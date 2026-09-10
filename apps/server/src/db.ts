@@ -175,12 +175,15 @@ function safeParseObject<T extends object>(json: string | null): T {
  * Add a column to an existing table when it is missing. `CREATE TABLE IF NOT EXISTS`
  * silently skips tables that already exist, so databases created before a schema
  * change would otherwise never gain the new columns.
+ *
+ * Returns whether the column was actually added — callers use that to run one-off
+ * backfills only on the boot that performs the migration.
  */
-function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
-  }
+  if (cols.some((c) => c.name === column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  return true;
 }
 
 export interface AppDb {
@@ -359,16 +362,23 @@ export function createDb(dbPath: string): AppDb {
   ensureColumn(db, "messages", "usage", "usage TEXT");
   ensureColumn(db, "messages", "reasoning", "reasoning TEXT");
   ensureColumn(db, "sessions", "settings", "settings TEXT NOT NULL DEFAULT '{}'");
-  ensureColumn(db, "sessions", "title_source", "title_source TEXT NOT NULL DEFAULT 'auto'");
+  const addedTitleSource = ensureColumn(db, "sessions", "title_source", "title_source TEXT NOT NULL DEFAULT 'auto'");
   ensureColumn(db, "copilots", "settings", "settings TEXT NOT NULL DEFAULT '{}'");
 
   // Everything that already existed predates auto-titling. A title that is not the
   // create-time placeholder was almost certainly typed by hand, so protect it from the
   // auto-titler by marking it as user-owned.
-  db.prepare(
-    `UPDATE sessions SET title_source = 'user'
-     WHERE title_source = 'auto' AND title IS NOT NULL AND title != '' AND title != ?`
-  ).run(DEFAULT_SESSION_TITLE);
+  //
+  // Gated on the migration that just added the column: run unconditionally it would also
+  // rewrite every *model-written* title on each subsequent boot (the auto-titler stores
+  // its result with `title_source = 'auto'`), silently locking conversations that were
+  // never renamed by a person.
+  if (addedTitleSource) {
+    db.prepare(
+      `UPDATE sessions SET title_source = 'user'
+       WHERE title_source = 'auto' AND title IS NOT NULL AND title != '' AND title != ?`
+    ).run(DEFAULT_SESSION_TITLE);
+  }
 
   // Fold the legacy `copilots.model` column into `settings.modelId`. The old column is
   // left dormant rather than dropped (DROP COLUMN is version-sensitive in SQLite).

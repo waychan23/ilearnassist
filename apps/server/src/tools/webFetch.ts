@@ -18,7 +18,7 @@ const MAX_REDIRECTS = 5;
  * model can make the server issue an arbitrary outbound request, so this is a genuine
  * security boundary rather than a nicety.
  */
-function isPrivateAddress(addr: string): boolean {
+export function isPrivateAddress(addr: string): boolean {
   const version = isIP(addr);
 
   if (version === 6) {
@@ -47,7 +47,7 @@ function isPrivateAddress(addr: string): boolean {
 }
 
 /** Throw unless `rawUrl` is http(s) and every address its host resolves to is public. */
-async function assertPublicUrl(rawUrl: string): Promise<URL> {
+export async function assertPublicUrl(rawUrl: string): Promise<URL> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -139,7 +139,7 @@ async function fetchGuarded(
 }
 
 /** Collapse an HTML document down to readable text, preferring <main>/<article>. */
-function htmlToText(html: string): { title: string; text: string } {
+export function htmlToText(html: string): { title: string; text: string } {
   const $ = load(html);
   const title = $("title").first().text().trim();
 

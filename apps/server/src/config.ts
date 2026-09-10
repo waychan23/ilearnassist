@@ -51,7 +51,7 @@ const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../.."
 const CONFIG_DIR = resolve(PROJECT_ROOT, "config");
 
 /** Replace `${VAR}` placeholders in a string from process.env (missing vars → empty). */
-function resolveEnv(value: string): string {
+export function resolveEnv(value: string): string {
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
     const v = process.env[name];
     return v === undefined ? "" : v;
@@ -96,7 +96,7 @@ function resolveEnvDeep(node: unknown): unknown {
 }
 
 /** Deep-merge `override` onto `base`; arrays are replaced rather than concatenated. */
-function deepMerge(base: unknown, override: unknown): unknown {
+export function deepMerge(base: unknown, override: unknown): unknown {
   if (Array.isArray(override) || Array.isArray(base)) return override ?? base;
   if (
     base &&
@@ -130,14 +130,27 @@ function asObj(v: unknown): Record<string, unknown> {
 function asStr(v: unknown, fallback: string): string {
   return typeof v === "string" ? v : fallback;
 }
+/**
+ * Coerce a scalar to a number.
+ *
+ * Accepts numeric strings as well as numbers: an `${ENV}` placeholder is substituted
+ * *after* YAML parsing, so `port: ${PORT}` arrives here as the string "3802". Without this
+ * it silently fell back to the default, which is a confusing way for a config to be
+ * ignored.
+ */
 function asNum(v: unknown, fallback: number): number {
-  return typeof v === "number" ? v : fallback;
+  if (typeof v === "number") return Number.isFinite(v) ? v : fallback;
+  if (typeof v === "string" && v.trim() !== "") {
+    const parsed = Number(v);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
 }
 function asBool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
-function withDefaults(raw: Record<string, unknown>): AppConfig {
+export function withDefaults(raw: Record<string, unknown>): AppConfig {
   const server = asObj(raw["server"]);
   const workspaces = asObj(raw["workspaces"]);
   const tools = asObj(raw["tools"]);
@@ -216,7 +229,7 @@ export function loadConfig(): AppConfig {
   return config;
 }
 
-function validateConfig(config: AppConfig): void {
+export function validateConfig(config: AppConfig): void {
   if (config.providers.length === 0) {
     throw new Error("No providers configured. Add at least one entry to config/config.yaml.");
   }
@@ -238,8 +251,19 @@ export function getProviderConfig(config: AppConfig, providerId?: string): Provi
   return provider;
 }
 
+/**
+ * Runtime data root — the sqlite database and the uploads tree live here.
+ *
+ * `GL_DATA_DIR` redirects it, which is what keeps the test suite and the e2e
+ * harness from writing into the repo's real `data/` directory. It must be set
+ * before this module is first imported: the value is read once, at import time.
+ */
+const DATA_DIR = process.env.GL_DATA_DIR
+  ? resolve(process.env.GL_DATA_DIR)
+  : resolve(PROJECT_ROOT, "data");
+
 export const PROJECT_PATHS = {
   projectRoot: PROJECT_ROOT,
   configDir: CONFIG_DIR,
-  dataDir: resolve(PROJECT_ROOT, "data"),
+  dataDir: DATA_DIR,
 } as const;

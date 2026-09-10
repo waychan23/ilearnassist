@@ -46,6 +46,11 @@ import { createWorkspaceDir, removeWorkspaceDir, uniqueSlug } from "./workspace.
 interface RoutesOptions {
   config: AppConfig;
   db: AppDb;
+  /**
+   * Where uploaded attachment bytes are stored. Defaults to the project's own
+   * `data/uploads`; tests redirect it at a temp directory.
+   */
+  uploadsRoot?: string;
 }
 
 /** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
@@ -53,6 +58,7 @@ const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 64 * 1
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
   const { config, db } = opts;
+  const uploadsRoot = opts.uploadsRoot ?? UPLOADS_ROOT;
 
   /* --------------------------------- resolution -------------------------------- */
   /*
@@ -238,7 +244,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.delete("/api/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     db.deleteSession(id);
-    await removeSessionUploads(UPLOADS_ROOT, id);
+    await removeSessionUploads(uploadsRoot, id);
     return { ok: true };
   });
 
@@ -295,10 +301,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         kind: kindFor(mimeType),
       };
 
-      await ensureSessionUploadDir(UPLOADS_ROOT, id);
+      await ensureSessionUploadDir(uploadsRoot, id);
       // resolveStoredPath re-derives the filename from the id + MIME type, so nothing the
       // client sent can steer the write outside `<uploads>/<sessionId>/`.
-      const path = resolveStoredPath(UPLOADS_ROOT, id, attachment);
+      const path = resolveStoredPath(uploadsRoot, id, attachment);
       if (!path) return reply.code(400).send({ error: "invalid attachment path" });
 
       try {
@@ -318,7 +324,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       sessionId: string;
       attachmentId: string;
     };
-    const found = await findStoredAttachment(UPLOADS_ROOT, sessionId, attachmentId);
+    const found = await findStoredAttachment(uploadsRoot, sessionId, attachmentId);
     if (!found) return reply.code(404).send({ error: "attachment not found" });
 
     try {
@@ -506,7 +512,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // Drop anything whose id/MIME would not resolve to a path under this session's upload
     // directory. A stale or hostile client cannot point the reader at an arbitrary file
     // (a well-formed id for a missing file still degrades to a placeholder downstream).
-    const storedAttachments = attachments.filter((a) => resolveStoredPath(UPLOADS_ROOT, id, a));
+    const storedAttachments = attachments.filter((a) => resolveStoredPath(uploadsRoot, id, a));
 
     db.createMessage({
       id: newId(),
@@ -528,7 +534,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         workspace,
         copilot,
         settings: session.settings,
-        uploadRoot: UPLOADS_ROOT,
+        uploadRoot: uploadsRoot,
         sessionId: id,
         vision: isVisionModel(provider, modelId),
         history,

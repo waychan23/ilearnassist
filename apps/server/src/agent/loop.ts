@@ -90,23 +90,19 @@ function chunkText(chunk: AIMessageChunk): string {
 }
 
 /**
- * Pull chain-of-thought deltas out of a chunk.
+ * Pull chain-of-thought out of a chunk when it arrives as a **content block**
+ * (`reasoning` / `thinking` / `reasoning_content`), which some providers use instead of
+ * a delta field.
  *
- * There is no single convention, so this checks the shapes LangChain surfaces in
- * practice: DeepSeek and most OpenAI-compatible gateways put it in
- * `additional_kwargs.reasoning_content`, OpenRouter uses `reasoning`, and some
- * providers emit a `reasoning`/`thinking` content block instead.
+ * Deliberately does NOT read `additional_kwargs`: as of `@langchain/openai` 1.5.x the
+ * parser does surface `reasoning_content` there, and `createReasoningFetch` already
+ * reports every delta-bearing key off the raw wire. Reading both would emit each
+ * reasoning delta twice — once from the tap, once from here — and double what gets
+ * persisted on the message. The tap is the single source of truth for those fields;
+ * this function only catches the block-shaped variant the tap cannot see.
  */
 function chunkReasoning(chunk: AIMessageChunk): string {
   const parts: string[] = [];
-
-  const extra = chunk.additional_kwargs as Record<string, unknown> | undefined;
-  if (extra) {
-    for (const key of ["reasoning_content", "reasoning", "thinking"]) {
-      const value = extra[key];
-      if (typeof value === "string" && value) parts.push(value);
-    }
-  }
 
   const c = chunk.content;
   if (Array.isArray(c)) {
