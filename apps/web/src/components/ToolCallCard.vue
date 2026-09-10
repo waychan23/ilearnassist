@@ -7,6 +7,7 @@ const open = ref(false);
 
 const LABELS: Record<string, string> = {
   web_search: "网页搜索",
+  web_fetch: "读取网页",
   list_files: "列出文件",
   read_file: "读取文件",
   write_file: "写入文件",
@@ -20,7 +21,7 @@ const done = computed(() => props.toolCall.output !== undefined);
 const arg = computed(() => {
   try {
     const obj = JSON.parse(props.toolCall.input) as Record<string, unknown>;
-    for (const key of ["query", "path", "content", "directory"]) {
+    for (const key of ["query", "url", "path", "content", "directory"]) {
       if (obj[key] !== undefined) {
         const s = String(obj[key]);
         return s.length > 80 ? s.slice(0, 80) + "…" : s;

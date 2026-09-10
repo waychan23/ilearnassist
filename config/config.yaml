@@ -29,6 +29,12 @@ defaultModel: deepseek-v4-pro
 # Providers / Models (OpenAI-compatible).
 # `baseURL` + `apiKey` are everything LangChain's ChatOpenAI needs to talk to
 # OpenAI, DeepSeek, Moonshot, Ollama, LM Studio, vLLM, or any compatible server.
+#
+# These entries are SEED data: on first boot they are copied into the SQLite
+# `providers`/`models` tables, after which the Settings → Providers UI is the
+# source of truth. Editing this file later does not overwrite what the UI saved
+# (delete the provider in the UI to re-seed it), but it remains the only way to
+# supply a key via ${ENV_VAR} rather than typing it into the browser.
 # ----------------------------------------------------------------------------
 providers:
   - id: deepseek
@@ -73,6 +79,14 @@ tools:
     # tavilyApiKey: ${TAVILY_API_KEY}
     # searxngBaseURL: http://localhost:8080
     # bingEndpoint: https://www.bing.com/search
+
+  # Fetches the readable text of a specific URL (the agent can follow up a
+  # web_search with this to read a page). Requests to loopback/private/link-local
+  # addresses are refused, and every redirect hop is re-checked.
+  webFetch:
+    enabled: true
+    # Cap on how many characters of extracted text are handed to the model.
+    maxChars: 20000
 
   # File tools are always enabled and sandboxed to the active workspace.
   fileTools:

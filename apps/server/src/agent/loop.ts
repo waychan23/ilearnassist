@@ -7,31 +7,65 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import type { ChatStreamEvent, Copilot, Message, ToolCall, Workspace } from "@guided-learning/shared";
-import type { AppConfig } from "../config.js";
+import type {
+  Attachment,
+  ChatStreamEvent,
+  Copilot,
+  Message,
+  MessageUsage,
+  SessionSettings,
+  ToolCall,
+  Workspace,
+} from "@guided-learning/shared";
+import type { ProviderRecord } from "../db.js";
+import { buildUserContent, type UserContentBlock } from "../attachments.js";
 import { buildModel } from "./model.js";
 
-const MAX_STEPS = 15;
+/** Fallback ReAct step budget when a session does not set one. */
+const DEFAULT_MAX_STEPS = 15;
 
 export interface RunAgentResult {
   content: string;
+  /** Chain of thought, when the provider exposed one. Display-only. */
+  reasoning: string;
   toolCalls: ToolCall[];
+  usage: MessageUsage;
 }
 
 export interface RunAgentInput {
-  config: AppConfig;
+  /** Undefined when the resolved provider no longer exists — `buildModel` rejects it. */
+  provider: ProviderRecord | undefined;
+  modelId: string;
   workspace: Workspace;
   copilot?: Copilot;
-  providerId?: string;
-  modelId?: string;
+  /** Resolved per-session generation parameters (temperature, maxSteps, …). */
+  settings: SessionSettings;
+  /** Root directory holding uploaded attachment bytes. */
+  uploadRoot: string;
+  sessionId: string;
+  /** Whether the selected model accepts image input. */
+  vision: boolean;
   /** Prior persisted user/assistant messages (oldest first). */
   history: Message[];
   userMessage: string;
+  attachments?: Attachment[];
   tools: StructuredToolInterface[];
   onEvent: (event: ChatStreamEvent) => void;
 }
 
-/** Turn a chunk's `content` (string OR complex content blocks) into plain text. */
+/** Content-block types that carry chain-of-thought rather than the answer. */
+const REASONING_BLOCK_TYPES = new Set(["reasoning", "thinking", "reasoning_content"]);
+
+function isReasoningBlock(block: object): boolean {
+  const type = (block as { type?: unknown }).type;
+  return typeof type === "string" && REASONING_BLOCK_TYPES.has(type);
+}
+
+/**
+ * Turn a chunk's `content` (string OR complex content blocks) into the *answer* text.
+ * Reasoning blocks are skipped: providers that surface chain-of-thought as a content
+ * block would otherwise have it concatenated straight into the visible reply.
+ */
 function chunkText(chunk: AIMessageChunk): string {
   const c = chunk.content;
   if (typeof c === "string") return c;
@@ -39,7 +73,13 @@ function chunkText(chunk: AIMessageChunk): string {
     return c
       .map((block) => {
         if (typeof block === "string") return block;
-        if (block && typeof block === "object" && "text" in block && typeof block.text === "string") {
+        if (
+          block &&
+          typeof block === "object" &&
+          !isReasoningBlock(block) &&
+          "text" in block &&
+          typeof block.text === "string"
+        ) {
           return block.text;
         }
         return "";
@@ -49,10 +89,56 @@ function chunkText(chunk: AIMessageChunk): string {
   return "";
 }
 
+/**
+ * Pull chain-of-thought deltas out of a chunk.
+ *
+ * There is no single convention, so this checks the shapes LangChain surfaces in
+ * practice: DeepSeek and most OpenAI-compatible gateways put it in
+ * `additional_kwargs.reasoning_content`, OpenRouter uses `reasoning`, and some
+ * providers emit a `reasoning`/`thinking` content block instead.
+ */
+function chunkReasoning(chunk: AIMessageChunk): string {
+  const parts: string[] = [];
+
+  const extra = chunk.additional_kwargs as Record<string, unknown> | undefined;
+  if (extra) {
+    for (const key of ["reasoning_content", "reasoning", "thinking"]) {
+      const value = extra[key];
+      if (typeof value === "string" && value) parts.push(value);
+    }
+  }
+
+  const c = chunk.content;
+  if (Array.isArray(c)) {
+    for (const block of c) {
+      if (!block || typeof block !== "object" || !isReasoningBlock(block)) continue;
+      const b = block as Record<string, unknown>;
+      for (const key of ["reasoning", "thinking", "text", "reasoning_content"]) {
+        const value = b[key];
+        if (typeof value === "string" && value) {
+          parts.push(value);
+          break;
+        }
+      }
+    }
+  }
+
+  return parts.join("");
+}
+
+function safeParseArgs(json: string): Record<string, unknown> {
+  try {
+    const v = JSON.parse(json);
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 function buildSystemPrompt(workspace: Workspace, copilot?: Copilot): string {
   const base =
     copilot?.systemPrompt?.trim() ||
-    "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, and a web_search tool to look up current information. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
+    "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
 
   const workspaceNote =
     `\n\nThe user is working inside a workspace located at:\n${workspace.dirPath}\n` +
@@ -63,32 +149,125 @@ function buildSystemPrompt(workspace: Workspace, copilot?: Copilot): string {
 }
 
 /**
+ * Rebuild prior turns into LangChain messages.
+ *
+ * Assistant messages that completed tool calls are replayed *with* those calls and their
+ * `ToolMessage` results, so the model keeps the thread of earlier tool use. (Dropping them
+ * previously left the model reasoning about a tool result it could no longer see.)
+ * Only calls with a recorded output are replayed — OpenAI rejects a `tool_calls` block
+ * whose results are missing.
+ */
+async function buildHistoryMessages(input: RunAgentInput, history: Message[]): Promise<BaseMessage[]> {
+  const out: BaseMessage[] = [];
+
+  for (const m of history) {
+    if (m.role === "user") {
+      const content = await buildUserContent(m.content, m.attachments, {
+        uploadRoot: input.uploadRoot,
+        sessionId: input.sessionId,
+        vision: input.vision,
+      });
+      out.push(new HumanMessage(content as string | UserContentBlock[]));
+      continue;
+    }
+
+    const completed = (m.toolCalls ?? []).filter((tc) => typeof tc.output === "string");
+    if (completed.length === 0) {
+      out.push(new AIMessage(m.content));
+      continue;
+    }
+
+    out.push(
+      new AIMessage({
+        content: m.content,
+        tool_calls: completed.map((tc) => ({
+          id: tc.id,
+          name: tc.name,
+          args: safeParseArgs(tc.input),
+          type: "tool_call" as const,
+        })),
+      })
+    );
+    for (const tc of completed) {
+      out.push(new ToolMessage({ tool_call_id: tc.id, name: tc.name, content: tc.output as string }));
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Trim history to the session's `maxContextMessages`, measured in messages. After slicing
+ * we drop any leading assistant message so the window always opens on a user turn.
+ */
+function trimHistory(history: Message[], settings: SessionSettings): Message[] {
+  const max = settings.maxContextMessages;
+  if (!max || max <= 0 || history.length <= max) return history;
+  let trimmed = history.slice(-max);
+  let i = 0;
+  while (i < trimmed.length && trimmed[i]!.role !== "user") i++;
+  trimmed = trimmed.slice(i);
+  return trimmed;
+}
+
+/**
  * A basic, bounded ReAct agent loop over LangChain primitives:
  *   model/stream (token streaming) -> tool calls -> tool execution -> repeat.
- * Emits `text`, `tool_start` and `tool_end` events as it runs.
+ * Emits `text`, `tool_start` and `tool_end` events as it runs, then a final `usage` event.
  */
 export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResult> {
-  const { llm, modelId } = buildModel(input.config, input.providerId, input.modelId);
+  let reasoning = "";
+
+  // Chain of thought is read off the raw SSE frames (see `createReasoningFetch`) because
+  // LangChain discards `reasoning_content` while parsing.
+  const { llm, modelId } = buildModel(input.provider, input.modelId, input.settings, {
+    onReasoning: (delta) => {
+      reasoning += delta;
+      input.onEvent({ type: "reasoning", delta });
+    },
+  });
   const modelWithTools = llm.bindTools(input.tools);
+  const maxSteps = input.settings.maxSteps ?? DEFAULT_MAX_STEPS;
+
+  const history = await buildHistoryMessages(input, trimHistory(input.history, input.settings));
+  const userContent = await buildUserContent(input.userMessage, input.attachments, {
+    uploadRoot: input.uploadRoot,
+    sessionId: input.sessionId,
+    vision: input.vision,
+  });
 
   const messages: BaseMessage[] = [
     new SystemMessage(buildSystemPrompt(input.workspace, input.copilot)),
-    ...input.history.map((m) =>
-      m.role === "user" ? new HumanMessage(m.content) : new AIMessage(m.content)
-    ),
-    new HumanMessage(input.userMessage),
+    ...history,
+    new HumanMessage(userContent as string | UserContentBlock[]),
   ];
 
   const toolByName = new Map<string, StructuredToolInterface>(input.tools.map((t) => [t.name, t]));
   const toolCalls: ToolCall[] = [];
   let finalContent = "";
 
-  for (let step = 0; step < MAX_STEPS; step++) {
+  // Summed across steps — what the provider actually billed for this turn.
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let cachedInputTokens = 0;
+  // The final step's input+output — how big the context had grown by the end of the turn.
+  let contextTokens = 0;
+  let sawUsage = false;
+
+  for (let step = 0; step < maxSteps; step++) {
     const chunks: AIMessageChunk[] = [];
     const stream = await modelWithTools.stream(messages);
 
     for await (const chunk of stream) {
       chunks.push(chunk);
+
+      const thought = chunkReasoning(chunk);
+      if (thought) {
+        reasoning += thought;
+        input.onEvent({ type: "reasoning", delta: thought });
+      }
+
       const text = chunkText(chunk);
       if (text) {
         finalContent += text;
@@ -99,6 +278,22 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     if (chunks.length === 0) break;
     const aiMessage = chunks.reduce((acc, c) => acc.concat(c) as AIMessageChunk);
     messages.push(aiMessage);
+
+    // Providers report usage on a dedicated chunk at the end of the step. Read it from the
+    // chunks rather than from `aiMessage`: `AIMessageChunk.concat` does *not* carry
+    // `usage_metadata` through the reduce, so the reduced message always reports none.
+    const stepUsage = chunks.reduce<AIMessageChunk["usage_metadata"] | undefined>(
+      (acc, c) => c.usage_metadata ?? acc,
+      undefined
+    );
+    if (stepUsage) {
+      sawUsage = true;
+      inputTokens += stepUsage.input_tokens ?? 0;
+      outputTokens += stepUsage.output_tokens ?? 0;
+      totalTokens += stepUsage.total_tokens ?? 0;
+      cachedInputTokens += stepUsage.input_token_details?.cache_read ?? 0;
+      contextTokens = (stepUsage.input_tokens ?? 0) + (stepUsage.output_tokens ?? 0);
+    }
 
     const calls = aiMessage.tool_calls ?? [];
     if (calls.length === 0) {
@@ -138,7 +333,16 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     finalContent =
       "The assistant ran out of steps while working on this task. Please ask a follow-up to continue.";
   }
-  return { content: finalContent, toolCalls };
+
+  // Empty (rather than all-zeros) when the provider reported nothing, so callers can tell
+  // "not reported" apart from "reported zero".
+  const usage: MessageUsage = sawUsage
+    ? { inputTokens, outputTokens, totalTokens, cachedInputTokens, contextTokens }
+    : {};
+
+  if (sawUsage) input.onEvent({ type: "usage", usage });
+
+  return { content: finalContent, reasoning: reasoning.trim(), toolCalls, usage };
 }
 
 /** Re-exported for clarity at the call site. */

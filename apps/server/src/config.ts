@@ -27,6 +27,12 @@ export interface WebSearchConfig {
   duckduckgoEndpoint?: string;
 }
 
+export interface WebFetchConfig {
+  enabled: boolean;
+  /** Maximum characters of extracted page text handed back to the model. */
+  maxChars: number;
+}
+
 export interface AppConfig {
   server: { host: string; port: number };
   workspaces: { rootDir: string };
@@ -35,6 +41,7 @@ export interface AppConfig {
   providers: ProviderDef[];
   tools: {
     webSearch: WebSearchConfig;
+    webFetch: WebFetchConfig;
     fileTools: { enabled: boolean };
   };
 }
@@ -135,6 +142,7 @@ function withDefaults(raw: Record<string, unknown>): AppConfig {
   const workspaces = asObj(raw["workspaces"]);
   const tools = asObj(raw["tools"]);
   const webSearch = asObj(tools["webSearch"]);
+  const webFetch = asObj(tools["webFetch"]);
   const fileTools = asObj(tools["fileTools"]);
 
   const rootDirRaw = asStr(workspaces["rootDir"], "./workspaces");
@@ -172,6 +180,10 @@ function withDefaults(raw: Record<string, unknown>): AppConfig {
           webSearch["duckduckgoEndpoint"],
           "https://html.duckduckgo.com/html/"
         ),
+      },
+      webFetch: {
+        enabled: asBool(webFetch["enabled"], true),
+        maxChars: asNum(webFetch["maxChars"], 20_000),
       },
       fileTools: {
         enabled: asBool(fileTools["enabled"], true),

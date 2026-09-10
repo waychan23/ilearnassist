@@ -1,13 +1,19 @@
 import type {
+  Attachment,
   ChatInput,
   ChatStreamEvent,
   Copilot,
   CreateCopilotInput,
+  CreateProviderInput,
   CreateSessionInput,
   Message,
+  ProviderConfig,
   PublicConfig,
   Session,
   UpdateCopilotInput,
+  UpdateProviderInput,
+  UpdateSessionInput,
+  UploadAttachmentInput,
   Workspace,
 } from "@guided-learning/shared";
 
@@ -57,11 +63,50 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  updateSession: (id: string, input: UpdateSessionInput) =>
+    request<Session>(`/sessions/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteSession: (id: string) =>
     request<{ ok: boolean }>(`/sessions/${id}`, { method: "DELETE" }),
 
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
+
+  uploadAttachment: (sessionId: string, input: UploadAttachmentInput) =>
+    request<Attachment>(`/sessions/${sessionId}/attachments`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  listProviders: () => request<ProviderConfig[]>("/providers"),
+  createProvider: (input: CreateProviderInput) =>
+    request<ProviderConfig>("/providers", { method: "POST", body: JSON.stringify(input) }),
+  updateProvider: (id: string, input: UpdateProviderInput) =>
+    request<ProviderConfig>(`/providers/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteProvider: (id: string) =>
+    request<{ ok: boolean }>(`/providers/${id}`, { method: "DELETE" }),
+  deleteModel: (providerId: string, modelId: string) =>
+    request<ProviderConfig>(`/providers/${providerId}/models/${modelId}`, { method: "DELETE" }),
+
+  updateDefaults: (input: { providerId?: string; modelId?: string }) =>
+    request<PublicConfig>("/defaults", { method: "PUT", body: JSON.stringify(input) }),
 };
+
+/** URL for an attachment's bytes (used as an `<img src>`), not an API call. */
+export function attachmentUrl(sessionId: string, attachmentId: string): string {
+  return `/api/sessions/${sessionId}/attachments/${attachmentId}`;
+}
+
+/** Read a File as bare base64 (no `data:` prefix), matching `UploadAttachmentInput`. */
+export async function fileToBase64(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  // Chunked so a large file does not blow the argument limit of String.fromCharCode.
+  let binary = "";
+  const CHUNK = 8192;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
 
 /** Parse an `event: ...\ndata: ...\n\n` Server-Sent Events stream into typed events. */
 async function* sseEvents(response: Response): AsyncGenerator<ChatStreamEvent> {

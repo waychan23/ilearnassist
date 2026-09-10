@@ -1,35 +1,68 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { nextTick, ref } from "vue";
 import { useAppStore } from "../stores/app";
-import type { Copilot } from "../api/types";
-import type { CopilotDraft } from "../stores/app";
+import { confirm } from "../composables/confirm";
+import type { Session } from "../api/types";
+import { openSettings } from "../composables/ui";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
-import CopilotDialog from "./dialogs/CopilotDialog.vue";
+import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 
 const store = useAppStore();
 
 const showCreateWorkspace = ref(false);
-const showCopilotDialog = ref(false);
-const editingCopilot = ref<Copilot | null>(null);
+const showNewSession = ref(false);
 
-function openNewCopilot() {
-  editingCopilot.value = null;
-  showCopilotDialog.value = true;
+/* --------------------------------- rename ---------------------------------- */
+const renamingId = ref<string | null>(null);
+const renameText = ref("");
+const renameInput = ref<HTMLInputElement | null>(null);
+
+function startRename(session: Session) {
+  renamingId.value = session.id;
+  renameText.value = session.title || "";
+  nextTick(() => {
+    renameInput.value?.focus();
+    renameInput.value?.select();
+  });
 }
 
-function openEditCopilot(c: Copilot) {
-  editingCopilot.value = c;
-  showCopilotDialog.value = true;
+async function commitRename() {
+  const id = renamingId.value;
+  if (!id) return;
+  const title = renameText.value;
+  renamingId.value = null;
+  if (title.trim() && title.trim() !== store.sessions.find((s) => s.id === id)?.title) {
+    await store.renameSession(id, title).catch(() => undefined);
+  }
 }
 
-async function onSaveCopilot(draft: CopilotDraft) {
-  await store.saveCopilot(draft);
-  showCopilotDialog.value = false;
+function cancelRename() {
+  renamingId.value = null;
 }
 
-async function onDeleteCopilot(c: Copilot) {
-  if (!window.confirm(`删除 Copilot「${c.name}」？`)) return;
-  await store.deleteCopilot(c.id);
+/* --------------------------------- deletes ---------------------------------- */
+async function onDeleteSession(session: Session) {
+  const ok = await confirm({
+    title: "删除会话",
+    message: `确定删除会话「${session.title || "新会话"}」吗？`,
+    detail: "该会话的全部消息记录将一并删除，且无法恢复。",
+    confirmText: "删除",
+    danger: true,
+  });
+  if (ok) await store.deleteSession(session.id);
+}
+
+async function onDeleteWorkspace() {
+  const ws = store.activeWorkspace;
+  if (!ws) return;
+  const ok = await confirm({
+    title: "删除工作区",
+    message: `确定删除工作区「${ws.name}」吗？`,
+    detail: `${ws.dirPath} 目录及其中所有文件都会被删除，且无法恢复。`,
+    confirmText: "删除",
+    danger: true,
+  });
+  if (ok) await store.deleteWorkspace(ws.id);
 }
 </script>
 
@@ -43,48 +76,58 @@ async function onDeleteCopilot(c: Copilot) {
       >
         <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
       </select>
-      <button class="btn" title="新建工作区" @click="showCreateWorkspace = true">＋</button>
+      <button class="icon-btn" title="新建工作区" @click="showCreateWorkspace = true">＋</button>
+      <button
+        class="icon-btn danger"
+        title="删除当前工作区"
+        :disabled="!store.activeWorkspace"
+        @click="onDeleteWorkspace"
+      >
+        🗑
+      </button>
     </div>
 
     <div class="side-section">
       <span>会话</span>
-      <button class="icon-btn" title="新建会话" @click="store.createSession()">＋</button>
+      <button class="icon-btn" title="新建会话" @click="showNewSession = true">＋</button>
     </div>
+
     <div class="side-scroll">
       <div
         v-for="s in store.sessions"
         :key="s.id"
         class="session-item"
+        :data-session-id="s.id"
         :class="{ active: s.id === store.activeSessionId }"
-        @click="store.selectSession(s.id)"
+        @click="renamingId === s.id ? undefined : store.selectSession(s.id)"
       >
-        <span class="label">{{ s.title || "新会话" }}</span>
-        <button class="icon-btn danger" title="删除" @click.stop="store.deleteSession(s.id)">
-          🗑
-        </button>
+        <input
+          v-if="renamingId === s.id"
+          :ref="(el) => (renameInput = el as HTMLInputElement | null)"
+          v-model="renameText"
+          class="input rename-input"
+          @click.stop
+          @keydown.enter.prevent="commitRename"
+          @keydown.esc.prevent="cancelRename"
+          @blur="commitRename"
+        />
+        <template v-else>
+          <span class="label" title="双击重命名" @dblclick.stop="startRename(s)">
+            {{ s.title || "新会话" }}
+          </span>
+          <button class="icon-btn" title="重命名" @click.stop="startRename(s)">✎</button>
+          <button class="icon-btn danger" title="删除" @click.stop="onDeleteSession(s)">🗑</button>
+        </template>
       </div>
       <div v-if="store.sessions.length === 0" class="muted">暂无会话</div>
     </div>
 
-    <div class="side-section">
-      <span>Copilot</span>
-      <button class="icon-btn" title="新建 Copilot" @click="openNewCopilot">＋</button>
-    </div>
-    <div class="side-scroll">
-      <div
-        v-for="c in store.copilots"
-        :key="c.id"
-        class="copilot-item"
-        :class="{ active: c.id === store.activeCopilotId }"
-        @click="store.setCopilot(c.id)"
-      >
-        <span class="dot"></span>
-        <span class="label">{{ c.name }}</span>
-        <button class="icon-btn" title="编辑" @click.stop="openEditCopilot(c)">⚙</button>
-        <button class="icon-btn danger" title="删除" @click.stop="onDeleteCopilot(c)">🗑</button>
-      </div>
-      <div v-if="store.copilots.length === 0" class="muted">暂无 Copilot</div>
-    </div>
+    <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
+    <button class="side-settings" title="设置" @click="openSettings()">
+      <span class="gear">⚙</span>
+      <span class="label">设置</span>
+      <span class="sub">{{ store.activeWorkspace?.name ?? "" }}</span>
+    </button>
 
     <div class="side-footer">
       <span class="dir" :title="store.config?.workspacesRootDir ?? ''">
@@ -97,20 +140,11 @@ async function onDeleteCopilot(c: Copilot) {
       @close="showCreateWorkspace = false"
       @created="showCreateWorkspace = false"
     />
-    <CopilotDialog
-      v-if="showCopilotDialog"
-      :copilot="editingCopilot"
-      @close="showCopilotDialog = false"
-      @save="onSaveCopilot"
-    />
+    <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
   </aside>
 </template>
 
 <style scoped>
-.copilot-item.active {
-  background: var(--panel-2);
-  color: var(--text);
-}
 .muted {
   padding: 8px 14px;
   color: var(--text-3);
@@ -120,5 +154,47 @@ async function onDeleteCopilot(c: Copilot) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.side-settings {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.side-settings:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+.side-settings .gear {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.side-settings .label {
+  flex-shrink: 0;
+}
+.side-settings .sub {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.rename-input {
+  padding: 3px 6px;
+  font-size: 13px;
+  height: 26px;
 }
 </style>

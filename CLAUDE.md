@@ -44,22 +44,26 @@ binaries directly:
 ## Layout
 
 ```
-config/config.yaml        # providers, models, tools, workspaces root (single source of truth)
+config/config.yaml        # bootstrap (server/workspaces/tools) + seed data (providers/models)
 apps/server/src/
-  index.ts                # bootstrap
+  index.ts                # bootstrap + seedFromConfig
   config.ts               # YAML + ${ENV} resolution + .env loader
-  db.ts                   # better-sqlite3 schema + CRUD (snake_case cols)
+  db.ts                   # better-sqlite3 schema + migrations + CRUD (snake_case cols)
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt
-  routes.ts               # Fastify routes (workspaces/copilots/sessions/chat)
+  attachments.ts          # upload storage + multimodal content building
+  routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
-  agent/model.ts          # ChatOpenAI builder (OpenAI-compatible)
+  agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
+  agent/title.ts          # auto-generated conversation titles
   tools/index.ts          # tool assembly + ALL_TOOL_NAMES
   tools/fileTools.ts      # list/read/write/create_dir/delete_file (sandboxed)
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
+  tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
 apps/web/src/
   stores/app.ts           # Pinia store (all state + actions)
   api/client.ts           # fetch helpers + SSE parser
+  composables/confirm.ts  # promise-returning confirm() for destructive UI actions
   components/…            # App, Sidebar, ChatView, MessageItem, ToolCallCard, Composer, dialogs
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
 ```
@@ -86,16 +90,45 @@ Fuller map in `docs/reference.md`.
   through `resolveInWorkspace` (rejects `..` escapes and absolute escapes) and
   never operate outside the active workspace directory. Do not add a file tool
   that bypasses this.
-- **API keys never leave the server.** `PublicConfig` (from `/api/config`) has
-  only `hasApiKey: boolean`, never the key.
+- **Uploads are sandboxed too.** Attachment paths go through `resolveStoredPath`
+  over `data/uploads/`, and stored files are located by directory listing rather
+  than by anything the client claims. Uploads live outside the workspace on
+  purpose, so chat attachments never show up in the agent's `list_files`.
+- **`web_fetch` SSRF guard is a security boundary.** It is the only tool that
+  makes the server issue an arbitrary outbound request. Keep the scheme check,
+  the check on *every DNS-resolved address*, and the manual per-hop redirect
+  re-validation. Do not "simplify" it to `redirect: "follow"`.
+- **API keys never leave the server.** `PublicConfig` (from `/api/config`) and
+  every provider response has only `hasApiKey: boolean`, never the key. A `PUT`
+  with no `apiKey` field means "leave unchanged" — that is what lets the UI edit a
+  provider it cannot read the key of.
 - **Shared types only.** Cross-boundary payloads live in `packages/shared`. Adding
   a field to an API response means updating the type there first, then both apps
   typecheck clean.
 - **SSE framing** is `event: <type>\ndata: <json>\n\n`. Chat streams via
-  `reply.hijack()`; the agent emits `text` deltas, `tool_start`/`tool_end`,
-  `message_done`, `error`, then `done`. The frontend expects exactly this.
+  `reply.hijack()`; the agent emits `text` deltas, `reasoning` deltas,
+  `tool_start`/`tool_end`, `usage`, `message_done`, optionally `title`, `error`,
+  then `done`. The frontend expects exactly this.
+- **Reasoning is display-only.** Chain of thought is persisted on the message and
+  rendered, but must **never** be replayed into history — providers ignore or reject
+  it. `buildHistoryMessages()` reads only `content` and `toolCalls`; keep it that way.
+- **Reasoning comes off the raw SSE stream, not from LangChain.** `ChatOpenAI`
+  discards `reasoning_content` while parsing, so `createReasoningFetch()` taps the
+  fetch response. Do not "simplify" it away. Likewise, read token usage from the
+  step's *chunks* — `AIMessageChunk.concat` does not carry `usage_metadata`.
+- **A user's title is permanent.** `session.titleSource` is `auto` until a human
+  supplies a title via `PATCH /api/sessions/:id`, which flips it to `user`; the
+  auto-titler must then never touch it. The titler runs on the first turn only, and
+  every failure is swallowed — it must not be able to fail a chat turn.
 - **History must stay user/assistant balanced.** On a chat error, a `⚠️ …`
-  assistant message is persisted so the next turn's history is well-formed.
+  assistant message is persisted so the next turn's history is well-formed. An
+  assistant message's `tool_calls` are only replayed into history when the
+  matching results exist — OpenAI rejects the pair otherwise.
+- **Schema changes need `ensureColumn`.** `CREATE TABLE IF NOT EXISTS` silently
+  skips existing tables, so an existing database would never gain a new column.
+- **Destructive UI actions confirm first.** Session, Copilot, workspace and
+  provider deletes go through `confirm()` from `composables/confirm.ts`. The
+  agent's own `delete_file` tool is deliberately *not* gated.
 
 ## Gotchas
 

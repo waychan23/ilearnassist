@@ -3,6 +3,9 @@ import { onMounted } from "vue";
 import { useAppStore } from "./stores/app";
 import Sidebar from "./components/Sidebar.vue";
 import ChatView from "./components/ChatView.vue";
+import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
+import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
+import { closeSettings, uiState } from "./composables/ui";
 
 const store = useAppStore();
 
@@ -15,6 +18,10 @@ onMounted(() => {
   <div class="app">
     <Sidebar />
     <ChatView />
+    <!-- Hosted once so every `confirm()` call from anywhere lands in the same prompt. -->
+    <ConfirmDialog />
+    <!-- Reachable from the sidebar footer and the composer's model picker. -->
+    <SettingsDialog v-if="uiState.settingsOpen" @close="closeSettings" />
     <Transition name="fade">
       <div v-if="store.error" class="toast">
         <span>{{ store.error }}</span>
