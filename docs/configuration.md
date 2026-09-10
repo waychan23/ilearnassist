@@ -101,6 +101,22 @@ TAVILY_API_KEY=…     # only if webSearch.provider = tavily
 
 Copy `.env.example` to `.env` to get started.
 
+Two more variables are read from the real environment (not `.env`), and exist for
+tests and the e2e run:
+
+| Variable | Effect |
+| --- | --- |
+| `GL_CONFIG_PATH` | Replace the path of the *overlay* normally read from `config/config.local.yaml`. `config/config.yaml` is still the base. |
+| `GL_DATA_DIR` | Move the runtime data directory (the sqlite database and `uploads/`) away from `<project>/data`. |
+
+Both are read once, when the config module is first imported — set them before the
+server starts, not at runtime. `pnpm test:e2e` uses both to keep a run off your real
+data.
+
+Note that `${…}` placeholders are substituted *after* YAML parsing, so a numeric
+field written as `port: ${PORT}` arrives as a string — numeric fields accept a
+numeric string for exactly this reason.
+
 ## Web search
 
 ```yaml

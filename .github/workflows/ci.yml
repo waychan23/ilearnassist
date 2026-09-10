@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # better-sqlite3 is a native module built against the local Node — keep this in
+          # step with the engines field in package.json.
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A clean typecheck is the bar for "done" (CLAUDE.md), and it covers the test
+      # files and the e2e specs too.
+      - run: pnpm typecheck
+
+      - run: pnpm test:coverage
+
+      # The browser e2e runs fully offline: a fake OpenAI-compatible LLM plus the real
+      # server, so no API keys or network access are needed.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

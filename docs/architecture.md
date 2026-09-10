@@ -135,24 +135,32 @@ control over the streaming shape:
 4. Emit `{ type: "usage" }` when the provider reported anything, then return
    `{ content, reasoning, toolCalls, usage }` for persistence.
 
-> **Usage is read from the chunks, not the reduced message.** `AIMessageChunk.concat`
-> does not carry `usage_metadata` through the reduce, so `aiMessage.usage_metadata` is
-> always undefined for a streamed step. The loop scans the step's chunks for the last
-> one that reports usage instead. Reading it off the reduced message silently produced
-> zero usage for every provider whose usage arrives on a dedicated final chunk.
+> **Usage is read from the chunks, not the reduced message.** Scanning the step's chunks
+> for the one that reports usage is the robust choice: it works whatever the provider
+> does, and it does not depend on how `AIMessageChunk.concat` happens to behave in the
+> installed `@langchain/core`. (As of 1.2.x `concat` *does* carry `usage_metadata`
+> through, so the reduced message is no longer empty — but reading it there is a
+> behaviour to re-verify on every dependency bump, whereas the chunk scan is not.)
 
 #### Chain of thought
 
-Reasoning is **not** available from the parsed message: LangChain's `ChatOpenAI` drops
-`reasoning_content` entirely — it appears in neither `content` nor `additional_kwargs`.
-The text only exists in the raw server-sent events, so `createReasoningFetch()` in
-`model.ts` wraps `fetch`, passes every byte through untouched, and scrapes
-`reasoning_content` / `reasoning` off each `data:` frame. The loop forwards those deltas
-as `reasoning` events.
+Chain of thought reaches the app through two independent channels, and only one of them
+may be read:
 
-`chunkText()` also *skips* content blocks typed `reasoning`/`thinking`, so a provider
-that returns chain-of-thought as a block can never have it concatenated into the visible
-answer. Reasoning is persisted for display but **never replayed into history** — see
+- **The raw SSE tap.** `createReasoningFetch()` in `model.ts` wraps `fetch`, passes every
+  byte through untouched, and scrapes `reasoning_content` / `reasoning` / `reasoning_text`
+  off each `data:` frame. **This is the single source of truth.**
+- **Parsed content blocks.** Some providers express reasoning as a content block typed
+  `reasoning`/`thinking` instead of a delta field; `chunkReasoning()` picks those up, and
+  `chunkText()` *skips* them so they can never be concatenated into the visible answer.
+
+`chunkReasoning()` deliberately does **not** read `chunk.additional_kwargs`. LangChain
+used to drop `reasoning_content` during parsing, but `@langchain/openai` 1.5.x maps it
+into `additional_kwargs` — so reading both channels emitted *every* reasoning delta twice
+and doubled the persisted `reasoning`. If you are tempted to add that branch back, run
+`apps/server/test/agent/loop.test.ts` first: it pins one event per delta.
+
+Reasoning is persisted for display but **never replayed into history** — see
 `buildHistoryMessages()`, which only reads `content` and `toolCalls`.
 
 #### Naming a conversation
@@ -167,9 +175,7 @@ produces a usable name. Either way the title is saved and a `title` event is emi
 between `message_done` and `done`, and neither path can turn a successful chat turn into
 an error.
 
-Note the asymmetry in how providers expose chain-of-thought: on a **non-streaming**
-response `reasoning_content` *is* present in `additional_kwargs`, while on a streamed one
-LangChain drops it (hence the fetch tap above). The titler does not rely on it either way.
+The titler does not rely on chain-of-thought at all, streaming or not.
 
 **History replay.** `buildHistoryMessages()` rebuilds prior turns, re-attaching
 an assistant message's `tool_calls` *and* the matching `ToolMessage`s — dropping

@@ -48,12 +48,32 @@ Open <http://localhost:5173>. The backend listens on `127.0.0.1:3720`.
 > [`config/config.yaml`](config/config.yaml) to switch models/providers. See
 > [docs/configuration.md](docs/configuration.md).
 
+## Tests
+
+The suite is offline — no API keys and no network. The agent is driven against a
+local fake OpenAI-compatible server, and the browser end-to-end run starts the
+real backend on a throwaway database.
+
+```bash
+pnpm test          # unit + integration (vitest, server + web)
+pnpm test:coverage # the same, with a coverage report
+pnpm exec playwright install chromium   # once
+pnpm test:e2e      # browser end-to-end (playwright)
+```
+
+New behaviour is expected to arrive with tests; see the Testing section of
+[CLAUDE.md](CLAUDE.md), which also explains how to test agent behaviour without
+calling a real model.
+
 ## Project structure
 
 ```
 apps/server/      Fastify backend — config, SQLite, agent loop, tools, routes
+apps/server/test/ unit + integration tests
 apps/web/         Vue 3 frontend — Pinia store, chat UI, SSE client
+apps/web/test/    unit tests
 packages/shared/  dependency-free types shared across the API boundary
+e2e/              Playwright specs + the e2e config overlay
 config/           config.yaml (+ optional config.local.yaml override)
 ```
 

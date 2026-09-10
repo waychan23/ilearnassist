@@ -20,7 +20,10 @@ pnpm install           # first time — see "Gotchas" below
 pnpm dev               # run server + web together (backend :3720, web :5173)
 pnpm dev:server        # tsx watch src/index.ts (backend only)
 pnpm dev:web           # vite (frontend only)
-pnpm typecheck         # tsc (server) + vue-tsc (web) across all packages
+pnpm typecheck         # tsc (server) + vue-tsc (web) + the e2e specs
+pnpm test              # vitest: unit + integration (server + web), no network
+pnpm test:coverage     # the same, with a coverage report (see "Testing")
+pnpm test:e2e          # playwright: real browser + real server + a fake LLM
 pnpm build             # production build of the web app
 ```
 
@@ -41,10 +44,78 @@ binaries directly:
 ( cd apps/web    && ./node_modules/.bin/vue-tsc --noEmit )
 ```
 
+## Testing
+
+**Every change ships with tests.** New behaviour needs a test that fails without it; a bug
+fix needs a regression test that fails on the old code. `pnpm test` and `pnpm typecheck`
+must both be clean — CI (`.github/workflows/ci.yml`) enforces it, so a red run is not
+mergeable. The whole suite is offline: no API keys, no network.
+
+```bash
+pnpm test              # vitest, both apps (~480 tests, a few seconds)
+pnpm test:watch        # same, in watch mode
+pnpm test:coverage     # with a report; HTML lands in coverage/
+pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromium)
+```
+
+### Where tests live
+
+| Path | What belongs there |
+| --- | --- |
+| `apps/server/test/` | unit + integration, mirroring `src/` |
+| `apps/web/test/` | unit tests for utils, the API client and the Pinia store (jsdom) |
+| `e2e/*.spec.ts` | browser flows against the real stack |
+
+Each app's `tsconfig` includes its `test/` directory, so **`pnpm typecheck` checks the
+tests too**. For `apps/web` that also means `pnpm build` (which runs `vue-tsc`) fails on a
+test type error. That is deliberate.
+
+### Testing the agent without a model
+
+Never call a real provider from a test. `apps/server/test/helpers/fakeLlm.ts` is a
+scriptable OpenAI-compatible server: point a provider's `baseURL` at it and the *real*
+`ChatOpenAI` → `createReasoningFetch` → `runAgentStream` → SSE route path runs end to end,
+deterministically and offline.
+
+```ts
+const llm = await startFakeLlm();
+const env = await startTestServer({ providers: [providerFor(llm)] });
+llm.setTurns([{ reasoning: "hmm", content: "the answer" }]);
+// …POST to /api/sessions/:id/chat via env.server.app.inject() and parse the SSE frames
+```
+
+It also runs standalone (`pnpm --filter @guided-learning/server fake-llm`), which is how
+the Playwright suite scripts it over HTTP.
+
+Reuse these rather than re-inventing them:
+
+- `startTestServer()` — a real server on a **throwaway temp directory**; never the repo's
+  `data/` or `workspaces/`.
+- `parseSse()` / `eventTypes()` — SSE transcript → typed events, mirroring the browser
+  client's parser.
+- `providerFor(llm)` / `keylessProvider()` — provider records with and without a key.
+
+### Testing the HTTP layer
+
+`app.inject()` captures a hijacked SSE response in full (status, headers and body), so
+route and chat tests need no port and no network — see
+`apps/server/test/chat-sse.test.ts`. Use a real `listen({ port: 0 })` only when a browser
+is the client.
+
+### What is deliberately *not* unit tested
+
+The Vue components. The Playwright suite covers them, which is why the Vitest coverage
+config excludes `*.vue` — a browser run's coverage cannot be merged into that report, so
+counting them there would only produce a number nobody acts on. Add a `data-testid` to any
+component a flow needs to select.
+
 ## Layout
 
 ```
 config/config.yaml        # bootstrap (server/workspaces/tools) + seed data (providers/models)
+vitest.config.ts          # root vitest entry (server + web projects; coverage scope)
+playwright.config.ts      # starts the fake LLM, the server and vite for e2e
+e2e/                      # playwright specs + the e2e config overlay + teardown
 apps/server/src/
   index.ts                # bootstrap + seedFromConfig
   config.ts               # YAML + ${ENV} resolution + .env loader
@@ -65,6 +136,8 @@ apps/web/src/
   api/client.ts           # fetch helpers + SSE parser
   composables/confirm.ts  # promise-returning confirm() for destructive UI actions
   components/…            # App, Sidebar, ChatView, MessageItem, ToolCallCard, Composer, dialogs
+apps/server/test/         # unit + integration tests (vitest, node env)
+apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
 ```
 
@@ -112,10 +185,20 @@ Fuller map in `docs/reference.md`.
 - **Reasoning is display-only.** Chain of thought is persisted on the message and
   rendered, but must **never** be replayed into history — providers ignore or reject
   it. `buildHistoryMessages()` reads only `content` and `toolCalls`; keep it that way.
-- **Reasoning comes off the raw SSE stream, not from LangChain.** `ChatOpenAI`
-  discards `reasoning_content` while parsing, so `createReasoningFetch()` taps the
-  fetch response. Do not "simplify" it away. Likewise, read token usage from the
-  step's *chunks* — `AIMessageChunk.concat` does not carry `usage_metadata`.
+- **Reasoning comes off the raw SSE stream, and only from there.** `createReasoningFetch()`
+  taps the fetch response and is the **single** source of chain-of-thought — do not
+  "simplify" it away. Do not *also* read `chunk.additional_kwargs` in `chunkReasoning()`:
+  `@langchain/openai` 1.5.x does map `reasoning_content` there, so reading both channels
+  emits every delta twice and doubles the persisted `reasoning`. `chunkReasoning()` exists
+  only for the content-block shape the tap cannot see. (Token usage is read from the
+  step's *chunks* rather than the reduced message — `concat` does carry `usage_metadata`
+  now, but the chunk scan does not depend on that staying true.)
+- **Streamed text can exceed what is persisted.** On a step that emits preamble text *and*
+  a tool call, the preamble is streamed as `text` deltas; when the final step produces
+  content, `finalContent` is *replaced* by just that step's text. So the live view shows
+  narration + answer while `messages.content` holds only the answer, and a reload drops the
+  narration. Pinned by a test in `apps/server/test/agent/loop.test.ts` — changing it is a
+  product decision, not a bug fix.
 - **A user's title is permanent.** `session.titleSource` is `auto` until a human
   supplies a title via `PATCH /api/sessions/:id`, which flips it to `user`; the
   auto-titler must then never touch it. The titler runs on the first turn only, and
@@ -138,6 +221,12 @@ Fuller map in `docs/reference.md`.
   change Node versions, reinstall.
 - Config loads `config/config.yaml`, overlaid by a git-ignored
   `config/config.local.yaml`, with `${ENV_VAR}` references resolved from `.env`
-  + real env vars. Real env vars win over `.env`.
+  + real env vars. Real env vars win over `.env`. `GL_CONFIG_PATH` swaps the
+  *overlay* path, and `GL_DATA_DIR` moves the sqlite database + uploads tree —
+  both exist for tests and the e2e run, and both must be set before the config
+  module is first imported.
+- `pnpm test:e2e` starts its own fake LLM, backend and Vite on 3898 / 3899 / 5199,
+  so a `pnpm dev` instance can keep running. Its scratch data lives in the
+  git-ignored `.e2e/`, removed on teardown.
 
 For the full architecture and configuration reference, see `docs/`.
