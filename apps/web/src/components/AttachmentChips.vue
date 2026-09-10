@@ -28,7 +28,7 @@ const chips = computed<Chip[]>(() =>
 
 <template>
   <div class="attachments">
-    <div v-for="c in chips" :key="c.attachment.id" class="chip">
+    <div v-for="c in chips" :key="c.attachment.id" class="chip" data-testid="attachment-chip">
       <img
         v-if="c.attachment.kind === 'image'"
         class="thumb"

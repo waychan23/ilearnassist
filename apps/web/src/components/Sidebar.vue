@@ -71,6 +71,7 @@ async function onDeleteWorkspace() {
     <div class="workspace-select">
       <select
         class="select"
+        data-testid="workspace-select"
         :value="store.activeWorkspaceId ?? ''"
         @change="store.selectWorkspace(($event.target as HTMLSelectElement).value)"
       >
@@ -89,14 +90,17 @@ async function onDeleteWorkspace() {
 
     <div class="side-section">
       <span>会话</span>
-      <button class="icon-btn" title="新建会话" @click="showNewSession = true">＋</button>
+      <button class="icon-btn" data-testid="new-session" title="新建会话" @click="showNewSession = true">
+        ＋
+      </button>
     </div>
 
-    <div class="side-scroll">
+    <div class="side-scroll" data-testid="session-list">
       <div
         v-for="s in store.sessions"
         :key="s.id"
         class="session-item"
+        data-testid="session-item"
         :data-session-id="s.id"
         :class="{ active: s.id === store.activeSessionId }"
         @click="renamingId === s.id ? undefined : store.selectSession(s.id)"

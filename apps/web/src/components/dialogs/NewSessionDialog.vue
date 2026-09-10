@@ -34,7 +34,12 @@ async function create() {
       <div class="modal-body">
         <div class="field">
           <label>标题（可选）</label>
-          <input v-model="title" class="input" placeholder="留空则为「新会话」" />
+          <input
+            v-model="title"
+            class="input"
+            data-testid="session-title-input"
+            placeholder="留空则为「新会话」"
+          />
         </div>
 
         <div class="field">
@@ -71,7 +76,9 @@ async function create() {
       </div>
       <div class="modal-foot">
         <button class="btn" @click="emit('close')">取消</button>
-        <button class="btn primary" :disabled="saving" @click="create">创建</button>
+        <button class="btn primary" data-testid="create-session" :disabled="saving" @click="create">
+          创建
+        </button>
       </div>
     </div>
   </div>

@@ -55,7 +55,7 @@ async function copy() {
 </script>
 
 <template>
-  <div v-if="hasDetail" class="reasoning" :class="{ thinking: props.thinking }">
+  <div v-if="hasDetail" class="reasoning" :class="{ thinking: props.thinking }" data-testid="reasoning">
     <div class="head" @click="expanded = !expanded">
       <span class="dot" :class="props.thinking ? 'live' : 'done'">💡</span>
       <span class="label">{{ label }}</span>

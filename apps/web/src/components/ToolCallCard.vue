@@ -43,7 +43,7 @@ const prettyInput = computed(() => {
 </script>
 
 <template>
-  <div class="tool-card">
+  <div class="tool-card" data-testid="tool-call">
     <div class="tool-head" @click="open = !open">
       <span class="icon" :class="done ? 'ok' : 'run'">{{ done ? "✓" : "↻" }}</span>
       <span class="name">{{ label }}</span>

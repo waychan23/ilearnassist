@@ -95,6 +95,7 @@ function onKeydown(e: KeyboardEvent) {
           <textarea
             ref="textarea"
             v-model="text"
+            data-testid="composer-input"
             rows="1"
             :placeholder="
               store.streaming.active ? 'Agent 正在思考…' : '输入消息，Enter 发送，Shift+Enter 换行'
@@ -105,6 +106,7 @@ function onKeydown(e: KeyboardEvent) {
 
           <button
             class="send-btn"
+            data-testid="composer-send"
             :disabled="!canSend"
             :title="store.streaming.active ? 'Agent 正在思考…' : '发送 (Enter)'"
             @click="send"
@@ -156,6 +158,7 @@ function onKeydown(e: KeyboardEvent) {
         <input
           ref="fileInput"
           class="hidden-input"
+          data-testid="composer-file-input"
           type="file"
           multiple
           accept="image/png,image/jpeg,image/webp,image/gif,text/plain,text/markdown,text/csv,text/html,text/css,text/xml,application/xml,application/json,application/javascript,application/typescript,application/pdf,.md,.txt,.json,.csv"

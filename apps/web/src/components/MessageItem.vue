@@ -81,7 +81,7 @@ const usageText = computed(() => {
 </script>
 
 <template>
-  <div v-if="isUser" class="msg user" :data-message-id="props.message?.id">
+  <div v-if="isUser" class="msg user" data-testid="message-user" :data-message-id="props.message?.id">
     <div class="user-stack">
       <AttachmentChips
         v-if="attachments.length"
@@ -97,7 +97,12 @@ const usageText = computed(() => {
     </div>
   </div>
 
-  <div v-else-if="isAssistant" class="msg assistant" :data-message-id="props.message?.id">
+  <div
+    v-else-if="isAssistant"
+    class="msg assistant"
+    data-testid="message-assistant"
+    :data-message-id="props.message?.id"
+  >
     <div class="avatar">🤖</div>
     <div class="body">
       <div v-if="error" class="error-banner">{{ error }}</div>
@@ -107,7 +112,7 @@ const usageText = computed(() => {
         :duration-ms="reasoningMs"
       />
       <ToolCallCard v-for="tc in toolCalls" :key="tc.id" :tool-call="tc" />
-      <div v-if="rendered" class="markdown" v-html="rendered"></div>
+      <div v-if="rendered" class="markdown" data-testid="message-content" v-html="rendered"></div>
       <div v-if="!props.streaming" class="actions">
         <button
           v-if="content"

@@ -124,6 +124,7 @@ watch(
           <div class="title-row">
             <span
               class="title"
+              data-testid="session-title"
               :class="{ editable: !!store.activeSession }"
               :title="store.activeSession ? '点击编辑标题' : undefined"
               @click="startTitleEdit"
@@ -165,7 +166,12 @@ watch(
 
     <!-- The rail is a sibling of the scroller, not a child: inside it would scroll away. -->
     <div class="messages-wrap">
-      <div ref="messagesEl" class="messages" :class="{ 'with-rail': showMinimap }">
+      <div
+        ref="messagesEl"
+        class="messages"
+        data-testid="messages"
+        :class="{ 'with-rail': showMinimap }"
+      >
         <div v-if="store.messages.length === 0 && !store.streaming.active" class="empty-state">
           <h2>{{ store.activeCopilot?.name ?? "开始对话" }}</h2>
           <p>在下方输入消息，Agent 将按需调用工具。</p>
