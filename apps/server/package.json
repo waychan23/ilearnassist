@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "fake-llm": "tsx test/helpers/fakeLlm.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@guided-learning/shared": "workspace:*",
     "@fastify/cors": "^11.3.0",
+    "@guided-learning/shared": "workspace:*",
     "@langchain/core": "^1.2.10",
     "@langchain/langgraph": "^1.4.14",
     "@langchain/openai": "^1.5.12",
@@ -24,6 +25,7 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.2",
     "tsx": "^4.23.13",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "5.0.0"
   }
 }

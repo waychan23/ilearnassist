@@ -1,6 +1,7 @@
 {
   "name": "guided-learning",
   "private": true,
+  "type": "module",
   "version": "0.1.0",
   "description": "A self-hosted, single-user agent product (B/S architecture) with workspaces, Copilots, and an agent loop over LangChain.js.",
   "packageManager": "pnpm@12.3.4",
@@ -11,7 +12,18 @@
     "dev": "pnpm --parallel --filter @guided-learning/server --filter @guided-learning/web dev",
     "dev:server": "pnpm --filter @guided-learning/server dev",
     "dev:web": "pnpm --filter @guided-learning/web dev",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
     "build": "pnpm --filter @guided-learning/web build"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.20.2",
+    "@vitest/coverage-v8": "5.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "5.0.0"
   }
 }

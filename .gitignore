@@ -9,6 +9,12 @@ build/
 # runtime data (workspaces, sqlite db, logs)
 workspaces/
 data/
+
+# scratch space for the e2e run (its own sqlite db + workspaces)
+.e2e/
+test-results/
+playwright-report/
+coverage/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal
