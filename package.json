@@ -1,0 +1,17 @@
+{
+  "name": "guided-learning",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A self-hosted, single-user agent product (B/S architecture) with workspaces, Copilots, and an agent loop over LangChain.js.",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @guided-learning/server --filter @guided-learning/web dev",
+    "dev:server": "pnpm --filter @guided-learning/server dev",
+    "dev:web": "pnpm --filter @guided-learning/web dev",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm --filter @guided-learning/web build"
+  }
+}

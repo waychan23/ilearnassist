@@ -1,0 +1,29 @@
+{
+  "name": "@guided-learning/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@guided-learning/shared": "workspace:*",
+    "@fastify/cors": "^11.3.0",
+    "@langchain/core": "^1.2.10",
+    "@langchain/langgraph": "^1.4.14",
+    "@langchain/openai": "^1.5.12",
+    "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
+    "fastify": "^5.12.3",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.0"
+  }
+}

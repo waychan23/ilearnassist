@@ -1,0 +1,79 @@
+# ============================================================================
+# guided-learning configuration
+# ----------------------------------------------------------------------------
+# This is the single source of truth for providers, models and tools.
+# Credentials may be given inline OR referenced from an environment variable
+# using the ${ENV_VAR} syntax (e.g. apiKey: ${OPENAI_API_KEY}).
+#
+# A `config/config.local.yaml` file (git-ignored) may override any of these
+# values — useful for keeping real keys out of version control.
+# ============================================================================
+
+server:
+  host: 127.0.0.1
+  port: 3720
+
+# Where the global workspaces directory lives. Every workspace that is created
+# through the UI/API gets its own sub-directory under this root. All file tools
+# are sandboxed to the active workspace directory.
+workspaces:
+  rootDir: ./workspaces
+
+# The provider used when a conversation has no explicit provider selected.
+defaultProvider: deepseek
+
+# The model used when a conversation has no explicit model selected.
+defaultModel: deepseek-v4-pro
+
+# ----------------------------------------------------------------------------
+# Providers / Models (OpenAI-compatible).
+# `baseURL` + `apiKey` are everything LangChain's ChatOpenAI needs to talk to
+# OpenAI, DeepSeek, Moonshot, Ollama, LM Studio, vLLM, or any compatible server.
+# ----------------------------------------------------------------------------
+providers:
+  - id: deepseek
+    name: DeepSeek
+    baseURL: https://api.deepseek.com/v1
+    apiKey: ${DEEPSEEK_API_KEY}
+    models:
+      - id: deepseek-v4-pro
+        name: DeepSeek V4 Pro
+
+  - id: openai
+    name: OpenAI
+    baseURL: https://api.openai.com/v1
+    apiKey: ${OPENAI_API_KEY}
+    models:
+      - id: gpt-4o-mini
+        name: GPT-4o mini
+
+  # Local / keyless example — uncomment to use a self-hosted OpenAI-compatible
+  # server such as Ollama (http://localhost:11434/v1) or LM Studio.
+  # - id: local
+  #   name: Local (Ollama)
+  #   baseURL: http://localhost:11434/v1
+  #   apiKey: none
+  #   models:
+  #     - id: llama3.1
+  #       name: Llama 3.1
+
+# ----------------------------------------------------------------------------
+# Tool configuration.
+# ----------------------------------------------------------------------------
+tools:
+  webSearch:
+    # One of: bing | tavily | duckduckgo | searxng
+    #   bing      — free, keyless, server-side scraping of Bing results (default)
+    #   tavily    — Tavily Search API (high quality, needs an API key)
+    #   duckduckgo— free, keyless, DuckDuckGo HTML endpoint
+    #   searxng   — self-hosted SearXNG instance
+    provider: bing
+    maxResults: 5
+    # tavily / bing / duckduckgo / searxng endpoints & keys (only what you use):
+    # tavilyApiKey: ${TAVILY_API_KEY}
+    # searxngBaseURL: http://localhost:8080
+    # bingEndpoint: https://www.bing.com/search
+
+  # File tools are always enabled and sandboxed to the active workspace.
+  fileTools:
+    enabled: true

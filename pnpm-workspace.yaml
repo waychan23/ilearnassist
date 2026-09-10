@@ -1,0 +1,16 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Native modules / bundlers that legitimately need a postinstall step.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+
+# Packages published within pnpm's 24h "minimum release age" supply-chain
+# window that we've reviewed and trust. pnpm auto-appends new entries here
+# during install; the two @langchain entries were added manually.
+minimumReleaseAgeExclude:
+  - '@types/node@22.20.2'
+  - '@langchain/core@1.2.10'
+  - '@langchain/openai@1.5.12'
