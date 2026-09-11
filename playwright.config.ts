@@ -50,7 +50,14 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
 
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // `locale` is pinned, not incidental. The app picks its language from
+  // `navigator.languages`, and Chromium's default is en-US — so without this every spec
+  // would render the English catalog and assert against Chinese text. Pinning it here (as
+  // opposed to a per-spec `addInitScript` writing `gl-locale`) keeps the *detection* path
+  // under test rather than bypassing it, and means a new spec inherits the pin instead of
+  // having to remember it. `e2e/i18n.spec.ts` is where the other locales are exercised,
+  // scoping its overrides to its own `describe` blocks.
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], locale: "zh-CN" } }],
 
   webServer: [
     {

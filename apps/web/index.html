@@ -8,6 +8,15 @@
       Apply the saved theme before the first paint. The bundle loads async, so doing this
       in the artefact would flash the default (dark) theme for a frame on every light-mode
       reload. Must stay in lock-step with the key and values in `composables/theme.ts`.
+
+      The `lang` half is the same idea, but there is no message to pre-load: `i18n.ts`
+      builds the instance with the detected locale before the first render, so nothing can
+      paint in the wrong language. Only `<html lang>` needs to be right early — screen
+      readers, hyphenation and the browser's translate prompt read it.
+
+      This deliberately dumbed-down match (`zh*` → zh-CN, `en*` → en, else en) MUST stay
+      consistent with the alias table in `utils/locale.ts`. Any divergence is invisible
+      rather than wrong: `useLocale()` immediately rewrites the attribute from that module.
     -->
     <script>
       (function () {
@@ -19,6 +28,28 @@
           );
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "auto");
+        }
+        try {
+          var l = localStorage.getItem("gl-locale");
+          if (l !== "zh-CN" && l !== "en") l = null;
+          if (!l) {
+            var tags = navigator.languages || [navigator.language || ""];
+            l = "en";
+            for (var i = 0; i < tags.length; i++) {
+              var s = String(tags[i]).toLowerCase().replace(/_/g, "-");
+              if (s === "zh" || s.indexOf("zh-") === 0) {
+                l = "zh-CN";
+                break;
+              }
+              if (s.indexOf("en") === 0) {
+                l = "en";
+                break;
+              }
+            }
+          }
+          document.documentElement.lang = l;
+        } catch (e) {
+          document.documentElement.lang = "en";
         }
       })();
     </script>

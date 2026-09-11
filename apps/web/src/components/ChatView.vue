@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { useTheme } from "../composables/theme";
+import { useLocale } from "../composables/locale";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
+import type { Locale } from "../utils/locale";
 import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
 import Composer from "./Composer.vue";
@@ -10,24 +13,28 @@ import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 
 const store = useAppStore();
 const theme = useTheme();
+const { t } = useI18n();
+const { locale, setLocale, available } = useLocale();
 const showNewSession = ref(false);
 const messagesEl = ref<HTMLElement | null>(null);
 
 /* ----------------------------------- theme ----------------------------------- */
 
-const THEME_META = {
-  light: { label: "浅色", icon: "☀️" },
-  dark: { label: "深色", icon: "🌙" },
-  auto: { label: "自动", icon: "🖥️" },
-} as const;
+/** Icons are not translatable — only the labels are. */
+const THEME_ICON = { light: "☀️", dark: "🌙", auto: "🖥️" } as const;
 
-const themeIcon = computed(() => THEME_META[theme.mode.value].icon);
+const themeIcon = computed(() => THEME_ICON[theme.mode.value]);
 /** "自动（当前浅色）" reads clearer than just "自动" when the OS is doing the deciding. */
 const themeLabel = computed(() =>
   theme.mode.value === "auto"
-    ? `自动（当前${THEME_META[theme.resolved.value].label}）`
-    : THEME_META[theme.mode.value].label
+    ? t("theme.autoCurrent", { current: t(`theme.${theme.resolved.value}`) })
+    : t(`theme.${theme.mode.value}`)
 );
+
+/* ---------------------------------- locale ----------------------------------- */
+function onLocaleChange(event: Event): void {
+  setLocale((event.target as HTMLSelectElement).value as Locale);
+}
 
 
 /* ------------------------------- title editing ------------------------------- */
@@ -134,7 +141,7 @@ watch(
             @blur="commitTitle"
           />
           <span v-if="store.activeSession?.titleSource === 'auto'" class="title-hint">
-            标题由 AI 自动生成，修改后将不再自动更新
+            {{ t("chat.titleHint") }}
           </span>
         </div>
 
@@ -147,7 +154,7 @@ watch(
               :title="store.activeSession ? '点击编辑标题' : undefined"
               @click="startTitleEdit"
             >
-              {{ store.activeSession?.title || store.activeWorkspace?.name || "guided-learning" }}
+              {{ store.activeSession?.title || store.activeWorkspace?.name || t("app.title") }}
             </span>
             <button
               v-if="store.activeSession"
@@ -177,9 +184,23 @@ watch(
 
       <!-- The title block takes the free space, so the actions land on the right. -->
       <div class="topbar-actions">
+        <!-- A select, not a cycle button: N locales on one icon is not legible, and the
+             labels are autonyms so they stay readable in either language. -->
+        <select
+          class="locale-select"
+          :value="locale"
+          :title="t('locale.switchLabel')"
+          :aria-label="t('locale.switchLabel')"
+          data-testid="locale-select"
+          @change="onLocaleChange"
+        >
+          <option v-for="l in available" :key="l" :value="l">
+            {{ l === "zh-CN" ? t("locale.zhCN") : t("locale.en") }}
+          </option>
+        </select>
         <button
           class="icon-btn theme-toggle"
-          :title="`主题：${themeLabel}（点击切换）`"
+          :title="t('theme.toggleTitle', { label: themeLabel })"
           data-testid="theme-toggle"
           @click="theme.cycle()"
         >
@@ -188,9 +209,12 @@ watch(
       </div>
     </header>
 
+    <!-- Split into three keys rather than one message with <strong> in it: no message
+         carries HTML, so there is nothing for `v-html` to inject. -->
     <div v-if="!store.isConfigured" class="config-banner">
-      ⚠ 尚未配置可用的 API Key。点击右上角 <strong>⚙ 设置 → Providers</strong> 添加一个
-      Provider 并填入 Key，保存后即刻生效。
+      {{ t("app.configBanner.before") }}
+      <strong>{{ t("app.configBanner.action") }}</strong>
+      {{ t("app.configBanner.after") }}
     </div>
 
     <!-- The rail is a sibling of the scroller, not a child: inside it would scroll away. -->
@@ -236,6 +260,18 @@ watch(
 .theme-toggle {
   font-size: 15px;
   padding: 4px 8px;
+}
+.locale-select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  padding: 3px 4px;
+  cursor: pointer;
+}
+.locale-select:hover {
+  color: var(--text);
 }
 .title-row {
   display: flex;
