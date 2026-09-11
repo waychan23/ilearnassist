@@ -157,6 +157,14 @@ const label = computed(() => {
   padding: var(--space-6);
   font-size: var(--fs-2);
 }
+
+/* See the note in `ModelSelector.vue`: a scoped width outranks the sheet's narrow rule. */
+@media (max-width: 560px) {
+  .popover {
+    width: auto;
+  }
+}
+
 .row {
   display: flex;
   justify-content: space-between;

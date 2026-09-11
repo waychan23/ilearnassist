@@ -264,6 +264,22 @@ function save() {
 .model-main .icon-btn {
   margin-top: var(--space-9);
 }
+/*
+ * The model row is a flex line — a name field, a narrow context-window field and a delete
+ * button. At phone width it wraps, and the fields take the full line rather than each other's
+ * space. The icon button's top offset only made sense against the two-column alignment.
+ */
+@media (max-width: 560px) {
+  .model-main {
+    flex-wrap: wrap;
+  }
+  .model-main .narrow-field {
+    flex: 1 1 auto;
+  }
+  .model-main .icon-btn {
+    margin-top: 0;
+  }
+}
 .caps {
   display: flex;
   gap: var(--space-7);

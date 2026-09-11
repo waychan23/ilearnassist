@@ -361,67 +361,11 @@ body {
   overflow: hidden;
 }
 
-/*
- * The compact layout. This and the narrow query at the end of the file are the app's only
- * two breakpoints; their pixel values are duplicated as strings in
- * `composables/breakpoints.ts` because a media query cannot read a custom property, and
- * `style.test.ts` asserts the two stay in step.
- */
-@media (max-width: 900px) {
-  /*
-   * The sidebar leaves the grid rather than being re-columned. Leaving it as a grid item with
-   * `grid-template-columns: 1fr` would make it an implicit second *row* — `.main`'s height
-   * would collapse and the message list would silently stop scrolling, which is the failure
-   * the `minmax(0, 1fr)` comment above exists to prevent. One in-flow child, one column, and
-   * the explicit row still pins everything.
-   */
-  .app {
-    grid-template-columns: 1fr;
-  }
 
-  .sidebar {
-    position: fixed;
-    inset-block: 0;
-    inset-inline-start: 0;
-    width: 272px;
-    z-index: var(--z-drawer);
-    transform: translateX(-100%);
-    /*
-     * `visibility` is load-bearing, not polish. Without it the closed panel's workspace
-     * select, its two glyph buttons, every session row and the settings entry stay in the tab
-     * order — focusable, off-screen, and announced. The delay keeps it visible until the
-     * slide finishes; `.open` cancels both.
-     */
-    visibility: hidden;
-    transition:
-      transform var(--dur-slow) var(--ease-drawer),
-      visibility 0s linear var(--dur-slow);
-  }
 
-  .sidebar.open {
-    transform: none;
-    visibility: visible;
-    transition-delay: 0s, 0s;
-  }
 
-  /*
-   * Sits above the drawer's own scrim token but below the drawer, because `--z-backdrop` is
-   * only meaningfully different from `--z-drawer` here — a single value would let the sidebar
-   * and its own dim tie.
-   */
-  .drawer-backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--scrim);
-    z-index: var(--z-backdrop);
-  }
 
-  /* One rule for every form grid: four copies collapsed into one class in the previous
-     commit, which is what makes this a single line rather than four. */
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-}
+
 
 .topbar {
   display: flex;
@@ -1302,7 +1246,14 @@ body {
   border-radius: var(--radius-lg);
   width: var(--modal-md);
   max-width: calc(100vw - 40px);
+  /*
+   * Both units, in this order. `100vh` is the fallback for a browser without `dvh`, but on
+   * iOS it is measured with the address bar *hidden*, so a dialog that fills it is taller
+   * than the visible area and its footer sits under the browser chrome. `dvh` tracks the
+   * bar, and the later declaration wins where it is understood.
+   */
   max-height: calc(100vh - 80px);
+  max-height: calc(100dvh - 80px);
   display: flex;
   flex-direction: column;
 }
@@ -1371,4 +1322,196 @@ body {
   color: var(--code-fg);
   padding: 1px 5px;
   border-radius: var(--radius-xs);
+}
+
+/* -------------------------------- responsive --------------------------------- */
+
+/*
+ * Every breakpoint lives here, at the end of the sheet, and that placement is load-bearing
+ * rather than tidy. A media query does not raise specificity, so an override written earlier
+ * in the file loses to the rule it means to override on source order alone — `position:
+ * fixed` on the phone-sized `.overlay-popover` silently lost to the same class declared
+ * further down, and the popover stayed absolutely positioned and ran off the edge.
+ *
+ * Two breakpoints, both minimums. `900` also hides the minimap rail, which is where the
+ * value came from; `560` is where the composer toolbar stops fitting on one line. The pixel
+ * values are duplicated as strings in `composables/breakpoints.ts` because a media query
+ * cannot read a custom property, and `style.test.ts` asserts the two stay in step.
+ */
+
+/*
+ * The compact layout. This and the narrow query at the end of the file are the app's only
+ * two breakpoints; their pixel values are duplicated as strings in
+ * `composables/breakpoints.ts` because a media query cannot read a custom property, and
+ * `style.test.ts` asserts the two stay in step.
+ */
+
+@media (max-width: 900px) {
+  /*
+   * The sidebar leaves the grid rather than being re-columned. Leaving it as a grid item with
+   * `grid-template-columns: 1fr` would make it an implicit second *row* — `.main`'s height
+   * would collapse and the message list would silently stop scrolling, which is the failure
+   * the `minmax(0, 1fr)` comment above exists to prevent. One in-flow child, one column, and
+   * the explicit row still pins everything.
+   */
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 272px;
+    z-index: var(--z-drawer);
+    transform: translateX(-100%);
+    /*
+     * `visibility` is load-bearing, not polish. Without it the closed panel's workspace
+     * select, its two glyph buttons, every session row and the settings entry stay in the tab
+     * order — focusable, off-screen, and announced. The delay keeps it visible until the
+     * slide finishes; `.open` cancels both.
+     */
+    visibility: hidden;
+    transition:
+      transform var(--dur-slow) var(--ease-drawer),
+      visibility 0s linear var(--dur-slow);
+  }
+
+  .sidebar.open {
+    transform: none;
+    visibility: visible;
+    transition-delay: 0s, 0s;
+  }
+
+  /*
+   * Sits above the drawer's own scrim token but below the drawer, because `--z-backdrop` is
+   * only meaningfully different from `--z-drawer` here — a single value would let the sidebar
+   * and its own dim tie.
+   */
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--scrim);
+    z-index: var(--z-backdrop);
+  }
+
+  /* One rule for every form grid: four copies collapsed into one class in the previous
+     commit, which is what makes this a single line rather than four. */
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/*
+ * The narrow phone. Nothing changes about the layout — the pane already has the width. What
+ * is left is the controls that cannot fit on one line, and the two floating surfaces that
+ * have nowhere to float to once their anchor is near the screen edge.
+ */
+@media (max-width: 560px) {
+  /*
+   * Dialogs become bottom sheets: anchored to the bottom edge, full width, shadow pointing
+   * up, and a safe-area inset so the last row clears the home indicator.
+   */
+  .modal-overlay {
+    align-items: flex-end;
+  }
+
+  .modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: var(--shadow-sheet);
+  }
+
+  .modal .modal-body {
+    padding: var(--space-7);
+  }
+
+  /* The footer stays reachable however long the body is. */
+  .modal .modal-foot {
+    position: sticky;
+    bottom: 0;
+    background: var(--panel);
+  }
+
+  /*
+   * The same for popovers, which is what promoting `.overlay-popover` paid for: one rule
+   * covers the model picker and the token counter, where two scoped copies would have been
+   * two chances to forget one.
+   */
+  .overlay-popover {
+    position: fixed;
+    inset-inline: var(--space-4);
+    inset-block-start: auto;
+    /*
+     * Anchored to the viewport edge, so it floats over the composer rather than above it.
+     * Clearing the composer would mean a magic offset against a height that changes — the
+     * toolbar wraps, an attachment chip adds a row — and a literal that happened to fit
+     * today would sit on the input tomorrow. Covering it reads as the bottom sheet it now
+     * is, and it is dismissed by tapping anywhere else.
+     */
+    inset-block-end: var(--space-4);
+    max-width: none;
+    max-height: 60dvh;
+  }
+
+  /*
+   * Five controls on one row no longer fit, so the row is allowed to take two. `flex-wrap`
+   * rather than `column-reverse`, which would invert the reading order for a screen reader.
+   */
+  .composer .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .composer .toolbar-right {
+    flex-shrink: 1;
+  }
+
+  /*
+   * Four tabs do not fit across a phone. They scroll rather than wrapping, because a tab
+   * label broken across two lines reads as two tabs and splits the active underline.
+   */
+  .tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding-inline: var(--space-5);
+  }
+
+  /* The Copilot is already named in the composer toolbar, where it can be changed; the copy
+     under the title only repeats it, and the title itself needs the room. */
+  .topbar .subtitle {
+    display: none;
+  }
+
+  /* Same reasoning for the edit button: the glyph is the affordance and the tooltip says
+     the rest, so the label is what the topbar spends first. */
+  .topbar .title-edit-btn .label {
+    display: none;
+  }
+}
+
+/*
+ * A finger gets the larger target on the controls that carry the turn: sending, and the
+ * drawer. The per-message actions stay at 32px — see the note in `MessageItem.vue`.
+ */
+@media (pointer: coarse) {
+  .composer .send-btn,
+  .composer .attach-btn,
+  .composer .params-btn,
+  .topbar .nav-toggle {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }

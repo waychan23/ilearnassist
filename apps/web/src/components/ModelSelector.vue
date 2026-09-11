@@ -152,6 +152,17 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   padding: var(--space-3);
 }
 
+/*
+ * A scoped declaration outranks the sheet's narrow-screen rule on specificity, not on order,
+ * so the width has to be released here rather than there. The sheet still owns where it ends
+ * up; this only says it stops insisting on 280px.
+ */
+@media (max-width: 560px) {
+  .menu {
+    width: auto;
+  }
+}
+
 .group-head {
   display: flex;
   align-items: center;

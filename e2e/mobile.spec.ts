@@ -179,6 +179,64 @@ test("layout: a dialog opened from the drawer covers the whole screen", async ({
   expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
 });
 
+test("narrow: the composer keeps the whole row reachable", async ({ page, request }) => {
+  // Five controls on one line no longer fit, and the reflow must not push the send button
+  // below the fold or shrink it out of reach.
+  await converse(page, request, "你好");
+
+  const input = page.getByTestId("composer-input");
+  const send = page.getByTestId("composer-send");
+
+  for (const [name, locator] of [
+    ["composer-input", input],
+    ["composer-send", send],
+  ] as const) {
+    const box = await locator.boundingBox();
+    expect(box, `${name} is not laid out`).not.toBeNull();
+    expect(box!.y + box!.height, `${name} is below the fold`).toBeLessThanOrEqual(839);
+    expect(box!.x, `${name} starts off-screen`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `${name} runs off the right edge`).toBeLessThanOrEqual(412);
+  }
+
+  // 44px, because sending is the one control the whole screen exists for.
+  const sendBox = (await send.boundingBox())!;
+  expect(sendBox.width).toBeGreaterThanOrEqual(44);
+  expect(sendBox.height).toBeGreaterThanOrEqual(44);
+});
+
+test("narrow: dialogs become bottom sheets", async ({ page, request }) => {
+  await converse(page, request, "你好");
+
+  // Settings lives in the sidebar, which is a drawer at this width.
+  await page.getByTestId("nav-toggle").tap();
+  await page.getByTestId("open-settings").tap();
+
+  const modal = page.locator("body > .modal-overlay .modal");
+  await expect(modal).toBeVisible();
+
+  const box = (await modal.boundingBox())!;
+  // Full width, and flush to the bottom edge rather than centred.
+  expect(box.width).toBeCloseTo(412, 0);
+  expect(box.y + box.height).toBeCloseTo(839, 0);
+});
+
+test("narrow: a popover becomes a sheet instead of hanging off the edge", async ({
+  page,
+  request,
+}) => {
+  // Anchored `right: 0` above a control near the right edge, the 280px menu has nowhere to
+  // go at this width — so it stops being anchored at all.
+  await converse(page, request, "你好");
+
+  await page.locator(".model-btn").tap();
+  const menu = page.locator(".overlay-popover.menu");
+  await expect(menu).toBeVisible();
+
+  const box = (await menu.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(412);
+});
+
 test("layout: a resize back to desktop restores the inline sidebar", async ({ page, request }) => {
   // Layout state that is only read once would leave the drawer semantics in place on a wide
   // screen — a hidden sidebar and a toggle for a drawer nobody needs.

@@ -170,7 +170,7 @@ watch(
               :title="t('chat.editTitle')"
               @click="startTitleEdit"
             >
-              ✎ {{ t("chat.editTitle") }}
+              ✎ <span class="label">{{ t("chat.editTitle") }}</span>
             </button>
             <span
               v-if="store.activeSession?.titleSource === 'auto'"
