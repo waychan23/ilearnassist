@@ -344,9 +344,9 @@ watch(
 .config-banner {
   margin: 0;
   padding: 8px 16px;
-  background: rgba(230, 179, 60, 0.12);
-  border-bottom: 1px solid rgba(230, 179, 60, 0.35);
-  color: #e6c06a;
+  background: var(--warning-bg);
+  border-bottom: 1px solid var(--warning-border);
+  color: var(--warning);
   font-size: 13px;
   flex-shrink: 0;
 }

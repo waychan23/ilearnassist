@@ -10,5 +10,11 @@ export default defineConfig({
     // `TextDecoder`, so it must run against the same implementations the browser gets.
     environment: "jsdom",
     include: ["test/**/*.test.ts"],
+    // Vitest stubs CSS by default, so a `.css` file read with `?raw` comes back as an
+    // empty string. `test/style.test.ts` parses `src/style.css` as text (jsdom will not
+    // resolve custom properties, so the contrast invariant can only be checked at the
+    // source), and needs the real content. Nothing else here imports CSS, so this costs
+    // nothing today.
+    css: true,
   },
 });

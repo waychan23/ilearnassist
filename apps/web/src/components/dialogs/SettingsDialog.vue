@@ -684,10 +684,12 @@ function onDefaultModelChange(e: Event) {
   font-weight: 400;
 }
 .key-state.ok {
-  color: #4cc38a;
+  color: var(--success);
 }
 .key-state.missing {
-  color: #e5534b;
+  /* `--danger-text`, not `--danger`: this is text, and the palette keeps a separate tone
+     for it in each theme. */
+  color: var(--danger-text);
 }
 .provider-row .url {
   color: var(--text-3);

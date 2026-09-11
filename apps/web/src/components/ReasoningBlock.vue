@@ -110,7 +110,7 @@ async function copy() {
   background: rgba(76, 139, 245, 0.16);
 }
 .dot.done {
-  background: rgba(230, 179, 60, 0.14);
+  background: var(--warning-bg);
 }
 
 .label {

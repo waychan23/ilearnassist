@@ -88,7 +88,7 @@ const prettyInput = computed(() => {
   display: inline-block;
 }
 .icon.ok {
-  color: #4cc38a;
+  color: var(--success);
 }
 .toggle {
   color: var(--text-3);

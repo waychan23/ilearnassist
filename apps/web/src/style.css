@@ -10,10 +10,29 @@
  * `color-scheme` is what tells the browser whether native controls and scrollbars render
  * light or dark, so it flips alongside the palette.
  *
- * Code blocks stay dark in both themes — a deliberate choice (GitHub's own light theme
- * keeps a light code background, but many editors invert it). `--code-bg` is therefore
- * intentionally NOT overridden below, and `highlight.js/styles/github-dark.css` stays the
- * single syntax theme.
+ * `--warning` and `--success` are darkened in the light palette rather than reused from
+ * the dark one: both are spent as *text* (and as a status dot / accent border), and the
+ * dark tones are unreadable on a light background — `#e6b33c` is 1.7:1 on `--panel-2`.
+ * Their light values clear 4.5:1 against every background they are painted on.
+ *
+ * Code blocks follow the theme: `--code-bg` is dark in the dark palette and light in the
+ * light one. An earlier version kept them dark in both, which meant every code surface had
+ * a background that did not flip while its text colour did — inline code rendered
+ * `#1f2328` on `#0d1117`, about 1.2:1.
+ *
+ * `--code-fg` / `--code-fg-2` are the foregrounds for those surfaces, and they flip with
+ * `--code-bg`. They are their own tones rather than `--text` / `--text-2`, so a rule that
+ * paints `--code-bg` can pair it with a `--code-fg` and be correct in both themes;
+ * `apps/web/test/style.test.ts` requires that pairing. Each theme's `--code-fg` is the
+ * colour its syntax sheet uses for untokenised code, so the two agree instead of differing
+ * by a shade.
+ *
+ * Because the block flips, the *syntax* palette has to as well — highlight.js's dark token
+ * colours are unreadable on a light background. `highlight.js` ships one stylesheet per
+ * theme rather than themed custom properties, and neither can be scoped by CSS alone (both
+ * key off `.hljs`, and the theme is an attribute, not a media query), so
+ * `composables/theme.ts` swaps `github.css` in for `github-dark.css`. Loading both and
+ * letting the later one win would colour every token for whichever imported last.
  */
 :root {
   --bg: #16181c;
@@ -32,8 +51,12 @@
   --danger-bg: rgba(229, 83, 75, 0.12);
   --danger-border: rgba(229, 83, 75, 0.4);
   --warning: #e6b33c;
+  --warning-bg: rgba(230, 179, 60, 0.12);
+  --warning-border: rgba(230, 179, 60, 0.35);
   --success: #4cc38a;
   --code-bg: #0d1117;
+  --code-fg: #c9d1d9;
+  --code-fg-2: #9aa0a6;
   --scrollbar: #33373e;
   --scrollbar-hover: #3f444c;
   --radius: 8px;
@@ -56,6 +79,13 @@
   --danger-text: #b3261e;
   --danger-bg: rgba(217, 67, 59, 0.08);
   --danger-border: rgba(217, 67, 59, 0.35);
+  --warning: #8a5c00;
+  --warning-bg: rgba(138, 92, 0, 0.08);
+  --warning-border: rgba(138, 92, 0, 0.3);
+  --success: #187733;
+  --code-bg: #f6f8fa;
+  --code-fg: #24292e;
+  --code-fg-2: #57606a;
   --scrollbar: #c1c8d0;
   --scrollbar-hover: #a5adb8;
   color-scheme: light;
@@ -78,6 +108,13 @@
     --danger-text: #b3261e;
     --danger-bg: rgba(217, 67, 59, 0.08);
     --danger-border: rgba(217, 67, 59, 0.35);
+    --warning: #8a5c00;
+    --warning-bg: rgba(138, 92, 0, 0.08);
+    --warning-border: rgba(138, 92, 0, 0.3);
+    --success: #187733;
+    --code-bg: #f6f8fa;
+    --code-fg: #24292e;
+    --code-fg-2: #57606a;
     --scrollbar: #c1c8d0;
     --scrollbar-hover: #a5adb8;
     color-scheme: light;
@@ -409,6 +446,7 @@ body {
 }
 .markdown code {
   background: var(--code-bg);
+  color: var(--code-fg);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
@@ -417,6 +455,7 @@ body {
 }
 .markdown pre {
   background: var(--code-bg);
+  color: var(--code-fg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px;
@@ -499,7 +538,7 @@ body {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--text-2);
+  color: var(--code-fg-2);
 }
 
 .streaming-cursor::after {
@@ -849,6 +888,7 @@ body {
 
 .config-tip code {
   background: var(--code-bg);
+  color: var(--code-fg);
   padding: 1px 5px;
   border-radius: 4px;
 }

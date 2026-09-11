@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { buildPdf } from "../apps/server/src/documents/sample.js";
+import { FAKE_LLM, scriptLlm } from "./llm";
 
 /**
  * Browser end-to-end: the real Vue app, the real Fastify server, a real sqlite database,
@@ -9,7 +10,6 @@ import { buildPdf } from "../apps/server/src/documents/sample.js";
  * it creates the workspace it needs rather than assuming an empty database.
  */
 
-const FAKE_LLM = `http://127.0.0.1:${process.env.GL_FAKE_LLM_PORT ?? 3898}`;
 const FAKE_PARSER = `http://127.0.0.1:${process.env.GL_FAKE_PARSER_PORT ?? 3897}`;
 
 /** The last chat (streaming) request the fake LLM received, as raw JSON. */
@@ -18,13 +18,6 @@ async function lastChatRequest(request: APIRequestContext): Promise<string> {
     stream?: boolean;
   }[];
   return JSON.stringify(sent.find((r) => r.stream === true));
-}
-
-/** Discard anything a previous test scripted, and queue the turns for the next one. */
-async function scriptLlm(request: APIRequestContext, body: { turns: unknown[]; title?: string }) {
-  await request.post(`${FAKE_LLM}/__reset`);
-  const res = await request.post(`${FAKE_LLM}/__script`, { data: body });
-  expect(res.ok()).toBe(true);
 }
 
 test("a conversation round trip survives a reload", async ({ page, request }) => {

@@ -1,14 +1,53 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { scriptLlm } from "./llm";
 
 /**
  * The theme is enforced by a `data-theme` attribute on `<html>` set before first paint,
  * so the assertions here read that attribute rather than a computed style — it is the
  * single source of truth that both the CSS and the toggle write to.
+ *
+ * The exception is the code palette: jsdom cannot resolve custom properties, so whether
+ * the surfaces painted `--code-bg` are actually *readable* can only be checked in a real
+ * browser. `apps/web/test/style.test.ts` pins that invariant at the source; the contrast
+ * check below catches what a source scan cannot, namely a later rule winning on
+ * specificity.
  */
 
 /** The attribute value the page is actually themed by. */
 const htmlTheme = (page: Page) =>
   page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+
+/**
+ * The computed foreground and background of a rendered element.
+ *
+ * The background is required to be opaque: a transparent one reads as `rgba(0, 0, 0, 0)`,
+ * whose digits `luminance` would happily take as black. Measuring a `<code>` inside a `<pre>`
+ * that way passes for the block's own background while proving nothing about it.
+ */
+async function colorsOf(locator: Locator): Promise<{ color: string; background: string }> {
+  const style = await locator.evaluate((node) => {
+    const computed = getComputedStyle(node);
+    return { color: computed.color, background: computed.backgroundColor };
+  });
+  expect(style.background, "background is transparent").not.toBe("rgba(0, 0, 0, 0)");
+  return style;
+}
+
+/** WCAG relative luminance of an `rgb(r, g, b)` colour. */
+function luminance(rgb: string): number {
+  const channel = (n: number): number => {
+    const c = n / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const [r, g, b] = [...rgb.matchAll(/\d+/g)].map((m) => channel(Number(m[0])));
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+/** WCAG contrast ratio between two `rgb(…)` colours. */
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+}
 
 test("theme cycles light → dark → auto and persists across a reload", async ({ page }) => {
   await page.goto("/");
@@ -60,4 +99,63 @@ test("a light theme flips the palette", async ({ page }) => {
   // The dark default is #16181c (near-black); light is white. Reading the resolved body
   // colour proves the variable actually flipped, not just the attribute.
   expect(bg).toBe("rgb(255, 255, 255)");
+});
+
+test("code surfaces flip with the theme and stay readable in both", async ({ page, request }) => {
+  // Inline code and a fenced, syntax-highlighted block — the two shapes that regressed,
+  // because they inherited `--text` on a background that never flipped.
+  await scriptLlm(request, {
+    turns: [{ content: "先跑 `pnpm install`。\n\n```bash\npnpm install --frozen-lockfile\n```\n" }],
+  });
+
+  await page.goto("/");
+  await page.getByTestId("composer-input").fill("怎么安装");
+  await page.getByTestId("composer-send").click();
+
+  const content = page.getByTestId("message-assistant").last().getByTestId("message-content");
+  await expect(content).toContainText("pnpm install");
+
+  // Inline code carries its own background; for the fenced block it is the `<pre>` that
+  // does (the `<code>` inside is `transparent`, see `colorsOf`).
+  const surfaces: [string, Locator][] = [
+    ["inline code", content.locator("p code").first()],
+    ["fenced block", content.locator("pre").first()],
+  ];
+
+  const readAll = async () => {
+    const seen: { color: string; background: string }[] = [];
+    for (const [, surface] of surfaces) seen.push(await colorsOf(surface));
+    return seen;
+  };
+
+  // Through the real toggle rather than by writing the attribute, so the whole path runs —
+  // including the syntax stylesheet `composables/theme.ts` swaps on the resolved theme. It
+  // cycles light → dark → auto, so this clicks on until the wanted theme is the attribute;
+  // counting clicks instead would depend on where the previous assertion left the cycle.
+  const toggle = page.getByTestId("theme-toggle");
+  const show = async (wanted: "light" | "dark") => {
+    for (let i = 0; i < 3 && (await htmlTheme(page)) !== wanted; i++) await toggle.click();
+    expect(await htmlTheme(page)).toBe(wanted);
+  };
+
+  await show("light");
+  const light = await readAll();
+  await show("dark");
+  const dark = await readAll();
+
+  surfaces.forEach(([name], i) => {
+    const onLight = light[i]!;
+    const onDark = dark[i]!;
+
+    // The palette flips. An earlier version pinned the code background dark in both themes
+    // while the text colour followed the theme: inline code was `#1f2328` on `#0d1117`,
+    // about 1.2:1 — invisible rather than merely dim.
+    expect(onLight.background, `${name} background`).not.toBe(onDark.background);
+    // Dark text on a light block in light, and the reverse in dark.
+    expect(luminance(onLight.background), name).toBeGreaterThan(luminance(onLight.color));
+    expect(luminance(onDark.background), name).toBeLessThan(luminance(onDark.color));
+
+    expect.soft(contrast(onLight.color, onLight.background), `${name}: light`).toBeGreaterThan(4.5);
+    expect.soft(contrast(onDark.color, onDark.background), `${name}: dark`).toBeGreaterThan(4.5);
+  });
 });

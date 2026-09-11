@@ -112,13 +112,13 @@ const label = computed(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: conic-gradient(var(--ring, #4cc38a) var(--pct), var(--border) 0);
+  background: conic-gradient(var(--ring, var(--success)) var(--pct), var(--border) 0);
 }
 .token-btn.ok {
-  --ring: #4cc38a;
+  --ring: var(--success);
 }
 .token-btn.warn {
-  --ring: #e6b33c;
+  --ring: var(--warning);
 }
 .token-btn.high {
   --ring: var(--danger);
@@ -169,10 +169,10 @@ const label = computed(() => {
   transition: width 0.2s;
 }
 .fill.ok {
-  background: #4cc38a;
+  background: var(--success);
 }
 .fill.warn {
-  background: #e6b33c;
+  background: var(--warning);
 }
 .fill.high {
   background: var(--danger);

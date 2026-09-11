@@ -3,7 +3,9 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import { i18n } from "./i18n";
 import { useLocale } from "./composables/locale";
-import "highlight.js/styles/github-dark.css";
+// The highlight.js theme is not imported here: syntax colours have to follow the resolved
+// theme, so `composables/theme.ts` swaps the matching stylesheet in (and importing one
+// here as well would leave a second, unscoped copy fighting it).
 import "./style.css";
 
 // Runs before mount so `<html lang>` and the i18n instance agree with storage (or with

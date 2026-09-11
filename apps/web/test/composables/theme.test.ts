@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import darkSyntax from "highlight.js/styles/github-dark.css?inline";
+import lightSyntax from "highlight.js/styles/github.css?inline";
 import type { useTheme as UseTheme } from "../../src/composables/theme.js";
 
 /**
@@ -119,5 +121,80 @@ describe("useTheme", () => {
     // A failed write must not throw, and the in-memory + DOM theme still update.
     expect(() => setTheme("dark")).not.toThrow();
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+});
+
+/**
+ * `highlight.js` ships one stylesheet per theme and both key off `.hljs`, so the resolved
+ * theme decides which one is in the document. The assertions compare against the same
+ * imports the composable uses, rather than poking at vendor colours — the precondition
+ * test below is what keeps them from passing vacuously if `?inline` ever returns a stub.
+ */
+describe("useTheme's syntax stylesheet", () => {
+  /** The `<style>` element the composable swaps the highlight.js theme into. */
+  const syntaxStyle = (): HTMLStyleElement | null =>
+    document.getElementById("gl-syntax-theme") as HTMLStyleElement | null;
+
+  /** Which vendor sheet the element is currently carrying. */
+  const served = (): "light" | "dark" | "none" => {
+    const text = syntaxStyle()?.textContent ?? "";
+    if (text.includes(darkSyntax)) return "dark";
+    if (text.includes(lightSyntax)) return "light";
+    return "none";
+  };
+
+  it("imports both vendor themes as text, and they are different stylesheets", () => {
+    expect(lightSyntax).toContain(".hljs");
+    expect(darkSyntax).toContain(".hljs");
+    expect(lightSyntax).not.toBe(darkSyntax);
+  });
+
+  it("lays the vendor rules down, so document order cannot decide a tie", async () => {
+    // Vite puts style.css after this element in dev but before it in a build. Layered rules
+    // lose to unlayered ones either way, which is what keeps our `pre code { padding: 0 }`
+    // from losing to the vendor's `pre code.hljs { padding: 1em }` in a build.
+    await loadTheme("light");
+    expect(syntaxStyle()?.textContent).toContain("@layer hljs");
+  });
+
+  it("serves the stylesheet matching the resolved theme", async () => {
+    await loadTheme("light");
+    expect(served()).toBe("light");
+
+    await loadTheme("dark");
+    expect(served()).toBe("dark");
+  });
+
+  it("follows the system while the theme is auto", async () => {
+    await loadTheme("auto", true);
+    expect(served()).toBe("dark");
+
+    await loadTheme("auto", false);
+    expect(served()).toBe("light");
+  });
+
+  it("swaps on a theme change, reusing one element rather than stacking them", async () => {
+    const { setTheme } = await loadTheme("light");
+    expect(served()).toBe("light");
+
+    setTheme("dark");
+    // Synchronous: a deferred swap would leave the attribute and the token colours out of
+    // step for a frame.
+    expect(served()).toBe("dark");
+
+    setTheme("light");
+    expect(served()).toBe("light");
+
+    expect(document.querySelectorAll("#gl-syntax-theme")).toHaveLength(1);
+  });
+
+  it("swaps when the system flips under auto", async () => {
+    await loadTheme("auto", false);
+    expect(served()).toBe("light");
+
+    mediaStub!.matches = true;
+    mediaStub!._listeners.forEach((fn) => fn());
+
+    expect(served()).toBe("dark");
   });
 });

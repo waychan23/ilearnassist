@@ -210,9 +210,9 @@ function onKeydown(e: KeyboardEvent) {
 }
 .vision-warning {
   font-size: 12px;
-  color: #e6c06a;
-  background: rgba(230, 179, 60, 0.1);
-  border: 1px solid rgba(230, 179, 60, 0.3);
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: var(--radius);
   padding: 6px 10px;
 }
