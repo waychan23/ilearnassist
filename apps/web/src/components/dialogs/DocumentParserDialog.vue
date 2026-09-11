@@ -85,80 +85,91 @@ function save() {
 </script>
 
 <template>
-  <div class="modal-overlay" @click.self="emit('close')">
-    <div class="modal">
-      <div class="modal-head">
-        <h3>{{ props.parser ? t("parsers.edit") : t("parsers.create") }}</h3>
-        <button
-        class="icon-btn"
-        :title="t('common.close')"
-        :aria-label="t('common.close')"
-        @click="emit('close')"
-      >✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="field">
-          <label>{{ t("parsers.kind") }}</label>
-          <select v-model="draft.kind" class="input" data-testid="parser-kind">
-            <option v-for="k in props.kinds" :key="k.kind" :value="k.kind">{{ k.label }}</option>
-          </select>
-          <div class="hint">
-            {{ t("parsers.kindHint") }}
+  <!--
+    Teleported to `body`, and this is load-bearing rather than tidiness. On a compact
+    viewport the sidebar is `position: fixed` inside a `transform`, and a fixed-position
+    element whose ancestor is transformed is positioned against *that ancestor* — so a
+    `.modal-overlay` left in place here would be laid out inside the off-canvas drawer and
+    render off-screen. The palette still applies: the theme lives on `<html>` and custom
+    properties cascade from there.
+  -->
+  <Teleport to="body">
+    <div class="modal-overlay" @click.self="emit('close')">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>{{ props.parser ? t("parsers.edit") : t("parsers.create") }}</h3>
+          <button
+          class="icon-btn"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="emit('close')"
+        >✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>{{ t("parsers.kind") }}</label>
+            <select v-model="draft.kind" class="input" data-testid="parser-kind">
+              <option v-for="k in props.kinds" :key="k.kind" :value="k.kind">{{ k.label }}</option>
+            </select>
+            <div class="hint">
+              {{ t("parsers.kindHint") }}
+            </div>
+          </div>
+
+          <div class="field">
+            <label>{{ t("common.name") }}</label>
+            <input v-model="draft.name" class="input" :placeholder="t('parsers.namePlaceholder')" />
+          </div>
+
+          <div class="field">
+            <label>Base URL</label>
+            <input
+              v-model="draft.baseURL"
+              class="input"
+              :placeholder="selectedKind?.defaultBaseURL ?? 'http://127.0.0.1:5001/v1/convert/file'"
+            />
+            <div class="hint" v-if="selectedKind?.helpURL">
+              {{ t("parsers.credentialsBefore") }}<a
+                :href="selectedKind.helpURL"
+                target="_blank"
+                rel="noreferrer"
+                >{{ selectedKind.helpURL }}</a
+              >
+            </div>
+          </div>
+
+          <div class="field">
+            <label>{{ t("parsers.apiKey") }}{{ keyRequired ? "" : t("parsers.apiKeyOptional") }}</label>
+            <input
+              v-model="draft.apiKey"
+              class="input"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="keyPlaceholder"
+              data-testid="parser-api-key"
+            />
+            <div class="hint">
+              {{ t("parsers.apiKeyNote") }}
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="check-row">
+              <input v-model="draft.enabled" type="checkbox" />
+              {{ t("parsers.enabled") }}
+            </label>
           </div>
         </div>
-
-        <div class="field">
-          <label>{{ t("common.name") }}</label>
-          <input v-model="draft.name" class="input" :placeholder="t('parsers.namePlaceholder')" />
+        <div class="modal-foot">
+          <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
+          <button class="btn primary" :disabled="!canSave" @click="save" data-testid="parser-save">
+            {{ t("common.save") }}
+          </button>
         </div>
-
-        <div class="field">
-          <label>Base URL</label>
-          <input
-            v-model="draft.baseURL"
-            class="input"
-            :placeholder="selectedKind?.defaultBaseURL ?? 'http://127.0.0.1:5001/v1/convert/file'"
-          />
-          <div class="hint" v-if="selectedKind?.helpURL">
-            {{ t("parsers.credentialsBefore") }}<a
-              :href="selectedKind.helpURL"
-              target="_blank"
-              rel="noreferrer"
-              >{{ selectedKind.helpURL }}</a
-            >
-          </div>
-        </div>
-
-        <div class="field">
-          <label>{{ t("parsers.apiKey") }}{{ keyRequired ? "" : t("parsers.apiKeyOptional") }}</label>
-          <input
-            v-model="draft.apiKey"
-            class="input"
-            type="password"
-            autocomplete="new-password"
-            :placeholder="keyPlaceholder"
-            data-testid="parser-api-key"
-          />
-          <div class="hint">
-            {{ t("parsers.apiKeyNote") }}
-          </div>
-        </div>
-
-        <div class="field">
-          <label class="check-row">
-            <input v-model="draft.enabled" type="checkbox" />
-            {{ t("parsers.enabled") }}
-          </label>
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
-        <button class="btn primary" :disabled="!canSave" @click="save" data-testid="parser-save">
-          {{ t("common.save") }}
-        </button>
       </div>
     </div>
-  </div>
+
+  </Teleport>
 </template>
 
 <style scoped>

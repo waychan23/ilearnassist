@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import type { Session } from "../api/types";
-import { openSettings } from "../composables/ui";
+import { closeDrawer, openSettings, uiState } from "../composables/ui";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 
@@ -13,6 +13,41 @@ const store = useAppStore();
 
 const showCreateWorkspace = ref(false);
 const showNewSession = ref(false);
+
+/*
+ * Every navigation closes the drawer, and none of them is a watcher.
+ *
+ * `watch(() => store.activeSessionId, closeDrawer)` looks tempting and is wrong twice over:
+ * it also fires on first load, when `init()` sets the active session and no drawer is open,
+ * and it cannot cover the workspace switch, which changes every session underneath.
+ *
+ * These are on the actions rather than on the dialogs' results, so the drawer is already
+ * gone by the time a modal covers the screen — and it is never left open behind one.
+ */
+function onWorkspaceChange(event: Event) {
+  void store.selectWorkspace((event.target as HTMLSelectElement).value);
+  closeDrawer();
+}
+
+function openNewWorkspace() {
+  showCreateWorkspace.value = true;
+  closeDrawer();
+}
+
+function openNewSession() {
+  showNewSession.value = true;
+  closeDrawer();
+}
+
+function selectSession(id: string) {
+  void store.selectSession(id);
+  closeDrawer();
+}
+
+function openSidebarSettings() {
+  closeDrawer();
+  openSettings();
+}
 
 /* --------------------------------- rename ---------------------------------- */
 const renamingId = ref<string | null>(null);
@@ -69,18 +104,23 @@ async function onDeleteWorkspace() {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside
+    id="app-sidebar"
+    class="sidebar"
+    data-testid="sidebar"
+    :class="{ open: uiState.drawerOpen }"
+  >
     <div class="workspace-select">
       <select
         class="select"
         data-testid="workspace-select"
         :value="store.activeWorkspaceId ?? ''"
-        @change="store.selectWorkspace(($event.target as HTMLSelectElement).value)"
+        @change="onWorkspaceChange"
       >
         <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
       </select>
       <button class="icon-btn" :title="t('sidebar.newWorkspace')"
-        :aria-label="t('sidebar.newWorkspace')" @click="showCreateWorkspace = true">＋</button>
+        :aria-label="t('sidebar.newWorkspace')" @click="openNewWorkspace">＋</button>
       <button
         class="icon-btn danger"
         :title="t('sidebar.deleteWorkspace')"
@@ -95,7 +135,7 @@ async function onDeleteWorkspace() {
     <div class="side-section">
       <span>{{ t("sidebar.sessions") }}</span>
       <button class="icon-btn" data-testid="new-session" :title="t('sidebar.newSession')"
-        :aria-label="t('sidebar.newSession')" @click="showNewSession = true">
+        :aria-label="t('sidebar.newSession')" @click="openNewSession">
         ＋
       </button>
     </div>
@@ -108,7 +148,7 @@ async function onDeleteWorkspace() {
         data-testid="session-item"
         :data-session-id="s.id"
         :class="{ active: s.id === store.activeSessionId }"
-        @click="renamingId === s.id ? undefined : store.selectSession(s.id)"
+        @click="renamingId === s.id ? undefined : selectSession(s.id)"
       >
         <input
           v-if="renamingId === s.id"
@@ -134,7 +174,12 @@ async function onDeleteWorkspace() {
     </div>
 
     <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
-    <button class="menu-item side-settings" :title="t('sidebar.settings')" data-testid="open-settings" @click="openSettings()">
+    <button
+      class="menu-item side-settings"
+      :title="t('sidebar.settings')"
+      data-testid="open-settings"
+      @click="openSidebarSettings"
+    >
       <span class="gear">⚙</span>
       <span class="label">{{ t("sidebar.settings") }}</span>
       <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>

@@ -51,3 +51,143 @@ test("touch: one tap opens the token popover, and it stays open", async ({ page,
   await page.locator(".topbar").tap();
   await expect(popover).toBeHidden();
 });
+
+test("layout: the sidebar is a drawer, and the pane gets the whole width", async ({
+  page,
+  request,
+}) => {
+  // The measured failure this exists for: at 375px the sidebar took 272px of it and the chat
+  // pane was 103px, so a user's message rendered one character per line.
+  await converse(page, request, "你好");
+
+  const sidebar = page.getByTestId("sidebar");
+  const pane = page.locator(".main");
+
+  await expect(sidebar).toBeHidden();
+  expect((await pane.boundingBox())?.width).toBeCloseTo(412, 0);
+
+  await page.getByTestId("nav-toggle").tap();
+  await expect(sidebar).toBeVisible();
+  await expect(page.getByTestId("drawer-backdrop")).toBeVisible();
+
+  await page.getByTestId("drawer-backdrop").tap({ position: { x: 380, y: 400 } });
+  await expect(sidebar).toBeHidden();
+});
+
+test("layout: focus enters the drawer and comes back to the toggle", async ({ page, request }) => {
+  await converse(page, request, "你好");
+
+  const toggle = page.getByTestId("nav-toggle");
+  await toggle.tap();
+
+  expect(
+    await page.evaluate(() => document.activeElement?.closest(".sidebar") !== null),
+  ).toBe(true);
+
+  // Escape is the keyboard path out — there is no close button in the drawer.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("sidebar")).toBeHidden();
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))).toBe(
+    "nav-toggle",
+  );
+});
+
+test("layout: one Escape closes the confirm prompt, not the drawer under it", async ({
+  page,
+  request,
+}) => {
+  // Both `ConfirmDialog` and the drawer listen on `window` for Escape. Without the guard in
+  // `App.vue` a single press closes both: the prompt disappears and the thing that asked for
+  // it slides away underneath.
+  await converse(page, request, "你好");
+
+  await page.getByTestId("nav-toggle").tap();
+  await page.getByTestId("sidebar").locator(".session-item .icon-btn.danger").first().tap();
+
+  const prompt = page.locator("body > .modal-overlay");
+  await expect(prompt).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(prompt).toHaveCount(0);
+  await expect(page.getByTestId("sidebar")).toBeVisible();
+});
+
+test("layout: the closed drawer is not reachable by keyboard", async ({ page, request }) => {
+  // `visibility: hidden` on the closed panel is what keeps its workspace select, its glyph
+  // buttons, every session row and the settings entry out of the tab order. Without it they
+  // are focusable and announced while off-screen.
+  await converse(page, request, "你好");
+  await expect(page.getByTestId("sidebar")).toBeHidden();
+
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press("Tab");
+    const inside = await page.evaluate(
+      () => document.activeElement?.closest(".sidebar") !== null,
+    );
+    expect(inside, `focus entered the closed drawer after ${i + 1} tabs`).toBe(false);
+  }
+});
+
+test("layout: nothing overflows the phone, even with the widest controls open", async ({
+  page,
+  request,
+}) => {
+  await converse(page, request, "你好");
+
+  const overflow = async () =>
+    page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }));
+
+  expect(await overflow()).toEqual({ scroll: 412, client: 412 });
+
+  // The three fixed-width offenders: a 280px menu, a 220px model button and a 260px popover,
+  // all anchored `right: 0` upward.
+  await page.locator(".model-btn").tap();
+  await expect(page.locator(".overlay-popover.menu")).toBeVisible();
+  expect(await overflow(), "the model menu overflows").toEqual({ scroll: 412, client: 412 });
+
+  await page.locator(".topbar").tap();
+  await page.locator(".token-btn").tap();
+  await expect(page.locator(".overlay-popover.popover")).toBeVisible();
+  expect(await overflow(), "the token popover overflows").toEqual({ scroll: 412, client: 412 });
+});
+
+test("layout: a dialog opened from the drawer covers the whole screen", async ({
+  page,
+  request,
+}) => {
+  // The teleport check. The sidebar is `position: fixed` inside a `transform`, and a fixed
+  // element whose ancestor is transformed is positioned against that ancestor — so a
+  // `.modal-overlay` left inside the sidebar would be laid out in the off-canvas drawer and
+  // render off-screen. Asserting the parent is `body` is the actual invariant.
+  await converse(page, request, "你好");
+
+  await page.getByTestId("nav-toggle").tap();
+  await expect(page.getByTestId("sidebar")).toBeVisible();
+  await page.getByTestId("open-settings").tap();
+
+  const dialog = page.locator("body > .modal-overlay");
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId("sidebar")).toBeHidden();
+
+  // Fits inside the viewport. It is *not* full width yet — the base `.modal` keeps its
+  // `max-width: calc(100vw - 40px)` — which is the narrow-screen polish, not this step.
+  const box = await page.locator("body > .modal-overlay .modal").boundingBox();
+  expect(box?.width).toBeLessThanOrEqual(412);
+  expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
+});
+
+test("layout: a resize back to desktop restores the inline sidebar", async ({ page, request }) => {
+  // Layout state that is only read once would leave the drawer semantics in place on a wide
+  // screen — a hidden sidebar and a toggle for a drawer nobody needs.
+  await converse(page, request, "你好");
+  await expect(page.getByTestId("nav-toggle")).toBeVisible();
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  await expect(page.getByTestId("nav-toggle")).toBeHidden();
+  await expect(page.getByTestId("sidebar")).toBeVisible();
+  expect((await page.getByTestId("sidebar").boundingBox())?.width).toBeCloseTo(272, 0);
+});

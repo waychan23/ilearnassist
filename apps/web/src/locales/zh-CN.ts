@@ -119,6 +119,7 @@ export default {
     rename: "重命名",
     delete: "删除",
     noSessions: "暂无会话",
+    openNav: "打开导航",
     settings: "设置",
   },
 

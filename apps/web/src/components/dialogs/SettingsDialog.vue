@@ -251,298 +251,309 @@ function onDefaultModelChange(e: Event) {
 </script>
 
 <template>
-  <div class="modal-overlay" @click.self="emit('close')">
-    <div class="modal lg">
-      <div class="modal-head">
-        <h3>{{ t("settings.title") }}</h3>
-        <button
-        class="icon-btn"
-        :title="t('common.close')"
-        :aria-label="t('common.close')"
-        @click="emit('close')"
-      >✕</button>
-      </div>
+  <!--
+    Teleported to `body`, and this is load-bearing rather than tidiness. On a compact
+    viewport the sidebar is `position: fixed` inside a `transform`, and a fixed-position
+    element whose ancestor is transformed is positioned against *that ancestor* — so a
+    `.modal-overlay` left in place here would be laid out inside the off-canvas drawer and
+    render off-screen. The palette still applies: the theme lives on `<html>` and custom
+    properties cascade from there.
+  -->
+  <Teleport to="body">
+    <div class="modal-overlay" @click.self="emit('close')">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h3>{{ t("settings.title") }}</h3>
+          <button
+          class="icon-btn"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="emit('close')"
+        >✕</button>
+        </div>
 
-      <div class="tabs">
-        <button class="tab" :class="{ active: tab === 'providers' }" @click="tab = 'providers'">
-          {{ t("settings.tabs.providers") }}
-        </button>
-        <button class="tab" :class="{ active: tab === 'copilots' }" @click="tab = 'copilots'">
-          Copilots
-          <span v-if="store.copilots.length" class="tab-count">{{ store.copilots.length }}</span>
-        </button>
-        <button
-          class="tab"
-          :class="{ active: tab === 'documents' }"
-          data-testid="tab-documents"
-          @click="tab = 'documents'"
-        >
-          {{ t("settings.tabs.documents") }}
-          <span v-if="documentParsers.length" class="tab-count">{{ documentParsers.length }}</span>
-        </button>
-        <button class="tab" :class="{ active: tab === 'defaults' }" @click="tab = 'defaults'">
-          {{ t("settings.tabs.copilot") }}
-        </button>
-      </div>
-
-      <div class="modal-body">
-        <template v-if="tab === 'providers'">
-          <div class="config-tip">
-            {{ t("settings.providers.noteBefore") }}<strong>{{ t("settings.providers.noteLive") }}</strong
-            >{{ t("settings.providers.noteBetween") }}<code>{{
-              t("settings.providers.noteConfigFile")
-            }}</code
-            >{{ t("settings.providers.noteAfter") }}
-          </div>
-
-          <div class="list-head">
-            <span>{{
-            t(
-              "settings.providers.countConfigured",
-              { count: providers.length },
-              providers.length
-            )
-          }}</span>
-            <button class="btn small" @click="openNew">{{ t("settings.providers.add") }}</button>
-          </div>
-
-          <div v-for="p in providers" :key="p.id" class="list-row provider-row">
-            <div class="info">
-              <div class="name">
-                {{ p.name }}
-                <span v-if="p.id === defaultProvider" class="badge">{{ t("settings.providers.default") }}</span>
-                <span class="key-state" :class="p.hasApiKey ? 'ok' : 'missing'">
-                  {{ p.hasApiKey ? t("settings.providers.keySet") : t("settings.providers.keyMissing") }}
-                </span>
-              </div>
-              <div class="mono url">{{ p.baseURL }}</div>
-              <div class="models">
-                <span v-for="m in p.models" :key="m.id" class="model-chip">
-                  {{ m.name }}
-                  <span v-if="m.capabilities.includes('vision')" :title="t('settings.providers.visionHint')">🖼</span>
-                  <span v-if="m.capabilities.includes('reasoning')" :title="t('settings.providers.reasoningHint')">🧠</span>
-                  <button
-                    class="chip-x"
-                    :title="t('settings.providers.deleteModel')"
-        :aria-label="t('settings.providers.deleteModel')"
-                    @click.stop="onDeleteModel(p, m.id, m.name)"
-                  >
-                    ×
-                  </button>
-                </span>
-                <span v-if="p.models.length === 0" class="no-models">{{ t("settings.providers.noModels") }}</span>
-              </div>
-            </div>
-            <div class="row-actions">
-              <button class="btn small" @click="openEdit(p)">{{ t("common.edit") }}</button>
-              <button class="icon-btn danger" :title="t('common.delete')" @click="onDelete(p)">🗑</button>
-            </div>
-          </div>
-
-          <div v-if="providers.length === 0" class="empty">
-            {{ t("settings.providers.empty") }}
-          </div>
-        </template>
-
-        <template v-else-if="tab === 'documents'">
-          <div class="config-tip">
-            {{ t("settings.documents.introBefore") }}<strong>{{
-              t("settings.documents.introBuiltin")
-            }}</strong>{{ t("settings.documents.introAfter") }}
-          </div>
-
-          <div class="field">
-            <label>{{ t("settings.documents.policy") }}</label>
-            <select
-              class="select"
-              :value="documentParsing?.policy"
-              data-testid="parse-policy"
-              @change="onPolicyChange(($event.target as HTMLSelectElement).value as DocumentParsePolicy)"
-            >
-              <option v-for="id in POLICY_IDS" :key="id" :value="id">{{ policyLabel(id) }}</option>
-            </select>
-            <div class="hint">{{ policyHint }}</div>
-          </div>
-
-          <div class="field">
-            <label class="check-row">
-              <input
-                type="checkbox"
-                :checked="documentParsing?.localEnabled"
-                data-testid="parse-local-enabled"
-                @change="onToggle('localEnabled', ($event.target as HTMLInputElement).checked)"
-              />
-              {{ t("settings.documents.localEnabled") }}
-            </label>
-            <div class="hint">
-              {{ t("settings.documents.localHint") }}
-            </div>
-          </div>
-
-          <div class="field">
-            <label class="check-row">
-              <input
-                type="checkbox"
-                :checked="documentParsing?.fallbackEnabled"
-                data-testid="parse-fallback"
-                @change="onToggle('fallbackEnabled', ($event.target as HTMLInputElement).checked)"
-              />
-              {{ t("settings.documents.fallback") }}
-            </label>
-            <div class="hint">
-              {{ t("settings.documents.fallbackHint") }}
-            </div>
-          </div>
-
-          <div class="models-head">
-            <label>{{ t("settings.documents.cloudParsers") }}</label>
-            <button class="btn small" @click="openNewParser" data-testid="add-parser">
-              {{ t("settings.documents.addParser") }}
-            </button>
-          </div>
-
-          <div v-if="documentParsers.length === 0" class="empty-note">
-            {{ t("settings.documents.noParsers") }}
-          </div>
-
-          <div
-            v-for="p in documentParsers"
-            :key="p.id"
-            class="list-row parser-row"
-            data-testid="parser-row"
+        <div class="tabs">
+          <button class="tab" :class="{ active: tab === 'providers' }" @click="tab = 'providers'">
+            {{ t("settings.tabs.providers") }}
+          </button>
+          <button class="tab" :class="{ active: tab === 'copilots' }" @click="tab = 'copilots'">
+            Copilots
+            <span v-if="store.copilots.length" class="tab-count">{{ store.copilots.length }}</span>
+          </button>
+          <button
+            class="tab"
+            :class="{ active: tab === 'documents' }"
+            data-testid="tab-documents"
+            @click="tab = 'documents'"
           >
-            <div class="parser-main">
-              <div class="parser-name">
-                {{ p.name }}
-                <span class="badge" :class="{ muted: !p.enabled }">
-                  {{ p.enabled ? t("settings.documents.enabled") : t("settings.documents.disabled") }}
-                </span>
-                <span class="badge muted">{{ p.kind }}</span>
-                <span v-if="p.hasApiKey" class="badge">{{ t("settings.documents.keySet") }}</span>
+            {{ t("settings.tabs.documents") }}
+            <span v-if="documentParsers.length" class="tab-count">{{ documentParsers.length }}</span>
+          </button>
+          <button class="tab" :class="{ active: tab === 'defaults' }" @click="tab = 'defaults'">
+            {{ t("settings.tabs.copilot") }}
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <template v-if="tab === 'providers'">
+            <div class="config-tip">
+              {{ t("settings.providers.noteBefore") }}<strong>{{ t("settings.providers.noteLive") }}</strong
+              >{{ t("settings.providers.noteBetween") }}<code>{{
+                t("settings.providers.noteConfigFile")
+              }}</code
+              >{{ t("settings.providers.noteAfter") }}
+            </div>
+
+            <div class="list-head">
+              <span>{{
+              t(
+                "settings.providers.countConfigured",
+                { count: providers.length },
+                providers.length
+              )
+            }}</span>
+              <button class="btn small" @click="openNew">{{ t("settings.providers.add") }}</button>
+            </div>
+
+            <div v-for="p in providers" :key="p.id" class="list-row provider-row">
+              <div class="info">
+                <div class="name">
+                  {{ p.name }}
+                  <span v-if="p.id === defaultProvider" class="badge">{{ t("settings.providers.default") }}</span>
+                  <span class="key-state" :class="p.hasApiKey ? 'ok' : 'missing'">
+                    {{ p.hasApiKey ? t("settings.providers.keySet") : t("settings.providers.keyMissing") }}
+                  </span>
+                </div>
+                <div class="mono url">{{ p.baseURL }}</div>
+                <div class="models">
+                  <span v-for="m in p.models" :key="m.id" class="model-chip">
+                    {{ m.name }}
+                    <span v-if="m.capabilities.includes('vision')" :title="t('settings.providers.visionHint')">🖼</span>
+                    <span v-if="m.capabilities.includes('reasoning')" :title="t('settings.providers.reasoningHint')">🧠</span>
+                    <button
+                      class="chip-x"
+                      :title="t('settings.providers.deleteModel')"
+          :aria-label="t('settings.providers.deleteModel')"
+                      @click.stop="onDeleteModel(p, m.id, m.name)"
+                    >
+                      ×
+                    </button>
+                  </span>
+                  <span v-if="p.models.length === 0" class="no-models">{{ t("settings.providers.noModels") }}</span>
+                </div>
               </div>
-              <div class="parser-url mono">{{ p.baseURL }}</div>
-              <div
-                v-if="testResult[p.id]"
-                class="hint"
-                :class="{ warn: !testResult[p.id]!.ok }"
-                data-testid="parser-test-result"
+              <div class="row-actions">
+                <button class="btn small" @click="openEdit(p)">{{ t("common.edit") }}</button>
+                <button class="icon-btn danger" :title="t('common.delete')" @click="onDelete(p)">🗑</button>
+              </div>
+            </div>
+
+            <div v-if="providers.length === 0" class="empty">
+              {{ t("settings.providers.empty") }}
+            </div>
+          </template>
+
+          <template v-else-if="tab === 'documents'">
+            <div class="config-tip">
+              {{ t("settings.documents.introBefore") }}<strong>{{
+                t("settings.documents.introBuiltin")
+              }}</strong>{{ t("settings.documents.introAfter") }}
+            </div>
+
+            <div class="field">
+              <label>{{ t("settings.documents.policy") }}</label>
+              <select
+                class="select"
+                :value="documentParsing?.policy"
+                data-testid="parse-policy"
+                @change="onPolicyChange(($event.target as HTMLSelectElement).value as DocumentParsePolicy)"
               >
-                {{ testResult[p.id]!.message }}
+                <option v-for="id in POLICY_IDS" :key="id" :value="id">{{ policyLabel(id) }}</option>
+              </select>
+              <div class="hint">{{ policyHint }}</div>
+            </div>
+
+            <div class="field">
+              <label class="check-row">
+                <input
+                  type="checkbox"
+                  :checked="documentParsing?.localEnabled"
+                  data-testid="parse-local-enabled"
+                  @change="onToggle('localEnabled', ($event.target as HTMLInputElement).checked)"
+                />
+                {{ t("settings.documents.localEnabled") }}
+              </label>
+              <div class="hint">
+                {{ t("settings.documents.localHint") }}
               </div>
             </div>
-            <button
-              class="btn small"
-              :disabled="testingId === p.id"
-              @click="onTestParser(p)"
+
+            <div class="field">
+              <label class="check-row">
+                <input
+                  type="checkbox"
+                  :checked="documentParsing?.fallbackEnabled"
+                  data-testid="parse-fallback"
+                  @change="onToggle('fallbackEnabled', ($event.target as HTMLInputElement).checked)"
+                />
+                {{ t("settings.documents.fallback") }}
+              </label>
+              <div class="hint">
+                {{ t("settings.documents.fallbackHint") }}
+              </div>
+            </div>
+
+            <div class="models-head">
+              <label>{{ t("settings.documents.cloudParsers") }}</label>
+              <button class="btn small" @click="openNewParser" data-testid="add-parser">
+                {{ t("settings.documents.addParser") }}
+              </button>
+            </div>
+
+            <div v-if="documentParsers.length === 0" class="empty-note">
+              {{ t("settings.documents.noParsers") }}
+            </div>
+
+            <div
+              v-for="p in documentParsers"
+              :key="p.id"
+              class="list-row parser-row"
+              data-testid="parser-row"
             >
-              {{ testingId === p.id ? t("settings.documents.testing") : t("settings.documents.test") }}
-            </button>
-            <button class="btn small" @click="openEditParser(p)">{{ t("common.edit") }}</button>
-            <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteParser(p)">✕</button>
-          </div>
-        </template>
-
-        <template v-else-if="tab === 'copilots'">
-          <div class="config-tip">
-            {{ t("settings.copilot.introBefore") }}<strong>{{ t("settings.copilot.introCopied") }}</strong
-            >{{ t("settings.copilot.introAfter") }}
-          </div>
-
-          <div class="list-head">
-            <span>{{
-            t(
-              "settings.copilot.countConfigured",
-              { count: store.copilots.length },
-              store.copilots.length
-            )
-          }}</span>
-            <button class="btn small" @click="openNewCopilot">{{ t("settings.copilot.add") }}</button>
-          </div>
-
-          <div v-for="c in store.copilots" :key="c.id" class="list-row copilot-row">
-            <div class="info">
-              <div class="name">
-                <span class="status-dot"></span>
-                {{ c.name }}
-                <span v-if="c.id === store.activeCopilotId" class="badge">{{ t("settings.copilot.inUse") }}</span>
+              <div class="parser-main">
+                <div class="parser-name">
+                  {{ p.name }}
+                  <span class="badge" :class="{ muted: !p.enabled }">
+                    {{ p.enabled ? t("settings.documents.enabled") : t("settings.documents.disabled") }}
+                  </span>
+                  <span class="badge muted">{{ p.kind }}</span>
+                  <span v-if="p.hasApiKey" class="badge">{{ t("settings.documents.keySet") }}</span>
+                </div>
+                <div class="parser-url mono">{{ p.baseURL }}</div>
+                <div
+                  v-if="testResult[p.id]"
+                  class="hint"
+                  :class="{ warn: !testResult[p.id]!.ok }"
+                  data-testid="parser-test-result"
+                >
+                  {{ testResult[p.id]!.message }}
+                </div>
               </div>
-              <div v-if="c.description" class="desc">{{ c.description }}</div>
-              <div class="meta">{{ copilotSummary(c) }}</div>
+              <button
+                class="btn small"
+                :disabled="testingId === p.id"
+                @click="onTestParser(p)"
+              >
+                {{ testingId === p.id ? t("settings.documents.testing") : t("settings.documents.test") }}
+              </button>
+              <button class="btn small" @click="openEditParser(p)">{{ t("common.edit") }}</button>
+              <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteParser(p)">✕</button>
             </div>
-            <div class="row-actions">
-              <button class="btn small" @click="openEditCopilot(c)">{{ t("common.edit") }}</button>
-              <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteCopilot(c)">🗑</button>
+          </template>
+
+          <template v-else-if="tab === 'copilots'">
+            <div class="config-tip">
+              {{ t("settings.copilot.introBefore") }}<strong>{{ t("settings.copilot.introCopied") }}</strong
+              >{{ t("settings.copilot.introAfter") }}
             </div>
-          </div>
 
-          <div v-if="store.copilots.length === 0" class="empty">
-            {{ t("settings.copilot.empty") }}
-          </div>
-        </template>
-
-        <template v-else>
-          <div class="field">
-            <label>{{ t("settings.defaults.provider") }}</label>
-            <select class="select" :value="defaultProvider" @change="onDefaultProviderChange">
-              <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
-            </select>
-            <div class="hint">{{ t("settings.defaults.providerHint", { name: defaultProviderName }) }}</div>
-          </div>
-
-          <div class="field">
-            <label>{{ t("settings.defaults.model") }}</label>
-            <select class="select" :value="defaultModel" @change="onDefaultModelChange">
-              <option v-for="m in defaultModelOptions" :key="m.id" :value="m.modelId">
-                {{ m.name }}
-              </option>
-            </select>
-            <div class="hint">{{
-              t("settings.defaults.modelHint", {
-                name: defaultModel || t("settings.defaults.modelUnset"),
-              })
-            }}</div>
-          </div>
-
-          <div class="field">
-            <label>{{ t("settings.defaults.workspaceRoot") }}</label>
-            <div class="value mono">{{ store.config?.workspacesRootDir }}</div>
-          </div>
-
-          <div class="field">
-            <label>{{ t("settings.defaults.webSearch") }}</label>
-            <div class="value">
-              {{ store.config?.webSearchProvider }}
-              <span class="hint inline">{{ t("settings.defaults.webSearchHint") }}</span>
+            <div class="list-head">
+              <span>{{
+              t(
+                "settings.copilot.countConfigured",
+                { count: store.copilots.length },
+                store.copilots.length
+              )
+            }}</span>
+              <button class="btn small" @click="openNewCopilot">{{ t("settings.copilot.add") }}</button>
             </div>
-          </div>
-        </template>
+
+            <div v-for="c in store.copilots" :key="c.id" class="list-row copilot-row">
+              <div class="info">
+                <div class="name">
+                  <span class="status-dot"></span>
+                  {{ c.name }}
+                  <span v-if="c.id === store.activeCopilotId" class="badge">{{ t("settings.copilot.inUse") }}</span>
+                </div>
+                <div v-if="c.description" class="desc">{{ c.description }}</div>
+                <div class="meta">{{ copilotSummary(c) }}</div>
+              </div>
+              <div class="row-actions">
+                <button class="btn small" @click="openEditCopilot(c)">{{ t("common.edit") }}</button>
+                <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteCopilot(c)">🗑</button>
+              </div>
+            </div>
+
+            <div v-if="store.copilots.length === 0" class="empty">
+              {{ t("settings.copilot.empty") }}
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="field">
+              <label>{{ t("settings.defaults.provider") }}</label>
+              <select class="select" :value="defaultProvider" @change="onDefaultProviderChange">
+                <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+              <div class="hint">{{ t("settings.defaults.providerHint", { name: defaultProviderName }) }}</div>
+            </div>
+
+            <div class="field">
+              <label>{{ t("settings.defaults.model") }}</label>
+              <select class="select" :value="defaultModel" @change="onDefaultModelChange">
+                <option v-for="m in defaultModelOptions" :key="m.id" :value="m.modelId">
+                  {{ m.name }}
+                </option>
+              </select>
+              <div class="hint">{{
+                t("settings.defaults.modelHint", {
+                  name: defaultModel || t("settings.defaults.modelUnset"),
+                })
+              }}</div>
+            </div>
+
+            <div class="field">
+              <label>{{ t("settings.defaults.workspaceRoot") }}</label>
+              <div class="value mono">{{ store.config?.workspacesRootDir }}</div>
+            </div>
+
+            <div class="field">
+              <label>{{ t("settings.defaults.webSearch") }}</label>
+              <div class="value">
+                {{ store.config?.webSearchProvider }}
+                <span class="hint inline">{{ t("settings.defaults.webSearchHint") }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="modal-foot">
+          <button class="btn primary" @click="emit('close')">{{ t("common.close") }}</button>
+        </div>
       </div>
 
-      <div class="modal-foot">
-        <button class="btn primary" @click="emit('close')">{{ t("common.close") }}</button>
-      </div>
+      <ProviderDialog
+        v-if="showEditor"
+        :provider="editing"
+        @close="showEditor = false"
+        @save="onSave"
+      />
+      <CopilotDialog
+        v-if="showCopilotEditor"
+        :copilot="editingCopilot"
+        @close="showCopilotEditor = false"
+        @save="onSaveCopilot"
+      />
+      <DocumentParserDialog
+        v-if="showParserEditor"
+        :parser="editingParser"
+        :kinds="store.parserKinds"
+        @close="showParserEditor = false"
+        @save="onSaveParser"
+      />
     </div>
 
-    <ProviderDialog
-      v-if="showEditor"
-      :provider="editing"
-      @close="showEditor = false"
-      @save="onSave"
-    />
-    <CopilotDialog
-      v-if="showCopilotEditor"
-      :copilot="editingCopilot"
-      @close="showCopilotEditor = false"
-      @save="onSaveCopilot"
-    />
-    <DocumentParserDialog
-      v-if="showParserEditor"
-      :parser="editingParser"
-      :kinds="store.parserKinds"
-      @close="showParserEditor = false"
-      @save="onSaveParser"
-    />
-  </div>
+  </Teleport>
 </template>
 
 <style scoped>

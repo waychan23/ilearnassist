@@ -331,6 +331,12 @@ body {
    * overflowed, and a long conversation was clipped by `overflow: hidden` with no
    * scrollbar. `minmax(0, 1fr)` pins the row to the container height and lets the child
    * shrink.
+   *
+   * A warning for whoever is tempted: do **not** give `.app` a `transform`, `filter` or
+   * `contain`. Any of them makes it the containing block for its fixed-position descendants,
+   * which would move the off-canvas sidebar and every dialog that is not teleported out of
+   * the viewport. The dialogs are teleported, which is what makes the sidebar free to be
+   * `position: fixed` below — the two decisions depend on each other.
    */
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
@@ -353,6 +359,68 @@ body {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+}
+
+/*
+ * The compact layout. This and the narrow query at the end of the file are the app's only
+ * two breakpoints; their pixel values are duplicated as strings in
+ * `composables/breakpoints.ts` because a media query cannot read a custom property, and
+ * `style.test.ts` asserts the two stay in step.
+ */
+@media (max-width: 900px) {
+  /*
+   * The sidebar leaves the grid rather than being re-columned. Leaving it as a grid item with
+   * `grid-template-columns: 1fr` would make it an implicit second *row* — `.main`'s height
+   * would collapse and the message list would silently stop scrolling, which is the failure
+   * the `minmax(0, 1fr)` comment above exists to prevent. One in-flow child, one column, and
+   * the explicit row still pins everything.
+   */
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 272px;
+    z-index: var(--z-drawer);
+    transform: translateX(-100%);
+    /*
+     * `visibility` is load-bearing, not polish. Without it the closed panel's workspace
+     * select, its two glyph buttons, every session row and the settings entry stay in the tab
+     * order — focusable, off-screen, and announced. The delay keeps it visible until the
+     * slide finishes; `.open` cancels both.
+     */
+    visibility: hidden;
+    transition:
+      transform var(--dur-slow) var(--ease-drawer),
+      visibility 0s linear var(--dur-slow);
+  }
+
+  .sidebar.open {
+    transform: none;
+    visibility: visible;
+    transition-delay: 0s, 0s;
+  }
+
+  /*
+   * Sits above the drawer's own scrim token but below the drawer, because `--z-backdrop` is
+   * only meaningfully different from `--z-drawer` here — a single value would let the sidebar
+   * and its own dim tie.
+   */
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--scrim);
+    z-index: var(--z-backdrop);
+  }
+
+  /* One rule for every form grid: four copies collapsed into one class in the previous
+     commit, which is what makes this a single line rather than four. */
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .topbar {

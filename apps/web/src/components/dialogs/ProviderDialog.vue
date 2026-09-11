@@ -119,95 +119,106 @@ function save() {
 </script>
 
 <template>
-  <div class="modal-overlay" @click.self="emit('close')">
-    <div class="modal lg">
-      <div class="modal-head">
-        <h3>{{ props.provider ? t("providers.edit") : t("providers.create") }}</h3>
-        <button
-        class="icon-btn"
-        :title="t('common.close')"
-        :aria-label="t('common.close')"
-        @click="emit('close')"
-      >✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-grid">
-          <div class="field">
-            <label>{{ t("common.name") }}</label>
-            <input v-model="draft.name" class="input" :placeholder="t('providers.namePlaceholder')" />
-          </div>
-          <div class="field">
-            <label>Base URL</label>
-            <input v-model="draft.baseURL" class="input" placeholder="https://api.deepseek.com/v1" />
-          </div>
+  <!--
+    Teleported to `body`, and this is load-bearing rather than tidiness. On a compact
+    viewport the sidebar is `position: fixed` inside a `transform`, and a fixed-position
+    element whose ancestor is transformed is positioned against *that ancestor* — so a
+    `.modal-overlay` left in place here would be laid out inside the off-canvas drawer and
+    render off-screen. The palette still applies: the theme lives on `<html>` and custom
+    properties cascade from there.
+  -->
+  <Teleport to="body">
+    <div class="modal-overlay" @click.self="emit('close')">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h3>{{ props.provider ? t("providers.edit") : t("providers.create") }}</h3>
+          <button
+          class="icon-btn"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="emit('close')"
+        >✕</button>
         </div>
-
-        <div class="field">
-          <label>API Key</label>
-          <input
-            v-model="draft.apiKey"
-            class="input"
-            type="password"
-            autocomplete="new-password"
-            :placeholder="keyPlaceholder"
-          />
-          <div class="hint">
-            {{ t("providers.apiKeyNote") }}
-          </div>
-        </div>
-
-        <div class="models-head">
-          <label>{{ t("providers.models") }}</label>
-          <button class="btn small" @click="addModel">{{ t("providers.addModel") }}</button>
-        </div>
-        <div class="models-hint">
-          {{ t("providers.modelNoteBefore") }}<strong>{{ t("providers.modelNoteToken") }}</strong
-          >{{ t("providers.modelNoteAfter", { fallback: DEFAULT_CONTEXT_WINDOW.toLocaleString() }) }}
-        </div>
-
-        <div v-for="(m, i) in draft.models" :key="i" class="model-row">
-          <div class="model-main">
+        <div class="modal-body">
+          <div class="form-grid">
             <div class="field">
-              <label>{{ t("providers.modelId") }}</label>
-              <input v-model="m.modelId" class="input" placeholder="gpt-4o-mini" />
+              <label>{{ t("common.name") }}</label>
+              <input v-model="draft.name" class="input" :placeholder="t('providers.namePlaceholder')" />
             </div>
             <div class="field">
-              <label>{{ t("providers.displayName") }}</label>
-              <input v-model="m.name" class="input" :placeholder="t('providers.displayNamePlaceholder')" />
+              <label>Base URL</label>
+              <input v-model="draft.baseURL" class="input" placeholder="https://api.deepseek.com/v1" />
             </div>
-            <div class="field narrow-field">
-              <label>{{ t("providers.contextLength") }}</label>
-              <input v-model="m.contextWindow" class="input" placeholder="128000" />
-              <div class="hint" :class="{ warn: contextLooksWrong(m) }">
-                {{ contextLooksWrong(m) ? t("providers.contextWrong") : t("providers.unitToken") }}
+          </div>
+
+          <div class="field">
+            <label>API Key</label>
+            <input
+              v-model="draft.apiKey"
+              class="input"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="keyPlaceholder"
+            />
+            <div class="hint">
+              {{ t("providers.apiKeyNote") }}
+            </div>
+          </div>
+
+          <div class="models-head">
+            <label>{{ t("providers.models") }}</label>
+            <button class="btn small" @click="addModel">{{ t("providers.addModel") }}</button>
+          </div>
+          <div class="models-hint">
+            {{ t("providers.modelNoteBefore") }}<strong>{{ t("providers.modelNoteToken") }}</strong
+            >{{ t("providers.modelNoteAfter", { fallback: DEFAULT_CONTEXT_WINDOW.toLocaleString() }) }}
+          </div>
+
+          <div v-for="(m, i) in draft.models" :key="i" class="model-row">
+            <div class="model-main">
+              <div class="field">
+                <label>{{ t("providers.modelId") }}</label>
+                <input v-model="m.modelId" class="input" placeholder="gpt-4o-mini" />
               </div>
+              <div class="field">
+                <label>{{ t("providers.displayName") }}</label>
+                <input v-model="m.name" class="input" :placeholder="t('providers.displayNamePlaceholder')" />
+              </div>
+              <div class="field narrow-field">
+                <label>{{ t("providers.contextLength") }}</label>
+                <input v-model="m.contextWindow" class="input" placeholder="128000" />
+                <div class="hint" :class="{ warn: contextLooksWrong(m) }">
+                  {{ contextLooksWrong(m) ? t("providers.contextWrong") : t("providers.unitToken") }}
+                </div>
+              </div>
+              <div class="field narrow-field">
+                <label>{{ t("providers.maxOutput") }}</label>
+                <input v-model="m.maxOutput" class="input" :placeholder="t('providers.optional')" />
+                <div class="hint">{{ t("providers.unitToken") }}</div>
+              </div>
+              <button class="icon-btn danger" :title="t('providers.removeModel')"
+          :aria-label="t('providers.removeModel')" @click="removeModel(i)">✕</button>
             </div>
-            <div class="field narrow-field">
-              <label>{{ t("providers.maxOutput") }}</label>
-              <input v-model="m.maxOutput" class="input" :placeholder="t('providers.optional')" />
-              <div class="hint">{{ t("providers.unitToken") }}</div>
+            <div class="caps">
+              <label v-for="c in CAPABILITIES" :key="c.id" class="check-row sm">
+                <input
+                  type="checkbox"
+                  :checked="m.capabilities.includes(c.id)"
+                  @change="toggleCapability(m, c.id)"
+                />
+                {{ t("providers.capabilities." + c.id) }}
+              </label>
             </div>
-            <button class="icon-btn danger" :title="t('providers.removeModel')"
-        :aria-label="t('providers.removeModel')" @click="removeModel(i)">✕</button>
-          </div>
-          <div class="caps">
-            <label v-for="c in CAPABILITIES" :key="c.id" class="check-row sm">
-              <input
-                type="checkbox"
-                :checked="m.capabilities.includes(c.id)"
-                @change="toggleCapability(m, c.id)"
-              />
-              {{ t("providers.capabilities." + c.id) }}
-            </label>
           </div>
         </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
-        <button class="btn primary" :disabled="!canSave" @click="save">{{ t("common.save") }}</button>
+        <div class="modal-foot">
+          <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
+          <button class="btn primary" :disabled="!canSave" @click="save">{{ t("common.save") }}</button>
+        </div>
       </div>
     </div>
-  </div>
+
+  </Teleport>
 </template>
 
 <style scoped>

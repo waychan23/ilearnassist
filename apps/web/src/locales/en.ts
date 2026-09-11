@@ -106,6 +106,7 @@ const en: typeof MessageSchema = {
     rename: "Rename",
     delete: "Delete",
     noSessions: "No conversations yet",
+    openNav: "Open navigation",
     settings: "Settings",
   },
 

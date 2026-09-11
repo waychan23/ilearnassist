@@ -5,6 +5,7 @@ import { useAppStore } from "../stores/app";
 import { useTheme } from "../composables/theme";
 import { useLocale } from "../composables/locale";
 import { isCompact } from "../composables/breakpoints";
+import { openDrawer, uiState } from "../composables/ui";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
 import type { Locale } from "../utils/locale";
 import MessageItem from "./MessageItem.vue";
@@ -118,6 +119,24 @@ watch(
 <template>
   <main class="main">
     <header class="topbar">
+      <!--
+        Only on a compact viewport, which also means no desktop spec can click it by
+        accident. `aria-expanded` conveys the state without a second string; `aria-controls`
+        needs the id the sidebar carries.
+      -->
+      <button
+        v-if="isCompact"
+        class="icon-btn nav-toggle"
+        data-testid="nav-toggle"
+        :title="t('sidebar.openNav')"
+        :aria-label="t('sidebar.openNav')"
+        :aria-expanded="uiState.drawerOpen"
+        aria-controls="app-sidebar"
+        @click="openDrawer"
+      >
+        ☰
+      </button>
+
       <div class="title-block">
         <div v-if="editingTitle" class="title-edit">
           <input

@@ -7,11 +7,9 @@ is what keeps the two from drifting.
 
 Read this before adding a colour, a size, a class or a breakpoint.
 
-> **Status.** The token layer, the focus ring, reduced motion, the surface pairing and every
-> shared class below are implemented and guarded. Still agreed-but-absent: all of the
-> responsive work (breakpoints, the drawer, `Teleport` for overlays) — those sections say so
-> where it matters. Nothing in this document is aspirational about the token tables: they
-> describe what is in `style.css` today.
+> **Status.** Everything in this document is implemented and guarded, apart from the
+> narrow-screen polish noted under [Responsive](#responsive). The token tables describe what
+> is in `style.css` today.
 
 ## How this document is organised
 
@@ -252,6 +250,43 @@ Promote to `style.css` when the third copy appears, or when a rule needs to chan
 breakpoint. The second condition matters more than it looks: a mobile override can only be
 written once if the rule exists once. Two popovers that both need to become sheets on a
 phone are two places to forget.
+
+## Responsive
+
+Two breakpoints, and both are minimums rather than preferences:
+
+| Name | Query | What changes |
+| --- | --- | --- |
+| compact | `(max-width: 900px)` | The sidebar becomes a drawer; the minimap rail is hidden |
+| narrow | `(max-width: 560px)` | The composer toolbar reflows; forms go single-column; dialogs become bottom sheets |
+
+The minimap's rule predates the drawer and set the value: below 900px its preview card has
+nowhere to go. Aligning the drawer to the same number means one mental model and one
+guarded constant rather than two numbers that look alike.
+
+`compact` is the breakpoint that matters structurally. It takes the sidebar out of the grid
+entirely — `position: fixed`, translated off-canvas — rather than re-columning it. Leaving it
+as a grid item would make it an implicit second **row**, collapsing `.main`'s height and
+silently stopping the message list from scrolling. The `minmax(0, 1fr)` comment in
+`style.css` documents that exact failure; do not undo either half of it.
+
+**A closed drawer must be unreachable, twice over.** `visibility: hidden` keeps its controls
+out of the tab order, and `inert` takes the pane behind it out of the tab order and the
+accessibility tree while it is open. That pair is the whole focus story — `inert` is a focus
+trap with no state machine, and a hand-rolled one is not needed.
+
+**Overlays are teleported to `body`, and this is not optional.** A `position: fixed` element
+whose ancestor is transformed is positioned against *that ancestor*. The drawer is a
+transformed ancestor, so a dialog left inside the sidebar would be laid out in the off-canvas
+panel and render off-screen. Adding a dialog means adding the `Teleport`, and giving `.app`
+a `transform`, `filter` or `contain` would break every overlay at once.
+
+**Breakpoints are literals in two languages.** A media query cannot read a custom property
+and JavaScript cannot evaluate CSS, so `900` and `560` are written in both. Nothing can make
+that one value, so it is guarded: `breakpoints.test.ts` pins the strings that reach
+`matchMedia`, and `style.test.ts` pins the sheet's media query values. Change both together —
+a mismatch produces a drawer that opens on a screen with no toggle, or a toggle that does
+nothing.
 
 ## Accessibility
 

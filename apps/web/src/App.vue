@@ -1,23 +1,91 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "./stores/app";
 import Sidebar from "./components/Sidebar.vue";
 import ChatView from "./components/ChatView.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
-import { closeSettings, uiState } from "./composables/ui";
+import { closeDrawer, closeSettings, uiState } from "./composables/ui";
+import { isCompact } from "./composables/breakpoints";
+import { confirmState } from "./composables/confirm";
 
 const store = useAppStore();
+const { t } = useI18n();
 
 onMounted(() => {
   store.init().catch((e) => store.setError(e instanceof Error ? e.message : String(e)));
 });
+
+/* ---------------------------------- drawer ---------------------------------- */
+
+/**
+ * Escape closes the drawer — but only the drawer.
+ *
+ * `ConfirmDialog` listens on `window` for the same key, so with a confirm prompt raised over
+ * an open drawer a single press would close both: the prompt vanishes and the thing that
+ * asked for it slides away underneath. The same applies to Settings, which the sidebar's own
+ * footer opens. Returning early while either is up leaves the topmost layer to handle it.
+ */
+function onKeydown(event: KeyboardEvent) {
+  if (event.key !== "Escape" || !uiState.drawerOpen) return;
+  if (confirmState.open || uiState.settingsOpen) return;
+  closeDrawer();
+}
+
+watch(
+  () => uiState.drawerOpen,
+  (open) => {
+    if (open) window.addEventListener("keydown", onKeydown);
+    else window.removeEventListener("keydown", onKeydown);
+  }
+);
+
+onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+
+/**
+ * Focus follows the drawer: into its first control when it opens, back to the button that
+ * opened it when it closes.
+ *
+ * Queried rather than threaded up through an event: the two ends live in `Sidebar` and
+ * `ChatView`, and an emit chain to hand `App` an element reference would be more moving
+ * parts than a selector for something that is on screen exactly once.
+ *
+ * Together with the backdrop, the `inert` on the pane behind it and the Escape handler this
+ * is the whole focus story — a hand-rolled trap would be a state machine doing what `inert`
+ * already does.
+ */
+watch(
+  () => uiState.drawerOpen,
+  async (open) => {
+    if (!isCompact.value) return;
+    await nextTick();
+    const selector = open ? "[data-testid='workspace-select']" : '[data-testid="nav-toggle"]';
+    document.querySelector<HTMLElement>(selector)?.focus();
+  }
+);
 </script>
 
 <template>
   <div class="app">
-    <Sidebar />
-    <ChatView />
+    <Sidebar :inert="!uiState.drawerOpen && isCompact" />
+
+    <!--
+      Only on a compact viewport, and only while the drawer is open. `inert` takes the pane
+      behind the drawer out of the tab order and the accessibility tree, which is the same
+      job a focus trap does with a fraction of the state. `ChatView` is single-root, so the
+      attribute falls through to `<main>`.
+    -->
+    <ChatView :inert="uiState.drawerOpen && isCompact" />
+
+    <div
+      v-if="isCompact && uiState.drawerOpen"
+      class="drawer-backdrop"
+      data-testid="drawer-backdrop"
+      aria-hidden="true"
+      @click="closeDrawer"
+    />
+
     <!-- Hosted once so every `confirm()` call from anywhere lands in the same prompt. -->
     <ConfirmDialog />
     <!-- Reachable from the sidebar footer and the composer's model picker. -->
@@ -26,11 +94,11 @@ onMounted(() => {
       <div v-if="store.error" class="toast">
         <span>{{ store.error }}</span>
         <button
-        class="icon-btn"
-        :title="$t('common.close')"
-        :aria-label="$t('common.close')"
-        @click="store.setError(null)"
-      >✕</button>
+          class="icon-btn"
+          :title="$t('common.close')"
+          :aria-label="$t('common.close')"
+          @click="store.setError(null)"
+        >✕</button>
       </div>
     </Transition>
   </div>

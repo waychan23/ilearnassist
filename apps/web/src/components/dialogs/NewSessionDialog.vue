@@ -27,68 +27,79 @@ async function create() {
 </script>
 
 <template>
-  <div class="modal-overlay" @click.self="emit('close')">
-    <div class="modal sm">
-      <div class="modal-head">
-        <h3>{{ t("session.new.title") }}</h3>
-        <button
-        class="icon-btn"
-        :title="t('common.close')"
-        :aria-label="t('common.close')"
-        @click="emit('close')"
-      >✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="field">
-          <label>{{ t("session.new.titleLabel") }}</label>
-          <input
-            v-model="title"
-            class="input"
-            data-testid="session-title-input"
-            :placeholder="t('session.new.titlePlaceholder', { fallback: t('session.fallbackTitle') })"
-          />
+  <!--
+    Teleported to `body`, and this is load-bearing rather than tidiness. On a compact
+    viewport the sidebar is `position: fixed` inside a `transform`, and a fixed-position
+    element whose ancestor is transformed is positioned against *that ancestor* — so a
+    `.modal-overlay` left in place here would be laid out inside the off-canvas drawer and
+    render off-screen. The palette still applies: the theme lives on `<html>` and custom
+    properties cascade from there.
+  -->
+  <Teleport to="body">
+    <div class="modal-overlay" @click.self="emit('close')">
+      <div class="modal sm">
+        <div class="modal-head">
+          <h3>{{ t("session.new.title") }}</h3>
+          <button
+          class="icon-btn"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="emit('close')"
+        >✕</button>
         </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>{{ t("session.new.titleLabel") }}</label>
+            <input
+              v-model="title"
+              class="input"
+              data-testid="session-title-input"
+              :placeholder="t('session.new.titlePlaceholder', { fallback: t('session.fallbackTitle') })"
+            />
+          </div>
 
-        <div class="field">
-          <label>Copilot</label>
-          <div class="copilot-list">
-            <label class="copilot-option" :class="{ active: copilotId === null }">
-              <input v-model="copilotId" type="radio" :value="null" />
-              <div>
-                <div class="name">{{ t("session.new.noCopilot") }}</div>
-                <div class="desc">{{ t("session.new.noCopilotDesc") }}</div>
-              </div>
-            </label>
-
-            <label
-              v-for="c in store.copilots"
-              :key="c.id"
-              class="copilot-option"
-              :class="{ active: copilotId === c.id }"
-            >
-              <input v-model="copilotId" type="radio" :value="c.id" />
-              <div>
-                <div class="name">{{ c.name }}</div>
-                <div v-if="c.description" class="desc">{{ c.description }}</div>
-                <div v-else-if="c.systemPrompt" class="desc preview">
-                  {{ c.systemPrompt.slice(0, 80) }}{{ c.systemPrompt.length > 80 ? "…" : "" }}
+          <div class="field">
+            <label>Copilot</label>
+            <div class="copilot-list">
+              <label class="copilot-option" :class="{ active: copilotId === null }">
+                <input v-model="copilotId" type="radio" :value="null" />
+                <div>
+                  <div class="name">{{ t("session.new.noCopilot") }}</div>
+                  <div class="desc">{{ t("session.new.noCopilotDesc") }}</div>
                 </div>
-              </div>
-            </label>
-          </div>
-          <div v-if="store.copilots.length === 0" class="hint">
-            {{ t("session.new.noCopilots") }}
+              </label>
+
+              <label
+                v-for="c in store.copilots"
+                :key="c.id"
+                class="copilot-option"
+                :class="{ active: copilotId === c.id }"
+              >
+                <input v-model="copilotId" type="radio" :value="c.id" />
+                <div>
+                  <div class="name">{{ c.name }}</div>
+                  <div v-if="c.description" class="desc">{{ c.description }}</div>
+                  <div v-else-if="c.systemPrompt" class="desc preview">
+                    {{ c.systemPrompt.slice(0, 80) }}{{ c.systemPrompt.length > 80 ? "…" : "" }}
+                  </div>
+                </div>
+              </label>
+            </div>
+            <div v-if="store.copilots.length === 0" class="hint">
+              {{ t("session.new.noCopilots") }}
+            </div>
           </div>
         </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
-        <button class="btn primary" data-testid="create-session" :disabled="saving" @click="create">
-          {{ t("common.create") }}
-        </button>
+        <div class="modal-foot">
+          <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
+          <button class="btn primary" data-testid="create-session" :disabled="saving" @click="create">
+            {{ t("common.create") }}
+          </button>
+        </div>
       </div>
     </div>
-  </div>
+
+  </Teleport>
 </template>
 
 <style scoped>
