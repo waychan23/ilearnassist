@@ -28,7 +28,7 @@ async function create() {
 
 <template>
   <div class="modal-overlay" @click.self="emit('close')">
-    <div class="modal narrow">
+    <div class="modal sm">
       <div class="modal-head">
         <h3>{{ t("session.new.title") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
@@ -87,9 +87,6 @@ async function create() {
 </template>
 
 <style scoped>
-.modal.narrow {
-  width: 460px;
-}
 .copilot-list {
   display: grid;
   gap: var(--space-4);

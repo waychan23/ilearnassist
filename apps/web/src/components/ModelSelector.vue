@@ -81,7 +81,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       <span class="caret" :class="{ open }">▾</span>
     </button>
 
-    <div v-if="open" class="menu">
+    <div v-if="open" class="overlay-popover menu">
       <template v-for="group in groups" :key="group.providerId">
         <div class="group-head">
           {{ group.providerName }}
@@ -123,7 +123,9 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  max-width: 220px;
+  /* The `45vw` half only binds on a narrow screen, where the model name is the widest thing
+     in the toolbar and has to yield to the controls beside it. */
+  max-width: min(220px, 45vw);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius);
@@ -139,7 +141,9 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   background: var(--panel);
   color: var(--text-2);
 }
+/* `min-width` is what makes the ellipsis reachable — see the note on `.copilot-tag`. */
 .model-btn .label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -161,19 +165,12 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   transform: rotate(180deg);
 }
 
+/* The surface, anchor and elevation come from `.overlay-popover`; only the size is ours. */
 .menu {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
-  z-index: var(--z-popover);
   width: 280px;
   max-height: 340px;
   overflow-y: auto;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   padding: var(--space-3);
-  box-shadow: var(--shadow-popover);
 }
 
 .group-head {

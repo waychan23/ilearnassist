@@ -31,7 +31,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 
 <template>
   <div v-if="confirmState.open" class="modal-overlay" @click.self="settleConfirm(false)">
-    <div class="modal narrow">
+    <div class="modal sm">
       <div class="modal-head">
         <h3>{{ confirmState.title }}</h3>
         <button class="icon-btn" @click="settleConfirm(false)">✕</button>
@@ -56,9 +56,6 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 </template>
 
 <style scoped>
-.modal.narrow {
-  width: 400px;
-}
 .confirm-message {
   margin: 0;
   word-break: break-word;

@@ -120,7 +120,15 @@ const RAMP_FAMILIES = ["--space-", "--fs-"] as const;
  * Families that are *named* scales. There is no index to check, but a duplicated name is
  * still a bug, and an empty family means the whole scale was dropped in a refactor.
  */
-const NAMED_FAMILIES = ["--radius", "--dur-", "--z-", "--shadow-", "--ease-", "--lh-"] as const;
+const NAMED_FAMILIES = [
+  "--radius",
+  "--modal-",
+  "--dur-",
+  "--z-",
+  "--shadow-",
+  "--ease-",
+  "--lh-",
+] as const;
 
 /** Every custom property `body` declares, lowercased. */
 function declaredVars(body: string): string[] {

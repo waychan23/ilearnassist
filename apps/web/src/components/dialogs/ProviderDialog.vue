@@ -120,13 +120,13 @@ function save() {
 
 <template>
   <div class="modal-overlay" @click.self="emit('close')">
-    <div class="modal wide">
+    <div class="modal lg">
       <div class="modal-head">
         <h3>{{ props.provider ? t("providers.edit") : t("providers.create") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
       </div>
       <div class="modal-body">
-        <div class="grid-2">
+        <div class="form-grid">
           <div class="field">
             <label>{{ t("common.name") }}</label>
             <input v-model="draft.name" class="input" :placeholder="t('providers.namePlaceholder')" />
@@ -205,14 +205,6 @@ function save() {
 </template>
 
 <style scoped>
-.modal.wide {
-  width: 720px;
-}
-.grid-2 {
-  display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: 0 var(--space-6);
-}
 .models-head {
   display: flex;
   align-items: center;

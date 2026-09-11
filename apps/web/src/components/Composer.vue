@@ -224,12 +224,20 @@ function onKeydown(e: KeyboardEvent) {
   border-radius: var(--radius);
   padding: var(--space-3) var(--space-5);
 }
+/*
+ * `min-width` is what makes the ellipsis reachable. A flex item defaults to `min-width:
+ * auto`, which refuses to shrink below its content — so `max-width` and `text-overflow`
+ * were both inert and a long Copilot name pushed the toolbar's other controls off the row
+ * instead of truncating.
+ */
 .copilot-tag {
   font-size: var(--fs-1);
   color: var(--text-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: var(--space-1) var(--space-5);
+  min-width: 0;
+  flex: 0 1 auto;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;

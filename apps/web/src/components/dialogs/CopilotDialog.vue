@@ -163,7 +163,7 @@ function save() {
 
         <div class="field">
           <label>{{ t("copilot.tools") }}</label>
-          <div class="tool-checks">
+          <div class="form-grid tool-checks">
             <label v-for="t in ALL_TOOLS" :key="t">
               <input type="checkbox" :checked="draft.tools.includes(t)" @change="toggleTool(t)" />
               {{ toolLabel(t) }}
@@ -174,7 +174,7 @@ function save() {
         <details class="defaults" :open="showDefaults">
           <summary>{{ t("copilot.defaults") }}</summary>
 
-          <div class="grid">
+          <div class="form-grid">
             <div class="field">
               <label>Provider</label>
               <select v-model="draft.providerId" class="select">
@@ -239,10 +239,5 @@ function save() {
 }
 .defaults[open] summary {
   margin-bottom: var(--space-6);
-}
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 var(--space-6);
 }
 </style>

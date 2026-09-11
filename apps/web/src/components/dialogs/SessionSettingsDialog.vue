@@ -100,7 +100,7 @@ const scopeNote = computed(() =>
           {{ scopeNote }}{{ t("sessionSettings.scopeSuffix") }}
         </div>
 
-        <div class="grid">
+        <div class="form-grid">
           <div class="field">
             <label>Provider</label>
             <select v-model="draft.providerId" class="select">
@@ -150,11 +150,3 @@ const scopeNote = computed(() =>
     </div>
   </div>
 </template>
-
-<style scoped>
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 var(--space-6);
-}
-</style>

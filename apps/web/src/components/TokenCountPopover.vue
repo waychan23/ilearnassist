@@ -42,7 +42,7 @@ const label = computed(() => {
       {{ label }}
     </button>
 
-    <div v-if="open" class="popover">
+    <div v-if="open" class="overlay-popover popover">
       <div class="row">
         <span>{{ t("tokens.used") }}</span>
         <span class="num">{{ formatTokens(used) }}</span>
@@ -102,6 +102,10 @@ const label = computed(() => {
   font-family: inherit;
   padding: var(--space-2) var(--space-5);
   cursor: pointer;
+  /* `nowrap` with no cap: the counter is a fixed-width figure, so the only thing that can
+     grow it is the label, and on a narrow screen it must not take the row. */
+  max-width: 40vw;
+  overflow: hidden;
   white-space: nowrap;
 }
 .token-btn:hover {
@@ -123,17 +127,10 @@ const label = computed(() => {
 .token-btn.high {
   --ring: var(--danger);
 }
+/* The surface, anchor and elevation come from `.overlay-popover`; only the size is ours. */
 .popover {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
   width: 260px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   padding: var(--space-6);
-  box-shadow: var(--shadow-popover);
-  z-index: var(--z-popover);
   font-size: var(--fs-2);
 }
 .row {

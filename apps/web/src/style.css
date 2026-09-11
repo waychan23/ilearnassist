@@ -131,6 +131,15 @@
   --radius-lg: 12px;
   --radius-full: 999px;
 
+  /*
+   * Dialog widths. Named steps rather than a bare number on `.modal`, because the narrow
+   * screen turns all three into the same full-width sheet and that rule has to be able to
+   * say "any modal" without listing pixel values.
+   */
+  --modal-sm: 400px;
+  --modal-md: 560px;
+  --modal-lg: 720px;
+
   /* ---- elevation ---- */
   --shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.45);
   --shadow-toast: 0 6px 24px rgba(0, 0, 0, 0.4);
@@ -953,6 +962,48 @@ body {
 
 /* ---------------------------------- modal ----------------------------------- */
 
+/* ---------------------------- surfaces and rows ----------------------------- */
+
+/*
+ * A two-column form grid with no row gap — rows carry their own margin, because the two
+ * halves of a row are related (a name and its URL) while two rows are not.
+ *
+ * Consolidated from four copies: the session-settings and copilot dialogs were byte for
+ * byte identical, the provider dialog differed only in its column ratio, and the tool
+ * checkbox grid only in its gap. The ratio is the deliberate part — `1fr 1.4fr` gave one
+ * field more room than its neighbour, and at `1fr 1fr` the pair reads as equals, which is
+ * what every other form in the app does.
+ *
+ * Sharing it is what makes the narrow-screen collapse one rule rather than four. A site that
+ * needs a different gap still gets the collapse, because the media query below overrides the
+ * columns only.
+ */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 var(--space-6);
+}
+
+/*
+ * The shared surface for anything anchored to a control and floating above it — currently
+ * the model picker and the token counter. The two blocks were identical in background,
+ * border, radius, shadow, z-index *and* anchor, which is why the surface is promoted rather
+ * than each component keeping its own: the narrow-screen rule that turns these into a
+ * bottom sheet can only be written once if the surface is defined once.
+ *
+ * Size is the caller's: the picker is wider than the counter, and each sets its own.
+ */
+.overlay-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: var(--z-popover);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -967,11 +1018,26 @@ body {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  width: 560px;
+  width: var(--modal-md);
   max-width: calc(100vw - 40px);
   max-height: calc(100vh - 80px);
   display: flex;
   flex-direction: column;
+}
+
+/*
+ * Width variants. `sm` is the confirm prompt and the new-session prompt, `lg` the two forms
+ * that carry a two-column grid. They used to live in the components' own scoped blocks —
+ * `.modal.narrow` meant 400px in one file and 460px in another, so the same name described
+ * two different things and neither was visible from the sheet. The new-session prompt is now
+ * 400px like the confirm prompt: they are the same shape of decision, and 400 was already
+ * the value the more common of the two used.
+ */
+.modal.sm {
+  width: var(--modal-sm);
+}
+.modal.lg {
+  width: var(--modal-lg);
 }
 
 .modal .modal-head {
@@ -1000,10 +1066,9 @@ body {
   gap: var(--space-5);
 }
 
-/* tool-checkboxes for copilot editing */
+/* Tool checkboxes for copilot editing. Lays out as a `.form-grid`; only the gap differs —
+   a checkbox row does not need the wide column gap a pair of text fields does. */
 .tool-checks {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
   margin-top: var(--space-3);
 }

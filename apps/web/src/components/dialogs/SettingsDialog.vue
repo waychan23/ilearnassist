@@ -252,7 +252,7 @@ function onDefaultModelChange(e: Event) {
 
 <template>
   <div class="modal-overlay" @click.self="emit('close')">
-    <div class="modal wide">
+    <div class="modal lg">
       <div class="modal-head">
         <h3>{{ t("settings.title") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
@@ -540,9 +540,6 @@ function onDefaultModelChange(e: Event) {
 </template>
 
 <style scoped>
-.modal.wide {
-  width: 720px;
-}
 .mono {
   font-family: "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: var(--fs-2);
