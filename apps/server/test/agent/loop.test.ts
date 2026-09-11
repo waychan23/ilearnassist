@@ -662,3 +662,68 @@ describe("replaying reasoning into history", () => {
     );
   });
 });
+
+describe("what a suspended turn persists", () => {
+  const questions = [
+    { header: "背景", question: "你的背景？", options: [{ label: "A" }, { label: "B" }] },
+  ];
+
+  /** Narration before a tool, then the sentence that introduces the questions. */
+  const narrateThenAsk = (): FakeTurn[] => [
+    {
+      content: "Let me look at the workspace.",
+      toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }],
+    },
+    {
+      content: "我先确认几件事：",
+      toolCalls: [{ id: "c2", name: "ask_user", args: { questions } }],
+    },
+  ];
+
+  it("holds the last step's text, not every step's narration run together", async () => {
+    // The bug this pins: a turn that ends on a tool call never reaches the branch that
+    // *replaces* the accumulated text, so both steps were saved concatenated with no
+    // separator — "Let me look at the workspace.我先确认几件事：".
+    const { result } = await run({ tools: [buildAskUserTool()], turns: narrateThenAsk() });
+
+    expect(result.awaiting).toBe(true);
+    expect(result.content).toBe("我先确认几件事：");
+  });
+
+  it("still streams the narration, which is the accepted asymmetry", async () => {
+    // The live view shows everything as it arrives; only what is *persisted* is trimmed.
+    // That is the same trade the final-answer path already makes, and changing it would
+    // be a product decision rather than a fix.
+    const { events } = await run({ tools: [buildAskUserTool()], turns: narrateThenAsk() });
+
+    const streamed = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+    expect(streamed).toBe("Let me look at the workspace.我先确认几件事：");
+  });
+
+  it("falls back to the previous utterance when the asking step says nothing", async () => {
+    // A silent suspending step must not resurrect the pile either — the most recent words
+    // are still the most recent words.
+    const { result } = await run({
+      tools: [buildAskUserTool()],
+      turns: [
+        { content: "Let me look at the workspace.", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
+        { toolCalls: [{ id: "c2", name: "ask_user", args: { questions } }] },
+      ],
+    });
+
+    expect(result.awaiting).toBe(true);
+    expect(result.content).toBe("Let me look at the workspace.");
+  });
+
+  it("leaves a turn with no narration at all alone", async () => {
+    const { result } = await run({
+      tools: [buildAskUserTool()],
+      turns: [{ content: "需要先确认。", toolCalls: [{ id: "c2", name: "ask_user", args: { questions } }] }],
+    });
+
+    expect(result.content).toBe("需要先确认。");
+  });
+});

@@ -310,6 +310,17 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   const toolByName = new Map<string, StructuredToolInterface>(input.tools.map((t) => [t.name, t]));
   const toolCalls: ToolCall[] = [];
   let finalContent = "";
+  /**
+   * The model's most recent utterance — the text of the last step that said anything.
+   *
+   * `finalContent` is an *accumulation*: every step's text is appended to it as it streams.
+   * A turn that ends on a plain answer never keeps that pile, because the branch below
+   * replaces it with the final step's text. A turn that ends on a tool call does not reach
+   * that branch, so without this it would persist every step's narration run together with
+   * no separator — which is what `ask_user` made reachable, being the first way a turn can
+   * legitimately end by asking rather than answering.
+   */
+  let lastUtterance = "";
   /** Set when a step asked the user something; the turn ends once the step finishes. */
   let awaiting = false;
 
@@ -324,6 +335,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
   for (let step = 0; step < maxSteps; step++) {
     const chunks: AIMessageChunk[] = [];
+    let stepText = "";
     const stream = await modelWithTools.stream(messages);
 
     for await (const chunk of stream) {
@@ -337,6 +349,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
       const text = chunkText(chunk);
       if (text) {
+        stepText += text;
         finalContent += text;
         input.onEvent({ type: "text", delta: text });
       }
@@ -361,6 +374,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       cachedInputTokens += stepUsage.input_token_details?.cache_read ?? 0;
       contextTokens = (stepUsage.input_tokens ?? 0) + (stepUsage.output_tokens ?? 0);
     }
+
+    if (stepText) lastUtterance = stepText;
 
     const calls = aiMessage.tool_calls ?? [];
     if (calls.length === 0) {
@@ -421,7 +436,15 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       messages.push(new ToolMessage({ tool_call_id: id, name, content: output }));
     }
 
-    if (suspendedHere) break;
+    if (suspendedHere) {
+      // The same rule the final answer gets: the message holds the model's most recent
+      // words, not every step's. A question is introduced by the sentence just before it,
+      // and the narration from earlier steps — which the live stream already showed — is
+      // not part of it. Falling back to the utterance rather than to the accumulation is
+      // what keeps a silent suspending step from re-joining everything after all.
+      finalContent = lastUtterance || finalContent;
+      break;
+    }
   }
 
   // Only when the turn genuinely ended without an answer. A suspension that carried no

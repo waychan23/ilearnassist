@@ -140,6 +140,14 @@ A suspension is recorded, not answered:
 - The route persists the assistant message and closes the stream normally. Nothing about
   the pending state lives in the process, which is what lets a question be answered after
   a page reload or a server restart.
+- **The message holds the last step's text, not every step's.** `finalContent` accumulates
+  as it streams, and the branch that trims it belongs to the final-answer path — which a
+  turn ending on a tool call never reaches. Left alone, the narration from one step and the
+  sentence introducing the questions from the next were joined with no separator
+  (`"Let me look at the workspace.我先确认几件事："`), so a Chinese question appeared to open
+  with an English fragment. This is not about language: two utterances run together like
+  that read as one broken sentence whatever they say. The live stream still shows both —
+  that asymmetry is the one the final-answer path already makes.
 
 The turn resumes on `POST /api/sessions/:id/answers`, which writes the answers onto the
 tool call (`output` for the model, `answer` for the card) and then runs a **fresh agent
@@ -179,7 +187,11 @@ control over the streaming shape:
 2. `chatModel.bindTools(tools)`.
 3. Loop up to `settings.maxSteps` (default **15**). Each step:
    - `modelWithTools.stream(messages)` and emit `text` deltas as they arrive,
-     accumulating `AIMessageChunk`s.
+     accumulating `AIMessageChunk`s. **Each step's text is also kept on its own**, because
+     what gets persisted is the model's *most recent* utterance rather than the pile: the
+     last step of a normal turn replaces the accumulation, and a suspended turn states the
+     same rule for itself. Without the latter, every step's narration is joined with no
+     separator — see [`ask_user`](#ask_user-and-the-suspended-turn).
    - Reduce chunks into a full `AIMessage`; read its `tool_calls`.
    - Accumulate `usage_metadata` (input/output/total/cached). The summed figures
      are what was billed; `contextTokens` records the *final* step's input+output
