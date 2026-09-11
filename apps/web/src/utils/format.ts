@@ -26,6 +26,7 @@ export function formatTokens(n: number): string {
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
+  // i18n-exempt: a character range for token estimation, not user-facing copy.
   const cjk = (text.match(/[㐀-鿿豈-﫿]/g) ?? []).length;
   const rest = text.length - cjk;
   return Math.ceil(cjk + rest / 4);
