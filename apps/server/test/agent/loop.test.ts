@@ -67,6 +67,8 @@ async function run(options: RunOptions) {
       slug: "w",
       dirPath: scratch,
       createdAt: new Date().toISOString(),
+      sessionCount: 0,
+      lastActivityAt: null,
     },
     settings: options.settings ?? {},
     uploadRoot: join(scratch, "uploads"),

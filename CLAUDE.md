@@ -73,6 +73,7 @@ pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromiu
 | `apps/web/test/i18n/` | catalog and hardcoded-text guards (see below) |
 | `apps/desktop/test/` | the control panel's paths, launch spec, process supervision and catalogs |
 | `e2e/*.spec.ts` | browser flows against the real stack |
+| `e2e/workspaces.ts` | `enterWorkspace()` / `leaveWorkspace()` — the front door, for specs |
 
 Each app's `tsconfig` includes its `test/` directory, so **`pnpm typecheck` checks the
 tests too**. For `apps/web` that also means `pnpm build` (which runs `vue-tsc`) fails on a
@@ -199,7 +200,8 @@ apps/web/src/
   composables/theme.ts    # light/dark/auto
   utils/apiError.ts       # server code → user-facing message
   utils/locale.ts         # browser-language detection + the alias table
-  components/…            # App, Sidebar, ChatView, MessageItem, ToolCallCard, Composer, dialogs
+  components/…            # App, WorkspaceHome, Sidebar, ChatView, MessageItem, ToolCallCard,
+                          #   Composer, TopbarControls, dialogs
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -322,6 +324,26 @@ Fuller map in `docs/reference.md`.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace and
   provider deletes go through `confirm()` from `composables/confirm.ts`. The
   agent's own `delete_file` tool is deliberately *not* gated.
+- **The app opens on the workspace home, and a card there is the only way into a
+  conversation.** There is still no router: `App.vue` renders `WorkspaceHome` *or* the
+  `Sidebar + ChatView` pair, chosen by `uiState.workspaceHome` in `composables/ui.ts` —
+  a flag, where two views and a boolean do not need a dependency and a URL nobody types.
+  The sidebar's old workspace `<select>` went in the same change: with the home page as
+  the switcher it was a second, duplicate way to change workspace, and it could name the
+  workspaces without saying anything about them. `selectWorkspace` is now reached only
+  through a card, and neither the workspace nor the session is persisted — the app landing
+  directly in a conversation is the regression, not the feature. Navigation goes through
+  `showWorkspaceHome()` / `showChat()`, never a component-local flag. `e2e/workspaces.ts`
+  is the same rule for the specs; a spec that skips it fails on a composer that never
+  renders.
+- **A workspace's conversation count and last activity are derived, never stored.**
+  `GET /api/workspaces` computes them in the same query that lists workspaces (a LEFT JOIN,
+  so a workspace with no conversations still appears with `0`/`null`), and the client
+  re-reads that list on the way back to the home page rather than keeping a counter. A
+  stored count is a second source of truth to get wrong on every deleted turn, renamed
+  session and second tab. Renaming a workspace is display-only: the directory keeps the slug
+  it was created with, or every path the agent had already written into a conversation would
+  break under it.
 - **Styling goes through the design system.** `docs/design-system.md` is the
   spec and `apps/web/test/style.test.ts` enforces it: a new colour lands in the
   one `:root` block *and* in both light-palette blocks, and spacing, type and

@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "./stores/app";
 import Sidebar from "./components/Sidebar.vue";
 import ChatView from "./components/ChatView.vue";
+import WorkspaceHome from "./components/WorkspaceHome.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
 import { closeDrawer, closeSettings, uiState } from "./composables/ui";
@@ -45,8 +46,15 @@ watch(
 onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 /**
- * Focus follows the drawer: into its first control when it opens, back to the button that
- * opened it when it closes.
+ * Focus follows the drawer: into a control when it opens, back to the button that opened it
+ * when it closes.
+ *
+ * The open target used to be the workspace `<select>`, which was the drawer's first control
+ * and moved you sideways between workspaces. That select is gone — the workspace home does
+ * its job — and the row that replaced it is a *back* button, which is not what someone
+ * opening the drawer is after. Focus goes to "new conversation" instead: a real control in
+ * the same region, and a constructive one, so a stray Enter does not undo the navigation
+ * the user just asked for.
  *
  * Queried rather than threaded up through an event: the two ends live in `Sidebar` and
  * `ChatView`, and an emit chain to hand `App` an element reference would be more moving
@@ -61,35 +69,46 @@ watch(
   async (open) => {
     if (!isCompact.value) return;
     await nextTick();
-    const selector = open ? "[data-testid='workspace-select']" : '[data-testid="nav-toggle"]';
+    const selector = open ? "[data-testid='new-session']" : '[data-testid="nav-toggle"]';
     document.querySelector<HTMLElement>(selector)?.focus();
   }
 );
 </script>
 
 <template>
-  <div class="app">
-    <Sidebar :inert="!uiState.drawerOpen && isCompact" />
+  <!--
+    Two views, and the flag that picks between them lives in `composables/ui.ts`. There is no
+    router: a route table for one boolean would be a dependency and a URL nobody types.
 
-    <!--
-      Only on a compact viewport, and only while the drawer is open. `inert` takes the pane
-      behind the drawer out of the tab order and the accessibility tree, which is the same
-      job a focus trap does with a fraction of the state. `ChatView` is single-root, so the
-      attribute falls through to `<main>`.
-    -->
-    <ChatView :inert="uiState.drawerOpen && isCompact" />
+    The overlays below sit outside the branch because both views reach them — Settings from
+    the sidebar footer, from the composer's model picker *and* from the workspace home.
+  -->
+  <div class="app" :class="{ home: uiState.workspaceHome }">
+    <WorkspaceHome v-if="uiState.workspaceHome" />
 
-    <div
-      v-if="isCompact && uiState.drawerOpen"
-      class="drawer-backdrop"
-      data-testid="drawer-backdrop"
-      aria-hidden="true"
-      @click="closeDrawer"
-    />
+    <template v-else>
+      <Sidebar :inert="!uiState.drawerOpen && isCompact" />
+
+      <!--
+        Only on a compact viewport, and only while the drawer is open. `inert` takes the pane
+        behind the drawer out of the tab order and the accessibility tree, which is the same
+        job a focus trap does with a fraction of the state. `ChatView` is single-root, so the
+        attribute falls through to `<main>`.
+      -->
+      <ChatView :inert="uiState.drawerOpen && isCompact" />
+
+      <div
+        v-if="isCompact && uiState.drawerOpen"
+        class="drawer-backdrop"
+        data-testid="drawer-backdrop"
+        aria-hidden="true"
+        @click="closeDrawer"
+      />
+    </template>
 
     <!-- Hosted once so every `confirm()` call from anywhere lands in the same prompt. -->
     <ConfirmDialog />
-    <!-- Reachable from the sidebar footer and the composer's model picker. -->
+    <!-- Reachable from the sidebar footer, the composer's model picker and the home page. -->
     <SettingsDialog v-if="uiState.settingsOpen" @close="closeSettings" />
     <Transition name="fade">
       <div v-if="store.error" class="toast">

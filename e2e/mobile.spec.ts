@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { scriptLlm } from "./llm";
+import { enterWorkspace } from "./workspaces";
 
 /**
  * The phone. Runs under the `mobile` project — a Pixel 7 viewport with `hasTouch` and
@@ -19,6 +20,7 @@ async function converse(
 ) {
   await scriptLlm(request, { turns: [{ content: "好的。" }] });
   await page.goto("/");
+  await enterWorkspace(page);
   await page.getByTestId("composer-input").fill(text);
   await page.getByTestId("composer-send").click();
   await page.getByTestId("message-assistant").last().locator(".actions").waitFor();
@@ -113,9 +115,9 @@ test("layout: one Escape closes the confirm prompt, not the drawer under it", as
 });
 
 test("layout: the closed drawer is not reachable by keyboard", async ({ page, request }) => {
-  // `visibility: hidden` on the closed panel is what keeps its workspace select, its glyph
-  // buttons, every session row and the settings entry out of the tab order. Without it they
-  // are focusable and announced while off-screen.
+  // `visibility: hidden` on the closed panel is what keeps its back-to-workspaces row, its
+  // glyph buttons, every session row and the settings entry out of the tab order. Without it
+  // they are focusable and announced while off-screen.
   await converse(page, request, "你好");
   await expect(page.getByTestId("sidebar")).toBeHidden();
 

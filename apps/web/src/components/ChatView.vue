@@ -2,41 +2,35 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
-import { useTheme } from "../composables/theme";
-import { useLocale } from "../composables/locale";
 import { isCompact } from "../composables/breakpoints";
-import { openDrawer, uiState } from "../composables/ui";
+import { openDrawer, showWorkspaceHome, uiState } from "../composables/ui";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
-import type { Locale } from "../utils/locale";
 import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
 import Composer from "./Composer.vue";
+import TopbarControls from "./TopbarControls.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 import Icon from "./Icon.vue";
 
 const store = useAppStore();
-const theme = useTheme();
 const { t } = useI18n();
-const { locale, setLocale, available } = useLocale();
 const showNewSession = ref(false);
 const messagesEl = ref<HTMLElement | null>(null);
 
-/* ----------------------------------- theme ----------------------------------- */
+/* --------------------------------- leaving ----------------------------------- */
 
-/** Icons are not translatable — only the labels are. */
-const THEME_ICON = { light: "sun", dark: "moon", auto: "monitor" } as const;
-
-const themeIcon = computed(() => THEME_ICON[theme.mode.value]);
-/** "自动（当前浅色）" reads clearer than just "自动" when the OS is doing the deciding. */
-const themeLabel = computed(() =>
-  theme.mode.value === "auto"
-    ? t("theme.autoCurrent", { current: t(`theme.${theme.resolved.value}`) })
-    : t(`theme.${theme.mode.value}`)
-);
-
-/* ---------------------------------- locale ----------------------------------- */
-function onLocaleChange(event: Event): void {
-  setLocale((event.target as HTMLSelectElement).value as Locale);
+/**
+ * Out of the workspace and back to the list.
+ *
+ * The workspace list is refetched rather than assumed: the conversation counts and last
+ * activity on the cards are the whole reason the page exists, and a turn sent since the
+ * user entered would leave the card they are about to look at stale. Not awaited — the
+ * navigation must not wait on a request, and the page renders from what is already in the
+ * store while the fresh numbers land.
+ */
+function leaveWorkspace(): void {
+  showWorkspaceHome();
+  void store.refreshWorkspaces().catch(() => undefined);
 }
 
 /* ------------------------------- title editing ------------------------------- */
@@ -121,6 +115,22 @@ watch(
   <main class="main">
     <header class="topbar">
       <!--
+        The way out, on every viewport. `isCompact` does not gate it the way it gates the
+        drawer toggle below: the drawer is one way to reach other conversations, but the
+        workspace list is the only way to reach another workspace, and a phone needs that
+        as much as a desktop does.
+      -->
+      <button
+        class="icon-btn back-toggle"
+        data-testid="back-to-workspaces"
+        :title="t('chat.backToWorkspaces')"
+        :aria-label="t('chat.backToWorkspaces')"
+        @click="leaveWorkspace"
+      >
+        <Icon name="arrow-left" />
+      </button>
+
+      <!--
         Only on a compact viewport, which also means no desktop spec can click it by
         accident. `aria-expanded` conveys the state without a second string; `aria-controls`
         needs the id the sidebar carries.
@@ -192,30 +202,7 @@ watch(
       </div>
 
       <!-- The title block takes the free space, so the actions land on the right. -->
-      <div class="topbar-actions">
-        <!-- A select, not a cycle button: N locales on one icon is not legible, and the
-             labels are autonyms so they stay readable in either language. -->
-        <select
-          class="locale-select"
-          :value="locale"
-          :title="t('locale.switchLabel')"
-          :aria-label="t('locale.switchLabel')"
-          data-testid="locale-select"
-          @change="onLocaleChange"
-        >
-          <option v-for="l in available" :key="l" :value="l">
-            {{ l === "zh-CN" ? t("locale.zhCN") : t("locale.en") }}
-          </option>
-        </select>
-        <button
-          class="icon-btn theme-toggle"
-          :title="t('theme.toggleTitle', { label: themeLabel })"
-          data-testid="theme-toggle"
-          @click="theme.cycle()"
-        >
-          <Icon :name="themeIcon" />
-        </button>
-      </div>
+      <TopbarControls />
     </header>
 
     <!-- Split into three keys rather than one message with <strong> in it: no message
@@ -263,28 +250,8 @@ watch(
   flex: 1;
   min-width: 0;
 }
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-shrink: 0;
-}
-.theme-toggle {
-  font-size: var(--fs-5);
-  padding: var(--space-2) var(--space-4);
-}
-.locale-select {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-2);
-  font-size: var(--fs-2);
-  padding: 3px var(--space-2);
-  cursor: pointer;
-}
-.locale-select:hover {
-  color: var(--text);
-}
+/* The language picker and the theme button moved to `TopbarControls.vue` when the
+   workspace home needed the same pair; their rules went with them. */
 .title-row {
   display: flex;
   align-items: center;

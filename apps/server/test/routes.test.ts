@@ -123,6 +123,79 @@ describe("workspaces", () => {
     expect(res.statusCode).toBe(200);
     expect(existsSync(workspace.dirPath)).toBe(false);
   });
+
+  /**
+   * The workspace cards are built from these two numbers, so they are asserted at the API
+   * boundary rather than only through the query that produces them.
+   */
+  it("reports each workspace's conversation count and last activity", async () => {
+    const empty = await newWorkspace(env, "Nothing Here");
+    const busy = await newWorkspace(env, "Talked In");
+    await newSession(env, busy.id);
+    await newSession(env, busy.id);
+
+    const listed = (await inject({ method: "GET", url: "/api/workspaces" })).json<Workspace[]>();
+    const emptyEntry = listed.find((w) => w.id === empty.id)!;
+    const busyEntry = listed.find((w) => w.id === busy.id)!;
+
+    // The LEFT JOIN is what keeps the empty one in the list at all — it is exactly the
+    // workspace a user has just made and is looking for.
+    expect(emptyEntry).toBeDefined();
+    expect(emptyEntry.sessionCount).toBe(0);
+    expect(emptyEntry.lastActivityAt).toBeNull();
+
+    expect(busyEntry.sessionCount).toBe(2);
+    expect(busyEntry.lastActivityAt).toBeTruthy();
+  });
+
+  it("renames a workspace without moving it on disk", async () => {
+    const workspace = await newWorkspace(env, "Before");
+    await newSession(env, workspace.id);
+
+    const res = await inject({
+      method: "PATCH",
+      url: `/api/workspaces/${workspace.id}`,
+      payload: { name: "  After  " },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const renamed = res.json<Workspace>();
+    expect(renamed.name).toBe("After");
+    // The slug and the directory are the workspace's identity: a rename that moved files
+    // would break every path the agent had already written into a conversation.
+    expect(renamed.slug).toBe(workspace.slug);
+    expect(renamed.dirPath).toBe(workspace.dirPath);
+    expect(existsSync(workspace.dirPath)).toBe(true);
+    // And the response carries the card's numbers, so replacing the entry in the store does
+    // not blank the count the user was just looking at.
+    expect(renamed.sessionCount).toBe(1);
+
+    const listed = (await inject({ method: "GET", url: "/api/workspaces" })).json<Workspace[]>();
+    expect(listed.find((w) => w.id === workspace.id)?.name).toBe("After");
+  });
+
+  it("refuses a blank rename, and 404s an unknown workspace", async () => {
+    const workspace = await newWorkspace(env, "Keep");
+
+    const blank = await inject({
+      method: "PATCH",
+      url: `/api/workspaces/${workspace.id}`,
+      payload: { name: "   " },
+    });
+    expect(blank.statusCode).toBe(400);
+    expect(blank.json<ApiErrorBody>().error.code).toBe("NAME_REQUIRED");
+
+    const missing = await inject({
+      method: "PATCH",
+      url: "/api/workspaces/nope",
+      payload: { name: "x" },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    // The blank attempt left the name alone.
+    const listed = (await inject({ method: "GET", url: "/api/workspaces" })).json<Workspace[]>();
+    expect(listed.find((w) => w.id === workspace.id)?.name).toBe("Keep");
+  });
 });
 
 describe("copilots", () => {

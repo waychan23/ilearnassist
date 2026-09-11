@@ -295,6 +295,27 @@ export const useAppStore = defineStore("app", () => {
     if (!activeWorkspaceId.value) activeWorkspaceId.value = ws.id;
   }
 
+  /**
+   * Re-read the workspace list, refreshing each card's conversation count and last activity.
+   *
+   * Called on the way back to the workspace home rather than kept in sync as conversations
+   * come and go: the counts are only ever looked at on that page, and a client-side
+   * incrementing counter would be a second source of truth to get wrong every time a turn
+   * is deleted, a session is renamed, or a second tab is open. Deliberately leaves
+   * `activeWorkspaceId` alone — the user is on their way somewhere, not arriving.
+   */
+  async function refreshWorkspaces(): Promise<void> {
+    workspaces.value = await api.listWorkspaces();
+  }
+
+  async function renameWorkspace(id: string, name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const updated = await api.renameWorkspace(id, trimmed);
+    const idx = workspaces.value.findIndex((w) => w.id === updated.id);
+    if (idx !== -1) workspaces.value[idx] = updated;
+  }
+
   async function deleteWorkspace(id: string): Promise<void> {
     await api.deleteWorkspace(id);
     workspaces.value = workspaces.value.filter((w) => w.id !== id);
@@ -760,6 +781,8 @@ export const useAppStore = defineStore("app", () => {
     loadSessions,
     selectWorkspace,
     createWorkspace,
+    refreshWorkspaces,
+    renameWorkspace,
     deleteWorkspace,
     selectSession,
     createSession,

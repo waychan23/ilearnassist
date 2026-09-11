@@ -343,6 +343,19 @@ body {
   overflow: hidden;
 }
 
+/*
+ * The workspace home is a single full-width child, so the two-column track collapses to
+ * one. Without this it would be laid out in the 272px sidebar column and the rest of the
+ * page would be empty — the grid has no reason to know how many children it has.
+ *
+ * Set here rather than in the responsive block: this is not a breakpoint, it is the other
+ * view. The `max-width: 900px` rule further down also lands on one column, which is
+ * correct on both views and needs no variant.
+ */
+.app.home {
+  grid-template-columns: 1fr;
+}
+
 .sidebar {
   background: var(--sidebar);
   border-right: 1px solid var(--border);
@@ -429,6 +442,216 @@ body {
   margin: 0;
 }
 
+/* ------------------------------ workspace home ------------------------------ */
+
+/*
+ * The page the app opens on. A header that does not scroll, over a grid that does — the
+ * same two-part shape as `.main`, and for the same reason: the language picker and the
+ * theme button have to stay reachable however many workspaces there are.
+ */
+.workspace-home {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.home-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-7);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.home-brand {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-4);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.home-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-9) var(--space-7) var(--space-10);
+}
+
+.home-intro {
+  margin-bottom: var(--space-8);
+}
+
+.home-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-8);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.home-sub {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-3);
+}
+
+/*
+ * `auto-fill` rather than `auto-fit`: with `auto-fit` a single workspace would stretch to
+ * the full width of the pane and stop looking like a card, which is the state every user
+ * starts in. The track floor is what decides the column count; at 375px the padding leaves
+ * 240px of room and the grid is simply one column, so no breakpoint is needed for it.
+ */
+.ws-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-6);
+  max-width: 1100px;
+}
+
+.ws-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 132px;
+  padding: var(--space-6);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition:
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+
+.ws-card:hover {
+  border-color: var(--accent);
+  background: var(--panel);
+}
+
+/* The card takes focus through the open button, so the ring is drawn on the card. */
+.ws-card:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/*
+ * The name is the accessible "open" control and stretches over the whole card, which is
+ * what makes the card clickable without nesting the rename and delete buttons inside it —
+ * a button inside a button is invalid, and browsers disagree about what it means.
+ * The action buttons are lifted above the stretched pseudo-element below.
+ */
+.ws-card-open {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--fs-6);
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-card-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+}
+
+.ws-card-path {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.ws-card-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: auto;
+}
+
+.ws-card-activity {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2);
+}
+
+/* Above the stretched button, or the click would open the workspace instead. */
+.ws-card-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Revealed on hover and on focus, so a card at rest reads as a workspace rather than as a
+   row of controls. `:focus-within` is what keeps them reachable by keyboard on a device
+   that has no hover at all. */
+.ws-card-actions .icon-btn {
+  opacity: 0;
+  transition: opacity var(--dur-fast);
+}
+
+.ws-card:hover .ws-card-actions .icon-btn,
+.ws-card:focus-within .ws-card-actions .icon-btn {
+  opacity: 1;
+}
+
+.ws-card-rename {
+  width: 100%;
+  font-size: var(--fs-6);
+  font-weight: 600;
+}
+
+.ws-card-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  min-height: 132px;
+  padding: var(--space-6);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-3);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast),
+    color var(--dur-fast);
+}
+
+.ws-card-new:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.home-empty {
+  padding: var(--space-10) 0;
+  color: var(--text-3);
+  font-size: var(--fs-3);
+}
+
+.home-empty h2 {
+  margin: 0 0 var(--space-4);
+  color: var(--text-2);
+  font-size: var(--fs-7);
+  font-weight: 600;
+}
+
+.home-empty p {
+  margin: 0;
+}
+
 /* -------------------------------- sidebar bits ------------------------------ */
 
 .side-section {
@@ -466,18 +689,39 @@ body {
   min-width: 0;
 }
 
-.workspace-select {
+/*
+ * The breadcrumb back to the workspace home.
+ *
+ * A block holding one full-width button, rather than the flex row it was when the
+ * new-workspace glyph sat beside it. The wrapper is kept for its margins: `.sidebar` is a
+ * column flexbox, and giving the button horizontal margins directly would put them *outside*
+ * its `width: 100%` and push it past the sidebar's clipped edge.
+ */
+.workspace-head {
   margin: var(--space-5) var(--space-6) var(--space-2);
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
 }
 
-/* The select shares this row with two icon buttons; without this it refuses to
-   shrink below its content width and pushes them out of the sidebar. */
-.workspace-select .select {
+.workspace-back {
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+}
+
+.workspace-back .arrow {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.workspace-back .label {
+  flex-shrink: 0;
+}
+
+/* The current workspace, set apart from the label it follows so the row reads as
+   "all workspaces › this one" rather than as one long name. */
+.workspace-back .sub {
   flex: 1;
-  min-width: 0;
+  text-align: right;
+  color: var(--text-3);
+  font-size: var(--fs-1);
 }
 
 .session-item {
@@ -1520,8 +1764,19 @@ body {
   .composer .send-btn,
   .composer .attach-btn,
   .composer .params-btn,
-  .topbar .nav-toggle {
+  .topbar .nav-toggle,
+  .topbar .back-toggle {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  /*
+   * The card actions are revealed on `:hover`, which a finger never performs — so on a
+   * touch screen they would be permanently invisible *and* unreachable, since a tap lands
+   * on the stretched open button instead. Shown always here, which costs a little quiet on
+   * a card at rest and is the only way the buttons exist at all.
+   */
+  .ws-card-actions .icon-btn {
+    opacity: 1;
   }
 }

@@ -4,15 +4,13 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import type { Session } from "../api/types";
-import { closeDrawer, openSettings, uiState } from "../composables/ui";
-import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
+import { closeDrawer, openSettings, showWorkspaceHome, uiState } from "../composables/ui";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 import Icon from "./Icon.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
 
-const showCreateWorkspace = ref(false);
 const showNewSession = ref(false);
 
 /*
@@ -25,14 +23,10 @@ const showNewSession = ref(false);
  * These are on the actions rather than on the dialogs' results, so the drawer is already
  * gone by the time a modal covers the screen — and it is never left open behind one.
  */
-function onWorkspaceChange(event: Event) {
-  void store.selectWorkspace((event.target as HTMLSelectElement).value);
+function backToWorkspaces() {
   closeDrawer();
-}
-
-function openNewWorkspace() {
-  showCreateWorkspace.value = true;
-  closeDrawer();
+  showWorkspaceHome();
+  void store.refreshWorkspaces().catch(() => undefined);
 }
 
 function openNewSession() {
@@ -90,18 +84,9 @@ async function onDeleteSession(session: Session) {
   if (ok) await store.deleteSession(session.id);
 }
 
-async function onDeleteWorkspace() {
-  const ws = store.activeWorkspace;
-  if (!ws) return;
-  const ok = await confirm({
-    title: t("workspace.delete.title"),
-    message: t("workspace.delete.message", { name: ws.name }),
-    detail: t("workspace.delete.detail", { path: ws.dirPath }),
-    confirmText: t("common.delete"),
-    danger: true,
-  });
-  if (ok) await store.deleteWorkspace(ws.id);
-}
+/* Deleting a workspace moved to its card on the workspace home. It was a glyph beside the
+   dropdown it used to share a row with, which put a destructive action one mis-click from
+   the control the user was actually reaching for. */
 </script>
 
 <template>
@@ -111,25 +96,28 @@ async function onDeleteWorkspace() {
     data-testid="sidebar"
     :class="{ open: uiState.drawerOpen }"
   >
-    <div class="workspace-select">
-      <select
-        class="select"
-        data-testid="workspace-select"
-        :value="store.activeWorkspaceId ?? ''"
-        @change="onWorkspaceChange"
-      >
-        <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
-      </select>
-      <button class="icon-btn" :title="t('sidebar.newWorkspace')"
-        :aria-label="t('sidebar.newWorkspace')" @click="openNewWorkspace"><Icon name="plus" /></button>
+    <!--
+      The workspace switcher, now a breadcrumb rather than a dropdown. The dropdown listed
+      every workspace and moved you sideways between them; the home page does that job now,
+      with room to say what is in each one, so this row does the only thing left: go back.
+      The current workspace stays named here because the topbar names the *conversation*,
+      and on the welcome screen it falls back to the workspace — a name worth confirming.
+
+      Creating one is on the home page too, and deliberately not repeated here. This row is
+      the way out of a workspace, and a `+` beside it made the two most different actions on
+      the sidebar — go back, and make something new — sit a few pixels apart under one
+      cursor. The workspace list is one click away and has a card for it.
+    -->
+    <div class="workspace-head">
       <button
-        class="icon-btn danger"
-        :title="t('sidebar.deleteWorkspace')"
-        :aria-label="t('sidebar.deleteWorkspace')"
-        :disabled="!store.activeWorkspace"
-        @click="onDeleteWorkspace"
+        class="menu-item workspace-back"
+        data-testid="all-workspaces"
+        :title="t('sidebar.allWorkspaces')"
+        @click="backToWorkspaces"
       >
-        <Icon name="trash" />
+        <span class="arrow"><Icon name="arrow-left" /></span>
+        <span class="label">{{ t("sidebar.allWorkspaces") }}</span>
+        <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
       </button>
     </div>
 
@@ -165,10 +153,10 @@ async function onDeleteWorkspace() {
           <span class="label" :title="t('sidebar.renameHint')" @dblclick.stop="startRename(s)">
             {{ s.title || t("session.fallbackTitle") }}
           </span>
-          <button class="icon-btn" :title="t('sidebar.rename')"
-            :aria-label="t('sidebar.rename')" @click.stop="startRename(s)"><Icon name="edit" /></button>
-          <button class="icon-btn danger" :title="t('sidebar.delete')"
-            :aria-label="t('sidebar.delete')" @click.stop="onDeleteSession(s)"><Icon name="trash" /></button>
+          <button class="icon-btn" :title="t('common.rename')"
+            :aria-label="t('common.rename')" @click.stop="startRename(s)"><Icon name="edit" /></button>
+          <button class="icon-btn danger" :title="t('common.delete')"
+            :aria-label="t('common.delete')" @click.stop="onDeleteSession(s)"><Icon name="trash" /></button>
         </template>
       </div>
       <div v-if="store.sessions.length === 0" class="muted">{{ t("sidebar.noSessions") }}</div>
@@ -177,12 +165,12 @@ async function onDeleteWorkspace() {
     <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
     <button
       class="menu-item side-settings"
-      :title="t('sidebar.settings')"
+      :title="t('common.settings')"
       data-testid="open-settings"
       @click="openSidebarSettings"
     >
       <span class="gear"><Icon name="gear" /></span>
-      <span class="label">{{ t("sidebar.settings") }}</span>
+      <span class="label">{{ t("common.settings") }}</span>
       <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
     </button>
 
@@ -192,11 +180,6 @@ async function onDeleteWorkspace() {
       </span>
     </div>
 
-    <CreateWorkspaceDialog
-      v-if="showCreateWorkspace"
-      @close="showCreateWorkspace = false"
-      @created="showCreateWorkspace = false"
-    />
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
   </aside>
 </template>

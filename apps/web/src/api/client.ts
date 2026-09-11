@@ -81,6 +81,8 @@ export const api = {
   listWorkspaces: () => request<Workspace[]>("/workspaces"),
   createWorkspace: (name: string) =>
     request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify({ name }) }),
+  renameWorkspace: (id: string, name: string) =>
+    request<Workspace>(`/workspaces/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteWorkspace: (id: string) =>
     request<{ ok: boolean }>(`/workspaces/${id}`, { method: "DELETE" }),
 

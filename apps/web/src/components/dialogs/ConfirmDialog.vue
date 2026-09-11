@@ -58,10 +58,13 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           <p v-if="confirmState.detail" class="confirm-detail">{{ confirmState.detail }}</p>
         </div>
         <div class="modal-foot">
-          <button class="btn" @click="settleConfirm(false)">{{ confirmState.cancelText }}</button>
+          <button class="btn" data-testid="confirm-cancel" @click="settleConfirm(false)">
+            {{ confirmState.cancelText }}
+          </button>
           <button
             ref="confirmBtn"
             class="btn"
+            data-testid="confirm-accept"
             :class="confirmState.danger ? 'danger' : 'primary'"
             @click="settleConfirm(true)"
           >

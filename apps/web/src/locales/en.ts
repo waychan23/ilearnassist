@@ -24,6 +24,8 @@ const en: typeof MessageSchema = {
     save: "Save",
     close: "Close",
     edit: "Edit",
+    rename: "Rename",
+    settings: "Settings",
   },
 
   app: {
@@ -58,6 +60,7 @@ const en: typeof MessageSchema = {
     autoBadgeTitle: "Titles are generated from the first turn of the conversation",
     start: "Start a conversation",
     startHint: "Type a message below; the agent will call tools as it needs them.",
+    backToWorkspaces: "Back to workspaces",
     startAction: "New conversation (choose a Copilot)",
   },
 
@@ -98,16 +101,12 @@ const en: typeof MessageSchema = {
   },
 
   sidebar: {
-    newWorkspace: "New workspace",
-    deleteWorkspace: "Delete this workspace",
+    allWorkspaces: "All workspaces",
     sessions: "Conversations",
     newSession: "New conversation",
     renameHint: "Double-click to rename",
-    rename: "Rename",
-    delete: "Delete",
     noSessions: "No conversations yet",
     openNav: "Open navigation",
-    settings: "Settings",
   },
 
   session: {
@@ -138,6 +137,23 @@ const en: typeof MessageSchema = {
       title: "Delete workspace",
       message: "Delete “{name}”?",
       detail: "The directory {path} and every file in it will be deleted. This cannot be undone.",
+    },
+
+    home: {
+      title: "Choose a workspace",
+      subtitle: "The agent reads and writes files only inside the workspace you pick.",
+      newCard: "New workspace",
+      empty: "No workspaces yet",
+      emptyHint: "Create one and the agent will read and write files inside it.",
+      open: "Open workspace {name}",
+      sessions: "1 conversation | {count} conversations",
+      activity: {
+        never: "No activity yet",
+        now: "just now",
+        minutes: "1 minute ago | {count} minutes ago",
+        hours: "1 hour ago | {count} hours ago",
+        days: "1 day ago | {count} days ago",
+      },
     },
   },
 

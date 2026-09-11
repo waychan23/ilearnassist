@@ -45,6 +45,11 @@ export const ICON_PATHS = {
   "caret-down": ["M4 6.5L8 10.5L12 6.5"],
   "caret-right": ["M6.5 4L10.5 8L6.5 12"],
 
+  /* Leaving a workspace, which is the opposite of what `caret-right` means at its call
+   * sites (`ModelSelector`'s disclosure). A chevron with a shaft, so it reads as a
+   * direction rather than a collapsed section. */
+  "arrow-left": ["M13 8H3", "M7 4L3 8L7 12"],
+
   send: ["M8 13.5V2.75", "M3.75 7L8 2.75L12.25 7"],
 
   menu: ["M2.75 4.5H13.25", "M2.75 8H13.25", "M2.75 11.5H13.25"],

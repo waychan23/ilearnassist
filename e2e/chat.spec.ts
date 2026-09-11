@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { buildPdf } from "../apps/server/src/documents/sample.js";
 import { FAKE_LLM, scriptLlm } from "./llm";
+import { enterWorkspace } from "./workspaces";
 
 /**
  * Browser end-to-end: the real Vue app, the real Fastify server, a real sqlite database,
@@ -33,10 +34,9 @@ test("a conversation round trip survives a reload", async ({ page, request }) =>
     ],
   });
 
+  // The first launch creates a default workspace; entering it is what shows the empty state.
   await page.goto("/");
-  await expect(page.getByTestId("composer-input")).toBeVisible();
-
-  // The first launch creates a default workspace and shows the empty state.
+  await enterWorkspace(page);
   await expect(page.getByText("开始对话")).toBeVisible();
 
   await page.getByTestId("composer-input").fill("帮我写一个文件");
@@ -68,8 +68,10 @@ test("a conversation round trip survives a reload", async ({ page, request }) =>
   // --- reload: everything must come back from the database, not from memory ---
   await page.reload();
 
-  // The app does not remember the active session across a reload; reopen it from the
-  // sidebar, then everything must come back from the database rather than the store.
+  // The app remembers neither the active workspace nor the active session across a reload —
+  // it opens on the workspace list, deliberately. Walk back in, then reopen the conversation
+  // from the sidebar: everything after this must come from the database, not the store.
+  await enterWorkspace(page);
   // `.first()`: sessions are ordered most-recently-updated first, and this test's
   // session was just created and touched, so it is the topmost item.
   await page.getByTestId("session-item").first().click();
@@ -93,6 +95,7 @@ test("a second turn keeps the earlier one in context and does not re-title", asy
   });
 
   await page.goto("/");
+  await enterWorkspace(page);
   await page.getByTestId("composer-input").fill("第一轮问题");
   await page.getByTestId("composer-send").click();
   await expect(page.getByTestId("message-assistant").last()).toContainText("第一轮回答。");
@@ -112,6 +115,7 @@ test("a PDF is parsed locally and its text reaches the model", async ({ page, re
   await scriptLlm(request, { turns: [{ content: "我读到了 PDF。" }] });
 
   await page.goto("/");
+  await enterWorkspace(page);
 
   await page.getByTestId("composer-file-input").setInputFiles({
     name: "lecture.pdf",
@@ -138,6 +142,7 @@ test("a PDF is parsed locally and its text reaches the model", async ({ page, re
 
   // Parse state is persisted with the message, so the chip is still informative on reload.
   await page.reload();
+  await enterWorkspace(page);
   await page.getByTestId("session-item").first().click();
   await expect(page.getByTestId("attachment-chip")).toBeVisible();
   await expect(page.getByTestId("attachment-detail")).toContainText("1 页");
@@ -153,6 +158,7 @@ test("a scanned PDF falls back to the cloud parser", async ({ page, request }) =
   await scriptLlm(request, { turns: [{ content: "云端读到了。" }] });
 
   await page.goto("/");
+  await enterWorkspace(page);
 
   // A page with no text layer: local extraction reports `no_text_layer`, which is the
   // recoverable failure the policy hands to the cloud tier.
@@ -209,6 +215,7 @@ test("an attached file reaches the model's prompt and survives a reload", async 
   await scriptLlm(request, { turns: [{ content: "我读到了。" }] });
 
   await page.goto("/");
+  await enterWorkspace(page);
 
   // Pick a file through the composer's real input.
   await page.getByTestId("composer-file-input").setInputFiles({
@@ -235,6 +242,7 @@ test("an attached file reaches the model's prompt and survives a reload", async 
   // The attachment is recorded on the persisted turn, so it comes back after a reload.
   // `.first()`: most-recently-updated session first (see the round-trip test above).
   await page.reload();
+  await enterWorkspace(page);
   await page.getByTestId("session-item").first().click();
   await expect(page.getByTestId("attachment-chip")).toContainText("notes.txt");
 });

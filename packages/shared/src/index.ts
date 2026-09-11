@@ -182,6 +182,17 @@ export interface Workspace {
   slug: string;
   dirPath: string;
   createdAt: string;
+  /**
+   * How many conversations the workspace holds, and when the most recent one was last
+   * touched — the two numbers the workspace cards are built from.
+   *
+   * Derived rather than stored, and carried on the workspace rather than fetched per card:
+   * a management page that has to ask once per workspace is a page that gets slower with
+   * every one the user creates. `lastActivityAt` is null for a workspace nobody has talked
+   * to yet, which is why it is not simply the creation date.
+   */
+  sessionCount: number;
+  lastActivityAt: string | null;
 }
 
 /** What a model can do — drives vision handling and UI badges. */
@@ -320,6 +331,10 @@ export interface PublicConfig {
 /* ----------------------------------- API payloads ----------------------------------- */
 
 export interface CreateWorkspaceInput {
+  name: string;
+}
+
+export interface UpdateWorkspaceInput {
   name: string;
 }
 

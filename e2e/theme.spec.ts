@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { scriptLlm } from "./llm";
+import { enterWorkspace } from "./workspaces";
 
 /**
  * The theme is enforced by a `data-theme` attribute on `<html>` set before first paint,
@@ -109,6 +110,7 @@ test("code surfaces flip with the theme and stay readable in both", async ({ pag
   });
 
   await page.goto("/");
+  await enterWorkspace(page);
   await page.getByTestId("composer-input").fill("怎么安装");
   await page.getByTestId("composer-send").click();
 
@@ -218,6 +220,7 @@ test("the user bubble flips with the theme and stays readable in both", async ({
   await scriptLlm(request, { turns: [{ content: "好的。" }] });
 
   await page.goto("/");
+  await enterWorkspace(page);
   await page.getByTestId("composer-input").fill("气泡测试");
   await page.getByTestId("composer-send").click();
 

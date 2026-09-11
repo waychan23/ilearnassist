@@ -26,6 +26,14 @@ interface WorkspaceRow {
   slug: string;
   dir_path: string;
   created_at: string;
+  /**
+   * Present only on rows that came back from the stats query. `getWorkspace` and
+   * `createWorkspace` select the bare table, and a brand-new workspace is by definition
+   * empty — so `mapWorkspace` reads these as 0/null rather than every caller having to
+   * join a table for a number it already knows.
+   */
+  session_count?: number;
+  last_activity_at?: string | null;
 }
 
 interface CopilotRow {
@@ -143,6 +151,8 @@ const mapWorkspace = (r: WorkspaceRow): Workspace => ({
   slug: r.slug,
   dirPath: r.dir_path,
   createdAt: r.created_at,
+  sessionCount: r.session_count ?? 0,
+  lastActivityAt: r.last_activity_at ?? null,
 });
 
 const mapCopilot = (r: CopilotRow): Copilot => ({
@@ -237,6 +247,11 @@ export interface AppDb {
   listWorkspaces(): Workspace[];
   getWorkspace(id: string): Workspace | undefined;
   createWorkspace(input: { id: string; name: string; slug: string; dirPath: string }): Workspace;
+  /**
+   * Rename only. The directory on disk keeps the slug it was created with — a rename that
+   * moved files would break every path the agent has already written into a conversation.
+   */
+  renameWorkspace(id: string, name: string): Workspace | undefined;
   deleteWorkspace(id: string): void;
 
   listCopilots(): Copilot[];
@@ -475,11 +490,36 @@ export function createDb(dbPath: string): AppDb {
   const now = () => new Date().toISOString();
 
   /* ------------------------------ workspaces ------------------------------ */
-  const stmtListWorkspaces = db.prepare("SELECT * FROM workspaces ORDER BY created_at ASC");
+  /*
+   * The list carries each workspace's conversation count and most recent activity, so the
+   * management page renders from one request. `MAX(s.updated_at)` rides the existing
+   * `idx_sessions_workspace (workspace_id, updated_at)` index; the LEFT JOIN is what keeps a
+   * workspace with no conversations in the result at all, with a count of 0 and no activity
+   * — an inner join would silently drop the empty ones, which are exactly the workspaces a
+   * user has just created and is looking for.
+   */
+  const stmtListWorkspaces = db.prepare(
+    `SELECT w.*, COUNT(s.id) AS session_count, MAX(s.updated_at) AS last_activity_at
+     FROM workspaces w LEFT JOIN sessions s ON s.workspace_id = w.id
+     GROUP BY w.id ORDER BY w.created_at ASC`
+  );
   const stmtGetWorkspace = db.prepare("SELECT * FROM workspaces WHERE id = ?");
+  /*
+   * The same row as `stmtGetWorkspace`, with the stats a card needs. Separate rather than
+   * folded in because `getWorkspace` is mostly an existence check on the hot path of every
+   * session route, where a join for a number nobody reads is a cost with no payer. It exists
+   * for the rename response: handing the client back a workspace whose `sessionCount` had
+   * collapsed to 0 would blank the card it was written to refresh.
+   */
+  const stmtGetWorkspaceWithStats = db.prepare(
+    `SELECT w.*, COUNT(s.id) AS session_count, MAX(s.updated_at) AS last_activity_at
+     FROM workspaces w LEFT JOIN sessions s ON s.workspace_id = w.id
+     WHERE w.id = ? GROUP BY w.id`
+  );
   const stmtCreateWorkspace = db.prepare(
     "INSERT INTO workspaces (id, name, slug, dir_path, created_at) VALUES (@id, @name, @slug, @dirPath, @createdAt)"
   );
+  const stmtRenameWorkspace = db.prepare("UPDATE workspaces SET name = ? WHERE id = ?");
   const stmtDeleteWorkspace = db.prepare("DELETE FROM workspaces WHERE id = ?");
 
   /* ------------------------------- copilots ------------------------------- */
@@ -597,6 +637,11 @@ export function createDb(dbPath: string): AppDb {
       stmtCreateWorkspace.run({ ...input, createdAt: now() });
       const r = stmtGetWorkspace.get(input.id) as WorkspaceRow;
       return mapWorkspace(r);
+    },
+    renameWorkspace(id, name) {
+      stmtRenameWorkspace.run(name, id);
+      const r = stmtGetWorkspaceWithStats.get(id) as WorkspaceRow | undefined;
+      return r ? mapWorkspace(r) : undefined;
     },
     deleteWorkspace(id) {
       stmtDeleteWorkspace.run(id);

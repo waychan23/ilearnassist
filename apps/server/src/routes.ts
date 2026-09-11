@@ -27,6 +27,7 @@ import type {
   UpdateDocumentParsingInput,
   UpdateProviderInput,
   UpdateSessionInput,
+  UpdateWorkspaceInput,
   UploadAttachmentInput,
 } from "@guided-learning/shared";
 import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
@@ -251,6 +252,21 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const dirPath = createWorkspaceDir(config.workspaces.rootDir, slug);
     const workspace = db.createWorkspace({ id: newId(), name, slug, dirPath });
     return reply.code(201).send(workspace);
+  });
+
+  /**
+   * Rename. The directory keeps its original slug — see `renameWorkspace` in `db.ts` — so
+   * this is a display-name change and nothing on disk moves underneath a running agent.
+   */
+  app.patch("/api/workspaces/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as UpdateWorkspaceInput;
+    if (!db.getWorkspace(id)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+
+    const name = body?.name?.trim();
+    if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
+
+    return db.renameWorkspace(id, name);
   });
 
   app.delete("/api/workspaces/:id", async (request, reply) => {

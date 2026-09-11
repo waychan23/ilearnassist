@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { estimateTokens, formatBytes, formatTokens } from "../../src/utils/format.js";
+import {
+  estimateTokens,
+  formatBytes,
+  formatRelativeTime,
+  formatTokens,
+} from "../../src/utils/format.js";
 
 describe("formatBytes", () => {
   it("shows raw bytes below 1 KB", () => {
@@ -66,5 +71,43 @@ describe("estimateTokens", () => {
 
   it("rounds up a partial token", () => {
     expect(estimateTokens("ab")).toBe(1);
+  });
+});
+
+describe("formatRelativeTime", () => {
+  const now = Date.parse("2026-09-11T12:00:00.000Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it("calls anything under a minute 'now'", () => {
+    expect(formatRelativeTime(ago(0), now)).toEqual({ kind: "now" });
+    expect(formatRelativeTime(ago(59_000), now)).toEqual({ kind: "now" });
+  });
+
+  it("steps through minutes, hours and days", () => {
+    expect(formatRelativeTime(ago(60_000), now)).toEqual({ kind: "minutes", count: 1 });
+    expect(formatRelativeTime(ago(59 * 60_000), now)).toEqual({ kind: "minutes", count: 59 });
+    expect(formatRelativeTime(ago(60 * 60_000), now)).toEqual({ kind: "hours", count: 1 });
+    expect(formatRelativeTime(ago(23 * 3_600_000), now)).toEqual({ kind: "hours", count: 23 });
+    expect(formatRelativeTime(ago(24 * 3_600_000), now)).toEqual({ kind: "days", count: 1 });
+    expect(formatRelativeTime(ago(6 * 86_400_000), now)).toEqual({ kind: "days", count: 6 });
+  });
+
+  it("falls back to the date at a week, where a count stops being readable", () => {
+    // "7 days ago" is still a number the reader has to convert; the date is not.
+    expect(formatRelativeTime(ago(7 * 86_400_000), now)).toEqual({
+      kind: "date",
+      value: "2026-09-04",
+    });
+  });
+
+  it("clamps a timestamp from the future to 'now' rather than reporting a negative age", () => {
+    // Browser and server share a machine in every supported setup, but a card must not be
+    // able to render "-3 minutes".
+    expect(formatRelativeTime(new Date(now + 120_000).toISOString(), now)).toEqual({ kind: "now" });
+  });
+
+  it("shows an unparseable timestamp rather than inventing an age for it", () => {
+    // A server bug, not a user-facing state — and "just now" would be a lie dressed as one.
+    expect(formatRelativeTime("not a date", now)).toEqual({ kind: "date", value: "not a date" });
   });
 });

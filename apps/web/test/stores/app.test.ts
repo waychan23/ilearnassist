@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     getConfig: vi.fn(),
     listWorkspaces: vi.fn(),
     createWorkspace: vi.fn(),
+    renameWorkspace: vi.fn(),
     deleteWorkspace: vi.fn(),
     listCopilots: vi.fn(),
     createCopilot: vi.fn(),
@@ -67,6 +68,8 @@ const WORKSPACE: Workspace = {
   slug: "notes",
   dirPath: "/tmp/notes",
   createdAt: "2026-01-01T00:00:00.000Z",
+  sessionCount: 0,
+  lastActivityAt: null,
 };
 
 const CONFIG: PublicConfig = {
@@ -536,6 +539,44 @@ describe("sessions", () => {
     await store.deleteWorkspace("w1");
 
     expect(store.activeWorkspaceId).toBeNull();
+    expect(mocks.api.listSessions).not.toHaveBeenCalled();
+  });
+
+  it("renames a workspace in place", async () => {
+    const store = await readyStore();
+    mocks.api.renameWorkspace.mockResolvedValue({
+      ...WORKSPACE,
+      name: "Renamed",
+      sessionCount: 3,
+    });
+
+    await store.renameWorkspace("w1", "  Renamed  ");
+
+    // Trimmed on the way out, and the server's own record — stats included — is what the
+    // card is rebuilt from rather than a local patch of the name.
+    expect(mocks.api.renameWorkspace).toHaveBeenCalledWith("w1", "Renamed");
+    expect(store.workspaces).toEqual([{ ...WORKSPACE, name: "Renamed", sessionCount: 3 }]);
+  });
+
+  it("does not call the API for a rename that would be blank", async () => {
+    const store = await readyStore();
+    await store.renameWorkspace("w1", "   ");
+    expect(mocks.api.renameWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the workspace list without disturbing the active one", async () => {
+    const store = await readyStore();
+    mocks.api.listWorkspaces.mockResolvedValue([{ ...WORKSPACE, sessionCount: 7 }]);
+    mocks.api.listSessions.mockClear();
+
+    await store.refreshWorkspaces();
+
+    // The counts are the point: a conversation started since the page was last rendered
+    // has to show up on the card the user is about to look at.
+    expect(store.workspaces[0]!.sessionCount).toBe(7);
+    // But the user is on their way somewhere, not arriving — the selection survives, and
+    // so does the conversation list it belongs to.
+    expect(store.activeWorkspaceId).toBe("w1");
     expect(mocks.api.listSessions).not.toHaveBeenCalled();
   });
 

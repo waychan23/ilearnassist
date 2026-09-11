@@ -31,6 +31,13 @@ export default {
     save: "保存",
     close: "关闭",
     edit: "编辑",
+    /*
+     * Verbs and one noun that two domains now say: the sidebar acts on a conversation, the
+     * workspace cards act on a workspace. Keying either copy `sidebar.*` would have put the
+     * card's wording behind a key named after a component that no longer owns the idea.
+     */
+    rename: "重命名",
+    settings: "设置",
   },
 
   app: {
@@ -72,6 +79,7 @@ export default {
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
     startAction: "新建会话（选择 Copilot）",
+    backToWorkspaces: "返回工作区列表",
   },
 
   composer: {
@@ -111,16 +119,14 @@ export default {
   },
 
   sidebar: {
-    newWorkspace: "新建工作区",
-    deleteWorkspace: "删除当前工作区",
+    /** Leaves the workspace for the workspace home — the only way back, now that the
+     *  dropdown it replaced is gone. */
+    allWorkspaces: "全部工作区",
     sessions: "会话",
     newSession: "新建会话",
     renameHint: "双击重命名",
-    rename: "重命名",
-    delete: "删除",
     noSessions: "暂无会话",
     openNav: "打开导航",
-    settings: "设置",
   },
 
   session: {
@@ -151,6 +157,32 @@ export default {
       title: "删除工作区",
       message: "确定删除工作区「{name}」吗？",
       detail: "{path} 目录及其中所有文件都会被删除，且无法恢复。",
+    },
+
+    /**
+     * The workspace home: the card grid the app opens on.
+     *
+     * `sessions` and the `activity.*` buckets are the plural family — `en` carries `|`
+     * branches and this catalog does not, and both are called `t(key, { count }, count)`.
+     * A bucket past a week is a bare date and has no entry here on purpose: there is nothing
+     * to say about it beyond the value itself.
+     */
+    home: {
+      title: "选择工作区",
+      subtitle: "Agent 只会在选中的工作区目录里读写文件。",
+      newCard: "新建工作区",
+      empty: "还没有工作区",
+      emptyHint: "创建一个工作区后，Agent 会在其中读写文件。",
+      /** The card is one big button; this is its accessible name. */
+      open: "打开工作区「{name}」",
+      sessions: "{count} 个会话",
+      activity: {
+        never: "暂无活动",
+        now: "刚刚",
+        minutes: "{count} 分钟前",
+        hours: "{count} 小时前",
+        days: "{count} 天前",
+      },
     },
   },
 

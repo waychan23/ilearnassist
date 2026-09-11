@@ -57,6 +57,55 @@ describe("workspaces", () => {
     db.deleteWorkspace("w1");
     expect(db.getWorkspace("w1")).toBeUndefined();
   });
+
+  it("counts each workspace's sessions and dates its last activity", () => {
+    addWorkspace("w1");
+    addWorkspace("w2");
+    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "a" });
+    db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "b" });
+
+    const [first, second] = db.listWorkspaces();
+
+    // A workspace nobody has talked to still appears, with no activity — that is the
+    // LEFT JOIN doing its job, and the state of every workspace a user has just created.
+    expect(second!.id).toBe("w2");
+    expect(second!.sessionCount).toBe(0);
+    expect(second!.lastActivityAt).toBeNull();
+
+    expect(first!.sessionCount).toBe(2);
+    expect(first!.lastActivityAt).toBeTruthy();
+    expect(Number.isNaN(Date.parse(first!.lastActivityAt!))).toBe(false);
+  });
+
+  it("renames a workspace, keeping its identity and its stats", () => {
+    addWorkspace("w1");
+    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "a" });
+
+    const renamed = db.renameWorkspace("w1", "Renamed")!;
+
+    expect(renamed.name).toBe("Renamed");
+    // Not an identity change: the directory is where the agent's files already live.
+    expect(renamed.slug).toBe("w1");
+    expect(renamed.dirPath).toBe(join(root, "w1"));
+    // The response drives a card replacement in the client, so it has to carry the numbers
+    // that card renders rather than the bare-row defaults.
+    expect(renamed.sessionCount).toBe(1);
+    expect(renamed.lastActivityAt).toBeTruthy();
+    expect(db.getWorkspace("w1")?.name).toBe("Renamed");
+  });
+
+  it("returns undefined when renaming a workspace that is not there", () => {
+    expect(db.renameWorkspace("nope", "x")).toBeUndefined();
+  });
+
+  it("does not hand back a bare row from createWorkspace or getWorkspace", () => {
+    // Both default the stats rather than joining for them, which is only safe because a
+    // brand-new workspace cannot have conversations and getWorkspace is an existence check.
+    const created = db.createWorkspace({ id: "w1", name: "W", slug: "w1", dirPath: "/tmp/w1" });
+    expect(created.sessionCount).toBe(0);
+    expect(created.lastActivityAt).toBeNull();
+    expect(db.getWorkspace("w1")).toEqual(created);
+  });
 });
 
 describe("copilots", () => {

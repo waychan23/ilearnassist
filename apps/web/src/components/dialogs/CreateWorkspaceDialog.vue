@@ -55,6 +55,7 @@ async function submit() {
             <input
               v-model="name"
               class="input"
+              data-testid="workspace-name-input"
               :placeholder="t('workspace.new.namePlaceholder')"
               @keydown.enter="submit"
             />
@@ -63,7 +64,12 @@ async function submit() {
         </div>
         <div class="modal-foot">
           <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
-          <button class="btn primary" :disabled="!name.trim() || saving" @click="submit">
+          <button
+            class="btn primary"
+            data-testid="workspace-create-submit"
+            :disabled="!name.trim() || saving"
+            @click="submit"
+          >
             {{ t("common.create") }}
           </button>
         </div>
