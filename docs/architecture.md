@@ -102,10 +102,11 @@ to only remove direct children of the root.
 | `web_search`    | search the web (bing/duckduckgo/tavily/searxng) | —   |
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
 | `read_document` | page through an attachment's extracted text | turn's attachments |
+| `ask_user`      | put a question to the user and end the turn until they answer | — |
 
 `buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
 returns the active set for a run, honoring config switches and the Copilot's tool
-allow-list. `web_search`, `web_fetch` and `read_document` survive
+allow-list. `web_search`, `web_fetch`, `read_document` and `ask_user` survive
 `fileTools.enabled: false` because none of them touches the workspace.
 
 **`read_document` is registered per turn and only when the turn has document
@@ -114,6 +115,43 @@ whitelist of *that turn's* attachment ids rather than to the uploads root — id
 guessable enough that a bare-id tool would let a model wander into another session's
 uploads. The check lives where the data crosses the boundary, matching the
 `resolveStoredPath` discipline used for uploads.
+
+#### `ask_user` and the suspended turn
+
+`tools/askUser.ts` is the one tool whose success **ends the turn**. The model asks 1–4
+questions with 2–4 options each; the client renders them as a card (tabs, one question at
+a time, an automatically appended free-text "other" choice, a single submit at the end).
+
+It works by throwing. `AskUserSuspension` is control flow, not failure — the same device
+LangGraph's `interrupt()` uses, and for the same reason: a tool cannot return "pause the
+loop now" through its return value without a sentinel string that every other reader of a
+tool result then has to know about. `runAgentStream` catches that class *before* its
+generic tool-error arm, so it never becomes a `Tool error:` string; a catch that swallowed
+it would turn a question into a silent no-op.
+
+A suspension is recorded, not answered:
+
+- The call goes into `RunAgentResult.toolCalls` with `status: "awaiting"` and **no
+  `output`**. That absence is the whole mechanism — `buildHistoryMessages()` replays only
+  tool calls that have an `output`, so a pending question is automatically absent from the
+  model's context, and gains one the moment it is answered.
+- A `tool_start` is emitted and **no `tool_end`**: there is no result to report, and
+  reporting one would render the card as a finished, answer-less question.
+- The route persists the assistant message and closes the stream normally. Nothing about
+  the pending state lives in the process, which is what lets a question be answered after
+  a page reload or a server restart.
+
+The turn resumes on `POST /api/sessions/:id/answers`, which writes the answers onto the
+tool call (`output` for the model, `answer` for the card) and then runs a **fresh agent
+run with `userMessage: null`**. Its history already ends in the assistant's `tool_calls`
+block followed by the matching `ToolMessage` — a valid request on its own — so no
+synthetic user turn is invented. `buildHistoryMessages()` reconstructs that pair from the
+database, which is why a turn split across two requests needs no checkpointing framework.
+
+Within a step, the other tool calls still run: `ask_user` is executed in order, so a step
+that asks *and* reads a file does both, and nothing the model asked for is silently
+dropped. A second `ask_user` in the same step becomes an ordinary tool error — two live
+question sets is a state the card cannot present.
 
 #### `web_fetch` and its SSRF guard
 
@@ -147,9 +185,12 @@ control over the streaming shape:
      are what was billed; `contextTokens` records the *final* step's input+output
      instead, since that is how large the context had grown.
    - For each tool call: emit `tool_start`, `await tool.invoke(args)` with a
-     JSON-safe result, emit `tool_end`, and append a `ToolMessage`.
+     JSON-safe result, emit `tool_end`, and append a `ToolMessage`. An `ask_user`
+     call throws `AskUserSuspension` instead; the loop records it and, once the
+     step's remaining calls have run, breaks out (see
+     [`ask_user`](#ask_user-and-the-suspended-turn)).
 4. Emit `{ type: "usage" }` when the provider reported anything, then return
-   `{ content, reasoning, toolCalls, usage }` for persistence.
+   `{ content, reasoning, toolCalls, usage, awaiting }` for persistence.
 
 > **Usage is read from the chunks, not the reduced message.** Scanning the step's chunks
 > for the one that reports usage is the robust choice: it works whatever the provider
@@ -175,6 +216,42 @@ used to drop `reasoning_content` during parsing, but `@langchain/openai` 1.5.x m
 into `additional_kwargs` — so reading both channels emitted *every* reasoning delta twice
 and doubled the persisted `reasoning`. If you are tempted to add that branch back, run
 `apps/server/test/agent/loop.test.ts` first: it pins one event per delta.
+
+##### Replaying it, which thinking mode requires
+
+Chain of thought is normally **not** replayed into history: providers ignore or reject it,
+so `buildHistoryMessages()` rebuilds an assistant turn from `content` and `toolCalls`
+alone. A thinking-mode provider is the exception. DeepSeek requires the reasoning back on
+any replayed message that carries `tool_calls`:
+
+```
+400 The `reasoning_content` in the thinking mode must be passed back to the API
+```
+
+It is not an `ask_user` problem. *Any* second turn in a conversation that used a tool hits
+it, because replaying the tool call is how the model is reminded what it did — and it is
+permanent, since the offending message stays in history. `ask_user` merely surfaced it
+first, being the feature that must replay a `tool_calls` block across requests to work at
+all. (The same requirement in Anthropic's protocol is why Claude Code, which reaches
+DeepSeek over `/anthropic`, never meets it: `thinking` is a first-class content block
+there.)
+
+`@langchain/openai` cannot send the field. Its outbound converter copies only
+`function_call`, `tool_calls` and `audio` out of `additional_kwargs`, and it drops
+`reasoning` / `reasoning_content` / `thinking` content blocks on purpose
+([langchainjs#11175](https://github.com/langchain-ai/langchainjs/pull/11175)) because other
+strict providers reject them — so upgrading the SDK makes this worse, not better. The only
+place left is the wire, which is where `createReasoningFetch` already lives for the same
+fight on the way **in**. So:
+
+- `buildHistoryMessages()` records each replayed tool-call message's reasoning in a side
+  map keyed by its first tool-call id, and returns it alongside the messages.
+- `createReasoningFetch()` rewrites the outgoing body, setting `reasoning_content` on every
+  assistant message that has tool calls — the recorded value, or `""` when the turn
+  recorded none, because the field has to be *present* and an empty string is a value
+  DeepSeek sends itself. It also drops the now-stale `content-length`.
+- All of it is gated on the model record declaring the `reasoning` capability, so a
+  provider that never used the field is never sent it.
 
 Reasoning is persisted for display but **never replayed into history** — see
 `buildHistoryMessages()`, which only reads `content` and `toolCalls`.
@@ -357,24 +434,42 @@ attachments, providers and app defaults.
 | `POST /api/document-parsers/:id/test` | round-trip a throwaway document |
 | `PUT /api/document-parsing` | the parsing policy |
 | `POST /api/sessions/:id/chat` | the SSE chat stream |
+| `POST /api/sessions/:id/answers` | answer a suspended `ask_user` call, and stream the resumed turn |
 
 Provider responses **never** include `apiKey` — only `hasApiKey: boolean`. `PUT`
 treats an absent `apiKey` field as "leave unchanged" (an empty string clears it),
 which is what lets the UI round-trip a provider whose key it cannot read.
 Deleting the last provider or the current default returns 409.
 
-The chat endpoint is the interesting one:
+The two endpoints that run a turn share `turnContext()` — provider, model, Copilot and
+tool set, resolved identically — and `finishTurn()` — persist the assistant message, emit
+`message_done`, auto-title a first turn, emit `done`. They must agree: a resumed turn that
+rebuilt its tools differently from the one that asked the question could find `ask_user`
+missing from the conversation it is in the middle of.
+
+`/chat`:
 
 1. Resolve effective provider/model — explicit request override ⊳ session
    settings ⊳ the Copilot's defaults ⊳ app default. A candidate only wins if it
    still exists, so a deleted provider degrades instead of erroring.
-2. Build the sandboxed tool set.
+2. Retire any `ask_user` call still awaiting an answer, then build the sandboxed tool set.
 3. Persist the user message, capture history *before* it (avoids a duplicate
    user turn), then `reply.hijack()`.
 4. Stream `meta` → agent events → `usage` → `message_done` with the persisted
    assistant message → `done`.
 5. On error, stream `error` and persist a balanced `⚠️ …` assistant message so
    history remains user/assistant alternating.
+
+`/answers` takes `{ toolCallId, action: "submit" | "cancel", answers? }`. It 409s when
+the call is not awaiting (a double submit, or a card the user already skipped), 400s a
+submission that skips a question or names an option the model never offered — the answers
+are replayed to the model as the user's own words, so the client does not get to supply
+prose — then writes `output`/`answer`/`status` onto the call and streams the resumed run.
+
+**Retiring a question is deliberately not the same as answering it.** `skipAwaitingToolCalls`
+sets `status: "skipped"` and writes no `output`, so the turn the user walked away from
+leaves no trace in the model's context; `action: "cancel"` writes a `dismissed` status
+*and* a tool result saying so, because dismissing is a decision the model should hear.
 
 ### SSE protocol (`stream.ts` + shared types)
 
@@ -438,6 +533,62 @@ because a control that changes per-turn behaviour belongs next to the input.
   **first** line once finished (a stable summary that stops the row looking alive).
   Expanding shows the full text in a warning-bordered, scrollable panel. The elapsed
   timer is measured client-side and only exists while streaming — it is not persisted.
+- **The `ask_user` card** (`AskUserCard.vue`, rendered by `ToolCallCard` in place of its
+  own args/result disclosure) — a question the agent asked, and the record of what was
+  answered. It is the one interactive thing inside a message, which is why it owns its
+  whole presentation rather than nesting in the generic tool card.
+
+  It renders **below the message content**, unlike every other tool card. A question is not
+  an action the agent took on the way to answering — it is the last thing in the turn, and
+  the sentence in front of it introduces it. `MessageItem` therefore splits the calls into
+  the ones that belong above the reply and the `ask_user` ones that belong below it. Above,
+  a card demanding an answer appeared before the words explaining it, and while streaming it
+  read as though the message had ended and then started talking again.
+
+  Three states, chosen by `ToolCall.status`. While `awaiting` it is a tab strip, one
+  question at a time, with previous/next and a single **submit on the last question**
+  (disabled until every one is answered). The free-text "other" choice is appended by the
+  client, per question, and is never something the model offers — a model that could name
+  it would spend one of its four slots on a button with nothing behind it.
+
+  Picking one of the model's options **advances by itself**, because on a single-select
+  question that choice *is* the answer and there is nothing left to do on the tab. Neither
+  of the other two cases advances: multi-select has no "I am done" the user ever gave, and
+  the free-text choice needs typing. The advance moves focus to the next tab, since the
+  panel is keyed by the question and the radio that was clicked has been destroyed —
+  without that, focus falls to `<body>` and a keyboard user restarts from the top of the
+  page.
+
+  Once answered it is a **summary**: one row per question with the choice, always visible
+  without expanding. Behind the disclosure are the options **as they were offered, ticked
+  where they were picked**, plus the typed answer as one more row when "other" was used —
+  so the record shows the decision against what was on offer, not the answer alone. That
+  asymmetry is the point: a tab strip is an answering affordance, and reading a
+  conversation back wants the answer, not the menu it came from.
+
+  The option inputs are keyed by the current question so Vue rebuilds them rather than
+  reusing the elements. Reuse is not merely stale text: a checked radio whose `name` is
+  mutated to the next question's group joins that group while still checked, and the
+  browser then unchecks whatever was selected there — silently losing the answer to the
+  question the user navigated back to. Answers live in the component's draft, so
+  rebuilding the inputs costs nothing.
+
+  **Between the call arriving and the turn recording it, the card shows a placeholder — not
+  the summary.** It used to fall through to the summary branch, so a card full of "未回答"
+  rows looked like a finished, unanswered record while the model was still streaming the
+  sentence that introduces it.
+
+- **A turn that fails must be visible on screen, in two places.** The server persists a
+  balanced `⚠️ …` assistant message (so history still reloads correctly) and streams an
+  `error` event; `error` is written to `streaming.error` *and* `store.error`. The banner
+  lives inside the streaming message, which `ChatView` renders only while a turn is
+  `active`, so on its own it flashes and vanishes the moment the turn ends — leaving a
+  failed turn with nothing on screen at all. `store.error` is the toast in `App.vue`, and
+  it outlives the turn. Keep both halves: a failure that is invisible is indistinguishable
+  from a button that does nothing, which is exactly how one was reported. For the same
+  reason the store's `answerQuestion` reports a submission it cannot place rather than
+  returning silently.
+
 - `composables/confirm.ts` — `confirm({ title, message, detail, danger })` returns
   a promise. Every destructive UI action (session, Copilot, workspace, provider)
   awaits it; `ConfirmDialog` is mounted once in `App.vue`. Enter accepts, Escape

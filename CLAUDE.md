@@ -190,6 +190,7 @@ apps/server/src/
   tools/documentTools.ts  # read_document — pages through an attachment's text
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
+  tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
 apps/web/src/
   stores/app.ts           # Pinia store (all state + actions)
   api/client.ts           # fetch helpers + SSE parser (normalizes errors → ApiError)
@@ -201,7 +202,7 @@ apps/web/src/
   utils/apiError.ts       # server code → user-facing message
   utils/locale.ts         # browser-language detection + the alias table
   components/…            # App, WorkspaceHome, Sidebar, ChatView, MessageItem, ToolCallCard,
-                          #   Composer, TopbarControls, dialogs
+                          #   AskUserCard, Composer, TopbarControls, dialogs
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -294,9 +295,37 @@ Fuller map in `docs/reference.md`.
   `reply.hijack()`; the agent emits `text` deltas, `reasoning` deltas,
   `tool_start`/`tool_end`, `usage`, `message_done`, optionally `title`, `error`,
   then `done`. The frontend expects exactly this.
-- **Reasoning is display-only.** Chain of thought is persisted on the message and
-  rendered, but must **never** be replayed into history — providers ignore or reject
-  it. `buildHistoryMessages()` reads only `content` and `toolCalls`; keep it that way.
+- **`ask_user` suspending the turn is control flow, not an error.** The tool throws
+  `AskUserSuspension` (the device LangGraph's `interrupt()` uses) and `runAgentStream`
+  catches that class *before* its generic tool-error arm — a catch that swallowed it would
+  turn the model's own question into a `Tool error:` string. A suspended call is recorded
+  with `status: "awaiting"` and **no `output`**, emits `tool_start` with **no `tool_end`**,
+  and ends the turn. That missing `output` is the entire persistence mechanism:
+  `buildHistoryMessages()` replays only calls that have one, so a pending question is
+  absent from the model's context until it is answered, and the answer arriving from a
+  later request is what puts it there. Do not "fix" either absence — no `output` and no
+  `tool_end` are both deliberate. The turn resumes as a fresh run with
+  `userMessage: null`, whose history already ends in the `tool_calls` + `ToolMessage`
+  pair, so no synthetic user message is invented and no checkpointing is needed.
+  Retiring a question (`skipped`) writes no `output` on purpose; only an explicit cancel
+  gives the model a result, because only a cancel is a decision it should hear.
+- **Reasoning is display-only, with one exception that is not optional.** Chain of
+  thought is persisted on the message and rendered, and `buildHistoryMessages()` replays
+  only `content` and `toolCalls` — most providers ignore or reject reasoning, so it must
+  not be put back into the messages *LangChain* sends. **But a thinking-mode provider
+  requires it back on any replayed message that carries `tool_calls`**: DeepSeek answers
+  `400 The reasoning_content in the thinking mode must be passed back to the API`, and a
+  session that hits it keeps hitting it, because the offending message stays in history.
+  `@langchain/openai` cannot send the field at all — its outbound converter copies only
+  `function_call`/`tool_calls`/`audio` out of `additional_kwargs`, and it strips
+  `reasoning`/`reasoning_content`/`thinking` content blocks deliberately
+  (langchainjs#11175) — so `buildHistoryMessages()` collects the reasoning into a side
+  map and `createReasoningFetch()` puts it back on the wire, keyed by the message's first
+  tool-call id. That is gated on the model record declaring the `reasoning` capability, so
+  a provider that never used the field never sees it. This is why `createReasoningFetch`
+  touches the **request** as well as the response — do not "simplify" it back to a
+  read-only tap, and do not delete the side map as an unused return value.
+- **Reasoning comes off the raw SSE stream, and only from there.** `createReasoningFetch()`
 - **Reasoning comes off the raw SSE stream, and only from there.** `createReasoningFetch()`
   taps the fetch response and is the **single** source of chain-of-thought — do not
   "simplify" it away. Do not *also* read `chunk.additional_kwargs` in `chunkReasoning()`:
@@ -319,6 +348,13 @@ Fuller map in `docs/reference.md`.
   assistant message is persisted so the next turn's history is well-formed. An
   assistant message's `tool_calls` are only replayed into history when the
   matching results exist — OpenAI rejects the pair otherwise.
+- **A failed turn must be readable after the turn has ended.** The `error` event is
+  written to `streaming.error` (a banner inside the streaming message, which unmounts
+  with the turn) *and* to `store.error` (the toast in `App.vue`, which does not). The
+  banner alone flashes and vanishes, and a failure with nothing on screen is
+  indistinguishable from a button that does nothing — which is how one was reported. The
+  store's `answerQuestion` follows the same rule: a submission it cannot place is
+  reported, never silently dropped.
 - **Schema changes need `ensureColumn`.** `CREATE TABLE IF NOT EXISTS` silently
   skips existing tables, so an existing database would never gain a new column.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace and

@@ -312,6 +312,31 @@ export interface AppDb {
     usage?: MessageUsage;
   }): Message;
 
+  /**
+   * Find a suspended `ask_user` call, with the id of the message holding it.
+   *
+   * Scoped to one session rather than looked up by tool-call id alone, because the id
+   * comes from the client and a bare lookup would let one session answer another's
+   * question. Returns undefined once the call is no longer `awaiting` — which is what
+   * makes a repeat submission a 409 rather than a silent overwrite.
+   */
+  findAwaitingToolCall(
+    sessionId: string,
+    toolCallId: string
+  ): { messageId: string; call: ToolCall } | undefined;
+
+  /** Write a message's whole `toolCalls` array back, after an answer was filled in. */
+  updateMessageToolCalls(messageId: string, toolCalls: ToolCall[]): void;
+
+  /**
+   * Retire every still-awaiting `ask_user` call in a session, returning how many.
+   *
+   * Called when the user sends a new message instead of answering: the turn those
+   * questions belonged to is over, and a card that stayed answerable would resume a
+   * conversation the user has already moved on from.
+   */
+  skipAwaitingToolCalls(sessionId: string): number;
+
   listProviders(): ProviderRecord[];
   getProvider(id: string): ProviderRecord | undefined;
   createProvider(input: { id: string; name: string; baseURL: string; apiKey?: string }): ProviderRecord;
@@ -562,6 +587,7 @@ export function createDb(dbPath: string): AppDb {
     `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, usage, created_at)
      VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @usage, @createdAt)`
   );
+  const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
 
   /* ------------------------------ providers ------------------------------- */
   const stmtListProviders = db.prepare("SELECT * FROM providers ORDER BY sort_order ASC, created_at ASC");
@@ -622,6 +648,9 @@ export function createDb(dbPath: string): AppDb {
   });
 
   const getSessionRow = (id: string) => stmtGetSession.get(id) as SessionRow | undefined;
+
+  const listMessagesOf = (sessionId: string): Message[] =>
+    (stmtListMessages.all(sessionId) as MessageRow[]).map(mapMessage);
 
   return {
     raw: db,
@@ -739,7 +768,7 @@ export function createDb(dbPath: string): AppDb {
     },
 
     listMessages(sessionId) {
-      return (stmtListMessages.all(sessionId) as MessageRow[]).map(mapMessage);
+      return listMessagesOf(sessionId);
     },
     getMessage(id) {
       const r = stmtGetMessage.get(id) as MessageRow | undefined;
@@ -759,6 +788,37 @@ export function createDb(dbPath: string): AppDb {
       });
       const row = stmtGetMessage.get(input.id) as MessageRow;
       return mapMessage(row);
+    },
+
+    findAwaitingToolCall(sessionId, toolCallId) {
+      for (const message of listMessagesOf(sessionId)) {
+        const call = (message.toolCalls ?? []).find(
+          (tc) => tc.id === toolCallId && tc.status === "awaiting"
+        );
+        if (call) return { messageId: message.id, call };
+      }
+      return undefined;
+    },
+
+    updateMessageToolCalls(messageId, toolCalls) {
+      stmtUpdateToolCalls.run(JSON.stringify(toolCalls), messageId);
+    },
+
+    skipAwaitingToolCalls(sessionId) {
+      let skipped = 0;
+      for (const message of listMessagesOf(sessionId)) {
+        const calls = message.toolCalls ?? [];
+        if (!calls.some((tc) => tc.status === "awaiting")) continue;
+        const next = calls.map((tc) => {
+          if (tc.status !== "awaiting") return tc;
+          skipped++;
+          // No `output`: the model must not be told about a question it asked in a turn
+          // the user moved on from. See `ToolCall.status`.
+          return { ...tc, status: "skipped" as const };
+        });
+        stmtUpdateToolCalls.run(JSON.stringify(next), message.id);
+      }
+      return skipped;
     },
 
     listProviders() {

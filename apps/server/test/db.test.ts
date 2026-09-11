@@ -12,6 +12,7 @@ import {
   SETTING_DEFAULT_PROVIDER,
   type AppDb,
 } from "../src/db.js";
+import type { ToolCall } from "@guided-learning/shared";
 
 let root: string;
 let db: AppDb;
@@ -551,5 +552,120 @@ describe("migrations", () => {
     } finally {
       second.raw.close();
     }
+  });
+});
+
+describe("suspended ask_user calls", () => {
+  beforeEach(() => {
+    addWorkspace();
+    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
+    db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "other" });
+  });
+
+  /** An assistant message holding one `ask_user` call in the given state. */
+  function askMessage(
+    id: string,
+    sessionId: string,
+    toolCallId: string,
+    status: ToolCall["status"]
+  ): void {
+    db.createMessage({
+      id,
+      sessionId,
+      role: "assistant",
+      content: "需要确认一件事。",
+      toolCalls: [
+        { id: toolCallId, name: "ask_user", input: JSON.stringify({ questions: [] }), status },
+        { id: `${toolCallId}-read`, name: "read_file", input: "{}", output: "ok" },
+      ],
+    });
+  }
+
+  it("round-trips the status and the structured answer", () => {
+    // Both live inside the `tool_calls` JSON blob, so this is also the check that adding
+    // them needed no migration and no new column.
+    db.createMessage({
+      id: "m1",
+      sessionId: "s1",
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "call_1",
+          name: "ask_user",
+          input: JSON.stringify({ questions: [] }),
+          output: "{}",
+          status: "answered",
+          answer: { "0": { selected: ["OAuth"] } },
+        },
+      ],
+    });
+
+    expect(db.getMessage("m1")!.toolCalls![0]).toMatchObject({
+      status: "answered",
+      answer: { "0": { selected: ["OAuth"] } },
+    });
+  });
+
+  it("finds an awaiting call, and only within its own session", () => {
+    askMessage("m1", "s1", "call_1", "awaiting");
+
+    expect(db.findAwaitingToolCall("s1", "call_1")).toMatchObject({ messageId: "m1" });
+    // The id is client-supplied, so a bare lookup would let one conversation answer
+    // another's question.
+    expect(db.findAwaitingToolCall("s2", "call_1")).toBeUndefined();
+  });
+
+  it("does not find a call that is no longer awaiting", () => {
+    askMessage("m1", "s1", "call_1", "answered");
+
+    expect(db.findAwaitingToolCall("s1", "call_1")).toBeUndefined();
+  });
+
+  it("rewrites a message's tool calls wholesale", () => {
+    askMessage("m1", "s1", "call_1", "awaiting");
+    const calls = db.getMessage("m1")!.toolCalls!;
+
+    db.updateMessageToolCalls(
+      "m1",
+      calls.map((tc) => (tc.id === "call_1" ? { ...tc, status: "answered" as const, output: "{}" } : tc))
+    );
+
+    expect(db.getMessage("m1")!.toolCalls![0]).toMatchObject({
+      status: "answered",
+      output: "{}",
+    });
+    // The sibling call is untouched — the update is per call, not per message.
+    expect(db.getMessage("m1")!.toolCalls![1]).toMatchObject({ id: "call_1-read", output: "ok" });
+  });
+
+  it("skips every awaiting call in a session and reports how many", () => {
+    askMessage("m1", "s1", "call_1", "awaiting");
+    askMessage("m2", "s1", "call_2", "awaiting");
+    askMessage("m3", "s2", "call_3", "awaiting");
+
+    expect(db.skipAwaitingToolCalls("s1")).toBe(2);
+
+    expect(db.getMessage("m1")!.toolCalls![0]!.status).toBe("skipped");
+    expect(db.getMessage("m2")!.toolCalls![0]!.status).toBe("skipped");
+    // Another session's question is none of this one's business.
+    expect(db.getMessage("m3")!.toolCalls![0]!.status).toBe("awaiting");
+  });
+
+  it("leaves a settled call alone", () => {
+    askMessage("m1", "s1", "call_1", "answered");
+
+    expect(db.skipAwaitingToolCalls("s1")).toBe(0);
+    expect(db.getMessage("m1")!.toolCalls![0]!.status).toBe("answered");
+  });
+
+  it("does not give a skipped call an output", () => {
+    // That absence is the whole mechanism: `buildHistoryMessages` drops a tool call with
+    // no output, which is what keeps a walked-away question out of the model's context.
+    askMessage("m1", "s1", "call_1", "awaiting");
+
+    db.skipAwaitingToolCalls("s1");
+
+    expect(db.getMessage("m1")!.toolCalls![0]!.output).toBeUndefined();
   });
 });

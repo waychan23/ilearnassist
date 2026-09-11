@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
-import type { Message, ToolCall } from "../api/types";
+import { ASK_USER_TOOL_NAME, type Message, type ToolCall } from "../api/types";
 import { renderMarkdown } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
 import ToolCallCard from "./ToolCallCard.vue";
@@ -36,6 +36,20 @@ const content = computed(() =>
 );
 const toolCalls = computed(() =>
   props.streaming ? props.streaming.toolCalls : props.message?.toolCalls ?? []
+);
+
+/**
+ * Tool cards that belong above the reply, and the `ask_user` ones that belong below it.
+ *
+ * A question is not an action the agent took on the way to answering — it is the last thing
+ * in the turn, and the sentence in front of it introduces it ("请先回答下面几个问题：").
+ * Rendering it above that sentence put a card demanding an answer *before* the words
+ * explaining it, and while streaming it read as though the message had already ended and
+ * then started talking again.
+ */
+const actionToolCalls = computed(() => toolCalls.value.filter((tc) => tc.name !== ASK_USER_TOOL_NAME));
+const questionToolCalls = computed(() =>
+  toolCalls.value.filter((tc) => tc.name === ASK_USER_TOOL_NAME)
 );
 const error = computed(() => props.streaming?.error ?? null);
 /**
@@ -140,8 +154,9 @@ const usageText = computed(() => {
         :thinking="reasoningThinking"
         :duration-ms="reasoningMs"
       />
-      <ToolCallCard v-for="tc in toolCalls" :key="tc.id" :tool-call="tc" />
+      <ToolCallCard v-for="tc in actionToolCalls" :key="tc.id" :tool-call="tc" />
       <div v-if="rendered" class="markdown" data-testid="message-content" v-html="rendered"></div>
+      <ToolCallCard v-for="tc in questionToolCalls" :key="tc.id" :tool-call="tc" />
       <div v-if="!props.streaming" class="actions">
         <button
           v-if="content"

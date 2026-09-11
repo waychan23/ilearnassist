@@ -5,6 +5,89 @@
 
 export type Role = "user" | "assistant";
 
+/* ------------------------------------ ask_user ------------------------------------ */
+
+/**
+ * The tool's name.
+ *
+ * Shared rather than declared on the server, because the *client* switches on it: it is
+ * what picks the answerable card out of an assistant message's tool calls. A second
+ * literal on the web side is a card that silently stops rendering the day the name moves.
+ */
+export const ASK_USER_TOOL_NAME = "ask_user";
+
+/** One choice the model offers, plus the sentence explaining what picking it means. */
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+/**
+ * One question, as the model asked it. Persisted verbatim in the tool call's `input`,
+ * which is what lets the card be re-rendered from history months later.
+ *
+ * There is deliberately **no `id`**: questions are an ordered array and the answers are
+ * keyed by position. An id the model has to invent is an id it can duplicate or forget,
+ * and neither failure buys anything — the model reads the full question text back.
+ */
+export interface AskUserQuestion {
+  /** The tab label. Short on purpose — the card is a strip of tabs, not a paragraph. */
+  header: string;
+  question: string;
+  /** Absent means single-select. */
+  multiSelect?: boolean;
+  /** How many the model offered. The client appends its own "other" choice on top. */
+  options: AskUserOption[];
+}
+
+/**
+ * Where an `ask_user` call stands.
+ *
+ * `awaiting`  — the turn is suspended here; the card is live and answerable.
+ * `answered`  — the user submitted; `output` and `answer` are both present.
+ * `skipped`   — the user sent a new message instead of answering, so this was retired
+ *               without an answer and deliberately **without** an `output`, which is what
+ *               keeps it out of the model's history.
+ * `dismissed` — the user pressed cancel. Also answerless, but a decision rather than a
+ *               drift, and worded differently in the UI.
+ */
+export type AskUserStatus = "awaiting" | "answered" | "skipped" | "dismissed";
+
+/**
+ * One question's answer.
+ *
+ * `selected` holds labels the model offered; `other` holds free text the user typed under
+ * the client-added "other" choice. They are separate fields rather than one list because
+ * only `selected` can be validated against what was offered.
+ */
+export interface AskUserAnswer {
+  selected: string[];
+  other?: string;
+}
+
+/** Answers keyed by the question's index in the `ask_user` call, as a string ("0"…"3"). */
+export type AskUserAnswers = Record<string, AskUserAnswer>;
+
+/** What the client POSTs back to `/api/sessions/:id/answers`. */
+export interface AnswerToolCallInput {
+  toolCallId: string;
+  action: "submit" | "cancel";
+  /** Required (and complete) when `action` is `submit`. */
+  answers?: AskUserAnswers;
+}
+
+/**
+ * Limits, exported as values rather than baked into the zod schema alone so the web
+ * catalog's tests and the card's rendering can read the same numbers.
+ */
+export const ASK_USER_MAX_QUESTIONS = 4;
+export const ASK_USER_MIN_OPTIONS = 2;
+export const ASK_USER_MAX_OPTIONS = 4;
+/** Advisory for the tab label; the schema rejects longer rather than truncating. */
+export const ASK_USER_HEADER_MAX = 12;
+/** Cap on a free-text "other" answer, so one reply cannot dwarf the context. */
+export const ASK_USER_OTHER_MAX = 500;
+
 /** A single tool invocation recorded on an assistant message (for rendering + history). */
 export interface ToolCall {
   id: string;
@@ -13,6 +96,20 @@ export interface ToolCall {
   input: string;
   /** Tool result returned to the model (present once the call completes). */
   output?: string;
+  /**
+   * `ask_user` only, and absent on every other tool. Set to `awaiting` when the turn
+   * suspends on this call, so the UI knows to offer the controls rather than report a
+   * tool that is merely slow.
+   */
+  status?: AskUserStatus;
+  /**
+   * `ask_user` only: the user's answer in structured form.
+   *
+   * A second copy of something `output` also carries, which is deliberate — `output` is
+   * the model's copy (a rendering that may be reworded), this is the UI's, and neither
+   * can be derived from the other without the card parsing prose.
+   */
+  answer?: AskUserAnswers;
 }
 
 /**
@@ -90,6 +187,8 @@ export const API_ERROR_CODES = [
   "UNKNOWN_PARSER",
   "UNKNOWN_PROVIDER",
   "MESSAGE_REQUIRED",
+  "QUESTION_NOT_PENDING",
+  "INVALID_ANSWER",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

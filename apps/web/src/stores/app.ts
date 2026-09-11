@@ -1,10 +1,13 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { api, streamChat, fileToBase64 } from "../api/client";
+import { api, streamAnswers, streamChat, fileToBase64 } from "../api/client";
 import { i18n } from "../i18n";
+import { translateApiError } from "../utils/apiError";
 import type {
+  AskUserAnswers,
   Attachment,
   AttachmentParseRecord,
+  ChatStreamEvent,
   Copilot,
   CopilotDefaults,
   CreateCopilotInput,
@@ -23,7 +26,7 @@ import type {
   UpdateProviderInput,
   Workspace,
 } from "../api/types";
-import { MAX_ATTACHMENT_BYTES } from "../api/types";
+import { ASK_USER_TOOL_NAME, MAX_ATTACHMENT_BYTES } from "../api/types";
 
 interface StreamingState {
   active: boolean;
@@ -651,6 +654,115 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /* -------------------------------- chat ----------------------------------- */
+
+  /**
+   * Apply one server-sent event to the store.
+   *
+   * Shared by the two streams a turn can arrive on — the one `streamChat` opens and the
+   * one `streamAnswers` opens when a suspended question is answered. They carry identical
+   * events, and a second switch on them would be a second definition of what "streaming"
+   * means, free to drift from the first.
+   */
+  function applyEvent(ev: ChatStreamEvent): void {
+    switch (ev.type) {
+      case "reasoning":
+        if (reasoningStartedAt === null) {
+          reasoningStartedAt = Date.now();
+          startReasoningTicker();
+        }
+        streaming.value.thinking = true;
+        streaming.value.reasoning += ev.delta;
+        break;
+      case "text":
+        // The answer starting means reasoning is over: freeze the timer for good.
+        if (streaming.value.thinking) stopReasoningTicker();
+        streaming.value.content += ev.delta;
+        break;
+      case "tool_start":
+        streaming.value.toolCalls.push({
+          id: ev.toolCall.id,
+          name: ev.toolCall.name,
+          input: ev.toolCall.input,
+        });
+        break;
+      case "tool_end": {
+        const tc = streaming.value.toolCalls.find((t) => t.id === ev.toolCall.id);
+        if (tc) tc.output = ev.toolCall.output;
+        break;
+      }
+      case "usage":
+        streaming.value.usage = ev.usage;
+        break;
+      case "message_done":
+        // The authoritative message is now in `messages`, so retire the transient
+        // one — otherwise both render until `done`, and the server still has a
+        // title call to make after this point.
+        messages.value.push(ev.message);
+        stopReasoningTicker();
+        streaming.value.active = false;
+        streaming.value.content = "";
+        streaming.value.reasoning = "";
+        streaming.value.toolCalls = [];
+        break;
+      case "title": {
+        // The server named the conversation after its first exchange.
+        const session = sessions.value.find((s) => s.id === ev.sessionId);
+        if (session) session.title = ev.title;
+        break;
+      }
+      case "error":
+        // Recorded in two places on purpose. The banner belongs to the turn and unmounts
+        // with it — the streaming block is only rendered while `active` — so on its own it
+        // leaves a failed turn with *nothing* on screen a moment later. The toast outlives
+        // the turn, which is what makes a failure something the user can actually read.
+        streaming.value.error = ev.message;
+        error.value = ev.message;
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Drain a turn's stream into the store, and tidy up whatever it did.
+   *
+   * Resolves `false` only when the request itself failed — a non-2xx, or a stream that
+   * never opened. A failure *inside* a turn arrives as an `error` event on a 200 and is
+   * not one of these: by then the server has already accepted the request, so a caller
+   * that rolled back on this would be undoing something the server did write.
+   */
+  async function consume(stream: AsyncGenerator<ChatStreamEvent>): Promise<boolean> {
+    let requestFailed = false;
+    try {
+      for await (const ev of stream) applyEvent(ev);
+    } catch (e) {
+      requestFailed = true;
+      streaming.value.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      streaming.value.active = false;
+      stopReasoningTicker();
+      // Pick up the server-assigned title and this turn's updated_at without clobbering
+      // the optimistic bubbles already in `messages`.
+      await loadSessions().catch(() => undefined);
+    }
+    return !requestFailed;
+  }
+
+  /** Every `ask_user` call still waiting for an answer, across the loaded messages. */
+  function awaitingToolCalls(): ToolCall[] {
+    return messages.value.flatMap((m) =>
+      (m.toolCalls ?? []).filter((tc) => tc.name === ASK_USER_TOOL_NAME && tc.status === "awaiting")
+    );
+  }
+
+  function findToolCall(id: string): ToolCall | undefined {
+    for (const message of messages.value) {
+      const found = (message.toolCalls ?? []).find((tc) => tc.id === id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
   async function sendMessage(text: string, attachments: Attachment[] = []): Promise<void> {
     const content = text.trim();
     if ((!content && attachments.length === 0) || streaming.value.active) return;
@@ -662,6 +774,11 @@ export const useAppStore = defineStore("app", () => {
     if (!activeSessionId.value) return;
 
     const sessionId = activeSessionId.value;
+
+    // Sending a message instead of answering retires the pending questions: the turn they
+    // belonged to is over. The server makes the same change when it writes this turn, and
+    // doing it here too is what keeps the card honest until the page is next reloaded.
+    for (const tc of awaitingToolCalls()) tc.status = "skipped";
 
     // Optimistic user bubble.
     messages.value.push({
@@ -676,73 +793,55 @@ export const useAppStore = defineStore("app", () => {
     clearPendingAttachments();
     streaming.value = { ...EMPTY_STREAMING(), active: true };
 
-    try {
-      for await (const ev of streamChat(sessionId, {
+    await consume(
+      streamChat(sessionId, {
         message: content,
         copilotId: activeCopilotId.value ?? undefined,
         attachments,
-      })) {
-        switch (ev.type) {
-          case "reasoning":
-            if (reasoningStartedAt === null) {
-              reasoningStartedAt = Date.now();
-              startReasoningTicker();
-            }
-            streaming.value.thinking = true;
-            streaming.value.reasoning += ev.delta;
-            break;
-          case "text":
-            // The answer starting means reasoning is over: freeze the timer for good.
-            if (streaming.value.thinking) stopReasoningTicker();
-            streaming.value.content += ev.delta;
-            break;
-          case "tool_start":
-            streaming.value.toolCalls.push({
-              id: ev.toolCall.id,
-              name: ev.toolCall.name,
-              input: ev.toolCall.input,
-            });
-            break;
-          case "tool_end": {
-            const tc = streaming.value.toolCalls.find((t) => t.id === ev.toolCall.id);
-            if (tc) tc.output = ev.toolCall.output;
-            break;
-          }
-          case "usage":
-            streaming.value.usage = ev.usage;
-            break;
-          case "message_done":
-            // The authoritative message is now in `messages`, so retire the transient
-            // one — otherwise both render until `done`, and the server still has a
-            // title call to make after this point.
-            messages.value.push(ev.message);
-            stopReasoningTicker();
-            streaming.value.active = false;
-            streaming.value.content = "";
-            streaming.value.reasoning = "";
-            streaming.value.toolCalls = [];
-            break;
-          case "title": {
-            // The server named the conversation after its first exchange.
-            const session = sessions.value.find((s) => s.id === ev.sessionId);
-            if (session) session.title = ev.title;
-            break;
-          }
-          case "error":
-            streaming.value.error = ev.message;
-            break;
-          default:
-            break;
-        }
-      }
-    } catch (e) {
-      streaming.value.error = e instanceof Error ? e.message : String(e);
-    } finally {
-      streaming.value.active = false;
-      stopReasoningTicker();
-      // Pick up the server-assigned title and this turn's updated_at without clobbering
-      // the optimistic bubbles already in `messages`.
-      await loadSessions().catch(() => undefined);
+      })
+    );
+  }
+
+  /**
+   * Submit (or cancel) a pending `ask_user` call and stream the turn that resumes.
+   *
+   * The card is flipped locally before the request goes out because no server event
+   * describes the change: nothing streams while the question is waiting, so the answer
+   * growing an `output` is something only this client knows about, right up until the
+   * resumed turn starts emitting. If the request fails the flip is undone, since the
+   * server will not have written it either.
+   */
+  async function answerQuestion(
+    toolCallId: string,
+    submission: { action: "submit" | "cancel"; answers?: AskUserAnswers }
+  ): Promise<void> {
+    const sessionId = activeSessionId.value;
+    const toolCall = findToolCall(toolCallId);
+    // A turn is already running; the card's controls are disabled for the same reason, so
+    // this is a race rather than a user action.
+    if (streaming.value.active) return;
+    if (!sessionId || !toolCall) {
+      // Never silently: the card is on screen, so a caller that drops the submission owes
+      // the user a reason. Saying nothing is indistinguishable from a button that is broken.
+      setError(translateApiError("QUESTION_NOT_PENDING", undefined, undefined));
+      return;
+    }
+
+    const previous: { status: ToolCall["status"]; answer: ToolCall["answer"] } = {
+      status: toolCall.status,
+      answer: toolCall.answer,
+    };
+    toolCall.status = submission.action === "cancel" ? "dismissed" : "answered";
+    toolCall.answer = submission.answers;
+
+    streaming.value = { ...EMPTY_STREAMING(), active: true };
+
+    const accepted = await consume(streamAnswers(sessionId, { toolCallId, ...submission }));
+    if (!accepted) {
+      // The server never took the answer — a 409 because it was already skipped, say — so
+      // the card goes back to waiting rather than claiming a decision nobody recorded.
+      toolCall.status = previous.status;
+      toolCall.answer = previous.answer;
     }
   }
 
@@ -807,6 +906,7 @@ export const useAppStore = defineStore("app", () => {
     removePendingAttachment,
     clearPendingAttachments,
     sendMessage,
+    answerQuestion,
     setError,
   };
 });

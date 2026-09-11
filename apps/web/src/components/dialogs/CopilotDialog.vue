@@ -14,6 +14,7 @@ const ALL_TOOLS = [
   "write_file",
   "create_directory",
   "delete_file",
+  "ask_user",
 ] as const;
 
 const props = defineProps<{ copilot: Copilot | null }>();

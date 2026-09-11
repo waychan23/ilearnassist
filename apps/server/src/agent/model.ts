@@ -22,12 +22,85 @@ const REASONING_KEYS = ["reasoning_content", "reasoning", "reasoning_text"] as c
  * Only `text/event-stream` responses are touched, and every byte is forwarded unchanged —
  * this observer cannot alter what the model client sees.
  */
-export function createReasoningFetch(
-  onReasoning: (delta: string) => void,
-  baseFetch: typeof fetch = fetch
-): typeof fetch {
+/**
+ * Put `reasoning_content` back on the outgoing assistant messages that carry tool calls.
+ *
+ * DeepSeek's thinking mode **requires** this: a replayed assistant message with `tool_calls`
+ * must carry the chain of thought that produced them, or the API answers
+ * `400 The reasoning_content in the thinking mode must be passed back to the API`. That
+ * message is not only about `ask_user` — *any* second turn in a conversation that used a
+ * tool hits it, because replaying the tool call is how the model is reminded what it did.
+ *
+ * `@langchain/openai` cannot send the field. Its outbound converter copies only
+ * `function_call`, `tool_calls` and `audio` out of `additional_kwargs`, and it strips
+ * `reasoning` / `reasoning_content` / `thinking` content blocks on purpose
+ * (langchainjs#11175) because other strict providers reject them. So the only place left
+ * is the wire — which is where this wrapper already lives, for the same fight on the way in.
+ *
+ * The value is what the turn actually produced, or `""` when none was recorded: the field
+ * has to be *present*, and an empty string is what DeepSeek itself sometimes sends. Only
+ * messages that already have tool calls are touched — a plain assistant turn needs nothing,
+ * and is proven to replay fine without it.
+ */
+function withReplayedReasoning(body: unknown, reasoning: Map<string, string>): unknown {
+  if (typeof body !== "string") return body;
+
+  let parsed: { messages?: unknown };
+  try {
+    parsed = JSON.parse(body) as { messages?: unknown };
+  } catch {
+    return body;
+  }
+  if (!Array.isArray(parsed.messages)) return body;
+
+  let changed = false;
+  for (const message of parsed.messages as Record<string, unknown>[]) {
+    if (!message || message.role !== "assistant") continue;
+    const calls = message.tool_calls;
+    if (!Array.isArray(calls) || calls.length === 0) continue;
+
+    // Keyed by the first call's id: ours are unique per message, so it identifies the turn
+    // without having to match on content or position.
+    const first = calls[0] as { id?: unknown } | undefined;
+    const id = typeof first?.id === "string" ? first.id : "";
+    message.reasoning_content = reasoning.get(id) ?? "";
+    changed = true;
+  }
+
+  return changed ? JSON.stringify(parsed) : body;
+}
+
+export interface ReasoningFetchOptions {
+  /** Called with each chain-of-thought delta as it arrives off the wire. */
+  onReasoning: (delta: string) => void;
+  /**
+   * Reasoning to replay, keyed by the first tool call's id of the message it belongs to.
+   *
+   * Absent means "do not touch the request" — which is the case for every model without
+   * the `reasoning` capability, so a provider that never used the field never sees it.
+   */
+  replayReasoning?: Map<string, string>;
+  baseFetch?: typeof fetch;
+}
+
+export function createReasoningFetch(options: ReasoningFetchOptions): typeof fetch {
+  const { onReasoning, replayReasoning, baseFetch = fetch } = options;
+
   return async (input, init) => {
-    const response = await baseFetch(input as RequestInfo | URL, init as RequestInit);
+    let outgoing = init as RequestInit;
+
+    if (replayReasoning) {
+      const body = withReplayedReasoning(outgoing?.body, replayReasoning);
+      if (body !== outgoing?.body) {
+        // The body grew, so any length the SDK computed is now wrong. Dropping the header
+        // lets the runtime measure the new one instead of sending a mismatched request.
+        const headers = new Headers(outgoing.headers);
+        headers.delete("content-length");
+        outgoing = { ...outgoing, body: body as BodyInit, headers };
+      }
+    }
+
+    const response = await baseFetch(input as RequestInfo | URL, outgoing);
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.body || !contentType.includes("text/event-stream")) return response;
 
@@ -86,6 +159,12 @@ export function createReasoningFetch(
 export interface BuildModelHooks {
   /** Called with each chain-of-thought delta as it arrives off the wire. */
   onReasoning?: (delta: string) => void;
+  /**
+   * Reasoning to put back on replayed tool-call messages, keyed by the first tool call's
+   * id. Only supplied when the model is configured with the `reasoning` capability — see
+   * `withReplayedReasoning`.
+   */
+  replayReasoning?: Map<string, string>;
 }
 
 export function buildModel(
@@ -111,7 +190,14 @@ export function buildModel(
     apiKey: provider.apiKey,
     configuration: {
       baseURL: provider.baseURL,
-      ...(hooks.onReasoning ? { fetch: createReasoningFetch(hooks.onReasoning) } : {}),
+      ...(hooks.onReasoning || hooks.replayReasoning
+        ? {
+            fetch: createReasoningFetch({
+              onReasoning: hooks.onReasoning ?? (() => {}),
+              replayReasoning: hooks.replayReasoning,
+            }),
+          }
+        : {}),
     },
     streaming: true,
     ...(params.temperature != null ? { temperature: params.temperature } : {}),

@@ -27,7 +27,7 @@ function frame(delta: Record<string, unknown>): string {
 async function tap(chunks: string[], contentType?: string) {
   const onReasoning = vi.fn();
   const base = vi.fn(async () => sseResponse(chunks, contentType));
-  const response = await createReasoningFetch(onReasoning, base)("https://example.test/v1", {});
+  const response = await createReasoningFetch({ onReasoning, baseFetch: base })("https://example.test/v1", {});
   const body = await response.text(); // consuming drives the transform
   return { onReasoning, body, response };
 }
@@ -105,7 +105,7 @@ describe("createReasoningFetch", () => {
     it("leaves a non-SSE response completely untouched", async () => {
       const base = vi.fn(async () => new Response('{"error":"nope"}', { headers: { "content-type": "application/json" } }));
       const onReasoning = vi.fn();
-      const response = await createReasoningFetch(onReasoning, base)("https://example.test", {});
+      const response = await createReasoningFetch({ onReasoning, baseFetch: base })("https://example.test", {});
 
       expect(onReasoning).not.toHaveBeenCalled();
       await expect(response.text()).resolves.toBe('{"error":"nope"}');
@@ -113,9 +113,94 @@ describe("createReasoningFetch", () => {
 
     it("leaves a bodyless response alone", async () => {
       const base = vi.fn(async () => new Response(null, { status: 204 }));
-      const response = await createReasoningFetch(vi.fn(), base)("https://example.test", {});
+      const response = await createReasoningFetch({ onReasoning: vi.fn(), baseFetch: base })("https://example.test", {});
       expect(response.status).toBe(204);
     });
+  });
+});
+
+describe("replaying reasoning_content", () => {
+  /** The body the wrapper actually sends on, as parsed JSON. */
+  async function sendThrough(
+    body: string,
+    replayReasoning?: Map<string, string>
+  ): Promise<Record<string, unknown>> {
+    const base = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      return new Response(null, { status: 204 });
+    });
+    let captured: Record<string, unknown> = {};
+    await createReasoningFetch({ onReasoning: vi.fn(), replayReasoning, baseFetch: base as unknown as typeof fetch })(
+      "https://example.test/v1",
+      { method: "POST", body, headers: { "content-type": "application/json", "content-length": "1" } }
+    );
+    return captured;
+  }
+
+  const request = JSON.stringify({
+    messages: [
+      { role: "system", content: "s" },
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "先问一句。", tool_calls: [{ id: "call_ask", type: "function" }] },
+      { role: "tool", content: "{}", tool_call_id: "call_ask" },
+    ],
+  });
+
+  it("puts the recorded chain of thought back on a tool-call message", async () => {
+    // DeepSeek's thinking mode answers 400 without it. LangChain cannot send the field at
+    // all, so this wrapper is the only place it can be put back.
+    const sent = await sendThrough(request, new Map([["call_ask", "the thinking"]]))
+
+    const messages = sent.messages as Record<string, unknown>[];
+    expect(messages[2]).toMatchObject({ reasoning_content: "the thinking" });
+    // A plain turn needs nothing, and must not be given anything.
+    expect(messages[1]).not.toHaveProperty("reasoning_content");
+    expect(messages[0]).not.toHaveProperty("reasoning_content");
+  });
+
+  it("sends an empty string when the turn recorded no reasoning", async () => {
+    // The field has to be *present*: an empty string is a value DeepSeek sends itself, and
+    // "no reasoning recorded" is not the same as "do not send the field".
+    const sent = await sendThrough(request, new Map());
+
+    expect((sent.messages as Record<string, unknown>[])[2]).toMatchObject({ reasoning_content: "" });
+  });
+
+  it("does not touch the request when the model is not a reasoning model", async () => {
+    // No map means no rewrite, which is how a provider that never used the field is kept
+    // from ever seeing it.
+    const sent = await sendThrough(request, undefined);
+
+    expect(sent).toEqual(JSON.parse(request));
+  });
+
+  it("drops the stale content-length, which the rewrite would invalidate", async () => {
+    const headers: Headers[] = [];
+    const base = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      headers.push(new Headers(init?.headers));
+      return new Response(null, { status: 204 });
+    });
+    await createReasoningFetch({
+      onReasoning: vi.fn(),
+      replayReasoning: new Map([["call_ask", "x".repeat(200)]]),
+      baseFetch: base as unknown as typeof fetch,
+    })("https://example.test/v1", { method: "POST", body: request, headers: { "content-length": "1" } });
+
+    expect(headers[0]!.get("content-length")).toBeNull();
+  });
+
+  it("forwards a body it cannot parse rather than dropping the turn", async () => {
+    const base = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect(init?.body).toBe("not json");
+      return new Response(null, { status: 204 });
+    });
+    await createReasoningFetch({
+      onReasoning: vi.fn(),
+      replayReasoning: new Map([["call_ask", "x"]]),
+      baseFetch: base as unknown as typeof fetch,
+    })("https://example.test/v1", { method: "POST", body: "not json" });
+
+    expect(base).toHaveBeenCalled();
   });
 });
 

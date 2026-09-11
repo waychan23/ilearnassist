@@ -47,18 +47,21 @@ const mocks = vi.hoisted(() => ({
     deleteModel: vi.fn(),
   },
   streamChat: vi.fn(),
+  streamAnswers: vi.fn(),
   fileToBase64: vi.fn(),
 }));
 
 vi.mock("../../src/api/client", () => ({
   api: mocks.api,
   streamChat: mocks.streamChat,
+  streamAnswers: mocks.streamAnswers,
   fileToBase64: mocks.fileToBase64,
   attachmentUrl: (sessionId: string, attachmentId: string) =>
     `/api/sessions/${sessionId}/attachments/${attachmentId}`,
 }));
 
 const { useAppStore } = await import("../../src/stores/app.js");
+const { ApiError } = await import("../../src/utils/apiError.js");
 
 /* --------------------------------- fixtures -------------------------------- */
 
@@ -850,5 +853,178 @@ describe("document parser settings", () => {
     await store.loadParserKinds();
     expect(mocks.api.listParserKinds).toHaveBeenCalledTimes(1);
     expect(store.parserKinds).toHaveLength(1);
+  });
+});
+
+describe("a failed turn", () => {
+  it("is left on screen as a toast, not only as a banner that unmounts with the turn", async () => {
+    // The banner lives inside the streaming message, which is only rendered while a turn is
+    // running. A failure therefore used to flash and vanish: the user was left with an
+    // unchanged card and no reason for it.
+    const store = await readyStore();
+    streamOf({ type: "error", message: "provider said no" }, { type: "done" });
+
+    await store.sendMessage("hello");
+
+    expect(store.error).toBe("provider said no");
+    expect(store.streaming.error).toBe("provider said no");
+  });
+});
+
+describe("answerQuestion", () => {
+  const QS = [
+    { header: "认证方式", question: "要用哪种认证方式？", options: [{ label: "OAuth" }, { label: "API Key" }] },
+  ];
+
+  /** An assistant message holding one live `ask_user` call. */
+  function pending(): Message {
+    return message({
+      role: "assistant",
+      content: "需要确认一件事。",
+      toolCalls: [
+        {
+          id: "call_ask",
+          name: "ask_user",
+          input: JSON.stringify({ questions: QS }),
+          status: "awaiting",
+        },
+      ],
+    });
+  }
+
+  const toolCall = (store: ReturnType<typeof useAppStore>) =>
+    store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "call_ask");
+
+  function answersTo(...events: ChatStreamEvent[]) {
+    mocks.streamAnswers.mockImplementation(async function* () {
+      for (const event of events) yield event;
+    });
+  }
+
+  it("records the answer locally and posts it", async () => {
+    const store = await readyStore({ messages: [pending()] });
+    answersTo({ type: "done" });
+
+    await store.answerQuestion("call_ask", {
+      action: "submit",
+      answers: { "0": { selected: ["OAuth"] } },
+    });
+
+    // Nothing streams while the question waits, so no server event describes this change —
+    // the card is flipped by the client that caused it.
+    expect(toolCall(store)).toMatchObject({
+      status: "answered",
+      answer: { "0": { selected: ["OAuth"] } },
+    });
+    expect(mocks.streamAnswers).toHaveBeenCalledWith("s1", {
+      toolCallId: "call_ask",
+      action: "submit",
+      answers: { "0": { selected: ["OAuth"] } },
+    });
+  });
+
+  it("streams the resumed turn into the conversation", async () => {
+    const store = await readyStore({ messages: [pending()] });
+    answersTo(
+      { type: "text", delta: "好的，" },
+      {
+        type: "message_done",
+        message: message({ id: "m2", role: "assistant", content: "好的，按 OAuth 来。" }),
+      },
+      { type: "done" }
+    );
+
+    await store.answerQuestion("call_ask", { action: "submit", answers: { "0": { selected: ["OAuth"] } } });
+
+    expect(store.messages.at(-1)).toMatchObject({ role: "assistant", content: "好的，按 OAuth 来。" });
+    expect(store.streaming.active).toBe(false);
+    expect(store.streaming.content).toBe("");
+  });
+
+  it("records a cancel as a dismissal with no answers", async () => {
+    const store = await readyStore({ messages: [pending()] });
+    answersTo({ type: "done" });
+
+    await store.answerQuestion("call_ask", { action: "cancel" });
+
+    expect(toolCall(store)).toMatchObject({ status: "dismissed", answer: {} });
+    expect(mocks.streamAnswers).toHaveBeenCalledWith("s1", {
+      toolCallId: "call_ask",
+      action: "cancel",
+    });
+  });
+
+  it("puts the card back when the server refuses the answer", async () => {
+    // A 409 — already answered in another tab, or skipped by a message sent since. The
+    // local flip is a guess until the response says otherwise, so it has to be undone.
+    const store = await readyStore({ messages: [pending()] });
+    mocks.streamAnswers.mockImplementation(async function* () {
+      // Thrown from inside the generator, as the real one does: a rejected `fetch` surfaces
+      // on the first `next()`, not when the generator is created.
+      throw new ApiError("QUESTION_NOT_PENDING", "这组问题已经不需要回答了", 409);
+    });
+
+    await store.answerQuestion("call_ask", { action: "submit", answers: { "0": { selected: ["OAuth"] } } });
+
+    expect(toolCall(store)).toMatchObject({ status: "awaiting" });
+    expect(toolCall(store)!.answer).toBeUndefined();
+    expect(store.streaming.error).toBe("这组问题已经不需要回答了");
+  });
+
+  it("reports a call that is not in the loaded conversation instead of doing nothing", async () => {
+    // A card on screen whose submission vanishes without a word is indistinguishable from
+    // a broken button — which is exactly how a real failure was reported.
+    const store = await readyStore({ messages: [pending()] });
+
+    await store.answerQuestion("no-such-call", { action: "cancel" });
+
+    expect(mocks.streamAnswers).not.toHaveBeenCalled();
+    expect(store.error).toBe("这组问题已经不需要回答了，可能已经提交或作废。");
+  });
+
+  it("ignores an answer while another turn is streaming", async () => {
+    const store = await readyStore({ messages: [pending()] });
+    store.streaming.active = true;
+
+    await store.answerQuestion("call_ask", { action: "cancel" });
+
+    expect(mocks.streamAnswers).not.toHaveBeenCalled();
+  });
+
+  it("retires a pending question when the user sends a message instead", async () => {
+    // The server makes the same change when it writes the new user turn; doing it here too
+    // is what keeps the card honest until the page is next reloaded.
+    const store = await readyStore({ messages: [pending()] });
+    streamOf({ type: "done" });
+
+    await store.sendMessage("算了，先做别的");
+
+    expect(toolCall(store)!.status).toBe("skipped");
+    expect(toolCall(store)!.answer).toBeUndefined();
+  });
+
+  it("leaves an already-answered card alone when a new message is sent", async () => {
+    const store = await readyStore({
+      messages: [
+        message({
+          role: "assistant",
+          toolCalls: [
+            {
+              id: "call_ask",
+              name: "ask_user",
+              input: JSON.stringify({ questions: QS }),
+              status: "answered",
+              answer: { "0": { selected: ["OAuth"] } },
+            },
+          ],
+        }),
+      ],
+    });
+    streamOf({ type: "done" });
+
+    await store.sendMessage("继续");
+
+    expect(toolCall(store)!.status).toBe("answered");
+    expect(toolCall(store)!.answer).toEqual({ "0": { selected: ["OAuth"] } });
   });
 });

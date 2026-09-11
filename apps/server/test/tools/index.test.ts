@@ -47,8 +47,10 @@ describe("buildTools", () => {
     expect(names({ documents: { ...documents, attachments: [] } })).not.toContain("read_document");
   });
 
-  it("keeps the web tools but drops the file tools when fileTools is disabled", () => {
-    expect(names({ fileToolsEnabled: false }).sort()).toEqual(["web_fetch", "web_search"]);
+  it("keeps the non-workspace tools but drops the file tools when fileTools is disabled", () => {
+    // `ask_user` is here with the web tools because it reads nothing at all — switching off
+    // the workspace sandbox is a statement about file access, not about talking to the user.
+    expect(names({ fileToolsEnabled: false }).sort()).toEqual(["ask_user", "web_fetch", "web_search"]);
   });
 
   it("keeps read_document when the file tools are disabled", () => {

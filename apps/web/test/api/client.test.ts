@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamEvent } from "@guided-learning/shared";
-import { api, attachmentUrl, fileToBase64, streamChat } from "../../src/api/client.js";
+import { api, attachmentUrl, fileToBase64, streamAnswers, streamChat } from "../../src/api/client.js";
 import { ApiError } from "../../src/utils/apiError.js";
 import { i18n } from "../../src/i18n.js";
 
@@ -188,6 +188,71 @@ describe("streamChat", () => {
   it("throws when there is no response body", async () => {
     stubFetch(() => new Response(null, { status: 200 }));
     await expect(collect()).rejects.toThrow(/Chat failed|No response body/);
+  });
+
+  it("throws when there is no response body", async () => {
+    stubFetch(() => new Response(null, { status: 200 }));
+    await expect(collect()).rejects.toThrow(/Chat failed|No response body/);
+  });
+
+  describe("streamAnswers", () => {
+    // The resumed turn arrives on its own route but in the same shape, which is what lets
+    // the store drain both with one loop.
+    async function collectAnswers(): Promise<ChatStreamEvent[]> {
+      const events: ChatStreamEvent[] = [];
+      for await (const event of streamAnswers("s7", {
+        toolCallId: "call_1",
+        action: "submit",
+        answers: { "0": { selected: ["OAuth"] } },
+      })) {
+        events.push(event);
+      }
+      return events;
+    }
+
+    it("posts the submission to the answers route", async () => {
+      const fetchMock = stubFetch(() => sseResponse(['event: done\ndata: {"type":"done"}\n\n']));
+      await collectAnswers();
+
+      expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s7/answers");
+      expect(fetchMock.mock.calls[0]![1]!.method).toBe("POST");
+      expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({
+        toolCallId: "call_1",
+        action: "submit",
+        answers: { "0": { selected: ["OAuth"] } },
+      });
+    });
+
+    it("parses the resumed turn's events", async () => {
+      stubFetch(() =>
+        sseResponse([
+          'event: meta\ndata: {"type":"meta","sessionId":"s7"}\n\n',
+          'event: text\ndata: {"type":"text","delta":"好的"}\n\n',
+          'event: done\ndata: {"type":"done"}\n\n',
+        ])
+      );
+
+      await expect(collectAnswers()).resolves.toEqual([
+        { type: "meta", sessionId: "s7" },
+        { type: "text", delta: "好的" },
+        { type: "done" },
+      ]);
+    });
+
+    it("surfaces a 409 as a translated ApiError", async () => {
+      // The double-submit and the already-skipped card both land here, and the store rolls
+      // the card back on it — so it has to reject rather than resolve with no events.
+      i18n.global.locale.value = "zh-CN";
+      stubFetch(() =>
+        jsonResponse(
+          { error: { code: "QUESTION_NOT_PENDING", message: "that question is no longer awaiting an answer" } },
+          { status: 409 }
+        )
+      );
+
+      await expect(collectAnswers()).rejects.toBeInstanceOf(ApiError);
+      await expect(collectAnswers()).rejects.toThrow("这组问题已经不需要回答了");
+    });
   });
 
   describe("event parsing", () => {

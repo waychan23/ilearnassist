@@ -2,12 +2,15 @@ import type { FastifyInstance } from "fastify";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type {
+  AnswerToolCallInput,
   ApiErrorBody,
   ApiErrorCode,
+  AskUserQuestion,
   Attachment,
   AttachmentParseRecord,
   ChatInput,
   ChatStreamEvent,
+  Copilot,
   CopilotDefaults,
   CreateCopilotInput,
   CreateDocumentParserInput,
@@ -21,7 +24,9 @@ import type {
   ProviderConfig,
   ProviderModelInput,
   PublicConfig,
+  Session,
   SessionSettings,
+  ToolCall,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
@@ -29,6 +34,7 @@ import type {
   UpdateSessionInput,
   UpdateWorkspaceInput,
   UploadAttachmentInput,
+  Workspace,
 } from "@guided-learning/shared";
 import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
 import type { AppConfig } from "./config.js";
@@ -53,10 +59,12 @@ import {
 } from "./documents/index.js";
 import type { DocumentService } from "./documents/service.js";
 import { listParseRecords } from "./documents/store.js";
-import { runAgentStream } from "./agent/loop.js";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
 import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
+import { renderAskUserResult, validateAnswers } from "./tools/askUser.js";
 import {
   ensureSessionUploadDir,
   findStoredAttachment,
@@ -781,6 +789,132 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /* ----------------------------------- chat ----------------------------------- */
 
+  /** Everything a turn needs, resolved the same way whether it starts or resumes. */
+  interface TurnContext {
+    copilot: Copilot | undefined;
+    provider: ProviderRecord | undefined;
+    modelId: string;
+    tools: StructuredToolInterface[];
+    vision: boolean;
+    toolUse: boolean;
+  }
+
+  /**
+   * Resolve the model, the Copilot in force and the tool set for one turn.
+   *
+   * Shared by the two routes that run a turn — `/chat` (a new user message) and
+   * `/answers` (resuming a suspended `ask_user`). They have to agree on all of it: a
+   * resumed turn that rebuilt its tools differently from the one that asked the question
+   * could find `ask_user` missing from the very conversation it is in the middle of.
+   */
+  function turnContext(
+    session: Session,
+    workspace: Workspace,
+    input: {
+      copilotId: string | null;
+      provider?: string;
+      model?: string;
+      /** This turn's attachments, which scope the `read_document` tool. */
+      attachments: Attachment[];
+    }
+  ): TurnContext {
+    const copilot = input.copilotId ? db.getCopilot(input.copilotId) : undefined;
+
+    // Session settings win over the Copilot's defaults; request fields are one-turn overrides.
+    const providerId = resolveProviderId(input.provider, session.settings, copilot?.settings);
+    const provider = db.getProvider(providerId);
+    const modelId = resolveModelId(provider, input.model, session.settings, copilot?.settings);
+
+    const tools = buildTools({
+      workspaceDir: workspace.dirPath,
+      webSearch: config.tools.webSearch,
+      webFetch: config.tools.webFetch,
+      fileToolsEnabled: config.tools.fileTools.enabled,
+      allowedNames: copilot?.tools,
+      // The tool is scoped to *this turn's* attachments, so a model cannot read a document
+      // from another conversation even if it guesses an id.
+      documents: {
+        uploadRoot: uploadsRoot,
+        sessionId: session.id,
+        attachments: input.attachments.map((a) => ({
+          id: a.id,
+          name: a.name,
+          mimeType: a.mimeType,
+        })),
+        maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
+      },
+    });
+
+    return {
+      copilot,
+      provider,
+      modelId,
+      tools,
+      vision: isVisionModel(provider, modelId),
+      toolUse: isToolUseModel(provider, modelId),
+    };
+  }
+
+  /**
+   * Persist what a turn produced and close the stream: the assistant message, its
+   * `message_done`, the conversation title when this was the first turn, and `done`.
+   *
+   * A turn that suspended on `ask_user` goes through here like any other — its assistant
+   * message simply carries a tool call with `status: "awaiting"` and no `output`, which
+   * is the whole representation of "we are waiting on a person".
+   */
+  async function finishTurn(
+    id: string,
+    session: Session,
+    ctx: TurnContext,
+    result: RunAgentResult,
+    sse: ReturnType<typeof createSseWriter>,
+    opts: { historyLength: number; userMessage: string | null }
+  ): Promise<void> {
+    const assistantMessage = db.createMessage({
+      id: newId(),
+      sessionId: id,
+      role: "assistant",
+      content: result.content,
+      reasoning: result.reasoning || undefined,
+      toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+      usage: Object.keys(result.usage).length > 0 ? result.usage : undefined,
+    });
+    db.touchSession(id);
+
+    sse.send({ type: "message_done", message: assistantMessage });
+
+    // Name the conversation from its first exchange, unless the user already typed a
+    // title (which flips `titleSource` to `user`) or this isn't the first turn. A resume
+    // has no user message to name it from, and is never the first turn anyway.
+    const isFirstTurn = opts.historyLength === 0;
+    if (isFirstTurn && session.titleSource !== "user" && opts.userMessage !== null) {
+      const title = await autoTitle({
+        provider: ctx.provider,
+        modelId: ctx.modelId,
+        userMessage: opts.userMessage,
+        assistantMessage: result.content,
+      });
+      if (title) {
+        db.setAutoTitle(id, title);
+        sse.send({ type: "title", sessionId: id, title });
+      }
+    }
+  }
+
+  /** Report a failed turn and keep history well-formed. */
+  function failTurn(id: string, err: unknown, sse: ReturnType<typeof createSseWriter>): void {
+    const errorText = err instanceof Error ? err.message : String(err);
+    sse.send({ type: "error", message: errorText });
+    // Persist a balanced assistant message so history stays user/assistant.
+    db.createMessage({
+      id: newId(),
+      sessionId: id,
+      role: "assistant",
+      content: `⚠️ ${errorText}`,
+    });
+  }
+
   app.post("/api/sessions/:id/chat", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as ChatInput;
@@ -801,36 +935,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       db.setSessionCopilot(id, body.copilotId);
     }
     const copilotId = body.copilotId ?? session.copilotId ?? null;
-    const copilot = copilotId ? db.getCopilot(copilotId) : undefined;
-
-    // Session settings win over the Copilot's defaults; request fields are one-turn overrides.
-    const providerId = resolveProviderId(body.provider, session.settings, copilot?.settings);
-    const provider = db.getProvider(providerId);
-    const modelId = resolveModelId(provider, body.model, session.settings, copilot?.settings);
 
     // Drop anything whose id/MIME would not resolve to a path under this session's upload
     // directory. A stale or hostile client cannot point the reader at an arbitrary file
     // (a well-formed id for a missing file still degrades to a placeholder downstream).
     const storedAttachments = attachments.filter((a) => resolveStoredPath(uploadsRoot, id, a));
 
-    const tools = buildTools({
-      workspaceDir: workspace.dirPath,
-      webSearch: config.tools.webSearch,
-      webFetch: config.tools.webFetch,
-      fileToolsEnabled: config.tools.fileTools.enabled,
-      allowedNames: copilot?.tools,
-      // The tool is scoped to *this turn's* attachments, so a model cannot read a document
-      // from another conversation even if it guesses an id.
-      documents: {
-        uploadRoot: uploadsRoot,
-        sessionId: id,
-        attachments: storedAttachments.map((a) => ({
-          id: a.id,
-          name: a.name,
-          mimeType: a.mimeType,
-        })),
-        maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
-      },
+    // Any question still waiting for an answer belongs to a turn the user has now moved
+    // on from. Retiring it here — before the new user turn is written — is what makes the
+    // card read "skipped" rather than staying live on a conversation that has moved past it.
+    db.skipAwaitingToolCalls(id);
+
+    const ctx = turnContext(session, workspace, {
+      copilotId,
+      provider: body.provider,
+      model: body.model,
+      attachments: storedAttachments,
     });
 
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
@@ -851,65 +971,151 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     try {
       const result = await runAgentStream({
-        provider,
-        modelId,
+        provider: ctx.provider,
+        modelId: ctx.modelId,
         workspace,
-        copilot,
+        copilot: ctx.copilot,
         settings: session.settings,
         uploadRoot: uploadsRoot,
         sessionId: id,
-        vision: isVisionModel(provider, modelId),
-        toolUse: isToolUseModel(provider, modelId),
+        vision: ctx.vision,
+        toolUse: ctx.toolUse,
         history,
         userMessage: message,
         attachments: storedAttachments,
-        tools,
+        tools: ctx.tools,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
 
-      const assistantMessage = db.createMessage({
-        id: newId(),
-        sessionId: id,
-        role: "assistant",
-        content: result.content,
-        reasoning: result.reasoning || undefined,
-        toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
-        usage: Object.keys(result.usage).length > 0 ? result.usage : undefined,
+      await finishTurn(id, session, ctx, result, sse, {
+        historyLength: history.length,
+        userMessage: message,
       });
-      db.touchSession(id);
-
-      sse.send({ type: "message_done", message: assistantMessage });
-
-      // Name the conversation from its first exchange, unless the user already typed a
-      // title (which flips `titleSource` to `user`) or this isn't the first turn.
-      const isFirstTurn = history.length === 0;
-      if (isFirstTurn && session.titleSource !== "user") {
-        const title = await autoTitle({
-          provider,
-          modelId,
-          userMessage: message,
-          assistantMessage: result.content,
-        });
-        if (title) {
-          db.setAutoTitle(id, title);
-          sse.send({ type: "title", sessionId: id, title });
-        }
-      }
     } catch (err) {
-      const errorText = err instanceof Error ? err.message : String(err);
-      sse.send({ type: "error", message: errorText });
-      // Persist a balanced assistant message so history stays user/assistant.
-      db.createMessage({
-        id: newId(),
-        sessionId: id,
-        role: "assistant",
-        content: `⚠️ ${errorText}`,
-      });
+      failTurn(id, err, sse);
     } finally {
       sse.send({ type: "done" });
       sse.end();
     }
   });
+
+  /**
+   * Answer a suspended `ask_user` call, and carry the turn on from there.
+   *
+   * Streams the same way `/chat` does, so the client consumes one shape for both. What it
+   * does *not* do is append a user message: the answers are written onto the tool call
+   * that asked for them, and the resumed run's history is that call plus its result.
+   * That is why a question can be answered after a reload, or after the server restarted
+   * — nothing about the pending state lives in a process.
+   */
+  app.post("/api/sessions/:id/answers", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnswerToolCallInput;
+
+    const session = db.getSession(id);
+    if (!session) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    const workspace = db.getWorkspace(session.workspaceId);
+    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+
+    const toolCallId = typeof body?.toolCallId === "string" ? body.toolCallId : "";
+    const action = body?.action === "cancel" ? "cancel" : "submit";
+
+    const pending = toolCallId ? db.findAwaitingToolCall(id, toolCallId) : undefined;
+    if (!pending) {
+      // Covers the double submit, the card the user already skipped by sending a message,
+      // and a tool-call id belonging to another session. None of them is a server fault.
+      return reply.code(409).send(
+        apiError("QUESTION_NOT_PENDING", "that question is no longer awaiting an answer")
+      );
+    }
+
+    const questions = readAskUserQuestions(pending.call);
+    if (!questions) {
+      return reply.code(409).send(
+        apiError("QUESTION_NOT_PENDING", "that tool call does not hold a question set")
+      );
+    }
+
+    const validated = validateAnswers(questions, { ...body, action, toolCallId });
+    if (!validated.ok) {
+      return reply.code(400).send(apiError("INVALID_ANSWER", validated.reason));
+    }
+
+    // Two copies of one answer, for two readers. `output` is what the model replays as the
+    // tool result; `answer` is what the card renders, so the UI never parses prose.
+    const status = action === "cancel" ? "dismissed" : "answered";
+    const message = db.getMessage(pending.messageId);
+    db.updateMessageToolCalls(
+      pending.messageId,
+      (message?.toolCalls ?? []).map((tc) =>
+        tc.id === toolCallId
+          ? {
+              ...tc,
+              status,
+              answer: validated.answers,
+              output: renderAskUserResult(questions, validated.answers, action),
+            }
+          : tc
+      )
+    );
+
+    const ctx = turnContext(session, workspace, {
+      copilotId: session.copilotId ?? null,
+      attachments: [],
+    });
+
+    await reply.hijack();
+    const sse = createSseWriter(reply);
+    sse.send({ type: "meta", sessionId: id });
+
+    try {
+      // Read history *after* the answer was written, so the resumed run sees it.
+      const history = db.listMessages(id);
+      const result = await runAgentStream({
+        provider: ctx.provider,
+        modelId: ctx.modelId,
+        workspace,
+        copilot: ctx.copilot,
+        settings: session.settings,
+        uploadRoot: uploadsRoot,
+        sessionId: id,
+        vision: ctx.vision,
+        toolUse: ctx.toolUse,
+        history,
+        userMessage: null,
+        tools: ctx.tools,
+        onEvent: (event: ChatStreamEvent) => sse.send(event),
+      });
+
+      await finishTurn(id, session, ctx, result, sse, {
+        historyLength: history.length,
+        userMessage: null,
+      });
+    } catch (err) {
+      failTurn(id, err, sse);
+    } finally {
+      sse.send({ type: "done" });
+      sse.end();
+    }
+  });
+}
+
+/**
+ * The question set a suspended `ask_user` call recorded, or undefined when the stored
+ * `input` is not one.
+ *
+ * Returns undefined rather than throwing because a malformed `input` here means the row
+ * predates this feature or was written by something other than the tool — a case the
+ * caller turns into the same 409 as a question that has already been answered.
+ */
+function readAskUserQuestions(call: ToolCall): AskUserQuestion[] | undefined {
+  try {
+    const parsed = JSON.parse(call.input) as { questions?: unknown };
+    if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) return undefined;
+    return parsed.questions as AskUserQuestion[];
+  } catch {
+    return undefined;
+  }
 }
 
 function isParsePolicy(value: unknown): value is DocumentParsePolicy {

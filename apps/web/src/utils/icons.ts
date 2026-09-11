@@ -44,6 +44,14 @@ export const ICON_PATHS = {
 
   "caret-down": ["M4 6.5L8 10.5L12 6.5"],
   "caret-right": ["M6.5 4L10.5 8L6.5 12"],
+  "caret-left": ["M9.5 4L5.5 8L9.5 12"],
+
+  /* The head of an `ask_user` card — a question the agent is putting to the user. */
+  help: [
+    "M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 1 1 11 0",
+    "M6.4 6.3a1.65 1.65 0 1 1 1.85 1.75V9.1",
+    "M8 11.4V11.41",
+  ],
 
   /* Leaving a workspace, which is the opposite of what `caret-right` means at its call
    * sites (`ModelSelector`'s disclosure). A chevron with a shaft, so it reads as a

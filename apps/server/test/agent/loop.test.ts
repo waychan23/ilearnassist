@@ -7,9 +7,11 @@ import type {
   Attachment,
   ChatStreamEvent,
   Message,
+  ModelCapability,
   SessionSettings,
 } from "@guided-learning/shared";
 import { runAgentStream } from "../../src/agent/loop.js";
+import { buildAskUserTool } from "../../src/tools/askUser.js";
 import { buildFileTools } from "../../src/tools/fileTools.js";
 import type { ProviderRecord } from "../../src/db.js";
 import { startFakeLlm, type FakeLlm, type FakeTurn } from "../helpers/fakeLlm.js";
@@ -40,8 +42,14 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-function provider(): ProviderRecord {
-  return { id: "fake", name: "Fake", baseURL: llm.baseURL, apiKey: "test-key", models: [] };
+function provider(capabilities: ModelCapability[] = []): ProviderRecord {
+  return {
+    id: "fake",
+    name: "Fake",
+    baseURL: llm.baseURL,
+    apiKey: "test-key",
+    models: [{ id: "r1", modelId: "fake-model", name: "fake-model", capabilities }],
+  };
 }
 
 interface RunOptions {
@@ -49,17 +57,20 @@ interface RunOptions {
   tools?: StructuredToolInterface[];
   settings?: SessionSettings;
   history?: Message[];
-  userMessage?: string;
+  /** `null` is a resume: a suspended turn carries on with no new user message. */
+  userMessage?: string | null;
   attachments?: Attachment[];
   vision?: boolean;
   toolUse?: boolean;
+  /** Declared capabilities of the model record — `reasoning` gates the replay below. */
+  capabilities?: ModelCapability[];
 }
 
 async function run(options: RunOptions) {
   llm.setTurns(options.turns);
   const events: ChatStreamEvent[] = [];
   const result = await runAgentStream({
-    provider: provider(),
+    provider: provider(options.capabilities ?? []),
     modelId: "fake-model",
     workspace: {
       id: "w1",
@@ -76,7 +87,7 @@ async function run(options: RunOptions) {
     vision: options.vision ?? false,
     toolUse: options.toolUse ?? false,
     history: options.history ?? [],
-    userMessage: options.userMessage ?? "hello",
+    userMessage: options.userMessage === undefined ? "hello" : options.userMessage,
     attachments: options.attachments ?? [],
     tools: options.tools ?? [],
     onEvent: (event) => events.push(event),
@@ -384,5 +395,270 @@ describe("runAgentStream — known inconsistencies (pinned)", () => {
     expect(streamed).toBe("I will write that file now.All done.");
     // ...but only the final step's text is persisted, so a reload loses the narration.
     expect(result.content).toBe("All done.");
+  });
+});
+
+describe("runAgentStream — ask_user suspends the turn", () => {
+  const questions = [
+    {
+      header: "认证方式",
+      question: "要用哪种认证方式？",
+      options: [{ label: "OAuth" }, { label: "API Key" }],
+    },
+  ];
+
+  const askUser = () => [buildAskUserTool()];
+
+  it("stops the turn, records the call as awaiting, and emits no end for it", async () => {
+    const { events, result } = await run({
+      tools: askUser(),
+      turns: [{ toolCalls: [{ name: "ask_user", args: { questions } }] }],
+    });
+
+    expect(result.awaiting).toBe(true);
+
+    // The pending call is recorded so the route can persist it — but with no `output`,
+    // which is exactly what keeps it out of history until the user answers.
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]).toMatchObject({ name: "ask_user", status: "awaiting" });
+    expect(result.toolCalls[0]!.output).toBeUndefined();
+
+    // A `tool_start` with no matching `tool_end`: there is no result yet, and saying there
+    // was would render the card as a finished, answer-less question.
+    expect(events.filter((e) => e.type === "tool_start")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "tool_end")).toEqual([]);
+  });
+
+  it("does not report the suspension as a failed tool", async () => {
+    // The sentinel is an exception, so the generic arm would happily turn it into
+    // "Tool error: …" — telling the model its own question broke.
+    const { result } = await run({
+      tools: askUser(),
+      turns: [{ toolCalls: [{ name: "ask_user", args: { questions } }] }],
+    });
+
+    expect(result.toolCalls[0]!.output).toBeUndefined();
+    expect(JSON.stringify(result.toolCalls)).not.toContain("Tool error");
+  });
+
+  it("does not claim the step budget ran out", async () => {
+    const { result } = await run({
+      tools: askUser(),
+      turns: [{ toolCalls: [{ name: "ask_user", args: { questions } }] }],
+    });
+
+    expect(result.content).toBe("");
+  });
+
+  it("keeps a preamble the model streamed before asking", async () => {
+    const { result, events } = await run({
+      tools: askUser(),
+      turns: [
+        {
+          content: "有两件事需要你定。",
+          toolCalls: [{ name: "ask_user", args: { questions } }],
+        },
+      ],
+    });
+
+    expect(result.content).toBe("有两件事需要你定。");
+    expect(events.some((e) => e.type === "text")).toBe(true);
+  });
+
+  it("runs the step's other tool calls before suspending", async () => {
+    // Nothing the model asked for is silently dropped: the read still happens, and the
+    // question is the only thing left outstanding.
+    const files = buildFileTools(scratch);
+    await files.writeFile.invoke({ path: "a.txt", content: "hello" });
+
+    const { result } = await run({
+      tools: [files.readFile, buildAskUserTool()],
+      turns: [
+        {
+          toolCalls: [
+            { id: "call_read", name: "read_file", args: { path: "a.txt" } },
+            { id: "call_ask", name: "ask_user", args: { questions } },
+          ],
+        },
+      ],
+    });
+
+    expect(result.awaiting).toBe(true);
+    const read = result.toolCalls.find((tc) => tc.id === "call_read");
+    expect(read?.output).toContain("hello");
+    expect(result.toolCalls.find((tc) => tc.id === "call_ask")?.status).toBe("awaiting");
+  });
+
+  it("rejects a second ask_user in the same step instead of suspending twice", async () => {
+    // Two live question sets is a state the card has no way to present, and the model can
+    // simply ask again — so the extra call becomes an ordinary tool error it can read.
+    const { result } = await run({
+      tools: askUser(),
+      turns: [
+        {
+          toolCalls: [
+            { id: "call_a", name: "ask_user", args: { questions } },
+            { id: "call_b", name: "ask_user", args: { questions } },
+          ],
+        },
+      ],
+    });
+
+    expect(result.awaiting).toBe(true);
+    const second = result.toolCalls.find((tc) => tc.id === "call_b");
+    expect(second?.status).toBeUndefined();
+    expect(second?.output).toMatch(/only one ask_user call is allowed per step/);
+  });
+
+  it("turns a malformed question set into a tool error, so no card is ever rendered", async () => {
+    // Validation runs inside the tool, which means a bad question set fails before the
+    // suspension exists. The model gets an ordinary tool error and can correct itself.
+    const { result } = await run({
+      tools: askUser(),
+      turns: [
+        { toolCalls: [{ name: "ask_user", args: { questions: [] } }] },
+        { content: "明白了。" },
+      ],
+    });
+
+    expect(result.awaiting).toBe(false);
+    expect(result.toolCalls[0]!.output).toMatch(/^Tool error: /);
+  });
+
+  it("cannot suspend when the tool is not in the copilot's tool set", async () => {
+    const { result } = await run({
+      tools: [],
+      turns: [{ toolCalls: [{ name: "ask_user", args: { questions } }] }, { content: "好的" }],
+    });
+
+    expect(result.awaiting).toBe(false);
+    expect(result.toolCalls[0]!.output).toBe('Unknown tool "ask_user".');
+  });
+
+  it("resumes without appending a user message, replaying the call and its result", async () => {
+    const { result } = await run({
+      tools: askUser(),
+      userMessage: null,
+      turns: [{ content: "好的，按 OAuth 实现。" }],
+      history: [
+        message({ role: "user", content: "帮我加个登录" }),
+        message({
+          role: "assistant",
+          content: "需要先确认一件事。",
+          toolCalls: [
+            {
+              id: "call_ask",
+              name: "ask_user",
+              input: JSON.stringify({ questions }),
+              output: '{"user_answers":[{"question":"要用哪种认证方式？","selected":["OAuth"]}]}',
+              status: "answered",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(result.content).toBe("好的，按 OAuth 实现。");
+    expect(result.awaiting).toBe(false);
+
+    const sent = llm.requests().at(-1) as {
+      messages: { role: string; tool_calls?: { id: string; function: { name: string } }[] }[];
+    };
+    // The history's own user turn is there, but nothing was appended after the tool result
+    // — the resumed run's request ends on the answer, not on words the user never wrote.
+    expect(sent.messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool"]);
+    expect(sent.messages.at(-1)!.role).toBe("tool");
+    expect(sent.messages[2]!.tool_calls?.[0]?.function.name).toBe("ask_user");
+  });
+
+  it("omits an unanswered call from the resumed history", async () => {
+    // The `skipped` case: the user sent a message instead of answering, so the call has no
+    // `output` and `buildHistoryMessages` leaves it out rather than sending OpenAI a
+    // `tool_calls` block whose results are missing.
+    await run({
+      tools: askUser(),
+      turns: [{ content: "ok" }],
+      history: [
+        message({ role: "user", content: "帮我加个登录" }),
+        message({
+          role: "assistant",
+          content: "需要先确认一件事。",
+          toolCalls: [
+            {
+              id: "call_ask",
+              name: "ask_user",
+              input: JSON.stringify({ questions }),
+              status: "skipped",
+            },
+          ],
+        }),
+      ],
+    });
+
+    const sent = llm.requests().at(-1) as { messages: { role: string }[] };
+    expect(sent.messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
+  });
+});
+
+describe("replaying reasoning into history", () => {
+  /** An assistant turn that used a tool, as it comes back out of the database. */
+  const history: Message[] = [
+    message({ role: "user", content: "教我 Flink" }),
+    message({
+      role: "assistant",
+      content: "先看一眼工作区。",
+      reasoning: "the chain of thought that produced the tool call",
+      toolCalls: [{ id: "call_ls", name: "read_file", input: '{"path":"."}', output: "{}" }],
+    }),
+  ];
+
+  const sentMessages = (): Record<string, unknown>[] =>
+    (llm.requests().at(-1) as { messages: Record<string, unknown>[] }).messages;
+
+  it("sends the chain of thought back with the tool call, for a reasoning model", async () => {
+    // DeepSeek's thinking mode answers 400 without this — and LangChain cannot send it,
+    // so it leaves the run through a side channel and the fetch wrapper puts it back.
+    await run({
+      turns: [{ content: "好。" }],
+      history,
+      capabilities: ["tool_use", "reasoning"],
+    });
+
+    const assistant = sentMessages().find((m) => m.role === "assistant")!;
+    expect(assistant).toMatchObject({
+      content: "先看一眼工作区。",
+      reasoning_content: "the chain of thought that produced the tool call",
+    });
+    expect(assistant.tool_calls).toHaveLength(1);
+  });
+
+  it("leaves the field off entirely for a model that never used it", async () => {
+    await run({ turns: [{ content: "好。" }], history, capabilities: ["tool_use"] });
+
+    const assistant = sentMessages().find((m) => m.role === "assistant")!;
+    expect(assistant).not.toHaveProperty("reasoning_content");
+  });
+
+  it("still sends an empty string when the turn recorded no reasoning", async () => {
+    // The field has to be present on a tool-call message; where nothing was recorded the
+    // value is the empty string DeepSeek sends itself, not an omission.
+    const noReasoning = structuredClone(history);
+    delete noReasoning[1]!.reasoning;
+
+    await run({ turns: [{ content: "好。" }], history: noReasoning, capabilities: ["reasoning"] });
+
+    expect(sentMessages().find((m) => m.role === "assistant")).toMatchObject({
+      reasoning_content: "",
+    });
+  });
+
+  it("does not attach it to a plain assistant turn", async () => {
+    const plain = [message({ role: "user", content: "hi" }), message({ role: "assistant", content: "a", reasoning: "hidden" })];
+
+    await run({ turns: [{ content: "好。" }], history: plain, capabilities: ["reasoning"] });
+
+    expect(sentMessages().find((m) => m.role === "assistant")).not.toHaveProperty(
+      "reasoning_content"
+    );
   });
 });

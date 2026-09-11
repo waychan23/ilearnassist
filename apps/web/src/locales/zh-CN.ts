@@ -28,6 +28,12 @@ export default {
     name: "名称",
     copied: "已复制",
     copy: "复制",
+    /**
+     * Joins a list of things into one sentence: the labels a user picked, say. A separator
+     * is punctuation the copy is built from, which is why it lives in the catalog rather
+     * than as a `、` in a template — the English one is not the same character.
+     */
+    listSeparator: "、",
     save: "保存",
     close: "关闭",
     edit: "编辑",
@@ -200,11 +206,44 @@ export default {
       create_directory: "创建目录",
       delete_file: "删除文件",
       read_document: "读取文档",
+      ask_user: "询问用户",
     },
     done: "完成",
     running: "运行中",
     args: "参数",
     result: "结果",
+  },
+
+  /**
+   * The `ask_user` card. Wording for a question the agent is putting to the user, and for
+   * the record it leaves behind once answered — the two read differently on purpose, since
+   * one is an invitation and the other is history.
+   */
+  askUser: {
+    title: "询问用户",
+    /** One per `AskUserStatus`, plus the moment before the turn has finished persisting. */
+    preparing: "准备问题中",
+    awaiting: "等待你的回答",
+    answered: "已确认",
+    skipped: "已跳过",
+    dismissed: "已取消",
+    /** The status line under a card whose questions were never answered. */
+    skippedHint: "你直接发了新消息，这组问题已作废。",
+    dismissedHint: "你取消了这组问题，助手会自行判断。",
+    other: "其他（手动输入）",
+    otherPlaceholder: "请输入…",
+    multiSelectHint: "可多选。",
+    /** `{current}` and `{total}` are 1-based. */
+    step: "第 {current} / {total} 题",
+    previous: "上一题",
+    next: "下一题",
+    submit: "提交",
+    cancel: "取消询问",
+    unanswered: "未回答",
+    /** The disclosure that reveals the options the agent originally offered. */
+    details: "查看详情",
+    /** Heads the options list in the detail view, the chosen ones ticked. */
+    options: "选项",
   },
 
   message: {
@@ -456,6 +495,8 @@ export default {
     UNKNOWN_PARSER: "未知的解析服务。",
     UNKNOWN_PROVIDER: "未知的 Provider。",
     MESSAGE_REQUIRED: "消息内容不能为空。",
+    QUESTION_NOT_PENDING: "这组问题已经不需要回答了，可能已经提交或作废。",
+    INVALID_ANSWER: "提交的回答不完整或已失效，请刷新页面后重试。",
   },
 
   /**

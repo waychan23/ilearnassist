@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ToolCall } from "../api/types";
+import { ASK_USER_TOOL_NAME, type ToolCall } from "../api/types";
+import AskUserCard from "./AskUserCard.vue";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{ toolCall: ToolCall }>();
+
+/**
+ * `ask_user` is not a tool call to report, it is a question to answer — so it renders as
+ * its own thing rather than through the args/result disclosure below, which has no way to
+ * offer controls and would hide the very answer the card exists to record.
+ */
+const isAskUser = computed(() => props.toolCall.name === ASK_USER_TOOL_NAME);
 const open = ref(false);
 const { t, te } = useI18n();
 
@@ -44,7 +52,8 @@ const prettyInput = computed(() => {
 </script>
 
 <template>
-  <div class="tool-card" data-testid="tool-call">
+  <AskUserCard v-if="isAskUser" :tool-call="toolCall" />
+  <div v-else class="tool-card" data-testid="tool-call">
     <div class="tool-head" @click="open = !open">
       <Icon :name="done ? 'check' : 'retry'" :class="done ? 'ok' : 'run'" />
       <span class="name">{{ label }}</span>

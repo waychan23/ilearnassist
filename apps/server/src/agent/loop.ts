@@ -19,6 +19,7 @@ import type {
 } from "@guided-learning/shared";
 import type { ProviderRecord } from "../db.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
+import { AskUserSuspension } from "../tools/askUser.js";
 import { buildModel } from "./model.js";
 
 /** Fallback ReAct step budget when a session does not set one. */
@@ -30,6 +31,15 @@ export interface RunAgentResult {
   reasoning: string;
   toolCalls: ToolCall[];
   usage: MessageUsage;
+  /**
+   * True when the turn stopped early because the model called `ask_user`.
+   *
+   * The call is in `toolCalls` with `status: "awaiting"` and **no `output`**, which is
+   * what keeps it out of history until the user answers (see `buildHistoryMessages`).
+   * Callers persist the message and close the stream; the turn resumes from the answers
+   * route, as a fresh run whose history already ends in the matching tool result.
+   */
+  awaiting: boolean;
 }
 
 export interface RunAgentInput {
@@ -53,7 +63,15 @@ export interface RunAgentInput {
   toolUse: boolean;
   /** Prior persisted user/assistant messages (oldest first). */
   history: Message[];
-  userMessage: string;
+  /**
+   * The new user turn, or `null` when resuming a suspended `ask_user` call.
+   *
+   * A resumed run has nothing for the user to have typed: its history already ends in the
+   * assistant's `tool_calls` block followed by the matching tool result, which is a valid
+   * request on its own. Appending a synthetic `HumanMessage` there would have to say
+   * *something*, and anything it said would be words the user never wrote.
+   */
+  userMessage: string | null;
   attachments?: Attachment[];
   tools: StructuredToolInterface[];
   onEvent: (event: ChatStreamEvent) => void;
@@ -140,7 +158,7 @@ function safeParseArgs(json: string): Record<string, unknown> {
 function buildSystemPrompt(workspace: Workspace, copilot?: Copilot): string {
   const base =
     copilot?.systemPrompt?.trim() ||
-    "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
+    "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
 
   const workspaceNote =
     `\n\nThe user is working inside a workspace located at:\n${workspace.dirPath}\n` +
@@ -159,8 +177,17 @@ function buildSystemPrompt(workspace: Workspace, copilot?: Copilot): string {
  * Only calls with a recorded output are replayed — OpenAI rejects a `tool_calls` block
  * whose results are missing.
  */
-async function buildHistoryMessages(input: RunAgentInput, history: Message[]): Promise<BaseMessage[]> {
+async function buildHistoryMessages(
+  input: RunAgentInput,
+  history: Message[]
+): Promise<{ messages: BaseMessage[]; reasoningByToolCall: Map<string, string> }> {
   const out: BaseMessage[] = [];
+  /**
+   * Chain of thought for each replayed tool-call message, keyed by its first tool call's
+   * id. LangChain will not carry it (see `withReplayedReasoning`), so it leaves the run
+   * through this side channel and is put back on the wire by the fetch wrapper.
+   */
+  const reasoningByToolCall = new Map<string, string>();
 
   for (const m of history) {
     if (m.role === "user") {
@@ -180,6 +207,12 @@ async function buildHistoryMessages(input: RunAgentInput, history: Message[]): P
       continue;
     }
 
+    // Recorded whether or not this message has reasoning of its own: a thinking-mode
+    // provider wants the field *present* on a tool-call message, and an empty string is a
+    // value it sends itself, so "none recorded" is a value to replay rather than a reason
+    // to skip it.
+    reasoningByToolCall.set(completed[0]!.id, m.reasoning ?? "");
+
     out.push(
       new AIMessage({
         content: m.content,
@@ -196,13 +229,26 @@ async function buildHistoryMessages(input: RunAgentInput, history: Message[]): P
     }
   }
 
-  return out;
+  return { messages: out, reasoningByToolCall };
 }
 
 /**
  * Trim history to the session's `maxContextMessages`, measured in messages. After slicing
  * we drop any leading assistant message so the window always opens on a user turn.
  */
+/**
+ * Whether the configured model declares chain of thought.
+ *
+ * The gate on replaying `reasoning_content` (see `withReplayedReasoning`): only a model
+ * that uses the field can need it back, and a provider that never used it must never be
+ * sent it. Read from the model record rather than sniffed from the base URL, so the user's
+ * own configuration is what decides.
+ */
+function isReasoningModel(provider: ProviderRecord | undefined, modelId: string): boolean {
+  const id = modelId || provider?.models[0]?.modelId;
+  return !!provider?.models.find((m) => m.modelId === id)?.capabilities.includes("reasoning");
+}
+
 function trimHistory(history: Message[], settings: SessionSettings): Message[] {
   const max = settings.maxContextMessages;
   if (!max || max <= 0 || history.length <= max) return history;
@@ -221,6 +267,13 @@ function trimHistory(history: Message[], settings: SessionSettings): Message[] {
 export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResult> {
   let reasoning = "";
 
+  // Rebuilt first: the reasoning it collects has to be in the model's hands before the
+  // first request goes out, because only the fetch wrapper can put it on the wire.
+  const { messages: history, reasoningByToolCall } = await buildHistoryMessages(
+    input,
+    trimHistory(input.history, input.settings)
+  );
+
   // Chain of thought is read off the raw SSE frames (see `createReasoningFetch`) because
   // LangChain discards `reasoning_content` while parsing.
   const { llm, modelId } = buildModel(input.provider, input.modelId, input.settings, {
@@ -228,27 +281,37 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       reasoning += delta;
       input.onEvent({ type: "reasoning", delta });
     },
+    // Only for a model that declares chain of thought. A provider that never used
+    // `reasoning_content` must never be sent it.
+    ...(isReasoningModel(input.provider, input.modelId)
+      ? { replayReasoning: reasoningByToolCall }
+      : {}),
   });
   const modelWithTools = llm.bindTools(input.tools);
   const maxSteps = input.settings.maxSteps ?? DEFAULT_MAX_STEPS;
 
-  const history = await buildHistoryMessages(input, trimHistory(input.history, input.settings));
-  const userContent = await buildUserContent(input.userMessage, input.attachments, {
-    uploadRoot: input.uploadRoot,
-    sessionId: input.sessionId,
-    vision: input.vision,
-    toolUse: input.toolUse,
-  });
-
   const messages: BaseMessage[] = [
     new SystemMessage(buildSystemPrompt(input.workspace, input.copilot)),
     ...history,
-    new HumanMessage(userContent as string | UserContentBlock[]),
   ];
+
+  // No user turn means this is a resume: `history` already ends in the tool result the
+  // model asked for, and that is the whole request.
+  if (input.userMessage !== null) {
+    const userContent = await buildUserContent(input.userMessage, input.attachments, {
+      uploadRoot: input.uploadRoot,
+      sessionId: input.sessionId,
+      vision: input.vision,
+      toolUse: input.toolUse,
+    });
+    messages.push(new HumanMessage(userContent as string | UserContentBlock[]));
+  }
 
   const toolByName = new Map<string, StructuredToolInterface>(input.tools.map((t) => [t.name, t]));
   const toolCalls: ToolCall[] = [];
   let finalContent = "";
+  /** Set when a step asked the user something; the turn ends once the step finishes. */
+  let awaiting = false;
 
   // Summed across steps — what the provider actually billed for this turn.
   let inputTokens = 0;
@@ -306,6 +369,12 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       break;
     }
 
+    // `ask_user` ends the turn, so a step that contains one must run its *other* calls
+    // first and suspend after them. Dropping them instead would leave the model's own
+    // tool_calls block holding calls nobody ever answered, and the model with no record
+    // that it had asked for them — so nothing the model asked for is ever silently lost.
+    let suspendedHere = false;
+
     for (const call of calls) {
       const id = call.id ?? `call_${step}_${toolCalls.length}`;
       const name = call.name ?? "unknown";
@@ -320,7 +389,27 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
           const result = await t.invoke(call.args ?? {});
           output = typeof result === "string" ? result : JSON.stringify(result);
         } catch (err) {
-          output = `Tool error: ${err instanceof Error ? err.message : String(err)}`;
+          // A suspension is not an error and must not be reported as one: the model would
+          // be told its own question failed. Caught before the generic arm below.
+          if (err instanceof AskUserSuspension) {
+            if (awaiting) {
+              // One suspension per step. Answering two sets of questions at once is a
+              // state the UI has no way to present, and the model can simply ask again.
+              output = "Tool error: only one ask_user call is allowed per step.";
+            } else {
+              awaiting = true;
+              suspendedHere = true;
+              // Recorded without an `output` on purpose: `buildHistoryMessages` replays
+              // only calls that have one, which is exactly what keeps a pending question
+              // out of the model's context until the user has answered it.
+              toolCalls.push({ id, name, input: args, status: "awaiting" });
+              // Note the deliberate absence of a `tool_end` event to match the
+              // `tool_start` above — there is no result to report yet.
+              continue;
+            }
+          } else {
+            output = `Tool error: ${err instanceof Error ? err.message : String(err)}`;
+          }
         }
       } else {
         output = `Unknown tool "${name}".`;
@@ -331,9 +420,13 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
       messages.push(new ToolMessage({ tool_call_id: id, name, content: output }));
     }
+
+    if (suspendedHere) break;
   }
 
-  if (!finalContent) {
+  // Only when the turn genuinely ended without an answer. A suspension that carried no
+  // preamble text is a normal outcome, not a budget failure.
+  if (!finalContent && !awaiting) {
     finalContent =
       "The assistant ran out of steps while working on this task. Please ask a follow-up to continue.";
   }
@@ -346,7 +439,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
   if (sawUsage) input.onEvent({ type: "usage", usage });
 
-  return { content: finalContent, reasoning: reasoning.trim(), toolCalls, usage };
+  return { content: finalContent, reasoning: reasoning.trim(), toolCalls, usage, awaiting };
 }
 
 /** Re-exported for clarity at the call site. */

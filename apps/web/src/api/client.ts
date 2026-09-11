@@ -1,4 +1,5 @@
 import type {
+  AnswerToolCallInput,
   Attachment,
   ChatInput,
   ChatStreamEvent,
@@ -213,19 +214,34 @@ async function* sseEvents(response: Response): AsyncGenerator<ChatStreamEvent> {
   }
 }
 
-/** Stream the agent's chat response for a session. */
-export async function* streamChat(
-  sessionId: string,
-  input: ChatInput
-): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`/api/sessions/${sessionId}/chat`, {
+/** POST a body and stream the SSE frames it answers with. */
+async function* streamPost(path: string, body: unknown): AsyncGenerator<ChatStreamEvent> {
+  const res = await fetch(`/api${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw toApiError(await errorBody(res), res.status);
   // A 200 with no body breaks the SSE contract below rather than being a server-reported
   // error, so it stays a plain Error — there is no code to translate.
   if (!res.body) throw new Error("No response body.");
   yield* sseEvents(res);
+}
+
+/** Stream the agent's chat response for a session. */
+export function streamChat(sessionId: string, input: ChatInput): AsyncGenerator<ChatStreamEvent> {
+  return streamPost(`/sessions/${sessionId}/chat`, input);
+}
+
+/**
+ * Answer a pending `ask_user` call and stream the turn that resumes from it.
+ *
+ * The same shape as `streamChat` on purpose: from the client's side the only difference
+ * is which bytes started the turn, so both are consumed by one loop in the store.
+ */
+export function streamAnswers(
+  sessionId: string,
+  input: AnswerToolCallInput
+): AsyncGenerator<ChatStreamEvent> {
+  return streamPost(`/sessions/${sessionId}/answers`, input);
 }

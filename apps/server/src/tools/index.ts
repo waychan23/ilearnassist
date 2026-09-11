@@ -1,5 +1,6 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
+import { buildAskUserTool } from "./askUser.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildFileTools } from "./fileTools.js";
 import { buildWebFetchTool } from "./webFetch.js";
@@ -15,6 +16,7 @@ export const ALL_TOOL_NAMES = [
   "create_directory",
   "delete_file",
   "read_document",
+  "ask_user",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
@@ -22,9 +24,10 @@ export type ToolName = (typeof ALL_TOOL_NAMES)[number];
 /**
  * Tools that do not touch the workspace, and so survive `fileTools.enabled: false`.
  * `read_document` reads attachments from the uploads tree, not the workspace, so it
- * belongs here rather than being switched off with the file tools.
+ * belongs here rather than being switched off with the file tools. `ask_user` reads
+ * nothing at all.
  */
-const NON_FILE_TOOLS = new Set<string>(["web_search", "web_fetch", "read_document"]);
+const NON_FILE_TOOLS = new Set<string>(["web_search", "web_fetch", "read_document", "ask_user"]);
 
 export interface BuildToolsInput {
   workspaceDir: string;
@@ -56,7 +59,14 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     files.deleteFile,
   ];
 
-  const all: StructuredToolInterface[] = [...fileTools, buildWebSearchTool(input.webSearch)];
+  // `ask_user` depends on no config and reads nothing, so it is assembled like a file
+  // tool rather than behind a feature switch — the only thing that ever removes it is a
+  // Copilot whose tool list does not name it.
+  const all: StructuredToolInterface[] = [
+    ...fileTools,
+    buildWebSearchTool(input.webSearch),
+    buildAskUserTool(),
+  ];
   if (input.webFetch.enabled) all.push(buildWebFetchTool(input.webFetch));
   if (input.documents && input.documents.attachments.length > 0) {
     all.push(buildDocumentTool(input.documents));
