@@ -183,6 +183,33 @@ const usageText = computed(() => {
 .actions:focus-within {
   opacity: 1;
 }
+
+/*
+ * A device with no hover never fires the rule above, so the actions would be permanently
+ * invisible — including the copy button, which is the only way to get a reply's text out.
+ *
+ * Keyed on the pointer rather than on a width. A 1024px tablet has no narrow-layout problem
+ * and cannot hover either, so a `max-width` query here would leave it broken.
+ *
+ * No layout shift when this fires: `.actions` already reserves `min-height`, so only the
+ * opacity changes.
+ */
+@media (hover: none) {
+  .actions {
+    opacity: 1;
+  }
+}
+
+/* A finger is not a mouse pointer, so the target grows where it is the only input. 32px is
+   deliberately between WCAG 2.5.8's 24px and iOS's 44px — a 44px copy button under every
+   message is visually heavy, and the primary actions get the larger target. */
+@media (pointer: coarse) {
+  .act {
+    min-height: 32px;
+    padding: var(--space-3) var(--space-4);
+  }
+}
+
 .user-stack .actions {
   justify-content: flex-end;
 }

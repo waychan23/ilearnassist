@@ -37,6 +37,15 @@ const imageWithoutVision = computed(
  */
 const parsingDocuments = computed(() => store.documentsParsing);
 
+/** Why the send button cannot be used, in one place: it is both the tooltip and the name. */
+const sendLabel = computed(() =>
+  store.streaming.active
+    ? t("composer.thinking")
+    : parsingDocuments.value
+      ? t("composer.parsingShort")
+      : t("composer.send")
+);
+
 /** Documents that failed to parse and are still staged — the model will not read them. */
 const failedDocuments = computed(() =>
   store.pendingAttachments.filter((a) => a.parseStatus === "failed")
@@ -134,13 +143,8 @@ function onKeydown(e: KeyboardEvent) {
             class="send-btn"
             data-testid="composer-send"
             :disabled="!canSend"
-            :title="
-            store.streaming.active
-              ? t('composer.thinking')
-              : parsingDocuments
-                ? t('composer.parsingShort')
-                : t('composer.send')
-          "
+            :title="sendLabel"
+            :aria-label="sendLabel"
             @click="send"
           >
             ↑
@@ -169,6 +173,7 @@ function onKeydown(e: KeyboardEvent) {
             <button
               class="icon-btn params-btn"
               :title="t('composer.settings')"
+        :aria-label="t('composer.settings')"
               @click="showSessionSettings = true"
             >
               🎛

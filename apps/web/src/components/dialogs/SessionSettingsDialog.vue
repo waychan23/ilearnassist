@@ -93,7 +93,12 @@ const scopeNote = computed(() =>
     <div class="modal">
       <div class="modal-head">
         <h3>{{ t("sessionSettings.title") }}</h3>
-        <button class="icon-btn" @click="emit('close')">✕</button>
+        <button
+        class="icon-btn"
+        :title="t('common.close')"
+        :aria-label="t('common.close')"
+        @click="emit('close')"
+      >✕</button>
       </div>
       <div class="modal-body">
         <div class="config-tip">

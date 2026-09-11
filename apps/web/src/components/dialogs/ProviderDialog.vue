@@ -123,7 +123,12 @@ function save() {
     <div class="modal lg">
       <div class="modal-head">
         <h3>{{ props.provider ? t("providers.edit") : t("providers.create") }}</h3>
-        <button class="icon-btn" @click="emit('close')">✕</button>
+        <button
+        class="icon-btn"
+        :title="t('common.close')"
+        :aria-label="t('common.close')"
+        @click="emit('close')"
+      >✕</button>
       </div>
       <div class="modal-body">
         <div class="form-grid">
@@ -182,7 +187,8 @@ function save() {
               <input v-model="m.maxOutput" class="input" :placeholder="t('providers.optional')" />
               <div class="hint">{{ t("providers.unitToken") }}</div>
             </div>
-            <button class="icon-btn danger" :title="t('providers.removeModel')" @click="removeModel(i)">✕</button>
+            <button class="icon-btn danger" :title="t('providers.removeModel')"
+        :aria-label="t('providers.removeModel')" @click="removeModel(i)">✕</button>
           </div>
           <div class="caps">
             <label v-for="c in CAPABILITIES" :key="c.id" class="check-row sm">

@@ -115,6 +115,7 @@ function stateOf(a: Attachment): string {
         v-if="c.attachment.parseStatus === 'failed' && removable"
         class="icon-btn retry"
         :title="t('attachments.reparse')"
+        :aria-label="t('attachments.reparse')"
         data-testid="attachment-reparse"
         @click="emit('reparse', c.attachment)"
       >
@@ -124,6 +125,7 @@ function stateOf(a: Attachment): string {
         v-if="removable"
         class="icon-btn danger remove"
         :title="t('attachments.remove')"
+        :aria-label="t('attachments.remove')"
         @click="emit('remove', c.attachment.id)"
       >
         ✕

@@ -1,15 +1,45 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { estimateTokens, formatTokens } from "../utils/format";
 import { DEFAULT_CONTEXT_WINDOW } from "../api/types";
+import { isCoarsePointer } from "../composables/breakpoints";
 
 const props = defineProps<{ pendingText: string }>();
 
 const { t } = useI18n();
 const store = useAppStore();
 const open = ref(false);
+const rootEl = ref<HTMLElement | null>(null);
+
+/**
+ * Open on hover, but only where hover exists.
+ *
+ * This used to be an unconditional `@mouseenter` beside the click toggle, and on a touch
+ * device a tap fires both: `mouseenter` set `open` true and the `click` immediately set it
+ * back to false. The popover opened and shut on every tap and could never stay up, because
+ * there is no `mouseleave` on a touch screen to reset it either.
+ */
+function onHoverEnter() {
+  if (!isCoarsePointer.value) open.value = true;
+}
+
+function onHoverLeave() {
+  if (!isCoarsePointer.value) open.value = false;
+}
+
+/** Tapping anywhere else dismisses it — the touch equivalent of moving the mouse away. */
+function onDocumentPointerDown(event: PointerEvent) {
+  if (rootEl.value && !rootEl.value.contains(event.target as Node)) open.value = false;
+}
+
+watch(open, (isOpen) => {
+  if (isOpen) document.addEventListener("pointerdown", onDocumentPointerDown, true);
+  else document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+});
+
+onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPointerDown, true));
 
 /** Tokens the *next* turn will roughly add, on top of the existing context. */
 const pending = computed(() => estimateTokens(props.pendingText));
@@ -36,8 +66,8 @@ const label = computed(() => {
 </script>
 
 <template>
-  <div class="token-wrap" @mouseenter="open = true" @mouseleave="open = false">
-    <button class="pill token-btn" :class="level" @click="open = !open">
+  <div ref="rootEl" class="token-wrap" @mouseenter="onHoverEnter" @mouseleave="onHoverLeave">
+    <button class="pill token-btn" :class="level" :aria-expanded="open" @click="open = !open">
       <span class="ring" :style="{ '--pct': `${ratio * 100}%` }"></span>
       {{ label }}
     </button>

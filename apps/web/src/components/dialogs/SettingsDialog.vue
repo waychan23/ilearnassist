@@ -255,7 +255,12 @@ function onDefaultModelChange(e: Event) {
     <div class="modal lg">
       <div class="modal-head">
         <h3>{{ t("settings.title") }}</h3>
-        <button class="icon-btn" @click="emit('close')">✕</button>
+        <button
+        class="icon-btn"
+        :title="t('common.close')"
+        :aria-label="t('common.close')"
+        @click="emit('close')"
+      >✕</button>
       </div>
 
       <div class="tabs">
@@ -319,6 +324,7 @@ function onDefaultModelChange(e: Event) {
                   <button
                     class="chip-x"
                     :title="t('settings.providers.deleteModel')"
+        :aria-label="t('settings.providers.deleteModel')"
                     @click.stop="onDeleteModel(p, m.id, m.name)"
                   >
                     ×

@@ -31,7 +31,12 @@ async function create() {
     <div class="modal sm">
       <div class="modal-head">
         <h3>{{ t("session.new.title") }}</h3>
-        <button class="icon-btn" @click="emit('close')">✕</button>
+        <button
+        class="icon-btn"
+        :title="t('common.close')"
+        :aria-label="t('common.close')"
+        @click="emit('close')"
+      >✕</button>
       </div>
       <div class="modal-body">
         <div class="field">

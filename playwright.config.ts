@@ -57,7 +57,31 @@ export default defineConfig({
   // under test rather than bypassing it, and means a new spec inherits the pin instead of
   // having to remember it. `e2e/i18n.spec.ts` is where the other locales are exercised,
   // scoping its overrides to its own `describe` blocks.
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], locale: "zh-CN" } }],
+  //
+  // Split by filename rather than by a `grep`, so it is structural: the desktop specs ignore
+  // `mobile.spec.ts` by name and need no edit, and an unlisted spec cannot be silently
+  // claimed by both projects and run twice.
+  //
+  // What runs at phone size is deliberately *only* `mobile.spec.ts`. The desktop flows —
+  // PDF upload, the settings tabs, a reload — are viewport-independent, so running them a
+  // second time would buy runtime and flake rather than coverage.
+  projects: [
+    {
+      name: "chromium",
+      testIgnore: /mobile\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], locale: "zh-CN" },
+    },
+    {
+      // `Pixel 7` gives 412×915 with `hasTouch` and `isMobile`. The last of those is what
+      // turns on meta-viewport emulation, which is what actually drives the responsive CSS —
+      // without it the page renders at desktop width scaled down and nothing under test
+      // would fire. `locale` is stated again rather than inherited: the desktop project
+      // states it, and repeating it keeps the reason visible next to the pin.
+      name: "mobile",
+      testMatch: /mobile\.spec\.ts$/,
+      use: { ...devices["Pixel 7"], locale: "zh-CN", hasTouch: true, isMobile: true },
+    },
+  ],
 
   webServer: [
     {

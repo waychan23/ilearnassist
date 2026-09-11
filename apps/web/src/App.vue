@@ -25,7 +25,12 @@ onMounted(() => {
     <Transition name="fade">
       <div v-if="store.error" class="toast">
         <span>{{ store.error }}</span>
-        <button class="icon-btn" @click="store.setError(null)">✕</button>
+        <button
+        class="icon-btn"
+        :title="$t('common.close')"
+        :aria-label="$t('common.close')"
+        @click="store.setError(null)"
+      >✕</button>
       </div>
     </Transition>
   </div>

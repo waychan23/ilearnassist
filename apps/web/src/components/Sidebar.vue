@@ -79,10 +79,12 @@ async function onDeleteWorkspace() {
       >
         <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
       </select>
-      <button class="icon-btn" :title="t('sidebar.newWorkspace')" @click="showCreateWorkspace = true">＋</button>
+      <button class="icon-btn" :title="t('sidebar.newWorkspace')"
+        :aria-label="t('sidebar.newWorkspace')" @click="showCreateWorkspace = true">＋</button>
       <button
         class="icon-btn danger"
         :title="t('sidebar.deleteWorkspace')"
+        :aria-label="t('sidebar.deleteWorkspace')"
         :disabled="!store.activeWorkspace"
         @click="onDeleteWorkspace"
       >
@@ -92,7 +94,8 @@ async function onDeleteWorkspace() {
 
     <div class="side-section">
       <span>{{ t("sidebar.sessions") }}</span>
-      <button class="icon-btn" data-testid="new-session" :title="t('sidebar.newSession')" @click="showNewSession = true">
+      <button class="icon-btn" data-testid="new-session" :title="t('sidebar.newSession')"
+        :aria-label="t('sidebar.newSession')" @click="showNewSession = true">
         ＋
       </button>
     </div>
@@ -121,8 +124,10 @@ async function onDeleteWorkspace() {
           <span class="label" :title="t('sidebar.renameHint')" @dblclick.stop="startRename(s)">
             {{ s.title || t("session.fallbackTitle") }}
           </span>
-          <button class="icon-btn" :title="t('sidebar.rename')" @click.stop="startRename(s)">✎</button>
-          <button class="icon-btn danger" :title="t('sidebar.delete')" @click.stop="onDeleteSession(s)">🗑</button>
+          <button class="icon-btn" :title="t('sidebar.rename')"
+        :aria-label="t('sidebar.rename')" @click.stop="startRename(s)">✎</button>
+          <button class="icon-btn danger" :title="t('sidebar.delete')"
+        :aria-label="t('sidebar.delete')" @click.stop="onDeleteSession(s)">🗑</button>
         </template>
       </div>
       <div v-if="store.sessions.length === 0" class="muted">{{ t("sidebar.noSessions") }}</div>

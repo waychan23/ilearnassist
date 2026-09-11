@@ -34,7 +34,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
     <div class="modal sm">
       <div class="modal-head">
         <h3>{{ confirmState.title }}</h3>
-        <button class="icon-btn" @click="settleConfirm(false)">✕</button>
+        <button
+        class="icon-btn"
+        :title="$t('common.close')"
+        :aria-label="$t('common.close')"
+        @click="settleConfirm(false)"
+      >✕</button>
       </div>
       <div class="modal-body">
         <p class="confirm-message">{{ confirmState.message }}</p>
