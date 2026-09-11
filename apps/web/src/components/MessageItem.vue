@@ -163,7 +163,7 @@ const usageText = computed(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
+  gap: var(--space-3);
   max-width: 78%;
 }
 .user-stack .bubble {
@@ -173,11 +173,11 @@ const usageText = computed(() => {
 .actions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 4px;
+  gap: var(--space-5);
+  margin-top: var(--space-2);
   min-height: 20px;
   opacity: 0;
-  transition: opacity 0.12s;
+  transition: opacity var(--dur-fast);
 }
 .msg:hover .actions,
 .actions:focus-within {
@@ -187,12 +187,12 @@ const usageText = computed(() => {
   justify-content: flex-end;
 }
 .act {
-  font-size: 11px;
-  padding: 2px 6px;
+  font-size: var(--fs-1);
+  padding: var(--space-1) var(--space-3);
   color: var(--text-3);
 }
 .usage-line {
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--text-3);
   cursor: default;
 }

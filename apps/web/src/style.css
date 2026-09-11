@@ -293,7 +293,7 @@ body {
 }
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-hover);
@@ -338,8 +338,8 @@ body {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-7);
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   flex-shrink: 0;
@@ -365,19 +365,19 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 0;
+  padding: var(--space-8) 0;
 }
 
 /* Gutter so the rail does not sit on top of the messages. */
 .messages.with-rail {
-  padding-left: 28px;
+  padding-left: var(--space-9);
 }
 
 .composer {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: var(--panel);
-  padding: 12px 16px;
+  padding: var(--space-6) var(--space-7);
 }
 
 .empty-state {
@@ -387,25 +387,25 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--text-3);
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .empty-state h2 {
   color: var(--text-2);
   font-weight: 600;
-  font-size: 18px;
+  font-size: var(--fs-7);
   margin: 0;
 }
 
 /* -------------------------------- sidebar bits ------------------------------ */
 
 .side-section {
-  padding: 10px 12px 6px;
+  padding: var(--space-5) var(--space-6) var(--space-3);
   display: flex;
   align-items: center;
   justify-content: space-between;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-2);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -418,13 +418,13 @@ body {
 
 .side-footer {
   border-top: 1px solid var(--border);
-  padding: 8px 12px;
+  padding: var(--space-4) var(--space-6);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-4);
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-2);
   flex-shrink: 0;
 }
 
@@ -435,9 +435,9 @@ body {
 }
 
 .workspace-select {
-  margin: 10px 12px 4px;
+  margin: var(--space-5) var(--space-6) var(--space-2);
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
 }
 
@@ -451,13 +451,13 @@ body {
 .session-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  margin: 1px 6px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  margin: 1px var(--space-3);
   border-radius: var(--radius);
   cursor: pointer;
   color: var(--text-2);
-  transition: background 0.12s;
+  transition: background var(--dur-fast);
 }
 
 .session-item:hover {
@@ -480,13 +480,13 @@ body {
 .copilot-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  margin: 1px 6px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  margin: 1px var(--space-3);
   border-radius: var(--radius);
   cursor: pointer;
   color: var(--text-2);
-  transition: background 0.12s;
+  transition: background var(--dur-fast);
 }
 
 .copilot-item:hover {
@@ -514,7 +514,7 @@ body {
 .msg {
   max-width: 860px;
   margin: 0 auto;
-  padding: 4px 24px 20px;
+  padding: var(--space-2) var(--space-9) var(--space-8);
 }
 
 .msg.user {
@@ -525,8 +525,8 @@ body {
 .msg .bubble {
   background: var(--bubble-bg);
   color: var(--bubble-fg);
-  padding: 10px 14px;
-  border-radius: 12px 12px 2px 12px;
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-2xs) var(--radius-lg);
   max-width: 78%;
   white-space: pre-wrap;
   word-break: break-word;
@@ -534,7 +534,7 @@ body {
 
 .msg.assistant {
   display: flex;
-  gap: 12px;
+  gap: var(--space-6);
 }
 
 .msg .avatar {
@@ -545,10 +545,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: var(--fs-4);
   background: var(--panel-2);
   color: var(--text-2);
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .msg .body {
@@ -561,7 +561,7 @@ body {
 }
 
 .markdown p {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-5);
 }
 .markdown p:last-child {
   margin-bottom: 0;
@@ -570,40 +570,40 @@ body {
 .markdown h2,
 .markdown h3,
 .markdown h4 {
-  margin: 16px 0 8px;
-  line-height: 1.3;
+  margin: var(--space-7) 0 var(--space-4);
+  line-height: var(--lh-tight);
 }
 .markdown h1 {
-  font-size: 20px;
+  font-size: var(--fs-8);
 }
 .markdown h2 {
-  font-size: 17px;
+  font-size: var(--fs-7);
 }
 .markdown h3 {
-  font-size: 15px;
+  font-size: var(--fs-5);
 }
 .markdown ul,
 .markdown ol {
-  margin: 0 0 10px;
-  padding-left: 22px;
+  margin: 0 0 var(--space-5);
+  padding-left: var(--space-8);
 }
 .markdown code {
   background: var(--code-bg);
   color: var(--code-fg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
   font-family: "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: var(--fs-3);
 }
 .markdown pre {
   background: var(--code-bg);
   color: var(--code-fg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: var(--space-6);
   overflow-x: auto;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-5);
 }
 .markdown pre code {
   background: transparent;
@@ -612,8 +612,8 @@ body {
 }
 .markdown blockquote {
   border-left: 3px solid var(--border);
-  margin: 0 0 10px;
-  padding-left: 12px;
+  margin: 0 0 var(--space-5);
+  padding-left: var(--space-6);
   color: var(--text-2);
 }
 .markdown a {
@@ -625,12 +625,12 @@ body {
 }
 .markdown table {
   border-collapse: collapse;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-5);
 }
 .markdown th,
 .markdown td {
   border: 1px solid var(--border);
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
 }
 
 /* --------------------------------- tool cards -------------------------------- */
@@ -639,46 +639,46 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-4);
   overflow: hidden;
 }
 
 .tool-card .tool-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
   cursor: pointer;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-3);
 }
 
 .tool-card .tool-head .icon {
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 
 .tool-card .tool-body {
   border-top: 1px solid var(--border);
-  padding: 10px;
+  padding: var(--space-5);
   display: grid;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .tool-card .tool-body .key {
   color: var(--text-3);
-  font-size: 12px;
-  margin-bottom: 2px;
+  font-size: var(--fs-2);
+  margin-bottom: var(--space-1);
 }
 
 .tool-card pre {
   background: var(--code-bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
   margin: 0;
   overflow-x: auto;
-  font-size: 12px;
+  font-size: var(--fs-2);
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--code-fg-2);
@@ -701,9 +701,9 @@ body {
   border: 1px solid var(--danger-border);
   color: var(--danger-text);
   border-radius: var(--radius);
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  font-size: 13px;
+  padding: var(--space-4) var(--space-6);
+  margin-bottom: var(--space-4);
+  font-size: var(--fs-3);
 }
 
 /* --------------------------------- composer --------------------------------- */
@@ -720,20 +720,20 @@ body {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .composer .surface {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 6px;
+  gap: var(--space-3);
   min-height: 84px;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 8px 10px;
-  transition: border-color 0.12s;
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  transition: border-color var(--dur-fast);
 }
 
 .composer .surface:focus-within {
@@ -743,7 +743,7 @@ body {
 .composer .input-row {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .composer textarea {
@@ -754,10 +754,10 @@ body {
   border: none;
   border-radius: 0;
   color: var(--text);
-  padding: 4px 2px;
+  padding: var(--space-2) var(--space-1);
   font-family: inherit;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: var(--fs-4);
+  line-height: var(--lh-base);
   max-height: 200px;
 }
 
@@ -766,19 +766,19 @@ body {
   flex-shrink: 0;
   width: 32px;
   height: 32px;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--accent);
   color: #fff;
-  font-size: 16px;
+  font-size: var(--fs-6);
   line-height: 1;
   font-family: inherit;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.12s;
+  transition: background var(--dur-fast);
 }
 
 .composer .send-btn:hover:not(:disabled) {
@@ -795,7 +795,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-4);
   min-width: 0;
 }
 
@@ -803,13 +803,13 @@ body {
 .composer .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
 .composer .toolbar-right {
   flex-shrink: 0;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .composer .attach-btn {
@@ -820,7 +820,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: var(--fs-5);
   color: var(--text-3);
 }
 
@@ -834,12 +834,12 @@ body {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 7px 14px;
+  padding: 7px var(--space-6);
   border-radius: var(--radius);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-3);
   font-family: inherit;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
 }
 
 .btn:hover {
@@ -867,8 +867,8 @@ body {
 }
 
 .btn.small {
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--fs-2);
 }
 
 .btn:disabled {
@@ -881,9 +881,9 @@ body {
   border: none;
   color: var(--text-3);
   cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
-  font-size: 14px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-4);
   line-height: 1;
 }
 
@@ -913,10 +913,10 @@ body {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 8px 10px;
+  padding: var(--space-4) var(--space-5);
   border-radius: var(--radius);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-4);
 }
 
 .input:focus,
@@ -935,20 +935,20 @@ body {
 }
 
 .field {
-  margin-bottom: 14px;
+  margin-bottom: var(--space-6);
 }
 
 .field label {
   display: block;
-  font-size: 13px;
+  font-size: var(--fs-3);
   color: var(--text-2);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
 }
 
 .field .hint {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--text-3);
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 /* ---------------------------------- modal ----------------------------------- */
@@ -960,13 +960,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  z-index: var(--z-overlay);
 }
 
 .modal {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   width: 560px;
   max-width: calc(100vw - 40px);
   max-height: calc(100vh - 80px);
@@ -978,41 +978,41 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: var(--space-7) var(--space-8);
   border-bottom: 1px solid var(--border);
 }
 
 .modal .modal-head h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--fs-6);
 }
 
 .modal .modal-body {
-  padding: 20px;
+  padding: var(--space-8);
   overflow-y: auto;
 }
 
 .modal .modal-foot {
-  padding: 14px 20px;
+  padding: var(--space-6) var(--space-8);
   border-top: 1px solid var(--border);
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--space-5);
 }
 
 /* tool-checkboxes for copilot editing */
 .tool-checks {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 6px;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
 }
 
 .tool-checks label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--space-4);
+  font-size: var(--fs-3);
   color: var(--text-2);
   cursor: pointer;
 }
@@ -1021,15 +1021,15 @@ body {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px;
-  font-size: 13px;
+  padding: var(--space-6) var(--space-6);
+  font-size: var(--fs-3);
   color: var(--text-2);
-  margin-bottom: 16px;
+  margin-bottom: var(--space-7);
 }
 
 .config-tip code {
   background: var(--code-bg);
   color: var(--code-fg);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }

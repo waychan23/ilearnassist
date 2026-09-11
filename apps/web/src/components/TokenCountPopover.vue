@@ -93,14 +93,14 @@ const label = computed(() => {
 .token-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-1);
   font-family: inherit;
-  padding: 4px 10px;
+  padding: var(--space-2) var(--space-5);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -130,18 +130,18 @@ const label = computed(() => {
   width: 260px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  z-index: 60;
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-popover);
+  z-index: var(--z-popover);
+  font-size: var(--fs-2);
 }
 .row {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-6);
   color: var(--text-3);
-  padding: 2px 0;
+  padding: var(--space-1) 0;
 }
 .row .num {
   color: var(--text-2);
@@ -149,8 +149,8 @@ const label = computed(() => {
 }
 .row.total {
   border-top: 1px solid var(--border);
-  margin-top: 4px;
-  padding-top: 6px;
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
   color: var(--text);
 }
 .row.total .num {
@@ -158,15 +158,15 @@ const label = computed(() => {
 }
 .bar {
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-2xs);
   background: var(--border);
   overflow: hidden;
-  margin: 8px 0 4px;
+  margin: var(--space-4) 0 var(--space-2);
 }
 .fill {
   height: 100%;
-  border-radius: 2px;
-  transition: width 0.2s;
+  border-radius: var(--radius-2xs);
+  transition: width var(--dur-base);
 }
 .fill.ok {
   background: var(--success);
@@ -181,18 +181,18 @@ const label = computed(() => {
   display: flex;
   justify-content: space-between;
   color: var(--text-3);
-  font-size: 11px;
-  margin-bottom: 6px;
+  font-size: var(--fs-1);
+  margin-bottom: var(--space-3);
 }
 .approx {
   font-style: italic;
 }
 .note {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-1);
   line-height: 1.5;
 }
 </style>

@@ -211,27 +211,27 @@ function save() {
 .grid-2 {
   display: grid;
   grid-template-columns: 1fr 1.4fr;
-  gap: 0 12px;
+  gap: 0 var(--space-6);
 }
 .models-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 4px 0 8px;
+  margin: var(--space-2) 0 var(--space-4);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-3);
 }
 .model-row {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px 4px;
-  margin-bottom: 10px;
+  padding: var(--space-5) var(--space-6) var(--space-2);
+  margin-bottom: var(--space-5);
   background: var(--panel-2);
 }
 .model-main {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-4);
 }
 .model-main .field {
   flex: 1;
@@ -241,10 +241,10 @@ function save() {
   flex: 0 0 124px;
 }
 .models-hint {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--text-3);
-  margin-bottom: 10px;
-  line-height: 1.6;
+  margin-bottom: var(--space-5);
+  line-height: var(--lh-base);
 }
 .model-main .hint.warn {
   color: var(--warning);
@@ -253,18 +253,18 @@ function save() {
   color: var(--text-2);
 }
 .model-main .icon-btn {
-  margin-top: 24px;
+  margin-top: var(--space-9);
 }
 .caps {
   display: flex;
-  gap: 16px;
-  padding-bottom: 6px;
+  gap: var(--space-7);
+  padding-bottom: var(--space-3);
 }
 .caps label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--space-3);
+  font-size: var(--fs-2);
   color: var(--text-3);
   cursor: pointer;
 }

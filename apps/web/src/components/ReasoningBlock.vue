@@ -83,17 +83,17 @@ async function copy() {
 
 <style scoped>
 .reasoning {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-5);
 }
 
 .head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   min-width: 0;
   cursor: pointer;
   user-select: none;
-  padding: 2px 0;
+  padding: var(--space-1) 0;
 }
 
 .dot {
@@ -104,7 +104,7 @@ async function copy() {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--fs-1);
 }
 .dot.live {
   background: var(--accent-bg);
@@ -115,7 +115,7 @@ async function copy() {
 
 .label {
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--fs-3);
   font-weight: 500;
   color: var(--warning);
 }
@@ -125,7 +125,7 @@ async function copy() {
 
 .time {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -137,35 +137,35 @@ async function copy() {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--text-3);
 }
 
 .copy {
   flex-shrink: 0;
-  font-size: 11px;
-  padding: 2px 4px;
+  font-size: var(--fs-1);
+  padding: var(--space-1) var(--space-2);
 }
 
 .chevron {
   flex-shrink: 0;
   color: var(--text-3);
-  font-size: 11px;
-  transition: transform 0.15s;
+  font-size: var(--fs-1);
+  transition: transform var(--dur-fast);
 }
 .chevron.open {
   transform: rotate(180deg);
 }
 
 .body {
-  margin: 6px 0 2px;
-  padding-left: 12px;
+  margin: var(--space-3) 0 var(--space-1);
+  padding-left: var(--space-6);
   border-left: 2px solid var(--warning);
   max-height: 400px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 13px;
+  font-size: var(--fs-3);
   line-height: 1.7;
   color: var(--text-3);
 }

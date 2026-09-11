@@ -79,7 +79,7 @@ const prettyInput = computed(() => {
   color: var(--text-3);
 }
 .status {
-  font-size: 12px;
+  font-size: var(--fs-2);
   white-space: nowrap;
 }
 .icon.run {

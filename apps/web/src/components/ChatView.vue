@@ -253,20 +253,20 @@ watch(
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   flex-shrink: 0;
 }
 .theme-toggle {
-  font-size: 15px;
-  padding: 4px 8px;
+  font-size: var(--fs-5);
+  padding: var(--space-2) var(--space-4);
 }
 .locale-select {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text-2);
-  font-size: 12px;
-  padding: 3px 4px;
+  font-size: var(--fs-2);
+  padding: 3px var(--space-2);
   cursor: pointer;
 }
 .locale-select:hover {
@@ -275,7 +275,7 @@ watch(
 .title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   min-width: 0;
 }
 /*
@@ -295,7 +295,7 @@ watch(
 }
 .topbar .title.editable {
   cursor: text;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .topbar .title.editable:hover {
   color: var(--accent);
@@ -304,7 +304,7 @@ watch(
 .title-edit-btn {
   flex-shrink: 0;
   padding: 3px 9px;
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--text-2);
 }
 .title-edit-btn:hover {
@@ -313,29 +313,29 @@ watch(
 }
 .auto-badge {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--fs-1);
   line-height: 1;
-  padding: 2px 5px;
-  border-radius: 6px;
+  padding: var(--space-1) 5px;
+  border-radius: var(--radius-sm);
   color: var(--text-3);
   border: 1px solid var(--border);
 }
 .title-edit {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 .title-input {
-  padding: 4px 8px;
-  font-size: 14px;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--fs-4);
   font-weight: 600;
 }
 .title-hint {
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--text-3);
 }
 .subtitle {
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -343,14 +343,14 @@ watch(
 }
 .config-banner {
   margin: 0;
-  padding: 8px 16px;
+  padding: var(--space-4) var(--space-7);
   background: var(--warning-bg);
   border-bottom: 1px solid var(--warning-border);
   color: var(--warning);
-  font-size: 13px;
+  font-size: var(--fs-3);
   flex-shrink: 0;
 }
 .empty-state button {
-  margin-top: 8px;
+  margin-top: var(--space-4);
 }
 </style>

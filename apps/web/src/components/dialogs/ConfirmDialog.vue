@@ -64,8 +64,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
   word-break: break-word;
 }
 .confirm-detail {
-  margin: 8px 0 0;
-  font-size: 13px;
+  margin: var(--space-4) 0 0;
+  font-size: var(--fs-3);
   color: var(--text-3);
 }
 </style>

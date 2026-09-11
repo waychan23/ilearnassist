@@ -229,20 +229,20 @@ function save() {
 .defaults {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: var(--space-5) var(--space-6);
   background: var(--panel-2);
 }
 .defaults summary {
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-3);
   color: var(--text-2);
 }
 .defaults[open] summary {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-6);
 }
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0 12px;
+  gap: 0 var(--space-6);
 }
 </style>

@@ -275,7 +275,7 @@ onBeforeUnmount(() => {
   min-height: 96px;
   max-height: 360px;
   width: 20px;
-  z-index: 10;
+  z-index: var(--z-rail);
   /* The rail must not eat clicks on the messages behind it; only the anchors do. */
   pointer-events: none;
   overflow: visible;
@@ -288,7 +288,7 @@ onBeforeUnmount(() => {
   margin-right: auto;
   overflow-y: auto;
   overflow-x: visible;
-  padding: 4px 0;
+  padding: var(--space-2) 0;
   scrollbar-width: none;
 }
 .minimap-scroll::-webkit-scrollbar {
@@ -328,8 +328,8 @@ onBeforeUnmount(() => {
   border-radius: 999px;
   background: var(--text-3);
   opacity: 0.35;
-  transition: width 0.1s ease-out, height 0.1s ease-out, opacity 0.1s ease-out,
-    background-color 0.1s ease-out;
+  transition: width var(--dur-fast) ease-out, height var(--dur-fast) ease-out, opacity var(--dur-fast) ease-out,
+    background-color var(--dur-fast) ease-out;
   will-change: width, opacity;
 }
 .minimap-line.active {
@@ -344,7 +344,7 @@ onBeforeUnmount(() => {
   width: 20px;
   height: 32px;
   pointer-events: none;
-  z-index: 10;
+  z-index: var(--z-rail);
   backdrop-filter: blur(1px);
 }
 .minimap-fade.top {
@@ -359,7 +359,7 @@ onBeforeUnmount(() => {
 .minimap-preview {
   position: absolute;
   left: 48px;
-  z-index: 20;
+  z-index: var(--z-rail-card);
   width: 360px;
   max-width: min(360px, calc(100vw - 96px));
   transform: translateY(-50%);
@@ -367,24 +367,24 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
-  padding: 8px 12px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  padding: var(--space-4) var(--space-6);
+  box-shadow: var(--shadow-popover);
 }
 .preview-user {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--fs-3);
   line-height: 1.45;
   color: var(--text);
 }
 .preview-assistant {
-  margin-top: 4px;
+  margin-top: var(--space-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--text-3);
 }
 </style>

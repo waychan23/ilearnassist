@@ -209,27 +209,27 @@ function onKeydown(e: KeyboardEvent) {
   display: none;
 }
 .vision-warning {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--warning);
   background: var(--warning-bg);
   border: 1px solid var(--warning-border);
   border-radius: var(--radius);
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
 }
 /* Informational, not a warning: extraction is simply still running. */
 .parse-notice {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--text-3);
   border: 1px dashed var(--border);
   border-radius: var(--radius);
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
 }
 .copilot-tag {
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--text-3);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 2px 10px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-1) var(--space-5);
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -144,6 +144,30 @@ function paletteColors(body: string): Map<string, string[]> {
   return colors;
 }
 
+/**
+ * The CSS text of every `<style>` block in a component, with comments removed — a docblock
+ * in a component quotes values in prose as readily as `style.css`'s does.
+ */
+function styleCss(source: string): string {
+  return [...source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
+    .map((block) => block[1]!.replace(/\/\*[\s\S]*?\*\//g, ""))
+    .join("\n");
+}
+
+/** A `padding` / `margin` / `gap` declaration and its value, logical variants included. */
+const SPACING_DECLARATION =
+  /(?<![\w-])(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?\s*:\s*([^;{}]+)/gi;
+
+/** Every px length the `--space-*` tokens already carry. */
+function spacingValues(): Set<string> {
+  const palette = paletteBlock();
+  return new Set(
+    declaredVars(palette.body)
+      .filter((name) => name.startsWith("--space-"))
+      .map((name) => declarationOf(palette.body, name)!),
+  );
+}
+
 /** Every colour literal in a rule body, normalised the same way as `paletteColors`. */
 function literalsInBody(body: string): string[] {
   return [...body.matchAll(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi)].map((match) =>
@@ -361,5 +385,42 @@ describe("style.css palette", () => {
     );
 
     expect([...inSheet, ...inComponents]).toEqual([]);
+  });
+
+  it("does not hand-write a spacing value that a token already carries", () => {
+    // The colour scan's counterpart for lengths, and the guard that keeps the token layer
+    // from eroding: without it the next `padding: 8px 12px` is indistinguishable from the
+    // ones the sweep replaced, and the scale quietly stops meaning anything.
+    //
+    // Scoped to padding, margin and gap on purpose. `width`, `height`, `min-height` and
+    // border widths legitimately carry pixels — a spacing token there would claim a
+    // relationship that does not exist, and would tie a hairline border to a spacing edit.
+    const values = spacingValues();
+    expect(values.size, "no --space-* tokens to check against").toBeGreaterThan(0);
+
+    // `style.css`'s rules, not its palette: the palette's own values are the tokens.
+    const sources: ReadonlyArray<readonly [string, string]> = [
+      ...Object.entries(COMPONENTS).map(
+        ([path, source]) => [shortName(path), styleCss(source)] as const,
+      ),
+      [
+        "src/style.css",
+        blocks(CSS)
+          .filter((block) => !PALETTE_SELECTORS.includes(block.selector))
+          .map((block) => block.body)
+          .join("\n"),
+      ],
+    ];
+
+    const offenders = sources.flatMap(([name, css]) =>
+      [...css.matchAll(SPACING_DECLARATION)].flatMap((declaration) =>
+        [...declaration[1]!.matchAll(/\d+px/g)]
+          .map((match) => match[0])
+          .filter((px) => values.has(px))
+          .map((px) => `${name}: ${declaration[0].trim().replace(/\s+/g, " ")}`),
+      ),
+    );
+
+    expect(offenders).toEqual([]);
   });
 });

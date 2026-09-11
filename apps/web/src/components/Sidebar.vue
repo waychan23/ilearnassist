@@ -152,9 +152,9 @@ async function onDeleteWorkspace() {
 
 <style scoped>
 .muted {
-  padding: 8px 14px;
+  padding: var(--space-4) var(--space-6);
   color: var(--text-3);
-  font-size: 13px;
+  font-size: var(--fs-3);
 }
 .dir {
   overflow: hidden;
@@ -164,15 +164,15 @@ async function onDeleteWorkspace() {
 .side-settings {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
   width: 100%;
-  padding: 10px 14px;
+  padding: var(--space-5) var(--space-6);
   border: 0;
   border-top: 1px solid var(--border);
   background: transparent;
   color: var(--text-2);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--fs-3);
   text-align: left;
   cursor: pointer;
   flex-shrink: 0;
@@ -182,7 +182,7 @@ async function onDeleteWorkspace() {
   color: var(--text);
 }
 .side-settings .gear {
-  font-size: 14px;
+  font-size: var(--fs-4);
   flex-shrink: 0;
 }
 .side-settings .label {
@@ -196,11 +196,11 @@ async function onDeleteWorkspace() {
   white-space: nowrap;
   text-align: right;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-1);
 }
 .rename-input {
-  padding: 3px 6px;
-  font-size: 13px;
+  padding: 3px var(--space-3);
+  font-size: var(--fs-3);
   height: 26px;
 }
 </style>

@@ -92,15 +92,15 @@ async function create() {
 }
 .copilot-list {
   display: grid;
-  gap: 8px;
+  gap: var(--space-4);
 }
 .copilot-option {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-5);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: var(--space-5) var(--space-6);
   cursor: pointer;
   background: var(--panel-2);
 }
@@ -111,13 +111,13 @@ async function create() {
   margin-top: 3px;
 }
 .copilot-option .name {
-  font-size: 13px;
+  font-size: var(--fs-3);
   font-weight: 500;
 }
 .copilot-option .desc {
-  font-size: 12px;
+  font-size: var(--fs-2);
   color: var(--text-3);
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 .copilot-option .desc.preview {
   font-style: italic;

@@ -155,6 +155,6 @@ const scopeNote = computed(() =>
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0 14px;
+  gap: 0 var(--space-6);
 }
 </style>

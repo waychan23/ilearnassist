@@ -40,19 +40,19 @@ onMounted(() => {
   background: var(--panel);
   border: 1px solid var(--danger-border);
   color: var(--danger-text);
-  padding: 10px 16px;
-  border-radius: 10px;
+  padding: var(--space-5) var(--space-7);
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-6);
   max-width: 80vw;
-  z-index: 200;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
-  font-size: 13px;
+  z-index: var(--z-toast);
+  box-shadow: var(--shadow-toast);
+  font-size: var(--fs-3);
 }
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
 }
 .fade-enter-from,
 .fade-leave-to {

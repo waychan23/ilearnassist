@@ -545,12 +545,12 @@ function onDefaultModelChange(e: Event) {
 }
 .mono {
   font-family: "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 10px 20px 0;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-8) 0;
   border-bottom: 1px solid var(--border);
 }
 .tab {
@@ -558,9 +558,9 @@ function onDefaultModelChange(e: Event) {
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--text-3);
-  padding: 8px 12px;
+  padding: var(--space-4) var(--space-6);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-3);
   font-family: inherit;
 }
 .tab:hover {
@@ -571,12 +571,12 @@ function onDefaultModelChange(e: Event) {
   border-bottom-color: var(--accent);
 }
 .tab-count {
-  margin-left: 6px;
-  padding: 0 6px;
+  margin-left: var(--space-3);
+  padding: 0 var(--space-3);
   border-radius: var(--radius);
   background: var(--panel-2);
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-1);
 }
 .tab.active .tab-count {
   color: var(--text-2);
@@ -586,33 +586,33 @@ function onDefaultModelChange(e: Event) {
   align-items: center;
   justify-content: space-between;
   color: var(--text-2);
-  font-size: 13px;
-  margin-bottom: 10px;
+  font-size: var(--fs-3);
+  margin-bottom: var(--space-5);
 }
 .check {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--space-4);
+  font-size: var(--fs-3);
   color: var(--text-2);
   cursor: pointer;
 }
 .empty-note {
   color: var(--text-3);
-  font-size: 12px;
-  padding: 10px 12px;
+  font-size: var(--fs-2);
+  padding: var(--space-5) var(--space-6);
   border: 1px dashed var(--border);
   border-radius: var(--radius);
-  margin-bottom: 10px;
+  margin-bottom: var(--space-5);
 }
 .parser-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
-  margin-bottom: 8px;
+  padding: var(--space-6);
+  margin-bottom: var(--space-4);
   background: var(--panel-2);
 }
 .parser-main {
@@ -622,15 +622,15 @@ function onDefaultModelChange(e: Event) {
 .parser-name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   font-weight: 500;
   flex-wrap: wrap;
 }
 .parser-row .badge {
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--accent);
   border: 1px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 0 7px;
   font-weight: 400;
 }
@@ -644,8 +644,8 @@ function onDefaultModelChange(e: Event) {
 }
 .parser-url {
   color: var(--text-3);
-  margin-top: 4px;
-  font-size: 12px;
+  margin-top: var(--space-2);
+  font-size: var(--fs-2);
   word-break: break-all;
 }
 .parser-row .hint.warn {
@@ -654,11 +654,11 @@ function onDefaultModelChange(e: Event) {
 .provider-row {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-6);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
-  margin-bottom: 8px;
+  padding: var(--space-6);
+  margin-bottom: var(--space-4);
   background: var(--panel-2);
 }
 .provider-row .info {
@@ -668,19 +668,19 @@ function onDefaultModelChange(e: Event) {
 .provider-row .name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   font-weight: 500;
 }
 .provider-row .badge {
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--accent);
   border: 1px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 0 7px;
   font-weight: 400;
 }
 .key-state {
-  font-size: 12px;
+  font-size: var(--fs-2);
   font-weight: 400;
 }
 .key-state.ok {
@@ -693,23 +693,23 @@ function onDefaultModelChange(e: Event) {
 }
 .provider-row .url {
   color: var(--text-3);
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 .provider-row .models {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 .model-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 2px 6px 2px 9px;
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3) var(--space-1) 9px;
+  font-size: var(--fs-2);
   color: var(--text-2);
 }
 .chip-x {
@@ -717,9 +717,9 @@ function onDefaultModelChange(e: Event) {
   border: none;
   color: var(--text-3);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-3);
   line-height: 1;
-  padding: 0 2px;
+  padding: 0 var(--space-1);
   font-family: inherit;
 }
 .chip-x:hover {
@@ -727,21 +727,21 @@ function onDefaultModelChange(e: Event) {
 }
 .no-models {
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-2);
 }
 .row-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
 }
 .copilot-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-6);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
-  margin-bottom: 8px;
+  padding: var(--space-5) var(--space-6);
+  margin-bottom: var(--space-4);
   background: var(--panel-2);
 }
 .copilot-row .info {
@@ -751,7 +751,7 @@ function onDefaultModelChange(e: Event) {
 .copilot-row .name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   font-weight: 500;
 }
 .copilot-row .dot {
@@ -762,35 +762,35 @@ function onDefaultModelChange(e: Event) {
   flex-shrink: 0;
 }
 .copilot-row .badge {
-  font-size: 11px;
+  font-size: var(--fs-1);
   font-weight: 400;
   color: var(--accent);
   border: 1px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 0 7px;
 }
 .copilot-row .desc {
   color: var(--text-2);
-  font-size: 13px;
-  margin-top: 2px;
+  font-size: var(--fs-3);
+  margin-top: var(--space-1);
 }
 .copilot-row .meta {
   color: var(--text-3);
-  font-size: 12px;
-  margin-top: 4px;
+  font-size: var(--fs-2);
+  margin-top: var(--space-2);
 }
 .empty {
   color: var(--text-3);
-  font-size: 13px;
-  padding: 12px 0;
+  font-size: var(--fs-3);
+  padding: var(--space-6) 0;
 }
 .value {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 10px;
+  padding: var(--space-4) var(--space-5);
 }
 .hint.inline {
-  margin-left: 6px;
+  margin-left: var(--space-3);
 }
 </style>

@@ -158,13 +158,13 @@ function save() {
 
 <style scoped>
 .field {
-  margin-bottom: 14px;
+  margin-bottom: var(--space-6);
 }
 .check {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--space-4);
+  font-size: var(--fs-3);
   color: var(--text-2);
   cursor: pointer;
 }

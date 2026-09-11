@@ -122,18 +122,18 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 .model-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   max-width: 220px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-2);
   font-family: inherit;
-  padding: 4px 8px;
+  padding: var(--space-2) var(--space-4);
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--dur-fast), color var(--dur-fast);
 }
 .model-btn:hover {
   background: var(--panel);
@@ -154,8 +154,8 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   background: var(--text-3);
 }
 .caret {
-  font-size: 10px;
-  transition: transform 0.15s;
+  font-size: var(--fs-1);
+  transition: transform var(--dur-fast);
 }
 .caret.open {
   transform: rotate(180deg);
@@ -165,24 +165,24 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   position: absolute;
   bottom: calc(100% + 8px);
   right: 0;
-  z-index: 60;
+  z-index: var(--z-popover);
   width: 280px;
   max-height: 340px;
   overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 6px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  box-shadow: var(--shadow-popover);
 }
 
 .group-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 8px 4px;
-  font-size: 11px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-2);
+  font-size: var(--fs-1);
   color: var(--text-3);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -196,14 +196,14 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 .item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   width: 100%;
-  padding: 7px 8px;
+  padding: 7px var(--space-4);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-3);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -219,7 +219,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   width: 12px;
   flex-shrink: 0;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--fs-1);
 }
 .item .name {
   flex: 1;
@@ -230,26 +230,26 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 }
 .item .caps {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-1);
 }
 
 .empty {
-  padding: 10px 8px;
-  font-size: 12px;
+  padding: var(--space-5) var(--space-4);
+  font-size: var(--fs-2);
   color: var(--text-3);
-  line-height: 1.6;
+  line-height: var(--lh-base);
 }
 
 .foot {
   width: 100%;
-  margin-top: 4px;
-  padding: 8px;
+  margin-top: var(--space-2);
+  padding: var(--space-4);
   border: 0;
   border-top: 1px solid var(--border);
-  border-radius: 0 0 6px 6px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
   background: transparent;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--fs-2);
   font-family: inherit;
   text-align: left;
   cursor: pointer;

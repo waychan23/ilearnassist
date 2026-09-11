@@ -136,16 +136,16 @@ function stateOf(a: Attachment): string {
 .attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-4);
 }
 .chip {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 5px 8px 5px 5px;
+  padding: 5px var(--space-4) 5px 5px;
   max-width: 260px;
 }
 /* A document still being read, and one that failed — both need to look different from
@@ -160,14 +160,14 @@ function stateOf(a: Attachment): string {
   color: var(--warning);
 }
 .retry {
-  font-size: 13px;
-  padding: 2px 5px;
+  font-size: var(--fs-3);
+  padding: var(--space-1) 5px;
 }
 .thumb {
   width: 36px;
   height: 36px;
   object-fit: cover;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
   background: var(--code-bg);
 }
@@ -177,7 +177,7 @@ function stateOf(a: Attachment): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--panel);
   flex-shrink: 0;
 }
@@ -187,17 +187,17 @@ function stateOf(a: Attachment): string {
   min-width: 0;
 }
 .name {
-  font-size: 12px;
+  font-size: var(--fs-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .size {
-  font-size: 11px;
+  font-size: var(--fs-1);
   color: var(--text-3);
 }
 .remove {
-  font-size: 11px;
-  padding: 2px 4px;
+  font-size: var(--fs-1);
+  padding: var(--space-1) var(--space-2);
 }
 </style>
