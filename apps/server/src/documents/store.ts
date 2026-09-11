@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import type { ParseStatus } from "@guided-learning/shared";
+import type { ParseErrorCode, ParseStatus } from "@guided-learning/shared";
 import { isSafeId } from "../ids.js";
 
 /**
@@ -31,6 +31,11 @@ export interface ParseRecord {
   status: ParseStatus;
   /** A message aimed at the user. Never contains a credential. */
   error?: string;
+  /**
+   * The machine code behind `error`, so the client can render it in the user's language.
+   * Absent on records written before i18n; `error` alone is then the fallback.
+   */
+  code?: ParseErrorCode;
   /** `"local"`, or the id of the document parser record that produced the text. */
   parserId?: string;
   parsedChars?: number;

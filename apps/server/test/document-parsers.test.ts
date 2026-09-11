@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Attachment, DocumentParserConfig, PublicConfig, Workspace } from "@guided-learning/shared";
+import type {
+  ApiErrorBody,
+  Attachment,
+  DocumentParserConfig,
+  PublicConfig,
+  Workspace,
+} from "@guided-learning/shared";
 import { MAX_INLINE_CHARS } from "../src/attachments.js";
 import { buildPdf } from "../src/documents/sample.js";
 import { eventTypes } from "./helpers/sse.js";
@@ -34,7 +40,11 @@ async function config(): Promise<PublicConfig> {
   return res.json<PublicConfig>();
 }
 
-async function statusOf(sessionId: string): Promise<Record<string, { status: string; error?: string; parsedChars?: number }>> {
+async function statusOf(
+  sessionId: string
+): Promise<
+  Record<string, { status: string; error?: string; parseErrorCode?: string; parsedChars?: number }>
+> {
   const res = await env.server.app.inject({
     method: "GET",
     url: `/api/sessions/${sessionId}/attachments`,
@@ -243,6 +253,25 @@ describe("parsing an uploaded document", () => {
     expect((await statusOf(session.id))[attachment.id]!.status).toBe("failed");
   });
 
+  it("reports the failure code, not just a sentence, on the status endpoint", async () => {
+    // The client translates by code — it owns the wording now — so the code has to survive
+    // the trip. The sidecar stores it as `code`; the endpoint renames it to `parseErrorCode`
+    // to match the client-facing type, and this is what pins that rename.
+    const session = await newSession(env, workspace.id);
+    const attachment = await uploadAttachment(env, session.id, {
+      name: "scanned.pdf",
+      mimeType: "application/pdf",
+      data: buildPdf([""]), // no text layer, and no cloud parser configured
+    });
+    await waitForParsing(env, session.id);
+
+    const record = (await statusOf(session.id))[attachment.id]!;
+    expect(record.status).toBe("failed");
+    expect(record.parseErrorCode).toBe("no_text_layer");
+    // The fallback sentence rides along for a client that does not know the code.
+    expect(record.error).toBeTruthy();
+  });
+
   it("404s a re-parse of an attachment that does not exist", async () => {
     const session = await newSession(env, workspace.id);
     const res = await env.server.app.inject({
@@ -320,7 +349,11 @@ describe("parsing through a cloud provider", () => {
 
       const res = await env.server.app.inject({ method: "POST", url: "/api/document-parsers/bad/test" });
       expect(res.statusCode).toBe(400);
-      expect(res.json<{ error: string }>().error).toContain("云解析服务");
+      // The code is what the client renders; the server's own sentence rides along only as
+      // a fallback, so assert the code rather than the wording.
+      const body = res.json<ApiErrorBody & { ok: boolean }>();
+      expect(body.ok).toBe(false);
+      expect(body.error.code).toBe("cloud_auth");
     } finally {
       await strict.close();
     }

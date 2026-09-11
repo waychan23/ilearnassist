@@ -9,7 +9,14 @@ import {
 import { driverFor, type DriverResult, type DriverTuning, type ParseDriver } from "./drivers/index.js";
 import { parseLocal } from "./local/index.js";
 
-export { ParseError, asParseError, describeParseError, isRecoverable } from "./errors.js";
+export {
+  ParseError,
+  asParseError,
+  describeParseError,
+  isRecoverable,
+  parseErrorCodeOf,
+  parseErrorDetail,
+} from "./errors.js";
 export type { ParseAttempt, ParseErrorCode } from "./errors.js";
 export { documentFormatFor, isDocumentMime, FORMAT_LABEL } from "./formats.js";
 export type { DocumentFormat } from "./formats.js";

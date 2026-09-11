@@ -2,7 +2,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
-import type { Attachment, Copilot, ProviderConfig, Session, Workspace } from "@guided-learning/shared";
+import type {
+  ApiErrorBody,
+  Attachment,
+  Copilot,
+  ProviderConfig,
+  Session,
+  Workspace,
+} from "@guided-learning/shared";
 import { keylessProvider, newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
 /**
@@ -347,7 +354,7 @@ describe("providers", () => {
     try {
       const res = await solo.server.app.inject({ method: "DELETE", url: "/api/providers/only" });
       expect(res.statusCode).toBe(409);
-      expect(res.json<{ error: string }>().error).toMatch(/only provider/);
+      expect(res.json<ApiErrorBody>().error.code).toBe("ONLY_PROVIDER");
     } finally {
       await solo.cleanup();
     }
@@ -356,7 +363,7 @@ describe("providers", () => {
   it("refuses to delete the default provider", async () => {
     const res = await inject({ method: "DELETE", url: "/api/providers/test" });
     expect(res.statusCode).toBe(409);
-    expect(res.json<{ error: string }>().error).toMatch(/default provider/);
+    expect(res.json<ApiErrorBody>().error.code).toBe("DEFAULT_PROVIDER");
   });
 
   it("deletes a non-default provider and its models", async () => {
@@ -439,7 +446,10 @@ describe("attachments", () => {
   it("rejects an unsupported file type", async () => {
     const res = await upload({ name: "archive.zip", mimeType: "application/zip", data: "aGk=" });
     expect(res.statusCode).toBe(415);
-    expect(res.json<{ error: string }>().error).toMatch(/Unsupported file type/);
+    const body = res.json<ApiErrorBody>();
+    expect(body.error.code).toBe("UNSUPPORTED_FILE_TYPE");
+    // The client renders the parameter itself, so it must survive the trip.
+    expect(body.error.params).toEqual({ mimeType: "application/zip" });
   });
 
   it("falls back to the extension when the browser sends no usable MIME type", async () => {
@@ -473,7 +483,7 @@ describe("attachments", () => {
     // garbage surfaces as an empty file rather than as a decode error.
     const res = await upload({ name: "a.txt", mimeType: "text/plain", data: "!!!!" });
     expect(res.statusCode).toBe(400);
-    expect(res.json<{ error: string }>().error).toMatch(/empty/);
+    expect(res.json<ApiErrorBody>().error.code).toBe("EMPTY_FILE");
   });
 
   it("rejects a file over the size cap", async () => {

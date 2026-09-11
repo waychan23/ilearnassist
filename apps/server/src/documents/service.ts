@@ -251,6 +251,7 @@ export class DocumentService {
       await writeParseRecord(this.#uploadRoot, sessionId, attachment.id, {
         status: "failed",
         error: describeParseError(error),
+        code: error.code,
       });
     }
   }

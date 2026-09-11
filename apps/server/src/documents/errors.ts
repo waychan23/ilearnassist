@@ -7,31 +7,14 @@
  * would have handled in one call.
  */
 
-export type ParseErrorCode =
-  /** The PDF is encrypted; no parser can read it without the password. */
-  | "password_protected"
-  /** Extraction succeeded but produced nothing — almost always a scanned/image PDF. */
-  | "no_text_layer"
-  /** Larger than the configured local parsing ceiling. Cloud parsers accept far more. */
-  | "too_large"
-  /** A format we have no extractor for. */
-  | "unsupported_type"
-  /** The bytes are not a readable document. */
-  | "corrupt"
-  /** The file vanished between upload and parse. */
-  | "missing_file"
-  /** No enabled parser is configured, so the cloud tier could not be attempted at all. */
-  | "no_cloud_parser"
-  /** Local extraction is switched off in settings. */
-  | "local_disabled"
-  /** A cloud parser rejected our credentials. */
-  | "cloud_auth"
-  /** A cloud parser failed for any other reason (HTTP error, bad payload, job error). */
-  | "cloud_failed"
-  /** The parser did not finish inside its budget. */
-  | "timeout"
-  /** Superseded by a newer run, or the server is shutting down. */
-  | "cancelled";
+import type { ParseErrorCode } from "@guided-learning/shared";
+
+/**
+ * Re-exported so the server modules that import the code union from this file keep
+ * working. It is *defined* in `packages/shared` because the client translates by code —
+ * the wording is no longer the server's to own.
+ */
+export type { ParseErrorCode };
 
 /** One tier's failed attempt, kept so a failure can explain what was already tried. */
 export interface ParseAttempt {
@@ -89,9 +72,32 @@ export function isRecoverable(err: unknown): boolean {
   return !NON_RECOVERABLE.has(code);
 }
 
-/** A message aimed at the person who uploaded the file, not at a log reader. */
+/** The stable code for a throw, so a route can emit it alongside the sentence. */
+export function parseErrorCodeOf(err: unknown): ParseErrorCode {
+  return err instanceof ParseError ? err.code : "corrupt";
+}
+
+/**
+ * The provider's own words, when the code alone would lose them.
+ *
+ * Only the two codes whose message is not self-contained carry a detail. Everything else
+ * has a fixed sentence the client renders from the code.
+ */
+export function parseErrorDetail(err: unknown): string | undefined {
+  const code = parseErrorCodeOf(err);
+  if (code !== "cloud_failed" && code !== "corrupt") return undefined;
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * A message aimed at the person who uploaded the file, not at a log reader.
+ *
+ * Now only a *fallback*: the client renders `parseErrorCodeOf()` in the user's language
+ * and reaches for this when it meets a code it does not know. Written in Chinese to match
+ * the catalog this project started in.
+ */
 export function describeParseError(err: unknown): string {
-  const code = err instanceof ParseError ? err.code : "corrupt";
+  const code = parseErrorCodeOf(err);
   switch (code) {
     case "password_protected":
       return "文件已加密，需要密码才能读取内容。";

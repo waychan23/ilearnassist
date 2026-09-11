@@ -39,6 +39,52 @@ const en: typeof MessageSchema = {
   chat: {
     titleHint: "Titles are generated automatically and stop updating once you edit them",
   },
+
+  errors: {
+    NAME_REQUIRED: "A name is required.",
+    WORKSPACE_NOT_FOUND: "That workspace no longer exists.",
+    COPILOT_NOT_FOUND: "That Copilot no longer exists.",
+    SESSION_NOT_FOUND: "That conversation no longer exists.",
+    TITLE_EMPTY: "The title cannot be empty.",
+    UNSUPPORTED_FILE_TYPE: "Unsupported file type: {mimeType}",
+    INVALID_ATTACHMENT_PATH: "That attachment path is not valid.",
+    ATTACHMENT_NOT_FOUND: "That attachment no longer exists.",
+    ATTACHMENT_STORE_FAILED: "Could not save the attachment. Please try again.",
+    DATA_REQUIRED: "The file contents are missing.",
+    INVALID_BASE64: "The file contents are not valid base64.",
+    EMPTY_FILE: "That file is empty.",
+    FILE_TOO_LARGE: "The file exceeds the {limitMb} MB limit.",
+    PROVIDER_NOT_FOUND: "That provider no longer exists.",
+    MODEL_NOT_FOUND: "That model no longer exists.",
+    MODEL_ID_REQUIRED: "Every model needs a modelId.",
+    BASE_URL_REQUIRED: "A base URL is required.",
+    ONLY_PROVIDER: "You cannot delete the only provider.",
+    DEFAULT_PROVIDER: "This is the default provider. Choose a different default first.",
+    PARSER_NOT_FOUND: "That parser no longer exists.",
+    UNKNOWN_PARSER_KIND: "Unknown parser kind: {kind}",
+    UNKNOWN_POLICY: "Unknown parsing policy: {policy}",
+    UNKNOWN_PARSER: "Unknown parser.",
+    UNKNOWN_PROVIDER: "Unknown provider.",
+    MESSAGE_REQUIRED: "A message is required.",
+  },
+
+  parseErrors: {
+    password_protected: "This file is encrypted; its contents need a password.",
+    no_text_layer:
+      "No text layer was found — this is likely a scan or an image-only PDF. Configure an OCR-capable cloud parser and try again.",
+    too_large:
+      "The file is over the local parsing limit, so it was skipped. Configure a cloud parser and try again, or raise the limit.",
+    unsupported_type: "This file type cannot be parsed yet.",
+    corrupt: "The file could not be read: {detail}",
+    missing_file: "The file is gone and cannot be parsed. Please upload it again.",
+    no_cloud_parser:
+      "No cloud parser is available. Add and enable one under Settings → Document parsing.",
+    local_disabled: "Local parsing is turned off in settings.",
+    cloud_auth: "The cloud parser rejected our credentials. Check the API key.",
+    cloud_failed: "Cloud parsing failed: {detail}",
+    timeout: "Parsing timed out. The file may be too large, or the parser is unresponsive.",
+    cancelled: "Parsing was cancelled.",
+  },
 };
 
 export default en;

@@ -23,6 +23,43 @@ import type {
   UploadAttachmentInput,
   Workspace,
 } from "@guided-learning/shared";
+import { ApiError, translateApiError } from "../utils/apiError";
+
+/**
+ * A failed response's body, as loosely as we can read it.
+ *
+ * Two shapes arrive here. Our own routes send the coded envelope
+ * (`{ error: { code, message, params? } }`); Fastify's built-in errors send
+ * `{ statusCode, error: "Not Found", message: "Route ... not found" }`. The `string` arm
+ * of `error` is what keeps the second working.
+ */
+type RawErrorBody = {
+  error?: string | { code?: string; message?: string; params?: Record<string, string | number> };
+  message?: string;
+};
+
+async function errorBody(res: Response): Promise<RawErrorBody> {
+  return (await res.json().catch(() => ({}))) as RawErrorBody;
+}
+
+/**
+ * Normalize either shape into an `ApiError` whose `message` is already in the user's
+ * language. Because it extends `Error`, every existing
+ * `catch (e) { store.setError(e.message) }` site renders translated text without changing.
+ */
+function toApiError(body: RawErrorBody, status: number): ApiError {
+  const error = body.error;
+  if (error && typeof error === "object") {
+    return new ApiError(
+      error.code,
+      translateApiError(error.code, error.params, error.message) || `Request failed (${status})`,
+      status
+    );
+  }
+  // Fastify's own error, or a route that has not been migrated yet. Its `message` is the
+  // specific one ("Bad Request" is the generic `error`), so prefer it.
+  return new ApiError(undefined, body.message ?? error ?? `Request failed (${status})`, status);
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Only send a JSON content-type when there is actually a body. Fastify (5.x)
@@ -34,15 +71,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const res = await fetch(`/api${path}`, options);
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as {
-      error?: string;
-      message?: string;
-    };
-    // Fastify errors carry a specific `message` and a generic `error`
-    // ("Bad Request"); our own routes return `{ error }`. Prefer specific.
-    throw new Error(body.message ?? body.error ?? `Request failed (${res.status})`);
-  }
+  if (!res.ok) throw toApiError(await errorBody(res), res.status);
   return res.json() as Promise<T>;
 }
 
@@ -112,8 +141,10 @@ export const api = {
     }),
   deleteDocumentParser: (id: string) =>
     request<{ ok: boolean }>(`/document-parsers/${id}`, { method: "DELETE" }),
+  // A failure is a 400 carrying the error envelope, so it rejects rather than resolving
+  // with `ok: false` — callers only ever see the success shape.
   testDocumentParser: (id: string) =>
-    request<{ ok: boolean; error?: string }>(`/document-parsers/${id}/test`, { method: "POST" }),
+    request<{ ok: true }>(`/document-parsers/${id}/test`, { method: "POST" }),
   updateDocumentParsing: (input: UpdateDocumentParsingInput) =>
     request<DocumentParsingConfig>("/document-parsing", {
       method: "PUT",
@@ -190,9 +221,9 @@ export async function* streamChat(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  if (!res.ok || !res.body) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `Chat failed (${res.status})`);
-  }
+  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  // A 200 with no body breaks the SSE contract below rather than being a server-reported
+  // error, so it stays a plain Error — there is no code to translate.
+  if (!res.body) throw new Error("No response body.");
   yield* sseEvents(res);
 }

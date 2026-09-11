@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { attachmentUrl } from "../api/client";
+import { translateParseError } from "../utils/apiError";
 import { formatBytes } from "../utils/format";
 import type { Attachment } from "../api/types";
 
@@ -51,7 +52,12 @@ function describe(a: Attachment): { detail: string; title: string } {
       };
     }
     case "failed":
-      return { detail: `${size} · 解析失败`, title: a.parseError ?? "解析失败" };
+      // The code is canonical; `parseError` is the server's own sentence, used when the
+      // client meets a code it has no message for (an older build, a newer server).
+      return {
+        detail: `${size} · 解析失败`,
+        title: translateParseError(a.parseErrorCode, undefined, a.parseError) || "解析失败",
+      };
     default:
       return { detail: size, title: a.name };
   }

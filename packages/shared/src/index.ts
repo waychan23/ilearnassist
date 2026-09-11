@@ -27,6 +27,92 @@ export interface ToolCall {
  */
 export type ParseStatus = "none" | "pending" | "parsing" | "ready" | "failed" | "skipped";
 
+/**
+ * Failure taxonomy for document text extraction.
+ *
+ * Lives here rather than beside the server's `ParseError` because the *client* turns it
+ * into words: the server no longer owns the wording, so the code has to cross the wire.
+ * `apps/server/src/documents/errors.ts` re-exports it, so server imports are unchanged.
+ *
+ * These codes carry more than messaging — the parse policy uses them to decide whether a
+ * failure is worth retrying on the other tier (local ⇄ cloud).
+ */
+export const PARSE_ERROR_CODES = [
+  "password_protected",
+  "no_text_layer",
+  "too_large",
+  "unsupported_type",
+  "corrupt",
+  "missing_file",
+  "no_cloud_parser",
+  "local_disabled",
+  "cloud_auth",
+  "cloud_failed",
+  "timeout",
+  "cancelled",
+] as const;
+
+/**
+ * Declared as a runtime list so the web catalog test can iterate it and prove every code
+ * has a message in every locale — a type alone would be erased by the time tests run.
+ */
+export type ParseErrorCode = (typeof PARSE_ERROR_CODES)[number];
+
+/**
+ * Machine codes for the server's curated error replies.
+ *
+ * Every one of these has an `errors.<CODE>` message in each web catalog, and the catalog
+ * test iterates this union to prove it — which is why it is a union and not bare strings.
+ */
+export const API_ERROR_CODES = [
+  "NAME_REQUIRED",
+  "WORKSPACE_NOT_FOUND",
+  "COPILOT_NOT_FOUND",
+  "SESSION_NOT_FOUND",
+  "TITLE_EMPTY",
+  "UNSUPPORTED_FILE_TYPE",
+  "INVALID_ATTACHMENT_PATH",
+  "ATTACHMENT_NOT_FOUND",
+  "ATTACHMENT_STORE_FAILED",
+  "DATA_REQUIRED",
+  "INVALID_BASE64",
+  "EMPTY_FILE",
+  "FILE_TOO_LARGE",
+  "PROVIDER_NOT_FOUND",
+  "MODEL_NOT_FOUND",
+  "MODEL_ID_REQUIRED",
+  "BASE_URL_REQUIRED",
+  "ONLY_PROVIDER",
+  "DEFAULT_PROVIDER",
+  "PARSER_NOT_FOUND",
+  "UNKNOWN_PARSER_KIND",
+  "UNKNOWN_POLICY",
+  "UNKNOWN_PARSER",
+  "UNKNOWN_PROVIDER",
+  "MESSAGE_REQUIRED",
+] as const;
+
+export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
+
+/**
+ * The error envelope every curated reply carries.
+ *
+ * `code` is canonical — the client renders it in the user's language. `message` is the
+ * server's own sentence, kept as the fallback for a code this build does not know yet
+ * (an older client against a newer server). `params` carries whatever the client needs to
+ * interpolate, so it can build the sentence itself rather than receiving one.
+ *
+ * Fastify's own errors do not use this shape and stay `{ message }`; the client handles
+ * both. See `apps/web/src/utils/apiError.ts`.
+ */
+export interface ApiErrorBody {
+  error: {
+    code: ApiErrorCode | ParseErrorCode;
+    message: string;
+    params?: Record<string, string | number>;
+  };
+}
+
 /** A file the user attached to a message. Bytes live on the server, never in this object. */
 export interface Attachment {
   id: string;
@@ -42,6 +128,11 @@ export interface Attachment {
   parseStatus?: ParseStatus;
   /** Why parsing failed, in words a user can act on. Never contains a credential. */
   parseError?: string;
+  /**
+   * The machine code behind `parseError`, so the client can say it in the user's language.
+   * Absent on rows written before i18n existed — the client falls back to `parseError`.
+   */
+  parseErrorCode?: ParseErrorCode;
   /** Which backend produced the text: `"local"`, or a configured parser's record id. */
   parserId?: string;
   /** Length of the extracted text in characters. */
@@ -302,6 +393,8 @@ export interface DriverInfo {
 export interface AttachmentParseRecord {
   status: ParseStatus;
   error?: string;
+  /** See `Attachment.parseErrorCode` — the streaming path needs it as much as the reload one. */
+  parseErrorCode?: ParseErrorCode;
   parserId?: string;
   parsedChars?: number;
   pageCount?: number;

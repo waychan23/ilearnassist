@@ -2,7 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type {
+  ApiErrorBody,
+  ApiErrorCode,
   Attachment,
+  AttachmentParseRecord,
   ChatInput,
   ChatStreamEvent,
   CopilotDefaults,
@@ -13,6 +16,7 @@ import type {
   CreateWorkspaceInput,
   DocumentParsePolicy,
   DocumentParserConfig,
+  ParseErrorCode,
   ParseStatus,
   ProviderConfig,
   ProviderModelInput,
@@ -39,7 +43,13 @@ import {
   type AppDb,
   type ProviderRecord,
 } from "./db.js";
-import { describeParseError, driverInfos, isDocumentParserKind } from "./documents/index.js";
+import {
+  describeParseError,
+  driverInfos,
+  isDocumentParserKind,
+  parseErrorCodeOf,
+  parseErrorDetail,
+} from "./documents/index.js";
 import type { DocumentService } from "./documents/service.js";
 import { listParseRecords } from "./documents/store.js";
 import { runAgentStream } from "./agent/loop.js";
@@ -72,6 +82,28 @@ interface RoutesOptions {
 
 /** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
 const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 64 * 1024;
+
+/**
+ * The error envelope for a curated reply.
+ *
+ * `code` is what the client renders — it owns the wording, in the user's language. The
+ * English `message` rides along as the fallback for a client that does not know the code
+ * yet, and `params` carries anything the client needs to interpolate so it never has to
+ * receive a pre-built sentence. See `ApiErrorBody` in `packages/shared`.
+ */
+function apiError(
+  code: ApiErrorCode | ParseErrorCode,
+  message: string,
+  params?: Record<string, string | number>
+): ApiErrorBody {
+  return { error: params ? { code, message, params } : { code, message } };
+}
+
+/** The parse-failure envelope: the code is the taxonomy value, the sentence a fallback. */
+function parseApiError(err: unknown): ApiErrorBody {
+  const detail = parseErrorDetail(err);
+  return apiError(parseErrorCodeOf(err), describeParseError(err), detail ? { detail } : undefined);
+}
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
   const { config, db, documents } = opts;
@@ -192,6 +224,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         ...att,
         parseStatus: record.status,
         parseError: record.error,
+        parseErrorCode: record.code,
         parserId: record.parserId,
         parsedChars: record.parsedChars,
         pageCount: record.pageCount,
@@ -212,7 +245,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.post("/api/workspaces", async (request, reply) => {
     const body = request.body as CreateWorkspaceInput;
     const name = body?.name?.trim();
-    if (!name) return reply.code(400).send({ error: "name is required" });
+    if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
     const slug = uniqueSlug(config.workspaces.rootDir, name);
     const dirPath = createWorkspaceDir(config.workspaces.rootDir, slug);
@@ -223,7 +256,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.delete("/api/workspaces/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const workspace = db.getWorkspace(id);
-    if (!workspace) return reply.code(404).send({ error: "workspace not found" });
+    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
     db.deleteWorkspace(id);
     removeWorkspaceDir(config.workspaces.rootDir, workspace.dirPath);
     return { ok: true };
@@ -235,7 +268,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   app.post("/api/copilots", async (request, reply) => {
     const body = request.body as CreateCopilotInput;
-    if (!body?.name?.trim()) return reply.code(400).send({ error: "name is required" });
+    if (!body?.name?.trim()) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
     const copilot = db.createCopilot({
       id: newId(),
       name: body.name.trim(),
@@ -251,7 +284,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const { id } = request.params as { id: string };
     const body = request.body as UpdateCopilotInput;
     const existing = db.getCopilot(id);
-    if (!existing) return reply.code(404).send({ error: "copilot not found" });
+    if (!existing) return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
     const copilot = db.updateCopilot(id, {
       name: body.name?.trim() ?? existing.name,
       description: body.description ?? existing.description,
@@ -272,14 +305,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   app.get("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
-    if (!db.getWorkspace(workspaceId)) return reply.code(404).send({ error: "workspace not found" });
+    if (!db.getWorkspace(workspaceId)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
     return db.listSessions(workspaceId);
   });
 
   app.post("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
     const body = request.body as CreateSessionInput;
-    if (!db.getWorkspace(workspaceId)) return reply.code(404).send({ error: "workspace not found" });
+    if (!db.getWorkspace(workspaceId)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
 
     const copilotId = body?.copilotId ?? null;
     const copilot = copilotId ? db.getCopilot(copilotId) : undefined;
@@ -300,9 +333,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.patch("/api/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateSessionInput;
-    if (!db.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     if (body?.title !== undefined && !body.title.trim()) {
-      return reply.code(400).send({ error: "title must not be empty" });
+      return reply.code(400).send(apiError("TITLE_EMPTY", "title must not be empty"));
     }
     return db.updateSession(id, { title: body?.title, settings: body?.settings });
   });
@@ -319,7 +352,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   app.get("/api/sessions/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     return db.listMessages(id);
   });
 
@@ -335,31 +368,42 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     { bodyLimit: ATTACHMENT_BODY_LIMIT },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      if (!db.getSession(id)) return reply.code(404).send({ error: "session not found" });
+      if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
 
       const body = request.body as UploadAttachmentInput;
       const name = body?.name?.trim();
-      if (!name) return reply.code(400).send({ error: "name is required" });
+      if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
       const mimeType = normalizeMime(name, body.mimeType);
       if (!isSupportedMime(mimeType)) {
-        return reply.code(415).send({ error: `Unsupported file type: ${body.mimeType || name}` });
+        return reply
+          .code(415)
+          .send(
+            apiError(
+              "UNSUPPORTED_FILE_TYPE",
+              `Unsupported file type: ${body.mimeType || name}`,
+              { mimeType: body.mimeType || name }
+            )
+          );
       }
       if (typeof body.data !== "string" || !body.data) {
-        return reply.code(400).send({ error: "data is required" });
+        return reply.code(400).send(apiError("DATA_REQUIRED", "data is required"));
       }
 
       let bytes: Buffer;
       try {
         bytes = Buffer.from(body.data, "base64");
       } catch {
-        return reply.code(400).send({ error: "data is not valid base64" });
+        return reply.code(400).send(apiError("INVALID_BASE64", "data is not valid base64"));
       }
-      if (bytes.byteLength === 0) return reply.code(400).send({ error: "file is empty" });
+      if (bytes.byteLength === 0) return reply.code(400).send(apiError("EMPTY_FILE", "file is empty"));
       if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
-        return reply.code(413).send({
-          error: `File is larger than the ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB limit`,
-        });
+        const limitMb = Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024);
+        return reply
+          .code(413)
+          .send(
+            apiError("FILE_TOO_LARGE", `File is larger than the ${limitMb} MB limit`, { limitMb })
+          );
       }
 
       const attachment: Attachment = {
@@ -374,13 +418,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // resolveStoredPath re-derives the filename from the id + MIME type, so nothing the
       // client sent can steer the write outside `<uploads>/<sessionId>/`.
       const path = resolveStoredPath(uploadsRoot, id, attachment);
-      if (!path) return reply.code(400).send({ error: "invalid attachment path" });
+      if (!path) return reply.code(400).send(apiError("INVALID_ATTACHMENT_PATH", "invalid attachment path"));
 
       try {
         await writeFile(path, bytes);
       } catch (err) {
         request.log.error(err, "failed to store attachment");
-        return reply.code(500).send({ error: "failed to store attachment" });
+        return reply.code(500).send(apiError("ATTACHMENT_STORE_FAILED", "failed to store attachment"));
       }
 
       // Text extraction runs *after* the response: a cloud parse can take minutes, and the
@@ -401,18 +445,34 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /** Parse state for every attachment in a session, keyed by attachment id. */
   app.get("/api/sessions/:id/attachments", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     const records = await listParseRecords(uploadsRoot, id);
-    return Object.fromEntries(records);
+    // Mapped rather than passed through: the sidecar stores the code as `code`, while the
+    // client-facing type calls it `parseErrorCode`. The rename is deliberate — the record
+    // is an internal representation and should not become the wire contract by accident.
+    return Object.fromEntries(
+      [...records].map(([attachmentId, r]) => [
+        attachmentId,
+        {
+          status: r.status,
+          error: r.error,
+          parseErrorCode: r.code,
+          parserId: r.parserId,
+          parsedChars: r.parsedChars,
+          pageCount: r.pageCount,
+          updatedAt: r.updatedAt,
+        } satisfies AttachmentParseRecord,
+      ])
+    );
   });
 
   /** Re-run extraction, e.g. after a failure or a change of parser settings. */
   app.post("/api/sessions/:id/attachments/:attachmentId/reparse", async (request, reply) => {
     const { id, attachmentId } = request.params as { id: string; attachmentId: string };
-    if (!db.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
 
     const found = await findStoredAttachment(uploadsRoot, id, attachmentId);
-    if (!found) return reply.code(404).send({ error: "attachment not found" });
+    if (!found) return reply.code(404).send(apiError("ATTACHMENT_NOT_FOUND", "attachment not found"));
 
     const body = (request.body ?? {}) as { name?: string };
     // Cloud parsers branch on the filename extension, so the on-disk name is a sound
@@ -429,7 +489,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         kind: kindFor(found.mimeType),
       });
     } catch (err) {
-      return reply.code(400).send({ error: describeParseError(err) });
+      return reply.code(400).send(parseApiError(err));
     }
     return reply.code(202).send({ status: "pending" });
   });
@@ -441,7 +501,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       attachmentId: string;
     };
     const found = await findStoredAttachment(uploadsRoot, sessionId, attachmentId);
-    if (!found) return reply.code(404).send({ error: "attachment not found" });
+    if (!found) return reply.code(404).send(apiError("ATTACHMENT_NOT_FOUND", "attachment not found"));
 
     try {
       const bytes = await readFile(found.path);
@@ -450,7 +510,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         .type(found.mimeType)
         .send(bytes);
     } catch {
-      return reply.code(404).send({ error: "attachment not found" });
+      return reply.code(404).send(apiError("ATTACHMENT_NOT_FOUND", "attachment not found"));
     }
   });
 
@@ -462,8 +522,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const body = request.body as CreateProviderInput;
     const name = body?.name?.trim();
     const baseURL = body?.baseURL?.trim();
-    if (!name) return reply.code(400).send({ error: "name is required" });
-    if (!baseURL) return reply.code(400).send({ error: "baseURL is required" });
+    if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
+    if (!baseURL) return reply.code(400).send(apiError("BASE_URL_REQUIRED", "baseURL is required"));
 
     const provider = db.createProvider({
       id: newId(),
@@ -473,7 +533,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     });
     for (const m of body.models ?? []) {
       const parsed = parseModelInput(m);
-      if (!parsed) return reply.code(400).send({ error: "each model needs a modelId" });
+      if (!parsed) return reply.code(400).send(apiError("MODEL_ID_REQUIRED", "each model needs a modelId"));
       db.createModel({ id: newId(), providerId: provider.id, ...parsed });
     }
     return reply.code(201).send(publicProvider(provider.id));
@@ -482,16 +542,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.put("/api/providers/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateProviderInput;
-    if (!db.getProvider(id)) return reply.code(404).send({ error: "provider not found" });
+    if (!db.getProvider(id)) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
 
     if (body?.models) {
       for (const m of body.models) {
         const parsed = parseModelInput(m);
-        if (!parsed) return reply.code(400).send({ error: "each model needs a modelId" });
+        if (!parsed) return reply.code(400).send(apiError("MODEL_ID_REQUIRED", "each model needs a modelId"));
         if (m.id) {
           // Editing in place. Unknown ids are rejected rather than silently inserted.
           if (!db.updateModel(m.id, parsed)) {
-            return reply.code(404).send({ error: `model not found: ${m.id}` });
+            return reply.code(404).send(apiError("MODEL_NOT_FOUND", `model not found: ${m.id}`, { modelId: m.id }));
           }
         } else {
           db.createModel({ id: newId(), providerId: id, ...parsed });
@@ -511,14 +571,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   app.delete("/api/providers/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.getProvider(id)) return reply.code(404).send({ error: "provider not found" });
+    if (!db.getProvider(id)) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
     if (db.listProviders().length <= 1) {
-      return reply.code(409).send({ error: "Cannot delete the only provider." });
+      return reply.code(409).send(apiError("ONLY_PROVIDER", "Cannot delete the only provider."));
     }
     if (db.getSetting(SETTING_DEFAULT_PROVIDER) === id) {
-      return reply.code(409).send({
-        error: "This is the default provider. Choose a different default first.",
-      });
+      return reply
+        .code(409)
+        .send(
+          apiError(
+            "DEFAULT_PROVIDER",
+            "This is the default provider. Choose a different default first."
+          )
+        );
     }
     db.deleteProvider(id);
     return { ok: true };
@@ -527,8 +592,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.delete("/api/providers/:providerId/models/:modelId", async (request, reply) => {
     const { providerId, modelId } = request.params as { providerId: string; modelId: string };
     const provider = db.getProvider(providerId);
-    if (!provider) return reply.code(404).send({ error: "provider not found" });
-    if (!db.deleteModel(modelId)) return reply.code(404).send({ error: "model not found" });
+    if (!provider) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
+    if (!db.deleteModel(modelId)) return reply.code(404).send(apiError("MODEL_NOT_FOUND", "model not found"));
     return publicProvider(providerId);
   });
 
@@ -543,10 +608,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const body = request.body as CreateDocumentParserInput;
     const name = body?.name?.trim();
     const baseURL = body?.baseURL?.trim();
-    if (!name) return reply.code(400).send({ error: "name is required" });
-    if (!baseURL) return reply.code(400).send({ error: "baseURL is required" });
+    if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
+    if (!baseURL) return reply.code(400).send(apiError("BASE_URL_REQUIRED", "baseURL is required"));
     if (!isDocumentParserKind(body.kind)) {
-      return reply.code(400).send({ error: `unknown parser kind: ${String(body.kind)}` });
+      return reply.code(400).send(apiError("UNKNOWN_PARSER_KIND", `unknown parser kind: ${String(body.kind)}`, { kind: String(body.kind) }));
     }
 
     const parser = db.createDocumentParser({
@@ -563,9 +628,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.put("/api/document-parsers/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateDocumentParserInput;
-    if (!db.getDocumentParser(id)) return reply.code(404).send({ error: "parser not found" });
+    if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
     if (body?.kind !== undefined && !isDocumentParserKind(body.kind)) {
-      return reply.code(400).send({ error: `unknown parser kind: ${String(body.kind)}` });
+      return reply.code(400).send(apiError("UNKNOWN_PARSER_KIND", `unknown parser kind: ${String(body.kind)}`, { kind: String(body.kind) }));
     }
 
     // Same key contract as providers: absent keeps the stored key, "" clears it.
@@ -581,7 +646,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   app.delete("/api/document-parsers/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.getDocumentParser(id)) return reply.code(404).send({ error: "parser not found" });
+    if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
 
     // Unlike LLM providers there is no "last one" guard: running with zero cloud parsers is
     // a normal configuration (local-only), so deleting the final entry is allowed.
@@ -595,12 +660,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /** Round-trip a throwaway document through a parser to prove the endpoint and key work. */
   app.post("/api/document-parsers/:id/test", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.getDocumentParser(id)) return reply.code(404).send({ error: "parser not found" });
+    if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
     try {
       await documents.testParser(id);
       return { ok: true };
     } catch (err) {
-      return reply.code(400).send({ ok: false, error: describeParseError(err) });
+      return reply.code(400).send({ ok: false, ...parseApiError(err) });
     }
   });
 
@@ -610,7 +675,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     if (body?.policy !== undefined) {
       if (!isParsePolicy(body.policy)) {
-        return reply.code(400).send({ error: `unknown policy: ${String(body.policy)}` });
+        return reply.code(400).send(apiError("UNKNOWN_POLICY", `unknown policy: ${String(body.policy)}`, { policy: String(body.policy) }));
       }
       db.setSetting(SETTING_DOCUMENT_POLICY, body.policy);
     }
@@ -623,7 +688,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (body?.defaultParserId !== undefined) {
       const pin = body.defaultParserId === null ? "" : body.defaultParserId.trim();
       if (pin && !db.getDocumentParser(pin)) {
-        return reply.code(400).send({ error: "unknown parser" });
+        return reply.code(400).send(apiError("UNKNOWN_PARSER", "unknown parser"));
       }
       db.setSetting(SETTING_DOCUMENT_DEFAULT_PARSER, pin);
     }
@@ -636,7 +701,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const body = request.body as { providerId?: string; modelId?: string };
     if (body?.providerId !== undefined) {
       if (!db.getProvider(body.providerId)) {
-        return reply.code(400).send({ error: "unknown provider" });
+        return reply.code(400).send(apiError("UNKNOWN_PROVIDER", "unknown provider"));
       }
       db.setSetting(SETTING_DEFAULT_PROVIDER, body.providerId);
     }
@@ -705,14 +770,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const body = request.body as ChatInput;
 
     const session = db.getSession(id);
-    if (!session) return reply.code(404).send({ error: "session not found" });
+    if (!session) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     const workspace = db.getWorkspace(session.workspaceId);
-    if (!workspace) return reply.code(404).send({ error: "workspace not found" });
+    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
 
     const message = body?.message?.trim();
     const attachments = body?.attachments ?? [];
     if (!message && attachments.length === 0) {
-      return reply.code(400).send({ error: "message is required" });
+      return reply.code(400).send(apiError("MESSAGE_REQUIRED", "message is required"));
     }
 
     // A Copilot may be switched per turn; the change sticks to the session.

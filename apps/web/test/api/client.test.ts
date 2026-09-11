@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamEvent } from "@guided-learning/shared";
 import { api, attachmentUrl, fileToBase64, streamChat } from "../../src/api/client.js";
+import { ApiError } from "../../src/utils/apiError.js";
+import { i18n } from "../../src/i18n.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -64,6 +66,56 @@ describe("request", () => {
   it("falls back to the status when the body is not JSON", async () => {
     stubFetch(() => new Response("<html>500</html>", { status: 500 }));
     await expect(api.listWorkspaces()).rejects.toThrow("Request failed (500)");
+  });
+
+  describe("the coded error envelope", () => {
+    // Our own routes send `{ error: { code, message, params? } }`. The code is what the
+    // user reads; the server's `message` is only a fallback.
+    beforeEach(() => {
+      i18n.global.locale.value = "zh-CN";
+    });
+
+    it("renders the code in the active language and keeps the code on the error", async () => {
+      stubFetch(() =>
+        jsonResponse(
+          { error: { code: "SESSION_NOT_FOUND", message: "session not found" } },
+          { status: 404 }
+        )
+      );
+
+      const error = await api.listWorkspaces().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).code).toBe("SESSION_NOT_FOUND");
+      expect((error as ApiError).status).toBe(404);
+      // The server's English sentence is replaced by the localized one.
+      expect((error as Error).message).toBe("会话不存在，可能已被删除。");
+    });
+
+    it("interpolates params from the envelope", async () => {
+      stubFetch(() =>
+        jsonResponse(
+          { error: { code: "FILE_TOO_LARGE", message: "too large", params: { limitMb: 20 } } },
+          { status: 413 }
+        )
+      );
+      await expect(api.listWorkspaces()).rejects.toThrow("文件超过 20 MB 限制。");
+    });
+
+    it("falls back to the server's message for a code this build does not know", async () => {
+      stubFetch(() =>
+        jsonResponse(
+          { error: { code: "FROM_A_NEWER_SERVER", message: "the server said this" } },
+          { status: 400 }
+        )
+      );
+      // Must not render the key path, which is what a bare `t()` would produce.
+      await expect(api.listWorkspaces()).rejects.toThrow("the server said this");
+    });
+
+    it("uses the status when the envelope carries no message at all", async () => {
+      stubFetch(() => jsonResponse({ error: { code: "UNKNOWN_TO_ME" } }, { status: 502 }));
+      await expect(api.listWorkspaces()).rejects.toThrow("Request failed (502)");
+    });
   });
 
   it("sends a JSON content-type only when there is a body", async () => {

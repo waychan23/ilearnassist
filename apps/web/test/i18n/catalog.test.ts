@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { API_ERROR_CODES, PARSE_ERROR_CODES } from "@guided-learning/shared";
 import zhCN from "../../src/locales/zh-CN";
 import en from "../../src/locales/en";
 import { flatten, placeholders, textOf, translationCallSites } from "../helpers/catalog";
@@ -22,10 +23,11 @@ const enFlat = flatten(en as unknown as Record<string, unknown>);
 const CJK_ALLOWED_IN_EN = new Set(["locale.zhCN"]);
 
 /**
- * Keys built at runtime (`` t(`theme.${mode}`) ``), which the static scan cannot see.
- * Kept as narrow as possible — a broad prefix here is how a typo hides.
+ * Keys built at runtime (`` t(`theme.${mode}`) ``, `` t(`parseErrors.${code}`) ``), which
+ * the static scan cannot see. Kept as narrow as possible — a broad prefix here is how a
+ * typo hides.
  */
-const DYNAMIC_PREFIXES = ["theme."];
+const DYNAMIC_PREFIXES = ["theme.", "errors.", "parseErrors."];
 
 const isDynamic = (key: string): boolean => DYNAMIC_PREFIXES.some((p) => key.startsWith(p));
 
@@ -66,6 +68,25 @@ describe("catalog completeness", () => {
       );
       expect(enNames, key).toEqual(placeholders(textOf(zhLeaf)));
     }
+  });
+});
+
+describe("server error codes", () => {
+  it("has a message for every ApiErrorCode in both catalogs", () => {
+    // Iterating the shared union is the point of declaring it as a runtime list: a code
+    // added to the server without a message here fails this test rather than rendering
+    // the raw code at a user.
+    const missing = API_ERROR_CODES.filter(
+      (code) => !(`errors.${code}` in zh) || !(`errors.${code}` in enFlat)
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("has a message for every ParseErrorCode in both catalogs", () => {
+    const missing = PARSE_ERROR_CODES.filter(
+      (code) => !(`parseErrors.${code}` in zh) || !(`parseErrors.${code}` in enFlat)
+    );
+    expect(missing).toEqual([]);
   });
 });
 
