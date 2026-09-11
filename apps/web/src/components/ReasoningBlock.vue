@@ -107,7 +107,7 @@ async function copy() {
   font-size: 10px;
 }
 .dot.live {
-  background: rgba(76, 139, 245, 0.16);
+  background: var(--accent-bg);
 }
 .dot.done {
   background: var(--warning-bg);

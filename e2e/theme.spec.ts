@@ -159,3 +159,45 @@ test("code surfaces flip with the theme and stay readable in both", async ({ pag
     expect.soft(contrast(onDark.color, onDark.background), `${name}: dark`).toBeGreaterThan(4.5);
   });
 });
+
+test("the user bubble flips with the theme and stays readable in both", async ({
+  page,
+  request,
+}) => {
+  // The bubble painted its background as a literal navy, so it kept the dark theme's colour
+  // on a white page. It looked correct in dark — which is why it survived review for so long
+  // — and it was unreadable in light. `style.test.ts` could not see it either: the literal
+  // was not a palette value, because there was no `--bubble-bg` for it to restate. Making the
+  // surface a token is what makes the source scan able to catch a regression; this is what
+  // catches it *rendered*, including a later rule winning on specificity.
+  await scriptLlm(request, { turns: [{ content: "好的。" }] });
+
+  await page.goto("/");
+  await page.getByTestId("composer-input").fill("气泡测试");
+  await page.getByTestId("composer-send").click();
+
+  const bubble = page.getByTestId("message-user").last().locator(".bubble");
+  await expect(bubble).toContainText("气泡测试");
+
+  // Through the real toggle rather than by writing the attribute, so the whole path runs.
+  const toggle = page.getByTestId("theme-toggle");
+  const show = async (wanted: "light" | "dark") => {
+    for (let i = 0; i < 3 && (await htmlTheme(page)) !== wanted; i++) await toggle.click();
+    expect(await htmlTheme(page)).toBe(wanted);
+  };
+
+  await show("light");
+  const light = await colorsOf(bubble);
+  await show("dark");
+  const dark = await colorsOf(bubble);
+
+  expect(light.background).not.toBe(dark.background);
+  // The polarity flips, not merely the value: a light bubble with dark text, and the
+  // reverse in dark. A frozen literal fails this in one direction or the other — which is
+  // exactly the shape the bug had.
+  expect(luminance(light.background), "bubble: light").toBeGreaterThan(luminance(light.color));
+  expect(luminance(dark.background), "bubble: dark").toBeLessThan(luminance(dark.color));
+
+  expect.soft(contrast(light.color, light.background), "bubble: light").toBeGreaterThan(4.5);
+  expect.soft(contrast(dark.color, dark.background), "bubble: dark").toBeGreaterThan(4.5);
+});

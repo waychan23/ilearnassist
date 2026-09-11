@@ -26,6 +26,12 @@ import { describe, expect, it } from "vitest";
  * The code-surface checks scan only `src/style.css`. `AttachmentChips.vue` also paints
  * `--code-bg`, on `.thumb` — a placeholder behind a thumbnail `<img>`, with nothing
  * rendered on top of it, so there is no foreground for it to pair with.
+ *
+ * Which variables are *theme-dependent* is derived from the value (see `isColor`), not kept
+ * as a list of names. A list was the original shape and it does not survive a token family:
+ * minting thirty non-colour tokens is precisely when someone adds thirty exempt names
+ * without re-reading any of them, and the list can then drift from the palette in the
+ * silent direction (a name nobody removed). The predicate cannot drift.
  */
 
 const RAW = import.meta.glob("../src/*.css", {
@@ -71,13 +77,50 @@ function blocks(css: string): Block[] {
 const LIGHT_SELECTORS = [':root[data-theme="light"]', ':root[data-theme="auto"]'];
 
 const CODE_VARS = ["--code-bg", "--code-fg", "--code-fg-2"];
-const FOREGROUNDS = ["--code-fg", "--code-fg-2"];
 
 /**
- * Variables with no reason to appear in the light palette: `--radius` is a length, not a
- * colour. Everything else in `:root` is a colour the light block is expected to restate.
+ * Whether a `:root` variable's value is a colour, and therefore whether the light palette
+ * is expected to restate it. Lengths (`--radius`, `--space-*`), durations, layer indices
+ * and shadows are not — a shadow that reads correctly on white needs no light variant, and
+ * demanding one would mean writing every new token into the palette three times.
+ *
+ * The blind spot, deliberately: a colour written as `oklch(…)`, `hsl(…)` or a bare name
+ * (`red`) is not detected here and would slip through as theme-independent. The palette is
+ * hex and `rgba()`, which is the shape this matches; a new token in another notation has to
+ * be restated in the light blocks by hand, and `hsl()` would be the moment to widen this.
  */
-const THEME_INDEPENDENT = ["--radius"];
+const isColor = (value: string | undefined): boolean => !!value && /^(#|rgba?\()/i.test(value);
+
+/**
+ * A translucent black is the one colour with no light variant to write: a scrim darkens
+ * whatever sits under it rather than carrying a colour of its own, so `rgba(0, 0, 0, 0.55)`
+ * is correct on white and on `#16181c` alike. Without this the predicate would demand a
+ * light value for `--scrim` and the "fix" would be restating the same value in both light
+ * blocks — three copies of a value that never flips.
+ *
+ * Deliberately narrow: only `rgb`/`rgba` with a zero red channel, so it cannot be reached
+ * by a colour someone merely forgot to flip. A light-tuned scrim would be
+ * `rgba(255, 255, 255, …)` and is *not* exempt — that one does belong in the light palette.
+ */
+const isNeutralScrim = (value: string): boolean => /^rgba?\(\s*0\s*,\s*0\s*,\s*0\s*[,)]/i.test(value);
+
+/** Whether the light palette is expected to restate a `:root` variable's value. */
+const needsLightValue = (value: string | undefined): boolean =>
+  isColor(value) && !isNeutralScrim(value!);
+
+/**
+ * Token families that are *ramps*, read by their index: `--space-6` is understood as two
+ * steps above `--space-4` without a lookup, so a gap or a repeat makes the index lie. A
+ * repeat is worse than a gap because CSS accepts it silently — the later declaration simply
+ * wins, and nothing else in the toolchain sees two `--space-4`s.
+ */
+const RAMP_FAMILIES = ["--space-", "--fs-"] as const;
+
+/**
+ * Families that are *named* scales. There is no index to check, but a duplicated name is
+ * still a bug, and an empty family means the whole scale was dropped in a refactor.
+ */
+const NAMED_FAMILIES = ["--radius", "--dur-", "--z-", "--shadow-", "--ease-", "--lh-"] as const;
 
 /** Every custom property `body` declares, lowercased. */
 function declaredVars(body: string): string[] {
@@ -101,12 +144,17 @@ function paletteColors(body: string): Map<string, string[]> {
   return colors;
 }
 
+/** Every colour literal in a rule body, normalised the same way as `paletteColors`. */
+function literalsInBody(body: string): string[] {
+  return [...body.matchAll(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi)].map((match) =>
+    match[0].toLowerCase().replace(/\s+/g, ""),
+  );
+}
+
 /** Every colour literal in a `<style>` block, normalised the same way. */
 function literalsIn(source: string): string[] {
   return [...source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].flatMap((block) =>
-    [...block[1]!.matchAll(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi)].map((match) =>
-      match[0].toLowerCase().replace(/\s+/g, ""),
-    ),
+    literalsInBody(block[1]!),
   );
 }
 
@@ -138,12 +186,54 @@ function uses(body: string, name: string): boolean {
   return body.includes(`var(${name})`);
 }
 
-describe("style.css palette", () => {
-  it("restates every :root colour in the light palette, unless it cannot flip", () => {
-    const all = blocks(CSS);
+/**
+ * The block that defines the palette.
+ *
+ * Selected by *what it declares* rather than by selector position. `:root` legitimately
+ * appears more than once — a media query overrides the motion tokens on it, which is how
+ * `prefers-reduced-motion` is honoured without auditing every `transition` in the app — and
+ * a bare `.find()` would silently take whichever came first. That is the failure this
+ * guards: a second palette block would escape every check below and look like a pass.
+ *
+ * Throwing rather than asserting so the message names the problem; the callers would
+ * otherwise fail several assertions later with a confusing diff.
+ */
+function paletteBlock(all: Block[] = blocks(CSS)): Block {
+  const roots = all.filter((block) => block.selector === ":root");
+  const carriers = roots.filter((block) =>
+    declaredVars(block.body).some((name) => isColor(declarationOf(block.body, name))),
+  );
 
-    const root = all.find((block) => block.selector === ":root");
-    if (!root) throw new Error("style.css has no :root block");
+  if (carriers.length !== 1) {
+    throw new Error(
+      `expected exactly one :root block declaring colours, found ${carriers.length} ` +
+        `(of ${roots.length} :root blocks) — a second palette block escapes the light-palette checks`,
+    );
+  }
+  return carriers[0]!;
+}
+
+/**
+ * Surfaces that follow the theme, each with the foreground tokens that are legitimate on it.
+ *
+ * A rule that paints one of these must state its own foreground: an inherited `--text` is
+ * the other half of the dark-on-dark bug, because it flips independently of the surface it
+ * lands on. The user bubble is the pair that was missing here — it carried its own
+ * hard-coded colour for so long that it never needed a foreground token, and the moment the
+ * surface became themed the omission would have become live.
+ */
+const PAIRED_SURFACES: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ["--code-bg", ["--code-fg", "--code-fg-2"]],
+  ["--bubble-bg", ["--bubble-fg"]],
+];
+
+/** The two selectors that carry a light palette, and the one they both restate. */
+const PALETTE_SELECTORS = [":root", ...LIGHT_SELECTORS];
+
+describe("style.css palette", () => {
+  it("restates every palette colour in the light palette, unless it cannot flip", () => {
+    const all = blocks(CSS);
+    const root = paletteBlock();
 
     // Both, not either: the attribute selector and the media query cannot share values,
     // so each is written out separately and each can drift on its own.
@@ -152,56 +242,124 @@ describe("style.css palette", () => {
 
     const missing = declaredVars(root.body).filter(
       (name) =>
-        !THEME_INDEPENDENT.includes(name) &&
+        needsLightValue(declarationOf(root.body, name)) &&
         light.some((block) => !declares(block.body, name)),
     );
 
     expect(missing).toEqual([]);
   });
 
-  it("gives the code surfaces a different colour in the light palette, not the same one", () => {
-    const root = blocks(CSS).find((block) => block.selector === ":root");
-    if (!root) throw new Error("style.css has no :root block");
+  it("neutralises every duration when the user prefers reduced motion", () => {
+    // Durations are tokens so this is one override rather than an audit of every
+    // `transition`. The cost of that bargain: a transition that hard-codes its duration
+    // silently opts out of the preference, so the override is asserted on the tokens rather
+    // than on a recording of the drawer.
+    const all = blocks(CSS);
+    const palette = paletteBlock(all);
+    const durations = declaredVars(palette.body).filter((name) => name.startsWith("--dur-"));
+
+    expect(durations.length).toBeGreaterThan(0);
+    expect(CSS, "style.css has no reduced-motion block").toContain(
+      "@media (prefers-reduced-motion: reduce)",
+    );
+
+    // The other `:root` blocks: the palette declares the durations, a media query overrides
+    // them. An empty list here would make the check below vacuously true, so it is asserted
+    // rather than assumed.
+    const overrides = all.filter((block) => block.selector === ":root" && block !== palette);
+    expect(overrides.length, "no :root block overrides the duration tokens").toBeGreaterThan(0);
+
+    const notNeutralised = durations.filter((name) =>
+      overrides.some((block) => declarationOf(block.body, name) !== "0.01ms"),
+    );
+
+    expect(notNeutralised, "a --dur-* token is not neutralised under reduced motion").toEqual([]);
+  });
+
+  it("declares each token family, with no gap and no duplicate step", () => {
+    const names = declaredVars(paletteBlock().body);
+
+    for (const family of RAMP_FAMILIES) {
+      const steps = names
+        .filter((name) => name.startsWith(family))
+        .map((name) => Number(name.slice(family.length)));
+
+      expect(steps.length, `${family}* declares nothing`).toBeGreaterThan(0);
+      expect(steps, `${family}* repeats a step`).toEqual([...new Set(steps)]);
+      expect([...steps].sort((a, b) => a - b), `${family}* has a gap`).toEqual(
+        steps.map((_, index) => index + 1),
+      );
+    }
+
+    for (const family of NAMED_FAMILIES) {
+      const declared = names.filter((name) => name.startsWith(family));
+
+      expect(declared.length, `${family}* declares nothing`).toBeGreaterThan(0);
+      expect(declared, `${family}* repeats a name`).toEqual([...new Set(declared)]);
+    }
+  });
+
+  it("gives every themed surface a different colour in the light palette, not the same one", () => {
+    const root = paletteBlock();
     const light = blocks(CSS).find((block) => block.selector === LIGHT_SELECTORS[0]);
     if (!light) throw new Error(`style.css has no ${LIGHT_SELECTORS[0]} block`);
 
     // Restating `--code-bg: #0d1117` in the light block would satisfy the completeness
-    // check while changing nothing, leaving dark-on-dark exactly as it was.
-    const unchanged = CODE_VARS.filter((name) => {
-      const dark = declarationOf(root.body, name);
-      return dark !== undefined && dark === declarationOf(light.body, name);
-    });
+    // check while changing nothing, leaving dark-on-dark exactly as it was. The bubble is
+    // the same shape of trap: its dark value is a navy that reads fine on `#16181c` and not
+    // at all on white, so a copied-down value would be invisible in review.
+    const unchanged = [...CODE_VARS, ...PAIRED_SURFACES.flatMap(([surface]) => [surface])].filter(
+      (name) => {
+        const dark = declarationOf(root.body, name);
+        return dark !== undefined && dark === declarationOf(light.body, name);
+      },
+    );
 
     expect(unchanged).toEqual([]);
   });
 
-  it("pairs every --code-bg background with a --code-fg foreground", () => {
-    const offenders = blocks(CSS)
-      .filter(
-        (block) =>
-          paintsBackground(block.body, "--code-bg") &&
-          !FOREGROUNDS.some((name) => uses(block.body, name)),
-      )
-      .map((block) => block.selector);
+  it("pairs every themed surface with a foreground from its own family", () => {
+    const offenders = PAIRED_SURFACES.flatMap(([background, foregrounds]) =>
+      blocks(CSS)
+        .filter(
+          (block) =>
+            paintsBackground(block.body, background) &&
+            !foregrounds.some((name) => uses(block.body, name)),
+        )
+        .map((block) => `${block.selector} paints ${background} without ${foregrounds.join("/")}`),
+    );
 
     expect(offenders).toEqual([]);
   });
 
-  it("does not hand-roll a palette colour in a component style", () => {
-    const root = blocks(CSS).find((block) => block.selector === ":root");
-    if (!root) throw new Error("style.css has no :root block");
+  it("does not hand-roll a palette colour in a rule", () => {
+    const root = paletteBlock();
     const palette = paletteColors(root.body);
 
     // Only literals that *are* a palette value are flagged, so the theme-independent
-    // scrims (`rgba(0, 0, 0, 0.4)` behind a dialog) stay legal without an exemption list.
+    // scrims and the `#fff` on a saturated button stay legal without an exemption list.
     // The flip side: a colour mixed for the dark theme but never added to the palette —
     // `#e6c06a`, say — is not caught here, only by reading it.
-    const offenders = Object.entries(COMPONENTS).flatMap(([path, source]) =>
+    const inSheet = blocks(CSS)
+      .filter((block) => !PALETTE_SELECTORS.includes(block.selector))
+      .flatMap((block) =>
+        literalsInBody(block.body)
+          .filter((literal) => palette.has(literal))
+          .map(
+            (literal) =>
+              `src/style.css ${block.selector}: ${literal} is ${palette.get(literal)!.join("/")}`,
+          ),
+      );
+
+    // The sheet's own rules, not just the components'. `#2b3f6b` on `.msg .bubble` lived
+    // here: it was correct for the dark theme and frozen at it, so it stayed dark navy on a
+    // white background — and scanning only the components could not see it.
+    const inComponents = Object.entries(COMPONENTS).flatMap(([path, source]) =>
       literalsIn(source)
         .filter((literal) => palette.has(literal))
         .map((literal) => `${shortName(path)}: ${literal} is ${palette.get(literal)!.join("/")}`),
     );
 
-    expect(offenders).toEqual([]);
+    expect([...inSheet, ...inComponents]).toEqual([]);
   });
 });

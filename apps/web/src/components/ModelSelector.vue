@@ -126,7 +126,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   max-width: 220px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius);
   color: var(--text-3);
   font-size: 12px;
   font-family: inherit;

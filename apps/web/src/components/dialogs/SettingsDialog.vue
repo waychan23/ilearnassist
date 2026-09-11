@@ -573,7 +573,7 @@ function onDefaultModelChange(e: Event) {
 .tab-count {
   margin-left: 6px;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--panel-2);
   color: var(--text-3);
   font-size: 11px;

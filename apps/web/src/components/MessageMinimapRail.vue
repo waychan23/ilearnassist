@@ -310,12 +310,16 @@ onBeforeUnmount(() => {
   padding: 0;
   border: 0;
   background: transparent;
-  outline: none;
   cursor: pointer;
 }
+/*
+ * The rail's anchors sit close together, so the global ring's 2px offset would overlap the
+ * neighbouring anchor. Only the offset is tightened — the colour and width still come from
+ * the one global rule, which is what `:where()`'s zero specificity is for.
+ */
 .minimap-anchor:focus-visible {
-  outline: 1px solid var(--accent);
-  border-radius: 4px;
+  outline-offset: -2px;
+  border-radius: var(--radius-xs);
 }
 
 .minimap-line {
@@ -361,7 +365,7 @@ onBeforeUnmount(() => {
   transform: translateY(-50%);
   pointer-events: none;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--panel);
   padding: 8px 12px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);

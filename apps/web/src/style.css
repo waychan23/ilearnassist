@@ -33,6 +33,26 @@
  * key off `.hljs`, and the theme is an attribute, not a media query), so
  * `composables/theme.ts` swaps `github.css` in for `github-dark.css`. Loading both and
  * letting the later one win would colour every token for whichever imported last.
+ *
+ * Tokens.
+ *
+ * Two naming schemes, and the split is deliberate rather than a leftover. A *ramp* is read
+ * by its index — `--space-6` is understood as two steps above `--space-4` without a lookup,
+ * which is the whole reason to number it. A *role* or a *layer* is not: `--radius-3` would
+ * still need a lookup to say whether it means a card or a chip, while `--radius-lg` says so.
+ * So the arithmetic scales are numeric (`--space-N`, `--fs-N`) and the semantic ones are
+ * named (`--radius*`, `--dur-*`, `--z-*`, `--shadow-*`, `--ease-*`, `--lh-*`).
+ *
+ * The palette lives in this one block, and a guard insists on it: `style.test.ts` picks the
+ * palette by *which `:root` declares colours* and fails if more than one does. A second
+ * palette block would escape the light-palette completeness check entirely, and the omission
+ * would look like a passing test. Other `:root` blocks are fine — the reduced-motion query
+ * below is one, and it declares only durations.
+ *
+ * Only colours are restated in the light blocks (the predicate in `style.test.ts` derives
+ * that from the value). Lengths, durations, layer indices and shadows are the same in both
+ * themes; `--scrim` is the one colour that is too, because a translucent black darkens what
+ * is under it rather than carrying a colour of its own.
  */
 :root {
   --bg: #16181c;
@@ -59,7 +79,84 @@
   --code-fg-2: #9aa0a6;
   --scrollbar: #33373e;
   --scrollbar-hover: #3f444c;
+
+  /*
+   * Semantic surfaces. Each was a literal somewhere it could not follow the theme: the user
+   * bubble hard-coded the dark blue in this sheet and stayed dark-on-light, and the
+   * reasoning tint hard-coded the *dark* accent — the same defect one step removed.
+   * `--focus-ring` is separate from `--accent` because the dark accent is only ~2.9:1 on
+   * `--panel`, too faint for a 2px indicator; the ring is a lightened accent.
+   */
+  --bubble-bg: #2b3f6b;
+  --bubble-fg: #eaf0ff;
+  --accent-bg: rgba(76, 139, 245, 0.16);
+  --focus-ring: #7aa7ff;
+
+  /* ---- spacing (2px base) — `padding`, `margin` and `gap` only ---- */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 16px;
+  --space-8: 20px;
+  --space-9: 24px;
+  --space-10: 32px;
+
+  /* ---- typography ---- */
+  --fs-1: 11px;
+  --fs-2: 12px;
+  --fs-3: 13px;
+  --fs-4: 14px;
+  --fs-5: 15px;
+  --fs-6: 16px;
+  --fs-7: 18px;
+  --fs-8: 20px;
+  --lh-tight: 1.3;
+  --lh-base: 1.6;
+
+  /*
+   * `--radius` keeps its bare name because it is the default and it is used ~20 times, and
+   * because a mistyped custom property fails *silently* — a `var(--radius-3)` that resolves
+   * to nothing leaves `border-radius` at 0, which neither `typecheck` nor `test` can see.
+   * `border-radius: 50%` stays a literal: a circle on a square box is idiomatic and never
+   * theme-dependent, so a token there is noise.
+   */
+  --radius-2xs: 2px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
   --radius: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+
+  /* ---- elevation ---- */
+  --shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --shadow-toast: 0 6px 24px rgba(0, 0, 0, 0.4);
+  --shadow-sheet: 0 -8px 28px rgba(0, 0, 0, 0.45);
+  --scrim: rgba(0, 0, 0, 0.55);
+
+  /* ---- motion ---- */
+  --dur-fast: 0.12s;
+  --dur-base: 0.2s;
+  --dur-slow: 0.28s;
+  --ease-drawer: cubic-bezier(0.2, 0, 0, 1);
+
+  /*
+   * The drawer sits above popovers (its own content can host one) and below the modal:
+   * Settings is reachable from the sidebar footer, so a dialog opened *from* the open drawer
+   * has to cover the drawer rather than race it. The backdrop needs its own value, or the
+   * sidebar and its own scrim would tie.
+   */
+  --z-rail: 10;
+  --z-rail-card: 20;
+  --z-popover: 60;
+  --z-backdrop: 70;
+  --z-drawer: 80;
+  --z-overlay: 100;
+  --z-toast: 200;
+
   color-scheme: dark;
 }
 
@@ -88,6 +185,12 @@
   --code-fg-2: #57606a;
   --scrollbar: #c1c8d0;
   --scrollbar-hover: #a5adb8;
+  /* Light bubbles are a blue tint rather than a dark navy, and the text stays near-black
+     on it (~11:1) instead of the light blue the dark theme uses. */
+  --bubble-bg: #dbe7ff;
+  --bubble-fg: #16233b;
+  --accent-bg: rgba(47, 111, 235, 0.1);
+  --focus-ring: #2f6feb;
   color-scheme: light;
 }
 
@@ -117,6 +220,12 @@
     --code-fg-2: #57606a;
     --scrollbar: #c1c8d0;
     --scrollbar-hover: #a5adb8;
+    /* Light bubbles are a blue tint rather than a dark navy, and the text stays near-black
+       on it (~11:1) instead of the light blue the dark theme uses. */
+    --bubble-bg: #dbe7ff;
+    --bubble-fg: #16233b;
+    --accent-bg: rgba(47, 111, 235, 0.1);
+    --focus-ring: #2f6feb;
     color-scheme: light;
   }
 }
@@ -139,9 +248,43 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue",
     Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: var(--fs-4);
+  line-height: var(--lh-base);
   -webkit-font-smoothing: antialiased;
+}
+
+/* --------------------------------- primitives ------------------------------- */
+
+/*
+ * The app's only focus indicator, and it is global on purpose: before this every control
+ * relied on the browser default, which three `outline: none` declarations then removed — so
+ * there was no visible keyboard focus anywhere except the minimap rail.
+ *
+ * `:where()` keeps the specificity at zero, which is what makes this a floor rather than an
+ * override: any class rule beats it, so a component that genuinely needs a different ring
+ * can say so, and nothing here fights the layout. The cost is that it cannot beat an
+ * `outline: none` either — that is why those were deleted rather than out-specified.
+ */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/*
+ * Durations are tokens so honouring the user's motion preference is one override rather than
+ * an audit of every `transition` in the app. Add a duration token here when you add one
+ * above; a transition that hard-codes its duration instead is a transition that ignores the
+ * preference, which `style.test.ts` checks for.
+ *
+ * `0.01ms` rather than `0s`: at zero the browser may skip the transition event entirely, so
+ * anything waiting on `transitionend` would hang.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0.01ms;
+    --dur-base: 0.01ms;
+    --dur-slow: 0.01ms;
+  }
 }
 
 ::-webkit-scrollbar {
@@ -380,8 +523,8 @@ body {
 }
 
 .msg .bubble {
-  background: #2b3f6b;
-  color: #eaf0ff;
+  background: var(--bubble-bg);
+  color: var(--bubble-fg);
   padding: 10px 14px;
   border-radius: 12px 12px 2px 12px;
   max-width: 78%;
@@ -397,7 +540,7 @@ body {
 .msg .avatar {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -616,7 +759,6 @@ body {
   font-size: 14px;
   line-height: 1.6;
   max-height: 200px;
-  outline: none;
 }
 
 /* The send control is an icon button in the input row, as in chatbox. */
@@ -775,7 +917,6 @@ body {
   border-radius: var(--radius);
   font-family: inherit;
   font-size: 14px;
-  outline: none;
 }
 
 .input:focus,
@@ -815,7 +956,7 @@ body {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
