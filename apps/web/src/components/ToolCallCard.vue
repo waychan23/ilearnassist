@@ -1,21 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import type { ToolCall } from "../api/types";
 
 const props = defineProps<{ toolCall: ToolCall }>();
 const open = ref(false);
+const { t, te } = useI18n();
 
-const LABELS: Record<string, string> = {
-  web_search: "网页搜索",
-  web_fetch: "读取网页",
-  list_files: "列出文件",
-  read_file: "读取文件",
-  write_file: "写入文件",
-  create_directory: "创建目录",
-  delete_file: "删除文件",
-};
-
-const label = computed(() => LABELS[props.toolCall.name] ?? props.toolCall.name);
+/**
+ * Labels come from the shared tools.name.* namespace, so this and the Copilot dialog's tool
+ * list resolve the same key. Uses te() rather than a fallback operator: t() on a missing
+ * key returns the key path itself, which would render as an internal identifier.
+ */
+const label = computed(() => {
+  const key = "tools.name." + props.toolCall.name;
+  return te(key) ? t(key) : props.toolCall.name;
+});
 const done = computed(() => props.toolCall.output !== undefined);
 
 const arg = computed(() => {
@@ -48,16 +48,16 @@ const prettyInput = computed(() => {
       <span class="icon" :class="done ? 'ok' : 'run'">{{ done ? "✓" : "↻" }}</span>
       <span class="name">{{ label }}</span>
       <span class="arg">{{ arg }}</span>
-      <span class="status">{{ done ? "完成" : "运行中" }}</span>
+      <span class="status">{{ done ? t("tools.done") : t("tools.running") }}</span>
       <span class="toggle">{{ open ? "▾" : "▸" }}</span>
     </div>
     <div v-if="open" class="tool-body">
       <div>
-        <div class="key">参数</div>
+        <div class="key">{{ t("tools.args") }}</div>
         <pre>{{ prettyInput }}</pre>
       </div>
       <div v-if="done">
-        <div class="key">结果</div>
+        <div class="key">{{ t("tools.result") }}</div>
         <pre>{{ props.toolCall.output }}</pre>
       </div>
     </div>

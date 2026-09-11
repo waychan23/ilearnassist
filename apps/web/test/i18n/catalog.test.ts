@@ -27,7 +27,7 @@ const CJK_ALLOWED_IN_EN = new Set(["locale.zhCN"]);
  * the static scan cannot see. Kept as narrow as possible — a broad prefix here is how a
  * typo hides.
  */
-const DYNAMIC_PREFIXES = ["theme.", "errors.", "parseErrors."];
+const DYNAMIC_PREFIXES = ["theme.", "errors.", "parseErrors.", "tools.name."];
 
 const isDynamic = (key: string): boolean => DYNAMIC_PREFIXES.some((p) => key.startsWith(p));
 

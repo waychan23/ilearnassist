@@ -19,6 +19,9 @@ const en: typeof MessageSchema = {
     create: "Create",
     delete: "Delete",
     name: "Name",
+    copied: "Copied",
+    copy: "Copy",
+    save: "Save",
   },
 
   app: {
@@ -134,6 +137,74 @@ const en: typeof MessageSchema = {
       detail: "The directory {path} and every file in it will be deleted. This cannot be undone.",
     },
   },
+
+  tools: {
+    name: {
+      web_search: "Web search",
+      web_fetch: "Read a web page",
+      list_files: "List files",
+      read_file: "Read a file",
+      write_file: "Write a file",
+      create_directory: "Create a directory",
+      delete_file: "Delete a file",
+      read_document: "Read a document",
+    },
+    done: "Done",
+    running: "Running",
+    args: "Arguments",
+    result: "Result",
+  },
+
+  message: {
+    copyReply: "Copy the reply",
+    contextTokens: "Context this turn: {count} tokens",
+    usage: {
+      input: "In",
+      output: "Out",
+      total: "Total",
+      cached: "Cached",
+    },
+    reasoning: {
+      thinking: "Thinking",
+      done: "Thought process",
+      duration: "took {duration}",
+      copy: "Copy the reasoning",
+    },
+  },
+
+  tokens: {
+    used: "Context used",
+    pending: "Pending input (estimated)",
+    projected: "Projected total",
+    estimatedLimit: "Estimated limit",
+    limitHint: "This model has no configured context length, so a default estimate is used",
+    messages: "Context messages",
+    maxSteps: "Max tool steps",
+    note: "“Context used” comes from last turn's token counts; “pending input” is estimated from character count and is a preview only.",
+  },
+
+  copilot: {
+    edit: "Edit Copilot",
+    create: "New Copilot",
+    namePlaceholder: "e.g. Code assistant",
+    description: "Description",
+    descriptionPlaceholder: "One line on what it is for",
+    systemPrompt: "System prompt",
+    systemPromptPlaceholder: "Define this Copilot's role, abilities and behavioural constraints…",
+    systemPromptHint: "Leave blank to use the built-in general-purpose assistant.",
+    tools: "Available tools (blank = all of them)",
+    defaults: "Defaults (copied into a new conversation; adjustable there afterwards)",
+    inherit: "Inherit default",
+    model: "Model",
+    maxOutput: "Max output",
+    unitToken: "in tokens",
+    maxHistory: "History messages to carry",
+    all: "All",
+    unitMessages: "messages",
+    maxSteps: "Max tool steps",
+    unitSteps: "steps",
+  },
+
 
   errors: {
     NAME_REQUIRED: "A name is required.",

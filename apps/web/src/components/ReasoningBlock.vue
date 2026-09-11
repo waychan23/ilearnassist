@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 /**
  * The model's chain of thought, following chatbox's reasoning row (which in turn mirrors
@@ -14,12 +15,15 @@ const props = defineProps<{
   durationMs?: number | null;
 }>();
 
+const { t } = useI18n();
 const expanded = ref(false);
 const copied = ref(false);
 
 const hasDetail = computed(() => props.content.trim().length > 0);
 
-const label = computed(() => (props.thinking ? "思考中" : "已深度思考"));
+const label = computed(() =>
+  props.thinking ? t("message.reasoning.thinking") : t("message.reasoning.done")
+);
 
 const durationText = computed(() => {
   const ms = props.durationMs;
@@ -60,12 +64,12 @@ async function copy() {
       <span class="dot" :class="props.thinking ? 'live' : 'done'">💡</span>
       <span class="label">{{ label }}</span>
       <span v-if="props.thinking" class="dots"><i></i><i></i><i></i></span>
-      <span v-if="durationText" class="time">用时 {{ durationText }}</span>
+      <span v-if="durationText" class="time">{{ t("message.reasoning.duration", { duration: durationText }) }}</span>
       <span v-if="!expanded" class="summary">{{ summary }}</span>
       <button
         v-if="expanded"
         class="icon-btn copy"
-        :title="copied ? '已复制' : '复制思考内容'"
+        :title="copied ? t('common.copied') : t('message.reasoning.copy')"
         @click.stop="copy"
       >
         {{ copied ? "✓" : "⧉" }}

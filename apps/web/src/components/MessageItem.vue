@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import type { Message, ToolCall } from "../api/types";
 import { renderMarkdown } from "../utils/markdown";
@@ -23,6 +24,7 @@ const props = defineProps<{
   streaming?: StreamingState;
 }>();
 
+const { t } = useI18n();
 const store = useAppStore();
 
 const isUser = computed(() => props.message?.role === "user");
@@ -95,10 +97,13 @@ const usageText = computed(() => {
   const u = usage.value;
   if (!u) return "";
   const parts: string[] = [];
-  if (u.inputTokens) parts.push(`输入 ${formatTokens(u.inputTokens)}`);
-  if (u.outputTokens) parts.push(`输出 ${formatTokens(u.outputTokens)}`);
-  if (u.totalTokens) parts.push(`合计 ${formatTokens(u.totalTokens)}`);
-  if (u.cachedInputTokens) parts.push(`缓存命中 ${formatTokens(u.cachedInputTokens)}`);
+  // Labels, not plurals — the number is formatted by formatTokens, not by i18n.
+  if (u.inputTokens) parts.push(t("message.usage.input") + " " + formatTokens(u.inputTokens));
+  if (u.outputTokens) parts.push(t("message.usage.output") + " " + formatTokens(u.outputTokens));
+  if (u.totalTokens) parts.push(t("message.usage.total") + " " + formatTokens(u.totalTokens));
+  if (u.cachedInputTokens) {
+    parts.push(t("message.usage.cached") + " " + formatTokens(u.cachedInputTokens));
+  }
   return parts.join(" · ");
 });
 </script>
@@ -113,8 +118,8 @@ const usageText = computed(() => {
       />
       <div v-if="content" class="bubble">{{ content }}</div>
       <div v-if="content && !props.streaming" class="actions">
-        <button class="icon-btn act" :title="copied ? '已复制' : '复制'" @click="copyMessage">
-          {{ copied ? "✓ 已复制" : "⧉ 复制" }}
+        <button class="icon-btn act" :title="copied ? t('common.copied') : t('common.copy')" @click="copyMessage">
+          {{ copied ? "✓ " + t("common.copied") : "⧉ " + t("common.copy") }}
         </button>
       </div>
     </div>
@@ -140,12 +145,12 @@ const usageText = computed(() => {
         <button
           v-if="content"
           class="icon-btn act"
-          :title="copied ? '已复制' : '复制回复'"
+          :title="copied ? t('common.copied') : t('message.copyReply')"
           @click="copyMessage"
         >
-          {{ copied ? "✓ 已复制" : "⧉ 复制" }}
+          {{ copied ? "✓ " + t("common.copied") : "⧉ " + t("common.copy") }}
         </button>
-        <span v-if="usageText" class="usage-line" :title="`本轮上下文 ${formatTokens(usage?.contextTokens ?? 0)} tokens`">
+        <span v-if="usageText" class="usage-line" :title="t('message.contextTokens', { count: formatTokens(usage?.contextTokens ?? 0) })">
           {{ usageText }}
         </span>
       </div>

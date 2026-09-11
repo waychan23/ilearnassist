@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { estimateTokens, formatTokens } from "../utils/format";
 import { DEFAULT_CONTEXT_WINDOW } from "../api/types";
 
 const props = defineProps<{ pendingText: string }>();
 
+const { t } = useI18n();
 const store = useAppStore();
 const open = ref(false);
 
@@ -42,15 +44,15 @@ const label = computed(() => {
 
     <div v-if="open" class="popover">
       <div class="row">
-        <span>已用上下文</span>
+        <span>{{ t("tokens.used") }}</span>
         <span class="num">{{ formatTokens(used) }}</span>
       </div>
       <div class="row">
-        <span>待发送输入（估算）</span>
+        <span>{{ t("tokens.pending") }}</span>
         <span class="num">{{ pending ? `+${formatTokens(pending)}` : "—" }}</span>
       </div>
       <div class="row total">
-        <span>预计占用</span>
+        <span>{{ t("tokens.projected") }}</span>
         <span class="num">{{ formatTokens(projected) }}</span>
       </div>
 
@@ -59,24 +61,24 @@ const label = computed(() => {
       </div>
       <div class="bar-label">
         <span>{{ (ratio * 100).toFixed(1) }}% of {{ formatTokens(limit) }}</span>
-        <span v-if="usingFallbackLimit" class="approx" title="模型未配置上下文长度，使用默认估算值">
-          估算上限
+        <span v-if="usingFallbackLimit" class="approx" :title="t('tokens.limitHint')">
+          {{ t("tokens.estimatedLimit") }}
         </span>
       </div>
 
       <div class="row">
-        <span>上下文消息</span>
+        <span>{{ t("tokens.messages") }}</span>
         <span class="num">
           {{ messageCount }}<template v-if="messageLimit"> / {{ messageLimit }}</template>
         </span>
       </div>
       <div class="row">
-        <span>最大工具轮数</span>
+        <span>{{ t("tokens.maxSteps") }}</span>
         <span class="num">{{ store.sessionSettings.maxSteps ?? 15 }}</span>
       </div>
 
       <div class="note">
-        「已用上下文」来自上一轮的 token 统计；「待发送输入」按字符数估算，仅供预览。
+        {{ t("tokens.note") }}
       </div>
     </div>
   </div>

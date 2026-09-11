@@ -26,6 +26,9 @@ export default {
     create: "创建",
     delete: "删除",
     name: "名称",
+    copied: "已复制",
+    copy: "复制",
+    save: "保存",
   },
 
   app: {
@@ -152,6 +155,74 @@ export default {
    * One message per `ApiErrorCode`. The catalog test iterates the shared union, so a code
    * added there without a message here fails the suite.
    */
+  tools: {
+    name: {
+      web_search: "网页搜索",
+      web_fetch: "读取网页",
+      list_files: "列出文件",
+      read_file: "读取文件",
+      write_file: "写入文件",
+      create_directory: "创建目录",
+      delete_file: "删除文件",
+      read_document: "读取文档",
+    },
+    done: "完成",
+    running: "运行中",
+    args: "参数",
+    result: "结果",
+  },
+
+  message: {
+    copyReply: "复制回复",
+    contextTokens: "本轮上下文 {count} tokens",
+    usage: {
+      input: "输入",
+      output: "输出",
+      total: "合计",
+      cached: "缓存命中",
+    },
+    reasoning: {
+      thinking: "思考中",
+      done: "已深度思考",
+      duration: "用时 {duration}",
+      copy: "复制思考内容",
+    },
+  },
+
+  tokens: {
+    used: "已用上下文",
+    pending: "待发送输入（估算）",
+    projected: "预计占用",
+    estimatedLimit: "估算上限",
+    limitHint: "模型未配置上下文长度，使用默认估算值",
+    messages: "上下文消息",
+    maxSteps: "最大工具轮数",
+    note: "「已用上下文」来自上一轮的 token 统计；「待发送输入」按字符数估算，仅供预览。",
+  },
+
+  copilot: {
+    edit: "编辑 Copilot",
+    create: "新建 Copilot",
+    namePlaceholder: "例如：代码助手",
+    description: "描述",
+    descriptionPlaceholder: "一句话说明它的用途",
+    systemPrompt: "System Prompt（设定）",
+    systemPromptPlaceholder: "定义这个 Copilot 的角色、能力与行为约束…",
+    systemPromptHint: "留空则使用内置的通用助手设定。",
+    tools: "可用工具（留空 = 全部可用）",
+    defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",
+    inherit: "继承默认",
+    model: "模型",
+    maxOutput: "最大输出",
+    unitToken: "单位 token",
+    maxHistory: "最多携带历史消息",
+    all: "全部",
+    unitMessages: "单位「条」",
+    maxSteps: "最大工具轮数",
+    unitSteps: "单位「轮」",
+  },
+
+
   errors: {
     NAME_REQUIRED: "名称不能为空。",
     WORKSPACE_NOT_FOUND: "工作区不存在，可能已被删除。",

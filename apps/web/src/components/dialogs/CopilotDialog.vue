@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import type { Copilot } from "../../api/types";
 import type { CopilotDraft } from "../../stores/app";
@@ -14,20 +15,17 @@ const ALL_TOOLS = [
   "delete_file",
 ] as const;
 
-const TOOL_LABELS: Record<string, string> = {
-  web_search: "网页搜索",
-  web_fetch: "读取网页",
-  list_files: "列出文件",
-  read_file: "读取文件",
-  write_file: "写入文件",
-  create_directory: "创建目录",
-  delete_file: "删除文件",
-};
-
 const props = defineProps<{ copilot: Copilot | null }>();
 const emit = defineEmits<{ close: []; save: [draft: CopilotDraft] }>();
 
 const store = useAppStore();
+const { t, te } = useI18n();
+
+/** The tool list shares the tools.name.* namespace with the tool-call card. */
+const toolLabel = (name: string): string => {
+  const key = "tools.name." + name;
+  return te(key) ? t(key) : name;
+};
 
 /** `""` means "inherit"; every numeric field uses the same convention. */
 interface Draft {
@@ -141,87 +139,87 @@ function save() {
   <div class="modal-overlay" @click.self="emit('close')">
     <div class="modal">
       <div class="modal-head">
-        <h3>{{ props.copilot ? "编辑 Copilot" : "新建 Copilot" }}</h3>
+        <h3>{{ props.copilot ? t("copilot.edit") : t("copilot.create") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
       </div>
       <div class="modal-body">
         <div class="field">
-          <label>名称</label>
-          <input v-model="draft.name" class="input" placeholder="例如：代码助手" />
+          <label>{{ t("common.name") }}</label>
+          <input v-model="draft.name" class="input" :placeholder="t('copilot.namePlaceholder')" />
         </div>
         <div class="field">
-          <label>描述</label>
-          <input v-model="draft.description" class="input" placeholder="一句话说明它的用途" />
+          <label>{{ t("copilot.description") }}</label>
+          <input v-model="draft.description" class="input" :placeholder="t('copilot.descriptionPlaceholder')" />
         </div>
         <div class="field">
-          <label>System Prompt（设定）</label>
+          <label>{{ t("copilot.systemPrompt") }}</label>
           <textarea
             v-model="draft.systemPrompt"
             class="textarea"
-            placeholder="定义这个 Copilot 的角色、能力与行为约束…"
+            :placeholder="t('copilot.systemPromptPlaceholder')"
           ></textarea>
-          <div class="hint">留空则使用内置的通用助手设定。</div>
+          <div class="hint">{{ t("copilot.systemPromptHint") }}</div>
         </div>
 
         <div class="field">
-          <label>可用工具（留空 = 全部可用）</label>
+          <label>{{ t("copilot.tools") }}</label>
           <div class="tool-checks">
             <label v-for="t in ALL_TOOLS" :key="t">
               <input type="checkbox" :checked="draft.tools.includes(t)" @change="toggleTool(t)" />
-              {{ TOOL_LABELS[t] ?? t }}
+              {{ toolLabel(t) }}
             </label>
           </div>
         </div>
 
         <details class="defaults" :open="showDefaults">
-          <summary>默认参数（新建会话时复制到会话中，之后可在会话里单独调整）</summary>
+          <summary>{{ t("copilot.defaults") }}</summary>
 
           <div class="grid">
             <div class="field">
               <label>Provider</label>
               <select v-model="draft.providerId" class="select">
-                <option value="">继承默认</option>
+                <option value="">{{ t("copilot.inherit") }}</option>
                 <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
               </select>
             </div>
             <div class="field">
-              <label>模型</label>
+              <label>{{ t("copilot.model") }}</label>
               <select v-model="draft.modelId" class="select" :disabled="!draft.providerId">
-                <option value="">继承默认</option>
+                <option value="">{{ t("copilot.inherit") }}</option>
                 <option v-for="m in models" :key="m.id" :value="m.modelId">{{ m.name }}</option>
               </select>
             </div>
             <div class="field">
               <label>Temperature</label>
-              <input v-model="draft.temperature" class="input" placeholder="继承默认" />
+              <input v-model="draft.temperature" class="input" :placeholder="t('copilot.inherit')" />
               <div class="hint">0 ~ 2</div>
             </div>
             <div class="field">
               <label>Top P</label>
-              <input v-model="draft.topP" class="input" placeholder="继承默认" />
+              <input v-model="draft.topP" class="input" :placeholder="t('copilot.inherit')" />
               <div class="hint">0 ~ 1</div>
             </div>
             <div class="field">
-              <label>最大输出</label>
-              <input v-model="draft.maxTokens" class="input" placeholder="继承默认" />
-              <div class="hint">单位 token</div>
+              <label>{{ t("copilot.maxOutput") }}</label>
+              <input v-model="draft.maxTokens" class="input" :placeholder="t('copilot.inherit')" />
+              <div class="hint">{{ t("copilot.unitToken") }}</div>
             </div>
             <div class="field">
-              <label>最多携带历史消息</label>
-              <input v-model="draft.maxContextMessages" class="input" placeholder="全部" />
-              <div class="hint">单位「条」</div>
+              <label>{{ t("copilot.maxHistory") }}</label>
+              <input v-model="draft.maxContextMessages" class="input" :placeholder="t('copilot.all')" />
+              <div class="hint">{{ t("copilot.unitMessages") }}</div>
             </div>
             <div class="field">
-              <label>最大工具轮数</label>
+              <label>{{ t("copilot.maxSteps") }}</label>
               <input v-model="draft.maxSteps" class="input" placeholder="15" />
-              <div class="hint">单位「轮」</div>
+              <div class="hint">{{ t("copilot.unitSteps") }}</div>
             </div>
           </div>
         </details>
       </div>
       <div class="modal-foot">
-        <button class="btn" @click="emit('close')">取消</button>
-        <button class="btn primary" :disabled="!draft.name.trim()" @click="save">保存</button>
+        <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
+        <button class="btn primary" :disabled="!draft.name.trim()" @click="save">{{ t("common.save") }}</button>
       </div>
     </div>
   </div>
