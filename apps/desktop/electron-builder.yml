@@ -1,0 +1,82 @@
+# Packaging for the desktop control panel.
+#
+# `pnpm --filter @guided-learning/desktop package` produces `release/*.dmg`.
+#
+# Two settings below are load-bearing and not the defaults. Read their comments before
+# changing them.
+
+appId: com.guidedlearning.desktop
+productName: guided-learning
+
+directories:
+  # Not the conventional `build/`: that name is ignored by the repo-wide `.gitignore`, and
+  # this directory holds the committed icon, not build output.
+  buildResources: assets
+  output: release
+
+# The app is `dist/` plus its two runtime dependencies. `package.json` comes along because
+# Electron reads `main` out of it to find the entry point.
+files:
+  - dist/**
+  - package.json
+  - "!dist/resources/**"
+
+# The unbundled half — the built frontend and the seed config. These land in
+# `Contents/Resources/`, outside the app directory, which is where `main.ts` looks when
+# `app.isPackaged` is true.
+extraResources:
+  - from: dist/resources
+    to: .
+
+# Not the default, and deliberate.
+#
+# The app's whole writable state lives under the user's data directory, so there is nothing
+# to protect by sealing the code up, and an archive buys a packaged app nothing it needs.
+# What it costs is real: the server runs as a *child process* and Node has to resolve two
+# packages out of the tree — `better-sqlite3` (a native addon that `dlopen`s a `.node` from
+# its `prebuilds/` directory) and `pdfjs-dist` (whose legacy build Node imports by ESM path).
+# Both of those go through filesystem calls that an asar archive intercepts, from a process
+# that is not the one Electron patched for it. Leaving the tree unpacked removes the question.
+asar: false
+
+# Also not the default. `better-sqlite3` v13 ships N-API prebuilds
+# (`prebuilds/darwin-arm64.node` and friends), and N-API binaries are ABI-stable across Node
+# and Electron versions — so the binary built for this machine's Node is already correct for
+# the Electron runtime that loads it. Rebuilding would mean a network fetch or a full
+# `node-gyp` compile at package time to produce a byte-different equivalent of a file we
+# already have.
+npmRebuild: false
+
+# Re-signs the finished bundle ad-hoc when there is no Developer ID identity to use.
+#
+# Without it the `.dmg` installs an app that macOS refuses to open as *"damaged"* — the one
+# Gatekeeper message that right-click → Open cannot dismiss, because it is a signature that
+# no longer matches the bundle rather than a trust prompt. See the script for the full
+# reasoning, and `docs/desktop.md` → Signing for what a real certificate would add.
+afterSign: ./scripts/after-sign.mjs
+
+mac:
+  category: public.app-category.productivity
+  icon: assets/icon.icns
+  darkModeSupport: true
+  # One arch by default so a bare `pnpm package` is quick on the machine you are developing
+  # on. `pnpm package:mac` (see package.json) builds both, which is what a release needs —
+  # the two architectures need separate Electron binaries and produce separate disk images.
+  target:
+    - target: dmg
+      arch:
+        - arm64
+
+dmg:
+  title: guided-learning ${version}
+  # The standard install gesture: drag the app onto Applications. Spelling it out rather
+  # than relying on the default layout, because the default leaves the two icons overlapping
+  # the window edge at some sizes.
+  contents:
+    - x: 140
+      y: 200
+      type: file
+    - x: 400
+      y: 200
+      type: link
+      path: /Applications

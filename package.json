@@ -16,8 +16,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
-    "build": "pnpm --filter @guided-learning/web build"
+    "test:e2e": "pnpm --filter @guided-learning/desktop bundle && playwright test",
+    "build": "pnpm --filter @guided-learning/web build",
+    "desktop:dev": "pnpm --filter @guided-learning/desktop dev",
+    "desktop:build": "pnpm --filter @guided-learning/desktop build",
+    "desktop:package": "pnpm --filter @guided-learning/desktop package"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

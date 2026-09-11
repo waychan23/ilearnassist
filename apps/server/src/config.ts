@@ -81,8 +81,19 @@ export interface AppConfig {
   };
 }
 
-/** Project root resolved relative to this file (<root>/apps/server/src/config.ts). */
-const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+/**
+ * Root holding `config/`, `data/`, `.env` and the default `workspaces/` tree.
+ *
+ * Defaults to the project root, derived from this file's own location
+ * (`<root>/apps/server/src/config.ts`). That is right for a checkout and wrong for a
+ * packaged desktop build, where the code sits in a read-only bundle and everything
+ * writable belongs under the OS's per-user data directory — so the desktop shell sets
+ * `GL_PROJECT_ROOT` and this defers to it. Same contract as `GL_DATA_DIR`: read once,
+ * at import time, so it must be set before this module is first imported.
+ */
+const PROJECT_ROOT = process.env.GL_PROJECT_ROOT
+  ? resolve(process.env.GL_PROJECT_ROOT)
+  : resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_DIR = resolve(PROJECT_ROOT, "config");
 
 /** Replace `${VAR}` placeholders in a string from process.env (missing vars → empty). */
@@ -366,8 +377,22 @@ const DATA_DIR = process.env.GL_DATA_DIR
   ? resolve(process.env.GL_DATA_DIR)
   : resolve(PROJECT_ROOT, "data");
 
+/**
+ * The built frontend (`apps/web/dist`), which this server also serves so the whole app
+ * answers on one origin with no reverse proxy in front of it.
+ *
+ * Two ways it can be absent, and both are normal: a plain checkout has no `dist/` until
+ * `pnpm build` has run, and a packed desktop bundle carries its own copy elsewhere and
+ * points `GL_WEB_DIR` at it. When there is no `index.html` to serve, the server is
+ * API-only, exactly as it was before.
+ */
+const WEB_DIR = process.env.GL_WEB_DIR
+  ? resolve(process.env.GL_WEB_DIR)
+  : resolve(PROJECT_ROOT, "apps/web/dist");
+
 export const PROJECT_PATHS = {
   projectRoot: PROJECT_ROOT,
   configDir: CONFIG_DIR,
   dataDir: DATA_DIR,
+  webDir: WEB_DIR,
 } as const;

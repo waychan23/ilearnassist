@@ -1,0 +1,35 @@
+import { contextBridge, ipcRenderer } from "electron";
+import { PANEL_CHANNELS, type PanelApi, type ServerStatus } from "../shared/panelApi.js";
+
+/**
+ * The whole surface the panel page is allowed to touch.
+ *
+ * `contextIsolation` is on and `nodeIntegration` is off, so this is not a convenience
+ * wrapper around a `require` the page still has — it is the only thing that crosses. The
+ * page gets seven named commands and a subscription, and no way to reach the filesystem,
+ * the process table or the server's stdio. That matters more here than in most Electron
+ * apps because the panel renders a URL and paths that come from the main process, and a
+ * page without ambient authority cannot be talked into doing something with them.
+ */
+
+const api: PanelApi = {
+  getState: () => ipcRenderer.invoke(PANEL_CHANNELS.getState) as Promise<ServerStatus>,
+  start: () => ipcRenderer.invoke(PANEL_CHANNELS.start) as Promise<ServerStatus>,
+  stop: () => ipcRenderer.invoke(PANEL_CHANNELS.stop) as Promise<ServerStatus>,
+  openApp: () => ipcRenderer.invoke(PANEL_CHANNELS.openApp) as Promise<void>,
+  openInBrowser: () => ipcRenderer.invoke(PANEL_CHANNELS.openInBrowser) as Promise<void>,
+  revealDataDir: () => ipcRenderer.invoke(PANEL_CHANNELS.revealDataDir) as Promise<void>,
+  quit: () => ipcRenderer.invoke(PANEL_CHANNELS.quit) as Promise<void>,
+
+  onStateChange: (listener) => {
+    // The raw event object is dropped rather than forwarded: it carries `sender` and
+    // `ports`, and handing those to page script would undo the isolation above.
+    const handler = (_event: unknown, status: ServerStatus): void => listener(status);
+    ipcRenderer.on(PANEL_CHANNELS.stateChanged, handler);
+    return () => {
+      ipcRenderer.removeListener(PANEL_CHANNELS.stateChanged, handler);
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld("panel", api);

@@ -24,7 +24,13 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # The Electron binary is ~130MB and CI never launches it: the desktop panel's e2e spec
+      # drives the *bundled page* in Chromium, and packaging a .dmg is not a CI job. The
+      # postinstall still runs, it just skips the download. Drop this if a job is ever added
+      # that runs or packages the Electron shell.
       - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
 
       # A clean typecheck is the bar for "done" (CLAUDE.md), and it covers the test
       # files and the e2e specs too.

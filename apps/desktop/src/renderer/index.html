@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      A desktop shell, not a page on the web: no navigation, no external subresources, and
+      the only scripts are the two files below. `style-src 'self'` is enough because every
+      rule ships in panel.css and nothing is inlined at runtime.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'"
+    />
+    <title>guided-learning</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="header">
+        <h1 class="wordmark">guided-learning</h1>
+        <p class="subtitle" data-i18n="app.tagline"></p>
+      </header>
+
+      <section class="status" data-state="stopped" aria-live="polite">
+        <div class="status__head">
+          <span class="status__dot" aria-hidden="true"></span>
+          <span class="status__label" data-role="state"></span>
+        </div>
+        <p class="status__detail" data-role="detail" hidden></p>
+        <div class="status__url" data-role="url-row" hidden>
+          <code class="status__code" data-role="url"></code>
+          <button type="button" class="button button--ghost button--small" data-action="copy"></button>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button type="button" class="button button--primary" data-action="open" disabled></button>
+        <div class="actions__row">
+          <button type="button" class="button" data-action="start"></button>
+          <button type="button" class="button" data-action="stop" disabled></button>
+        </div>
+        <button type="button" class="button button--link" data-action="browser" disabled></button>
+      </section>
+
+      <section class="field">
+        <div class="field__head">
+          <span class="field__label" data-i18n="label.dataDir"></span>
+          <button type="button" class="button button--link" data-action="reveal"></button>
+        </div>
+        <code class="field__value" data-role="data-dir"></code>
+      </section>
+
+      <section class="logs">
+        <button
+          type="button"
+          class="logs__toggle"
+          data-action="logs"
+          aria-expanded="false"
+          aria-controls="log-output"
+        >
+          <!--
+            A stroked chevron, not a "▸". The interface's marks are drawn rather than typed
+            so they inherit `currentColor` and rotate with transform; a character glyph
+            would be painted by the font and sit off-baseline at this size.
+          -->
+          <svg class="logs__chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span data-role="logs-label"></span>
+        </button>
+        <pre class="logs__output" id="log-output" data-role="logs" hidden></pre>
+      </section>
+    </main>
+
+    <!--
+      A classic script, not a module. The panel is loaded from `file://`, where Chromium
+      refuses module scripts outright ("origin 'null' has been blocked by CORS policy"), so
+      the renderer bundle is built as an IIFE. `defer` keeps it off the parser's critical
+      path while still running before `DOMContentLoaded`.
+    -->
+    <script src="panel.js" defer></script>
+  </body>
+</html>

@@ -6,11 +6,15 @@ Guidance for Claude Code when working in this repository.
 
 **guided-learning** is a self-hosted, single-user agent product (Browser/Server
 architecture). It provides a chatbox-like UI over a manual ReAct agent loop with
-tool calling. Two apps share a types package:
+tool calling. Three apps share a types package:
 
 - `apps/server` — Fastify 5 + better-sqlite3 + LangChain.js (`@langchain/core`,
-  `@langchain/openai`). Runs the agent loop and streams results over SSE.
+  `@langchain/openai`). Runs the agent loop, streams results over SSE, and serves
+  the built frontend when there is one.
 - `apps/web` — Vue 3 (Composition API) + Pinia + Vite. Renders the chat UI.
+- `apps/desktop` — Electron. A "control panel" that starts/stops the server and opens
+  the app, packaged as a Mac `.dmg` for people who do not want a terminal. Supervises
+  the server as a child process; reimplements none of it. See `docs/desktop.md`.
 - `packages/shared` — dependency-free API/domain types used by both sides.
 
 ## Commands
@@ -25,6 +29,8 @@ pnpm test              # vitest: unit + integration (server + web), no network
 pnpm test:coverage     # the same, with a coverage report (see "Testing")
 pnpm test:e2e          # playwright: real browser + real server + a fake LLM
 pnpm build             # production build of the web app
+pnpm desktop:dev       # bundle and launch the Electron control panel
+pnpm desktop:package   # build a Mac .dmg (apps/desktop/release/)
 ```
 
 TypeScript is strict (`strict`, `noUncheckedIndexedAccess`, `isolatedModules`,
@@ -65,6 +71,7 @@ pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromiu
 | `apps/server/test/` | unit + integration, mirroring `src/` |
 | `apps/web/test/` | unit tests for utils, the API client, the composables and the Pinia store (jsdom) |
 | `apps/web/test/i18n/` | catalog and hardcoded-text guards (see below) |
+| `apps/desktop/test/` | the control panel's paths, launch spec, process supervision and catalogs |
 | `e2e/*.spec.ts` | browser flows against the real stack |
 
 Each app's `tsconfig` includes its `test/` directory, so **`pnpm typecheck` checks the
@@ -150,6 +157,15 @@ config/config.yaml        # bootstrap (server/workspaces/tools) + seed data (pro
 vitest.config.ts          # root vitest entry (server + web projects; coverage scope)
 playwright.config.ts      # starts the fake LLM, the server and vite for e2e
 e2e/                      # playwright specs + the e2e config overlay + teardown
+apps/desktop/src/
+  shared/panelApi.ts      # the IPC contract (channels, ServerStatus, PanelApi)
+  shared/messages.ts      # the panel's two catalogs + fault → sentence
+  main/main.ts            # Electron: windows, menu, IPC handlers
+  main/serverProcess.ts   # supervises the server child (start/stop/crash/timeout)
+  main/paths.ts           # per-user layout + idempotent first-run seeding
+  main/launch.ts          # child env (ELECTRON_RUN_AS_NODE, GL_*) + stdout address parsing
+  preload/preload.ts      # contextBridge surface — seven commands, nothing else
+  renderer/               # the panel page (plain HTML/CSS + one bundled IIFE)
 apps/server/src/
   index.ts                # bootstrap + seedFromConfig
   config.ts               # YAML + ${ENV} resolution + .env loader
@@ -325,6 +341,33 @@ Fuller map in `docs/reference.md`.
   loses on source order alone. This has already produced one bug: the narrow
   `position: fixed` on `.overlay-popover` silently lost to the same class
   declared further down.
+- **The server serves the built frontend, and only when one exists.** `webApp.ts`
+  registers `@fastify/static` at `/` *after* the API routes, conditional on an
+  `index.html` being present. `buildServer` takes `webDir` and **tests never pass it** —
+  whether the machine running them happens to have run `pnpm build` must not change what
+  they assert. That a concrete `/api` route still wins over the static wildcard, and that
+  an unknown `/api/...` still answers with Fastify's 404 envelope, are pinned in
+  `apps/server/test/web-app.test.ts`.
+- **The desktop server runs on Electron's Node, not a system Node.** There is no Node on
+  a user's machine, so the child is spawned from `process.execPath` with
+  `ELECTRON_RUN_AS_NODE=1`. That is also what makes `better-sqlite3`'s prebuilt N-API
+  binary the right one. Do not "simplify" it to a plain `node` invocation.
+- **The panel enters `running` on exactly one signal**: the server printing
+  `[guided-learning] listening on <url>`. Not a fixed port, not a timer, and not
+  Fastify's own "Server listening at …" banner, which is logged from inside `listen`
+  before the process is necessarily ready. A control panel that claims a server is up
+  when it is not is worse than one that says nothing, because the user has no way to tell.
+- **The desktop app never writes into its own bundle.** Writable state lives under
+  `app.getPath("userData")`, reached through `GL_PROJECT_ROOT`; the bundle is read-only
+  and is replaced wholesale on every update. First-run seeding is idempotent and **never
+  overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the
+  user typed into the Settings UI from vanishing on the next launch.
+- **`asar: false` and `npmRebuild: false` in `electron-builder.yml` are deliberate.**
+  The first, because the server resolves a native addon and an ESM package from a child
+  process and neither should have to go through an asar archive. The second, because
+  `better-sqlite3` v13's prebuilds are N-API and therefore already ABI-correct for
+  Electron. Flip `npmRebuild` only if a dependency ships a non-N-API native module.
+  Rationale in full in `docs/desktop.md`.
 - **Extracted document text lives in `parsed/`, never beside the bytes.** An
   attachment's derived data goes to `uploads/<sessionId>/parsed/<attachmentId>.txt`,
   not `uploads/<sessionId>/<attachmentId>.txt`. `findStoredAttachment()` globs
@@ -345,8 +388,12 @@ Fuller map in `docs/reference.md`.
 
 ## Gotchas
 
-- `pnpm-workspace.yaml` has `allowBuilds: { better-sqlite3: true, esbuild: true }`.
-  Without it, `pnpm install` fails with `ERR_PNPM_IGNORED_BUILDS` (native addon).
+- `pnpm-workspace.yaml`'s `allowBuilds` gates every package whose postinstall does real
+  work. Without the entries it fails with `ERR_PNPM_IGNORED_BUILDS`. `better-sqlite3` and
+  `esbuild` are native/bundler; `electron` downloads the ~130 MB binary the desktop app
+  runs on. `electron-winstaller` is explicitly `false` — it is Windows-only Squirrel
+  tooling, and `pnpm install` otherwise rewrites the file with a
+  `set this to true or false` placeholder that is not valid YAML.
 - `better-sqlite3` is a native module — it builds against your local Node. If you
   change Node versions, reinstall.
 - Config loads `config/config.yaml`, overlaid by a git-ignored
@@ -357,6 +404,14 @@ Fuller map in `docs/reference.md`.
   module is first imported.
 - `pnpm test:e2e` starts its own fake LLM, backend and Vite on 3898 / 3899 / 5199,
   so a `pnpm dev` instance can keep running. Its scratch data lives in the
-  git-ignored `.e2e/`, removed on teardown.
+  git-ignored `.e2e/`, removed on teardown. It bundles `apps/desktop` first, because
+  `e2e/panel.spec.ts` runs against the control panel's built page.
+- **`electron-builder` fetches its helper binaries from GitHub at first use, and Electron's
+  binary comes from there too.** On a slow or blocked network both stall with no output at
+  all, so the build looks hung rather than failing. Set the mirrors first — details in
+  `docs/desktop.md` → Building from a slow network.
+- `pnpm desktop:dev` runs `build.mjs --no-web`, which reuses whatever frontend is already
+  staged in `dist/resources/web` and leaves it alone. Run `pnpm desktop:build` (or
+  `pnpm build`) once if the panel's server has nothing to serve.
 
 For the full architecture and configuration reference, see `docs/`.

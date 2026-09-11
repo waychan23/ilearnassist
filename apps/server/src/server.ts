@@ -6,6 +6,7 @@ import type { AppConfig } from "./config.js";
 import { createDb, seedDocumentParsersFromConfig, seedFromConfig, type AppDb } from "./db.js";
 import { DocumentService } from "./documents/service.js";
 import { ensureWorkspacesRoot } from "./workspace.js";
+import { registerWebApp } from "./webApp.js";
 import routes from "./routes.js";
 
 /**
@@ -21,6 +22,12 @@ export interface BuildServerInput {
   config: AppConfig;
   /** Holds the sqlite database and the `uploads/` tree. */
   dataDir: string;
+  /**
+   * Holds the built frontend to serve alongside the API. Omitted by the tests on
+   * purpose: whether `apps/web/dist` happens to exist on the machine running them must
+   * not change what they assert, so only the real entry point passes this.
+   */
+  webDir?: string;
   /** Fastify's logger. Tests pass `false` so route logs don't bury the assertions. */
   logger?: boolean;
 }
@@ -32,6 +39,8 @@ export interface BuiltServer {
   uploadsRoot: string;
   /** Owns document text extraction; exported so tests can await quiescence. */
   documents: DocumentService;
+  /** Whether the built frontend was found and is being served at `/`. */
+  servesWebApp: boolean;
 }
 
 export async function buildServer(input: BuildServerInput): Promise<BuiltServer> {
@@ -70,10 +79,13 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
   await app.register(cors, { origin: true });
   await app.register(routes, { config, db, uploadsRoot, documents });
 
+  // After the API, so a concrete route always wins over the static wildcard.
+  const servesWebApp = await registerWebApp(app, input.webDir);
+
   // A parse still running at shutdown would keep the process alive past `close()`.
   app.addHook("onClose", async () => {
     await documents.shutdown();
   });
 
-  return { app, db, uploadsRoot, documents };
+  return { app, db, uploadsRoot, documents, servesWebApp };
 }

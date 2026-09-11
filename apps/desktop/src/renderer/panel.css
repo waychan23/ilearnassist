@@ -1,0 +1,438 @@
+/*
+ * The control panel's stylesheet.
+ *
+ * A deliberate sibling of `apps/web/src/style.css` rather than an import of it: the panel
+ * is a separate bundle, shipped before the server exists, and it must render correctly
+ * when the frontend has not been built at all. What it copies is the *palette* — the same
+ * values, so the two windows look like one product — and the token discipline: colour
+ * ramps are numeric, roles are named, and light theme overrides only colour.
+ *
+ * There is one hex value that is not a token, and it is not here: `chromeColour()` in
+ * `main.ts` hands the OS a frame colour before any stylesheet exists.
+ *
+ * Theme follows the system (`prefers-color-scheme`), not the app's own stored preference.
+ * The panel has no theme control because it is not the chat UI — it inherits whatever the
+ * user's machine is set to, which is what every other native window does.
+ */
+:root {
+  --bg: #16181c;
+  --panel: #202327;
+  --border: #2b2f35;
+  --text: #e6e8eb;
+  --text-2: #9aa0a6;
+  --text-3: #6b7280;
+  --accent: #4c8bf5;
+  --accent-hover: #5f97f7;
+  --accent-fg: #ffffff;
+  --danger: #e5534b;
+  --danger-text: #f2a19c;
+  --success: #4cc38a;
+  --warning: #e6b33c;
+  --code-bg: #0d1117;
+  --code-fg: #c9d1d9;
+  --focus-ring: #7aa7ff;
+  color-scheme: dark;
+
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 16px;
+  --space-8: 20px;
+  --space-9: 24px;
+  --space-10: 32px;
+
+  --fs-1: 11px;
+  --fs-2: 12px;
+  --fs-3: 13px;
+  --fs-4: 14px;
+  --fs-5: 15px;
+  --fs-7: 18px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+  --dur-fast: 120ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* Cleared by the macOS rule below; the inset traffic lights need room above the header. */
+  --titlebar-pad: 0px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --panel: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-2: #59636e;
+    --text-3: #818b98;
+    --accent: #2f6feb;
+    --accent-hover: #245cd0;
+    --danger: #d9433b;
+    --danger-text: #b3261e;
+    /* Both are spent as text or as a status dot on a light background, where the dark
+       palette's tones fall under 2:1. Same reasoning as the web stylesheet's light block. */
+    --success: #187733;
+    --warning: #8a5c00;
+    --code-bg: #f6f8fa;
+    --code-fg: #24292e;
+    --focus-ring: #2f6feb;
+    color-scheme: light;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+ * `hidden` has to beat an author `display`.
+ *
+ * The attribute only sets `display: none` at the user-agent level, so any rule below that
+ * gives an element a `display` of its own silently un-hides it. That is exactly how the
+ * address row kept showing its "copy" button on a failed start, next to no address — the
+ * `hidden` toggle was working the whole time and the CSS was overriding it.
+ */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+    Roboto, sans-serif;
+  font-size: var(--fs-4);
+  line-height: 1.5;
+  /* The window is the app; selecting chrome text is an accident, not an intent. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Traffic lights sit inside the window because of `titleBarStyle: hiddenInset`. */
+body.is-mac {
+  --titlebar-pad: 30px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  height: 100%;
+  padding: calc(var(--space-8) + var(--titlebar-pad)) var(--space-8) var(--space-8);
+  overflow: hidden;
+}
+
+/* The drag region for the hidden title bar. Buttons below opt back out. */
+.header {
+  -webkit-app-region: drag;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wordmark {
+  margin: 0;
+  font-size: var(--fs-7);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-2);
+}
+
+/* ---------- status ---------- */
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-7);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.status__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.status__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--text-3);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.status[data-state="running"] .status__dot {
+  background: var(--success);
+}
+
+.status[data-state="starting"] .status__dot,
+.status[data-state="stopping"] .status__dot {
+  background: var(--warning);
+}
+
+.status[data-state="failed"] .status__dot {
+  background: var(--danger);
+}
+
+.status__label {
+  font-weight: 600;
+}
+
+.status__detail {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-3);
+}
+
+.status__url {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.status__code {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-3) var(--space-5);
+  overflow: hidden;
+  background: var(--code-bg);
+  border-radius: var(--radius-xs);
+  color: var(--code-fg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* The one string on this panel worth copying, so it is the one that is selectable. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ---------- buttons ---------- */
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.actions__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 34px;
+  padding: 0 var(--space-7);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-3);
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--text-3);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.button--primary {
+  min-height: 42px;
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-fg);
+  font-size: var(--fs-4);
+  font-weight: 600;
+}
+
+.button--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+
+.button--small {
+  min-height: 26px;
+  padding: 0 var(--space-5);
+  font-size: var(--fs-2);
+}
+
+.button--ghost {
+  background: transparent;
+}
+
+/*
+ * A link-styled button rather than an `<a>`: every one of these triggers an IPC call, and
+ * an anchor with no href is a button that lies about what it is.
+ */
+.button--link {
+  min-height: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: var(--fs-2);
+}
+
+.button--link:hover:not(:disabled) {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* ---------- data folder ---------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.field__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.field__label {
+  color: var(--text-2);
+  font-size: var(--fs-2);
+}
+
+.field__value {
+  padding: var(--space-4) var(--space-5);
+  overflow: hidden;
+  background: var(--code-bg);
+  border-radius: var(--radius-xs);
+  color: var(--code-fg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* `direction: rtl` would truncate from the left and keep the folder name visible, but it
+     reorders the path's own punctuation in a LTR run. The full path is worth more than the
+     pretty end, so it scrolls instead. */
+  overflow-x: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ---------- logs ---------- */
+
+.logs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+/*
+ * Take the leftover height only while the output is showing. Collapsed, the panel is a
+ * short stack of controls and should sit at the top of the window rather than stretch; open,
+ * the output is the one thing that wants every remaining pixel.
+ */
+.logs:has(.logs__output:not([hidden])) {
+  flex: 1;
+}
+
+.logs__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.logs__toggle:hover {
+  color: var(--text);
+}
+
+.logs__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.logs__chevron {
+  width: 14px;
+  height: 14px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.logs__toggle[aria-expanded="true"] .logs__chevron {
+  transform: rotate(90deg);
+}
+
+.logs__output {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-5);
+  overflow: auto;
+  background: var(--code-bg);
+  border-radius: var(--radius-sm);
+  color: var(--code-fg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-1);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Respecting the system setting is the whole reason this is a media query and not a rule. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0ms !important;
+  }
+}

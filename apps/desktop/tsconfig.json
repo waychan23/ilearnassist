@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    /* Electron, Node and the DOM are all in scope because this package genuinely spans all
+       three: `main/` is Node with Electron's API, `renderer/` is a browser page, and
+       `shared/` is imported by both. Splitting into three tsconfigs would buy nothing at
+       this size and would lose the check that matters — that a `ServerStatus` built in
+       `main` still satisfies what `renderer` destructures. */
+    "types": ["node"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "scripts"]
+}

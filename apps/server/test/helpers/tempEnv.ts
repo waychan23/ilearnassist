@@ -29,6 +29,12 @@ export interface TestServerOptions {
   defaultModel?: string;
   documentParsers?: DocumentParserDef[];
   documentParsing?: Partial<DocumentParsingDefaults>;
+  /**
+   * A built frontend to serve alongside the API. Omitted by default, and that is the point:
+   * whether the machine running the tests happens to have run `pnpm build` must not change
+   * what they assert about routing.
+   */
+  webDir?: string;
   tools?: {
     webSearch?: Partial<WebSearchConfig>;
     webFetch?: Partial<WebFetchConfig>;
@@ -140,7 +146,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     },
   };
 
-  const server = await buildServer({ config, dataDir, logger: false });
+  const server = await buildServer({ config, dataDir, logger: false, webDir: options.webDir });
   await server.app.ready();
 
   return {

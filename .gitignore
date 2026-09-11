@@ -6,6 +6,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# the desktop app's packaged output (the .dmg and the unpacked .app)
+release/
+
 # runtime data (workspaces, sqlite db, logs)
 workspaces/
 data/

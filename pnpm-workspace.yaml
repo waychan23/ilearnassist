@@ -5,6 +5,13 @@ packages:
 # Native modules / bundlers that legitimately need a postinstall step.
 allowBuilds:
   better-sqlite3: true
+  # Downloads the prebuilt Electron binary the desktop shell runs on. Without it
+  # `apps/desktop` installs but has no runtime to start.
+  electron: true
+  # Windows-only installer tooling (`electron-builder`'s Squirrel target). The desktop
+  # shell ships a `.dmg` today, so there is nothing for its postinstall to build.
+  # Flip this to true alongside the first `win` target.
+  electron-winstaller: false
   esbuild: true
 
 # Packages published within pnpm's 24h "minimum release age" supply-chain

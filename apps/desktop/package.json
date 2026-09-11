@@ -1,0 +1,27 @@
+{
+  "name": "@guided-learning/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Desktop control panel: starts the guided-learning server and opens the app.",
+  "main": "dist/main/main.cjs",
+  "scripts": {
+    "dev": "node scripts/build.mjs --no-web && electron .",
+    "build": "node scripts/build.mjs",
+    "bundle": "node scripts/build.mjs --no-web",
+    "icon": "node scripts/make-icon.mjs",
+    "package": "node scripts/build.mjs && electron-builder --mac",
+    "package:mac": "node scripts/build.mjs && electron-builder --mac --arm64 --x64",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "pdfjs-dist": "^4.10.38"
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2"
+  }
+}
