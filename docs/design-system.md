@@ -7,9 +7,9 @@ is what keeps the two from drifting.
 
 Read this before adding a colour, a size, a class or a breakpoint.
 
-> **Status.** Everything in this document is implemented and guarded, apart from the
-> narrow-screen polish noted under [Responsive](#responsive). The token tables describe what
-> is in `style.css` today.
+> **Status.** Everything in this document is implemented and guarded. The token tables
+> describe what is in `style.css` today; `apps/web/test/style.test.ts`, `test/composables/`
+> and `e2e/mobile.spec.ts` are what hold the code to it.
 
 ## How this document is organised
 
@@ -17,6 +17,7 @@ Read this before adding a colour, a size, a class or a breakpoint.
 | --- | --- |
 | [Tokens](#tokens) | Which value do I use for this spacing / size / radius? |
 | [Shared classes](#shared-classes) | Is there already a class for this control? |
+| [Responsive](#responsive) | Which breakpoint, and what has to move with it? |
 | [Accessibility](#accessibility) | What do I owe keyboard and touch users? |
 | [Adding to the system](#adding-to-the-system) | What has to change together, and what breaks |
 | [Deliberately not tokenised](#deliberately-not-tokenised) | Why is this number still a literal? |

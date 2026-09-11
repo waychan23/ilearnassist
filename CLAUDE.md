@@ -292,6 +292,29 @@ Fuller map in `docs/reference.md`.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace and
   provider deletes go through `confirm()` from `composables/confirm.ts`. The
   agent's own `delete_file` tool is deliberately *not* gated.
+- **Styling goes through the design system.** `docs/design-system.md` is the
+  spec and `apps/web/test/style.test.ts` enforces it: a new colour lands in the
+  one `:root` block *and* in both light-palette blocks, and spacing, type and
+  radius come from tokens rather than literals — a `padding: 8px 12px` in a
+  component fails the build. Nothing but colours is restated for the light
+  theme; the guard derives that from the value, so a length or a duration needs
+  no light variant and a colour cannot skip one. `--scrim` is the cautionary
+  tale: it was exempted as "a black that dims rather than colours", and 0.55 of
+  black over a white page composites the whole thing to `#737373`.
+- **A breakpoint is a literal in two languages.** `composables/breakpoints.ts`
+  holds the strings that reach `matchMedia`; `style.css` holds the same values as
+  media queries, and both are pinned by tests. Change them together — a mismatch
+  is a drawer that opens on a screen with no toggle.
+- **Every overlay is teleported to `body`.** `position: fixed` resolves against
+  the nearest *transformed* ancestor, and the mobile drawer is one, so a dialog
+  left inside the sidebar renders off-screen. Relatedly, do not give `.app` a
+  `transform`, `filter` or `contain`: it would become the containing block for
+  the fixed sidebar and every overlay at once.
+- **Responsive rules live at the end of `style.css`.** A media query does not
+  raise specificity, so an override written above the rule it means to override
+  loses on source order alone. This has already produced one bug: the narrow
+  `position: fixed` on `.overlay-popover` silently lost to the same class
+  declared further down.
 - **Extracted document text lives in `parsed/`, never beside the bytes.** An
   attachment's derived data goes to `uploads/<sessionId>/parsed/<attachmentId>.txt`,
   not `uploads/<sessionId>/<attachmentId>.txt`. `findStoredAttachment()` globs

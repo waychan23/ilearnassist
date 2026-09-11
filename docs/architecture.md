@@ -407,6 +407,15 @@ after that point, and rendering both would show the answer twice for as long as 
   `SettingsDialog` (Providers / Copilots / defaults tabs), `ProviderDialog`,
   `CopilotDialog`, `NewSessionDialog`, `SessionSettingsDialog`,
   `CreateWorkspaceDialog`.
+- `composables/` — the few pieces of state that are not domain state and not component-local.
+  `theme.ts` and `locale.ts` own the two persisted preferences; `ui.ts` holds the booleans
+  more than one component needs to read or set (`settingsOpen`, `drawerOpen`); `breakpoints.ts`
+  holds the media-query flags (`isCompact`, `isNarrow`, `isCoarsePointer`) as module-level
+  singletons, because a viewport query is a fact about the window rather than about any one
+  component. `confirm.ts` is the promise-returning confirm prompt.
+
+  The styling conventions — the token tables, the shared classes, the breakpoints — live in
+  `docs/design-system.md`, and `apps/web/test/style.test.ts` is what holds the sheet to them.
 
 ### Where controls live
 
@@ -452,6 +461,41 @@ inside the scroller it would scroll away with the content. When the rail is show
 is load-bearing; without it the flex item refuses to shrink below its content and the list
 silently stops scrolling.
 
+### Responsive
+
+Two breakpoints, both declared at the **end** of `style.css`. That placement is load-bearing:
+a media query does not raise specificity, so an override written above the rule it means to
+override loses on source order alone. `.overlay-popover` is declared in the surfaces section
+near the bottom, and the narrow `position: fixed` written above it silently lost — the
+popover stayed absolutely positioned and ran off the edge of the screen.
+
+| Query | What changes |
+| --- | --- |
+| `(max-width: 900px)` | The sidebar becomes a drawer; the minimap rail is hidden |
+| `(max-width: 560px)` | Dialogs and popovers become bottom sheets; the composer toolbar reflows; forms go single-column |
+
+The drawer takes the sidebar **out of the grid** — `position: fixed`, translated off-canvas —
+rather than re-columning it. Left as a grid item under `grid-template-columns: 1fr` it would
+become an implicit second *row*, collapsing `.main`'s height and stopping the message list
+from scrolling: the failure the `minmax(0, 1fr)` comment in the sheet documents.
+
+Three things hold the drawer together and none is optional:
+
+- `visibility: hidden` when closed, or its 6+ controls stay tabbable off-screen
+- `inert` on the pane behind it while open, which is a focus trap without the state machine
+- **every dialog teleported to `body`** — `position: fixed` resolves against the nearest
+  transformed ancestor, and the drawer is one, so an overlay left inside the sidebar is laid
+  out in the off-canvas panel and renders off-screen
+
+Escape closes the topmost layer only: `App.vue`'s handler returns early while a confirm
+prompt or Settings is up, because `ConfirmDialog` listens on `window` for the same key and
+one press would otherwise close both.
+
+The pixel values are duplicated as strings in `composables/breakpoints.ts` — a media query
+cannot read a custom property and JavaScript cannot evaluate one. `breakpoints.test.ts` pins
+the strings that reach `matchMedia` and `style.test.ts` pins the sheet's media query values;
+change both together.
+
 ### Minimap rail
 
 `MessageMinimapRail.vue` mirrors chatbox's rail of the same name: one anchor per **turn**
@@ -468,7 +512,9 @@ in `utils/minimap.ts`.
 - Only anchors inside the rail's scroll window (plus 8 items of overscan) are rendered, so
   a very long conversation does not put thousands of nodes in the DOM.
 - Keyboard: ArrowUp/ArrowDown/Home/End with a roving `tabIndex`.
-- Hidden below 900px viewport width, where the preview card would have nowhere to go.
+- Hidden below 900px viewport width, where the preview card would have nowhere to go. The
+  value lives in `composables/breakpoints.ts` as `isCompact`, shared with the drawer so the
+  two cannot disagree about what "narrow" means.
 
 Previews are capped at 300 characters (`MINIMAP_PREVIEW_MAX_LENGTH`). Building them from
 full message text would re-scan the whole conversation on every streaming chunk, which is

@@ -411,6 +411,24 @@ describe("style.css palette", () => {
     expect(noted.filter((px) => !["900", "560"].includes(px!))).toEqual([]);
   });
 
+  it("keeps every breakpoint after the rules it overrides", () => {
+    // Position, not specificity, is what decides a media-query override — which is how the
+    // narrow `position: fixed` on `.overlay-popover` silently lost to the same class declared
+    // further down the file, leaving the popover absolutely positioned and 155px off-screen.
+    // Checking the marker exists catches the other half: a `@media` block is easy to append
+    // wherever it reads well, and only a positional rule notices.
+    // Against `SOURCE`, not `CSS`: the marker lives in a comment, and `CSS` is the sheet with
+    // its comments stripped — scanning that for it would never find one.
+    const marker = SOURCE.indexOf("responsive ---");
+    expect(marker, "style.css has no responsive section marker").toBeGreaterThan(-1);
+
+    const strays = [...SOURCE.matchAll(/@media\s*\(max-width:\s*\d+px\)/g)]
+      .map((match) => match.index!)
+      .filter((at) => at < marker);
+
+    expect(strays, "a breakpoint is declared above the responsive section").toEqual([]);
+  });
+
   it("does not hand-write a spacing value that a token already carries", () => {
     // The colour scan's counterpart for lengths, and the guard that keeps the token layer
     // from eroding: without it the next `padding: 8px 12px` is indistinguishable from the
