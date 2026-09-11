@@ -7,11 +7,12 @@ is what keeps the two from drifting.
 
 Read this before adding a colour, a size, a class or a breakpoint.
 
-> **Status.** The token layer, the focus ring, reduced motion and the surface pairing are
-> implemented and guarded. The shared-class inventory and the responsive work (breakpoints,
-> the drawer, `Teleport` for overlays) are the agreed target and are not in the code yet —
-> those sections say so where it matters. Nothing in this document is aspirational about the
-> token tables: they describe what is in `style.css` today.
+> **Status.** The token layer, the focus ring, reduced motion, the surface pairing and the
+> structural shared classes (`.form-grid`, `.overlay-popover`, the modal width variants) are
+> implemented and guarded. Still agreed-but-absent: the decorative class promotions, and all
+> of the responsive work (breakpoints, the drawer, `Teleport` for overlays) — those sections
+> say so where it matters. Nothing in this document is aspirational about the token tables:
+> they describe what is in `style.css` today.
 
 ## How this document is organised
 
@@ -188,10 +189,10 @@ this project names explicitly. Do not re-litigate it without reading that contra
 
 ## Shared classes
 
-> The tier-1 vocabulary below is in `style.css` today. The tier-2 composites — the popover
-> surface, the form grid, the settings rows, the tab strip — are the agreed target of the
-> class-consolidation pass and do not exist yet. Until then, the duplication described under
-> [when to promote](#when-to-promote) is still live.
+> The tier-1 vocabulary and the structural tier-2 composites below are in `style.css` today.
+> The decorative promotions — `.truncate`, `.list-row`, `.tabs`, `.badge`, `.check-row`,
+> `.menu-item`, `.pill`, `.btn.ghost`, `.status-dot` — are still the agreed target, so the
+> duplication described under [when to promote](#when-to-promote) is still live for those.
 
 ### Placement
 
@@ -219,6 +220,15 @@ Tier 1, in `style.css`:
 Tier 1 is the vocabulary to reach for first. A component that defines `.model-btn`,
 `.token-btn` or `.tab` from scratch instead of using `.btn` or `.icon-btn` is the
 duplication this tier exists to prevent.
+
+Tier 2, in `style.css`, for structures several components need:
+
+| Class | Modifiers | Use |
+| --- | --- | --- |
+| `.form-grid` | | Two columns, no row gap — rows carry their own margin. Sites that need a different gap override it and still inherit the narrow-screen collapse |
+| `.overlay-popover` | | The surface for anything anchored above a control: background, border, radius, shadow, `--z-popover` and the upward anchor. Callers set their own size |
+| `.modal.sm` / `.modal.lg` | | Dialog widths, from `--modal-sm` / `--modal-lg`. `.modal` alone is `--modal-md` |
+| `.tool-checks` | with `.form-grid` | The Copilot tool checkbox grid — the shared grid at a tighter gap |
 
 ### Naming a scoped class
 
@@ -289,9 +299,9 @@ block, not writing a new media query.
 
 ## Adding to the system
 
-> Which of these are enforced today: the token rules and the colour/surface rules are, by
-> `style.test.ts`. The spacing guard, the breakpoint guard and the overlay rule land with the
-> phases that introduce what they guard — they are stated here because they are the
+> Which of these are enforced today: the token rules, the colour/surface rules and the
+> spacing rule are, by `style.test.ts`. The breakpoint guard and the overlay rule land with
+> the phases that introduce what they guard — they are stated here because they are the
 > convention either way, and a class added now should already follow them.
 
 **A token.** Add it to the `:root` block. If its value is a colour (hex or `rgb`/`rgba`),
