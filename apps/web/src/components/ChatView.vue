@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { useTheme } from "../composables/theme";
 import { useLocale } from "../composables/locale";
+import { isCompact } from "../composables/breakpoints";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
 import type { Locale } from "../utils/locale";
 import MessageItem from "./MessageItem.vue";
@@ -69,21 +70,10 @@ function cancelTitleEdit() {
 const minimapAnchors = computed(() => buildMinimapAnchors(store.messages));
 
 // Hidden on narrow viewports, matching chatbox — the rail would crowd the messages and
-// the preview card would have nowhere to go.
-const isNarrow = ref(false);
-let narrowQuery: MediaQueryList | null = null;
-function syncNarrow(e: MediaQueryList | MediaQueryListEvent) {
-  isNarrow.value = e.matches;
-}
-onMounted(() => {
-  if (typeof window.matchMedia !== "function") return;
-  narrowQuery = window.matchMedia("(max-width: 900px)");
-  syncNarrow(narrowQuery);
-  narrowQuery.addEventListener("change", syncNarrow);
-});
-onBeforeUnmount(() => narrowQuery?.removeEventListener("change", syncNarrow));
-
-const showMinimap = computed(() => !isNarrow.value && minimapAnchors.value.length > 0);
+// the preview card would have nowhere to go. `isCompact` is shared with the drawer, which
+// needs the same breakpoint: two copies of "900" is how a drawer ends up opening on a
+// screen whose toggle is hidden.
+const showMinimap = computed(() => !isCompact.value && minimapAnchors.value.length > 0);
 
 /**
  * Scroll the list so the anchored turn sits at the top. Computed from rects rather than

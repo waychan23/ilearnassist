@@ -398,6 +398,19 @@ describe("style.css palette", () => {
     expect([...inSheet, ...inComponents]).toEqual([]);
   });
 
+  it("uses only the documented breakpoints", () => {
+    // The CSS half of the lock-step in `composables/breakpoints.ts`: the JS half asserts the
+    // strings that reach `matchMedia`, this asserts the sheet's media queries are the same
+    // values. Media queries cannot read custom properties, so the number is spelt out in
+    // both languages and this is the only place the two are compared.
+    //
+    // It has nothing to check yet — no layout media query exists — and is written now so
+    // that the responsive work cannot introduce a stray 768px by habit.
+    const noted = [...CSS.matchAll(/@media\s*\(max-width:\s*(\d+)px\)/g)].map((m) => m[1]);
+
+    expect(noted.filter((px) => !["900", "560"].includes(px!))).toEqual([]);
+  });
+
   it("does not hand-write a spacing value that a token already carries", () => {
     // The colour scan's counterpart for lengths, and the guard that keeps the token layer
     // from eroding: without it the next `padding: 8px 12px` is indistinguishable from the
