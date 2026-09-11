@@ -72,12 +72,12 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 <template>
   <div ref="rootEl" class="model-picker">
     <button
-      class="model-btn"
+      class="btn ghost model-btn"
       :title="hasAnyAvailable ? t('modelSelector.chooseTitle') : t('modelSelector.noModelsTitle')"
       @click="open = !open"
     >
-      <span class="dot" :class="{ off: !store.effectiveModel }"></span>
-      <span class="label">{{ buttonLabel }}</span>
+      <span class="status-dot ok" :class="{ off: !store.effectiveModel }"></span>
+      <span class="label truncate">{{ buttonLabel }}</span>
       <span class="caret" :class="{ open }">▾</span>
     </button>
 
@@ -90,12 +90,12 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
         <button
           v-for="m in group.models"
           :key="m.id"
-          class="item"
+          class="menu-item"
           :class="{ active: isCurrent(group.providerId, m.modelId) }"
           @click="choose(group.providerId, m.modelId)"
         >
-          <span class="check">{{ isCurrent(group.providerId, m.modelId) ? "✓" : "" }}</span>
-          <span class="name">{{ m.name }}</span>
+          <span class="check-mark">{{ isCurrent(group.providerId, m.modelId) ? "✓" : "" }}</span>
+          <span class="name truncate">{{ m.name }}</span>
           <span class="caps">
             <span v-if="m.capabilities.includes('vision')" :title="t('providers.capabilities.vision')">🖼</span>
             <span v-if="m.capabilities.includes('reasoning')" :title="t('providers.capabilities.reasoning')">🧠</span>
@@ -107,7 +107,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
         {{ t("modelSelector.empty") }}
       </div>
 
-      <button class="foot" @click="open = false; emit('manage')">{{ t("modelSelector.manage") }}</button>
+      <button class="menu-item foot" @click="open = false; emit('manage')">{{ t("modelSelector.manage") }}</button>
     </div>
   </div>
 </template>
@@ -119,6 +119,11 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   align-items: center;
 }
 
+/*
+ * The chrome, the hover and the transition come from `.btn.ghost`. Its hover steps to
+ * `--panel-2`, where this button's own used to fill with `--panel` — the composer's own
+ * background, so the hover was invisible.
+ */
 .model-btn {
   display: flex;
   align-items: center;
@@ -126,37 +131,11 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   /* The `45vw` half only binds on a narrow screen, where the model name is the widest thing
      in the toolbar and has to yield to the controls beside it. */
   max-width: min(220px, 45vw);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  color: var(--text-3);
   font-size: var(--fs-2);
-  font-family: inherit;
   padding: var(--space-2) var(--space-4);
-  cursor: pointer;
   white-space: nowrap;
-  transition: background var(--dur-fast), color var(--dur-fast);
 }
-.model-btn:hover {
-  background: var(--panel);
-  color: var(--text-2);
-}
-/* `min-width` is what makes the ellipsis reachable — see the note on `.copilot-tag`. */
-.model-btn .label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  flex-shrink: 0;
-}
-.dot.off {
-  background: var(--text-3);
-}
+
 .caret {
   font-size: var(--fs-1);
   transition: transform var(--dur-fast);
@@ -190,42 +169,20 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   letter-spacing: 0;
 }
 
-.item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  width: 100%;
-  padding: 7px var(--space-4);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-2);
-  font-size: var(--fs-3);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.item:hover {
-  background: var(--panel-2);
+.menu-item.active {
   color: var(--text);
 }
-.item.active {
-  color: var(--text);
-}
-.item .check {
+/* A tick gutter, so the model names line up whether or not one is current. */
+.menu-item .check-mark {
   width: 12px;
   flex-shrink: 0;
   color: var(--accent);
   font-size: var(--fs-1);
 }
-.item .name {
+.menu-item .name {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.item .caps {
+.menu-item .caps {
   flex-shrink: 0;
   font-size: var(--fs-1);
 }
@@ -237,21 +194,4 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   line-height: var(--lh-base);
 }
 
-.foot {
-  width: 100%;
-  margin-top: var(--space-2);
-  padding: var(--space-4);
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  background: transparent;
-  color: var(--accent);
-  font-size: var(--fs-2);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.foot:hover {
-  background: var(--panel-2);
-}
 </style>

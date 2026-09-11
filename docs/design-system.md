@@ -7,12 +7,11 @@ is what keeps the two from drifting.
 
 Read this before adding a colour, a size, a class or a breakpoint.
 
-> **Status.** The token layer, the focus ring, reduced motion, the surface pairing and the
-> structural shared classes (`.form-grid`, `.overlay-popover`, the modal width variants) are
-> implemented and guarded. Still agreed-but-absent: the decorative class promotions, and all
-> of the responsive work (breakpoints, the drawer, `Teleport` for overlays) — those sections
-> say so where it matters. Nothing in this document is aspirational about the token tables:
-> they describe what is in `style.css` today.
+> **Status.** The token layer, the focus ring, reduced motion, the surface pairing and every
+> shared class below are implemented and guarded. Still agreed-but-absent: all of the
+> responsive work (breakpoints, the drawer, `Teleport` for overlays) — those sections say so
+> where it matters. Nothing in this document is aspirational about the token tables: they
+> describe what is in `style.css` today.
 
 ## How this document is organised
 
@@ -188,11 +187,6 @@ this project names explicitly. Do not re-litigate it without reading that contra
 
 ## Shared classes
 
-> The tier-1 vocabulary and the structural tier-2 composites below are in `style.css` today.
-> The decorative promotions — `.truncate`, `.list-row`, `.tabs`, `.badge`, `.check-row`,
-> `.menu-item`, `.pill`, `.btn.ghost`, `.status-dot` — are still the agreed target, so the
-> duplication described under [when to promote](#when-to-promote) is still live for those.
-
 ### Placement
 
 `style.css` is ordered: reset → layout → sidebar → messages → tool cards → composer →
@@ -228,6 +222,16 @@ Tier 2, in `style.css`, for structures several components need:
 | `.overlay-popover` | | The surface for anything anchored above a control: background, border, radius, shadow, `--z-popover` and the upward anchor. Callers set their own size |
 | `.modal.sm` / `.modal.lg` | | Dialog widths, from `--modal-sm` / `--modal-lg`. `.modal` alone is `--modal-md` |
 | `.tool-checks` | with `.form-grid` | The Copilot tool checkbox grid — the shared grid at a tighter gap |
+| `.list-row` | | A row in a settings list: the box, and the flex row inside it. Variants keep their own gap, padding and alignment |
+| `.row-actions` | | The icon-button cluster at the end of a row |
+| `.tabs` / `.tab` / `.tab-count` | `.active` | The tab strip on a tabbed dialog |
+| `.check-row` | `.sm` | A labelled checkbox — one line, whole line clickable |
+| `.badge` | `.muted` | A small outlined label. `muted` drops the accent, for the variant that reports absence rather than presence |
+| `.status-dot` | `.ok`, `.off` | A status dot. `ok` is the smaller health dot; `off` is the same dot with nothing in force |
+| `.menu-item` | `.foot` | A full-width action row in a popover, plus the footer that sits under a divider |
+| `.btn.ghost` | | A text button with no chrome until hovered |
+| `.pill` | | The rounded outline shared by the Copilot tag and the token counter — shape only |
+| `.truncate` | | The single truncation rule. Includes `min-width: 0`, which is what makes the other three declarations do anything on a flex item |
 
 ### Naming a scoped class
 

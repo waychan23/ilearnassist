@@ -260,7 +260,7 @@ onBeforeUnmount(() => {
 
     <div v-if="hoveredAnchor" class="minimap-preview" :style="{ top: `${previewTop}px` }">
       <div class="preview-user">{{ hoveredText }}</div>
-      <div v-if="hoveredAssistantText" class="preview-assistant">{{ hoveredAssistantText }}</div>
+      <div v-if="hoveredAssistantText" class="preview-assistant truncate">{{ hoveredAssistantText }}</div>
     </div>
   </div>
 </template>
@@ -381,9 +381,6 @@ onBeforeUnmount(() => {
 }
 .preview-assistant {
   margin-top: var(--space-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--fs-2);
   color: var(--text-3);
 }

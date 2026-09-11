@@ -129,14 +129,14 @@ async function onDeleteWorkspace() {
     </div>
 
     <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
-    <button class="side-settings" :title="t('sidebar.settings')" data-testid="open-settings" @click="openSettings()">
+    <button class="menu-item side-settings" :title="t('sidebar.settings')" data-testid="open-settings" @click="openSettings()">
       <span class="gear">⚙</span>
       <span class="label">{{ t("sidebar.settings") }}</span>
-      <span class="sub">{{ store.activeWorkspace?.name ?? "" }}</span>
+      <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
     </button>
 
     <div class="side-footer">
-      <span class="dir" :title="store.config?.workspacesRootDir ?? ''">
+      <span class="dir truncate" :title="store.config?.workspacesRootDir ?? ''">
         {{ store.config?.workspacesRootDir }}
       </span>
     </div>
@@ -156,30 +156,14 @@ async function onDeleteWorkspace() {
   color: var(--text-3);
   font-size: var(--fs-3);
 }
-.dir {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* `.menu-item` gives the row its reset, spacing and hover. It is full-bleed at the foot of
+   the sidebar, so it takes a top border instead of the radius a floating row would have. */
 .side-settings {
-  display: flex;
-  align-items: center;
   gap: var(--space-5);
-  width: 100%;
   padding: var(--space-5) var(--space-6);
-  border: 0;
   border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-2);
-  font-family: inherit;
-  font-size: var(--fs-3);
-  text-align: left;
-  cursor: pointer;
+  border-radius: 0;
   flex-shrink: 0;
-}
-.side-settings:hover {
-  background: var(--panel);
-  color: var(--text);
 }
 .side-settings .gear {
   font-size: var(--fs-4);
@@ -190,10 +174,6 @@ async function onDeleteWorkspace() {
 }
 .side-settings .sub {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   text-align: right;
   color: var(--text-3);
   font-size: var(--fs-1);

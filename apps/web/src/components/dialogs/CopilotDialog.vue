@@ -164,7 +164,7 @@ function save() {
         <div class="field">
           <label>{{ t("copilot.tools") }}</label>
           <div class="form-grid tool-checks">
-            <label v-for="t in ALL_TOOLS" :key="t">
+            <label v-for="t in ALL_TOOLS" :key="t" class="check-row">
               <input type="checkbox" :checked="draft.tools.includes(t)" @change="toggleTool(t)" />
               {{ toolLabel(t) }}
             </label>

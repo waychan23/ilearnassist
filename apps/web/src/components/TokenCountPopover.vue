@@ -37,7 +37,7 @@ const label = computed(() => {
 
 <template>
   <div class="token-wrap" @mouseenter="open = true" @mouseleave="open = false">
-    <button class="token-btn" :class="level" @click="open = !open">
+    <button class="pill token-btn" :class="level" @click="open = !open">
       <span class="ring" :style="{ '--pct': `${ratio * 100}%` }"></span>
       {{ label }}
     </button>
@@ -91,15 +91,9 @@ const label = computed(() => {
   align-items: center;
 }
 .token-btn {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
   background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
   color: var(--text-3);
   font-size: var(--fs-1);
-  font-family: inherit;
   padding: var(--space-2) var(--space-5);
   cursor: pointer;
   /* `nowrap` with no cap: the counter is a fixed-width figure, so the only thing that can

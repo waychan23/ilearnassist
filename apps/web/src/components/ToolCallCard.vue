@@ -47,7 +47,7 @@ const prettyInput = computed(() => {
     <div class="tool-head" @click="open = !open">
       <span class="icon" :class="done ? 'ok' : 'run'">{{ done ? "✓" : "↻" }}</span>
       <span class="name">{{ label }}</span>
-      <span class="arg">{{ arg }}</span>
+      <span class="arg truncate">{{ arg }}</span>
       <span class="status">{{ done ? t("tools.done") : t("tools.running") }}</span>
       <span class="toggle">{{ open ? "▾" : "▸" }}</span>
     </div>
@@ -72,10 +72,6 @@ const prettyInput = computed(() => {
 }
 .arg {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--text-3);
 }
 .status {

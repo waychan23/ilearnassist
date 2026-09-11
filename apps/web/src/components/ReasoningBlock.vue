@@ -65,7 +65,7 @@ async function copy() {
       <span class="label">{{ label }}</span>
       <span v-if="props.thinking" class="dots"><i></i><i></i><i></i></span>
       <span v-if="durationText" class="time">{{ t("message.reasoning.duration", { duration: durationText }) }}</span>
-      <span v-if="!expanded" class="summary">{{ summary }}</span>
+      <span v-if="!expanded" class="summary truncate">{{ summary }}</span>
       <button
         v-if="expanded"
         class="icon-btn copy"
@@ -133,10 +133,6 @@ async function copy() {
 /* The live preview is single-line and clipped, so a long thought never reflows the row. */
 .summary {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
   font-size: var(--fs-2);
   color: var(--text-3);
 }

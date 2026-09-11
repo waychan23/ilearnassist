@@ -165,7 +165,7 @@ watch(
             </button>
             <span
               v-if="store.activeSession?.titleSource === 'auto'"
-              class="auto-badge"
+              class="badge muted"
               :title="t('chat.autoBadgeTitle')"
             >
               AI
@@ -173,7 +173,7 @@ watch(
           </div>
           <div
             v-if="store.activeCopilot"
-            class="subtitle"
+            class="subtitle truncate"
             :title="store.activeCopilot.systemPrompt"
           >
             ◈ {{ store.activeCopilot.name }}
@@ -311,15 +311,6 @@ watch(
   color: var(--text);
   border-color: var(--text-3);
 }
-.auto-badge {
-  flex-shrink: 0;
-  font-size: var(--fs-1);
-  line-height: 1;
-  padding: var(--space-1) 5px;
-  border-radius: var(--radius-sm);
-  color: var(--text-3);
-  border: 1px solid var(--border);
-}
 .title-edit {
   display: flex;
   flex-direction: column;
@@ -337,9 +328,6 @@ watch(
 .subtitle {
   font-size: var(--fs-1);
   color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .config-banner {
   margin: 0;

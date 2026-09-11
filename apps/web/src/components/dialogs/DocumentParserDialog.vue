@@ -140,7 +140,7 @@ function save() {
         </div>
 
         <div class="field">
-          <label class="check">
+          <label class="check-row">
             <input v-model="draft.enabled" type="checkbox" />
             {{ t("parsers.enabled") }}
           </label>
@@ -159,14 +159,6 @@ function save() {
 <style scoped>
 .field {
   margin-bottom: var(--space-6);
-}
-.check {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: var(--fs-3);
-  color: var(--text-2);
-  cursor: pointer;
 }
 .hint a {
   color: var(--accent);

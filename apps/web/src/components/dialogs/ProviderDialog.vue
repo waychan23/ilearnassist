@@ -185,7 +185,7 @@ function save() {
             <button class="icon-btn danger" :title="t('providers.removeModel')" @click="removeModel(i)">✕</button>
           </div>
           <div class="caps">
-            <label v-for="c in CAPABILITIES" :key="c.id">
+            <label v-for="c in CAPABILITIES" :key="c.id" class="check-row sm">
               <input
                 type="checkbox"
                 :checked="m.capabilities.includes(c.id)"
@@ -251,13 +251,5 @@ function save() {
   display: flex;
   gap: var(--space-7);
   padding-bottom: var(--space-3);
-}
-.caps label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--fs-2);
-  color: var(--text-3);
-  cursor: pointer;
 }
 </style>

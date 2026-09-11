@@ -108,7 +108,7 @@ function stateOf(a: Attachment): string {
       />
       <span v-else class="file-icon">📄</span>
       <div class="meta">
-        <span class="name" :title="c.attachment.name">{{ c.attachment.name }}</span>
+        <span class="name truncate" :title="c.attachment.name">{{ c.attachment.name }}</span>
         <span class="size" data-testid="attachment-detail">{{ c.detail }}</span>
       </div>
       <button
@@ -188,9 +188,6 @@ function stateOf(a: Attachment): string {
 }
 .name {
   font-size: var(--fs-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .size {
   font-size: var(--fs-1);

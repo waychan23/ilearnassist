@@ -301,7 +301,7 @@ function onDefaultModelChange(e: Event) {
             <button class="btn small" @click="openNew">{{ t("settings.providers.add") }}</button>
           </div>
 
-          <div v-for="p in providers" :key="p.id" class="provider-row">
+          <div v-for="p in providers" :key="p.id" class="list-row provider-row">
             <div class="info">
               <div class="name">
                 {{ p.name }}
@@ -359,7 +359,7 @@ function onDefaultModelChange(e: Event) {
           </div>
 
           <div class="field">
-            <label class="check">
+            <label class="check-row">
               <input
                 type="checkbox"
                 :checked="documentParsing?.localEnabled"
@@ -374,7 +374,7 @@ function onDefaultModelChange(e: Event) {
           </div>
 
           <div class="field">
-            <label class="check">
+            <label class="check-row">
               <input
                 type="checkbox"
                 :checked="documentParsing?.fallbackEnabled"
@@ -402,16 +402,16 @@ function onDefaultModelChange(e: Event) {
           <div
             v-for="p in documentParsers"
             :key="p.id"
-            class="parser-row"
+            class="list-row parser-row"
             data-testid="parser-row"
           >
             <div class="parser-main">
               <div class="parser-name">
                 {{ p.name }}
-                <span class="badge" :class="{ off: !p.enabled }">
+                <span class="badge" :class="{ muted: !p.enabled }">
                   {{ p.enabled ? t("settings.documents.enabled") : t("settings.documents.disabled") }}
                 </span>
-                <span class="badge kind">{{ p.kind }}</span>
+                <span class="badge muted">{{ p.kind }}</span>
                 <span v-if="p.hasApiKey" class="badge">{{ t("settings.documents.keySet") }}</span>
               </div>
               <div class="parser-url mono">{{ p.baseURL }}</div>
@@ -453,10 +453,10 @@ function onDefaultModelChange(e: Event) {
             <button class="btn small" @click="openNewCopilot">{{ t("settings.copilot.add") }}</button>
           </div>
 
-          <div v-for="c in store.copilots" :key="c.id" class="copilot-row">
+          <div v-for="c in store.copilots" :key="c.id" class="list-row copilot-row">
             <div class="info">
               <div class="name">
-                <span class="dot"></span>
+                <span class="status-dot"></span>
                 {{ c.name }}
                 <span v-if="c.id === store.activeCopilotId" class="badge">{{ t("settings.copilot.inUse") }}</span>
               </div>
@@ -544,40 +544,6 @@ function onDefaultModelChange(e: Event) {
   font-family: "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: var(--fs-2);
 }
-.tabs {
-  display: flex;
-  gap: var(--space-2);
-  padding: var(--space-5) var(--space-8) 0;
-  border-bottom: 1px solid var(--border);
-}
-.tab {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-3);
-  padding: var(--space-4) var(--space-6);
-  cursor: pointer;
-  font-size: var(--fs-3);
-  font-family: inherit;
-}
-.tab:hover {
-  color: var(--text-2);
-}
-.tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-.tab-count {
-  margin-left: var(--space-3);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius);
-  background: var(--panel-2);
-  color: var(--text-3);
-  font-size: var(--fs-1);
-}
-.tab.active .tab-count {
-  color: var(--text-2);
-}
 .list-head {
   display: flex;
   align-items: center;
@@ -585,14 +551,6 @@ function onDefaultModelChange(e: Event) {
   color: var(--text-2);
   font-size: var(--fs-3);
   margin-bottom: var(--space-5);
-}
-.check {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: var(--fs-3);
-  color: var(--text-2);
-  cursor: pointer;
 }
 .empty-note {
   color: var(--text-3);
@@ -602,15 +560,9 @@ function onDefaultModelChange(e: Event) {
   border-radius: var(--radius);
   margin-bottom: var(--space-5);
 }
+/* `.list-row` carries the box; this row's contents sit closer together than a provider's. */
 .parser-row {
-  display: flex;
-  align-items: flex-start;
   gap: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-6);
-  margin-bottom: var(--space-4);
-  background: var(--panel-2);
 }
 .parser-main {
   flex: 1;
@@ -623,22 +575,6 @@ function onDefaultModelChange(e: Event) {
   font-weight: 500;
   flex-wrap: wrap;
 }
-.parser-row .badge {
-  font-size: var(--fs-1);
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  padding: 0 7px;
-  font-weight: 400;
-}
-.parser-row .badge.off {
-  color: var(--text-3);
-  border-color: var(--border);
-}
-.parser-row .badge.kind {
-  color: var(--text-3);
-  border-color: var(--border);
-}
 .parser-url {
   color: var(--text-3);
   margin-top: var(--space-2);
@@ -647,16 +583,6 @@ function onDefaultModelChange(e: Event) {
 }
 .parser-row .hint.warn {
   color: var(--warning);
-}
-.provider-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-6);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-6);
-  margin-bottom: var(--space-4);
-  background: var(--panel-2);
 }
 .provider-row .info {
   flex: 1;
@@ -667,14 +593,6 @@ function onDefaultModelChange(e: Event) {
   align-items: center;
   gap: var(--space-4);
   font-weight: 500;
-}
-.provider-row .badge {
-  font-size: var(--fs-1);
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  padding: 0 7px;
-  font-weight: 400;
 }
 .key-state {
   font-size: var(--fs-2);
@@ -726,20 +644,10 @@ function onDefaultModelChange(e: Event) {
   color: var(--text-3);
   font-size: var(--fs-2);
 }
-.row-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
+/* A single-line row, so its contents centre rather than aligning to the top. */
 .copilot-row {
-  display: flex;
   align-items: center;
-  gap: var(--space-6);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: var(--space-5) var(--space-6);
-  margin-bottom: var(--space-4);
-  background: var(--panel-2);
 }
 .copilot-row .info {
   flex: 1;
@@ -750,21 +658,6 @@ function onDefaultModelChange(e: Event) {
   align-items: center;
   gap: var(--space-4);
   font-weight: 500;
-}
-.copilot-row .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-.copilot-row .badge {
-  font-size: var(--fs-1);
-  font-weight: 400;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  padding: 0 7px;
 }
 .copilot-row .desc {
   color: var(--text-2);

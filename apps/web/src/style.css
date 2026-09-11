@@ -976,6 +976,209 @@ body {
 /* ---------------------------- surfaces and rows ----------------------------- */
 
 /*
+ * A row in a settings list: the box three near-identical shells had each written out — a
+ * parser, a provider, a Copilot. The box is genuinely the same in all three; only the layout
+ * inside differs, and that stays with each variant rather than being forced into one shape
+ * that would fit none of them.
+ */
+.list-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-6);
+  margin-bottom: var(--space-4);
+  background: var(--panel-2);
+}
+
+/* The icon-button cluster at the end of a row. One definition, so the touch phase has one
+   place to grow the hit targets. */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/*
+ * A labelled checkbox: the control and its text on one line, with the whole line clickable.
+ * Three sites were identical; the capability row in the provider form is smaller and dimmer,
+ * which is a modifier rather than a fourth copy.
+ */
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--fs-3);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.check-row.sm {
+  gap: var(--space-3);
+  font-size: var(--fs-2);
+  color: var(--text-3);
+}
+
+/*
+ * A small outlined label: a status, a plugin kind, a count. The accent outline carries the
+ * meaning, so the variant that reports absence drops the accent rather than adding a colour.
+ */
+.badge {
+  font-size: var(--fs-1);
+  font-weight: 400;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+}
+.badge.muted {
+  color: var(--text-3);
+  border-color: var(--border);
+}
+
+/*
+ * The tab strip on a tabbed dialog. Promoted because the narrow screen has to do something
+ * with it — four tabs do not fit across a phone — and a rule can only be written once if the
+ * strip is one thing.
+ */
+.tabs {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-8) 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+  padding: var(--space-4) var(--space-6);
+  cursor: pointer;
+  font-size: var(--fs-3);
+  font-family: inherit;
+}
+.tab:hover {
+  color: var(--text-2);
+}
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+/* A count beside a tab label — filled rather than outlined, so it recedes behind the label
+   it belongs to instead of reading as a second badge. */
+.tab-count {
+  margin-left: var(--space-3);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-size: var(--fs-1);
+}
+.tab.active .tab-count {
+  color: var(--text-2);
+}
+
+/*
+ * A status dot. Three sites: one identity dot at 8px in the accent, one health dot at 6px in
+ * `--success`, and the reasoning row's 18px icon chip that is *not* this — it holds a glyph,
+ * so folding it in here would have been a regression rather than a consolidation.
+ */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.status-dot.ok {
+  width: 6px;
+  height: 6px;
+  background: var(--success);
+}
+/* Nothing is in force — the dot still reserves its space so the label does not shift. */
+.status-dot.off {
+  background: var(--text-3);
+}
+
+/*
+ * A full-width action row inside a popover: the model list's entries and its footer. The
+ * base is the reset both need — a button that reads as a list row rather than a button.
+ */
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-3);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-item:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+/* The footer sits under a divider and is the one entry that is an accent, not a row. */
+.menu-item.foot {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--fs-2);
+}
+
+/*
+ * A text button with no chrome until it is pointed at: the model picker and the sidebar's
+ * settings entry. This is `.icon-btn`'s hover with text padding, deliberately — an icon
+ * button and a text button that do the same thing should light up the same way.
+ */
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-3);
+  font-weight: 400;
+}
+.btn.ghost:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/*
+ * A pill: the rounded outline shared by the Copilot tag and the token counter. Shape only —
+ * each keeps its own colour, size and level modifiers, because those are what it is for.
+ */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-family: inherit;
+}
+
+/*
+ * The one truncation rule. Six components had written the same three declarations, and three
+ * of them were missing `min-width: 0` — which is the declaration that makes the other two do
+ * anything at all, because a flex item defaults to `min-width: auto` and refuses to shrink
+ * below its content. With the trio but no `min-width`, `text-overflow: ellipsis` can never
+ * fire and the element pushes its siblings out instead of truncating.
+ *
+ * `min-width: 0` is a no-op outside a flex or grid container, so this is safe to apply to a
+ * plain block as well.
+ */
+.truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
  * A two-column form grid with no row gap — rows carry their own margin, because the two
  * halves of a row are related (a name and its URL) while two rows are not.
  *
@@ -1084,14 +1287,6 @@ body {
   margin-top: var(--space-3);
 }
 
-.tool-checks label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: var(--fs-3);
-  color: var(--text-2);
-  cursor: pointer;
-}
 
 .config-tip {
   background: var(--panel-2);
