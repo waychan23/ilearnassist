@@ -206,4 +206,41 @@ providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
   it("surfaces a config error instead of booting half-configured", async () => {
     await expect(load("providers: []\n")).rejects.toThrow(/No providers configured/);
   });
+
+  it("lets GL_HOST override the configured bind address", async () => {
+    // The desktop shell's "open on your phone" switch rebinds the server to every
+    // interface. It cannot do that by editing a config file — the overlay belongs to the
+    // user once seeded — so the override has to come from the environment.
+    vi.stubEnv("GL_HOST", "0.0.0.0");
+    const config = await load(`
+server: { host: 127.0.0.1, port: 3720 }
+defaultProvider: p
+defaultModel: m
+providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
+`);
+    expect(config.server.host).toBe("0.0.0.0");
+  });
+
+  it("leaves the configured host alone when GL_HOST is unset", async () => {
+    const config = await load(`
+server: { host: 127.0.0.1, port: 3720 }
+defaultProvider: p
+defaultModel: m
+providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
+`);
+    expect(config.server.host).toBe("127.0.0.1");
+  });
+
+  it("ignores a blank GL_HOST rather than binding to nothing", async () => {
+    // An empty string would be passed straight to `listen`, which rejects it — turning an
+    // unset-but-present variable into a boot failure.
+    vi.stubEnv("GL_HOST", "   ");
+    const config = await load(`
+server: { host: 127.0.0.1, port: 3720 }
+defaultProvider: p
+defaultModel: m
+providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
+`);
+    expect(config.server.host).toBe("127.0.0.1");
+  });
 });

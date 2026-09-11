@@ -44,12 +44,28 @@ export function parseListeningLine(line: string): string | null {
   return match?.[1] ?? null;
 }
 
+/** Loopback: reachable only from this machine. The default, and the safe one. */
+export const LOOPBACK_HOST = "127.0.0.1";
+/** Every interface: reachable from anything on the same network. */
+export const ANY_INTERFACE_HOST = "0.0.0.0";
+
 export interface BuildLaunchSpecInput {
   /** `process.execPath` — the Electron binary, run as Node. */
   electronExecPath: string;
   /** Absolute path of the bundled server entry point inside the app. */
   serverEntry: string;
   paths: AppPaths;
+  /**
+   * Bind address. Always set, including when it equals the config file's own default.
+   *
+   * That is deliberate, and it is the difference between a switch that is truthful and one
+   * that is merely suggestive. If the loopback case were left to the config file, a user
+   * who had hand-edited `server.host` there would have the panel report "not shared" while
+   * the port was open to the network they are sitting on — a control whose stated state and
+   * actual state can disagree is worse than no control. So the switch owns the bind address,
+   * and the file it was seeded from describes everything else.
+   */
+  host: string;
   /** Defaults to `process.env`; injectable so tests can spawn a plain `node`. */
   baseEnv?: Record<string, string | undefined>;
 }
@@ -70,6 +86,7 @@ export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
       // The built frontend, shipped in the bundle. The server serves it from the same
       // origin as the API, so the panel opens one URL and the app just works.
       GL_WEB_DIR: input.paths.webDir,
+      GL_HOST: input.host,
     },
   };
 }

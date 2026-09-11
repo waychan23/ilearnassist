@@ -50,6 +50,22 @@
         <code class="field__value" data-role="data-dir"></code>
       </section>
 
+      <section class="field">
+        <div class="field__head">
+          <span class="field__label" data-i18n="label.lanAccess"></span>
+          <span class="field__actions">
+            <!-- Only while sharing is on: a switch that is off needs no "turn it off". -->
+            <button type="button" class="button button--link" data-action="unshare" hidden></button>
+            <button type="button" class="button button--link" data-action="share"></button>
+          </span>
+        </div>
+        <!-- The address stays on screen while sharing is on, so it can be read out to someone
+             whose camera will not cooperate. -->
+        <code class="field__value" data-role="lan-url" hidden></code>
+      </section>
+
+      <p class="note" data-i18n="hint.closeToTray"></p>
+
       <section class="logs">
         <button
           type="button"
@@ -70,6 +86,36 @@
         </button>
         <pre class="logs__output" id="log-output" data-role="logs" hidden></pre>
       </section>
+
+      <!--
+        A real overlay rather than a section that expands in place: the QR needs a square of
+        room, and growing the panel under it would push the controls the user just pressed
+        off the bottom of a window they cannot scroll.
+      -->
+      <div class="overlay" data-role="qr-overlay" hidden>
+        <div class="overlay__scrim" data-action="qr-dismiss"></div>
+        <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="qr-title">
+          <header class="sheet__head">
+            <h2 class="sheet__title" id="qr-title" data-i18n="qr.title"></h2>
+            <button type="button" class="button button--link" data-action="qr-dismiss" data-i18n="qr.close"></button>
+          </header>
+
+          <!-- Carries the reason when there is no code to show, and is empty otherwise. -->
+          <p class="sheet__message" data-role="qr-message" hidden></p>
+
+          <div class="qr" data-role="qr" hidden></div>
+
+          <p class="sheet__hint" data-i18n="qr.steps"></p>
+
+          <div class="sheet__address" data-role="qr-address" hidden>
+            <span class="sheet__address-label" data-i18n="qr.address"></span>
+            <div class="sheet__address-row">
+              <code class="field__value" data-role="qr-url"></code>
+              <button type="button" class="button button--small" data-action="qr-copy"></button>
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
 
     <!--

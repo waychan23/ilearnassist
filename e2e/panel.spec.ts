@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { ServerStatus } from "../apps/desktop/src/shared/panelApi.js";
+import type { PanelState } from "../apps/desktop/src/shared/panelApi.js";
 
 /**
  * The desktop control panel's page, in a real browser.
@@ -12,8 +12,8 @@ import type { ServerStatus } from "../apps/desktop/src/shared/panelApi.js";
  * all, and it is the right seam — everything above the boundary (`ServerProcess`, the IPC
  * handlers) is already covered by `apps/desktop/test/`, against real child processes.
  *
- * The reason this exists rather than a jsdom test is the first assertion in the second
- * block. jsdom has no layout engine and no cascade, so it cannot tell whether `hidden`
+ * The reason this exists rather than a jsdom test is `will not claim a server is up when it
+ * is not`. jsdom has no layout engine and no cascade, so it cannot tell whether `hidden`
  * actually hides anything — and a `display: flex` in the stylesheet overriding the attribute
  * is precisely the bug that shipped once: the address row kept its "copy" button, next to no
  * address, every time a start failed.
@@ -25,51 +25,70 @@ import type { ServerStatus } from "../apps/desktop/src/shared/panelApi.js";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PANEL_URL = pathToFileURL(join(ROOT, "apps/desktop/dist/renderer/index.html")).href;
 
-const RUNNING: ServerStatus = {
-  state: "running",
-  url: "http://127.0.0.1:51452",
-  fault: null,
-  dataDir: "/Users/someone/Library/Application Support/guided-learning",
-  logs: ["seeding providers", "[guided-learning] listening on http://127.0.0.1:51452"],
+const LOOPBACK = "http://127.0.0.1:51452";
+const LAN_ADDRESS = "192.168.1.42";
+const LAN_URL = `http://${LAN_ADDRESS}:51452`;
+
+const RUNNING: PanelState = {
+  server: {
+    state: "running",
+    url: LOOPBACK,
+    fault: null,
+    dataDir: "/Users/someone/Library/Application Support/guided-learning",
+    logs: ["seeding providers", `[guided-learning] listening on ${LOOPBACK}`],
+  },
+  sharedOnLan: false,
+  lanUrl: null,
+  lanAddress: LAN_ADDRESS,
 };
 
-const FAILED: ServerStatus = {
+const SHARED: PanelState = { ...RUNNING, sharedOnLan: true, lanUrl: LAN_URL };
+
+const FAILED: PanelState = {
   ...RUNNING,
-  state: "failed",
-  url: null,
-  fault: { code: "exited", exitCode: 1, signal: null },
+  server: { ...RUNNING.server, state: "failed", url: null, fault: { code: "exited", exitCode: 1, signal: null } },
 };
+
+interface PanelHandle {
+  push(next: PanelState): Promise<void>;
+  calls: string[];
+}
 
 /**
  * Load the panel with a stubbed `window.panel`, and return a handle for pushing status
  * changes the way the main process would.
  */
-async function openPanel(page: Page, initial: ServerStatus): Promise<{ push(next: ServerStatus): Promise<void>; calls: string[] }> {
+async function openPanel(page: Page, initial: PanelState): Promise<PanelHandle> {
   const calls: string[] = [];
   await page.exposeFunction("__record", (name: string) => {
     calls.push(name);
   });
 
-  await page.addInitScript((status: ServerStatus) => {
+  await page.addInitScript((status: PanelState) => {
     const w = window as unknown as Record<string, unknown>;
     w["__status"] = status;
+    const record = w["__record"] as (name: string) => Promise<void>;
     w["panel"] = {
       getState: async () => w["__status"],
       start: async () => {
-        await (w["__record"] as (n: string) => Promise<void>)("start");
+        await record("start");
         return w["__status"];
       },
       stop: async () => {
-        await (w["__record"] as (n: string) => Promise<void>)("stop");
+        await record("stop");
+        return w["__status"];
+      },
+      shareOnLan: async (on: boolean) => {
+        await record(`shareOnLan:${on}`);
         return w["__status"];
       },
       openApp: async () => {
-        await (w["__record"] as (n: string) => Promise<void>)("openApp");
+        await record("openApp");
       },
-      openInBrowser: async () => {},
-      revealDataDir: async () => {},
-      quit: async () => {},
-      onStateChange: (listener: (s: ServerStatus) => void) => {
+      openInBrowser: async () => undefined,
+      revealDataDir: async () => undefined,
+      quit: async () => undefined,
+      onStateChange: (listener: (state: PanelState) => void) => {
         w["__push"] = listener;
         return () => undefined;
       },
@@ -81,25 +100,26 @@ async function openPanel(page: Page, initial: ServerStatus): Promise<{ push(next
   return {
     calls,
     push: async (next) => {
-      await page.evaluate((status) => {
+      await page.evaluate((state) => {
         const w = window as unknown as Record<string, unknown>;
-        w["__status"] = status;
-        (w["__push"] as (s: ServerStatus) => void)(status);
+        w["__status"] = state;
+        (w["__push"] as (s: PanelState) => void)(state);
       }, next);
     },
   };
 }
 
 const status = (page: Page) => page.locator(".status");
+const qrSheet = (page: Page) => page.locator('[data-role="qr-overlay"]');
 
 test.describe("the control panel", () => {
-  test.use({ viewport: { width: 480, height: 640 } });
+  test.use({ viewport: { width: 480, height: 660 } });
 
   test("shows a running server with the address it came up on", async ({ page }) => {
     await openPanel(page, RUNNING);
 
     await expect(page.locator('[data-role="state"]')).toHaveText("运行中");
-    await expect(page.locator('[data-role="url"]')).toHaveText(RUNNING.url!);
+    await expect(page.locator('[data-role="url"]')).toHaveText(LOOPBACK);
     await expect(page.locator('[data-role="detail"]')).toBeHidden();
   });
 
@@ -136,7 +156,7 @@ test.describe("the control panel", () => {
 
   test("re-enables starting once the server is down", async ({ page }) => {
     const panel = await openPanel(page, RUNNING);
-    await panel.push({ ...RUNNING, state: "stopped", url: null });
+    await panel.push({ ...RUNNING, server: { ...RUNNING.server, state: "stopped", url: null } });
 
     await expect(page.locator('[data-action="start"]')).toBeEnabled();
     await expect(page.locator('[data-action="stop"]')).toBeDisabled();
@@ -156,7 +176,7 @@ test.describe("the control panel", () => {
   });
 
   test("sends the command when a button is pressed", async ({ page }) => {
-    const panel = await openPanel(page, { ...RUNNING, state: "stopped", url: null });
+    const panel = await openPanel(page, { ...RUNNING, server: { ...RUNNING.server, state: "stopped", url: null } });
 
     await page.locator('[data-action="start"]').click();
     await expect.poll(() => panel.calls).toContain("start");
@@ -165,6 +185,117 @@ test.describe("the control panel", () => {
   test("names the folder the data lives in", async ({ page }) => {
     await openPanel(page, RUNNING);
     // A user who needs to back up, or to send someone a log, has to be able to find this.
-    await expect(page.locator('[data-role="data-dir"]')).toHaveText(RUNNING.dataDir);
+    await expect(page.locator('[data-role="data-dir"]')).toHaveText(RUNNING.server.dataDir);
+  });
+
+  test("tells a user that closing the window does not stop the server", async ({ page }) => {
+    // The tray is invisible until it is needed, so the one window that can explain it does.
+    await openPanel(page, RUNNING);
+    await expect(page.locator(".note")).toContainText("菜单栏");
+  });
+
+  test("fits every control inside the window, with none below the fold", async ({ page }) => {
+    // The window is a fixed size and the panel is a fixed stack of rows, so adding a row is
+    // how a control ends up off the bottom edge with nothing to indicate it exists. The log
+    // disclosure was already half past the edge when the network row was added.
+    await openPanel(page, SHARED);
+
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+
+    for (const selector of [
+      '[data-action="open"]',
+      '[data-action="stop"]',
+      '[data-action="share"]',
+      '[data-action="reveal"]',
+      '[data-action="logs"]',
+      ".note",
+    ]) {
+      const box = await page.locator(selector).boundingBox();
+      expect(box, selector).not.toBeNull();
+      expect(box!.y + box!.height, selector).toBeLessThanOrEqual(viewport!.height);
+    }
+  });
+});
+
+test.describe("opening the app on a phone", () => {
+  test.use({ viewport: { width: 480, height: 660 } });
+
+  test("offers the network address only while sharing is on", async ({ page }) => {
+    const panel = await openPanel(page, RUNNING);
+    await expect(page.locator('[data-role="lan-url"]')).toBeHidden();
+    await expect(page.locator('[data-action="unshare"]')).toBeHidden();
+
+    await panel.push(SHARED);
+
+    await expect(page.locator('[data-role="lan-url"]')).toHaveText(LAN_URL);
+    await expect(page.locator('[data-action="unshare"]')).toBeVisible();
+  });
+
+  test("draws a scannable code for the network address", async ({ page }) => {
+    await openPanel(page, SHARED);
+
+    await page.locator('[data-action="share"]').click();
+
+    await expect(qrSheet(page)).toBeVisible();
+    await expect(page.locator('[data-role="qr"] svg')).toBeVisible();
+    // The address is written out as well as encoded, for a camera that will not cooperate.
+    await expect(page.locator('[data-role="qr-url"]')).toHaveText(LAN_URL);
+    // A button with no label is a rectangle: the sheet's copy control shipped blank once.
+    await expect(page.locator('[data-action="qr-copy"]')).toHaveText("复制地址");
+
+    // A QR code is mostly modules. A handful of rects would be a code that renders and
+    // never scans, which is exactly the failure this asserts against.
+    const modules = await page.locator('[data-role="qr"] rect, [data-role="qr"] g rect').count();
+    expect(modules).toBeGreaterThan(40);
+  });
+
+  test("turns sharing on rather than showing a code that cannot work", async ({ page }) => {
+    // The panel is loopback-only until this is pressed, so a code drawn from the current
+    // state would encode 127.0.0.1 and send the phone to its own loopback.
+    const panel = await openPanel(page, RUNNING);
+
+    await page.locator('[data-action="share"]').click();
+
+    await expect.poll(() => panel.calls).toContain("shareOnLan:true");
+    // Until the restart lands there is genuinely nothing to scan, and the sheet says so
+    // rather than leaving a blank square.
+    await expect(page.locator('[data-role="qr-message"]')).toBeVisible();
+    await expect(page.locator('[data-role="qr"]')).toBeHidden();
+
+    await panel.push(SHARED);
+
+    await expect(page.locator('[data-role="qr"] svg')).toBeVisible();
+    await expect(page.locator('[data-role="qr-message"]')).toBeHidden();
+  });
+
+  test("says so when there is no network address to offer", async ({ page }) => {
+    // A machine on no network cannot be reached from a phone, and a QR encoding a
+    // loopback address would look like it worked.
+    await openPanel(page, { ...SHARED, lanUrl: null, lanAddress: null });
+
+    await page.locator('[data-action="share"]').click();
+
+    await expect(page.locator('[data-role="qr-message"]')).toContainText("局域网地址");
+    await expect(page.locator('[data-role="qr"]')).toBeHidden();
+  });
+
+  test("closes on Escape, so a modal does not trap a keyboard user", async ({ page }) => {
+    await openPanel(page, SHARED);
+    await page.locator('[data-action="share"]').click();
+    await expect(qrSheet(page)).toBeVisible();
+
+    await page.keyboard.press("Escape");
+
+    await expect(qrSheet(page)).toBeHidden();
+  });
+
+  test("turns sharing off from the panel, without opening the sheet", async ({ page }) => {
+    const panel = await openPanel(page, SHARED);
+
+    await page.locator('[data-action="unshare"]').click();
+
+    await expect.poll(() => panel.calls).toContain("shareOnLan:false");
+    await expect(qrSheet(page)).toBeHidden();
   });
 });

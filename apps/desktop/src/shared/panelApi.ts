@@ -11,6 +11,12 @@ export const PANEL_CHANNELS = {
   getState: "panel:get-state",
   start: "panel:start",
   stop: "panel:stop",
+  /**
+   * Rebind the server so other devices can reach it, or stop. Restarts it either way —
+   * a bind address is chosen at `listen`, so there is nothing to change underneath a
+   * running process.
+   */
+  shareOnLan: "panel:share-on-lan",
   openApp: "panel:open-app",
   openInBrowser: "panel:open-in-browser",
   revealDataDir: "panel:reveal-data-dir",
@@ -47,17 +53,40 @@ export interface ServerStatus {
   logs: string[];
 }
 
+/**
+ * Everything the panel renders, in one object.
+ *
+ * The panel shows more than the server's state — whether it is reachable from another
+ * device, and at what address — and those facts belong to the *app*, not to the child
+ * process. Wrapping rather than widening `ServerStatus` keeps `ServerProcess` ignorant of
+ * networks and settings, which is what lets it be tested against a bare `node` script.
+ */
+export interface PanelState {
+  server: ServerStatus;
+  /** Whether the server is bound so other devices on the network can reach it. */
+  sharedOnLan: boolean;
+  /**
+   * The URL to open from a phone or tablet. Null when there is nothing to open — sharing is
+   * off, the server is not up, or this machine has no address another device could use.
+   */
+  lanUrl: string | null;
+  /** This machine's network address, so it can be typed by hand if scanning is awkward. */
+  lanAddress: string | null;
+}
+
 export interface PanelApi {
-  getState(): Promise<ServerStatus>;
-  start(): Promise<ServerStatus>;
-  stop(): Promise<ServerStatus>;
+  getState(): Promise<PanelState>;
+  start(): Promise<PanelState>;
+  stop(): Promise<PanelState>;
+  /** Turn LAN sharing on or off. Restarts the server, so it resolves when that settles. */
+  shareOnLan(on: boolean): Promise<PanelState>;
   /** Opens (or focuses) the app window. A no-op unless the server is running. */
   openApp(): Promise<void>;
   /** Opens the same URL in the user's own browser, for bookmarks and devtools. */
   openInBrowser(): Promise<void>;
   revealDataDir(): Promise<void>;
   quit(): Promise<void>;
-  onStateChange(listener: (status: ServerStatus) => void): () => void;
+  onStateChange(listener: (state: PanelState) => void): () => void;
 }
 
 declare global {

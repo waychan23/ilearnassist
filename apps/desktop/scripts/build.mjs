@@ -130,6 +130,21 @@ function copyRendererAssets() {
   }
 }
 
+/**
+ * The menu-bar icon, as a resource rather than as an asset.
+ *
+ * `assets/` is electron-builder's `buildResources` directory — the builder reads it and
+ * deliberately keeps it *out* of the app bundle. The tray icon is needed at runtime, so it
+ * is staged here instead, where `extraResources` copies it into `Contents/Resources/tray/`
+ * and `main.ts` resolves it through `resourcesDir` in both packed and unpacked runs.
+ */
+function copyTrayIcons() {
+  mkdirSync(join(resources, "tray"), { recursive: true });
+  for (const file of ["trayTemplate.png", "trayTemplate@2x.png"]) {
+    cpSync(join(desktopRoot, "assets", file), join(resources, "tray", file));
+  }
+}
+
 /** The frontend, built by its own toolchain and then staged as a resource. */
 function buildWeb() {
   console.log("[desktop] building the web app…");
@@ -174,6 +189,7 @@ async function main() {
   await Promise.all([bundleServer(), bundleElectron(), bundleRenderer()]);
   copyRendererAssets();
   copySeedConfig();
+  copyTrayIcons();
 
   if (skipWeb) {
     const staged = existsSync(join(resources, "web", "index.html"));

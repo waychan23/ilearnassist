@@ -163,11 +163,15 @@ apps/desktop/src/
   main/main.ts            # Electron: windows, menu, IPC handlers
   main/serverProcess.ts   # supervises the server child (start/stop/crash/timeout)
   main/paths.ts           # per-user layout + idempotent first-run seeding
-  main/launch.ts          # child env (ELECTRON_RUN_AS_NODE, GL_*) + stdout address parsing
+  main/launch.ts          # child env (ELECTRON_RUN_AS_NODE, GL_*, GL_HOST) + stdout parsing
+  main/lan.ts             # which address a phone can reach, ranked
+  main/settings.ts        # the panel's own preferences (LAN sharing)
+  shared/qr.ts            # URL → module square, and → drawable runs
   preload/preload.ts      # contextBridge surface — seven commands, nothing else
   renderer/               # the panel page (plain HTML/CSS + one bundled IIFE)
 apps/server/src/
-  index.ts                # bootstrap + seedFromConfig
+  index.ts                # bootstrap + seedFromConfig + the listening line + SIGTERM
+  webApp.ts               # serves the built frontend beside the API, when there is one
   config.ts               # YAML + ${ENV} resolution + .env loader
   db.ts                   # better-sqlite3 schema + migrations + CRUD (snake_case cols)
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt
@@ -362,6 +366,25 @@ Fuller map in `docs/reference.md`.
   and is replaced wholesale on every update. First-run seeding is idempotent and **never
   overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the
   user typed into the Settings UI from vanishing on the next launch.
+- **The panel's LAN switch owns the bind address, and `GL_HOST` is always set.** Including
+  when sharing is off and the address is loopback. Leaving that case to `config.yaml` would
+  let a hand-edited `server.host` there put the server on the network while the switch still
+  read "off", and a control whose stated state and actual state can disagree is worse than
+  no control. Sharing is off until asked for: turning it on makes the user's workspaces,
+  conversations and provider keys reachable by anything on the network.
+- **The QR code does not follow the theme, and its colours are `fill` attributes rather
+  than CSS.** A scanner needs dark modules on a light field. As classes the colours live
+  only as long as the stylesheet does, so a serialised or rasterised copy of the SVG falls
+  back to SVG's default black fill — quiet zone included, which then paints over the whole
+  code. That is what the first version did.
+- **Closing the panel does not stop the server.** The window hides; only the tray item and
+  a real quit reach `server.stop()`, through `before-quit`. Do not add an
+  `app.on("window-all-closed", () => app.quit())`, and do not make the panel's `close`
+  handler destroy anything — a phone mid-conversation is the thing this protects.
+- **A LAN address is ranked, never just found.** A VPN or container address is a private
+  IPv4 on an up interface and unreachable from a phone in the same room, so `lan.ts`
+  excludes virtual interfaces by name and returns null rather than a code that cannot work.
+  See `docs/desktop.md` → Which address goes in the code.
 - **`asar: false` and `npmRebuild: false` in `electron-builder.yml` are deliberate.**
   The first, because the server resolves a native addon and an ESM package from a child
   process and neither should have to go through an asar archive. The second, because

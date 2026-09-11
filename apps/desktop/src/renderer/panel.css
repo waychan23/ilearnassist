@@ -31,6 +31,8 @@
   --code-bg: #0d1117;
   --code-fg: #c9d1d9;
   --focus-ring: #7aa7ff;
+  --scrim: rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 
   --space-1: 2px;
@@ -82,6 +84,10 @@
     --code-bg: #f6f8fa;
     --code-fg: #24292e;
     --focus-ring: #2f6feb;
+    /* Not the dark theme's 0.55: over a white panel that composites the whole window to
+       grey and reads as if the theme flipped rather than as if a dialog opened. */
+    --scrim: rgba(0, 0, 0, 0.32);
+    --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.18);
     color-scheme: light;
   }
 }
@@ -131,7 +137,13 @@ body.is-mac {
   gap: var(--space-7);
   height: 100%;
   padding: calc(var(--space-8) + var(--titlebar-pad)) var(--space-8) var(--space-8);
-  overflow: hidden;
+  /*
+   * Scrolls rather than clips. The window has a minimum size and the panel has a fixed set
+   * of rows, so on a short window — or after the next row is added — `hidden` would put the
+   * log disclosure below the edge with no way to reach it. A scrollbar is a smaller
+   * admission than a control that has quietly stopped existing.
+   */
+  overflow-y: auto;
 }
 
 /* The drag region for the hidden title bar. Buttons below opt back out. */
@@ -357,6 +369,141 @@ body.is-mac {
   overflow-x: auto;
   user-select: text;
   -webkit-user-select: text;
+}
+
+.field__actions {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-6);
+}
+
+/*
+ * The one line of chrome that explains why the red button did not quit. Small and dim,
+ * because it is reassurance rather than information — a user who already knows will read
+ * past it, and one who does not would otherwise assume the app ignored them.
+ */
+.note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+}
+
+/* ---------- the QR sheet ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+}
+
+.overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+}
+
+.sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: 340px;
+  /* The window is 660 tall and the sheet is centred in it, so this only bites on the
+     smallest allowed window — where scrolling beats clipping the address. */
+  max-height: 100%;
+  overflow-y: auto;
+  padding: var(--space-8);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.sheet__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.sheet__title {
+  margin: 0;
+  font-size: var(--fs-5);
+  font-weight: 600;
+}
+
+.sheet__message {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-3);
+}
+
+/* A start that failed is the one message here the user has to act on. */
+.sheet__message--fault {
+  color: var(--danger-text);
+}
+
+.sheet__hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-2);
+  line-height: 1.6;
+}
+
+.sheet__address {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sheet__address-label {
+  color: var(--text-2);
+  font-size: var(--fs-2);
+}
+
+.sheet__address-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.sheet__address-row .field__value {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * The QR code is the one surface here that ignores the theme, and it has to: a scanner
+ * needs dark modules on a light field, and inverting the code to match a dark window is
+ * the classic way to ship a QR that renders beautifully and never reads on the phone it
+ * was made for. The white card is therefore deliberate in both themes.
+ *
+ * The modules themselves carry their own `fill` attributes rather than being styled from
+ * here — see `paintQr` — so the code stays scannable when the SVG is copied out of the
+ * page. Only the card it sits on is this sheet's business.
+ */
+.qr {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: #ffffff;
+  border-radius: var(--radius);
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  max-width: 232px;
+  height: auto;
+  /* One unit per module, so a fractional scale would smear the edges into grey. */
+  shape-rendering: crispEdges;
 }
 
 /* ---------- logs ---------- */

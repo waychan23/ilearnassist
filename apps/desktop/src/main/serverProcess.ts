@@ -11,8 +11,16 @@ import { parseListeningLine, type LaunchSpec } from "./launch.js";
  * condition (the server printed that it is listening) and left on exactly one (its process
  * exited). There is no optimistic "it should be up by now".
  *
- * `spec` is injected rather than built here so the class can be driven against a plain
- * `node` script in tests, with no Electron and no real server.
+ * The spec is a *function*, not a value, because one of its inputs changes at runtime: the
+ * bind address follows the user's "open on your phone" switch, and that switch has to take
+ * effect on the next start without rebuilding this object — replacing it would drop the
+ * subscription the panel's state is pushed through, which is the kind of bug that shows up
+ * as a status display that quietly stops updating. Reading the spec at spawn time also means
+ * it can never apply to a process already running, which is the correct semantics: rebinding
+ * requires a restart, and the panel does one.
+ *
+ * It is injected rather than built here so the class can be driven against a plain `node`
+ * script in tests, with no Electron and no real server.
  */
 
 export interface ServerProcessOptions {
@@ -39,7 +47,7 @@ const DEFAULTS = {
 };
 
 export class ServerProcess {
-  readonly #spec: LaunchSpec;
+  readonly #resolveSpec: () => LaunchSpec;
   readonly #options: Required<Omit<ServerProcessOptions, "dataDir">> & { dataDir: string };
 
   #child: ChildProcess | null = null;
@@ -56,8 +64,8 @@ export class ServerProcess {
   #stopping = false;
   #listeners = new Set<(status: ServerStatus) => void>();
 
-  constructor(spec: LaunchSpec, options: ServerProcessOptions) {
-    this.#spec = spec;
+  constructor(resolveSpec: (() => LaunchSpec) | LaunchSpec, options: ServerProcessOptions) {
+    this.#resolveSpec = typeof resolveSpec === "function" ? resolveSpec : () => resolveSpec;
     this.#options = { ...DEFAULTS, ...options };
   }
 
@@ -98,10 +106,12 @@ export class ServerProcess {
     this.#state = "starting";
     this.#emit();
 
+    const spec = this.#resolveSpec();
+
     let child: ChildProcess;
     try {
-      child = spawn(this.#spec.command, this.#spec.args, {
-        env: this.#spec.env,
+      child = spawn(spec.command, spec.args, {
+        env: spec.env,
         // No stdin: a server that tried to prompt would hang forever, and nothing in the
         // protocol here is interactive.
         stdio: ["ignore", "pipe", "pipe"],

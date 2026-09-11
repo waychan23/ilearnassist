@@ -5,11 +5,16 @@ that someone who is not a developer can install guided-learning the way they ins
 other Mac application: drag it into Applications, double-click it, and get a window with a
 button that opens the app.
 
-The panel does three things and nothing else:
+The panel does four things and nothing else:
 
 - **starts and stops the server**, and says truthfully which of the two it is;
 - **opens the chat UI**, in a window of its own or in the user's browser;
+- **opens the app on a phone or tablet** on the same network, by showing a QR code;
 - **shows where the data lives**, and offers to reveal it in Finder.
+
+It also keeps running when you close it: the window goes away, the server does not, and a
+menu-bar icon brings it back. Only an explicit "stop the server and quit" stops anything —
+see [Closing the window, and quitting](#closing-the-window-and-quitting).
 
 The backend is unchanged by this. The desktop app supervises the same Fastify server that
 `pnpm dev:server` starts; it does not reimplement or wrap any of it.
@@ -124,6 +129,81 @@ mechanism, not a fork of the config format) setting `port: 0`, so the OS assigns
 on every launch. A fixed port is the wrong default for a desktop app: it turns "another copy
 is already running" or "something else likes 3720" into a failed launch whose error a
 non-technical user cannot act on. Edit that file to pin one.
+
+## Opening the app on a phone or tablet
+
+Press **Open on your phone** in the panel. If the server is loopback-only it restarts bound
+to every interface, then the panel shows a QR code; point the phone's camera at it and the
+same app opens in the phone's browser.
+
+That button is the consent. Being reachable from the network is not something the app should
+do on its own — it makes this machine's workspaces, conversations and, through the chat UI
+on that device, the configured provider keys reachable by anything on the network. Reasonable
+on a home network; not reasonable to have happen on a café's. So it is off until asked for,
+stays on until turned off, and the panel carries a **Stop sharing** control for as long as it
+is on.
+
+The bind address follows the switch rather than the config, always — including when the
+switch is off and the address is loopback. Leaving the loopback case to `config.yaml` would
+mean a user who had hand-edited `server.host` there could have the panel report "not shared"
+while the port was open to the network they were sitting on, and a control whose stated state
+and actual state can disagree is worse than no control. That is what `GL_HOST` is for, and
+why `buildLaunchSpec` always sets it.
+
+Rebinding needs a restart, because a bind address is chosen once at `listen` and there is no
+way to widen a socket that is already accepting. The panel performs one and waits for it, so
+the address it shows is one that is answering.
+
+### Which address goes in the code
+
+A machine has several addresses and only one of them is reachable from the phone. Picking the
+wrong one produces a QR that scans perfectly and then times out, with nothing on either device
+saying which end is wrong — so `lan.ts` ranks rather than finds:
+
+- **Virtual interfaces are excluded**, by name: `utun`, `tun`, `bridge`, `docker`, `vmnet`,
+  `awdl` and friends. A VPN address is a private IPv4 on an up interface, indistinguishable
+  from Wi-Fi by inspection, and reachable only from inside the tunnel.
+- **`169.254.x.x` is excluded** — what an interface gives itself when DHCP failed.
+- **A private address is preferred**, but a public one is still offered: a café can hand out
+  routable addresses.
+- **The result is a total order**, so the panel cannot show a different address on two
+  launches of the same machine. A QR that changes for no reason is one a user stops trusting.
+
+If nothing survives that, `findLanAddress` returns null and the sheet says so instead of
+drawing a code. Null is a real answer: encoding `127.0.0.1` would make the phone load its
+*own* loopback, which is the most confusing possible outcome.
+
+### The QR code does not follow the theme
+
+It is the one surface in the panel that ignores light and dark, and it has to: a scanner needs
+dark modules on a light field, and inverting the code to match a dark window is the classic
+way to ship a QR that renders beautifully, screenshots well and never reads on the phone it
+was made for.
+
+The two colours are `fill` **attributes on the elements**, not CSS. As classes they would live
+only as long as the stylesheet does, and a serialised or rasterised copy of the SVG would fall
+back to SVG's default black fill — including the quiet zone, which then paints over the whole
+code. That is not hypothetical: it is what the first version did, and decoding the rendered
+SVG is how it was found. Every colour in `paintQr` is written where it travels with the
+markup.
+
+## Closing the window, and quitting
+
+Closing the panel **hides it**. The server keeps running, so a phone that is mid-conversation
+does not lose it, and a menu-bar icon brings the panel back. A second launch — the Dock icon,
+or opening the app again — raises the existing panel rather than starting a rival server,
+via `requestSingleInstanceLock`.
+
+Only two things stop the server: the menu bar's **Stop server and quit**, and quitting the app
+any way at all (`Cmd+Q`, the app menu). Both route through `before-quit`, which awaits
+`server.stop()` — that is what drains in-flight requests and closes sqlite rather than killing
+the process mid-write. `process.on("exit")` force-kills the child as a backstop for the paths
+that cannot await, so nothing is left holding the port.
+
+The tray icon is a **template image**: black with alpha, filename ending in `Template`, so
+macOS recolours it for a dark menu bar and dims it when the app is not frontmost. It is drawn
+at 16 and 32 pixels rather than scaled down from the 1024-pixel app icon, because the
+reduction turns the speech bubble's tail into a smudge.
 
 ## Commands
 
@@ -257,6 +337,9 @@ inputs as arguments:
 | `paths.test.ts` | the per-user layout, and that seeding never overwrites a user's config |
 | `launch.test.ts` | reading the address off stdout, and the child's environment |
 | `serverProcess.test.ts` | the whole state machine, against real child processes |
+| `lan.test.ts` | which address a phone can reach, and that it does not change between calls |
+| `settings.test.ts` | that no state of the preferences file can stop the app from opening |
+| `qr.test.ts` | that a decoder reads the URL back out of the code |
 | `messages.test.ts` | the panel's two catalogs |
 
 `serverProcess.test.ts` spawns real processes running one-line Node fixtures rather than
@@ -265,11 +348,19 @@ a line split across two `data` chunks is still recognised, that SIGTERM actually
 child, that an exit nobody asked for is reported as a failure. A fake would assert that the
 code calls the methods it visibly calls.
 
+`qr.test.ts` deliberately does **not** decode with the library that encoded: it rasterises the
+module square, hands the pixels to `jsQR`, and asserts the URL comes back. A code read back by
+its own encoder proves only that the encoder is self-consistent, and a QR is not read by its
+own encoder — it is read by a phone camera.
+
 `e2e/panel.spec.ts` covers the page itself, in Chromium, against the built bundle — with
 `window.panel` stubbed, since that one object is the whole of what the page needs from
 Electron. It is a browser test rather than a jsdom one for a specific reason: jsdom has no
 cascade, so it cannot tell whether `hidden` actually hides anything, and a `display: flex` in
-the stylesheet silently overriding the attribute is a bug that shipped once.
+the stylesheet silently overriding the attribute is a bug that shipped once. The same
+limitation is why one of its cases asserts that every control's bounding box is inside the
+window: the panel is a fixed-size window over a fixed stack of rows, so adding a row is how a
+control ends up below the bottom edge with nothing to indicate it exists.
 
 What is deliberately not tested is the rest of the plumbing — window creation, the menu, the
 IPC handlers, and `renderer/panel.ts`'s DOM bindings. Those are kept thin enough to read.
@@ -294,3 +385,18 @@ how "the panel says Running and the URL is the port the server actually bound" w
 for the shipped `.dmg`, and how clicking `[data-action="open"]` was shown to produce a second
 page target on the server's URL. Reach for this before trusting a green unit test about a
 build you have not run.
+
+The same protocol drives the parts no unit test can reach:
+
+- **The LAN switch** — click `[data-action="share"]`, then `fetch()` the URL the sheet
+  encoded. A 200 from the network address is the only proof the bind is real; a server still
+  on loopback refuses that address outright.
+- **Close-to-tray** — `Runtime.evaluate("window.close()")` and then compare process counts.
+  A *hidden* window disappears from `/json` while its renderer and the server child stay
+  alive, which is the distinction that matters; the panel is not destroyed.
+- **The re-raise** — launch a second instance and check both that a page target is back and
+  that there is still exactly **one** server child. Two would mean the single-instance lock is
+  not holding, which looks like nothing at all until two servers fight over the database.
+
+Launch the app detached (`spawn(..., { detached: true }).unref()`) and do the whole sequence
+inside one script: a process backgrounded from a shell does not reliably outlive the shell.

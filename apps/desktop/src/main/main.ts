@@ -1,23 +1,32 @@
-import { app, BrowserWindow, Menu, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, nativeTheme, shell } from "electron";
+import { networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { PANEL_CHANNELS, type ServerStatus } from "../shared/panelApi.js";
+import { PANEL_CHANNELS, type PanelState } from "../shared/panelApi.js";
 import {
   PANEL_MESSAGES,
   resolvePanelLocale,
   translate,
   type PanelLocale,
 } from "../shared/messages.js";
-import { buildLaunchSpec, serverEntryFor } from "./launch.js";
+import {
+  ANY_INTERFACE_HOST,
+  LOOPBACK_HOST,
+  buildLaunchSpec,
+  serverEntryFor,
+} from "./launch.js";
+import { findLanAddress, lanUrlFor } from "./lan.js";
 import { resolveAppPaths, seedFirstRun, type AppPaths } from "./paths.js";
+import { readSettings, writeSettings, type DesktopSettings } from "./settings.js";
 import { ServerProcess } from "./serverProcess.js";
 
 /**
  * The control panel's main process.
  *
- * Three jobs, in order of how much they matter: keep the backend alive and tell the truth
- * about it, give the user a way to open the app, and get out of the way. Everything with
- * logic in it lives in a sibling module that does not import `electron`, so it can be
- * tested without a display; what is left here is window and menu plumbing.
+ * Four jobs, in order of how much they matter: keep the backend alive and tell the truth
+ * about it, let a phone on the same network open the app, outlive its own window, and get
+ * out of the way. Everything with logic in it lives in a sibling module that does not import
+ * `electron`, so it can be tested without a display; what is left here is window, tray and
+ * menu plumbing.
  */
 
 // Must happen before the first `getPath("userData")`. Electron derives that path from the
@@ -28,7 +37,8 @@ app.setName("guided-learning");
 
 const appRoot = app.getAppPath();
 /**
- * Where the read-only half of the app lives — the built frontend and the seed config.
+ * Where the read-only half of the app lives — the built frontend, the seed config and the
+ * tray icon.
  *
  * Packed, these are `Contents/Resources/*`, courtesy of electron-builder's
  * `extraResources`. Unpacked, `process.resourcesPath` is Electron's own Resources folder
@@ -45,9 +55,14 @@ const t = (key: Parameters<typeof translate>[1], values?: Record<string, string 
   translate(messages, key, values);
 
 let paths: AppPaths;
+let settingsFile: string;
+let settings: DesktopSettings;
 let server: ServerProcess;
 let panelWindow: BrowserWindow | null = null;
 let appWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+/** Set once a real quit is under way, so closing a window stops meaning "hide". */
+let quitting = false;
 /** Guards the async shutdown in `before-quit` against re-entering itself. */
 let shuttingDown = false;
 
@@ -60,12 +75,77 @@ let shuttingDown = false;
  */
 const chromeColour = (): string => (nativeTheme.shouldUseDarkColors ? "#16181c" : "#ffffff");
 
+// ---- state -----------------------------------------------------------------
+
+/**
+ * Everything the panel renders.
+ *
+ * `sharedOnLan` is read from the setting rather than from the process, because it is what
+ * *decides* the bind address rather than something observed from it — and because the two
+ * can only disagree during the moment a restart is in flight, which the panel renders as
+ * `starting`.
+ */
+function currentState(): PanelState {
+  const status = server.status();
+  const lanAddress = findLanAddress(networkInterfaces());
+  return {
+    server: status,
+    sharedOnLan: settings.sharedOnLan,
+    // Offered only while sharing is on. The address answers either way once the server is
+    // bound to every interface, but showing it while the switch is off would invite someone
+    // to open a URL that cannot work — the switch is the promise, so it gates the offer.
+    lanUrl: settings.sharedOnLan ? lanUrlFor(status.url, lanAddress) : null,
+    lanAddress,
+  };
+}
+
+function broadcast(): void {
+  refreshTrayMenu();
+  if (!panelWindow || panelWindow.isDestroyed()) return;
+  panelWindow.webContents.send(PANEL_CHANNELS.stateChanged, currentState());
+}
+
+/**
+ * Turn LAN sharing on or off, restarting the server if it was up.
+ *
+ * A restart rather than a reload is not a shortcut: a bind address is chosen once, at
+ * `listen`, and there is no way to widen a socket that is already accepting connections.
+ * The address the panel holds is stale the moment it happens, which is why the restart
+ * resolves before this returns — the renderer's next render is then showing a URL that is
+ * actually answering.
+ */
+async function shareOnLan(on: boolean): Promise<PanelState> {
+  if (settings.sharedOnLan !== on) {
+    settings = { ...settings, sharedOnLan: on };
+    try {
+      writeSettings(settingsFile, settings);
+    } catch (err) {
+      // Worth continuing: the switch still applies to this run, and refusing to rebind
+      // because a preferences file could not be written would make the button look broken.
+      console.error("Could not save the desktop settings:", err);
+    }
+  }
+
+  const wasUp = ["running", "starting"].includes(server.status().state);
+  await server.stop();
+  if (wasUp) await server.start();
+
+  broadcast();
+  return currentState();
+}
+
+// ---- windows ---------------------------------------------------------------
+
 function createPanelWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 480,
-    height: 640,
+    // Every row, plus room for the log view when it is opened — the disclosure takes the
+    // leftover height, so the slack when it is collapsed is what the log pane gets when it
+    // is not.
+    height: 660,
     minWidth: 420,
-    minHeight: 560,
+    // Below this the panel scrolls, which works but is not how it is meant to be read.
+    minHeight: 600,
     show: false,
     title: t("window.title"),
     backgroundColor: chromeColour(),
@@ -84,11 +164,37 @@ function createPanelWindow(): BrowserWindow {
     console.error("Failed to load the control panel:", err);
   });
   window.once("ready-to-show", () => window.show());
+
+  /**
+   * Closing the panel is not quitting.
+   *
+   * This is the tray's whole reason for existing: the server keeps running so a phone that
+   * is mid-conversation does not lose it, and the app stays one click away in the menu bar.
+   * A real quit — the tray's own item, `Cmd+Q`, the app menu — sets `quitting` first, and
+   * only then does closing the window actually close it.
+   */
+  window.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    window.hide();
+  });
+
   window.on("closed", () => {
     panelWindow = null;
   });
 
   return window;
+}
+
+/** Raise the panel, recreating it if it was destroyed rather than hidden. */
+function showPanel(): void {
+  if (!panelWindow || panelWindow.isDestroyed()) {
+    panelWindow = createPanelWindow();
+    return;
+  }
+  if (panelWindow.isMinimized()) panelWindow.restore();
+  panelWindow.show();
+  panelWindow.focus();
 }
 
 /**
@@ -133,15 +239,78 @@ async function openAppWindow(): Promise<void> {
   await window.loadURL(url);
 }
 
-function broadcast(status: ServerStatus): void {
-  if (!panelWindow || panelWindow.isDestroyed()) return;
-  panelWindow.webContents.send(PANEL_CHANNELS.stateChanged, status);
+// ---- tray ------------------------------------------------------------------
+
+/**
+ * The menu-bar icon, which is what keeps the app reachable once its window is gone.
+ *
+ * A template image — black with alpha, filename ending in `Template` — so macOS inverts it
+ * for a dark menu bar and it needs no light and dark variants of its own. `createFromPath`
+ * picks up the `@2x` sibling automatically, so the icon is drawn once at two sizes rather
+ * than scaled and blurred on a Retina display.
+ */
+function createTray(): void {
+  const icon = nativeImage.createFromPath(join(resourcesDir, "tray", "trayTemplate.png"));
+  if (icon.isEmpty()) {
+    // A missing icon would otherwise appear as an invisible tray item that still swallows
+    // clicks — worse than no tray, because the app would look like it had quit. The panel
+    // still works; only the menu-bar half does not.
+    console.error("Tray icon missing from the app bundle; running without a menu-bar item");
+    return;
+  }
+
+  tray = new Tray(icon);
+  tray.setToolTip(t("tray.tooltip"));
+  refreshTrayMenu();
 }
 
+/**
+ * Rebuild the tray menu from the current state.
+ *
+ * Rebuilt rather than mutated because "open the app" is only meaningful while the server is
+ * up, and a menu-bar item that does nothing when clicked is indistinguishable from a broken
+ * app. The state changes for reasons the tray never hears about — a crash, a slow start — so
+ * this is called from the same place the panel is told.
+ */
+function refreshTrayMenu(): void {
+  if (!tray) return;
+  const running = server.status().state === "running";
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: t("tray.openPanel"), click: () => showPanel() },
+      {
+        label: t("action.open"),
+        enabled: running,
+        click: () => void openAppWindow(),
+      },
+      { type: "separator" },
+      {
+        // The only path that stops the server. Everything else — the red button, the app
+        // window, hiding the dock icon — leaves it running on purpose.
+        label: t("tray.stopAndQuit"),
+        click: () => {
+          quitting = true;
+          app.quit();
+        },
+      },
+    ])
+  );
+}
+
+// ---- wiring ----------------------------------------------------------------
+
 function registerIpc(): void {
-  ipcMain.handle(PANEL_CHANNELS.getState, () => server.status());
-  ipcMain.handle(PANEL_CHANNELS.start, () => server.start());
-  ipcMain.handle(PANEL_CHANNELS.stop, () => server.stop());
+  ipcMain.handle(PANEL_CHANNELS.getState, () => currentState());
+  ipcMain.handle(PANEL_CHANNELS.start, async () => {
+    await server.start();
+    return currentState();
+  });
+  ipcMain.handle(PANEL_CHANNELS.stop, async () => {
+    await server.stop();
+    return currentState();
+  });
+  ipcMain.handle(PANEL_CHANNELS.shareOnLan, (_event, on: unknown) => shareOnLan(on === true));
   ipcMain.handle(PANEL_CHANNELS.openApp, () => openAppWindow());
   ipcMain.handle(PANEL_CHANNELS.openInBrowser, async () => {
     const url = server.status().url;
@@ -154,6 +323,7 @@ function registerIpc(): void {
     if (failure) console.error("Could not open the data folder:", failure);
   });
   ipcMain.handle(PANEL_CHANNELS.quit, () => {
+    quitting = true;
     app.quit();
   });
 }
@@ -172,6 +342,8 @@ function buildMenu(): void {
                 { role: "hide" as const },
                 { role: "hideOthers" as const },
                 { type: "separator" as const },
+                // Quitting from here stops the server too: `before-quit` is what does it,
+                // and it does not care what asked.
                 { role: "quit" as const, label: t("action.quit") },
               ],
             },
@@ -209,10 +381,13 @@ function buildMenu(): void {
  * `before-quit` is the only hook early enough to await anything, so the shutdown lives
  * there: stop the server (which drains requests and closes sqlite), then let the quit
  * proceed. The re-entrancy guard matters because `app.quit()` at the end fires this event
- * a second time.
+ * a second time, and the server would be stopped twice.
  */
 function installShutdown(): void {
   app.on("before-quit", (event) => {
+    // Before anything else, so the panel's close handler stops hiding the window and lets
+    // the quit actually happen.
+    quitting = true;
     if (shuttingDown) return;
     event.preventDefault();
     shuttingDown = true;
@@ -228,29 +403,32 @@ function installShutdown(): void {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (!panelWindow || panelWindow.isDestroyed()) return;
-    if (panelWindow.isMinimized()) panelWindow.restore();
-    panelWindow.show();
-    panelWindow.focus();
-  });
+  app.on("second-instance", () => showPanel());
 
   app.whenReady().then(async () => {
     paths = resolveAppPaths({ userDataDir: app.getPath("userData"), resourcesDir });
+    settingsFile = join(paths.root, "desktop.json");
     seedFirstRun(paths);
+    settings = readSettings(settingsFile);
 
     server = new ServerProcess(
-      buildLaunchSpec({
-        electronExecPath: process.execPath,
-        serverEntry: serverEntryFor(appRoot),
-        paths,
-      }),
+      // Read at every start, so flipping the switch takes effect on the restart that
+      // follows it without replacing this object — which would drop the subscription the
+      // panel's state arrives through.
+      () =>
+        buildLaunchSpec({
+          electronExecPath: process.execPath,
+          serverEntry: serverEntryFor(appRoot),
+          paths,
+          host: settings.sharedOnLan ? ANY_INTERFACE_HOST : LOOPBACK_HOST,
+        }),
       { dataDir: paths.root }
     );
     server.subscribe(broadcast);
 
     registerIpc();
     buildMenu();
+    createTray();
 
     panelWindow = createPanelWindow();
 
@@ -259,13 +437,16 @@ if (!app.requestSingleInstanceLock()) {
     // press "start" before anything works has a puzzle.
     await server.start();
 
-    app.on("activate", () => {
-      if (!panelWindow || panelWindow.isDestroyed()) panelWindow = createPanelWindow();
-      else panelWindow.focus();
-    });
+    app.on("activate", () => showPanel());
   });
 
-  // The panel is the app. Closing it means quitting — leaving a headless server running
-  // with no window to stop it would be indistinguishable from a bug.
-  app.on("window-all-closed", () => app.quit());
+  /**
+   * Deliberately empty, and deliberately present.
+   *
+   * Electron quits by default when every window has closed *unless* something subscribes —
+   * and quitting here would defeat the tray, which exists so that closing the last window
+   * does not stop the server. The panel hides rather than closes, so in practice this only
+   * fires if a window is destroyed some other way.
+   */
+  app.on("window-all-closed", () => undefined);
 }

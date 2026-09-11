@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { buildLaunchSpec, parseListeningLine, serverEntryFor } from "../src/main/launch.js";
+import {
+  ANY_INTERFACE_HOST,
+  LOOPBACK_HOST,
+  buildLaunchSpec,
+  parseListeningLine,
+  serverEntryFor,
+} from "../src/main/launch.js";
 import type { AppPaths } from "../src/main/paths.js";
 
 const paths: AppPaths = {
@@ -44,12 +50,16 @@ describe("parseListeningLine", () => {
 });
 
 describe("buildLaunchSpec", () => {
-  const spec = buildLaunchSpec({
-    electronExecPath: "/Applications/guided-learning.app/Contents/MacOS/guided-learning",
-    serverEntry: "/Applications/guided-learning.app/Contents/Resources/app/dist/server/index.mjs",
-    paths,
-    baseEnv: { PATH: "/usr/bin" },
-  });
+  const build = (host: string) =>
+    buildLaunchSpec({
+      electronExecPath: "/Applications/guided-learning.app/Contents/MacOS/guided-learning",
+      serverEntry: "/Applications/guided-learning.app/Contents/Resources/app/dist/server/index.mjs",
+      paths,
+      host,
+      baseEnv: { PATH: "/usr/bin" },
+    });
+
+  const spec = build(LOOPBACK_HOST);
 
   it("runs the Electron binary as a plain Node process", () => {
     // There is no Node on a user's machine, so the child has to be the runtime we are
@@ -69,6 +79,14 @@ describe("buildLaunchSpec", () => {
 
   it("keeps the ambient environment", () => {
     expect(spec.env["PATH"]).toBe("/usr/bin");
+  });
+
+  it("always states the bind address, including on the loopback default", () => {
+    // Stating it even when it matches the config file is the point: leaving the loopback
+    // case to the file would let a hand-edited `server.host` there put the server on the
+    // network while the panel's switch still read "off".
+    expect(build(LOOPBACK_HOST).env["GL_HOST"]).toBe("127.0.0.1");
+    expect(build(ANY_INTERFACE_HOST).env["GL_HOST"]).toBe("0.0.0.0");
   });
 });
 

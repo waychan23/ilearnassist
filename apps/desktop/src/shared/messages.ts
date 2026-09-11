@@ -55,10 +55,24 @@ export interface PanelMessages {
   "action.quit": string;
   "action.showLogs": string;
   "action.hideLogs": string;
+  "action.share": string;
+  "action.unshare": string;
   "label.dataDir": string;
+  "label.lanAccess": string;
   "label.logs": string;
   "label.logsEmpty": string;
   "hint.notRunning": string;
+  "hint.closeToTray": string;
+  "qr.title": string;
+  "qr.steps": string;
+  "qr.address": string;
+  "qr.close": string;
+  "qr.preparing": string;
+  "qr.notRunning": string;
+  "qr.noNetwork": string;
+  "tray.tooltip": string;
+  "tray.openPanel": string;
+  "tray.stopAndQuit": string;
   "fault.spawn_failed": string;
   "fault.exited": string;
   "fault.exitedWithSignal": string;
@@ -88,13 +102,29 @@ const zhCN: PanelMessages = {
   "action.copyUrl": "复制地址",
   "action.copied": "已复制",
   "action.reveal": "在访达中显示",
-  "action.quit": "退出",
+  "action.quit": "停止服务器并退出",
   "action.showLogs": "查看日志",
   "action.hideLogs": "收起日志",
+  "action.share": "在手机/平板打开",
+  // Not "关闭": sitting next to the button that opens the QR sheet, that reads as "close
+  // this dialog" rather than "stop being reachable from the network".
+  "action.unshare": "停止共享",
   "label.dataDir": "数据目录",
+  "label.lanAccess": "手机 / 平板访问",
   "label.logs": "运行日志",
   "label.logsEmpty": "暂无输出",
   "hint.notRunning": "服务未运行，先启动服务再打开界面。",
+  "hint.closeToTray": "关闭这个窗口不会停止服务，它会继续在菜单栏运行。",
+  "qr.title": "在手机或平板上打开",
+  "qr.steps": "让手机连接与本机相同的 Wi-Fi，然后用相机扫描下面的二维码。",
+  "qr.address": "也可以手动输入这个地址",
+  "qr.close": "关闭",
+  "qr.preparing": "正在开启局域网访问…",
+  "qr.notRunning": "服务还没有运行，暂时无法访问。请先启动服务。",
+  "qr.noNetwork": "没有找到可用的局域网地址。请先让这台电脑连上 Wi-Fi 或网线。",
+  "tray.tooltip": "guided-learning",
+  "tray.openPanel": "打开控制面板",
+  "tray.stopAndQuit": "停止服务器并退出",
   "fault.spawn_failed": "无法启动服务进程：{message}",
   "fault.exited": "服务意外退出（退出码 {exitCode}）。",
   "fault.exitedWithSignal": "服务被信号 {signal} 终止。",
@@ -124,13 +154,27 @@ const en: PanelMessages = {
   "action.copyUrl": "Copy address",
   "action.copied": "Copied",
   "action.reveal": "Show in Finder",
-  "action.quit": "Quit",
+  "action.quit": "Stop server and quit",
   "action.showLogs": "Show logs",
   "action.hideLogs": "Hide logs",
+  "action.share": "Open on your phone",
+  "action.unshare": "Turn off",
   "label.dataDir": "Data folder",
+  "label.lanAccess": "Phone or tablet",
   "label.logs": "Server output",
   "label.logsEmpty": "Nothing yet",
   "hint.notRunning": "The server is not running. Start it before opening the app.",
+  "hint.closeToTray": "Closing this window keeps the server running in the menu bar.",
+  "qr.title": "Open on your phone or tablet",
+  "qr.steps": "Connect your phone to the same Wi-Fi as this Mac, then scan the code below.",
+  "qr.address": "Or type this address by hand",
+  "qr.close": "Close",
+  "qr.preparing": "Turning on network access…",
+  "qr.notRunning": "The server is not running yet, so there is nothing to open. Start it first.",
+  "qr.noNetwork": "No network address available. Connect this Mac to Wi-Fi or Ethernet first.",
+  "tray.tooltip": "guided-learning",
+  "tray.openPanel": "Open control panel",
+  "tray.stopAndQuit": "Stop server and quit",
   "fault.spawn_failed": "Could not start the server process: {message}",
   "fault.exited": "The server exited unexpectedly (exit code {exitCode}).",
   "fault.exitedWithSignal": "The server was terminated by signal {signal}.",

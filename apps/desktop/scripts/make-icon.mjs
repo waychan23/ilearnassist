@@ -140,6 +140,54 @@ function render() {
   return rgba;
 }
 
+/**
+ * The menu-bar mark: the same speech bubble, as a **template image**.
+ *
+ * A template image is shape only — black pixels with an alpha channel — and macOS draws it
+ * in whatever colour the menu bar currently needs, inverting it for dark mode and dimming
+ * it when the app is not frontmost. That is why there is no gradient and no colour here: any
+ * hue written into these channels is discarded, and a coloured source would only mislead the
+ * next person to open it.
+ *
+ * Drawn at each size rather than scaled down from the app icon, because a 16px reduction of
+ * the 1024px artwork turns the bubble's tail into a smudge. The proportions are restated for
+ * the small canvas instead: a wider margin, a shallower tail, and a thicker body.
+ */
+function renderTray(size) {
+  const margin = size * 0.08;
+  const body = {
+    x0: margin,
+    y0: size * 0.14,
+    x1: size - margin,
+    y1: size * 0.66,
+    radius: size * 0.17,
+  };
+  const tail = [
+    [size * 0.28, size * 0.6],
+    [size * 0.52, size * 0.6],
+    [size * 0.3, size * 0.9],
+  ];
+  const tailSign = polygonCentreSign(tail);
+  const rgba = Buffer.alloc(size * size * 4);
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const px = x + 0.5;
+      const py = y + 0.5;
+      const cover = Math.max(
+        coverage(roundedBox(px, py, body.x0, body.y0, body.x1, body.y1, body.radius)),
+        coverage(convexPolygon(px, py, tail, tailSign))
+      );
+      const offset = (y * size + x) * 4;
+      // RGB stays zero: the channels are ignored for drawing, and leaving them white would
+      // make this file look like a white square in any viewer.
+      rgba[offset + 3] = Math.round(cover * 255);
+    }
+  }
+
+  return rgba;
+}
+
 // ---- a minimal PNG encoder -------------------------------------------------
 
 const CRC_TABLE = (() => {
@@ -217,6 +265,16 @@ function main() {
   const png = encodePng(render(), SIZE);
   writeFileSync(join(assetsDir, "icon.png"), png);
   console.log(`[icon] assets/icon.png (${SIZE}×${SIZE})`);
+
+  // The `Template` suffix is what tells macOS to recolour it, and the `@2x` sibling is what
+  // keeps it sharp on a Retina menu bar. Both names are load-bearing.
+  for (const [size, name] of [
+    [16, "trayTemplate.png"],
+    [32, "trayTemplate@2x.png"],
+  ]) {
+    writeFileSync(join(assetsDir, name), encodePng(renderTray(size), size));
+    console.log(`[icon] assets/${name} (${size}×${size})`);
+  }
 
   if (process.platform !== "darwin") return;
 

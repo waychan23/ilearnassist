@@ -324,6 +324,16 @@ export function loadConfig(): AppConfig {
   const merged = resolveEnvDeep(deepMerge(base, local)) as Record<string, unknown>;
   const config = withDefaults(merged);
 
+  // `GL_HOST` overrides the bind address, for the same reason `GL_DATA_DIR` overrides the
+  // data directory: the desktop shell changes it *at runtime*. Letting a phone on the same
+  // network open the app means binding beyond loopback, and the two config files are both
+  // disqualified — `config.yaml` is the shared bootstrap, and the `config.local.yaml`
+  // overlay is seeded once and then belongs to the user, who may have put a port or a key
+  // in it. An environment variable is the only channel that can differ per launch without
+  // rewriting something the user owns.
+  const host = process.env.GL_HOST?.trim();
+  if (host) config.server.host = host;
+
   validateConfig(config);
   cached = config;
   return config;

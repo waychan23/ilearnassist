@@ -29,7 +29,10 @@ function fixture(script: string): LaunchSpec {
   return { command: process.execPath, args: ["-e", script], env: {} };
 }
 
-function start(spec: LaunchSpec, options: Partial<ConstructorParameters<typeof ServerProcess>[1]> = {}) {
+function start(
+  spec: LaunchSpec | (() => LaunchSpec),
+  options: Partial<ConstructorParameters<typeof ServerProcess>[1]> = {}
+) {
   const instance = new ServerProcess(spec, { dataDir: "/tmp/data", logFlushMs: 10, ...options });
   live.push(instance);
   return instance;
@@ -192,6 +195,30 @@ describe("ServerProcess — stopping and restarting", () => {
     await server.stop();
 
     expect(server.status().state).toBe("stopped");
+  });
+
+  it("reads the launch spec at each start, so a setting can change between runs", async () => {
+    // The panel's "open on your phone" switch changes the bind address, which the server
+    // can only pick up from its environment at spawn. Reading the spec once would pin it to
+    // whatever it was at launch, and the switch would appear to work while changing nothing.
+    let url = "http://127.0.0.1:11111";
+    const server = start(() => ({
+      command: process.execPath,
+      args: [
+        "-e",
+        `console.log("[guided-learning] listening on " + process.env.TEST_URL); setInterval(() => {}, 1000);`,
+      ],
+      env: { TEST_URL: url },
+    }));
+
+    await server.start();
+    await waitFor(() => server.status().state === "running");
+    expect(server.status().url).toBe("http://127.0.0.1:11111");
+
+    await server.stop();
+    url = "http://192.168.1.42:22222";
+    await server.start();
+    await waitFor(() => server.status().url === "http://192.168.1.42:22222");
   });
 
   it("can start again after a stop", async () => {
