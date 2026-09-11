@@ -727,3 +727,71 @@ describe("what a suspended turn persists", () => {
     expect(result.content).toBe("需要先确认。");
   });
 });
+
+describe("running out of steps", () => {
+  const calls = (): FakeTurn[] => [
+    { toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
+    { toolCalls: [{ id: "c2", name: "no_such_tool", args: {} }] },
+  ];
+
+  it("keeps the last utterance and says it was cut short", async () => {
+    // Both halves matter. The last utterance is the most recent thing the model said; the
+    // notice is what stops a turn that stopped mid-work from reading as a finished answer.
+    const { result } = await run({
+      turns: [
+        { content: "Let me look around.", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
+        { content: "我先看看工作区。", toolCalls: [{ id: "c2", name: "no_such_tool", args: {} }] },
+      ],
+      settings: { maxSteps: 2 },
+    });
+
+    // Not the two utterances run together.
+    expect(result.content).toBe(
+      "我先看看工作区。\n\nThe assistant ran out of steps while working on this task. Please ask a follow-up to continue."
+    );
+  });
+
+  it("still says so when the model never spoke", async () => {
+    const { result } = await run({ turns: calls(), settings: { maxSteps: 2 } });
+
+    expect(result.content).toBe(
+      "The assistant ran out of steps while working on this task. Please ask a follow-up to continue."
+    );
+  });
+
+  it("does not add the notice when the model answered", async () => {
+    const { result } = await run({
+      turns: [
+        { content: "查一下。", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
+        { content: "答案是 42。" },
+      ],
+      settings: { maxSteps: 2 },
+    });
+
+    expect(result.content).toBe("答案是 42。");
+  });
+
+  it("does not add the notice when the turn suspended on a question", async () => {
+    const { result } = await run({
+      tools: [buildAskUserTool()],
+      settings: { maxSteps: 2 },
+      turns: [
+        { content: "先看一眼。", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
+        {
+          content: "需要你定一下：",
+          toolCalls: [
+            {
+              id: "c2",
+              name: "ask_user",
+              args: { questions: [{ header: "背景", question: "你的背景？", options: [{ label: "A" }, { label: "B" }] }] },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.awaiting).toBe(true);
+    expect(result.content).toBe("需要你定一下：");
+    expect(result.content).not.toContain("ran out of steps");
+  });
+});

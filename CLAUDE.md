@@ -340,16 +340,22 @@ Fuller map in `docs/reference.md`.
   narration + answer while `messages.content` holds only the answer, and a reload drops the
   narration. Pinned by a test in `apps/server/test/agent/loop.test.ts` — changing it is a
   product decision, not a bug fix.
-- **A suspended turn keeps one utterance, not all of them.** `finalContent` *accumulates*
-  every step's text as it streams, and only the final-answer branch replaces that pile. A
-  turn that ends on a tool call — which `ask_user` made reachable in normal use, being the
-  first way to end a turn by asking rather than answering — never reaches it, so the
-  suspend path states the same rule explicitly: `finalContent = lastUtterance`. Without it
-  every step's narration was joined with **no separator**
-  (`"Let me look at the workspace.我先确认几件事："`), which reads as one broken sentence in
-  any language. The live stream still shows the narration; only what is persisted is
-  trimmed. The fallback is the last *utterance* rather than the accumulation, so a silent
-  suspending step cannot resurrect the pile either.
+- **A message holds the model's most recent utterance, never every step's run together.**
+  `finalContent` *accumulates* each step's text as it streams, and it is the `lastUtterance`
+  tracked per step that every ending actually reads from — the final answer, the suspension,
+  and the exhausted budget alike. The rule matters because of how it used to fail: only the
+  final-answer branch replaced the pile, so any ending that did *not* go through it
+  persisted every step's narration joined with **no separator**
+  (`"Let me look at the workspace.我先确认几件事："`), which reads as one broken sentence
+  whatever language it is in. `ask_user` is what made that reachable in normal use, being
+  the first way to end a turn by asking rather than answering. Fallbacks are always the last
+  *utterance*, never the accumulation, so a step that said nothing cannot resurrect the pile.
+  The live stream still shows everything as it arrives; only what is persisted is trimmed.
+- **A turn that was cut short says so, and it is persisted.** When the step budget runs out
+  the message keeps the model's last utterance *and* appends `OUT_OF_STEPS`. The sentence
+  used to appear only when the model had said nothing at all, which meant every truncated
+  turn that had narrated anything — the common case — read as a finished answer. Like the
+  `⚠️ ` prefix it is untranslated on purpose: it is content, replayed to the model next turn.
 - **A user's title is permanent.** `session.titleSource` is `auto` until a human
   supplies a title via `PATCH /api/sessions/:id`, which flips it to `user`; the
   auto-titler must then never touch it. The titler runs on the first turn only, and

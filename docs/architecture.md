@@ -188,10 +188,12 @@ control over the streaming shape:
 3. Loop up to `settings.maxSteps` (default **15**). Each step:
    - `modelWithTools.stream(messages)` and emit `text` deltas as they arrive,
      accumulating `AIMessageChunk`s. **Each step's text is also kept on its own**, because
-     what gets persisted is the model's *most recent* utterance rather than the pile: the
-     last step of a normal turn replaces the accumulation, and a suspended turn states the
-     same rule for itself. Without the latter, every step's narration is joined with no
-     separator — see [`ask_user`](#ask_user-and-the-suspended-turn).
+     what gets persisted is the model's *most recent utterance* and never the pile of every
+     step run together: the final answer, a suspension and an exhausted budget all read from
+     `lastUtterance`, and each of their fallbacks is that same utterance rather than the
+     accumulation. Any ending that skipped this joined two utterances with no separator
+     (`"Let me look at the workspace.我先确认几件事："`) — see
+     [`ask_user`](#ask_user-and-the-suspended-turn).
    - Reduce chunks into a full `AIMessage`; read its `tool_calls`.
    - Accumulate `usage_metadata` (input/output/total/cached). The summed figures
      are what was billed; `contextTokens` records the *final* step's input+output

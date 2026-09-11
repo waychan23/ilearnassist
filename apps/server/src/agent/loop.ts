@@ -25,6 +25,14 @@ import { buildModel } from "./model.js";
 /** Fallback ReAct step budget when a session does not set one. */
 const DEFAULT_MAX_STEPS = 15;
 
+/**
+ * Persisted into the conversation when the step budget runs out, so the model on the next
+ * turn knows it was cut off. Untranslated like the `⚠️ ` prefix: it is content that is
+ * replayed into history, not chrome.
+ */
+const OUT_OF_STEPS =
+  "The assistant ran out of steps while working on this task. Please ask a follow-up to continue.";
+
 export interface RunAgentResult {
   content: string;
   /** Chain of thought, when the provider exposed one. Display-only. */
@@ -323,6 +331,12 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   let lastUtterance = "";
   /** Set when a step asked the user something; the turn ends once the step finishes. */
   let awaiting = false;
+  /**
+   * Whether the loop stopped for a reason of its own — an answer, a question, or a provider
+   * that sent nothing. False means the budget ran out with the model still working, which is
+   * a different outcome and has to be reported as one.
+   */
+  let ended = false;
 
   // Summed across steps — what the provider actually billed for this turn.
   let inputTokens = 0;
@@ -355,7 +369,10 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       }
     }
 
-    if (chunks.length === 0) break;
+    if (chunks.length === 0) {
+      ended = true;
+      break;
+    }
     const aiMessage = chunks.reduce((acc, c) => acc.concat(c) as AIMessageChunk);
     messages.push(aiMessage);
 
@@ -380,7 +397,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     const calls = aiMessage.tool_calls ?? [];
     if (calls.length === 0) {
       // No tool calls: the model's final answer is this message's content.
-      finalContent = chunkText(aiMessage) || finalContent;
+      finalContent = chunkText(aiMessage) || lastUtterance;
+      ended = true;
       break;
     }
 
@@ -443,15 +461,18 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       // not part of it. Falling back to the utterance rather than to the accumulation is
       // what keeps a silent suspending step from re-joining everything after all.
       finalContent = lastUtterance || finalContent;
+      ended = true;
       break;
     }
   }
 
-  // Only when the turn genuinely ended without an answer. A suspension that carried no
-  // preamble text is a normal outcome, not a budget failure.
-  if (!finalContent && !awaiting) {
-    finalContent =
-      "The assistant ran out of steps while working on this task. Please ask a follow-up to continue.";
+  // The budget ran out with the model still working. Its last utterance is kept — it is the
+  // most recent thing it said — and the truncation is stated after it, because a turn that
+  // stops mid-work and reads as a finished answer is worse than one that admits it. The
+  // sentence is always present, not only when the model said nothing: that used to be the
+  // rule, and it meant every truncated turn that had narrated anything looked complete.
+  if (!ended) {
+    finalContent = lastUtterance ? `${lastUtterance}\n\n${OUT_OF_STEPS}` : OUT_OF_STEPS;
   }
 
   // Empty (rather than all-zeros) when the provider reported nothing, so callers can tell
