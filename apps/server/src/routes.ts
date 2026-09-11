@@ -1,19 +1,26 @@
 import type { FastifyInstance } from "fastify";
 import { readFile, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type {
   Attachment,
   ChatInput,
   ChatStreamEvent,
   CopilotDefaults,
   CreateCopilotInput,
+  CreateDocumentParserInput,
   CreateProviderInput,
   CreateSessionInput,
   CreateWorkspaceInput,
+  DocumentParsePolicy,
+  DocumentParserConfig,
+  ParseStatus,
   ProviderConfig,
   ProviderModelInput,
   PublicConfig,
   SessionSettings,
   UpdateCopilotInput,
+  UpdateDocumentParserInput,
+  UpdateDocumentParsingInput,
   UpdateProviderInput,
   UpdateSessionInput,
   UploadAttachmentInput,
@@ -22,11 +29,19 @@ import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
 import type { AppConfig } from "./config.js";
 import {
   newId,
+  readDocumentParsing,
   SETTING_DEFAULT_MODEL,
   SETTING_DEFAULT_PROVIDER,
+  SETTING_DOCUMENT_DEFAULT_PARSER,
+  SETTING_DOCUMENT_FALLBACK,
+  SETTING_DOCUMENT_LOCAL_ENABLED,
+  SETTING_DOCUMENT_POLICY,
   type AppDb,
   type ProviderRecord,
 } from "./db.js";
+import { describeParseError, driverInfos, isDocumentParserKind } from "./documents/index.js";
+import type { DocumentService } from "./documents/service.js";
+import { listParseRecords } from "./documents/store.js";
 import { runAgentStream } from "./agent/loop.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
 import { createSseWriter } from "./stream.js";
@@ -51,13 +66,15 @@ interface RoutesOptions {
    * `data/uploads`; tests redirect it at a temp directory.
    */
   uploadsRoot?: string;
+  /** Owns document text extraction and the parse-state sidecars. */
+  documents: DocumentService;
 }
 
 /** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
 const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 64 * 1024;
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
-  const { config, db } = opts;
+  const { config, db, documents } = opts;
   const uploadsRoot = opts.uploadsRoot ?? UPLOADS_ROOT;
 
   /* --------------------------------- resolution -------------------------------- */
@@ -113,6 +130,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   const isVisionModel = (provider: ProviderRecord | undefined, modelId: string): boolean =>
     !!provider?.models.find((m) => m.modelId === modelId)?.capabilities.includes("vision");
 
+  /** Drives how a truncated document is explained — see `BuildContentOptions.toolUse`. */
+  const isToolUseModel = (provider: ProviderRecord | undefined, modelId: string): boolean =>
+    !!provider?.models.find((m) => m.modelId === modelId)?.capabilities.includes("tool_use");
+
   function providerConfigs(): ProviderConfig[] {
     return db.listProviders().map((p) => ({
       id: p.id,
@@ -123,6 +144,25 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }));
   }
 
+  function documentParserConfigs(): DocumentParserConfig[] {
+    return db.listDocumentParsers().map((p) => ({
+      id: p.id,
+      name: p.name,
+      kind: p.kind,
+      baseURL: p.baseURL,
+      enabled: p.enabled,
+      hasApiKey: !!p.apiKey,
+    }));
+  }
+
+  const documentParsing = () =>
+    readDocumentParsing(db, {
+      localEnabled: config.documentParsing.localEnabled,
+      policy: config.documentParsing.policy,
+      fallbackEnabled: config.documentParsing.fallbackEnabled,
+      defaultParserId: config.documentParsing.defaultParserId ?? null,
+    });
+
   function publicConfig(): PublicConfig {
     return {
       defaultProvider: resolveDefaultProviderId(),
@@ -130,7 +170,33 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       providers: providerConfigs(),
       workspacesRootDir: config.workspaces.rootDir,
       webSearchProvider: config.tools.webSearch.provider,
+      documentParsers: documentParserConfigs(),
+      documentParsing: documentParsing(),
     };
+  }
+
+  /**
+   * Fold parse state into the attachment metadata that gets persisted with a message.
+   *
+   * The prompt itself reads the sidecar directly, so this is purely for the UI: without it
+   * a conversation reloaded tomorrow would show every document as unparsed, having lost the
+   * only record of what happened.
+   */
+  async function withParseState(sessionId: string, list: Attachment[]): Promise<Attachment[]> {
+    if (list.length === 0) return list;
+    const records = await listParseRecords(uploadsRoot, sessionId);
+    return list.map((att) => {
+      const record = records.get(att.id);
+      if (!record) return att;
+      return {
+        ...att,
+        parseStatus: record.status,
+        parseError: record.error,
+        parserId: record.parserId,
+        parsedChars: record.parsedChars,
+        pageCount: record.pageCount,
+      };
+    });
   }
 
   /* ------------------------------- config/health ------------------------------- */
@@ -243,6 +309,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   app.delete("/api/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    // Abort before deleting: a parse still running would finish by writing a sidecar back
+    // into the directory we are about to remove, recreating it as an orphan.
+    documents.cancelSession(id);
     db.deleteSession(id);
     await removeSessionUploads(uploadsRoot, id);
     return { ok: true };
@@ -314,9 +383,56 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         return reply.code(500).send({ error: "failed to store attachment" });
       }
 
-      return reply.code(201).send(attachment);
+      // Text extraction runs *after* the response: a cloud parse can take minutes, and the
+      // composer must not hold the upload open for it. The client polls the parse state,
+      // which `schedule` has already written as `pending` before this returns.
+      void documents.schedule(id, attachment).catch((err: unknown) => {
+        request.log.error(err, "failed to schedule document parsing");
+      });
+
+      // Report the pending state immediately so the client never has to guess.
+      const pending = documents.handles(attachment)
+        ? { ...attachment, parseStatus: "pending" as ParseStatus }
+        : attachment;
+      return reply.code(201).send(pending);
     }
   );
+
+  /** Parse state for every attachment in a session, keyed by attachment id. */
+  app.get("/api/sessions/:id/attachments", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!db.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    const records = await listParseRecords(uploadsRoot, id);
+    return Object.fromEntries(records);
+  });
+
+  /** Re-run extraction, e.g. after a failure or a change of parser settings. */
+  app.post("/api/sessions/:id/attachments/:attachmentId/reparse", async (request, reply) => {
+    const { id, attachmentId } = request.params as { id: string; attachmentId: string };
+    if (!db.getSession(id)) return reply.code(404).send({ error: "session not found" });
+
+    const found = await findStoredAttachment(uploadsRoot, id, attachmentId);
+    if (!found) return reply.code(404).send({ error: "attachment not found" });
+
+    const body = (request.body ?? {}) as { name?: string };
+    // Cloud parsers branch on the filename extension, so the on-disk name is a sound
+    // fallback when the caller does not supply the original — the MIME type came from that
+    // same extension a moment ago.
+    const name = body.name?.trim() || basename(found.path);
+
+    try {
+      await documents.reparse(id, {
+        id: attachmentId,
+        name,
+        mimeType: found.mimeType,
+        size: 0,
+        kind: kindFor(found.mimeType),
+      });
+    } catch (err) {
+      return reply.code(400).send({ error: describeParseError(err) });
+    }
+    return reply.code(202).send({ status: "pending" });
+  });
 
   /** Serve an attachment back for preview/thumbnail rendering. */
   app.get("/api/sessions/:sessionId/attachments/:attachmentId", async (request, reply) => {
@@ -416,6 +532,104 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return publicProvider(providerId);
   });
 
+  /* ----------------------------- document parsers ------------------------------ */
+
+  /** The protocol kinds the server implements, so the UI never hard-codes the list. */
+  app.get("/api/document-parsers/kinds", async () => driverInfos());
+
+  app.get("/api/document-parsers", async () => documentParserConfigs());
+
+  app.post("/api/document-parsers", async (request, reply) => {
+    const body = request.body as CreateDocumentParserInput;
+    const name = body?.name?.trim();
+    const baseURL = body?.baseURL?.trim();
+    if (!name) return reply.code(400).send({ error: "name is required" });
+    if (!baseURL) return reply.code(400).send({ error: "baseURL is required" });
+    if (!isDocumentParserKind(body.kind)) {
+      return reply.code(400).send({ error: `unknown parser kind: ${String(body.kind)}` });
+    }
+
+    const parser = db.createDocumentParser({
+      id: newId(),
+      name,
+      kind: body.kind,
+      baseURL,
+      apiKey: body.apiKey?.trim() || undefined,
+      enabled: body.enabled !== false,
+    });
+    return reply.code(201).send(publicDocumentParser(parser.id));
+  });
+
+  app.put("/api/document-parsers/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as UpdateDocumentParserInput;
+    if (!db.getDocumentParser(id)) return reply.code(404).send({ error: "parser not found" });
+    if (body?.kind !== undefined && !isDocumentParserKind(body.kind)) {
+      return reply.code(400).send({ error: `unknown parser kind: ${String(body.kind)}` });
+    }
+
+    // Same key contract as providers: absent keeps the stored key, "" clears it.
+    db.updateDocumentParser(id, {
+      name: body?.name,
+      kind: body?.kind,
+      baseURL: body?.baseURL,
+      apiKey: body?.apiKey === undefined ? undefined : body.apiKey.trim(),
+      enabled: body?.enabled,
+    });
+    return publicDocumentParser(id);
+  });
+
+  app.delete("/api/document-parsers/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!db.getDocumentParser(id)) return reply.code(404).send({ error: "parser not found" });
+
+    // Unlike LLM providers there is no "last one" guard: running with zero cloud parsers is
+    // a normal configuration (local-only), so deleting the final entry is allowed.
+    db.deleteDocumentParser(id);
+    if (db.getSetting(SETTING_DOCUMENT_DEFAULT_PARSER) === id) {
+      db.setSetting(SETTING_DOCUMENT_DEFAULT_PARSER, "");
+    }
+    return { ok: true };
+  });
+
+  /** Round-trip a throwaway document through a parser to prove the endpoint and key work. */
+  app.post("/api/document-parsers/:id/test", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!db.getDocumentParser(id)) return reply.code(404).send({ error: "parser not found" });
+    try {
+      await documents.testParser(id);
+      return { ok: true };
+    } catch (err) {
+      return reply.code(400).send({ ok: false, error: describeParseError(err) });
+    }
+  });
+
+  /** The parsing policy (tier order, fallback, pinned parser). */
+  app.put("/api/document-parsing", async (request, reply) => {
+    const body = request.body as UpdateDocumentParsingInput;
+
+    if (body?.policy !== undefined) {
+      if (!isParsePolicy(body.policy)) {
+        return reply.code(400).send({ error: `unknown policy: ${String(body.policy)}` });
+      }
+      db.setSetting(SETTING_DOCUMENT_POLICY, body.policy);
+    }
+    if (body?.localEnabled !== undefined) {
+      db.setSetting(SETTING_DOCUMENT_LOCAL_ENABLED, body.localEnabled ? "1" : "0");
+    }
+    if (body?.fallbackEnabled !== undefined) {
+      db.setSetting(SETTING_DOCUMENT_FALLBACK, body.fallbackEnabled ? "1" : "0");
+    }
+    if (body?.defaultParserId !== undefined) {
+      const pin = body.defaultParserId === null ? "" : body.defaultParserId.trim();
+      if (pin && !db.getDocumentParser(pin)) {
+        return reply.code(400).send({ error: "unknown parser" });
+      }
+      db.setSetting(SETTING_DOCUMENT_DEFAULT_PARSER, pin);
+    }
+    return documentParsing();
+  });
+
   /* --------------------------------- app defaults ------------------------------ */
 
   app.put("/api/defaults", async (request, reply) => {
@@ -453,6 +667,21 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       );
       return fallbackTitle(input.userMessage, input.assistantMessage) || undefined;
     }
+  }
+
+  /** Never returns `apiKey` — only whether one is set. */
+  function publicDocumentParser(id: string): DocumentParserConfig {
+    const parsers = documentParserConfigs();
+    return (
+      parsers.find((p) => p.id === id) ?? {
+        id,
+        name: "",
+        kind: "sync",
+        baseURL: "",
+        enabled: false,
+        hasApiKey: false,
+      }
+    );
   }
 
   /** Never returns `apiKey` — only whether one is set. */
@@ -498,28 +727,40 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const provider = db.getProvider(providerId);
     const modelId = resolveModelId(provider, body.model, session.settings, copilot?.settings);
 
+    // Drop anything whose id/MIME would not resolve to a path under this session's upload
+    // directory. A stale or hostile client cannot point the reader at an arbitrary file
+    // (a well-formed id for a missing file still degrades to a placeholder downstream).
+    const storedAttachments = attachments.filter((a) => resolveStoredPath(uploadsRoot, id, a));
+
     const tools = buildTools({
       workspaceDir: workspace.dirPath,
       webSearch: config.tools.webSearch,
       webFetch: config.tools.webFetch,
       fileToolsEnabled: config.tools.fileTools.enabled,
       allowedNames: copilot?.tools,
+      // The tool is scoped to *this turn's* attachments, so a model cannot read a document
+      // from another conversation even if it guesses an id.
+      documents: {
+        uploadRoot: uploadsRoot,
+        sessionId: id,
+        attachments: storedAttachments.map((a) => ({
+          id: a.id,
+          name: a.name,
+          mimeType: a.mimeType,
+        })),
+        maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
+      },
     });
 
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
     const history = db.listMessages(id);
-
-    // Drop anything whose id/MIME would not resolve to a path under this session's upload
-    // directory. A stale or hostile client cannot point the reader at an arbitrary file
-    // (a well-formed id for a missing file still degrades to a placeholder downstream).
-    const storedAttachments = attachments.filter((a) => resolveStoredPath(uploadsRoot, id, a));
 
     db.createMessage({
       id: newId(),
       sessionId: id,
       role: "user",
       content: message,
-      attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
+      attachments: storedAttachments.length > 0 ? await withParseState(id, storedAttachments) : undefined,
     });
 
     // Take over the response so we can stream Server-Sent Events.
@@ -537,6 +778,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         uploadRoot: uploadsRoot,
         sessionId: id,
         vision: isVisionModel(provider, modelId),
+        toolUse: isToolUseModel(provider, modelId),
         history,
         userMessage: message,
         attachments: storedAttachments,
@@ -587,6 +829,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       sse.end();
     }
   });
+}
+
+function isParsePolicy(value: unknown): value is DocumentParsePolicy {
+  return (
+    value === "local-only" ||
+    value === "local-first" ||
+    value === "cloud-first" ||
+    value === "cloud-only"
+  );
 }
 
 /** Validate + normalize one model payload. Returns undefined when it is unusable. */

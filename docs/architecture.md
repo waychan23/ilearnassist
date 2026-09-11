@@ -11,8 +11,9 @@
                                               │  ├─ agent/loop.ts (ReAct)    │
                                               │  │    └─ agent/model.ts      │
                                               │  │        (ChatOpenAI)       │
-                                              │  ├─ tools/ (files + web)     │
+                                              │  ├─ tools/ (files+web+doc)   │
                                               │  ├─ attachments.ts (uploads) │
+                                              │  ├─ documents/ (parsing)     │
                                               │  ├─ workspace.ts (sandbox)   │
                                               │  └─ db.ts (SQLite)           │
                                               └──────────────┬───────────────┘
@@ -39,13 +40,18 @@ The result is a typed `AppConfig` with providers, models, tool settings and the
 workspaces root. A separate `publicConfig()` strips `apiKey` before sending it
 to the client.
 
-**`config.yaml` is bootstrap + seed data, not live config.** Providers and models
-are seeded into SQLite on first boot (`seedFromConfig`); after that the
-Settings → Providers UI is the source of truth and the YAML is never re-applied
-(so editing it cannot clobber what was saved in the UI, and deleting a provider
-in the UI sticks). `config.yaml` remains the only way to supply a key via
-`${ENV_VAR}` instead of typing it into the browser. Server/workspaces/tools
-settings are still read from YAML on every boot.
+**`config.yaml` is bootstrap + seed data, not live config.** Providers, models and
+document parsers are seeded into SQLite on first boot (`seedFromConfig`,
+`seedDocumentParsersFromConfig`); after that the settings UI is the source of truth
+and the YAML is never re-applied (so editing it cannot clobber what was saved in the
+UI, and deleting an entry in the UI sticks). `config.yaml` remains the only way to
+supply a key via `${ENV_VAR}` instead of typing it into the browser.
+Server/workspaces/tools settings are still read from YAML on every boot.
+
+Parsers are seeded behind an explicit **`documentParsing.seeded` marker** rather than
+the "table is empty" signal providers use — running with zero cloud parsers is a
+legitimate configuration (local-only), so an empty table must not be read as "never
+seeded", or every boot would resurrect entries the user deliberately deleted.
 
 ### Database (`db.ts`)
 
@@ -60,7 +66,9 @@ snake_case, mapped to camelCase objects in code:
 - `providers` — id, name, base_url, api_key, sort_order, timestamps
 - `models` — id, provider_id (FK, CASCADE), model_id, name, context_window,
   max_output, capabilities (JSON), sort_order
-- `app_settings` — key/value (`defaultProvider`, `defaultModel`)
+- `document_parsers` — id, name, kind, base_url, api_key, enabled, sort_order, timestamps
+- `app_settings` — key/value (`defaultProvider`, `defaultModel`, and the
+  `documentParsing.*` policy keys)
 
 Schema changes are applied **in place** by `ensureColumn()` (`PRAGMA table_info`
 + `ALTER TABLE ADD COLUMN`), because `CREATE TABLE IF NOT EXISTS` silently skips
@@ -93,11 +101,19 @@ to only remove direct children of the root.
 | `delete_file`   | delete a file/dir inside the workspace    | workspace |
 | `web_search`    | search the web (bing/duckduckgo/tavily/searxng) | —   |
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
+| `read_document` | page through an attachment's extracted text | turn's attachments |
 
-`buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames })`
+`buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
 returns the active set for a run, honoring config switches and the Copilot's tool
-allow-list. `web_search` and `web_fetch` survive `fileTools.enabled: false`
-because they never touch the workspace.
+allow-list. `web_search`, `web_fetch` and `read_document` survive
+`fileTools.enabled: false` because none of them touches the workspace.
+
+**`read_document` is registered per turn and only when the turn has document
+attachments.** A model is never offered a tool with nothing to read. It is bound to a
+whitelist of *that turn's* attachment ids rather than to the uploads root — ids are
+guessable enough that a bare-id tool would let a model wander into another session's
+uploads. The check lives where the data crosses the boundary, matching the
+`resolveStoredPath` discipline used for uploads.
 
 #### `web_fetch` and its SSRF guard
 
@@ -208,12 +224,116 @@ than trusting the client.
   labelled text placeholder instead of failing the run.
 - **Text-like files** (`text/*`, json, csv, md, source) → inlined with a filename
   header, truncated at 20k chars with an explicit notice.
-- **Other binaries** (pdf, office) → stored, shown in the UI, and named in the
-  prompt, but not parsed. They are never silently dropped.
+- **Documents** (pdf, docx, xlsx, pptx, odt, ods) → inlined from their extracted text.
+  Past `MAX_INLINE_CHARS` only a `PREVIEW_CHARS` preview goes in, followed by a pointer
+  at the `read_document` tool — or, for a model without `tool_use`, a plain note that the
+  rest was omitted. Nothing is silently dropped.
+- **Anything else** is named in the prompt but not parsed.
 
 Uploads arrive as base64 JSON with a raised per-route `bodyLimit` rather than
 multipart, which keeps the server dependency-free (`@fastify/multipart` is not
 installed) at the cost of a ~33% larger body.
+
+### Document parsing (`documents/`)
+
+PDF and Office attachments are converted to text before they reach the model. Local
+extraction is always available; cloud parsers are optional and configured like LLM
+providers.
+
+```
+data/uploads/<sessionId>/
+  <attachmentId>.pdf        the original bytes
+  parsed/
+    <attachmentId>.txt      extracted text
+    <attachmentId>.json     { status, error?, parserId?, parsedChars?, pageCount? }
+```
+
+**The `parsed/` subdirectory is load-bearing.** `findStoredAttachment()` locates an
+attachment with `entries.find(name => name.startsWith(id + "."))`, and `txt` is a
+legitimate extension in `EXT_MIME` — a flat sibling `<id>.txt` could be picked ahead of
+the PDF, and the download endpoint would serve extracted text instead of the original
+file. Derived data in its own directory makes that collision unrepresentable.
+
+Parse state lives on disk rather than in sqlite because the uploads tree is already the
+authority for attachment bytes and MIME types, and because `removeSessionUploads()`
+deletes the whole session directory — so a session delete cleans up parse state for
+free, with no migration and no cascade to maintain.
+
+**Extraction is asynchronous.** A cloud job routinely takes tens of seconds (five
+minutes is the ceiling), so the upload endpoint returns `201` with `parseStatus:
+"pending"` and a background `DocumentService` queue does the work. The client polls
+`GET /api/sessions/:id/attachments` and the composer **blocks sending until every
+attachment has settled** — the text is injected when the message is built, so sending
+early would produce a turn where the model never saw the document the user attached.
+
+#### Local extraction
+
+| Format | Extractor | Notes |
+| --- | --- | --- |
+| PDF | `pdfjs-dist@4` (legacy build) | text layer only; `==== Page N ====` markers |
+| docx / pptx / xlsx | built-in OOXML reader over `fflate` | paragraphs, slides, and cells via the shared-string table |
+| odt / ods | built-in ODF reader | body text sits directly in `<text:p>`, with no `<t>` wrapper |
+
+`pdfjs-dist` is pinned to **4.x** on purpose: 5.7+ and 6.x require Node ≥ 22.13, while
+this project supports Node ≥ 20. `officeparser` was the obvious choice for Office but
+drags in `tesseract.js` plus two `@napi-rs/canvas` binaries for OCR this feature does not
+do; `fflate` is ~30 KB and has no install scripts.
+
+A scanned PDF has no text layer and yields nothing. That is reported as `no_text_layer`
+rather than an empty string — **the model must never be told it read a document it never
+saw**, and the distinct code is what lets the policy hand the file to a cloud parser.
+
+#### Cloud parsers
+
+A parser record is `{ id, name, kind, baseURL, apiKey, enabled }`. `kind` names a **wire
+protocol**, not a vendor, so two `mineru` records can point at the hosted service and a
+self-hosted box without a second implementation:
+
+| `kind` | Protocol | Covers |
+| --- | --- | --- |
+| `sync` | POST the file, read text/Markdown back | `docling-serve`, Marker, self-hosted MinerU |
+| `mineru` | presigned `PUT` → poll → download a ZIP holding Markdown | MinerU's v4 API, hosted or self-hosted |
+| `llamaparse` | multipart upload → poll → Markdown inline in the response | LlamaParse (Reducto is the same shape) |
+
+There is **no de-facto standard** for this API — the vendors converge on "submit, poll,
+get Markdown" but differ in how the result is shaped, and that difference is in the
+response structure rather than the paths, so no amount of path templating bridges it.
+Hence one thin driver per protocol, all sharing the `pollUntil` loop in `drivers/async.ts`.
+A new self-hosted service needs no code at all, which is what makes the "just point it at
+a base URL" story work.
+
+#### Policy
+
+```yaml
+documentParsing:
+  localEnabled: true
+  policy: local-first     # local-only | local-first | cloud-first | cloud-only
+  fallbackEnabled: true
+  defaultParserId: null   # null = try every enabled parser in order
+```
+
+With `fallbackEnabled: false`, a hybrid policy degrades to its first tier only, so a
+failure surfaces instead of being retried elsewhere.
+
+**Which failures are worth retrying elsewhere** is the crux, and it is encoded in
+`errors.ts`:
+
+- **Recoverable** — `no_text_layer` (a scan is exactly what an OCR-capable parser is
+  for), `too_large` (the cloud ceiling is an order of magnitude higher than the local
+  one, so a file too big to parse here is the *most* likely to succeed there), `corrupt`,
+  and every cloud failure.
+- **Not recoverable** — `password_protected`, `unsupported_type`, `cancelled`,
+  `missing_file`. No other tier can read these, so a cloud round-trip would be pure waste.
+
+The cloud tier also fails over *within* itself: parsers are tried in order (a pinned
+`defaultParserId` first), so a wrong key on one service does not cost the parse when
+another works.
+
+`no_cloud_parser` and `local_disabled` mean a tier **never ran**, which is not the same
+as a file being unreadable. When both a real read failure and an unavailable tier are
+present, the read failure is what the user is shown — otherwise a scanned PDF under
+`local-first` with nothing configured would report "unsupported file type" instead of
+"no text layer, this looks like a scan".
 
 ### Routes (`routes.ts`)
 
@@ -228,8 +348,14 @@ attachments, providers and app defaults.
 | `POST /api/providers/:id/models`, `DELETE /api/providers/:providerId/models/:modelId` | model CRUD |
 | `POST /api/workspaces/:workspaceId/sessions` | create a conversation (copies the Copilot's defaults in) |
 | `PATCH /api/sessions/:id` | rename and/or update per-conversation settings (a title also flips `titleSource` to `user`) |
-| `POST /api/sessions/:id/attachments` | upload (base64 JSON) |
+| `POST /api/sessions/:id/attachments` | upload (base64 JSON); schedules parsing |
+| `GET /api/sessions/:id/attachments` | parse state for every attachment, by id |
 | `GET /api/sessions/:sessionId/attachments/:attachmentId` | serve the bytes back |
+| `POST /api/sessions/:id/attachments/:attachmentId/reparse` | re-run extraction |
+| `GET/POST /api/document-parsers`, `PUT/DELETE /api/document-parsers/:id` | cloud parser CRUD |
+| `GET /api/document-parsers/kinds` | the protocol kinds the server implements |
+| `POST /api/document-parsers/:id/test` | round-trip a throwaway document |
+| `PUT /api/document-parsing` | the parsing policy |
 | `POST /api/sessions/:id/chat` | the SSE chat stream |
 
 Provider responses **never** include `apiKey` — only `hasApiKey: boolean`. `PUT`

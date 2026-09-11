@@ -28,6 +28,19 @@ providers:
       - id: fake-vision
         name: fake-vision
 
+# A mock cloud parser, used to prove the fallback path in a browser. `local-first` stays
+# the policy, so only documents the local extractor cannot read (scanned pages, say) ever
+# reach it — which is the whole point of the fallback.
+documentParsers:
+  - id: mock-cloud
+    name: Mock Cloud Parser
+    kind: sync
+    baseURL: ${GL_FAKE_PARSER_URL}
+
+documentParsing:
+  policy: local-first
+  fallbackEnabled: true
+
 tools:
   webSearch:
     provider: bing

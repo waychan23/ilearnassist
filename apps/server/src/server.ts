@@ -3,7 +3,8 @@ import cors from "@fastify/cors";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AppConfig } from "./config.js";
-import { createDb, seedFromConfig, type AppDb } from "./db.js";
+import { createDb, seedDocumentParsersFromConfig, seedFromConfig, type AppDb } from "./db.js";
+import { DocumentService } from "./documents/service.js";
 import { ensureWorkspacesRoot } from "./workspace.js";
 import routes from "./routes.js";
 
@@ -29,6 +30,8 @@ export interface BuiltServer {
   db: AppDb;
   /** Where uploads are written — handed to the routes so tests can redirect it. */
   uploadsRoot: string;
+  /** Owns document text extraction; exported so tests can await quiescence. */
+  documents: DocumentService;
 }
 
 export async function buildServer(input: BuildServerInput): Promise<BuiltServer> {
@@ -49,9 +52,28 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
     defaultModel: config.defaultModel,
   });
 
+  // Document parsers follow the same seed-once contract, but are marked with an explicit
+  // setting rather than "the table is empty" — see SETTING_DOCUMENT_SEEDED.
+  seedDocumentParsersFromConfig(db, {
+    parsers: config.documentParsers,
+    parsing: {
+      localEnabled: config.documentParsing.localEnabled,
+      policy: config.documentParsing.policy,
+      fallbackEnabled: config.documentParsing.fallbackEnabled,
+      defaultParserId: config.documentParsing.defaultParserId ?? null,
+    },
+  });
+
+  const documents = new DocumentService({ uploadRoot: uploadsRoot, db, config });
+
   const app = Fastify({ logger: input.logger ?? true });
   await app.register(cors, { origin: true });
-  await app.register(routes, { config, db, uploadsRoot });
+  await app.register(routes, { config, db, uploadsRoot, documents });
 
-  return { app, db, uploadsRoot };
+  // A parse still running at shutdown would keep the process alive past `close()`.
+  app.addHook("onClose", async () => {
+    await documents.shutdown();
+  });
+
+  return { app, db, uploadsRoot, documents };
 }

@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import type { DocumentParsePolicy, DocumentParserKind } from "@guided-learning/shared";
 
 export type WebSearchProvider = "bing" | "tavily" | "duckduckgo" | "searxng";
 
@@ -33,16 +34,50 @@ export interface WebFetchConfig {
   maxChars: number;
 }
 
+/** Seed entry for a cloud document parser. Structurally mirrors `DocumentParserConfig`. */
+export interface DocumentParserDef {
+  id: string;
+  name: string;
+  kind: DocumentParserKind;
+  baseURL: string;
+  apiKey?: string;
+  enabled?: boolean;
+}
+
+export interface DocumentParsingDefaults {
+  localEnabled: boolean;
+  policy: DocumentParsePolicy;
+  fallbackEnabled: boolean;
+  defaultParserId?: string | null;
+}
+
+/** Operational limits for text extraction. None of these are user-facing knobs. */
+export interface DocumentsConfig {
+  /** Above this, local extraction is skipped and the file is offered to a cloud parser. */
+  localMaxBytes: number;
+  /** Ceiling on stored extracted text, so one pathological file cannot fill the disk. */
+  maxTextChars: number;
+  /** How many documents parse at once. */
+  concurrency: number;
+  requestTimeoutMs: number;
+  /** Total budget for one async cloud job, polling included. */
+  jobTimeoutMs: number;
+  pollIntervalMs: number;
+}
+
 export interface AppConfig {
   server: { host: string; port: number };
   workspaces: { rootDir: string };
   defaultProvider: string;
   defaultModel: string;
   providers: ProviderDef[];
+  documentParsers: DocumentParserDef[];
+  documentParsing: DocumentParsingDefaults;
   tools: {
     webSearch: WebSearchConfig;
     webFetch: WebFetchConfig;
     fileTools: { enabled: boolean };
+    documents: DocumentsConfig;
   };
 }
 
@@ -157,6 +192,8 @@ export function withDefaults(raw: Record<string, unknown>): AppConfig {
   const webSearch = asObj(tools["webSearch"]);
   const webFetch = asObj(tools["webFetch"]);
   const fileTools = asObj(tools["fileTools"]);
+  const documents = asObj(tools["documents"]);
+  const documentParsing = asObj(raw["documentParsing"]);
 
   const rootDirRaw = asStr(workspaces["rootDir"], "./workspaces");
   const rootDir = resolve(PROJECT_ROOT, rootDirRaw);
@@ -182,6 +219,35 @@ export function withDefaults(raw: Record<string, unknown>): AppConfig {
           } as ProviderDef;
         })
       : [],
+    documentParsers: Array.isArray(raw["documentParsers"])
+      ? (raw["documentParsers"] as unknown[])
+          .map((p) => {
+            const v = asObj(p);
+            const kind = asStr(v["kind"], "");
+            return {
+              id: String(v["id"]),
+              name: asStr(v["name"], String(v["id"])),
+              kind: kind as DocumentParserKind,
+              // `asStr` rather than `String`: a missing baseURL must become "", not the
+              // string "undefined", which is truthy and would survive the filter below.
+              baseURL: asStr(v["baseURL"], ""),
+              apiKey: typeof v["apiKey"] === "string" ? v["apiKey"] : undefined,
+              enabled: v["enabled"] === undefined ? true : asBool(v["enabled"], true),
+            } as DocumentParserDef;
+          })
+          // An unrecognised `kind` would fail at parse time, long after boot. Drop it here,
+          // where the config is still being read, rather than shipping a broken record.
+          .filter((p) => isParserKind(p.kind) && p.baseURL)
+      : [],
+    documentParsing: {
+      localEnabled: asBool(documentParsing["localEnabled"], true),
+      policy: isPolicy(documentParsing["policy"]) ? documentParsing["policy"] : "local-first",
+      fallbackEnabled: asBool(documentParsing["fallbackEnabled"], true),
+      defaultParserId:
+        typeof documentParsing["defaultParserId"] === "string"
+          ? documentParsing["defaultParserId"]
+          : null,
+    },
     tools: {
       webSearch: {
         provider: (webSearch["provider"] as WebSearchProvider) ?? "bing",
@@ -201,8 +267,31 @@ export function withDefaults(raw: Record<string, unknown>): AppConfig {
       fileTools: {
         enabled: asBool(fileTools["enabled"], true),
       },
+      documents: {
+        localMaxBytes: asNum(documents["localMaxBytes"], 20 * 1024 * 1024),
+        maxTextChars: asNum(documents["maxTextChars"], 2_000_000),
+        concurrency: Math.max(1, asNum(documents["concurrency"], 2)),
+        requestTimeoutMs: asNum(documents["requestTimeoutMs"], 30_000),
+        jobTimeoutMs: asNum(documents["jobTimeoutMs"], 300_000),
+        pollIntervalMs: asNum(documents["pollIntervalMs"], 3_000),
+      },
     },
   };
+}
+
+const PARSE_POLICIES: DocumentParsePolicy[] = [
+  "local-only",
+  "local-first",
+  "cloud-first",
+  "cloud-only",
+];
+
+function isPolicy(value: unknown): value is DocumentParsePolicy {
+  return typeof value === "string" && (PARSE_POLICIES as string[]).includes(value);
+}
+
+function isParserKind(value: unknown): value is DocumentParserKind {
+  return value === "sync" || value === "mineru" || value === "llamaparse";
 }
 
 let cached: AppConfig | undefined;
@@ -241,6 +330,21 @@ export function validateConfig(config: AppConfig): void {
   }
   if (!config.defaultModel) {
     throw new Error("defaultModel must be set in config/config.yaml.");
+  }
+
+  // Document parser ids are primary keys; a duplicate would fail at seed time with an
+  // opaque SQLite constraint error instead of naming the offending entry.
+  const parserIds = new Set<string>();
+  for (const parser of config.documentParsers) {
+    if (parserIds.has(parser.id)) {
+      throw new Error(`Duplicate documentParsers id "${parser.id}" in config/config.yaml.`);
+    }
+    parserIds.add(parser.id);
+  }
+  if (config.documentParsing.defaultParserId && !parserIds.has(config.documentParsing.defaultParserId)) {
+    throw new Error(
+      `documentParsing.defaultParserId "${config.documentParsing.defaultParserId}" does not match any configured documentParsers id.`
+    );
   }
 }
 

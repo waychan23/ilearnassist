@@ -24,13 +24,37 @@ afterEach(() => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
+const documents = {
+  uploadRoot: "/tmp/uploads",
+  sessionId: "s1",
+  attachments: [{ id: "att-1", name: "lecture.pdf", mimeType: "application/pdf" }],
+};
+
 describe("buildTools", () => {
-  it("exposes every tool by default", () => {
-    expect(names().sort()).toEqual([...ALL_TOOL_NAMES].sort());
+  it("exposes every tool by default, minus read_document", () => {
+    // `read_document` is absent because this turn has no document attachments — the tool
+    // is registered per turn, so a model is never offered one with nothing to read.
+    expect(names().sort()).toEqual(
+      [...ALL_TOOL_NAMES].filter((n) => n !== "read_document").sort()
+    );
+  });
+
+  it("adds read_document when the turn has a document attachment", () => {
+    expect(names({ documents })).toContain("read_document");
+  });
+
+  it("omits read_document when the attachment list is empty", () => {
+    expect(names({ documents: { ...documents, attachments: [] } })).not.toContain("read_document");
   });
 
   it("keeps the web tools but drops the file tools when fileTools is disabled", () => {
     expect(names({ fileToolsEnabled: false }).sort()).toEqual(["web_fetch", "web_search"]);
+  });
+
+  it("keeps read_document when the file tools are disabled", () => {
+    // It reads attachments from the uploads tree, not the workspace, so the workspace
+    // sandbox switch has no bearing on it.
+    expect(names({ fileToolsEnabled: false, documents })).toContain("read_document");
   });
 
   it("drops web_fetch when it is disabled", () => {
@@ -43,7 +67,11 @@ describe("buildTools", () => {
 
   it("treats an empty allow-list as 'no restriction'", () => {
     // A Copilot with no tools selected gets everything, not nothing.
-    expect(names({ allowedNames: [] })).toHaveLength(ALL_TOOL_NAMES.length);
+    expect(names({ allowedNames: [], documents })).toHaveLength(ALL_TOOL_NAMES.length);
+  });
+
+  it("lets a Copilot allow-list exclude read_document", () => {
+    expect(names({ allowedNames: ["read_file"], documents })).toEqual(["read_file"]);
   });
 
   it("applies the allow-list on top of the config gates", () => {

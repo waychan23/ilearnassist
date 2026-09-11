@@ -1,10 +1,19 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Session, Workspace } from "@guided-learning/shared";
-import type { AppConfig, ProviderDef, WebFetchConfig, WebSearchConfig } from "../../src/config.js";
+import type { Attachment, Session, Workspace } from "@guided-learning/shared";
+import type {
+  AppConfig,
+  DocumentParserDef,
+  DocumentParsingDefaults,
+  DocumentsConfig,
+  ProviderDef,
+  WebFetchConfig,
+  WebSearchConfig,
+} from "../../src/config.js";
 import { buildServer, type BuiltServer } from "../../src/server.js";
 import type { FakeLlm } from "./fakeLlm.js";
+import type { FakeParser } from "./fakeParser.js";
 
 /**
  * Boots the real server against a throwaway directory tree.
@@ -18,10 +27,31 @@ export interface TestServerOptions {
   providers?: ProviderDef[];
   defaultProvider?: string;
   defaultModel?: string;
+  documentParsers?: DocumentParserDef[];
+  documentParsing?: Partial<DocumentParsingDefaults>;
   tools?: {
     webSearch?: Partial<WebSearchConfig>;
     webFetch?: Partial<WebFetchConfig>;
     fileTools?: { enabled?: boolean };
+    documents?: Partial<DocumentsConfig>;
+  };
+}
+
+/** A parser record pointing at a fake parser service. */
+export function parserFor(
+  parser: FakeParser,
+  overrides: Partial<DocumentParserDef> = {}
+): DocumentParserDef {
+  return {
+    id: overrides.id ?? "fake-parser",
+    name: overrides.name ?? "Fake Parser",
+    kind: overrides.kind ?? "sync",
+    // MinerU's base URL carries the API version (`https://mineru.net/api/v4`) and the
+    // driver appends `/file-urls/batch` — mirror that here so the fake is addressed the
+    // way a real deployment would be.
+    baseURL: overrides.baseURL ?? (overrides.kind === "mineru" ? `${parser.baseURL}/api/v4` : parser.baseURL),
+    apiKey: overrides.apiKey ?? (overrides.kind === "sync" ? undefined : "test-key"),
+    enabled: overrides.enabled ?? true,
   };
 }
 
@@ -85,10 +115,28 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     defaultProvider: options.defaultProvider ?? first.id,
     defaultModel: options.defaultModel ?? first.models[0]?.id ?? "",
     providers,
+    documentParsers: options.documentParsers ?? [],
+    documentParsing: {
+      localEnabled: true,
+      policy: "local-first",
+      fallbackEnabled: true,
+      defaultParserId: null,
+      ...options.documentParsing,
+    },
     tools: {
       webSearch,
       webFetch,
       fileTools: { enabled: options.tools?.fileTools?.enabled ?? true },
+      documents: {
+        localMaxBytes: 20 * 1024 * 1024,
+        maxTextChars: 2_000_000,
+        concurrency: 2,
+        requestTimeoutMs: 5_000,
+        jobTimeoutMs: 10_000,
+        // Tests must not wait seconds per poll; the production default is 3s.
+        pollIntervalMs: 20,
+        ...options.tools?.documents,
+      },
     },
   };
 
@@ -107,6 +155,57 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Wait until a session has no parse still pending or running, or the budget runs out.
+ *
+ * Extraction is deliberately off the request path, so every test that uploads a document
+ * has to wait for a background job rather than for a response. Polling the sidecar keeps
+ * the assertion honest: it observes the same state the browser does.
+ */
+export async function waitForParsing(
+  env: TestEnv,
+  sessionId: string,
+  timeoutMs = 15_000
+): Promise<void> {
+  const { listParseRecords } = await import("../../src/documents/store.js");
+  const deadline = Date.now() + timeoutMs;
+
+  for (;;) {
+    const records = await listParseRecords(env.uploadsRoot, sessionId);
+    const busy = [...records.values()].some(
+      (r) => r.status === "pending" || r.status === "parsing"
+    );
+    if (!busy) {
+      // One extra tick so a queued job that just left the queue has written its record.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const settled = await listParseRecords(env.uploadsRoot, sessionId);
+      const stillBusy = [...settled.values()].some(
+        (r) => r.status === "pending" || r.status === "parsing"
+      );
+      if (!stillBusy) return;
+    }
+    if (Date.now() > deadline) throw new Error(`parsing did not settle within ${timeoutMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/** Upload a file through the real route and return the created attachment. */
+export async function uploadAttachment(
+  env: TestEnv,
+  sessionId: string,
+  file: { name: string; mimeType: string; data: Buffer }
+): Promise<Attachment> {
+  const res = await env.server.app.inject({
+    method: "POST",
+    url: `/api/sessions/${sessionId}/attachments`,
+    payload: { name: file.name, mimeType: file.mimeType, data: file.data.toString("base64") },
+  });
+  if (res.statusCode !== 201) {
+    throw new Error(`upload failed: ${res.statusCode} ${res.body}`);
+  }
+  return res.json<Attachment>();
 }
 
 /* ------------------------------- API shorthands ------------------------------ */

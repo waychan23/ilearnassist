@@ -1,5 +1,6 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
+import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildFileTools } from "./fileTools.js";
 import { buildWebFetchTool } from "./webFetch.js";
 import { buildWebSearchTool } from "./webSearch.js";
@@ -13,12 +14,17 @@ export const ALL_TOOL_NAMES = [
   "write_file",
   "create_directory",
   "delete_file",
+  "read_document",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
 
-/** Tools that do not touch the workspace, and so survive `fileTools.enabled: false`. */
-const NON_FILE_TOOLS = new Set<string>(["web_search", "web_fetch"]);
+/**
+ * Tools that do not touch the workspace, and so survive `fileTools.enabled: false`.
+ * `read_document` reads attachments from the uploads tree, not the workspace, so it
+ * belongs here rather than being switched off with the file tools.
+ */
+const NON_FILE_TOOLS = new Set<string>(["web_search", "web_fetch", "read_document"]);
 
 export interface BuildToolsInput {
   workspaceDir: string;
@@ -27,6 +33,12 @@ export interface BuildToolsInput {
   fileToolsEnabled: boolean;
   /** When non-empty, only these tools are exposed (from a Copilot's `tools` list). */
   allowedNames?: string[];
+  /**
+   * Present only when the turn has document attachments to read. The tool is left out
+   * entirely otherwise, so the common case carries no tool for a capability it has no
+   * use for — and the model cannot call it against a document that does not exist.
+   */
+  documents?: DocumentToolContext;
 }
 
 /**
@@ -46,6 +58,9 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
 
   const all: StructuredToolInterface[] = [...fileTools, buildWebSearchTool(input.webSearch)];
   if (input.webFetch.enabled) all.push(buildWebFetchTool(input.webFetch));
+  if (input.documents && input.documents.attachments.length > 0) {
+    all.push(buildDocumentTool(input.documents));
+  }
 
   const allowed = input.allowedNames && input.allowedNames.length > 0
     ? new Set(input.allowedNames)

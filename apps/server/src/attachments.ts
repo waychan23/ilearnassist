@@ -2,6 +2,8 @@ import { promises as fs } from "node:fs";
 import { join, relative, resolve as resolvePath, extname } from "node:path";
 import type { Attachment } from "@guided-learning/shared";
 import { PROJECT_PATHS } from "./config.js";
+import { isDocumentMime } from "./documents/formats.js";
+import { readParseRecord, readParsedTextHead } from "./documents/store.js";
 
 /** Root directory holding every session's uploaded bytes. */
 export const UPLOADS_ROOT = join(PROJECT_PATHS.dataDir, "uploads");
@@ -32,6 +34,11 @@ const MIME_EXT: Record<string, string> = {
   "application/javascript": "js",
   "application/typescript": "ts",
   "application/pdf": "pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "application/vnd.oasis.opendocument.text": "odt",
+  "application/vnd.oasis.opendocument.spreadsheet": "ods",
 };
 
 /** Filename extension → MIME type, used when the browser reports nothing useful. */
@@ -52,13 +59,19 @@ const EXT_MIME: Record<string, string> = {
   js: "application/javascript",
   ts: "application/typescript",
   pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
 };
 
 /** Per-file cap on how much inlined text is handed to the model. */
-const MAX_INLINE_CHARS = 20_000;
+export const MAX_INLINE_CHARS = 20_000;
 
-/** Ids are server-issued UUIDs; anything else never touches the filesystem. */
-const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+import { isSafeId } from "./ids.js";
+
+export { isSafeId };
 
 /**
  * Pick the MIME type to trust: the browser's value when we support it, otherwise the
@@ -91,7 +104,7 @@ export function isTextLike(mimeType: string): boolean {
 
 /** Absolute path for a stored attachment. Throws if the ids are not safe. */
 export function attachmentPath(uploadRoot: string, sessionId: string, att: Attachment): string {
-  if (!SAFE_ID.test(sessionId) || !SAFE_ID.test(att.id)) {
+  if (!isSafeId(sessionId) || !isSafeId(att.id)) {
     throw new Error("Invalid attachment id.");
   }
   const ext = MIME_EXT[att.mimeType];
@@ -122,7 +135,7 @@ export function resolveStoredPath(
 }
 
 export async function ensureSessionUploadDir(uploadRoot: string, sessionId: string): Promise<string> {
-  if (!SAFE_ID.test(sessionId)) throw new Error("Invalid session id.");
+  if (!isSafeId(sessionId)) throw new Error("Invalid session id.");
   const dir = join(uploadRoot, sessionId);
   await fs.mkdir(dir, { recursive: true });
   return dir;
@@ -144,7 +157,7 @@ export async function findStoredAttachment(
   sessionId: string,
   attachmentId: string
 ): Promise<{ path: string; mimeType: string } | undefined> {
-  if (!SAFE_ID.test(sessionId) || !SAFE_ID.test(attachmentId)) return undefined;
+  if (!isSafeId(sessionId) || !isSafeId(attachmentId)) return undefined;
 
   const dir = join(uploadRoot, sessionId);
   let entries: string[];
@@ -174,7 +187,7 @@ export async function findStoredAttachment(
 
 /** Delete a session's upload directory. Best-effort — a failure must not block deletion. */
 export async function removeSessionUploads(uploadRoot: string, sessionId: string): Promise<void> {
-  if (!SAFE_ID.test(sessionId)) return;
+  if (!isSafeId(sessionId)) return;
   await fs.rm(join(uploadRoot, sessionId), { recursive: true, force: true }).catch(() => undefined);
 }
 
@@ -182,11 +195,24 @@ export type UserContentBlock =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
 
+/**
+ * How much of a long parsed document is inlined before the model is told to read the rest
+ * with the `read_document` tool. Keeping the preview short is what stops a 200-page PDF
+ * from being resent in full on every turn of the conversation.
+ */
+export const PREVIEW_CHARS = 4_000;
+
 export interface BuildContentOptions {
   uploadRoot: string;
   sessionId: string;
   /** When false, images are replaced by a text placeholder instead of being sent. */
   vision: boolean;
+  /**
+   * Whether the selected model can call tools. A model that cannot page through a
+   * truncated document is told the content was omitted outright, rather than being
+   * pointed at a tool it will never invoke.
+   */
+  toolUse?: boolean;
 }
 
 /**
@@ -195,7 +221,9 @@ export interface BuildContentOptions {
  * - Images become `image_url` blocks so a vision model actually sees them; without
  *   vision support they degrade to a labelled placeholder rather than failing the run.
  * - Text-like files are inlined with a filename header.
- * - Binary files are named but not parsed — they are never silently dropped.
+ * - Documents (PDF, Office) are inlined from their extracted text, truncated to a preview
+ *   once they get long — the model is told how to page through the rest with
+ *   `read_document`. Anything still unparsed is named rather than silently dropped.
  *
  * Returns a plain string when there are no attachments, which keeps the common path
  * byte-identical to before.
@@ -247,9 +275,60 @@ export async function buildUserContent(
       continue;
     }
 
-    // Binary we do not parse (e.g. PDF): name it so the model knows it exists.
+    if (isDocumentMime(att.mimeType)) {
+      blocks.push({ type: "text", text: await documentBlock(att, opts) });
+      continue;
+    }
+
+    // A binary we have no extractor for: name it so the model knows it exists.
     blocks.push({ type: "text", text: `[附件：${att.name}（${att.mimeType}，未解析内容）]` });
   }
 
   return blocks;
+}
+
+/**
+ * The prompt representation of one parsed document.
+ *
+ * Long documents are inlined as a preview plus a pointer, never in full. `buildHistoryMessages`
+ * re-runs this for every earlier turn, so inlining a whole book would put it in the context
+ * window once per turn for the rest of the conversation — which is exactly the case the
+ * `read_document` tool exists to avoid.
+ */
+async function documentBlock(att: Attachment, opts: BuildContentOptions): Promise<string> {
+  const header = `--- 附件：${att.name} ---`;
+
+  // Read one character past the threshold: the extra byte is what distinguishes "this is
+  // the whole document" from "there is more", which a cap-sized read could never tell.
+  const head = await readParsedTextHead(
+    opts.uploadRoot,
+    opts.sessionId,
+    att.id,
+    MAX_INLINE_CHARS + 1
+  );
+  if (head === undefined) {
+    // No sidecar yet. Either extraction is still running, or it failed; the parse record
+    // is what distinguishes them, and the user can see both states on the attachment chip.
+    const record = await readParseRecord(opts.uploadRoot, opts.sessionId, att.id);
+    if (record?.status === "failed") {
+      return `[附件：${att.name}（解析失败：${record.error ?? "未知原因"}）]`;
+    }
+    if (record?.status === "pending" || record?.status === "parsing") {
+      return `[附件：${att.name}（正在解析，内容暂不可用）]`;
+    }
+    return `[附件：${att.name}（${att.mimeType}，未解析内容）]`;
+  }
+
+  if (head.length <= MAX_INLINE_CHARS) {
+    return `${header}\n${head}\n--- 附件结束 ---`;
+  }
+
+  const preview = head.slice(0, PREVIEW_CHARS);
+  const pointer = opts.toolUse
+    ? `[... 内容过长，此处仅为前 ${PREVIEW_CHARS} 字符。` +
+      `请调用 read_document 工具读取剩余内容 —— attachmentId 为 "${att.id}"，` +
+      `用 offset 参数分段读取。]`
+    : `[... 内容过长，剩余部分已省略。]`;
+
+  return `${header}\n${preview}\n${pointer}\n--- 附件结束 ---`;
 }

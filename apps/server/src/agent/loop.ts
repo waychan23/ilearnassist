@@ -45,6 +45,12 @@ export interface RunAgentInput {
   sessionId: string;
   /** Whether the selected model accepts image input. */
   vision: boolean;
+  /**
+   * Whether the selected model can call tools. Used only to decide how to explain a
+   * truncated document: pointing a model at `read_document` when it cannot call tools
+   * would leave it believing the rest of the file is retrievable when it is not.
+   */
+  toolUse: boolean;
   /** Prior persisted user/assistant messages (oldest first). */
   history: Message[];
   userMessage: string;
@@ -162,6 +168,7 @@ async function buildHistoryMessages(input: RunAgentInput, history: Message[]): P
         uploadRoot: input.uploadRoot,
         sessionId: input.sessionId,
         vision: input.vision,
+        toolUse: input.toolUse,
       });
       out.push(new HumanMessage(content as string | UserContentBlock[]));
       continue;
@@ -230,6 +237,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     uploadRoot: input.uploadRoot,
     sessionId: input.sessionId,
     vision: input.vision,
+    toolUse: input.toolUse,
   });
 
   const messages: BaseMessage[] = [

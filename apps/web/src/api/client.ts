@@ -4,13 +4,20 @@ import type {
   ChatStreamEvent,
   Copilot,
   CreateCopilotInput,
+  CreateDocumentParserInput,
   CreateProviderInput,
   CreateSessionInput,
+  DocumentParserConfig,
+  DocumentParsingConfig,
+  DriverInfo,
+  AttachmentParseRecord,
   Message,
   ProviderConfig,
   PublicConfig,
   Session,
   UpdateCopilotInput,
+  UpdateDocumentParserInput,
+  UpdateDocumentParsingInput,
   UpdateProviderInput,
   UpdateSessionInput,
   UploadAttachmentInput,
@@ -88,6 +95,39 @@ export const api = {
 
   updateDefaults: (input: { providerId?: string; modelId?: string }) =>
     request<PublicConfig>("/defaults", { method: "PUT", body: JSON.stringify(input) }),
+
+  /* --------------------------- document parsers --------------------------- */
+
+  listParserKinds: () => request<DriverInfo[]>("/document-parsers/kinds"),
+  listDocumentParsers: () => request<DocumentParserConfig[]>("/document-parsers"),
+  createDocumentParser: (input: CreateDocumentParserInput) =>
+    request<DocumentParserConfig>("/document-parsers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateDocumentParser: (id: string, input: UpdateDocumentParserInput) =>
+    request<DocumentParserConfig>(`/document-parsers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteDocumentParser: (id: string) =>
+    request<{ ok: boolean }>(`/document-parsers/${id}`, { method: "DELETE" }),
+  testDocumentParser: (id: string) =>
+    request<{ ok: boolean; error?: string }>(`/document-parsers/${id}/test`, { method: "POST" }),
+  updateDocumentParsing: (input: UpdateDocumentParsingInput) =>
+    request<DocumentParsingConfig>("/document-parsing", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+
+  /** Parse state for every attachment in a session, keyed by attachment id. */
+  listAttachmentStatus: (sessionId: string) =>
+    request<Record<string, AttachmentParseRecord>>(`/sessions/${sessionId}/attachments`),
+  reparseAttachment: (sessionId: string, attachmentId: string, name?: string) =>
+    request<{ status: string }>(`/sessions/${sessionId}/attachments/${attachmentId}/reparse`, {
+      method: "POST",
+      body: JSON.stringify(name ? { name } : {}),
+    }),
 };
 
 /** URL for an attachment's bytes (used as an `<img src>`), not an API call. */

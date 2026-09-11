@@ -5,11 +5,12 @@ import { fileURLToPath } from "node:url";
 /**
  * Browser end-to-end run.
  *
- * Three processes are started, all of them local and offline:
+ * Four processes are started, all of them local and offline:
  *   1. the fake OpenAI-compatible LLM  (`apps/server/test/helpers/fakeLlm.ts`)
- *   2. the real guided-learning server, pointed at that fake and at a throwaway
+ *   2. a fake cloud document parser    (`apps/server/test/helpers/fakeParser.ts`)
+ *   3. the real guided-learning server, pointed at both fakes and at a throwaway
  *      database under `.e2e/`
- *   3. the Vite dev server, which proxies `/api` to (2)
+ *   4. the Vite dev server, which proxies `/api` to (3)
  *
  * Ports are deliberately offset from `pnpm dev` (3720 / 5173) so a dev server can stay
  * running while the suite executes, and `reuseExistingServer` is off everywhere — this
@@ -24,6 +25,9 @@ const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const FAKE_LLM_PORT = 3898;
 const SERVER_PORT = 3899;
 const WEB_PORT = 5199;
+// A stand-in for a cloud document parser, so the cloud half of the parsing policy is
+// exercised in a browser too — including the failure path that makes it worth having.
+const FAKE_PARSER_PORT = 3897;
 
 /** Scratch space for this run: sqlite database, uploads and workspace directories. */
 const E2E_DIR = join(ROOT, ".e2e");
@@ -58,6 +62,14 @@ export default defineConfig({
       stderr: "pipe",
     },
     {
+      command: "pnpm --filter @guided-learning/server fake-parser",
+      port: FAKE_PARSER_PORT,
+      env: { FAKE_PARSER_PORT: String(FAKE_PARSER_PORT) },
+      reuseExistingServer: false,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    {
       command: "pnpm --filter @guided-learning/server start",
       port: SERVER_PORT,
       env: {
@@ -65,6 +77,7 @@ export default defineConfig({
         GL_CONFIG_PATH: join(ROOT, "e2e", "config.local.yaml"),
         GL_SERVER_PORT: String(SERVER_PORT),
         GL_FAKE_LLM_URL: `http://127.0.0.1:${FAKE_LLM_PORT}/v1`,
+        GL_FAKE_PARSER_URL: `http://127.0.0.1:${FAKE_PARSER_PORT}`,
       },
       reuseExistingServer: false,
       stdout: "pipe",

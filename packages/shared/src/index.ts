@@ -15,6 +15,18 @@ export interface ToolCall {
   output?: string;
 }
 
+/**
+ * How far a document attachment has got through text extraction.
+ *
+ * `none`    — not a document (images, text files), or a message persisted before this
+ *             feature existed. Everything downstream treats it as "no text expected".
+ * `pending` — queued; `parsing` — a parser is running right now.
+ * `ready`   — extracted text is on disk and will be injected into the prompt.
+ * `failed`  — extraction gave up; `parseError` says why. The bytes are still attached.
+ * `skipped` — deliberately not parsed (the file is too large, or parsing is disabled).
+ */
+export type ParseStatus = "none" | "pending" | "parsing" | "ready" | "failed" | "skipped";
+
 /** A file the user attached to a message. Bytes live on the server, never in this object. */
 export interface Attachment {
   id: string;
@@ -23,6 +35,19 @@ export interface Attachment {
   size: number;
   /** `image` attachments are sent to the model as multimodal content. */
   kind: "image" | "file";
+  /**
+   * Parse state for document attachments. Absent on images, on text-like files (which are
+   * inlined verbatim) and on rows persisted before this feature existed.
+   */
+  parseStatus?: ParseStatus;
+  /** Why parsing failed, in words a user can act on. Never contains a credential. */
+  parseError?: string;
+  /** Which backend produced the text: `"local"`, or a configured parser's record id. */
+  parserId?: string;
+  /** Length of the extracted text in characters. */
+  parsedChars?: number;
+  /** Page count, when the parser could determine one (PDF and most cloud parsers). */
+  pageCount?: number;
 }
 
 /**
@@ -147,12 +172,58 @@ export interface ProviderConfig {
   hasApiKey: boolean;
 }
 
+/**
+ * Which wire protocol a document parser speaks. A closed set — each value is a driver
+ * the server implements — while the *instances* are user-managed records, so two
+ * `mineru` entries (hosted + self-hosted) are two records of the same kind.
+ *
+ * `sync` is the fully generic one: POST the bytes, get Markdown back. It covers any
+ * service that extracts text in a single round trip (`docling-serve`, Marker, a
+ * self-hosted MinerU). The other two are the async vendor protocols, which differ in
+ * how the job is submitted and how the result is shaped — a difference no amount of
+ * path templating bridges, hence a driver each.
+ */
+export type DocumentParserKind = "sync" | "mineru" | "llamaparse";
+
+/** A configured document-parsing backend, as exposed to the client (never the apiKey). */
+export interface DocumentParserConfig {
+  id: string;
+  name: string;
+  kind: DocumentParserKind;
+  baseURL: string;
+  enabled: boolean;
+  hasApiKey: boolean;
+}
+
+/**
+ * When to use local extraction versus a cloud parser.
+ *
+ * `local-only`   — never call out.
+ * `local-first`  — local, then fall back to cloud on a recoverable failure.
+ * `cloud-first`  — cloud, then fall back to local.
+ * `cloud-only`   — always call out.
+ *
+ * `fallbackEnabled: false` removes the second step from the two hybrid policies, so a
+ * failure surfaces instead of being retried elsewhere.
+ */
+export type DocumentParsePolicy = "local-only" | "local-first" | "cloud-first" | "cloud-only";
+
+export interface DocumentParsingConfig {
+  localEnabled: boolean;
+  policy: DocumentParsePolicy;
+  fallbackEnabled: boolean;
+  /** Pinned parser record id. `null` means "try every enabled parser in order". */
+  defaultParserId: string | null;
+}
+
 export interface PublicConfig {
   defaultProvider: string;
   defaultModel: string;
   providers: ProviderConfig[];
   workspacesRootDir: string;
   webSearchProvider: string;
+  documentParsers: DocumentParserConfig[];
+  documentParsing: DocumentParsingConfig;
 }
 
 /* ----------------------------------- API payloads ----------------------------------- */
@@ -212,6 +283,53 @@ export interface UpdateProviderInput {
   /** Omit (or leave empty) to keep the stored key unchanged. */
   apiKey?: string;
   models?: ProviderModelInput[];
+}
+
+/**
+ * A protocol the server can speak, as advertised by `GET /api/document-parsers/kinds`.
+ * The settings form builds its "add a parser" UI from this rather than hard-coding the list.
+ */
+export interface DriverInfo {
+  kind: DocumentParserKind;
+  label: string;
+  requiresApiKey: boolean;
+  defaultBaseURL?: string;
+  /** Where to send a user who needs a credential. */
+  helpURL?: string;
+}
+
+/** Extraction state of one attachment, keyed by attachment id in the session status map. */
+export interface AttachmentParseRecord {
+  status: ParseStatus;
+  error?: string;
+  parserId?: string;
+  parsedChars?: number;
+  pageCount?: number;
+  updatedAt: string;
+}
+
+export interface CreateDocumentParserInput {
+  name: string;
+  kind: DocumentParserKind;
+  baseURL: string;
+  apiKey?: string;
+  enabled?: boolean;
+}
+
+export interface UpdateDocumentParserInput {
+  name?: string;
+  kind?: DocumentParserKind;
+  baseURL?: string;
+  /** Omit (or leave empty) to keep the stored key unchanged. */
+  apiKey?: string;
+  enabled?: boolean;
+}
+
+export interface UpdateDocumentParsingInput {
+  localEnabled?: boolean;
+  policy?: DocumentParsePolicy;
+  fallbackEnabled?: boolean;
+  defaultParserId?: string | null;
 }
 
 export interface ChatInput {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useAppStore } from "../stores/app";
 import type { Message, ToolCall } from "../api/types";
 import { renderMarkdown } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
@@ -22,6 +23,8 @@ const props = defineProps<{
   streaming?: StreamingState;
 }>();
 
+const store = useAppStore();
+
 const isUser = computed(() => props.message?.role === "user");
 const isAssistant = computed(() => props.message?.role === "assistant" || !!props.streaming);
 
@@ -32,7 +35,27 @@ const toolCalls = computed(() =>
   props.streaming ? props.streaming.toolCalls : props.message?.toolCalls ?? []
 );
 const error = computed(() => props.streaming?.error ?? null);
-const attachments = computed(() => props.message?.attachments ?? []);
+/**
+ * Submitted attachments, with the live parse state overlaid.
+ *
+ * The message carries the state the server recorded when it was sent, which is correct on
+ * a fresh load but stale as soon as the user re-parses from the chip — the message row
+ * itself never changes after the fact.
+ */
+const attachments = computed(() =>
+  (props.message?.attachments ?? []).map((a) => {
+    const live = store.parseStatus[a.id];
+    if (!live) return a;
+    return {
+      ...a,
+      parseStatus: live.status,
+      parseError: live.error,
+      parserId: live.parserId,
+      parsedChars: live.parsedChars,
+      pageCount: live.pageCount,
+    };
+  })
+);
 
 /**
  * Chain of thought. Live while streaming (with the timer), or from the persisted

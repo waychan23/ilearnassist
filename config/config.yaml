@@ -64,6 +64,57 @@ providers:
   #       name: Llama 3.1
 
 # ----------------------------------------------------------------------------
+# Document parsing (PDF / Word / Excel / PowerPoint / OpenDocument).
+#
+# PDF and Office attachments are converted to text before they reach the model.
+# Local extraction (pdfjs + a built-in OOXML reader) is always available and
+# needs nothing configured. Cloud parsers are optional, and are what makes
+# scanned PDFs and complex layouts readable.
+#
+# `documentParsers` entries are SEED data, same contract as `providers` above:
+# copied into the database on first boot, after which Settings → 文档解析 owns
+# them. Deleting every parser there is a valid state and will NOT be undone by
+# a restart.
+# ----------------------------------------------------------------------------
+documentParsers: []
+  # `kind` picks the wire protocol; `baseURL` + `apiKey` point it at an instance.
+  #   sync      — POST a file, get Markdown back. Self-hosted, no key needed:
+  #               docling-serve (http://127.0.0.1:5001/v1/convert/file),
+  #               Marker, or a self-hosted MinerU.
+  #   mineru    — MinerU's async batch API (https://mineru.net/api/v4), or a
+  #               self-hosted MinerU exposing the same routes.
+  #   llamaparse— LlamaParse v2 (https://api.cloud.llamaindex.ai). Reducto is
+  #               the same shape and can be added as another driver.
+  #
+  # - id: docling
+  #   name: Docling (local)
+  #   kind: sync
+  #   baseURL: http://127.0.0.1:5001/v1/convert/file
+  #
+  # - id: mineru
+  #   name: MinerU
+  #   kind: mineru
+  #   baseURL: https://mineru.net/api/v4
+  #   apiKey: ${MINERU_API_KEY}
+
+documentParsing:
+  # Local extraction. Turning this off is only sensible with a cloud parser set
+  # as the sole tier (policy: cloud-only).
+  localEnabled: true
+  # Which tier runs first, and whether the other is used as a fallback:
+  #   local-only  — never call out (fully offline)
+  #   local-first — local, then cloud if local cannot read the file (default)
+  #   cloud-first — cloud, then local
+  #   cloud-only  — always call out
+  policy: local-first
+  # `false` removes the second step from the hybrid policies above, so a failure
+  # is reported instead of being retried on the other side.
+  fallbackEnabled: true
+  # Pin one parser to be tried first. Leave unset to try every enabled parser in
+  # the order shown in Settings.
+  # defaultParserId: mineru
+
+# ----------------------------------------------------------------------------
 # Tool configuration.
 # ----------------------------------------------------------------------------
 tools:
@@ -91,3 +142,18 @@ tools:
   # File tools are always enabled and sandboxed to the active workspace.
   fileTools:
     enabled: true
+
+  # Limits for document text extraction. Usually left alone.
+  documents:
+    # Above this, local extraction is skipped and the file is offered to a cloud
+    # parser instead (whose ceilings are an order of magnitude higher).
+    localMaxBytes: 20971520
+    # Ceiling on stored extracted text, so one pathological file cannot fill the disk.
+    maxTextChars: 2000000
+    # How many documents parse at once.
+    concurrency: 2
+    # Per-HTTP-request budget for a cloud parser.
+    requestTimeoutMs: 30000
+    # Total budget for one async cloud job, polling included.
+    jobTimeoutMs: 300000
+    pollIntervalMs: 3000

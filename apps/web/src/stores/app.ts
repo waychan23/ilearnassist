@@ -3,10 +3,15 @@ import { defineStore } from "pinia";
 import { api, streamChat, fileToBase64 } from "../api/client";
 import type {
   Attachment,
+  AttachmentParseRecord,
   Copilot,
   CopilotDefaults,
   CreateCopilotInput,
   CreateProviderInput,
+  DocumentParserConfig,
+  DocumentParserKind,
+  DocumentParsingConfig,
+  DriverInfo,
   Message,
   MessageUsage,
   ProviderConfig,
@@ -58,6 +63,20 @@ export interface ProviderDraft {
   }[];
 }
 
+export interface DocumentParserDraft {
+  id?: string;
+  name: string;
+  kind: DocumentParserKind;
+  baseURL: string;
+  apiKey: string;
+  enabled: boolean;
+}
+
+/** Whether an attachment is still queued or being read. */
+function isSettling(attachment: Attachment): boolean {
+  return attachment.parseStatus === "pending" || attachment.parseStatus === "parsing";
+}
+
 const EMPTY_STREAMING = (): StreamingState => ({
   active: false,
   content: "",
@@ -89,6 +108,30 @@ export const useAppStore = defineStore("app", () => {
 
   /** Uploaded-but-not-yet-sent attachments for the composer. */
   const pendingAttachments = ref<Attachment[]>([]);
+
+  /**
+   * Parse state for attachments already sent in this conversation, keyed by attachment id.
+   *
+   * Historical messages carry whatever state the server recorded when they were sent, which
+   * is right for a reload but goes stale the moment the user re-parses from the composer.
+   * This map is the live overlay on top of that.
+   */
+  const parseStatus = ref<Record<string, AttachmentParseRecord>>({});
+
+  /** The protocol kinds the server implements, for the parser settings form. */
+  const parserKinds = ref<DriverInfo[]>([]);
+
+  /**
+   * Timer behind the attachment parse badges.
+   *
+   * Extraction is asynchronous on the server, so the composer has to poll for it. Polling
+   * only runs while something is actually settling and stops as soon as everything has —
+   * an idle conversation must not keep asking.
+   */
+  let parsePoll: ReturnType<typeof setInterval> | null = null;
+
+  /** Attachment ids whose re-parse was asked for but has not yet settled. */
+  const markingParsing = ref(new Set<string>());
 
   /**
    * Ticker behind the "思考中 · 3.2s" label. Lives in the store rather than the component
@@ -193,6 +236,15 @@ export const useAppStore = defineStore("app", () => {
   });
 
   const isConfigured = computed(() => !!config.value?.providers.some((p) => p.hasApiKey));
+
+  /**
+   * True while any pending attachment is still being extracted.
+   *
+   * The composer blocks sending until this clears. Sending anyway would produce a turn
+   * where the model never saw the document the user believes they attached — and because
+   * the text is injected at send time, it would never appear later either.
+   */
+  const documentsParsing = computed(() => pendingAttachments.value.some(isSettling));
 
   /* ------------------------------- actions --------------------------------- */
   function setError(message: string | null) {
@@ -399,7 +451,111 @@ export const useAppStore = defineStore("app", () => {
     config.value = await api.updateDefaults(input);
   }
 
+  /* -------------------------- document parsers ----------------------------- */
+  function applyDocumentParser(updated: DocumentParserConfig) {
+    if (!config.value) return;
+    const parsers = config.value.documentParsers;
+    const idx = parsers.findIndex((p) => p.id === updated.id);
+    if (idx !== -1) parsers[idx] = updated;
+    else parsers.push(updated);
+  }
+
+  /** The protocol kinds, fetched once — the "add a parser" form is built from them. */
+  async function loadParserKinds(): Promise<void> {
+    if (parserKinds.value.length > 0) return;
+    parserKinds.value = await api.listParserKinds();
+  }
+
+  async function saveDocumentParser(draft: DocumentParserDraft): Promise<void> {
+    const input = {
+      name: draft.name.trim(),
+      kind: draft.kind,
+      baseURL: draft.baseURL.trim(),
+      enabled: draft.enabled,
+      // Omit entirely when blank so the server keeps the stored key untouched.
+      ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+    };
+
+    const updated = draft.id
+      ? await api.updateDocumentParser(draft.id, input)
+      : await api.createDocumentParser(input);
+    applyDocumentParser(updated);
+  }
+
+  async function deleteDocumentParser(id: string): Promise<void> {
+    await api.deleteDocumentParser(id);
+    if (config.value) {
+      config.value.documentParsers = config.value.documentParsers.filter((p) => p.id !== id);
+    }
+    await refreshConfig();
+  }
+
+  /** Round-trip a throwaway document through a parser. Throws with the reason on failure. */
+  async function testDocumentParser(id: string): Promise<void> {
+    await api.testDocumentParser(id);
+  }
+
+  async function setDocumentParsing(
+    input: Partial<DocumentParsingConfig>
+  ): Promise<void> {
+    const updated = await api.updateDocumentParsing(input);
+    if (config.value) config.value.documentParsing = updated;
+  }
+
   /* ----------------------------- attachments ------------------------------- */
+  function stopParsePolling(): void {
+    if (parsePoll !== null) {
+      clearInterval(parsePoll);
+      parsePoll = null;
+    }
+  }
+
+  /** Fold freshly polled parse state onto the pending attachments and the live map. */
+  function mergeParseStatus(statuses: Record<string, AttachmentParseRecord>): void {
+    parseStatus.value = { ...parseStatus.value, ...statuses };
+    pendingAttachments.value = pendingAttachments.value.map((attachment) => {
+      const record = statuses[attachment.id];
+      if (!record) return attachment;
+      return {
+        ...attachment,
+        parseStatus: record.status,
+        parseError: record.error,
+        parserId: record.parserId,
+        parsedChars: record.parsedChars,
+        pageCount: record.pageCount,
+      };
+    });
+  }
+
+  /**
+   * Watch for extraction to finish.
+   *
+   * `also` lets a re-parse started from a *sent* message keep the loop alive: nothing is
+   * pending in that case, so the "is anything still settling" check would stop polling
+   * before the first result arrived.
+   */
+  function startParsePolling(sessionId: string, also: () => boolean = () => false): void {
+    if (parsePoll !== null) return;
+
+    const tick = async (): Promise<void> => {
+      try {
+        const statuses = await api.listAttachmentStatus(sessionId);
+        mergeParseStatus(statuses);
+        for (const id of [...markingParsing.value]) {
+          const status = statuses[id]?.status;
+          if (status && status !== "pending" && status !== "parsing") markingParsing.value.delete(id);
+        }
+      } catch {
+        // A failed poll is not worth surfacing — the next one usually succeeds, and the
+        // attachment chip keeps showing the last known state either way.
+      }
+      if (!pendingAttachments.value.some(isSettling) && !also()) stopParsePolling();
+    };
+
+    parsePoll = setInterval(() => void tick(), 1500);
+    void tick();
+  }
+
   async function uploadAttachment(file: File): Promise<Attachment | null> {
     if (file.size > MAX_ATTACHMENT_BYTES) {
       setError(`「${file.name}」超过 ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB 限制`);
@@ -418,10 +574,43 @@ export const useAppStore = defineStore("app", () => {
         data: await fileToBase64(file),
       });
       pendingAttachments.value.push(attachment);
+      // Documents are extracted in the background; anything else is already in a final
+      // state and needs no polling.
+      if (isSettling(attachment)) startParsePolling(sessionId);
       return attachment;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return null;
+    }
+  }
+
+  /**
+   * Re-run extraction on an attachment that failed, or that predates a settings change.
+   *
+   * Works for both a pending composer attachment and one already sent in the conversation
+   * — the latter is why the live `parseStatus` map exists, since nothing about a historical
+   * message changes when the server re-parses it.
+   */
+  async function reparseAttachment(attachment: Attachment): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return;
+    try {
+      await api.reparseAttachment(sessionId, attachment.id, attachment.name);
+      markingParsing.value.add(attachment.id);
+      parseStatus.value = {
+        ...parseStatus.value,
+        [attachment.id]: {
+          status: "pending",
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      pendingAttachments.value = pendingAttachments.value.map((a) =>
+        a.id === attachment.id ? { ...a, parseStatus: "pending", parseError: undefined } : a
+      );
+      startParsePolling(sessionId, () => markingParsing.value.size > 0);
+    } catch (e) {
+      markingParsing.value.delete(attachment.id);
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -430,6 +619,7 @@ export const useAppStore = defineStore("app", () => {
   }
 
   function clearPendingAttachments(): void {
+    stopParsePolling();
     pendingAttachments.value = [];
   }
 
@@ -541,6 +731,8 @@ export const useAppStore = defineStore("app", () => {
     activeCopilotId,
     draftSettings,
     pendingAttachments,
+    parseStatus,
+    parserKinds,
     streaming,
     error,
     // derived
@@ -555,6 +747,7 @@ export const useAppStore = defineStore("app", () => {
     contextWindow,
     contextTokens,
     isConfigured,
+    documentsParsing,
     // actions
     init,
     refreshConfig,
@@ -575,7 +768,13 @@ export const useAppStore = defineStore("app", () => {
     deleteProvider,
     deleteModel,
     setDefaults,
+    loadParserKinds,
+    saveDocumentParser,
+    deleteDocumentParser,
+    testDocumentParser,
+    setDocumentParsing,
     uploadAttachment,
+    reparseAttachment,
     removePendingAttachment,
     clearPendingAttachments,
     sendMessage,

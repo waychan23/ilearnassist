@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import { buildPdf } from "../apps/server/src/documents/sample.js";
 
 /**
  * Browser end-to-end: the real Vue app, the real Fastify server, a real sqlite database,
@@ -9,6 +10,15 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
  */
 
 const FAKE_LLM = `http://127.0.0.1:${process.env.GL_FAKE_LLM_PORT ?? 3898}`;
+const FAKE_PARSER = `http://127.0.0.1:${process.env.GL_FAKE_PARSER_PORT ?? 3897}`;
+
+/** The last chat (streaming) request the fake LLM received, as raw JSON. */
+async function lastChatRequest(request: APIRequestContext): Promise<string> {
+  const sent = (await (await request.get(`${FAKE_LLM}/__requests`)).json()) as {
+    stream?: boolean;
+  }[];
+  return JSON.stringify(sent.find((r) => r.stream === true));
+}
 
 /** Discard anything a previous test scripted, and queue the turns for the next one. */
 async function scriptLlm(request: APIRequestContext, body: { turns: unknown[]; title?: string }) {
@@ -103,6 +113,100 @@ test("a second turn keeps the earlier one in context and does not re-title", asy
   // Both turns are on screen, and the title did not change on the second turn.
   await expect(page.getByTestId("message-user")).toHaveCount(2);
   await expect(page.getByTestId("session-title")).toHaveText(titleAfterFirstTurn ?? "");
+});
+
+test("a PDF is parsed locally and its text reaches the model", async ({ page, request }) => {
+  await scriptLlm(request, { turns: [{ content: "我读到了 PDF。" }] });
+
+  await page.goto("/");
+
+  await page.getByTestId("composer-file-input").setInputFiles({
+    name: "lecture.pdf",
+    mimeType: "application/pdf",
+    buffer: buildPdf(["Photosynthesis converts light into chemical energy."]),
+  });
+
+  // Extraction is asynchronous, so the chip reports progress before it reports success —
+  // and sending is blocked until it settles.
+  await expect(page.getByTestId("attachment-chip")).toBeVisible();
+  await expect(page.getByTestId("attachment-detail")).toContainText("解析中", { timeout: 15_000 });
+  await expect(page.getByTestId("attachment-detail")).toContainText("已解析", { timeout: 20_000 });
+  await expect(page.getByTestId("attachment-detail")).toContainText("1 页");
+  // Parsed by the built-in extractor, not by the mock cloud service.
+  await expect(page.getByTestId("attachment-detail")).not.toContainText("云解析");
+
+  await page.getByTestId("composer-input").fill("这份 PDF 讲了什么");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("我读到了 PDF。");
+
+  // The extracted text — not the filename — is what the model was given.
+  const chatRequest = await lastChatRequest(request);
+  expect(chatRequest).toContain("Photosynthesis converts light into chemical energy.");
+
+  // Parse state is persisted with the message, so the chip is still informative on reload.
+  await page.reload();
+  await page.getByTestId("session-item").first().click();
+  await expect(page.getByTestId("attachment-chip")).toBeVisible();
+  await expect(page.getByTestId("attachment-detail")).toContainText("1 页");
+});
+
+test("a scanned PDF falls back to the cloud parser", async ({ page, request }) => {
+  // The mock parser answers with this, and it is unmistakably not the local extractor's
+  // output — so finding it in the prompt proves the fallback actually ran.
+  await request.post(`${FAKE_PARSER}/__reset`);
+  await request.post(`${FAKE_PARSER}/__script`, {
+    data: { text: "CLOUD-EXTRACTED-CONTENT from the scanned page." },
+  });
+  await scriptLlm(request, { turns: [{ content: "云端读到了。" }] });
+
+  await page.goto("/");
+
+  // A page with no text layer: local extraction reports `no_text_layer`, which is the
+  // recoverable failure the policy hands to the cloud tier.
+  await page.getByTestId("composer-file-input").setInputFiles({
+    name: "scan.pdf",
+    mimeType: "application/pdf",
+    buffer: buildPdf([""]),
+  });
+
+  await expect(page.getByTestId("attachment-detail")).toContainText("已解析", { timeout: 20_000 });
+  // Attributed to the cloud, so the user can tell which service read it.
+  await expect(page.getByTestId("attachment-detail")).toContainText("云解析");
+
+  const parserRequests = (await (await request.get(`${FAKE_PARSER}/__requests`)).json()) as unknown[];
+  expect(parserRequests.length).toBeGreaterThan(0);
+
+  await page.getByTestId("composer-input").fill("扫描件里写了什么");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("云端读到了。");
+
+  const chatRequest = await lastChatRequest(request);
+  expect(chatRequest).toContain("CLOUD-EXTRACTED-CONTENT from the scanned page.");
+});
+
+test("the document-parsing settings screen manages a cloud parser", async ({ page, request }) => {
+  await page.goto("/");
+
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("tab-documents").click();
+
+  // The e2e config seeds one, so the list is not empty to begin with.
+  await expect(page.getByTestId("parser-row")).toHaveCount(1);
+  await expect(page.getByTestId("parse-policy")).toHaveValue("local-first");
+
+  // "Test connection" round-trips a throwaway document through the mock service.
+  await page.getByRole("button", { name: "测试连接" }).click();
+  await expect(page.getByTestId("parser-test-result")).toContainText("连接正常");
+
+  await page.getByTestId("add-parser").click();
+  await page.getByTestId("parser-kind").selectOption("llamaparse");
+  await page.getByPlaceholder("例如：Docling（本机）").fill("My LlamaParse");
+  // llamaparse requires a key, so the form refuses to save without one — which is the
+  // guard that stops a half-configured service from being added.
+  await expect(page.getByTestId("parser-save")).toBeDisabled();
+  await page.getByTestId("parser-api-key").fill("llama-key");
+  await page.getByTestId("parser-save").click();
+  await expect(page.getByTestId("parser-row")).toHaveCount(2);
 });
 
 test("an attached file reaches the model's prompt and survives a reload", async ({

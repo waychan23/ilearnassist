@@ -11,24 +11,77 @@ const props = defineProps<{
   removable?: boolean;
 }>();
 
-const emit = defineEmits<{ remove: [id: string] }>();
+const emit = defineEmits<{ remove: [id: string]; reparse: [attachment: Attachment] }>();
 
 interface Chip {
   attachment: Attachment;
   url: string;
+  /** Short line under the filename: size, or what extraction is doing. */
+  detail: string;
+  /** Tooltip for a failure — the chip itself only has room for a marker. */
+  title: string;
+}
+
+/**
+ * Attachment chips.
+ *
+ * A document chip's second line reports parse state rather than size: whether the model
+ * can actually read the file is the thing the user needs to know before sending, and a
+ * failed parse otherwise looks identical to a successful one until the answer goes wrong.
+ */
+/** `0k 字符` for a one-paragraph document reads as "nothing was extracted". */
+function formatChars(chars: number | undefined): string {
+  if (!chars) return "";
+  if (chars < 1000) return `${chars} 字符`;
+  return `${(chars / 1000).toFixed(1)}k 字符`;
+}
+
+function describe(a: Attachment): { detail: string; title: string } {
+  const size = formatBytes(a.size);
+  switch (a.parseStatus) {
+    case "pending":
+    case "parsing":
+      return { detail: "解析中…", title: "正在提取文本，完成后才能发送" };
+    case "ready": {
+      const pages = a.pageCount ? `${a.pageCount} 页 · ` : "";
+      const from = a.parserId && a.parserId !== "local" ? " · 云解析" : "";
+      return {
+        detail: `已解析 · ${size} · ${pages}${formatChars(a.parsedChars)}${from}`,
+        title: "已解析，内容会随消息一起发送",
+      };
+    }
+    case "failed":
+      return { detail: `${size} · 解析失败`, title: a.parseError ?? "解析失败" };
+    default:
+      return { detail: size, title: a.name };
+  }
 }
 
 const chips = computed<Chip[]>(() =>
-  props.attachments.map((a) => ({
-    attachment: a,
-    url: attachmentUrl(props.sessionId, a.id),
-  }))
+  props.attachments.map((a) => {
+    const { detail, title } = describe(a);
+    return { attachment: a, url: attachmentUrl(props.sessionId, a.id), detail, title };
+  })
 );
+
+/** CSS modifier for the chip's state, so failures read as failures at a glance. */
+function stateOf(a: Attachment): string {
+  if (a.parseStatus === "failed") return "failed";
+  if (a.parseStatus === "pending" || a.parseStatus === "parsing") return "busy";
+  return "";
+}
 </script>
 
 <template>
   <div class="attachments">
-    <div v-for="c in chips" :key="c.attachment.id" class="chip" data-testid="attachment-chip">
+    <div
+      v-for="c in chips"
+      :key="c.attachment.id"
+      class="chip"
+      :class="stateOf(c.attachment)"
+      data-testid="attachment-chip"
+      :title="c.title"
+    >
       <img
         v-if="c.attachment.kind === 'image'"
         class="thumb"
@@ -39,8 +92,17 @@ const chips = computed<Chip[]>(() =>
       <span v-else class="file-icon">📄</span>
       <div class="meta">
         <span class="name" :title="c.attachment.name">{{ c.attachment.name }}</span>
-        <span class="size">{{ formatBytes(c.attachment.size) }}</span>
+        <span class="size" data-testid="attachment-detail">{{ c.detail }}</span>
       </div>
+      <button
+        v-if="c.attachment.parseStatus === 'failed' && removable"
+        class="icon-btn retry"
+        title="重新解析"
+        data-testid="attachment-reparse"
+        @click="emit('reparse', c.attachment)"
+      >
+        ↻
+      </button>
       <button
         v-if="removable"
         class="icon-btn danger remove"
@@ -67,7 +129,22 @@ const chips = computed<Chip[]>(() =>
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 5px 8px 5px 5px;
-  max-width: 240px;
+  max-width: 260px;
+}
+/* A document still being read, and one that failed — both need to look different from
+   a plain attachment, because the user's next action depends on which it is. */
+.chip.busy .file-icon {
+  opacity: 0.5;
+}
+.chip.failed {
+  border-color: var(--warning);
+}
+.chip.failed .size {
+  color: var(--warning);
+}
+.retry {
+  font-size: 13px;
+  padding: 2px 5px;
 }
 .thumb {
   width: 36px;

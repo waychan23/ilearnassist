@@ -127,7 +127,7 @@ async function onDeleteWorkspace() {
     </div>
 
     <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
-    <button class="side-settings" title="设置" @click="openSettings()">
+    <button class="side-settings" title="设置" data-testid="open-settings" @click="openSettings()">
       <span class="gear">⚙</span>
       <span class="label">设置</span>
       <span class="sub">{{ store.activeWorkspace?.name ?? "" }}</span>

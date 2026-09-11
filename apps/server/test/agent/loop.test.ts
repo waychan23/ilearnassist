@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import type { ChatStreamEvent, Message, SessionSettings } from "@guided-learning/shared";
+import type {
+  Attachment,
+  ChatStreamEvent,
+  Message,
+  SessionSettings,
+} from "@guided-learning/shared";
 import { runAgentStream } from "../../src/agent/loop.js";
 import { buildFileTools } from "../../src/tools/fileTools.js";
 import type { ProviderRecord } from "../../src/db.js";
@@ -45,6 +50,9 @@ interface RunOptions {
   settings?: SessionSettings;
   history?: Message[];
   userMessage?: string;
+  attachments?: Attachment[];
+  vision?: boolean;
+  toolUse?: boolean;
 }
 
 async function run(options: RunOptions) {
@@ -63,10 +71,11 @@ async function run(options: RunOptions) {
     settings: options.settings ?? {},
     uploadRoot: join(scratch, "uploads"),
     sessionId: "s1",
-    vision: false,
+    vision: options.vision ?? false,
+    toolUse: options.toolUse ?? false,
     history: options.history ?? [],
     userMessage: options.userMessage ?? "hello",
-    attachments: [],
+    attachments: options.attachments ?? [],
     tools: options.tools ?? [],
     onEvent: (event) => events.push(event),
   });

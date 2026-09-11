@@ -2,15 +2,21 @@
 import { computed, ref } from "vue";
 import { useAppStore } from "../../stores/app";
 import { confirm } from "../../composables/confirm";
-import type { Copilot, ProviderConfig } from "../../api/types";
-import type { CopilotDraft, ProviderDraft } from "../../stores/app";
+import type {
+  Copilot,
+  DocumentParserConfig,
+  DocumentParsePolicy,
+  ProviderConfig,
+} from "../../api/types";
+import type { CopilotDraft, DocumentParserDraft, ProviderDraft } from "../../stores/app";
 import ProviderDialog from "./ProviderDialog.vue";
 import CopilotDialog from "./CopilotDialog.vue";
+import DocumentParserDialog from "./DocumentParserDialog.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const store = useAppStore();
 
-const tab = ref<"providers" | "copilots" | "defaults">("providers");
+const tab = ref<"providers" | "copilots" | "documents" | "defaults">("providers");
 const showEditor = ref(false);
 const editing = ref<ProviderConfig | null>(null);
 
@@ -73,6 +79,96 @@ async function onDeleteModel(provider: ProviderConfig, modelId: string, name: st
   if (!ok) return;
   try {
     await store.deleteModel(provider.id, modelId);
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/* ----------------------------- document parsers ----------------------------- */
+
+const POLICIES: { id: DocumentParsePolicy; label: string; hint: string }[] = [
+  { id: "local-only", label: "仅本地", hint: "完全离线，不调用任何外部服务" },
+  { id: "local-first", label: "本地优先", hint: "先用本地解析，读不出内容时再调用云解析" },
+  { id: "cloud-first", label: "云优先", hint: "先用云解析，失败时回退到本地" },
+  { id: "cloud-only", label: "仅云", hint: "全部交给云解析服务" },
+];
+
+const showParserEditor = ref(false);
+const editingParser = ref<DocumentParserConfig | null>(null);
+const testingId = ref<string | null>(null);
+const testResult = ref<Record<string, { ok: boolean; message: string }>>({});
+
+const documentParsers = computed(() => store.config?.documentParsers ?? []);
+const documentParsing = computed(() => store.config?.documentParsing);
+
+// The form is built from the kinds the server implements, so a new driver needs no UI change.
+void store.loadParserKinds().catch(() => undefined);
+
+const policyHint = computed(
+  () => POLICIES.find((p) => p.id === documentParsing.value?.policy)?.hint ?? ""
+);
+
+function openNewParser() {
+  editingParser.value = null;
+  showParserEditor.value = true;
+}
+
+function openEditParser(p: DocumentParserConfig) {
+  editingParser.value = p;
+  showParserEditor.value = true;
+}
+
+async function onSaveParser(draft: DocumentParserDraft) {
+  try {
+    await store.saveDocumentParser(draft);
+    showParserEditor.value = false;
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function onDeleteParser(p: DocumentParserConfig) {
+  const ok = await confirm({
+    title: "删除解析服务",
+    message: `确定删除「${p.name}」吗？`,
+    detail: "已经解析好的文档不受影响；重新解析时需要另选一个服务。",
+    confirmText: "删除",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await store.deleteDocumentParser(p.id);
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Round-trip a throwaway document through the service and report what came back. */
+async function onTestParser(p: DocumentParserConfig) {
+  testingId.value = p.id;
+  testResult.value = { ...testResult.value, [p.id]: { ok: true, message: "测试中…" } };
+  try {
+    await store.testDocumentParser(p.id);
+    testResult.value = { ...testResult.value, [p.id]: { ok: true, message: "连接正常" } };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    testResult.value = { ...testResult.value, [p.id]: { ok: false, message } };
+  } finally {
+    testingId.value = null;
+  }
+}
+
+async function onPolicyChange(policy: DocumentParsePolicy) {
+  try {
+    await store.setDocumentParsing({ policy });
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function onToggle(key: "localEnabled" | "fallbackEnabled", value: boolean) {
+  try {
+    await store.setDocumentParsing({ [key]: value });
   } catch (e) {
     store.setError(e instanceof Error ? e.message : String(e));
   }
@@ -156,6 +252,15 @@ function onDefaultModelChange(e: Event) {
           Copilots
           <span v-if="store.copilots.length" class="tab-count">{{ store.copilots.length }}</span>
         </button>
+        <button
+          class="tab"
+          :class="{ active: tab === 'documents' }"
+          data-testid="tab-documents"
+          @click="tab = 'documents'"
+        >
+          文档解析
+          <span v-if="documentParsers.length" class="tab-count">{{ documentParsers.length }}</span>
+        </button>
         <button class="tab" :class="{ active: tab === 'defaults' }" @click="tab = 'defaults'">
           默认与工具
         </button>
@@ -207,6 +312,103 @@ function onDefaultModelChange(e: Event) {
 
           <div v-if="providers.length === 0" class="empty">
             还没有 Provider，点击「新建 Provider」添加一个 OpenAI 兼容的接口。
+          </div>
+        </template>
+
+        <template v-else-if="tab === 'documents'">
+          <div class="config-tip">
+            PDF、Word、Excel、PowerPoint 附件会先转成文本再交给模型。本地解析<strong>开箱即用</strong>，
+            云解析服务是可选补充 —— 扫描件、复杂排版、公式表格这些本地读不出来的，交给它更合适。
+          </div>
+
+          <div class="field">
+            <label>解析策略</label>
+            <select
+              class="select"
+              :value="documentParsing?.policy"
+              data-testid="parse-policy"
+              @change="onPolicyChange(($event.target as HTMLSelectElement).value as DocumentParsePolicy)"
+            >
+              <option v-for="p in POLICIES" :key="p.id" :value="p.id">{{ p.label }}</option>
+            </select>
+            <div class="hint">{{ policyHint }}</div>
+          </div>
+
+          <div class="field">
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="documentParsing?.localEnabled"
+                data-testid="parse-local-enabled"
+                @change="onToggle('localEnabled', ($event.target as HTMLInputElement).checked)"
+              />
+              启用本地解析
+            </label>
+            <div class="hint">
+              关闭后只能依赖云解析服务。只有在策略为「仅云」，或已经配好云服务时才建议关闭。
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="documentParsing?.fallbackEnabled"
+                data-testid="parse-fallback"
+                @change="onToggle('fallbackEnabled', ($event.target as HTMLInputElement).checked)"
+              />
+              允许回退到另一侧
+            </label>
+            <div class="hint">
+              关闭后，选定的那一侧失败就直接报错，不再尝试另一侧。适用于想严格控制外发的场景。
+            </div>
+          </div>
+
+          <div class="models-head">
+            <label>云解析服务</label>
+            <button class="btn small" @click="openNewParser" data-testid="add-parser">
+              ＋ 添加服务
+            </button>
+          </div>
+
+          <div v-if="documentParsers.length === 0" class="empty-note">
+            还没有配置云解析服务。本地解析仍然可用，扫描件会因此解析失败。
+          </div>
+
+          <div
+            v-for="p in documentParsers"
+            :key="p.id"
+            class="parser-row"
+            data-testid="parser-row"
+          >
+            <div class="parser-main">
+              <div class="parser-name">
+                {{ p.name }}
+                <span class="badge" :class="{ off: !p.enabled }">
+                  {{ p.enabled ? "已启用" : "已停用" }}
+                </span>
+                <span class="badge kind">{{ p.kind }}</span>
+                <span v-if="p.hasApiKey" class="badge">Key 已配置</span>
+              </div>
+              <div class="parser-url mono">{{ p.baseURL }}</div>
+              <div
+                v-if="testResult[p.id]"
+                class="hint"
+                :class="{ warn: !testResult[p.id]!.ok }"
+                data-testid="parser-test-result"
+              >
+                {{ testResult[p.id]!.message }}
+              </div>
+            </div>
+            <button
+              class="btn small"
+              :disabled="testingId === p.id"
+              @click="onTestParser(p)"
+            >
+              {{ testingId === p.id ? "测试中…" : "测试连接" }}
+            </button>
+            <button class="btn small" @click="openEditParser(p)">编辑</button>
+            <button class="icon-btn danger" title="删除" @click="onDeleteParser(p)">✕</button>
           </div>
         </template>
 
@@ -294,6 +496,13 @@ function onDefaultModelChange(e: Event) {
       @close="showCopilotEditor = false"
       @save="onSaveCopilot"
     />
+    <DocumentParserDialog
+      v-if="showParserEditor"
+      :parser="editingParser"
+      :kinds="store.parserKinds"
+      @close="showParserEditor = false"
+      @save="onSaveParser"
+    />
   </div>
 </template>
 
@@ -346,6 +555,68 @@ function onDefaultModelChange(e: Event) {
   color: var(--text-2);
   font-size: 13px;
   margin-bottom: 10px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.empty-note {
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+}
+.parser-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--panel-2);
+}
+.parser-main {
+  flex: 1;
+  min-width: 0;
+}
+.parser-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  flex-wrap: wrap;
+}
+.parser-row .badge {
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 0 7px;
+  font-weight: 400;
+}
+.parser-row .badge.off {
+  color: var(--text-3);
+  border-color: var(--border);
+}
+.parser-row .badge.kind {
+  color: var(--text-3);
+  border-color: var(--border);
+}
+.parser-url {
+  color: var(--text-3);
+  margin-top: 4px;
+  font-size: 12px;
+  word-break: break-all;
+}
+.parser-row .hint.warn {
+  color: var(--warning);
 }
 .provider-row {
   display: flex;

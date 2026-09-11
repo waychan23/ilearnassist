@@ -32,6 +32,15 @@ const mocks = vi.hoisted(() => ({
     deleteSession: vi.fn(),
     listMessages: vi.fn(),
     uploadAttachment: vi.fn(),
+    listAttachmentStatus: vi.fn(),
+    reparseAttachment: vi.fn(),
+    listParserKinds: vi.fn(),
+    listDocumentParsers: vi.fn(),
+    createDocumentParser: vi.fn(),
+    updateDocumentParser: vi.fn(),
+    deleteDocumentParser: vi.fn(),
+    testDocumentParser: vi.fn(),
+    updateDocumentParsing: vi.fn(),
     deleteProvider: vi.fn(),
     deleteModel: vi.fn(),
   },
@@ -64,6 +73,13 @@ const CONFIG: PublicConfig = {
   defaultModel: "m1",
   workspacesRootDir: "/tmp/ws",
   webSearchProvider: "bing",
+  documentParsers: [],
+  documentParsing: {
+    localEnabled: true,
+    policy: "local-first",
+    fallbackEnabled: true,
+    defaultParserId: null,
+  },
   providers: [
     {
       id: "p1",
@@ -593,5 +609,201 @@ describe("attachments", () => {
     await store.sendMessage("look", store.pendingAttachments);
 
     expect(store.pendingAttachments).toEqual([]);
+  });
+});
+
+describe("document parsing", () => {
+  const PDF = {
+    id: "d1",
+    name: "lecture.pdf",
+    mimeType: "application/pdf",
+    size: 1000,
+    kind: "file" as const,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("polls for parse state while a document is settling, then stops", async () => {
+    const store = await readyStore();
+    mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
+    mocks.api.listAttachmentStatus
+      .mockResolvedValueOnce({ d1: { status: "parsing", updatedAt: "" } })
+      .mockResolvedValue({ d1: { status: "ready", parsedChars: 4200, pageCount: 3, updatedAt: "" } });
+
+    await store.uploadAttachment(new File(["x"], "lecture.pdf"));
+    // The first poll fires immediately rather than after a full interval.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.pendingAttachments[0]!.parseStatus).toBe("parsing");
+    expect(store.documentsParsing).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(store.pendingAttachments[0]!.parseStatus).toBe("ready");
+    expect(store.pendingAttachments[0]!.parsedChars).toBe(4200);
+    expect(store.documentsParsing).toBe(false);
+
+    // Settled: no further polling, so an idle composer does not keep asking the server.
+    const calls = mocks.api.listAttachmentStatus.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mocks.api.listAttachmentStatus).toHaveBeenCalledTimes(calls);
+  });
+
+  it("does not poll for an attachment that needs no parsing", async () => {
+    const store = await readyStore();
+    mocks.api.uploadAttachment.mockResolvedValue({
+      id: "t1",
+      name: "a.txt",
+      mimeType: "text/plain",
+      size: 3,
+      kind: "file",
+    });
+
+    await store.uploadAttachment(new File(["hi"], "a.txt"));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mocks.api.listAttachmentStatus).not.toHaveBeenCalled();
+    expect(store.documentsParsing).toBe(false);
+  });
+
+  it("surfaces a parse failure on the attachment", async () => {
+    const store = await readyStore();
+    mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
+    mocks.api.listAttachmentStatus.mockResolvedValue({
+      d1: { status: "failed", error: "未检测到文本层", updatedAt: "" },
+    });
+
+    await store.uploadAttachment(new File(["x"], "lecture.pdf"));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(store.pendingAttachments[0]!.parseStatus).toBe("failed");
+    expect(store.pendingAttachments[0]!.parseError).toBe("未检测到文本层");
+    expect(store.documentsParsing).toBe(false);
+  });
+
+  it("re-parses and keeps polling until the retry settles", async () => {
+    const store = await readyStore();
+    const failed = { ...PDF, parseStatus: "failed" as const, parseError: "boom" };
+    store.pendingAttachments = [failed];
+    mocks.api.reparseAttachment.mockResolvedValue({ status: "pending" });
+    // First poll still in progress, second one done — that is what makes the loop keep
+    // going for a re-parse when nothing is staged in the composer.
+    mocks.api.listAttachmentStatus
+      .mockResolvedValueOnce({ d1: { status: "parsing", updatedAt: "" } })
+      .mockResolvedValue({ d1: { status: "ready", parsedChars: 10, updatedAt: "" } });
+
+    await store.reparseAttachment(failed);
+    expect(mocks.api.reparseAttachment).toHaveBeenCalledWith("s1", "d1", "lecture.pdf");
+    // Nothing is *pending* in the composer, so polling would stop immediately were it not
+    // for the re-parse being tracked — this is the case that needs the extra bookkeeping.
+    expect(store.pendingAttachments[0]!.parseStatus).not.toBe("failed");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mocks.api.listAttachmentStatus.mock.calls.length).toBeGreaterThan(1);
+    expect(store.pendingAttachments[0]!.parseStatus).toBe("ready");
+    expect(store.pendingAttachments[0]!.parseError).toBeUndefined();
+  });
+
+  it("stops polling when the staged attachments are cleared", async () => {
+    const store = await readyStore();
+    mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
+    mocks.api.listAttachmentStatus.mockResolvedValue({
+      d1: { status: "parsing", updatedAt: "" },
+    });
+
+    await store.uploadAttachment(new File(["x"], "lecture.pdf"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    store.clearPendingAttachments();
+    const calls = mocks.api.listAttachmentStatus.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mocks.api.listAttachmentStatus).toHaveBeenCalledTimes(calls);
+  });
+});
+
+describe("document parser settings", () => {
+  it("saves a new parser and folds the result into config", async () => {
+    const store = await readyStore();
+    const created = {
+      id: "p1",
+      name: "Docling",
+      kind: "sync" as const,
+      baseURL: "http://127.0.0.1:5001",
+      enabled: true,
+      hasApiKey: false,
+    };
+    mocks.api.createDocumentParser.mockResolvedValue(created);
+
+    await store.saveDocumentParser({
+      name: "Docling",
+      kind: "sync",
+      baseURL: "http://127.0.0.1:5001",
+      apiKey: "",
+      enabled: true,
+    });
+
+    // A blank key is omitted entirely so the server keeps whatever it has stored.
+    expect(mocks.api.createDocumentParser.mock.calls[0]![0]).not.toHaveProperty("apiKey");
+    expect(store.config?.documentParsers).toEqual([created]);
+  });
+
+  it("sends a key when one was typed", async () => {
+    const store = await readyStore();
+    mocks.api.createDocumentParser.mockResolvedValue({
+      id: "p1",
+      name: "MinerU",
+      kind: "mineru",
+      baseURL: "https://mineru.net/api/v4",
+      enabled: true,
+      hasApiKey: true,
+    });
+
+    await store.saveDocumentParser({
+      name: "MinerU",
+      kind: "mineru",
+      baseURL: "https://mineru.net/api/v4",
+      apiKey: "secret",
+      enabled: true,
+    });
+
+    expect(mocks.api.createDocumentParser.mock.calls[0]![0]).toMatchObject({ apiKey: "secret" });
+  });
+
+  it("updates the parsing policy in place", async () => {
+    const store = await readyStore();
+    mocks.api.updateDocumentParsing.mockResolvedValue({
+      localEnabled: true,
+      policy: "cloud-first",
+      fallbackEnabled: false,
+      defaultParserId: null,
+    });
+
+    await store.setDocumentParsing({ policy: "cloud-first", fallbackEnabled: false });
+    expect(store.config?.documentParsing.policy).toBe("cloud-first");
+    expect(store.config?.documentParsing.fallbackEnabled).toBe(false);
+  });
+
+  it("removes a deleted parser from config", async () => {
+    const store = await readyStore();
+    mocks.api.deleteDocumentParser.mockResolvedValue({ ok: true });
+    mocks.api.getConfig.mockResolvedValue({ ...CONFIG, documentParsers: [] });
+
+    await store.deleteDocumentParser("p1");
+    expect(store.config?.documentParsers).toEqual([]);
+  });
+
+  it("fetches the protocol kinds once", async () => {
+    const store = await readyStore();
+    mocks.api.listParserKinds.mockResolvedValue([
+      { kind: "sync", label: "Sync", requiresApiKey: false },
+    ]);
+
+    await store.loadParserKinds();
+    await store.loadParserKinds();
+    expect(mocks.api.listParserKinds).toHaveBeenCalledTimes(1);
+    expect(store.parserKinds).toHaveLength(1);
   });
 });

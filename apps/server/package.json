@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "fake-llm": "tsx test/helpers/fakeLlm.ts",
+    "fake-parser": "tsx test/helpers/fakeParser.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,6 +19,8 @@
     "better-sqlite3": "^13.0.3",
     "cheerio": "^1.2.0",
     "fastify": "^5.12.3",
+    "fflate": "^0.8.3",
+    "pdfjs-dist": "^4.10.38",
     "yaml": "^2.9.0",
     "zod": "^3.25.0"
   },

@@ -15,12 +15,29 @@ const textarea = ref<HTMLTextAreaElement | null>(null);
 const showSessionSettings = ref(false);
 
 const canSend = computed(
-  () => !store.streaming.active && (!!text.value.trim() || store.pendingAttachments.length > 0)
+  () =>
+    !store.streaming.active &&
+    !store.documentsParsing &&
+    (!!text.value.trim() || store.pendingAttachments.length > 0)
 );
 
 /** Warn before sending an image to a model that cannot read it. */
 const imageWithoutVision = computed(
   () => store.pendingAttachments.some((a) => a.kind === "image") && !store.supportsVision
+);
+
+/**
+ * A document still being extracted cannot be sent yet.
+ *
+ * The extracted text is injected when the message is built, so sending now would produce a
+ * turn where the model never saw the document — and it would not appear on a later turn
+ * either, because the attachment belongs to this message. Waiting is the honest behaviour.
+ */
+const parsingDocuments = computed(() => store.documentsParsing);
+
+/** Documents that failed to parse and are still staged — the model will not read them. */
+const failedDocuments = computed(() =>
+  store.pendingAttachments.filter((a) => a.parseStatus === "failed")
 );
 
 /**
@@ -83,6 +100,15 @@ function onKeydown(e: KeyboardEvent) {
 <template>
   <div class="composer">
     <div class="inner-wrap">
+      <div v-if="parsingDocuments" class="parse-notice" data-testid="composer-parsing">
+        正在解析附件，完成后即可发送…
+      </div>
+
+      <div v-else-if="failedDocuments.length" class="vision-warning" data-testid="composer-parse-failed">
+        有 {{ failedDocuments.length }} 个附件解析失败，模型将无法读取其内容。可点击附件上的 ↻
+        重新解析，或先在「设置 → 文档解析」中配置云解析服务。
+      </div>
+
       <div v-if="imageWithoutVision" class="vision-warning">
         当前模型「{{ store.effectiveModel?.name }}」未标记支持图片输入，图片将以文字占位符发送。
         可在「设置 → Providers」中为它勾选「图片输入」。
@@ -108,7 +134,13 @@ function onKeydown(e: KeyboardEvent) {
             class="send-btn"
             data-testid="composer-send"
             :disabled="!canSend"
-            :title="store.streaming.active ? 'Agent 正在思考…' : '发送 (Enter)'"
+            :title="
+            store.streaming.active
+              ? 'Agent 正在思考…'
+              : parsingDocuments
+                ? '附件解析中…'
+                : '发送 (Enter)'
+          "
             @click="send"
           >
             ↑
@@ -121,6 +153,7 @@ function onKeydown(e: KeyboardEvent) {
           :attachments="store.pendingAttachments"
           removable
           @remove="store.removePendingAttachment"
+          @reparse="store.reparseAttachment"
         />
 
         <div class="toolbar">
@@ -128,7 +161,7 @@ function onKeydown(e: KeyboardEvent) {
             <button
               class="icon-btn attach-btn"
               title="添加图片或文件"
-              :disabled="uploading || store.streaming.active"
+              :disabled="uploading || store.streaming.active || parsingDocuments"
               @click="fileInput?.click()"
             >
               {{ uploading ? "…" : "📎" }}
@@ -180,6 +213,14 @@ function onKeydown(e: KeyboardEvent) {
   color: #e6c06a;
   background: rgba(230, 179, 60, 0.1);
   border: 1px solid rgba(230, 179, 60, 0.3);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+/* Informational, not a warning: extraction is simply still running. */
+.parse-notice {
+  font-size: 12px;
+  color: var(--text-3);
+  border: 1px dashed var(--border);
   border-radius: var(--radius);
   padding: 6px 10px;
 }

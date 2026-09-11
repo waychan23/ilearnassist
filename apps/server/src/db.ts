@@ -6,6 +6,8 @@ import type {
   Attachment,
   Copilot,
   CopilotDefaults,
+  DocumentParsePolicy,
+  DocumentParserKind,
   Message,
   MessageUsage,
   ModelCapability,
@@ -81,6 +83,18 @@ interface ModelRow {
   sort_order: number;
 }
 
+interface DocumentParserRow {
+  id: string;
+  name: string;
+  kind: string;
+  base_url: string;
+  api_key: string | null;
+  enabled: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 /** A provider as the server sees it — includes the apiKey. Never send this to a client. */
 export interface ProviderRecord {
   id: string;
@@ -90,9 +104,32 @@ export interface ProviderRecord {
   models: ProviderModel[];
 }
 
+/** A configured document-parsing backend. Like `ProviderRecord`, carries the real key. */
+export interface DocumentParserRecord {
+  id: string;
+  name: string;
+  kind: DocumentParserKind;
+  baseURL: string;
+  apiKey?: string;
+  enabled: boolean;
+}
+
 /** Setting keys stored in `app_settings`. */
 export const SETTING_DEFAULT_PROVIDER = "defaultProvider";
 export const SETTING_DEFAULT_MODEL = "defaultModel";
+export const SETTING_DOCUMENT_POLICY = "documentParsing.policy";
+export const SETTING_DOCUMENT_LOCAL_ENABLED = "documentParsing.localEnabled";
+export const SETTING_DOCUMENT_FALLBACK = "documentParsing.fallbackEnabled";
+export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId";
+/**
+ * Marks that `config.yaml`'s parser list has been copied in at least once.
+ *
+ * Providers can use "the table is empty" as their not-yet-seeded signal, but parsers
+ * cannot: running with zero cloud parsers is a perfectly normal state (local-only), so an
+ * empty table must not be read as "never seeded" or every boot would resurrect entries
+ * the user deliberately deleted.
+ */
+export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
 
 /**
  * The title a conversation gets at creation, before the auto-titler replaces it. Kept as
@@ -140,6 +177,15 @@ const mapMessage = (r: MessageRow): Message => ({
   attachments: r.attachments ? safeParseArray<Attachment>(r.attachments) : undefined,
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
   createdAt: r.created_at,
+});
+
+const mapDocumentParser = (r: DocumentParserRow): DocumentParserRecord => ({
+  id: r.id,
+  name: r.name,
+  kind: r.kind as DocumentParserKind,
+  baseURL: r.base_url,
+  apiKey: r.api_key ?? undefined,
+  enabled: r.enabled !== 0,
 });
 
 const mapModel = (r: ModelRow): ProviderModel => ({
@@ -282,6 +328,28 @@ export interface AppDb {
   /** Returns false when no such model existed. */
   deleteModel(id: string): boolean;
 
+  listDocumentParsers(): DocumentParserRecord[];
+  getDocumentParser(id: string): DocumentParserRecord | undefined;
+  createDocumentParser(input: {
+    id: string;
+    name: string;
+    kind: DocumentParserKind;
+    baseURL: string;
+    apiKey?: string;
+    enabled?: boolean;
+  }): DocumentParserRecord;
+  updateDocumentParser(
+    id: string,
+    input: {
+      name?: string;
+      kind?: DocumentParserKind;
+      baseURL?: string;
+      apiKey?: string;
+      enabled?: boolean;
+    }
+  ): DocumentParserRecord | undefined;
+  deleteDocumentParser(id: string): void;
+
   getSetting(key: string): string | undefined;
   setSetting(key: string, value: string): void;
 }
@@ -351,6 +419,17 @@ export function createDb(dbPath: string): AppDb {
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS document_parsers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      api_key TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at);
@@ -468,6 +547,20 @@ export function createDb(dbPath: string): AppDb {
   const stmtDeleteModel = db.prepare("DELETE FROM models WHERE id = ?");
   const stmtNextModelOrder = db.prepare(
     "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM models WHERE provider_id = ?"
+  );
+
+  /* --------------------------- document parsers --------------------------- */
+  const stmtListDocumentParsers = db.prepare(
+    "SELECT * FROM document_parsers ORDER BY sort_order ASC, created_at ASC"
+  );
+  const stmtGetDocumentParser = db.prepare("SELECT * FROM document_parsers WHERE id = ?");
+  const stmtCreateDocumentParser = db.prepare(
+    `INSERT INTO document_parsers (id, name, kind, base_url, api_key, enabled, sort_order, created_at, updated_at)
+     VALUES (@id, @name, @kind, @baseURL, @apiKey, @enabled, @sortOrder, @createdAt, @updatedAt)`
+  );
+  const stmtDeleteDocumentParser = db.prepare("DELETE FROM document_parsers WHERE id = ?");
+  const stmtNextDocumentParserOrder = db.prepare(
+    "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM document_parsers"
   );
 
   /* ------------------------------ app settings ---------------------------- */
@@ -700,6 +793,53 @@ export function createDb(dbPath: string): AppDb {
       return stmtDeleteModel.run(id).changes > 0;
     },
 
+    listDocumentParsers() {
+      return (stmtListDocumentParsers.all() as DocumentParserRow[]).map(mapDocumentParser);
+    },
+    getDocumentParser(id) {
+      const r = stmtGetDocumentParser.get(id) as DocumentParserRow | undefined;
+      return r ? mapDocumentParser(r) : undefined;
+    },
+    createDocumentParser(input) {
+      const ts = now();
+      const { next } = stmtNextDocumentParserOrder.get() as { next: number };
+      stmtCreateDocumentParser.run({
+        id: input.id,
+        name: input.name,
+        kind: input.kind,
+        baseURL: input.baseURL,
+        apiKey: input.apiKey ?? null,
+        enabled: input.enabled === false ? 0 : 1,
+        sortOrder: next,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      const r = stmtGetDocumentParser.get(input.id) as DocumentParserRow;
+      return mapDocumentParser(r);
+    },
+    updateDocumentParser(id, input) {
+      const existing = stmtGetDocumentParser.get(id) as DocumentParserRow | undefined;
+      if (!existing) return undefined;
+      db.prepare(
+        `UPDATE document_parsers SET name = ?, kind = ?, base_url = ?, api_key = ?, enabled = ?, updated_at = ?
+         WHERE id = ?`
+      ).run(
+        input.name?.trim() || existing.name,
+        input.kind ?? existing.kind,
+        input.baseURL?.trim() || existing.base_url,
+        // Same contract as providers: an absent key keeps the stored one, "" clears it.
+        input.apiKey === undefined ? existing.api_key : input.apiKey || null,
+        input.enabled === undefined ? existing.enabled : input.enabled ? 1 : 0,
+        now(),
+        id
+      );
+      const r = stmtGetDocumentParser.get(id) as DocumentParserRow;
+      return mapDocumentParser(r);
+    },
+    deleteDocumentParser(id) {
+      stmtDeleteDocumentParser.run(id);
+    },
+
     getSetting(key) {
       const r = stmtGetSetting.get(key) as { value: string } | undefined;
       return r?.value;
@@ -777,4 +917,104 @@ export function seedFromConfig(
   db.setSetting(SETTING_DEFAULT_PROVIDER, input.defaultProvider);
   db.setSetting(SETTING_DEFAULT_MODEL, input.defaultModel);
   return true;
+}
+
+/* ---------------------------- document parsing ---------------------------- */
+
+/** The shape `seedDocumentParsersFromConfig` needs from `config.yaml`. */
+export interface SeedDocumentParserDef {
+  id: string;
+  name: string;
+  kind: DocumentParserKind;
+  baseURL: string;
+  apiKey?: string;
+  enabled?: boolean;
+}
+
+export interface SeedDocumentParsingDef {
+  localEnabled: boolean;
+  policy: DocumentParsePolicy;
+  fallbackEnabled: boolean;
+  defaultParserId?: string | null;
+}
+
+/**
+ * Copy `config.yaml`'s document parsers into the database on first boot.
+ *
+ * Gated on an explicit marker rather than "the table is empty" — a user who deleted every
+ * cloud parser (running local-only) has a legitimately empty table, and re-seeding it on
+ * the next restart would undo their decision.
+ *
+ * `defaultParserId` is deliberately *not* seeded as a setting unless explicitly given:
+ * absent means "try every enabled parser in preference order", which is the better default
+ * for someone who never opened the settings screen.
+ */
+export function seedDocumentParsersFromConfig(
+  db: AppDb,
+  input: { parsers: SeedDocumentParserDef[]; parsing: SeedDocumentParsingDef }
+): boolean {
+  const alreadySeeded = db.getSetting(SETTING_DOCUMENT_SEEDED) !== undefined;
+
+  if (!alreadySeeded) {
+    for (const p of input.parsers) {
+      db.createDocumentParser({
+        id: p.id,
+        name: p.name,
+        kind: p.kind,
+        baseURL: p.baseURL,
+        apiKey: p.apiKey,
+        enabled: p.enabled,
+      });
+    }
+    db.setSetting(SETTING_DOCUMENT_SEEDED, "1");
+  }
+
+  // Policy settings are backfilled independently: a config file that only gains a
+  // `documentParsing:` block should take effect without a database reset.
+  if (!db.getSetting(SETTING_DOCUMENT_POLICY)) {
+    db.setSetting(SETTING_DOCUMENT_POLICY, input.parsing.policy);
+  }
+  if (!db.getSetting(SETTING_DOCUMENT_LOCAL_ENABLED)) {
+    db.setSetting(SETTING_DOCUMENT_LOCAL_ENABLED, input.parsing.localEnabled ? "1" : "0");
+  }
+  if (!db.getSetting(SETTING_DOCUMENT_FALLBACK)) {
+    db.setSetting(SETTING_DOCUMENT_FALLBACK, input.parsing.fallbackEnabled ? "1" : "0");
+  }
+  if (input.parsing.defaultParserId && !db.getSetting(SETTING_DOCUMENT_DEFAULT_PARSER)) {
+    db.setSetting(SETTING_DOCUMENT_DEFAULT_PARSER, input.parsing.defaultParserId);
+  }
+
+  return !alreadySeeded;
+}
+
+/** Current parsing policy, falling back to the config file for anything unset. */
+export function readDocumentParsing(
+  db: AppDb,
+  defaults: SeedDocumentParsingDef
+): {
+  localEnabled: boolean;
+  policy: DocumentParsePolicy;
+  fallbackEnabled: boolean;
+  defaultParserId: string | null;
+} {
+  const policy = db.getSetting(SETTING_DOCUMENT_POLICY);
+  return {
+    localEnabled: (db.getSetting(SETTING_DOCUMENT_LOCAL_ENABLED) ?? (defaults.localEnabled ? "1" : "0")) !== "0",
+    policy: isParsePolicy(policy) ? policy : defaults.policy,
+    fallbackEnabled:
+      (db.getSetting(SETTING_DOCUMENT_FALLBACK) ?? (defaults.fallbackEnabled ? "1" : "0")) !== "0",
+    // An empty setting means "no pin" — normalise it to null so callers get one
+    // representation of "try everything" rather than two that both behave the same.
+    defaultParserId:
+      db.getSetting(SETTING_DOCUMENT_DEFAULT_PARSER) || defaults.defaultParserId || null,
+  };
+}
+
+function isParsePolicy(value: string | undefined): value is DocumentParsePolicy {
+  return (
+    value === "local-only" ||
+    value === "local-first" ||
+    value === "cloud-first" ||
+    value === "cloud-only"
+  );
 }

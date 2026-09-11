@@ -87,6 +87,14 @@ llm.setTurns([{ reasoning: "hmm", content: "the answer" }]);
 It also runs standalone (`pnpm --filter @guided-learning/server fake-llm`), which is how
 the Playwright suite scripts it over HTTP.
 
+`apps/server/test/helpers/fakeParser.ts` is the same idea for document parsing: a
+scriptable stand-in that speaks all three cloud-parser protocols (`sync` multipart,
+MinerU's presigned-upload-and-poll, LlamaParse's multipart-and-poll), so the *real*
+drivers run — presigned `PUT`, job polling, ZIP extraction, Bearer auth, error mapping —
+with no account at any vendor. It runs standalone too
+(`pnpm --filter @guided-learning/server fake-parser`), and the Playwright harness starts
+one so the cloud fallback is exercised in a browser.
+
 Reuse these rather than re-inventing them:
 
 - `startTestServer()` — a real server on a **throwaway temp directory**; never the repo's
@@ -127,8 +135,12 @@ apps/server/src/
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
+  documents/              # document → text: local extractors, cloud drivers, policy
+  documents/local/        # pdfjs (PDF) + an OOXML/ODF reader over fflate
+  documents/drivers/      # one file per wire protocol (sync / mineru / llamaparse)
   tools/index.ts          # tool assembly + ALL_TOOL_NAMES
   tools/fileTools.ts      # list/read/write/create_dir/delete_file (sandboxed)
+  tools/documentTools.ts  # read_document — pages through an attachment's text
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
 apps/web/src/
@@ -212,6 +224,23 @@ Fuller map in `docs/reference.md`.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace and
   provider deletes go through `confirm()` from `composables/confirm.ts`. The
   agent's own `delete_file` tool is deliberately *not* gated.
+- **Extracted document text lives in `parsed/`, never beside the bytes.** An
+  attachment's derived data goes to `uploads/<sessionId>/parsed/<attachmentId>.txt`,
+  not `uploads/<sessionId>/<attachmentId>.txt`. `findStoredAttachment()` globs
+  `<id>.*` in the session directory and `txt` is a valid extension in the MIME table,
+  so a flat sibling would let the download endpoint serve extracted text instead of
+  the original PDF. Pinned by a test in `apps/server/test/documents/store.test.ts`.
+- **`read_document` is scoped to the current turn's attachments.** It is bound to a
+  whitelist of attachment ids, not to the uploads root, because ids are guessable and
+  a bare-id tool would let a model read another session's uploads. Adding a document
+  tool that takes an id without checking it against the whitelist reintroduces that.
+- **A document that could not be read must never look like one that was.** An empty
+  extraction is reported as `no_text_layer`, not as empty text — a model told it read
+  a file it never saw will answer about it anyway. `parseStatus` on the attachment is
+  what the UI renders, and the composer blocks sending until extraction has settled.
+- **`pdfjs-dist` is pinned to 4.x.** 5.7+ and 6.x require Node ≥ 22.13 while
+  `package.json` advertises Node ≥ 20; bumping that floor is a separate,
+  user-visible change and must not ride along with an unrelated dependency update.
 
 ## Gotchas
 

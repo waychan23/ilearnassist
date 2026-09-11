@@ -226,7 +226,89 @@ defaults.
 Files and images can be attached in the composer (paperclip, or paste a
 screenshot). Bytes are stored under `data/uploads/<sessionId>/` — outside the
 workspace, so they never appear in the agent's `list_files`. Each file is capped
-at 10 MB, and only a known set of MIME types is accepted (images, text-like files
-and PDF). Images are sent to the model as real multimodal content when the
-selected model is marked `vision`; text-like files are inlined; binaries are
-named but not parsed. Deleting a conversation deletes its uploads.
+at 10 MB, and only a known set of MIME types is accepted (images, text-like files,
+PDF and the Office/OpenDocument formats). Images are sent to the model as real
+multimodal content when the selected model is marked `vision`; text-like files are
+inlined; documents are parsed (see below). Deleting a conversation deletes its
+uploads and their extracted text.
+
+## Document parsing
+
+PDF, Word, Excel, PowerPoint and OpenDocument attachments are converted to text
+before they reach the model. **Local extraction works out of the box and needs no
+configuration** — it is the only tier that runs with the machine offline. Cloud
+parsers are optional and matter for scanned pages, complex layouts and formulas.
+
+```yaml
+documentParsers: []
+  # - id: docling
+  #   name: Docling (local)
+  #   kind: sync
+  #   baseURL: http://127.0.0.1:5001/v1/convert/file
+  # - id: mineru
+  #   name: MinerU
+  #   kind: mineru
+  #   baseURL: https://mineru.net/api/v4
+  #   apiKey: ${MINERU_API_KEY}
+
+documentParsing:
+  localEnabled: true
+  policy: local-first      # local-only | local-first | cloud-first | cloud-only
+  fallbackEnabled: true
+  # defaultParserId: mineru
+```
+
+### `kind` — the wire protocol
+
+`kind` selects how the server talks to a service. The endpoint and credential come
+from the record, so one `kind` covers several products and you can keep several
+records of the same kind (hosted and self-hosted, for example).
+
+| `kind` | Protocol | Works with |
+| --- | --- | --- |
+| `sync` | POST the file, get text/Markdown back. **No key needed.** | `docling-serve` (the easiest self-hosted option — a Docker container, CPU is fine), Marker, a self-hosted MinerU |
+| `mineru` | Presigned upload → poll → download a ZIP containing Markdown | MinerU's v4 API, hosted or self-hosted. `baseURL` includes the version: `https://mineru.net/api/v4` |
+| `llamaparse` | Multipart upload → poll → Markdown in the poll response | LlamaParse. Reducto is the same shape |
+
+New entries can also be added in **设置 → 文档解析**, which is the source of truth
+after the first boot. Each row has a **测试连接** button that round-trips a
+throwaway document, so a typo in `baseURL` is caught there rather than at the first
+upload. API keys are write-only: the server never returns one, and leaving the field
+blank on save keeps the stored value.
+
+### `documentParsing` — the policy
+
+| Policy | Behaviour |
+| --- | --- |
+| `local-only` | Never call out. Fully offline. |
+| `local-first` | Local, then cloud if local cannot read the file. The default. |
+| `cloud-first` | Cloud, then local if the cloud fails. |
+| `cloud-only` | Always call out. |
+
+`fallbackEnabled: false` removes the second step from the two hybrid policies, so a
+failure is reported instead of being retried on the other side — useful when you want
+strict control over what leaves the machine.
+
+With `localEnabled: false` the local tier is skipped entirely; only sensible alongside
+a cloud parser, since nothing else can read a PDF.
+
+**Scanned PDFs.** Local extraction reads the text layer only. A scan has none, which is
+reported as "未检测到文本层，可能是扫描件" — and under `local-first` that is exactly
+the case the cloud tier exists for. It is deliberately *not* reported as an empty
+document, because a model told a file was read when it was not will answer anyway.
+
+### Operational limits (`tools.documents`)
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `localMaxBytes` | 20 MB | Above this, local extraction is skipped and the file is offered to a cloud parser (whose ceilings are far higher) |
+| `maxTextChars` | 2,000,000 | Ceiling on stored extracted text |
+| `concurrency` | 2 | How many documents parse at once |
+| `requestTimeoutMs` | 30 s | Per-HTTP-request budget for a cloud parser |
+| `jobTimeoutMs` | 300 s | Total budget for one async cloud job, polling included |
+| `pollIntervalMs` | 3 s | How often an async job is polled |
+
+Extraction runs in the background: the upload returns immediately and the composer
+shows progress on the attachment chip, blocking **send** until every attachment has
+settled. Sending earlier would produce a turn in which the model never saw the
+document.
