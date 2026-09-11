@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useAppStore } from "../stores/app";
+import { useTheme } from "../composables/theme";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
 import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
@@ -8,8 +9,25 @@ import Composer from "./Composer.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 
 const store = useAppStore();
+const theme = useTheme();
 const showNewSession = ref(false);
 const messagesEl = ref<HTMLElement | null>(null);
+
+/* ----------------------------------- theme ----------------------------------- */
+
+const THEME_META = {
+  light: { label: "浅色", icon: "☀️" },
+  dark: { label: "深色", icon: "🌙" },
+  auto: { label: "自动", icon: "🖥️" },
+} as const;
+
+const themeIcon = computed(() => THEME_META[theme.mode.value].icon);
+/** "自动（当前浅色）" reads clearer than just "自动" when the OS is doing the deciding. */
+const themeLabel = computed(() =>
+  theme.mode.value === "auto"
+    ? `自动（当前${THEME_META[theme.resolved.value].label}）`
+    : THEME_META[theme.mode.value].label
+);
 
 
 /* ------------------------------- title editing ------------------------------- */
@@ -157,6 +175,17 @@ watch(
         </template>
       </div>
 
+      <!-- The title block takes the free space, so the actions land on the right. -->
+      <div class="topbar-actions">
+        <button
+          class="icon-btn theme-toggle"
+          :title="`主题：${themeLabel}（点击切换）`"
+          data-testid="theme-toggle"
+          @click="theme.cycle()"
+        >
+          {{ themeIcon }}
+        </button>
+      </div>
     </header>
 
     <div v-if="!store.isConfigured" class="config-banner">
@@ -197,6 +226,16 @@ watch(
 .title-block {
   flex: 1;
   min-width: 0;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.theme-toggle {
+  font-size: 15px;
+  padding: 4px 8px;
 }
 .title-row {
   display: flex;
