@@ -36,7 +36,6 @@ function onLocaleChange(event: Event): void {
   setLocale((event.target as HTMLSelectElement).value as Locale);
 }
 
-
 /* ------------------------------- title editing ------------------------------- */
 const editingTitle = ref(false);
 const titleDraft = ref("");
@@ -135,7 +134,7 @@ watch(
             ref="titleInput"
             v-model="titleDraft"
             class="input title-input"
-            placeholder="会话标题"
+            :placeholder="t('chat.titlePlaceholder')"
             @keydown.enter.prevent="commitTitle"
             @keydown.esc.prevent="cancelTitleEdit"
             @blur="commitTitle"
@@ -151,7 +150,7 @@ watch(
               class="title"
               data-testid="session-title"
               :class="{ editable: !!store.activeSession }"
-              :title="store.activeSession ? '点击编辑标题' : undefined"
+              :title="store.activeSession ? t('chat.editTitleHint') : undefined"
               @click="startTitleEdit"
             >
               {{ store.activeSession?.title || store.activeWorkspace?.name || t("app.title") }}
@@ -159,15 +158,15 @@ watch(
             <button
               v-if="store.activeSession"
               class="btn title-edit-btn"
-              title="编辑标题"
+              :title="t('chat.editTitle')"
               @click="startTitleEdit"
             >
-              ✎ 编辑标题
+              ✎ {{ t("chat.editTitle") }}
             </button>
             <span
               v-if="store.activeSession?.titleSource === 'auto'"
               class="auto-badge"
-              title="标题由 AI 根据第一轮对话自动生成"
+              :title="t('chat.autoBadgeTitle')"
             >
               AI
             </span>
@@ -226,9 +225,9 @@ watch(
         :class="{ 'with-rail': showMinimap }"
       >
         <div v-if="store.messages.length === 0 && !store.streaming.active" class="empty-state">
-          <h2>{{ store.activeCopilot?.name ?? "开始对话" }}</h2>
-          <p>在下方输入消息，Agent 将按需调用工具。</p>
-          <button class="btn" @click="showNewSession = true">＋ 新建会话（选择 Copilot）</button>
+          <h2>{{ store.activeCopilot?.name ?? t("chat.start") }}</h2>
+          <p>{{ t("chat.startHint") }}</p>
+          <button class="btn" @click="showNewSession = true">{{ t("chat.startAction") }}</button>
         </div>
         <MessageItem v-for="m in store.messages" :key="m.id" :message="m" />
         <MessageItem v-if="store.streaming.active" :streaming="store.streaming" />

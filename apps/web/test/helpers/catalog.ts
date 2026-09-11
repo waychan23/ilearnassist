@@ -75,12 +75,16 @@ export interface CallSite {
 }
 
 /**
- * Every statically-written `t("some.key")` / `$t("some.key")` / `te("some.key")` in the
- * source tree. Interpolated keys (`` t(`theme.${mode}`) ``) are deliberately not matched —
+ * Every statically-written `t("some.key")`, `$t("some.key")`, `te("some.key")` — and their
+ * `i18n.global.t(...)` form, which is how non-component modules reach the catalog — in the
+ * source tree. Interpolated keys (`` t(`theme.${mode}`) ``) are deliberately not matched:
  * they are covered by the dynamic-prefix allowlist in the test, not by this scan.
+ *
+ * The lookbehind excludes an identifier character or `$` but *not* `.`, so `i18n.global.t`
+ * is found while a hypothetical `_t(` is not.
  */
 export function translationCallSites(): CallSite[] {
-  const pattern = /(?<![\w$.])(?:\$?t|te)\(\s*["']([a-zA-Z0-9_][a-zA-Z0-9_.-]*)["']/g;
+  const pattern = /(?<![\w$])(?:\$?t|te)\(\s*["']([a-zA-Z0-9_][a-zA-Z0-9_.-]*)["']/g;
   const sites: CallSite[] = [];
   for (const [file, raw] of Object.entries(sourceFiles())) {
     // The catalogs themselves are message *definitions*, not call sites.

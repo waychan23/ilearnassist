@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import type { Session } from "../api/types";
@@ -7,6 +8,7 @@ import { openSettings } from "../composables/ui";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 
+const { t } = useI18n();
 const store = useAppStore();
 
 const showCreateWorkspace = ref(false);
@@ -43,10 +45,10 @@ function cancelRename() {
 /* --------------------------------- deletes ---------------------------------- */
 async function onDeleteSession(session: Session) {
   const ok = await confirm({
-    title: "删除会话",
-    message: `确定删除会话「${session.title || "新会话"}」吗？`,
-    detail: "该会话的全部消息记录将一并删除，且无法恢复。",
-    confirmText: "删除",
+    title: t("session.delete.title"),
+    message: t("session.delete.message", { name: session.title || t("session.fallbackTitle") }),
+    detail: t("session.delete.detail"),
+    confirmText: t("common.delete"),
     danger: true,
   });
   if (ok) await store.deleteSession(session.id);
@@ -56,10 +58,10 @@ async function onDeleteWorkspace() {
   const ws = store.activeWorkspace;
   if (!ws) return;
   const ok = await confirm({
-    title: "删除工作区",
-    message: `确定删除工作区「${ws.name}」吗？`,
-    detail: `${ws.dirPath} 目录及其中所有文件都会被删除，且无法恢复。`,
-    confirmText: "删除",
+    title: t("workspace.delete.title"),
+    message: t("workspace.delete.message", { name: ws.name }),
+    detail: t("workspace.delete.detail", { path: ws.dirPath }),
+    confirmText: t("common.delete"),
     danger: true,
   });
   if (ok) await store.deleteWorkspace(ws.id);
@@ -77,10 +79,10 @@ async function onDeleteWorkspace() {
       >
         <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
       </select>
-      <button class="icon-btn" title="新建工作区" @click="showCreateWorkspace = true">＋</button>
+      <button class="icon-btn" :title="t('sidebar.newWorkspace')" @click="showCreateWorkspace = true">＋</button>
       <button
         class="icon-btn danger"
-        title="删除当前工作区"
+        :title="t('sidebar.deleteWorkspace')"
         :disabled="!store.activeWorkspace"
         @click="onDeleteWorkspace"
       >
@@ -89,8 +91,8 @@ async function onDeleteWorkspace() {
     </div>
 
     <div class="side-section">
-      <span>会话</span>
-      <button class="icon-btn" data-testid="new-session" title="新建会话" @click="showNewSession = true">
+      <span>{{ t("sidebar.sessions") }}</span>
+      <button class="icon-btn" data-testid="new-session" :title="t('sidebar.newSession')" @click="showNewSession = true">
         ＋
       </button>
     </div>
@@ -116,20 +118,20 @@ async function onDeleteWorkspace() {
           @blur="commitRename"
         />
         <template v-else>
-          <span class="label" title="双击重命名" @dblclick.stop="startRename(s)">
-            {{ s.title || "新会话" }}
+          <span class="label" :title="t('sidebar.renameHint')" @dblclick.stop="startRename(s)">
+            {{ s.title || t("session.fallbackTitle") }}
           </span>
-          <button class="icon-btn" title="重命名" @click.stop="startRename(s)">✎</button>
-          <button class="icon-btn danger" title="删除" @click.stop="onDeleteSession(s)">🗑</button>
+          <button class="icon-btn" :title="t('sidebar.rename')" @click.stop="startRename(s)">✎</button>
+          <button class="icon-btn danger" :title="t('sidebar.delete')" @click.stop="onDeleteSession(s)">🗑</button>
         </template>
       </div>
-      <div v-if="store.sessions.length === 0" class="muted">暂无会话</div>
+      <div v-if="store.sessions.length === 0" class="muted">{{ t("sidebar.noSessions") }}</div>
     </div>
 
     <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
-    <button class="side-settings" title="设置" data-testid="open-settings" @click="openSettings()">
+    <button class="side-settings" :title="t('sidebar.settings')" data-testid="open-settings" @click="openSettings()">
       <span class="gear">⚙</span>
-      <span class="label">设置</span>
+      <span class="label">{{ t("sidebar.settings") }}</span>
       <span class="sub">{{ store.activeWorkspace?.name ?? "" }}</span>
     </button>
 

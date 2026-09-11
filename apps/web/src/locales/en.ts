@@ -12,6 +12,15 @@ import type MessageSchema from "./zh-CN";
  * way — `t(key, count, { …params })` — so no component ever branches on the locale.
  */
 const en: typeof MessageSchema = {
+  common: {
+    confirmTitle: "Confirm",
+    confirm: "Confirm",
+    cancel: "Cancel",
+    create: "Create",
+    delete: "Delete",
+    name: "Name",
+  },
+
   app: {
     title: "guided-learning",
     configBanner: {
@@ -38,6 +47,56 @@ const en: typeof MessageSchema = {
 
   chat: {
     titleHint: "Titles are generated automatically and stop updating once you edit them",
+    titlePlaceholder: "Conversation title",
+    editTitleHint: "Click to edit the title",
+    editTitle: "Edit title",
+    autoBadgeTitle: "Titles are generated from the first turn of the conversation",
+    start: "Start a conversation",
+    startHint: "Type a message below; the agent will call tools as it needs them.",
+    startAction: "＋ New conversation (choose a Copilot)",
+  },
+
+  sidebar: {
+    newWorkspace: "New workspace",
+    deleteWorkspace: "Delete this workspace",
+    sessions: "Conversations",
+    newSession: "New conversation",
+    renameHint: "Double-click to rename",
+    rename: "Rename",
+    delete: "Delete",
+    noSessions: "No conversations yet",
+    settings: "Settings",
+  },
+
+  session: {
+    fallbackTitle: "New conversation",
+    new: {
+      title: "New conversation",
+      titleLabel: "Title (optional)",
+      titlePlaceholder: "Leave blank for “{fallback}”",
+      noCopilot: "No Copilot",
+      noCopilotDesc: "Uses the built-in general-purpose assistant and default parameters.",
+      noCopilots: "No Copilots yet. Create one under Settings → Copilots.",
+    },
+    // 「」 is a Chinese quoting convention; English gets curly quotes.
+    delete: {
+      title: "Delete conversation",
+      message: "Delete “{name}”?",
+      detail: "All of its messages will be deleted too. This cannot be undone.",
+    },
+  },
+
+  workspace: {
+    new: {
+      title: "New workspace",
+      namePlaceholder: "e.g. My Project",
+      hint: "A matching subdirectory will be created under the workspaces root.",
+    },
+    delete: {
+      title: "Delete workspace",
+      message: "Delete “{name}”?",
+      detail: "The directory {path} and every file in it will be deleted. This cannot be undone.",
+    },
   },
 
   errors: {

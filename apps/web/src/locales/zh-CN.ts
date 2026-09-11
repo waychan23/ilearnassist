@@ -19,6 +19,15 @@
  * `zh` messages never do, and both are called as `t(key, count, { …params })`.
  */
 export default {
+  common: {
+    confirmTitle: "确认操作",
+    confirm: "确认",
+    cancel: "取消",
+    create: "创建",
+    delete: "删除",
+    name: "名称",
+  },
+
   app: {
     /** Shown when there is no session and no workspace to name the topbar after. */
     title: "guided-learning",
@@ -51,6 +60,56 @@ export default {
 
   chat: {
     titleHint: "标题由 AI 自动生成，修改后将不再自动更新",
+    titlePlaceholder: "会话标题",
+    editTitleHint: "点击编辑标题",
+    editTitle: "编辑标题",
+    autoBadgeTitle: "标题由 AI 根据第一轮对话自动生成",
+    start: "开始对话",
+    startHint: "在下方输入消息，Agent 将按需调用工具。",
+    startAction: "＋ 新建会话（选择 Copilot）",
+  },
+
+  sidebar: {
+    newWorkspace: "新建工作区",
+    deleteWorkspace: "删除当前工作区",
+    sessions: "会话",
+    newSession: "新建会话",
+    renameHint: "双击重命名",
+    rename: "重命名",
+    delete: "删除",
+    noSessions: "暂无会话",
+    settings: "设置",
+  },
+
+  session: {
+    /** Shown in place of a title before the auto-titler has produced one. */
+    fallbackTitle: "新会话",
+    new: {
+      title: "新建会话",
+      titleLabel: "标题（可选）",
+      titlePlaceholder: "留空则为「{fallback}」",
+      noCopilot: "不使用 Copilot",
+      noCopilotDesc: "使用内置的通用助手设定与默认参数。",
+      noCopilots: "还没有 Copilot。可在「设置 → Copilots」中创建。",
+    },
+    delete: {
+      title: "删除会话",
+      message: "确定删除会话「{name}」吗？",
+      detail: "该会话的全部消息记录将一并删除，且无法恢复。",
+    },
+  },
+
+  workspace: {
+    new: {
+      title: "新建工作区",
+      namePlaceholder: "例如：My Project",
+      hint: "将在工作区根目录自动创建对应的子目录。",
+    },
+    delete: {
+      title: "删除工作区",
+      message: "确定删除工作区「{name}」吗？",
+      detail: "{path} 目录及其中所有文件都会被删除，且无法恢复。",
+    },
   },
 
   /**

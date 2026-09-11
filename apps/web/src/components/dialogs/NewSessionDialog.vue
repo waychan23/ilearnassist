@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 
 const emit = defineEmits<{ close: [] }>();
+const { t } = useI18n();
 const store = useAppStore();
 
 const title = ref("");
@@ -28,17 +30,17 @@ async function create() {
   <div class="modal-overlay" @click.self="emit('close')">
     <div class="modal narrow">
       <div class="modal-head">
-        <h3>新建会话</h3>
+        <h3>{{ t("session.new.title") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
       </div>
       <div class="modal-body">
         <div class="field">
-          <label>标题（可选）</label>
+          <label>{{ t("session.new.titleLabel") }}</label>
           <input
             v-model="title"
             class="input"
             data-testid="session-title-input"
-            placeholder="留空则为「新会话」"
+            :placeholder="t('session.new.titlePlaceholder', { fallback: t('session.fallbackTitle') })"
           />
         </div>
 
@@ -48,8 +50,8 @@ async function create() {
             <label class="copilot-option" :class="{ active: copilotId === null }">
               <input v-model="copilotId" type="radio" :value="null" />
               <div>
-                <div class="name">不使用 Copilot</div>
-                <div class="desc">使用内置的通用助手设定与默认参数。</div>
+                <div class="name">{{ t("session.new.noCopilot") }}</div>
+                <div class="desc">{{ t("session.new.noCopilotDesc") }}</div>
               </div>
             </label>
 
@@ -70,14 +72,14 @@ async function create() {
             </label>
           </div>
           <div v-if="store.copilots.length === 0" class="hint">
-            还没有 Copilot。可在「设置 → Copilots」中创建。
+            {{ t("session.new.noCopilots") }}
           </div>
         </div>
       </div>
       <div class="modal-foot">
-        <button class="btn" @click="emit('close')">取消</button>
+        <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
         <button class="btn primary" data-testid="create-session" :disabled="saving" @click="create">
-          创建
+          {{ t("common.create") }}
         </button>
       </div>
     </div>
