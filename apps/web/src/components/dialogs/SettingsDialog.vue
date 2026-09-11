@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import { confirm } from "../../composables/confirm";
 import type {
@@ -14,6 +15,7 @@ import CopilotDialog from "./CopilotDialog.vue";
 import DocumentParserDialog from "./DocumentParserDialog.vue";
 
 const emit = defineEmits<{ close: [] }>();
+const { t } = useI18n();
 const store = useAppStore();
 
 const tab = ref<"providers" | "copilots" | "documents" | "defaults">("providers");
@@ -54,10 +56,10 @@ async function onSave(draft: ProviderDraft) {
 
 async function onDelete(p: ProviderConfig) {
   const ok = await confirm({
-    title: "删除 Provider",
-    message: `确定删除「${p.name}」吗？`,
-    detail: `它的 ${p.models.length} 个模型配置会一并删除，使用它的会话将回退到默认 Provider。`,
-    confirmText: "删除",
+    title: t("settings.deleteProvider.title"),
+    message: t("settings.deleteProvider.message", { name: p.name }),
+    detail: t("settings.deleteProvider.detail", { count: p.models.length }, p.models.length),
+    confirmText: t("common.delete"),
     danger: true,
   });
   if (!ok) return;
@@ -70,10 +72,10 @@ async function onDelete(p: ProviderConfig) {
 
 async function onDeleteModel(provider: ProviderConfig, modelId: string, name: string) {
   const ok = await confirm({
-    title: "删除模型",
-    message: `从「${provider.name}」中删除模型「${name}」？`,
-    detail: "仍在引用它的会话会回退到该 Provider 下的第一个模型。",
-    confirmText: "删除",
+    title: t("settings.deleteModel.title"),
+    message: t("settings.deleteModel.message", { provider: provider.name, model: name }),
+    detail: t("settings.deleteModel.detail"),
+    confirmText: t("common.delete"),
     danger: true,
   });
   if (!ok) return;
@@ -86,12 +88,9 @@ async function onDeleteModel(provider: ProviderConfig, modelId: string, name: st
 
 /* ----------------------------- document parsers ----------------------------- */
 
-const POLICIES: { id: DocumentParsePolicy; label: string; hint: string }[] = [
-  { id: "local-only", label: "仅本地", hint: "完全离线，不调用任何外部服务" },
-  { id: "local-first", label: "本地优先", hint: "先用本地解析，读不出内容时再调用云解析" },
-  { id: "cloud-first", label: "云优先", hint: "先用云解析，失败时回退到本地" },
-  { id: "cloud-only", label: "仅云", hint: "全部交给云解析服务" },
-];
+/** The order the policy picker offers; labels and hints come from the catalog by id. */
+const POLICY_IDS: DocumentParsePolicy[] = ["local-only", "local-first", "cloud-first", "cloud-only"];
+const policyLabel = (id: DocumentParsePolicy): string => t("settings.policy." + id + ".label");
 
 const showParserEditor = ref(false);
 const editingParser = ref<DocumentParserConfig | null>(null);
@@ -104,9 +103,10 @@ const documentParsing = computed(() => store.config?.documentParsing);
 // The form is built from the kinds the server implements, so a new driver needs no UI change.
 void store.loadParserKinds().catch(() => undefined);
 
-const policyHint = computed(
-  () => POLICIES.find((p) => p.id === documentParsing.value?.policy)?.hint ?? ""
-);
+const policyHint = computed(() => {
+  const policy = documentParsing.value?.policy;
+  return policy ? t("settings.policy." + policy + ".hint") : "";
+});
 
 function openNewParser() {
   editingParser.value = null;
@@ -129,10 +129,10 @@ async function onSaveParser(draft: DocumentParserDraft) {
 
 async function onDeleteParser(p: DocumentParserConfig) {
   const ok = await confirm({
-    title: "删除解析服务",
-    message: `确定删除「${p.name}」吗？`,
-    detail: "已经解析好的文档不受影响；重新解析时需要另选一个服务。",
-    confirmText: "删除",
+    title: t("settings.deleteParser.title"),
+    message: t("settings.deleteParser.message", { name: p.name }),
+    detail: t("settings.deleteParser.detail"),
+    confirmText: t("common.delete"),
     danger: true,
   });
   if (!ok) return;
@@ -146,10 +146,10 @@ async function onDeleteParser(p: DocumentParserConfig) {
 /** Round-trip a throwaway document through the service and report what came back. */
 async function onTestParser(p: DocumentParserConfig) {
   testingId.value = p.id;
-  testResult.value = { ...testResult.value, [p.id]: { ok: true, message: "测试中…" } };
+  testResult.value = { ...testResult.value, [p.id]: { ok: true, message: t("settings.documents.testing") } };
   try {
     await store.testDocumentParser(p.id);
-    testResult.value = { ...testResult.value, [p.id]: { ok: true, message: "连接正常" } };
+    testResult.value = { ...testResult.value, [p.id]: { ok: true, message: t("settings.documents.testOk") } };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     testResult.value = { ...testResult.value, [p.id]: { ok: false, message } };
@@ -200,10 +200,10 @@ async function onSaveCopilot(draft: CopilotDraft) {
 
 async function onDeleteCopilot(c: Copilot) {
   const ok = await confirm({
-    title: "删除 Copilot",
-    message: `确定删除 Copilot「${c.name}」吗？`,
-    detail: "使用它的会话不会被删除，但会失去这层设定。",
-    confirmText: "删除",
+    title: t("settings.deleteCopilot.title"),
+    message: t("settings.deleteCopilot.message", { name: c.name }),
+    detail: t("settings.deleteCopilot.detail"),
+    confirmText: t("common.delete"),
     danger: true,
   });
   if (!ok) return;
@@ -219,9 +219,23 @@ function copilotSummary(c: Copilot) {
   const bits: string[] = [];
   if (c.settings.modelId) bits.push(c.settings.modelId);
   if (c.settings.temperature != null) bits.push(`temperature ${c.settings.temperature}`);
-  if (c.settings.maxSteps != null) bits.push(`最多 ${c.settings.maxSteps} 轮工具`);
-  if (c.settings.maxContextMessages != null) bits.push(`历史 ${c.settings.maxContextMessages} 条`);
-  bits.push(c.tools.length ? `${c.tools.length} 个工具` : "全部工具");
+  if (c.settings.maxSteps != null) {
+    bits.push(t("settings.copilot.summarySteps", { count: c.settings.maxSteps }));
+  }
+  if (c.settings.maxContextMessages != null) {
+    bits.push(
+      t(
+        "settings.copilot.summaryHistory",
+        { count: c.settings.maxContextMessages },
+        c.settings.maxContextMessages
+      )
+    );
+  }
+  bits.push(
+    c.tools.length
+      ? t("settings.copilot.summaryTools", { count: c.tools.length }, c.tools.length)
+      : t("settings.copilot.summaryAllTools")
+  );
   return bits.join(" · ");
 }
 
@@ -240,13 +254,13 @@ function onDefaultModelChange(e: Event) {
   <div class="modal-overlay" @click.self="emit('close')">
     <div class="modal wide">
       <div class="modal-head">
-        <h3>设置</h3>
+        <h3>{{ t("settings.title") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
       </div>
 
       <div class="tabs">
         <button class="tab" :class="{ active: tab === 'providers' }" @click="tab = 'providers'">
-          Providers / 模型
+          {{ t("settings.tabs.providers") }}
         </button>
         <button class="tab" :class="{ active: tab === 'copilots' }" @click="tab = 'copilots'">
           Copilots
@@ -258,78 +272,88 @@ function onDefaultModelChange(e: Event) {
           data-testid="tab-documents"
           @click="tab = 'documents'"
         >
-          文档解析
+          {{ t("settings.tabs.documents") }}
           <span v-if="documentParsers.length" class="tab-count">{{ documentParsers.length }}</span>
         </button>
         <button class="tab" :class="{ active: tab === 'defaults' }" @click="tab = 'defaults'">
-          默认与工具
+          {{ t("settings.tabs.copilot") }}
         </button>
       </div>
 
       <div class="modal-body">
         <template v-if="tab === 'providers'">
           <div class="config-tip">
-            Provider 与模型保存在数据库中，配置<strong>即时生效</strong>，无需重启服务。
-            <code>config.yaml</code> 仅作为首次启动的初始数据。API Key 只写不读回。
+            {{ t("settings.providers.noteBefore") }}<strong>{{ t("settings.providers.noteLive") }}</strong
+            >{{ t("settings.providers.noteBetween") }}<code>{{
+              t("settings.providers.noteConfigFile")
+            }}</code
+            >{{ t("settings.providers.noteAfter") }}
           </div>
 
           <div class="list-head">
-            <span>已配置 {{ providers.length }} 个 Provider</span>
-            <button class="btn small" @click="openNew">＋ 新建 Provider</button>
+            <span>{{
+            t(
+              "settings.providers.countConfigured",
+              { count: providers.length },
+              providers.length
+            )
+          }}</span>
+            <button class="btn small" @click="openNew">{{ t("settings.providers.add") }}</button>
           </div>
 
           <div v-for="p in providers" :key="p.id" class="provider-row">
             <div class="info">
               <div class="name">
                 {{ p.name }}
-                <span v-if="p.id === defaultProvider" class="badge">默认</span>
+                <span v-if="p.id === defaultProvider" class="badge">{{ t("settings.providers.default") }}</span>
                 <span class="key-state" :class="p.hasApiKey ? 'ok' : 'missing'">
-                  {{ p.hasApiKey ? "✓ Key 已配置" : "✗ 未配置 Key" }}
+                  {{ p.hasApiKey ? t("settings.providers.keySet") : t("settings.providers.keyMissing") }}
                 </span>
               </div>
               <div class="mono url">{{ p.baseURL }}</div>
               <div class="models">
                 <span v-for="m in p.models" :key="m.id" class="model-chip">
                   {{ m.name }}
-                  <span v-if="m.capabilities.includes('vision')" title="支持图片输入">🖼</span>
-                  <span v-if="m.capabilities.includes('reasoning')" title="推理模型">🧠</span>
+                  <span v-if="m.capabilities.includes('vision')" :title="t('settings.providers.visionHint')">🖼</span>
+                  <span v-if="m.capabilities.includes('reasoning')" :title="t('settings.providers.reasoningHint')">🧠</span>
                   <button
                     class="chip-x"
-                    title="删除该模型"
+                    :title="t('settings.providers.deleteModel')"
                     @click.stop="onDeleteModel(p, m.id, m.name)"
                   >
                     ×
                   </button>
                 </span>
-                <span v-if="p.models.length === 0" class="no-models">尚未配置模型</span>
+                <span v-if="p.models.length === 0" class="no-models">{{ t("settings.providers.noModels") }}</span>
               </div>
             </div>
             <div class="row-actions">
-              <button class="btn small" @click="openEdit(p)">编辑</button>
-              <button class="icon-btn danger" title="删除" @click="onDelete(p)">🗑</button>
+              <button class="btn small" @click="openEdit(p)">{{ t("common.edit") }}</button>
+              <button class="icon-btn danger" :title="t('common.delete')" @click="onDelete(p)">🗑</button>
             </div>
           </div>
 
           <div v-if="providers.length === 0" class="empty">
-            还没有 Provider，点击「新建 Provider」添加一个 OpenAI 兼容的接口。
+            {{ t("settings.providers.empty") }}
           </div>
         </template>
 
         <template v-else-if="tab === 'documents'">
           <div class="config-tip">
-            PDF、Word、Excel、PowerPoint 附件会先转成文本再交给模型。本地解析<strong>开箱即用</strong>，
-            云解析服务是可选补充 —— 扫描件、复杂排版、公式表格这些本地读不出来的，交给它更合适。
+            {{ t("settings.documents.introBefore") }}<strong>{{
+              t("settings.documents.introBuiltin")
+            }}</strong>{{ t("settings.documents.introAfter") }}
           </div>
 
           <div class="field">
-            <label>解析策略</label>
+            <label>{{ t("settings.documents.policy") }}</label>
             <select
               class="select"
               :value="documentParsing?.policy"
               data-testid="parse-policy"
               @change="onPolicyChange(($event.target as HTMLSelectElement).value as DocumentParsePolicy)"
             >
-              <option v-for="p in POLICIES" :key="p.id" :value="p.id">{{ p.label }}</option>
+              <option v-for="id in POLICY_IDS" :key="id" :value="id">{{ policyLabel(id) }}</option>
             </select>
             <div class="hint">{{ policyHint }}</div>
           </div>
@@ -342,10 +366,10 @@ function onDefaultModelChange(e: Event) {
                 data-testid="parse-local-enabled"
                 @change="onToggle('localEnabled', ($event.target as HTMLInputElement).checked)"
               />
-              启用本地解析
+              {{ t("settings.documents.localEnabled") }}
             </label>
             <div class="hint">
-              关闭后只能依赖云解析服务。只有在策略为「仅云」，或已经配好云服务时才建议关闭。
+              {{ t("settings.documents.localHint") }}
             </div>
           </div>
 
@@ -357,22 +381,22 @@ function onDefaultModelChange(e: Event) {
                 data-testid="parse-fallback"
                 @change="onToggle('fallbackEnabled', ($event.target as HTMLInputElement).checked)"
               />
-              允许回退到另一侧
+              {{ t("settings.documents.fallback") }}
             </label>
             <div class="hint">
-              关闭后，选定的那一侧失败就直接报错，不再尝试另一侧。适用于想严格控制外发的场景。
+              {{ t("settings.documents.fallbackHint") }}
             </div>
           </div>
 
           <div class="models-head">
-            <label>云解析服务</label>
+            <label>{{ t("settings.documents.cloudParsers") }}</label>
             <button class="btn small" @click="openNewParser" data-testid="add-parser">
-              ＋ 添加服务
+              {{ t("settings.documents.addParser") }}
             </button>
           </div>
 
           <div v-if="documentParsers.length === 0" class="empty-note">
-            还没有配置云解析服务。本地解析仍然可用，扫描件会因此解析失败。
+            {{ t("settings.documents.noParsers") }}
           </div>
 
           <div
@@ -385,10 +409,10 @@ function onDefaultModelChange(e: Event) {
               <div class="parser-name">
                 {{ p.name }}
                 <span class="badge" :class="{ off: !p.enabled }">
-                  {{ p.enabled ? "已启用" : "已停用" }}
+                  {{ p.enabled ? t("settings.documents.enabled") : t("settings.documents.disabled") }}
                 </span>
                 <span class="badge kind">{{ p.kind }}</span>
-                <span v-if="p.hasApiKey" class="badge">Key 已配置</span>
+                <span v-if="p.hasApiKey" class="badge">{{ t("settings.documents.keySet") }}</span>
               </div>
               <div class="parser-url mono">{{ p.baseURL }}</div>
               <div
@@ -405,23 +429,28 @@ function onDefaultModelChange(e: Event) {
               :disabled="testingId === p.id"
               @click="onTestParser(p)"
             >
-              {{ testingId === p.id ? "测试中…" : "测试连接" }}
+              {{ testingId === p.id ? t("settings.documents.testing") : t("settings.documents.test") }}
             </button>
-            <button class="btn small" @click="openEditParser(p)">编辑</button>
-            <button class="icon-btn danger" title="删除" @click="onDeleteParser(p)">✕</button>
+            <button class="btn small" @click="openEditParser(p)">{{ t("common.edit") }}</button>
+            <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteParser(p)">✕</button>
           </div>
         </template>
 
         <template v-else-if="tab === 'copilots'">
           <div class="config-tip">
-            Copilot 定义一段系统设定（System Prompt）、可用工具与默认生成参数。新建会话时选择一个
-            Copilot，它的设定会注入该对话，默认参数会被<strong>复制</strong>到会话中 —— 之后
-            修改 Copilot 不会影响已开始的对话。
+            {{ t("settings.copilot.introBefore") }}<strong>{{ t("settings.copilot.introCopied") }}</strong
+            >{{ t("settings.copilot.introAfter") }}
           </div>
 
           <div class="list-head">
-            <span>已配置 {{ store.copilots.length }} 个 Copilot</span>
-            <button class="btn small" @click="openNewCopilot">＋ 新建 Copilot</button>
+            <span>{{
+            t(
+              "settings.copilot.countConfigured",
+              { count: store.copilots.length },
+              store.copilots.length
+            )
+          }}</span>
+            <button class="btn small" @click="openNewCopilot">{{ t("settings.copilot.add") }}</button>
           </div>
 
           <div v-for="c in store.copilots" :key="c.id" class="copilot-row">
@@ -429,58 +458,62 @@ function onDefaultModelChange(e: Event) {
               <div class="name">
                 <span class="dot"></span>
                 {{ c.name }}
-                <span v-if="c.id === store.activeCopilotId" class="badge">当前会话使用中</span>
+                <span v-if="c.id === store.activeCopilotId" class="badge">{{ t("settings.copilot.inUse") }}</span>
               </div>
               <div v-if="c.description" class="desc">{{ c.description }}</div>
               <div class="meta">{{ copilotSummary(c) }}</div>
             </div>
             <div class="row-actions">
-              <button class="btn small" @click="openEditCopilot(c)">编辑</button>
-              <button class="icon-btn danger" title="删除" @click="onDeleteCopilot(c)">🗑</button>
+              <button class="btn small" @click="openEditCopilot(c)">{{ t("common.edit") }}</button>
+              <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteCopilot(c)">🗑</button>
             </div>
           </div>
 
           <div v-if="store.copilots.length === 0" class="empty">
-            还没有 Copilot，点击「新建 Copilot」创建一个。
+            {{ t("settings.copilot.empty") }}
           </div>
         </template>
 
         <template v-else>
           <div class="field">
-            <label>默认 Provider</label>
+            <label>{{ t("settings.defaults.provider") }}</label>
             <select class="select" :value="defaultProvider" @change="onDefaultProviderChange">
               <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
-            <div class="hint">新建会话未指定 Provider 时使用。当前：{{ defaultProviderName }}</div>
+            <div class="hint">{{ t("settings.defaults.providerHint", { name: defaultProviderName }) }}</div>
           </div>
 
           <div class="field">
-            <label>默认模型</label>
+            <label>{{ t("settings.defaults.model") }}</label>
             <select class="select" :value="defaultModel" @change="onDefaultModelChange">
               <option v-for="m in defaultModelOptions" :key="m.id" :value="m.modelId">
                 {{ m.name }}
               </option>
             </select>
-            <div class="hint">新建会话未指定模型时使用。当前：{{ defaultModel || "未设置" }}</div>
+            <div class="hint">{{
+              t("settings.defaults.modelHint", {
+                name: defaultModel || t("settings.defaults.modelUnset"),
+              })
+            }}</div>
           </div>
 
           <div class="field">
-            <label>工作区根目录</label>
+            <label>{{ t("settings.defaults.workspaceRoot") }}</label>
             <div class="value mono">{{ store.config?.workspacesRootDir }}</div>
           </div>
 
           <div class="field">
-            <label>网页搜索 Provider</label>
+            <label>{{ t("settings.defaults.webSearch") }}</label>
             <div class="value">
               {{ store.config?.webSearchProvider }}
-              <span class="hint inline">（在 config.yaml 的 tools.webSearch 中修改）</span>
+              <span class="hint inline">{{ t("settings.defaults.webSearchHint") }}</span>
             </div>
           </div>
         </template>
       </div>
 
       <div class="modal-foot">
-        <button class="btn primary" @click="emit('close')">关闭</button>
+        <button class="btn primary" @click="emit('close')">{{ t("common.close") }}</button>
       </div>
     </div>
 

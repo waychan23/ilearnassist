@@ -27,9 +27,23 @@ const CJK_ALLOWED_IN_EN = new Set(["locale.zhCN"]);
  * the static scan cannot see. Kept as narrow as possible — a broad prefix here is how a
  * typo hides.
  */
-const DYNAMIC_PREFIXES = ["theme.", "errors.", "parseErrors.", "tools.name."];
+const DYNAMIC_PREFIXES = [
+  "theme.",
+  "errors.",
+  "parseErrors.",
+  "tools.name.",
+  "providers.capabilities.",
+  "settings.policy.",
+];
 
 const isDynamic = (key: string): boolean => DYNAMIC_PREFIXES.some((p) => key.startsWith(p));
+
+/**
+ * A *partial* key, from a concatenation like `t("settings.policy." + id + ".label")`. The
+ * scan cannot evaluate the expression, so it captures the literal prefix and it ends in a
+ * dot — which no real key does. Such captures are neither checked nor counted as usage.
+ */
+const isPartial = (key: string): boolean => key.endsWith(".");
 
 describe("catalog completeness", () => {
   it("has the same keys in both catalogs", () => {
@@ -93,7 +107,7 @@ describe("server error codes", () => {
 describe("catalog usage", () => {
   it("resolves every statically-written key in the source tree", () => {
     const missing = translationCallSites()
-      .filter(({ key }) => !(key in zh))
+      .filter(({ key }) => !isPartial(key) && !(key in zh))
       .map(({ file, key }) => `${file.replace(/.*\/src\//, "src/")}: ${key}`);
 
     expect(missing).toEqual([]);

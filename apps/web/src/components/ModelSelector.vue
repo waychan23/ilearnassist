@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import type { ProviderConfig, ProviderModel } from "../api/types";
 
@@ -11,6 +12,7 @@ import type { ProviderConfig, ProviderModel } from "../api/types";
  * force — hiding it would make the button disagree with the conversation's actual setting.
  */
 const emit = defineEmits<{ manage: [] }>();
+const { t } = useI18n();
 const store = useAppStore();
 
 const open = ref(false);
@@ -42,7 +44,7 @@ const hasAnyAvailable = computed(() =>
   (store.config?.providers ?? []).some((p) => p.hasApiKey && p.models.length > 0)
 );
 
-const buttonLabel = computed(() => store.effectiveModel?.name || "选择模型");
+const buttonLabel = computed(() => store.effectiveModel?.name || t("modelSelector.choose"));
 
 function isCurrent(providerId: string, modelId: string) {
   return store.currentProviderId === providerId && store.effectiveModelId === modelId;
@@ -71,7 +73,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   <div ref="rootEl" class="model-picker">
     <button
       class="model-btn"
-      :title="hasAnyAvailable ? '选择模型（作用于当前会话）' : '尚未配置可用的模型'"
+      :title="hasAnyAvailable ? t('modelSelector.chooseTitle') : t('modelSelector.noModelsTitle')"
       @click="open = !open"
     >
       <span class="dot" :class="{ off: !store.effectiveModel }"></span>
@@ -83,7 +85,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       <template v-for="group in groups" :key="group.providerId">
         <div class="group-head">
           {{ group.providerName }}
-          <span v-if="!group.available" class="warn">未配置 Key</span>
+          <span v-if="!group.available" class="warn">{{ t("modelSelector.keyMissing") }}</span>
         </div>
         <button
           v-for="m in group.models"
@@ -95,17 +97,17 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
           <span class="check">{{ isCurrent(group.providerId, m.modelId) ? "✓" : "" }}</span>
           <span class="name">{{ m.name }}</span>
           <span class="caps">
-            <span v-if="m.capabilities.includes('vision')" title="支持图片输入">🖼</span>
-            <span v-if="m.capabilities.includes('reasoning')" title="推理模型">🧠</span>
+            <span v-if="m.capabilities.includes('vision')" :title="t('providers.capabilities.vision')">🖼</span>
+            <span v-if="m.capabilities.includes('reasoning')" :title="t('providers.capabilities.reasoning')">🧠</span>
           </span>
         </button>
       </template>
 
       <div v-if="groups.length === 0" class="empty">
-        还没有可用的模型。请在「设置 → Providers」中添加 Provider 与模型。
+        {{ t("modelSelector.empty") }}
       </div>
 
-      <button class="foot" @click="open = false; emit('manage')">管理模型…</button>
+      <button class="foot" @click="open = false; emit('manage')">{{ t("modelSelector.manage") }}</button>
     </div>
   </div>
 </template>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import type { DocumentParserConfig, DocumentParserKind, DriverInfo } from "../../api/types";
 import type { DocumentParserDraft } from "../../stores/app";
 
@@ -19,6 +20,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ close: []; save: [draft: DocumentParserDraft] }>();
+const { t } = useI18n();
 
 const draft = reactive<{
   name: string;
@@ -55,7 +57,11 @@ watch(
 
 const keyRequired = computed(() => !!selectedKind.value?.requiresApiKey);
 const keyPlaceholder = computed(() =>
-  props.parser?.hasApiKey ? "已配置（留空则不修改）" : keyRequired.value ? "必填" : "可留空"
+  props.parser?.hasApiKey
+    ? t("parsers.apiKeySet")
+    : keyRequired.value
+      ? t("parsers.apiKeyRequired")
+      : t("parsers.apiKeyOptionalValue")
 );
 
 const canSave = computed(() => {
@@ -82,24 +88,23 @@ function save() {
   <div class="modal-overlay" @click.self="emit('close')">
     <div class="modal">
       <div class="modal-head">
-        <h3>{{ props.parser ? "编辑解析服务" : "新建解析服务" }}</h3>
+        <h3>{{ props.parser ? t("parsers.edit") : t("parsers.create") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
       </div>
       <div class="modal-body">
         <div class="field">
-          <label>协议类型</label>
+          <label>{{ t("parsers.kind") }}</label>
           <select v-model="draft.kind" class="input" data-testid="parser-kind">
             <option v-for="k in props.kinds" :key="k.kind" :value="k.kind">{{ k.label }}</option>
           </select>
           <div class="hint">
-            协议决定怎么跟服务通信，端点与密钥由下面的字段决定。同一个协议可以建多条记录
-            （例如 MinerU 云端与自建各一条）。
+            {{ t("parsers.kindHint") }}
           </div>
         </div>
 
         <div class="field">
-          <label>名称</label>
-          <input v-model="draft.name" class="input" placeholder="例如：Docling（本机）" />
+          <label>{{ t("common.name") }}</label>
+          <input v-model="draft.name" class="input" :placeholder="t('parsers.namePlaceholder')" />
         </div>
 
         <div class="field">
@@ -110,7 +115,7 @@ function save() {
             :placeholder="selectedKind?.defaultBaseURL ?? 'http://127.0.0.1:5001/v1/convert/file'"
           />
           <div class="hint" v-if="selectedKind?.helpURL">
-            端点需要与所选协议匹配。申请凭据：<a
+            {{ t("parsers.credentialsBefore") }}<a
               :href="selectedKind.helpURL"
               target="_blank"
               rel="noreferrer"
@@ -120,7 +125,7 @@ function save() {
         </div>
 
         <div class="field">
-          <label>API Key {{ keyRequired ? "" : "（可选）" }}</label>
+          <label>{{ t("parsers.apiKey") }}{{ keyRequired ? "" : t("parsers.apiKeyOptional") }}</label>
           <input
             v-model="draft.apiKey"
             class="input"
@@ -130,21 +135,21 @@ function save() {
             data-testid="parser-api-key"
           />
           <div class="hint">
-            出于安全考虑，服务端不会返回 Key 的内容。留空表示保持原值不变。
+            {{ t("parsers.apiKeyNote") }}
           </div>
         </div>
 
         <div class="field">
           <label class="check">
             <input v-model="draft.enabled" type="checkbox" />
-            启用（关闭后解析时会跳过这一条）
+            {{ t("parsers.enabled") }}
           </label>
         </div>
       </div>
       <div class="modal-foot">
-        <button class="btn" @click="emit('close')">取消</button>
+        <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
         <button class="btn primary" :disabled="!canSave" @click="save" data-testid="parser-save">
-          保存
+          {{ t("common.save") }}
         </button>
       </div>
     </div>

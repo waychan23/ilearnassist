@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { DEFAULT_CONTEXT_WINDOW } from "../../api/types";
 import type { ProviderConfig } from "../../api/types";
 import type { ProviderDraft } from "../../stores/app";
 
 const CAPABILITIES = [
-  { id: "vision", label: "图片输入" },
-  { id: "reasoning", label: "推理模型" },
-  { id: "tool_use", label: "工具调用" },
+  { id: "vision" },
+  { id: "reasoning" },
+  { id: "tool_use" },
 ] as const;
 
 const props = defineProps<{ provider: ProviderConfig | null }>();
 const emit = defineEmits<{ close: []; save: [draft: ProviderDraft] }>();
+const { t } = useI18n();
 
 interface ModelRow {
   id?: string;
@@ -81,7 +83,7 @@ function toggleCapability(row: ModelRow, cap: string) {
 }
 
 const keyPlaceholder = computed(() =>
-  props.provider?.hasApiKey ? "已配置（留空则不修改）" : "尚未配置"
+  props.provider?.hasApiKey ? t("providers.apiKeySet") : t("providers.apiKeyUnset")
 );
 
 const canSave = computed(
@@ -120,14 +122,14 @@ function save() {
   <div class="modal-overlay" @click.self="emit('close')">
     <div class="modal wide">
       <div class="modal-head">
-        <h3>{{ props.provider ? "编辑 Provider" : "新建 Provider" }}</h3>
+        <h3>{{ props.provider ? t("providers.edit") : t("providers.create") }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
       </div>
       <div class="modal-body">
         <div class="grid-2">
           <div class="field">
-            <label>名称</label>
-            <input v-model="draft.name" class="input" placeholder="例如：DeepSeek" />
+            <label>{{ t("common.name") }}</label>
+            <input v-model="draft.name" class="input" :placeholder="t('providers.namePlaceholder')" />
           </div>
           <div class="field">
             <label>Base URL</label>
@@ -145,42 +147,42 @@ function save() {
             :placeholder="keyPlaceholder"
           />
           <div class="hint">
-            出于安全考虑，服务端不会返回 Key 的内容。留空表示保持原值不变。
+            {{ t("providers.apiKeyNote") }}
           </div>
         </div>
 
         <div class="models-head">
-          <label>模型</label>
-          <button class="btn small" @click="addModel">＋ 添加模型</button>
+          <label>{{ t("providers.models") }}</label>
+          <button class="btn small" @click="addModel">{{ t("providers.addModel") }}</button>
         </div>
         <div class="models-hint">
-          上下文长度与最大输出均以 <strong>token</strong> 为单位（如 128000）。上下文长度只用于估算上下文
-          占用比例，留空则按 {{ DEFAULT_CONTEXT_WINDOW.toLocaleString() }} 估算。
+          {{ t("providers.modelNoteBefore") }}<strong>{{ t("providers.modelNoteToken") }}</strong
+          >{{ t("providers.modelNoteAfter", { fallback: DEFAULT_CONTEXT_WINDOW.toLocaleString() }) }}
         </div>
 
         <div v-for="(m, i) in draft.models" :key="i" class="model-row">
           <div class="model-main">
             <div class="field">
-              <label>模型 ID</label>
+              <label>{{ t("providers.modelId") }}</label>
               <input v-model="m.modelId" class="input" placeholder="gpt-4o-mini" />
             </div>
             <div class="field">
-              <label>显示名称</label>
-              <input v-model="m.name" class="input" placeholder="留空则同模型 ID" />
+              <label>{{ t("providers.displayName") }}</label>
+              <input v-model="m.name" class="input" :placeholder="t('providers.displayNamePlaceholder')" />
             </div>
             <div class="field narrow-field">
-              <label>上下文长度</label>
+              <label>{{ t("providers.contextLength") }}</label>
               <input v-model="m.contextWindow" class="input" placeholder="128000" />
               <div class="hint" :class="{ warn: contextLooksWrong(m) }">
-                {{ contextLooksWrong(m) ? "数值异常，单位是 token 不是字符" : "单位 token" }}
+                {{ contextLooksWrong(m) ? t("providers.contextWrong") : t("providers.unitToken") }}
               </div>
             </div>
             <div class="field narrow-field">
-              <label>最大输出</label>
-              <input v-model="m.maxOutput" class="input" placeholder="可留空" />
-              <div class="hint">单位 token</div>
+              <label>{{ t("providers.maxOutput") }}</label>
+              <input v-model="m.maxOutput" class="input" :placeholder="t('providers.optional')" />
+              <div class="hint">{{ t("providers.unitToken") }}</div>
             </div>
-            <button class="icon-btn danger" title="移除模型" @click="removeModel(i)">✕</button>
+            <button class="icon-btn danger" :title="t('providers.removeModel')" @click="removeModel(i)">✕</button>
           </div>
           <div class="caps">
             <label v-for="c in CAPABILITIES" :key="c.id">
@@ -189,14 +191,14 @@ function save() {
                 :checked="m.capabilities.includes(c.id)"
                 @change="toggleCapability(m, c.id)"
               />
-              {{ c.label }}
+              {{ t("providers.capabilities." + c.id) }}
             </label>
           </div>
         </div>
       </div>
       <div class="modal-foot">
-        <button class="btn" @click="emit('close')">取消</button>
-        <button class="btn primary" :disabled="!canSave" @click="save">保存</button>
+        <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
+        <button class="btn primary" :disabled="!canSave" @click="save">{{ t("common.save") }}</button>
       </div>
     </div>
   </div>
