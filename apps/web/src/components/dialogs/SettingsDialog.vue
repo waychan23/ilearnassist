@@ -13,6 +13,7 @@ import type { CopilotDraft, DocumentParserDraft, ProviderDraft } from "../../sto
 import ProviderDialog from "./ProviderDialog.vue";
 import CopilotDialog from "./CopilotDialog.vue";
 import DocumentParserDialog from "./DocumentParserDialog.vue";
+import Icon from "../Icon.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
@@ -265,11 +266,13 @@ function onDefaultModelChange(e: Event) {
         <div class="modal-head">
           <h3>{{ t("settings.title") }}</h3>
           <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="emit('close')"
-        >✕</button>
+            class="icon-btn"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <Icon name="close" />
+          </button>
         </div>
 
         <div class="tabs">
@@ -312,7 +315,9 @@ function onDefaultModelChange(e: Event) {
                 providers.length
               )
             }}</span>
-              <button class="btn small" @click="openNew">{{ t("settings.providers.add") }}</button>
+              <button class="btn small" @click="openNew">
+                <Icon name="plus" /> {{ t("settings.providers.add") }}
+              </button>
             </div>
 
             <div v-for="p in providers" :key="p.id" class="list-row provider-row">
@@ -321,6 +326,7 @@ function onDefaultModelChange(e: Event) {
                   {{ p.name }}
                   <span v-if="p.id === defaultProvider" class="badge">{{ t("settings.providers.default") }}</span>
                   <span class="key-state" :class="p.hasApiKey ? 'ok' : 'missing'">
+                    <Icon :name="p.hasApiKey ? 'check' : 'cross'" />
                     {{ p.hasApiKey ? t("settings.providers.keySet") : t("settings.providers.keyMissing") }}
                   </span>
                 </div>
@@ -328,15 +334,15 @@ function onDefaultModelChange(e: Event) {
                 <div class="models">
                   <span v-for="m in p.models" :key="m.id" class="model-chip">
                     {{ m.name }}
-                    <span v-if="m.capabilities.includes('vision')" :title="t('settings.providers.visionHint')">🖼</span>
-                    <span v-if="m.capabilities.includes('reasoning')" :title="t('settings.providers.reasoningHint')">🧠</span>
+                    <span v-if="m.capabilities.includes('vision')" :title="t('settings.providers.visionHint')"><Icon name="image" /></span>
+                    <span v-if="m.capabilities.includes('reasoning')" :title="t('settings.providers.reasoningHint')"><Icon name="bulb" /></span>
                     <button
                       class="chip-x"
                       :title="t('settings.providers.deleteModel')"
-          :aria-label="t('settings.providers.deleteModel')"
+                      :aria-label="t('settings.providers.deleteModel')"
                       @click.stop="onDeleteModel(p, m.id, m.name)"
                     >
-                      ×
+                      <Icon name="close" />
                     </button>
                   </span>
                   <span v-if="p.models.length === 0" class="no-models">{{ t("settings.providers.noModels") }}</span>
@@ -344,7 +350,7 @@ function onDefaultModelChange(e: Event) {
               </div>
               <div class="row-actions">
                 <button class="btn small" @click="openEdit(p)">{{ t("common.edit") }}</button>
-                <button class="icon-btn danger" :title="t('common.delete')" @click="onDelete(p)">🗑</button>
+                <button class="icon-btn danger" :title="t('common.delete')" @click="onDelete(p)"><Icon name="trash" /></button>
               </div>
             </div>
 
@@ -406,7 +412,7 @@ function onDefaultModelChange(e: Event) {
             <div class="models-head">
               <label>{{ t("settings.documents.cloudParsers") }}</label>
               <button class="btn small" @click="openNewParser" data-testid="add-parser">
-                {{ t("settings.documents.addParser") }}
+                <Icon name="plus" /> {{ t("settings.documents.addParser") }}
               </button>
             </div>
 
@@ -447,7 +453,7 @@ function onDefaultModelChange(e: Event) {
                 {{ testingId === p.id ? t("settings.documents.testing") : t("settings.documents.test") }}
               </button>
               <button class="btn small" @click="openEditParser(p)">{{ t("common.edit") }}</button>
-              <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteParser(p)">✕</button>
+              <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteParser(p)"><Icon name="trash" /></button>
             </div>
           </template>
 
@@ -465,7 +471,9 @@ function onDefaultModelChange(e: Event) {
                 store.copilots.length
               )
             }}</span>
-              <button class="btn small" @click="openNewCopilot">{{ t("settings.copilot.add") }}</button>
+              <button class="btn small" @click="openNewCopilot">
+                <Icon name="plus" /> {{ t("settings.copilot.add") }}
+              </button>
             </div>
 
             <div v-for="c in store.copilots" :key="c.id" class="list-row copilot-row">
@@ -480,7 +488,7 @@ function onDefaultModelChange(e: Event) {
               </div>
               <div class="row-actions">
                 <button class="btn small" @click="openEditCopilot(c)">{{ t("common.edit") }}</button>
-                <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteCopilot(c)">🗑</button>
+                <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteCopilot(c)"><Icon name="trash" /></button>
               </div>
             </div>
 

@@ -37,8 +37,8 @@ export default {
     /** Shown when there is no session and no workspace to name the topbar after. */
     title: "guided-learning",
     configBanner: {
-      before: "⚠ 尚未配置可用的 API Key。点击右上角",
-      action: "⚙ 设置 → Providers",
+      before: "尚未配置可用的 API Key。点击右上角",
+      action: "设置 → Providers",
       after: "添加一个 Provider 并填入 Key，保存后即刻生效。",
     },
   },
@@ -71,13 +71,13 @@ export default {
     autoBadgeTitle: "标题由 AI 根据第一轮对话自动生成",
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
-    startAction: "＋ 新建会话（选择 Copilot）",
+    startAction: "新建会话（选择 Copilot）",
   },
 
   composer: {
     parsing: "正在解析附件，完成后即可发送…",
     parseFailed:
-      "有 {count} 个附件解析失败，模型将无法读取其内容。可点击附件上的 ↻ 重新解析，或先在「设置 → 文档解析」中配置云解析服务。",
+      "有 {count} 个附件解析失败，模型将无法读取其内容。可点击附件的重新解析按钮重试，或先在「设置 → 文档解析」中配置云解析服务。",
     visionWarning:
       "当前模型「{model}」未标记支持图片输入，图片将以文字占位符发送。可在「设置 → Providers」中为它勾选「图片输入」。",
     placeholder: "输入消息，Enter 发送，Shift+Enter 换行",
@@ -235,10 +235,10 @@ export default {
     },
     providers: {
       countConfigured: "已配置 {count} 个 Provider",
-      add: "＋ 新建 Provider",
+      add: "新建 Provider",
       default: "默认",
-      keySet: "✓ Key 已配置",
-      keyMissing: "✗ 未配置 Key",
+      keySet: "Key 已配置",
+      keyMissing: "未配置 Key",
       deleteModel: "删除该模型",
       noModels: "尚未配置模型",
       empty: "还没有 Provider，点击「新建 Provider」添加一个 OpenAI 兼容的接口。",
@@ -264,7 +264,7 @@ export default {
       fallbackHint:
         "关闭后，选定的那一侧失败就直接报错，不再尝试另一侧。适用于想严格控制外发的场景。",
       cloudParsers: "云解析服务",
-      addParser: "＋ 添加服务",
+      addParser: "添加服务",
       noParsers: "还没有配置云解析服务。本地解析仍然可用，扫描件会因此解析失败。",
       enabled: "已启用",
       disabled: "已停用",
@@ -275,7 +275,7 @@ export default {
     },
     copilot: {
       countConfigured: "已配置 {count} 个 Copilot",
-      add: "＋ 新建 Copilot",
+      add: "新建 Copilot",
       inUse: "当前会话使用中",
       empty: "还没有 Copilot，点击「新建 Copilot」创建一个。",
       introBefore:
@@ -333,7 +333,7 @@ export default {
     apiKeyUnset: "尚未配置",
     apiKeyNote: "出于安全考虑，服务端不会返回 Key 的内容。留空表示保持原值不变。",
     models: "模型",
-    addModel: "＋ 添加模型",
+    addModel: "添加模型",
     modelNoteBefore: "上下文长度与最大输出均以 ",
     modelNoteToken: "token",
     modelNoteAfter: " 为单位（如 128000）。上下文长度只用于估算上下文占用比例，留空则按 {fallback} 估算。",

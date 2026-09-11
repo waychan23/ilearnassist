@@ -12,6 +12,7 @@ import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
 import Composer from "./Composer.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
+import Icon from "./Icon.vue";
 
 const store = useAppStore();
 const theme = useTheme();
@@ -23,7 +24,7 @@ const messagesEl = ref<HTMLElement | null>(null);
 /* ----------------------------------- theme ----------------------------------- */
 
 /** Icons are not translatable — only the labels are. */
-const THEME_ICON = { light: "☀️", dark: "🌙", auto: "🖥️" } as const;
+const THEME_ICON = { light: "sun", dark: "moon", auto: "monitor" } as const;
 
 const themeIcon = computed(() => THEME_ICON[theme.mode.value]);
 /** "自动（当前浅色）" reads clearer than just "自动" when the OS is doing the deciding. */
@@ -134,7 +135,7 @@ watch(
         aria-controls="app-sidebar"
         @click="openDrawer"
       >
-        ☰
+        <Icon name="menu" />
       </button>
 
       <div class="title-block">
@@ -170,7 +171,7 @@ watch(
               :title="t('chat.editTitle')"
               @click="startTitleEdit"
             >
-              ✎ <span class="label">{{ t("chat.editTitle") }}</span>
+              <Icon name="edit" /> <span class="label">{{ t("chat.editTitle") }}</span>
             </button>
             <span
               v-if="store.activeSession?.titleSource === 'auto'"
@@ -185,7 +186,7 @@ watch(
             class="subtitle truncate"
             :title="store.activeCopilot.systemPrompt"
           >
-            ◈ {{ store.activeCopilot.name }}
+            <Icon name="diamond" /> {{ store.activeCopilot.name }}
           </div>
         </template>
       </div>
@@ -212,7 +213,7 @@ watch(
           data-testid="theme-toggle"
           @click="theme.cycle()"
         >
-          {{ themeIcon }}
+          <Icon :name="themeIcon" />
         </button>
       </div>
     </header>
@@ -220,8 +221,9 @@ watch(
     <!-- Split into three keys rather than one message with <strong> in it: no message
          carries HTML, so there is nothing for `v-html` to inject. -->
     <div v-if="!store.isConfigured" class="config-banner">
+      <Icon name="warning" />
       {{ t("app.configBanner.before") }}
-      <strong>{{ t("app.configBanner.action") }}</strong>
+      <strong><Icon name="gear" /> {{ t("app.configBanner.action") }}</strong>
       {{ t("app.configBanner.after") }}
     </div>
 
@@ -236,7 +238,9 @@ watch(
         <div v-if="store.messages.length === 0 && !store.streaming.active" class="empty-state">
           <h2>{{ store.activeCopilot?.name ?? t("chat.start") }}</h2>
           <p>{{ t("chat.startHint") }}</p>
-          <button class="btn" @click="showNewSession = true">{{ t("chat.startAction") }}</button>
+          <button class="btn" @click="showNewSession = true">
+            <Icon name="plus" /> {{ t("chat.startAction") }}
+          </button>
         </div>
         <MessageItem v-for="m in store.messages" :key="m.id" :message="m" />
         <MessageItem v-if="store.streaming.active" :streaming="store.streaming" />

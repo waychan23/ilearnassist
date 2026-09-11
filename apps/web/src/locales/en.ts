@@ -29,8 +29,8 @@ const en: typeof MessageSchema = {
   app: {
     title: "guided-learning",
     configBanner: {
-      before: "⚠ No API key is configured yet. Click",
-      action: "⚙ Settings → Providers",
+      before: "No API key is configured yet. Click",
+      action: "Settings → Providers",
       after: "in the top right to add a Provider and its key; it takes effect as soon as you save.",
     },
   },
@@ -58,13 +58,13 @@ const en: typeof MessageSchema = {
     autoBadgeTitle: "Titles are generated from the first turn of the conversation",
     start: "Start a conversation",
     startHint: "Type a message below; the agent will call tools as it needs them.",
-    startAction: "＋ New conversation (choose a Copilot)",
+    startAction: "New conversation (choose a Copilot)",
   },
 
   composer: {
     parsing: "Attachments are still being parsed; sending unlocks when they finish…",
     parseFailed:
-      "1 attachment could not be parsed, so the model will not be able to read it. Click ↻ on the attachment to retry, or configure a cloud parser under Settings → Document parsing. | {count} attachments could not be parsed, so the model will not be able to read them. Click ↻ on an attachment to retry, or configure a cloud parser under Settings → Document parsing.",
+      "1 attachment could not be parsed, so the model will not be able to read it. Use the retry button on the attachment, or configure a cloud parser under Settings → Document parsing. | {count} attachments could not be parsed, so the model will not be able to read them. Use the retry button on an attachment, or configure a cloud parser under Settings → Document parsing.",
     visionWarning:
       "The current model “{model}” is not marked as accepting image input, so images will be sent as text placeholders. Tick “Image input” for it under Settings → Providers.",
     placeholder: "Type a message — Enter to send, Shift+Enter for a new line",
@@ -218,10 +218,10 @@ const en: typeof MessageSchema = {
     },
     providers: {
       countConfigured: "{count} provider configured | {count} providers configured",
-      add: "＋ New provider",
+      add: "New provider",
       default: "Default",
-      keySet: "✓ Key configured",
-      keyMissing: "✗ No key",
+      keySet: "Key configured",
+      keyMissing: "No key",
       deleteModel: "Delete this model",
       noModels: "No models configured",
       empty: "No providers yet. Click “New provider” to add an OpenAI-compatible endpoint.",
@@ -247,7 +247,7 @@ const en: typeof MessageSchema = {
       fallbackHint:
         "With this off, a failure on the chosen side errors out instead of trying the other. Useful when you want tight control over what leaves the machine.",
       cloudParsers: "Cloud parsers",
-      addParser: "＋ Add a service",
+      addParser: "Add a service",
       noParsers:
         "No cloud parsers configured. Local parsing still works; scans will fail to parse because of it.",
       enabled: "Enabled",
@@ -259,7 +259,7 @@ const en: typeof MessageSchema = {
     },
     copilot: {
       countConfigured: "{count} Copilot configured | {count} Copilots configured",
-      add: "＋ New Copilot",
+      add: "New Copilot",
       inUse: "In use by this conversation",
       empty: "No Copilots yet. Click “New Copilot” to create one.",
       introBefore:
@@ -324,7 +324,7 @@ const en: typeof MessageSchema = {
     apiKeyNote:
       "For security the server never returns the key, so leaving this blank keeps the current one.",
     models: "Models",
-    addModel: "＋ Add a model",
+    addModel: "Add a model",
     modelNoteBefore: "Both the context length and the max output are in ",
     modelNoteToken: "tokens",
     modelNoteAfter:

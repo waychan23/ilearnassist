@@ -3,6 +3,7 @@ import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import type { SessionSettings } from "../../api/types";
+import Icon from "../Icon.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
@@ -103,11 +104,13 @@ const scopeNote = computed(() =>
         <div class="modal-head">
           <h3>{{ t("sessionSettings.title") }}</h3>
           <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="emit('close')"
-        >✕</button>
+            class="icon-btn"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <Icon name="close" />
+          </button>
         </div>
         <div class="modal-body">
           <div class="config-tip">

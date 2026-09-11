@@ -5,6 +5,7 @@ import { attachmentUrl } from "../api/client";
 import { translateParseError } from "../utils/apiError";
 import { formatBytes } from "../utils/format";
 import type { Attachment } from "../api/types";
+import Icon from "./Icon.vue";
 
 const props = defineProps<{
   sessionId: string;
@@ -106,7 +107,7 @@ function stateOf(a: Attachment): string {
         :alt="c.attachment.name"
         :title="c.attachment.name"
       />
-      <span v-else class="file-icon">📄</span>
+      <span v-else class="file-icon"><Icon name="file" /></span>
       <div class="meta">
         <span class="name truncate" :title="c.attachment.name">{{ c.attachment.name }}</span>
         <span class="size" data-testid="attachment-detail">{{ c.detail }}</span>
@@ -119,7 +120,7 @@ function stateOf(a: Attachment): string {
         data-testid="attachment-reparse"
         @click="emit('reparse', c.attachment)"
       >
-        ↻
+        <Icon name="retry" />
       </button>
       <button
         v-if="removable"
@@ -128,7 +129,7 @@ function stateOf(a: Attachment): string {
         :aria-label="t('attachments.remove')"
         @click="emit('remove', c.attachment.id)"
       >
-        ✕
+        <Icon name="close" />
       </button>
     </div>
   </div>
@@ -182,6 +183,9 @@ function stateOf(a: Attachment): string {
   border-radius: var(--radius-sm);
   background: var(--panel);
   flex-shrink: 0;
+  /* Needed only since the glyph became an `<Icon>`: the emoji it replaced was painted
+   * by the emoji font at its own size, so this box never had to state one. */
+  font-size: var(--fs-6);
 }
 .meta {
   display: flex;

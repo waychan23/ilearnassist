@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { DEFAULT_CONTEXT_WINDOW } from "../../api/types";
 import type { ProviderConfig } from "../../api/types";
 import type { ProviderDraft } from "../../stores/app";
+import Icon from "../Icon.vue";
 
 const CAPABILITIES = [
   { id: "vision" },
@@ -133,11 +134,13 @@ function save() {
         <div class="modal-head">
           <h3>{{ props.provider ? t("providers.edit") : t("providers.create") }}</h3>
           <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="emit('close')"
-        >✕</button>
+            class="icon-btn"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <Icon name="close" />
+          </button>
         </div>
         <div class="modal-body">
           <div class="form-grid">
@@ -167,7 +170,9 @@ function save() {
 
           <div class="models-head">
             <label>{{ t("providers.models") }}</label>
-            <button class="btn small" @click="addModel">{{ t("providers.addModel") }}</button>
+            <button class="btn small" @click="addModel">
+              <Icon name="plus" /> {{ t("providers.addModel") }}
+            </button>
           </div>
           <div class="models-hint">
             {{ t("providers.modelNoteBefore") }}<strong>{{ t("providers.modelNoteToken") }}</strong
@@ -196,8 +201,14 @@ function save() {
                 <input v-model="m.maxOutput" class="input" :placeholder="t('providers.optional')" />
                 <div class="hint">{{ t("providers.unitToken") }}</div>
               </div>
-              <button class="icon-btn danger" :title="t('providers.removeModel')"
-          :aria-label="t('providers.removeModel')" @click="removeModel(i)">✕</button>
+              <button
+                class="icon-btn danger"
+                :title="t('providers.removeModel')"
+                :aria-label="t('providers.removeModel')"
+                @click="removeModel(i)"
+              >
+                <Icon name="close" />
+              </button>
             </div>
             <div class="caps">
               <label v-for="c in CAPABILITIES" :key="c.id" class="check-row sm">

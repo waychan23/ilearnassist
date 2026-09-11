@@ -7,6 +7,7 @@ import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
 import SessionSettingsDialog from "./dialogs/SessionSettingsDialog.vue";
 import { openSettings } from "../composables/ui";
+import Icon from "./Icon.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -147,7 +148,7 @@ function onKeydown(e: KeyboardEvent) {
             :aria-label="sendLabel"
             @click="send"
           >
-            ↑
+            <Icon name="send" />
           </button>
         </div>
 
@@ -168,22 +169,22 @@ function onKeydown(e: KeyboardEvent) {
               :disabled="uploading || store.streaming.active || parsingDocuments"
               @click="fileInput?.click()"
             >
-              {{ uploading ? "…" : "📎" }}
+              <Icon v-if="!uploading" name="attach" /><template v-else>…</template>
             </button>
             <button
               class="icon-btn params-btn"
               :title="t('composer.settings')"
-        :aria-label="t('composer.settings')"
+              :aria-label="t('composer.settings')"
               @click="showSessionSettings = true"
             >
-              🎛
+              <Icon name="sliders" />
             </button>
             <span
               v-if="store.activeCopilot"
               class="pill copilot-tag truncate"
               :title="store.activeCopilot.systemPrompt"
             >
-              ◈ {{ store.activeCopilot.name }}
+              <Icon name="diamond" /> {{ store.activeCopilot.name }}
             </span>
           </div>
 

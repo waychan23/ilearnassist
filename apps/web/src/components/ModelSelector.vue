@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import type { ProviderConfig, ProviderModel } from "../api/types";
+import Icon from "./Icon.vue";
 
 /**
  * Model picker for the composer toolbar, following chatbox's `ModelSelectorV2` placement.
@@ -78,7 +79,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
     >
       <span class="status-dot ok" :class="{ off: !store.effectiveModel }"></span>
       <span class="label truncate">{{ buttonLabel }}</span>
-      <span class="caret" :class="{ open }">▾</span>
+      <Icon class="caret" :class="{ open }" name="caret-down" />
     </button>
 
     <div v-if="open" class="overlay-popover menu">
@@ -94,11 +95,13 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
           :class="{ active: isCurrent(group.providerId, m.modelId) }"
           @click="choose(group.providerId, m.modelId)"
         >
-          <span class="check-mark">{{ isCurrent(group.providerId, m.modelId) ? "✓" : "" }}</span>
+          <span class="check-mark">
+            <Icon v-if="isCurrent(group.providerId, m.modelId)" name="check" />
+          </span>
           <span class="name truncate">{{ m.name }}</span>
           <span class="caps">
-            <span v-if="m.capabilities.includes('vision')" :title="t('providers.capabilities.vision')">🖼</span>
-            <span v-if="m.capabilities.includes('reasoning')" :title="t('providers.capabilities.reasoning')">🧠</span>
+            <span v-if="m.capabilities.includes('vision')" :title="t('providers.capabilities.vision')"><Icon name="image" /></span>
+            <span v-if="m.capabilities.includes('reasoning')" :title="t('providers.capabilities.reasoning')"><Icon name="bulb" /></span>
           </span>
         </button>
       </template>
@@ -195,7 +198,10 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 }
 .menu-item .caps {
   flex-shrink: 0;
-  font-size: var(--fs-1);
+  /* `--fs-2`, matching the capability marks in the settings chip. At `--fs-1` an `<Icon>`
+   * is exactly 11px, where the emoji it replaced rendered optically larger than its font
+   * size — so the same token would have made these visibly smaller than before. */
+  font-size: var(--fs-2);
 }
 
 .empty {

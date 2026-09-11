@@ -18,9 +18,15 @@ import { sourceFiles } from "../helpers/catalog";
  * CJK ideographs plus the punctuation that travels with them.
  *
  * The fullwidth-forms block (U+FF00-FFEF) is deliberately excluded: it is mostly
- * width-variant glyphs rather than words, and the fullwidth plus is used here as an icon
- * on the "new workspace" button. Any real Chinese sentence contains ideographs and is
- * still caught, so dropping that block costs no real detection.
+ * width-variant punctuation (`，！？：；（）`) rather than words, and any real Chinese
+ * sentence contains ideographs and is still caught, so dropping the block costs no real
+ * detection.
+ *
+ * That block used to earn its exclusion a second way — the fullwidth plus doubled as the
+ * icon on the "new workspace" button, and a rule that flagged it would have flagged the
+ * button. That stopped being true once icons moved to `<Icon>`. Icons are `icons.test.ts`'s
+ * business now, and it names the plus explicitly rather than by range; this test has no
+ * opinion about them.
  */
 const CJK = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 

@@ -1,0 +1,118 @@
+/**
+ * The application's icons, as path data on a 16x16 grid.
+ *
+ * Before this existed the UI drew its icons with Unicode characters, and the set had
+ * drifted into two incompatible rendering families: colour emoji (`trash`, `brain`,
+ * `image`, the theme trio) handed to the platform's emoji font, and monochrome symbols
+ * (`x`, `check`, the carets) taken from whatever text font is in force. The two do not
+ * merely look different. An emoji is painted by a colour font, so it **ignores `color`**
+ * — which made `.icon-btn.danger:hover { color: var(--danger) }` a rule that worked on
+ * the dialog close buttons and silently did nothing on the delete buttons beside them.
+ * It also put the same action behind two glyphs: `trash` and the `x` it fell back to
+ * when a row had no room for it, and a second, visually identical `x` (U+00D7) that a
+ * settings chip had picked up along the way.
+ *
+ * Every icon here is described the same way, and that description is the style:
+ *
+ * - a 16x16 viewBox, with geometry staying inside roughly 2..14 so a 1.5 stroke is
+ *   never clipped at the edge
+ * - stroked, never filled — a filled glyph is what reintroduced the weight mismatch
+ * - `currentColor`, so a hover, a `.danger` state or an inherited `--text-3` reaches
+ *   the icon without the icon knowing anything about colour
+ * - one shape language: open outlines, round caps and joins, no decorative detail that
+ *   would disappear below 14px
+ *
+ * Paths are an array because an icon is usually several strokes rather than one, and
+ * keeping them separate means a later tweak to one does not have to re-parse a combined
+ * `d`. `Icon.vue` renders them; `test/icons.test.ts` holds the set to the rules above.
+ */
+export const ICON_PATHS = {
+  /* Two names for one shape, deliberately: a dialog dismisses with `close`, a key that
+   * is not configured reports `cross`. Same geometry, different intent at the call site. */
+  close: ["M3.5 3.5L12.5 12.5", "M12.5 3.5L3.5 12.5"],
+  cross: ["M3.5 3.5L12.5 12.5", "M12.5 3.5L3.5 12.5"],
+
+  check: ["M3 8.5L6.5 12L13 4"],
+
+  trash: ["M2.5 4.5H13.5", "M6.25 4.5V3.25H9.75V4.5", "M4.5 4.5L5.15 12.75H10.85L11.5 4.5"],
+
+  copy: ["M11.5 4.5H4.5V11.5", "M5.5 5.5H12.5V12.5H5.5Z"],
+
+  retry: ["M14 8a6 6 0 1 1-6-6c1.68 0 3.29.67 4.49 1.83L14 5.33", "M14 2v3.33h-3.33"],
+
+  edit: ["M11.25 2.75L13.25 4.75L5.75 12.25L2.75 13.25L3.75 10.25Z", "M10.25 3.75L12.25 5.75"],
+
+  "caret-down": ["M4 6.5L8 10.5L12 6.5"],
+  "caret-right": ["M6.5 4L10.5 8L6.5 12"],
+
+  send: ["M8 13.5V2.75", "M3.75 7L8 2.75L12.25 7"],
+
+  menu: ["M2.75 4.5H13.25", "M2.75 8H13.25", "M2.75 11.5H13.25"],
+
+  gear: [
+    "M6.7 2L9.3 2L8.9 3.7L10.4 4.4L11.3 2.9L13.1 4.7L11.6 5.6L12.3 7.1L14 6.7L14 9.3L12.3 8.9L11.6 10.4L13.1 11.3L11.3 13.1L10.4 11.6L8.9 12.3L9.3 14L6.7 14L7.1 12.3L5.6 11.6L4.7 13.1L2.9 11.3L4.4 10.4L3.7 8.9L2 9.3L2 6.7L3.7 7.1L4.4 5.6L2.9 4.7L4.7 2.9L5.6 4.4L7.1 3.7Z",
+    "M10.3 8a2.3 2.3 0 1 1-4.6 0 2.3 2.3 0 1 1 4.6 0",
+  ],
+
+  plus: ["M8 3V13", "M3 8H13"],
+
+  warning: ["M8 2.6L14.4 13.4H1.6Z", "M8 6.6V9.7", "M8 11.6V11.61"],
+
+  attach: [
+    "M14.29 7.37l-6.13 6.13a4 4 0 0 1-5.66-5.66l6.13-6.13a2.67 2.67 0 0 1 3.77 3.77l-6.13 6.13a1.33 1.33 0 0 1-1.89-1.89l5.66-5.65",
+  ],
+
+  file: ["M3.5 2.5H8.75L12.5 6.25V13.5H3.5Z", "M8.75 2.5V6.25H12.5"],
+
+  image: [
+    "M2.5 3.5H13.5V12.5H2.5Z",
+    "M2.5 9.75L5.5 6.75L8.5 9.75L10.25 8L13.5 11.25",
+    "M5.9 6.1V6.11",
+  ],
+
+  bulb: [
+    "M11.5 6.75a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0",
+    "M6.4 10.4V11.9H9.6V10.4",
+    "M6.9 13.4H9.1",
+  ],
+
+  sliders: [
+    "M2.75 4.5H13.25",
+    "M2.75 8H13.25",
+    "M2.75 11.5H13.25",
+    "M5.5 3.25V5.75",
+    "M10 6.75V9.25",
+    "M6.5 10.25V12.75",
+  ],
+
+  diamond: ["M8 2.5L13.5 8L8 13.5L2.5 8Z"],
+
+  robot: [
+    "M3.75 5.5H12.25V12.25H3.75Z",
+    "M8 5.5V3.75",
+    "M8 2.75V2.76",
+    "M6.5 8.5V9",
+    "M9.5 8.5V9",
+  ],
+
+  sun: [
+    "M11.5 8a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0",
+    "M8 1.75V3.25",
+    "M8 12.75V14.25",
+    "M1.75 8H3.25",
+    "M12.75 8H14.25",
+    "M3.6 3.6L4.66 4.66",
+    "M11.34 11.34L12.4 12.4",
+    "M12.4 3.6L11.34 4.66",
+    "M4.66 11.34L3.6 12.4",
+  ],
+
+  moon: ["M12.75 9.75A5.25 5.25 0 1 1 6.25 3.25a4.2 4.2 0 1 0 6.5 6.5Z"],
+
+  monitor: ["M2.5 3.5H13.5V10.5H2.5Z", "M8 10.5V12.75", "M5.75 13H10.25"],
+} as const satisfies Record<string, readonly string[]>;
+
+export type IconName = keyof typeof ICON_PATHS;
+
+/** Every icon name, for the guard in `test/icons.test.ts` to iterate. */
+export const ICON_NAMES = Object.keys(ICON_PATHS) as readonly IconName[];

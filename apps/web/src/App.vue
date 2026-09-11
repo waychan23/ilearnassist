@@ -9,6 +9,7 @@ import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
 import { closeDrawer, closeSettings, uiState } from "./composables/ui";
 import { isCompact } from "./composables/breakpoints";
 import { confirmState } from "./composables/confirm";
+import Icon from "./components/Icon.vue";
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -98,7 +99,7 @@ watch(
           :title="$t('common.close')"
           :aria-label="$t('common.close')"
           @click="store.setError(null)"
-        >✕</button>
+        ><Icon name="close" /></button>
       </div>
     </Transition>
   </div>

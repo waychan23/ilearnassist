@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+import Icon from "../Icon.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -40,11 +41,13 @@ async function submit() {
         <div class="modal-head">
           <h3>{{ t("workspace.new.title") }}</h3>
           <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="emit('close')"
-        >✕</button>
+            class="icon-btn"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <Icon name="close" />
+          </button>
         </div>
         <div class="modal-body">
           <div class="field">

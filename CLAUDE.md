@@ -230,9 +230,19 @@ Fuller map in `docs/reference.md`.
   keyed by component file — components get split and renamed. Non-component
   modules (`stores/app.ts`, `utils/minimap.ts`, `composables/confirm.ts`)
   translate through `i18n.global.t`, not `useI18n()`.
-- **Symbols are not copy.** `⚠`, `✎`, `◈`, `＋`, `✕`, `AI` and product names stay
-  in the templates; so do the SI unit symbols in `utils/format.ts` (B/KB/MB/GB,
-  k/M). Moving them into the catalog only makes them harder to find.
+- **Icons come from the shared set; typographic characters do not.** Every mark in the
+  UI is `<Icon name="…">`, drawn from `utils/icons.ts` — a 16×16 grid, stroked,
+  `currentColor`, never a character and never an emoji. What stays a character is what
+  is genuinely *content*: `AI` and product names, the SI unit symbols in
+  `utils/format.ts` (B/KB/MB/GB, k/M), and the `→` / `·` separators the copy is built
+  from. The split is not a preference. An emoji is painted by a colour font and
+  **ignores `color`**, which made `.icon-btn.danger:hover` a rule that worked on the
+  dialog close buttons and silently did nothing on the delete buttons beside them; and a
+  glyph inside a translated sentence cannot be sized, coloured or aligned, which is how
+  `✓ Key configured` lived in the catalog while the same idea in `ModelSelector` carried
+  no mark. The server's `⚠️ ` on a failed turn is persisted into history and replayed to
+  the model — content, not chrome, on the same boundary as the untranslated tool strings.
+  `apps/web/test/icons.test.ts` enforces all of this.
 - **`en` plural messages use `|`; `zh-CN` ones do not.** Both catalogs take the
   same call shape — `t(key, named, plural)` — so no component branches on the
   locale. A message containing a literal `|` must escape it as `{'|'}` or it

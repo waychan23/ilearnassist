@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ToolCall } from "../api/types";
+import Icon from "./Icon.vue";
 
 const props = defineProps<{ toolCall: ToolCall }>();
 const open = ref(false);
@@ -45,11 +46,11 @@ const prettyInput = computed(() => {
 <template>
   <div class="tool-card" data-testid="tool-call">
     <div class="tool-head" @click="open = !open">
-      <span class="icon" :class="done ? 'ok' : 'run'">{{ done ? "✓" : "↻" }}</span>
+      <Icon :name="done ? 'check' : 'retry'" :class="done ? 'ok' : 'run'" />
       <span class="name">{{ label }}</span>
       <span class="arg truncate">{{ arg }}</span>
       <span class="status">{{ done ? t("tools.done") : t("tools.running") }}</span>
-      <span class="toggle">{{ open ? "▾" : "▸" }}</span>
+      <Icon class="toggle" :name="open ? 'caret-down' : 'caret-right'" />
     </div>
     <div v-if="open" class="tool-body">
       <div>

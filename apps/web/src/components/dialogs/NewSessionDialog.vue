@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+import Icon from "../Icon.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
@@ -41,11 +42,13 @@ async function create() {
         <div class="modal-head">
           <h3>{{ t("session.new.title") }}</h3>
           <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="emit('close')"
-        >✕</button>
+            class="icon-btn"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <Icon name="close" />
+          </button>
         </div>
         <div class="modal-body">
           <div class="field">

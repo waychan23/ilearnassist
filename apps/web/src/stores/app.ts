@@ -175,7 +175,7 @@ export const useAppStore = defineStore("app", () => {
 
   /**
    * The parameters actually in force. Mirrors the server's resolution order exactly:
-   * session ⊳ Copilot defaults ⊳ app default. A candidate only wins when it still
+   * session → Copilot defaults → app default. A candidate only wins when it still
    * resolves, so a deleted provider degrades instead of showing a broken selection.
    */
   const sessionSettings = computed<SessionSettings>(

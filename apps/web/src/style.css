@@ -908,6 +908,16 @@ body {
   cursor: not-allowed;
 }
 
+/* The one rule every `<Icon>` needs. An inline SVG sits on the text baseline, so it
+ * rides high next to a label without the nudge; `flex: none` keeps it from being
+ * squeezed in the flex rows most of these live in. Sizing is deliberately absent —
+ * the icons are `1em`, so `font-size` on the control is what sizes them, exactly as it
+ * sized the glyphs they replaced. */
+.icon {
+  vertical-align: -0.125em;
+  flex: none;
+}
+
 .icon-btn {
   background: transparent;
   border: none;

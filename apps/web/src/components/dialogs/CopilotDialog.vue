@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import type { Copilot } from "../../api/types";
 import type { CopilotDraft } from "../../stores/app";
+import Icon from "../Icon.vue";
 
 const ALL_TOOLS = [
   "web_search",
@@ -150,11 +151,13 @@ function save() {
         <div class="modal-head">
           <h3>{{ props.copilot ? t("copilot.edit") : t("copilot.create") }}</h3>
           <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="emit('close')"
-        >✕</button>
+            class="icon-btn"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <Icon name="close" />
+          </button>
         </div>
         <div class="modal-body">
           <div class="field">

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import Icon from "./Icon.vue";
 
 /**
  * The model's chain of thought, following chatbox's reasoning row (which in turn mirrors
@@ -61,7 +62,7 @@ async function copy() {
 <template>
   <div v-if="hasDetail" class="reasoning" :class="{ thinking: props.thinking }" data-testid="reasoning">
     <div class="head" @click="expanded = !expanded">
-      <span class="dot" :class="props.thinking ? 'live' : 'done'">💡</span>
+      <span class="dot" :class="props.thinking ? 'live' : 'done'"><Icon name="bulb" /></span>
       <span class="label">{{ label }}</span>
       <span v-if="props.thinking" class="dots"><i></i><i></i><i></i></span>
       <span v-if="durationText" class="time">{{ t("message.reasoning.duration", { duration: durationText }) }}</span>
@@ -72,9 +73,9 @@ async function copy() {
         :title="copied ? t('common.copied') : t('message.reasoning.copy')"
         @click.stop="copy"
       >
-        {{ copied ? "✓" : "⧉" }}
+        <Icon :name="copied ? 'check' : 'copy'" />
       </button>
-      <span class="chevron" :class="{ open: expanded }">▾</span>
+      <Icon class="chevron" :class="{ open: expanded }" name="caret-down" />
     </div>
 
     <div v-if="expanded" class="body">{{ props.content }}</div>

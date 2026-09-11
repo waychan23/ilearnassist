@@ -8,6 +8,7 @@ import { formatTokens } from "../utils/format";
 import ToolCallCard from "./ToolCallCard.vue";
 import AttachmentChips from "./AttachmentChips.vue";
 import ReasoningBlock from "./ReasoningBlock.vue";
+import Icon from "./Icon.vue";
 
 interface StreamingState {
   active: boolean;
@@ -119,7 +120,7 @@ const usageText = computed(() => {
       <div v-if="content" class="bubble">{{ content }}</div>
       <div v-if="content && !props.streaming" class="actions">
         <button class="icon-btn act" :title="copied ? t('common.copied') : t('common.copy')" @click="copyMessage">
-          {{ copied ? "✓ " + t("common.copied") : "⧉ " + t("common.copy") }}
+          <Icon :name="copied ? 'check' : 'copy'" /> {{ copied ? t("common.copied") : t("common.copy") }}
         </button>
       </div>
     </div>
@@ -131,7 +132,7 @@ const usageText = computed(() => {
     data-testid="message-assistant"
     :data-message-id="props.message?.id"
   >
-    <div class="avatar">🤖</div>
+    <div class="avatar"><Icon name="robot" /></div>
     <div class="body">
       <div v-if="error" class="error-banner">{{ error }}</div>
       <ReasoningBlock
@@ -148,7 +149,7 @@ const usageText = computed(() => {
           :title="copied ? t('common.copied') : t('message.copyReply')"
           @click="copyMessage"
         >
-          {{ copied ? "✓ " + t("common.copied") : "⧉ " + t("common.copy") }}
+          <Icon :name="copied ? 'check' : 'copy'" /> {{ copied ? t("common.copied") : t("common.copy") }}
         </button>
         <span v-if="usageText" class="usage-line" :title="t('message.contextTokens', { count: formatTokens(usage?.contextTokens ?? 0) })">
           {{ usageText }}

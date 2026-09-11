@@ -7,6 +7,7 @@ import type { Session } from "../api/types";
 import { closeDrawer, openSettings, uiState } from "../composables/ui";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
+import Icon from "./Icon.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -120,7 +121,7 @@ async function onDeleteWorkspace() {
         <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
       </select>
       <button class="icon-btn" :title="t('sidebar.newWorkspace')"
-        :aria-label="t('sidebar.newWorkspace')" @click="openNewWorkspace">＋</button>
+        :aria-label="t('sidebar.newWorkspace')" @click="openNewWorkspace"><Icon name="plus" /></button>
       <button
         class="icon-btn danger"
         :title="t('sidebar.deleteWorkspace')"
@@ -128,7 +129,7 @@ async function onDeleteWorkspace() {
         :disabled="!store.activeWorkspace"
         @click="onDeleteWorkspace"
       >
-        🗑
+        <Icon name="trash" />
       </button>
     </div>
 
@@ -136,7 +137,7 @@ async function onDeleteWorkspace() {
       <span>{{ t("sidebar.sessions") }}</span>
       <button class="icon-btn" data-testid="new-session" :title="t('sidebar.newSession')"
         :aria-label="t('sidebar.newSession')" @click="openNewSession">
-        ＋
+        <Icon name="plus" />
       </button>
     </div>
 
@@ -165,9 +166,9 @@ async function onDeleteWorkspace() {
             {{ s.title || t("session.fallbackTitle") }}
           </span>
           <button class="icon-btn" :title="t('sidebar.rename')"
-        :aria-label="t('sidebar.rename')" @click.stop="startRename(s)">✎</button>
+            :aria-label="t('sidebar.rename')" @click.stop="startRename(s)"><Icon name="edit" /></button>
           <button class="icon-btn danger" :title="t('sidebar.delete')"
-        :aria-label="t('sidebar.delete')" @click.stop="onDeleteSession(s)">🗑</button>
+            :aria-label="t('sidebar.delete')" @click.stop="onDeleteSession(s)"><Icon name="trash" /></button>
         </template>
       </div>
       <div v-if="store.sessions.length === 0" class="muted">{{ t("sidebar.noSessions") }}</div>
@@ -180,7 +181,7 @@ async function onDeleteWorkspace() {
       data-testid="open-settings"
       @click="openSidebarSettings"
     >
-      <span class="gear">⚙</span>
+      <span class="gear"><Icon name="gear" /></span>
       <span class="label">{{ t("sidebar.settings") }}</span>
       <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
     </button>

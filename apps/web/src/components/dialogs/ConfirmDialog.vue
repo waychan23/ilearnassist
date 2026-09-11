@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, watch } from "vue";
 import { confirmState, settleConfirm } from "../../composables/confirm";
+import Icon from "../Icon.vue";
 
 const confirmBtn = ref<HTMLButtonElement | null>(null);
 
@@ -44,11 +45,13 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
         <div class="modal-head">
           <h3>{{ confirmState.title }}</h3>
           <button
-          class="icon-btn"
-          :title="$t('common.close')"
-          :aria-label="$t('common.close')"
-          @click="settleConfirm(false)"
-        >✕</button>
+            class="icon-btn"
+            :title="$t('common.close')"
+            :aria-label="$t('common.close')"
+            @click="settleConfirm(false)"
+          >
+            <Icon name="close" />
+          </button>
         </div>
         <div class="modal-body">
           <p class="confirm-message">{{ confirmState.message }}</p>

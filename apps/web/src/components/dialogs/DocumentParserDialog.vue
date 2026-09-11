@@ -3,6 +3,7 @@ import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { DocumentParserConfig, DocumentParserKind, DriverInfo } from "../../api/types";
 import type { DocumentParserDraft } from "../../stores/app";
+import Icon from "../Icon.vue";
 
 /**
  * Add/edit one cloud document parser.
@@ -99,11 +100,13 @@ function save() {
         <div class="modal-head">
           <h3>{{ props.parser ? t("parsers.edit") : t("parsers.create") }}</h3>
           <button
-          class="icon-btn"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="emit('close')"
-        >✕</button>
+            class="icon-btn"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <Icon name="close" />
+          </button>
         </div>
         <div class="modal-body">
           <div class="field">

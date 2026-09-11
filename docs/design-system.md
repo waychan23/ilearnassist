@@ -17,6 +17,7 @@ Read this before adding a colour, a size, a class or a breakpoint.
 | --- | --- |
 | [Tokens](#tokens) | Which value do I use for this spacing / size / radius? |
 | [Shared classes](#shared-classes) | Is there already a class for this control? |
+| [Icons](#icons) | How do I draw a mark, and how do I add one? |
 | [Responsive](#responsive) | Which breakpoint, and what has to move with it? |
 | [Accessibility](#accessibility) | What do I owe keyboard and touch users? |
 | [Adding to the system](#adding-to-the-system) | What has to change together, and what breaks |
@@ -252,6 +253,58 @@ breakpoint. The second condition matters more than it looks: a mobile override c
 written once if the rule exists once. Two popovers that both need to become sheets on a
 phone are two places to forget.
 
+## Icons
+
+Every mark in the UI is `<Icon name="…" />`, drawn from `ICON_PATHS` in
+[`apps/web/src/utils/icons.ts`](../apps/web/src/utils/icons.ts). There is no second way in:
+no character, no emoji, no inline `<svg>` at a call site.
+
+The reason is not that the characters looked inconsistent, though they did — half of them
+were colour emoji and half were monochrome text glyphs, so 🗑 sitting next to ✕ in one
+toolbar was drawn by two different fonts, at two different weights and baselines. Two
+concrete bugs came out of the mixing, and neither is visible in a screenshot review:
+
+- **An emoji ignores `color`.** It is painted by a colour font, so
+  `.icon-btn.danger:hover { color: var(--danger) }` recoloured the dialog close buttons and
+  did *nothing* to the delete buttons beside them. Every state carried by colour — hover,
+  `.danger`, disabled — is silently dead on a colour-emoji icon.
+- **A glyph inside a sentence cannot be styled.** Ten characters lived in the two catalogs
+  rather than in a template, where nothing could size, colour or align them. The drift that
+  followed is the honest argument: `settings.providers.keySet` rendered `✓ Key 已配置` while
+  `modelSelector.keyMissing` — the same idea — rendered with no mark at all.
+
+### The style
+
+One description, and it is the whole convention:
+
+| Property | Value |
+| --- | --- |
+| Grid | 16×16 viewBox, geometry inside roughly 2–14 so a 1.5 stroke is not clipped |
+| Paint | `fill="none"`, `stroke="currentColor"` — stroked, never filled |
+| Stroke | `1.5`, round caps and joins |
+| Detail | Nothing that disappears below 14px |
+
+`currentColor` is what makes this better than what it replaced: an icon inherits hover,
+`.danger` and `--text-3` without knowing anything about colour, so the state rules already
+in `style.css` simply work. A filled glyph is the one thing ruled out — fill is exactly the
+weight mismatch the emoji brought.
+
+Sizing defaults to `1em`, deliberately. Every glyph this replaced was sized by `font-size`,
+so `.icon-btn { font-size: var(--fs-4) }` and `.tool-card .tool-head .icon { font-size:
+var(--fs-2) }` keep working untouched and an icon in running text tracks that text.
+`Icon.vue`'s `size` prop exists for the few fixed-size boxes — the 30px avatar, the 36px
+file chip — where `1em` would inherit something arbitrary.
+
+### Not an icon
+
+Three characters are punctuation the copy is built from and stay as characters: the `→` in
+`Settings → Providers`, the `·` in a `1.2 MB · 3 pages` list, and the `▍` streaming cursor
+in `style.css`. `icons.test.ts` strips the first two before it scans, and does not scan the
+sheet at all.
+
+The server's `⚠️ ` is out of scope for the same reason it is untranslated: it is persisted
+into the conversation and replayed to the model, so it is content rather than chrome.
+
 ## Responsive
 
 Two breakpoints, and both are minimums rather than preferences:
@@ -293,10 +346,14 @@ nothing.
 
 ### Every control needs an accessible name
 
-A glyph is not a copy string. `🗑 ✎ ＋ ✕ ☰ 📎 ⚙` stay in the templates, and the accessible
-name comes from the catalog via `t()`. An icon-only button carries both a `title` (for
-mouse users) and an `aria-label` (for everyone else) — a `title` never renders on touch, so
-a button whose only label is a `title` is unlabelled on a phone.
+An icon is not a copy string. It comes from [`<Icon>`](#icons), which is `aria-hidden` and
+carries no name of its own, and the accessible name comes from the catalog via `t()`. An
+icon-only button carries both a `title` (for mouse users) and an `aria-label` (for everyone
+else) — a `title` never renders on touch, so a button whose only label is a `title` is
+unlabelled on a phone.
+
+Keeping the name off the SVG is the point: a name written there would be a second, English
+one, outside the catalog. It belongs on the control, where the two languages already agree.
 
 `no-hardcoded-text.test.ts` only detects CJK, so an English `aria-label="Open sidebar"`
 literal would pass it silently. There is no machine guard for this; it is a review rule.
@@ -362,6 +419,13 @@ the documented values, and the breakpoints composable's unit test asserts the sa
 reach `matchMedia`. **Change both together** — a CSS/JS breakpoint mismatch produces a
 drawer that opens on a screen with no toggle, or a toggle that does nothing.
 
+**An icon.** Add the name and its paths to `ICON_PATHS` in `src/utils/icons.ts`, following
+[the style](#the-style) — a 16 grid, stroked, `currentColor`, no fill. Then use it. The
+name is a union type, so a typo is a compile error, and `icons.test.ts` checks that the path
+data parses and uses only drawing commands, that every name resolves from every call site,
+and that every name in the set is drawn somewhere — an icon added and then not used fails
+the build rather than sitting in the set forever.
+
 **An overlay.** Render it through a `Teleport` to `body`. A `position: fixed` overlay
 positioned inside a transformed ancestor (the mobile drawer uses `transform`) is positioned
 against that ancestor and lands off-screen. See the warning comment on `.app`.
@@ -398,6 +462,15 @@ components set inline via `:style` (`--pct` on the token ring).
 **Tailwind, UnoCSS or a component library.** The token layer covers the same ground with no
 build step and no runtime dependency, and the existing guard suite already enforces the
 invariants a framework would otherwise supply.
+
+**Emoji, an icon font, or an icon library.** Emoji are painted by a colour font and so
+ignore `color`, which is the bug [the icons section](#icons) opens with. An icon font has
+the problem any font has: the glyphs depend on what is installed, so the same page renders
+differently on macOS, Windows and Android, and there is nothing a test could hold to. A
+library such as `lucide-vue-next` solves the drawing itself and would be a reasonable
+answer, but it buys that with a runtime dependency in a stylesheet that has none — the whole
+set here is about forty lines of path data, and a guard testing that call sites name a real
+icon is needed either way.
 
 **`flex-direction: column-reverse` to stack the composer toolbar on a narrow screen.** It
 inverts the reading order for screen readers.
