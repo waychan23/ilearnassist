@@ -54,9 +54,8 @@ This rule makes that legible instead of accidental.
 
 Dark values are the `:root` declarations; light values are restated in two more blocks (see
 [the light palette](#the-light-palette)). Only *colours* are restated — lengths, durations,
-layer indices and shadows are identical in both themes. `--scrim` is the one exception among
-colours, because a translucent black darkens what is under it rather than carrying a colour
-of its own.
+layer indices and shadows are identical in both themes, and a shadow exempts itself by not
+being a colour.
 
 | Token | Use |
 | --- | --- |
@@ -136,7 +135,7 @@ theme-dependent, and a token there is noise.
 | `--shadow-popover` | Menus and popovers that float above the composer |
 | `--shadow-toast` | The error toast |
 | `--shadow-sheet` | A bottom sheet, whose shadow points up |
-| `--scrim` | The dim behind a modal or the mobile drawer. Shared so the two agree |
+| `--scrim` | The dim behind a modal or the mobile drawer. Shared so the two agree, and **theme-dependent**: 0.55 in dark, 0.32 in light. The dark value over a white page composites everything to `#737373` and reads as a theme flip rather than as a dialog |
 
 ### Motion
 

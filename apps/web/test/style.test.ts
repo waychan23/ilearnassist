@@ -92,21 +92,17 @@ const CODE_VARS = ["--code-bg", "--code-fg", "--code-fg-2"];
 const isColor = (value: string | undefined): boolean => !!value && /^(#|rgba?\()/i.test(value);
 
 /**
- * A translucent black is the one colour with no light variant to write: a scrim darkens
- * whatever sits under it rather than carrying a colour of its own, so `rgba(0, 0, 0, 0.55)`
- * is correct on white and on `#16181c` alike. Without this the predicate would demand a
- * light value for `--scrim` and the "fix" would be restating the same value in both light
- * blocks — three copies of a value that never flips.
+ * Whether the light palette is expected to restate a `:root` variable's value.
  *
- * Deliberately narrow: only `rgb`/`rgba` with a zero red channel, so it cannot be reached
- * by a colour someone merely forgot to flip. A light-tuned scrim would be
- * `rgba(255, 255, 255, …)` and is *not* exempt — that one does belong in the light palette.
+ * This was briefly narrowed to exempt a translucent black, on the reasoning that a scrim
+ * darkens whatever sits under it rather than carrying a colour of its own and so needs no
+ * light variant. That held for shadows and was wrong for `--scrim`: 0.55 of black over a
+ * white page composites the whole thing to `#737373`, which erases the sidebar and topbar
+ * boundaries and reads as if the theme flipped rather than as if a dialog opened. A colour is
+ * a colour — the exemptions are shapes, and a shadow already exempts itself by not starting
+ * with a colour.
  */
-const isNeutralScrim = (value: string): boolean => /^rgba?\(\s*0\s*,\s*0\s*,\s*0\s*[,)]/i.test(value);
-
-/** Whether the light palette is expected to restate a `:root` variable's value. */
-const needsLightValue = (value: string | undefined): boolean =>
-  isColor(value) && !isNeutralScrim(value!);
+const needsLightValue = (value: string | undefined): boolean => isColor(value);
 
 /**
  * Token families that are *ramps*, read by their index: `--space-6` is understood as two
@@ -336,16 +332,23 @@ describe("style.css palette", () => {
     const light = blocks(CSS).find((block) => block.selector === LIGHT_SELECTORS[0]);
     if (!light) throw new Error(`style.css has no ${LIGHT_SELECTORS[0]} block`);
 
-    // Restating `--code-bg: #0d1117` in the light block would satisfy the completeness
-    // check while changing nothing, leaving dark-on-dark exactly as it was. The bubble is
-    // the same shape of trap: its dark value is a navy that reads fine on `#16181c` and not
-    // at all on white, so a copied-down value would be invisible in review.
-    const unchanged = [...CODE_VARS, ...PAIRED_SURFACES.flatMap(([surface]) => [surface])].filter(
-      (name) => {
-        const dark = declarationOf(root.body, name);
-        return dark !== undefined && dark === declarationOf(light.body, name);
-      },
-    );
+    // Restating `--code-bg: #0d1117` in the light block would satisfy the completeness check
+    // while changing nothing, leaving dark-on-dark exactly as it was.
+    //
+    // The list is colours whose *magnitude* matters as much as their hue. `--scrim` is here
+    // because it was once exempt from the light palette on the argument that a translucent
+    // black dims whatever is under it and so needs no variant — true of a shadow, false of
+    // this: 0.55 of black over a white page composites everything to `#737373`.
+    const mustFlip = [
+      ...CODE_VARS,
+      ...PAIRED_SURFACES.map(([surface]) => surface),
+      "--scrim",
+    ];
+
+    const unchanged = mustFlip.filter((name) => {
+      const dark = declarationOf(root.body, name);
+      return dark !== undefined && dark === declarationOf(light.body, name);
+    });
 
     expect(unchanged).toEqual([]);
   });

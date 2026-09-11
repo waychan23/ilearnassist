@@ -49,10 +49,13 @@
  * would look like a passing test. Other `:root` blocks are fine — the reduced-motion query
  * below is one, and it declares only durations.
  *
- * Only colours are restated in the light blocks (the predicate in `style.test.ts` derives
- * that from the value). Lengths, durations, layer indices and shadows are the same in both
- * themes; `--scrim` is the one colour that is too, because a translucent black darkens what
- * is under it rather than carrying a colour of its own.
+ * Only colours are restated in the light blocks, and the guard derives which those are from
+ * the value: a colour always needs a light variant, lengths, durations, layer indices and
+ * shadows never do. `--scrim` is a colour and is restated with the others. An earlier
+ * version exempted a translucent black as theme-independent on the reasoning that it darkens
+ * whatever is under it — true of a shadow, false of a scrim: 0.55 of black over a white page
+ * composites the whole thing to #737373, flattening the sidebar and topbar into one grey
+ * field that reads as if the theme flipped.
  */
 :root {
   --bg: #16181c;
@@ -200,6 +203,10 @@
   --bubble-fg: #16233b;
   --accent-bg: rgba(47, 111, 235, 0.1);
   --focus-ring: #2f6feb;
+  /* Not the dark theme's 0.55: on white that composites the whole page to
+     #737373, which erases the sidebar and topbar boundaries and reads as if the
+     theme flipped rather than as if a dialog opened. */
+  --scrim: rgba(0, 0, 0, 0.32);
   color-scheme: light;
 }
 
@@ -235,6 +242,10 @@
     --bubble-fg: #16233b;
     --accent-bg: rgba(47, 111, 235, 0.1);
     --focus-ring: #2f6feb;
+    /* Not the dark theme's 0.55: on white that composites the whole page to
+       #737373, which erases the sidebar and topbar boundaries and reads as if the
+       theme flipped rather than as if a dialog opened. */
+    --scrim: rgba(0, 0, 0, 0.32);
     color-scheme: light;
   }
 }

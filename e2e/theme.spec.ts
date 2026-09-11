@@ -160,6 +160,51 @@ test("code surfaces flip with the theme and stay readable in both", async ({ pag
   });
 });
 
+test("the dialog scrim dims less in the light theme than in the dark one", async ({ page }) => {
+  // The scrim was `rgba(0, 0, 0, 0.55)` in both themes. Over a white page that composites
+  // everything to `#737373` — the sidebar and topbar boundaries disappear and the page reads
+  // as if the theme flipped rather than as if a dialog opened. `style.test.ts` pins that the
+  // token has two values; this pins the rendered alpha, which a later rule could override.
+  const alpha = async () => {
+    const value = await page
+      .locator(".modal-overlay")
+      .evaluate((node) => getComputedStyle(node).backgroundColor);
+    const match = /rgba?\([^)]*?,\s*([\d.]+)\s*\)/.exec(value);
+    return match ? Number(match[1]) : 1;
+  };
+
+  // The theme is chosen *before* the dialog opens: the scrim covers the whole viewport and
+  // intercepts the toggle, which is why this cannot simply switch themes with it up.
+  const show = async (wanted: "light" | "dark") => {
+    const toggle = page.getByTestId("theme-toggle");
+    for (let i = 0; i < 4; i++) {
+      if ((await htmlTheme(page)) === wanted) break;
+      await toggle.click();
+    }
+    expect(await htmlTheme(page)).toBe(wanted);
+  };
+
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+
+  await show("dark");
+  await page.getByTestId("open-settings").click();
+  await expect(page.locator(".modal-overlay")).toBeVisible();
+  const dark = await alpha();
+  await page.locator(".modal-overlay").click({ position: { x: 8, y: 8 } });
+  await expect(page.locator(".modal-overlay")).toHaveCount(0);
+
+  await show("light");
+  await page.getByTestId("open-settings").click();
+  await expect(page.locator(".modal-overlay")).toBeVisible();
+  const light = await alpha();
+
+  expect(dark, "the dark scrim should stay heavy").toBeGreaterThan(0.4);
+  expect(light, "the light scrim should be much lighter").toBeLessThan(0.4);
+  expect(light).toBeLessThan(dark);
+});
+
 test("the user bubble flips with the theme and stays readable in both", async ({
   page,
   request,
