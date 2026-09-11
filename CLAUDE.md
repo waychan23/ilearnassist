@@ -52,7 +52,7 @@ must both be clean — CI (`.github/workflows/ci.yml`) enforces it, so a red run
 mergeable. The whole suite is offline: no API keys, no network.
 
 ```bash
-pnpm test              # vitest, both apps (~480 tests, a few seconds)
+pnpm test              # vitest, both apps (~670 tests, a few seconds)
 pnpm test:watch        # same, in watch mode
 pnpm test:coverage     # with a report; HTML lands in coverage/
 pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromium)
@@ -63,7 +63,8 @@ pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromiu
 | Path | What belongs there |
 | --- | --- |
 | `apps/server/test/` | unit + integration, mirroring `src/` |
-| `apps/web/test/` | unit tests for utils, the API client and the Pinia store (jsdom) |
+| `apps/web/test/` | unit tests for utils, the API client, the composables and the Pinia store (jsdom) |
+| `apps/web/test/i18n/` | catalog and hardcoded-text guards (see below) |
 | `e2e/*.spec.ts` | browser flows against the real stack |
 
 Each app's `tsconfig` includes its `test/` directory, so **`pnpm typecheck` checks the
@@ -110,6 +111,31 @@ route and chat tests need no port and no network — see
 `apps/server/test/chat-sse.test.ts`. Use a real `listen({ port: 0 })` only when a browser
 is the client.
 
+### Testing the i18n catalogs
+
+`apps/web/test/i18n/` is a set of guards rather than feature tests, and adding a string
+means satisfying all of them:
+
+- **`catalog.test.ts`** — key symmetry both ways, no empty values, no untranslated Chinese
+  left in `en.ts`, placeholder parity across plural branches, a message for every
+  `ApiErrorCode`/`ParseErrorCode`, every statically-written key resolves, and no dead keys.
+  Keys built by concatenation are recognised by their trailing dot and matched against an
+  explicit dynamic-prefix allowlist — keep that list narrow, since a broad prefix is where
+  a typo hides.
+- **`no-hardcoded-text.test.ts`** — fails on a user-facing CJK string anywhere outside
+  `src/locales/`. Mark a legitimate exception with a `// i18n-exempt: <reason>` line
+  comment, on the line or the one above; `grep -rn "i18n-exempt" apps/web/src` should
+  return exactly one file. If it returns more, the guard is being routed around.
+
+Tests that assert on wording must **pin the locale** (`i18n.global.locale.value = "zh-CN"`)
+rather than inherit jsdom's `en-US` navigator — otherwise they pass against the English
+catalog, which is a test passing for the wrong reason.
+
+In Playwright, `locale: "zh-CN"` is pinned on the project in `playwright.config.ts`, so
+every spec renders Chinese and inherits the pin. `e2e/i18n.spec.ts` is the only place the
+other locales are exercised, and it scopes its `test.use({ locale })` overrides to its own
+`describe` blocks.
+
 ### What is deliberately *not* unit tested
 
 The Vue components. The Playwright suite covers them, which is why the Vitest coverage
@@ -145,8 +171,14 @@ apps/server/src/
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
 apps/web/src/
   stores/app.ts           # Pinia store (all state + actions)
-  api/client.ts           # fetch helpers + SSE parser
+  api/client.ts           # fetch helpers + SSE parser (normalizes errors → ApiError)
+  i18n.ts                 # vue-i18n instance + the localStorage key
+  locales/                # zh-CN.ts (source of truth) + en.ts (typed against it)
   composables/confirm.ts  # promise-returning confirm() for destructive UI actions
+  composables/locale.ts   # language selection (sibling of theme.ts, not a store)
+  composables/theme.ts    # light/dark/auto
+  utils/apiError.ts       # server code → user-facing message
+  utils/locale.ts         # browser-language detection + the alias table
   components/…            # App, Sidebar, ChatView, MessageItem, ToolCallCard, Composer, dialogs
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
@@ -190,6 +222,42 @@ Fuller map in `docs/reference.md`.
 - **Shared types only.** Cross-boundary payloads live in `packages/shared`. Adding
   a field to an API response means updating the type there first, then both apps
   typecheck clean.
+- **No user-facing string is hardcoded.** Every visible label, tooltip,
+  `placeholder`, `aria-label` and `title` comes from `t()` and a key in
+  `apps/web/src/locales/`. The catalogs are `zh-CN.ts` (source of truth, typed)
+  and `en.ts` (typed as that schema, so `pnpm typecheck` fails on a missing key).
+  Keys are **domain-first** (`chat.titleHint`, `tools.name.write_file`), never
+  keyed by component file — components get split and renamed. Non-component
+  modules (`stores/app.ts`, `utils/minimap.ts`, `composables/confirm.ts`)
+  translate through `i18n.global.t`, not `useI18n()`.
+- **Symbols are not copy.** `⚠`, `✎`, `◈`, `＋`, `✕`, `AI` and product names stay
+  in the templates; so do the SI unit symbols in `utils/format.ts` (B/KB/MB/GB,
+  k/M). Moving them into the catalog only makes them harder to find.
+- **`en` plural messages use `|`; `zh-CN` ones do not.** Both catalogs take the
+  same call shape — `t(key, named, plural)` — so no component branches on the
+  locale. A message containing a literal `|` must escape it as `{'|'}` or it
+  becomes a plural branch. No message carries HTML: the two templates that need
+  markup split the sentence into fragments and wrap them in real elements, so
+  there is nothing for `v-html` to inject.
+- **Server errors travel as `{ error: { code, message, params? } }`.** `code` is
+  canonical and drives the client's wording (`ApiErrorCode` or `ParseErrorCode`
+  from `packages/shared`); `message` is the server's own sentence, kept only for
+  a client that does not know the code; `params` carries what the client needs to
+  interpolate. Add a code to the runtime list first, then the route, then
+  `errors.*`/`parseErrors.*` in both catalogs — `catalog.test.ts` iterates the
+  list and fails otherwise. `utils/apiError.ts` is the single place a code becomes
+  a message, which is why every `catch (e) { setError(e.message) }` site
+  translates for free.
+- **Raw SSE `error` bodies and tool-result strings are deliberately not
+  translated.** The first is dynamic provider text with no code to key on; the
+  second is *model input*, and translating it would change model behaviour. Both
+  stay as they are — a provider failure therefore renders in the provider's
+  language.
+- **Language is detected, not stored, until chosen.** Absence of `gl-locale` means
+  "read `navigator.languages`"; there is no `"auto"` value, unlike the theme,
+  because language is chosen once rather than toggled. Anything unsupported falls
+  back to English. `useLocale()` and the pre-paint script in `index.html` must
+  stay in lock-step, the same obligation `theme.ts` carries.
 - **SSE framing** is `event: <type>\ndata: <json>\n\n`. Chat streams via
   `reply.hijack()`; the agent emits `text` deltas, `reasoning` deltas,
   `tool_start`/`tool_end`, `usage`, `message_done`, optionally `title`, `error`,
