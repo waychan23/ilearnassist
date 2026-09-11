@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { api, streamChat, fileToBase64 } from "../api/client";
+import { i18n } from "../i18n";
 import type {
   Attachment,
   AttachmentParseRecord,
@@ -558,7 +559,12 @@ export const useAppStore = defineStore("app", () => {
 
   async function uploadAttachment(file: File): Promise<Attachment | null> {
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      setError(`「${file.name}」超过 ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB 限制`);
+      setError(
+        i18n.global.t("attachments.tooLarge", {
+          name: file.name,
+          limitMb: Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024),
+        })
+      );
       return null;
     }
 

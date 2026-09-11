@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { attachmentUrl } from "../api/client";
 import { translateParseError } from "../utils/apiError";
 import { formatBytes } from "../utils/format";
@@ -13,6 +14,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ remove: [id: string]; reparse: [attachment: Attachment] }>();
+
+const { t } = useI18n();
 
 interface Chip {
   attachment: Attachment;
@@ -30,11 +33,12 @@ interface Chip {
  * can actually read the file is the thing the user needs to know before sending, and a
  * failed parse otherwise looks identical to a successful one until the answer goes wrong.
  */
-/** `0k 字符` for a one-paragraph document reads as "nothing was extracted". */
 function formatChars(chars: number | undefined): string {
+  // Below 1000 the raw count is exact and honest; "0k characters" for a one-paragraph
+  // document reads as "nothing was extracted".
   if (!chars) return "";
-  if (chars < 1000) return `${chars} 字符`;
-  return `${(chars / 1000).toFixed(1)}k 字符`;
+  if (chars < 1000) return t("attachments.chars", { count: chars }, chars);
+  return t("attachments.charsK", { count: (chars / 1000).toFixed(1) });
 }
 
 function describe(a: Attachment): { detail: string; title: string } {
@@ -42,21 +46,28 @@ function describe(a: Attachment): { detail: string; title: string } {
   switch (a.parseStatus) {
     case "pending":
     case "parsing":
-      return { detail: "解析中…", title: "正在提取文本，完成后才能发送" };
+      return { detail: t("attachments.parsing"), title: t("attachments.parsingTitle") };
     case "ready": {
-      const pages = a.pageCount ? `${a.pageCount} 页 · ` : "";
-      const from = a.parserId && a.parserId !== "local" ? " · 云解析" : "";
+      const pages = a.pageCount
+        ? `${t("attachments.pages", { count: a.pageCount }, a.pageCount)} · `
+        : "";
+      const from = a.parserId && a.parserId !== "local" ? ` · ${t("attachments.cloud")}` : "";
+      const chars = formatChars(a.parsedChars);
+      // Composed fragments rather than one interpolated sentence: the chip has no room for
+      // a full sentence, and each part is a different unit for a translator.
       return {
-        detail: `已解析 · ${size} · ${pages}${formatChars(a.parsedChars)}${from}`,
-        title: "已解析，内容会随消息一起发送",
+        detail: [t("attachments.ready"), size, pages + chars + from].filter(Boolean).join(" · "),
+        title: t("attachments.readyTitle"),
       };
     }
     case "failed":
       // The code is canonical; `parseError` is the server's own sentence, used when the
       // client meets a code it has no message for (an older build, a newer server).
       return {
-        detail: `${size} · 解析失败`,
-        title: translateParseError(a.parseErrorCode, undefined, a.parseError) || "解析失败",
+        detail: `${size} · ${t("attachments.failed")}`,
+        title:
+          translateParseError(a.parseErrorCode, undefined, a.parseError) ||
+          t("attachments.failed"),
       };
     default:
       return { detail: size, title: a.name };
@@ -103,7 +114,7 @@ function stateOf(a: Attachment): string {
       <button
         v-if="c.attachment.parseStatus === 'failed' && removable"
         class="icon-btn retry"
-        title="重新解析"
+        :title="t('attachments.reparse')"
         data-testid="attachment-reparse"
         @click="emit('reparse', c.attachment)"
       >
@@ -112,7 +123,7 @@ function stateOf(a: Attachment): string {
       <button
         v-if="removable"
         class="icon-btn danger remove"
-        title="移除"
+        :title="t('attachments.remove')"
         @click="emit('remove', c.attachment.id)"
       >
         ✕

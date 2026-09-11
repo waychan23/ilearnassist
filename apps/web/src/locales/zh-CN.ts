@@ -69,6 +69,42 @@ export default {
     startAction: "＋ 新建会话（选择 Copilot）",
   },
 
+  composer: {
+    parsing: "正在解析附件，完成后即可发送…",
+    parseFailed:
+      "有 {count} 个附件解析失败，模型将无法读取其内容。可点击附件上的 ↻ 重新解析，或先在「设置 → 文档解析」中配置云解析服务。",
+    visionWarning:
+      "当前模型「{model}」未标记支持图片输入，图片将以文字占位符发送。可在「设置 → Providers」中为它勾选「图片输入」。",
+    placeholder: "输入消息，Enter 发送，Shift+Enter 换行",
+    thinking: "Agent 正在思考…",
+    parsingShort: "附件解析中…",
+    send: "发送 (Enter)",
+    attach: "添加图片或文件",
+    settings: "会话参数（Temperature、上下文长度、工具轮数…）",
+  },
+
+  attachments: {
+    parsing: "解析中…",
+    parsingTitle: "正在提取文本，完成后才能发送",
+    ready: "已解析",
+    readyTitle: "已解析，内容会随消息一起发送",
+    failed: "解析失败",
+    chars: "{count} 字符",
+    charsK: "{count}k 字符",
+    pages: "{count} 页",
+    cloud: "云解析",
+    reparse: "重新解析",
+    remove: "移除",
+    tooLarge: "「{name}」超过 {limitMb} MB 限制",
+  },
+
+  minimap: {
+    image: "[图片]",
+    file: "[附件：{name}]",
+    empty: "（无文本内容）",
+    jumpTo: "跳转到第 {n} 轮对话",
+  },
+
   sidebar: {
     newWorkspace: "新建工作区",
     deleteWorkspace: "删除当前工作区",

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   getMinimapRenderRange,
   MINIMAP_ITEM_HEIGHT,
@@ -14,6 +15,7 @@ import {
  * the turn, and clicking jumps the message list to it.
  */
 const props = defineProps<{ anchors: MessageMinimapAnchor[] }>();
+const { t } = useI18n();
 const emit = defineEmits<{ jump: [anchor: MessageMinimapAnchor] }>();
 
 const BASE_LINE_WIDTH = 6;
@@ -77,7 +79,7 @@ const previewTop = computed(() => {
 });
 
 const hoveredText = computed(() =>
-  hoveredAnchor.value ? normalizePreviewText(hoveredAnchor.value.text, "（无文本内容）") : ""
+  hoveredAnchor.value ? normalizePreviewText(hoveredAnchor.value.text, t("minimap.empty")) : ""
 );
 const hoveredAssistantText = computed(() =>
   hoveredAnchor.value?.assistantText ? normalizePreviewText(hoveredAnchor.value.assistantText) : ""
@@ -233,9 +235,9 @@ onBeforeUnmount(() => {
           type="button"
           class="minimap-anchor"
           :style="{ top: `${index * MINIMAP_ITEM_HEIGHT}px` }"
-          :aria-label="`跳转到第 ${index + 1} 轮对话`"
+          :aria-label="t('minimap.jumpTo', { n: index + 1 })"
           aria-keyshortcuts="ArrowUp ArrowDown Home End"
-          :title="normalizePreviewText(anchor.text, '（无文本内容）')"
+          :title="normalizePreviewText(anchor.text, t('minimap.empty'))"
           :tabindex="index === keyboardIndex ? 0 : -1"
           @mouseenter="hoveredIndex = index"
           @focus="focusAnchorAt(index)"

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../src/i18n.js";
 import type { Message } from "@guided-learning/shared";
 import {
   MINIMAP_ITEM_HEIGHT,
@@ -8,6 +9,12 @@ import {
   normalizePreviewText,
   smoothstep,
 } from "../../src/utils/minimap.js";
+
+// `messagePreview` emits translated attachment placeholders, and jsdom's navigator is
+// en-US — so pin the locale rather than let the ambient one decide the expected text.
+beforeEach(() => {
+  i18n.global.locale.value = "zh-CN";
+});
 
 function message(overrides: Partial<Message> & Pick<Message, "role">): Message {
   return {
@@ -106,7 +113,7 @@ describe("messagePreview", () => {
         ],
       })
     );
-    expect(preview).toBe("[图片] [附件：notes.md]");
+    expect(preview).toBe("[图片] [附件：notes.md]"); // pinned to zh-CN below
   });
 
   it("prefers the text when both are present", () => {

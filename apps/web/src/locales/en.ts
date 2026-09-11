@@ -56,6 +56,42 @@ const en: typeof MessageSchema = {
     startAction: "＋ New conversation (choose a Copilot)",
   },
 
+  composer: {
+    parsing: "Attachments are still being parsed; sending unlocks when they finish…",
+    parseFailed:
+      "1 attachment could not be parsed, so the model will not be able to read it. Click ↻ on the attachment to retry, or configure a cloud parser under Settings → Document parsing. | {count} attachments could not be parsed, so the model will not be able to read them. Click ↻ on an attachment to retry, or configure a cloud parser under Settings → Document parsing.",
+    visionWarning:
+      "The current model “{model}” is not marked as accepting image input, so images will be sent as text placeholders. Tick “Image input” for it under Settings → Providers.",
+    placeholder: "Type a message — Enter to send, Shift+Enter for a new line",
+    thinking: "The agent is thinking…",
+    parsingShort: "Parsing attachments…",
+    send: "Send (Enter)",
+    attach: "Add an image or file",
+    settings: "Session parameters (temperature, context length, tool steps…)",
+  },
+
+  attachments: {
+    parsing: "Parsing…",
+    parsingTitle: "Extracting text — sending unlocks when it finishes",
+    ready: "Parsed",
+    readyTitle: "Parsed; the contents will be sent with the message",
+    failed: "Parsing failed",
+    chars: "1 character | {count} characters",
+    charsK: "{count}k characters",
+    pages: "1 page | {count} pages",
+    cloud: "cloud",
+    reparse: "Parse again",
+    remove: "Remove",
+    tooLarge: "“{name}” exceeds the {limitMb} MB limit",
+  },
+
+  minimap: {
+    image: "[image]",
+    file: "[file: {name}]",
+    empty: "(no text content)",
+    jumpTo: "Jump to turn {n}",
+  },
+
   sidebar: {
     newWorkspace: "New workspace",
     deleteWorkspace: "Delete this workspace",

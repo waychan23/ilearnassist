@@ -1,3 +1,4 @@
+import { i18n } from "../i18n";
 import type { Message } from "../api/types";
 
 /**
@@ -66,7 +67,7 @@ export function messagePreview(message: Message, maxLength = MINIMAP_PREVIEW_MAX
   let text = message.content.trim();
   if (!text && message.attachments?.length) {
     text = message.attachments
-      .map((a) => (a.kind === "image" ? "[图片]" : `[附件：${a.name}]`))
+      .map((a) => (a.kind === "image" ? i18n.global.t("minimap.image") : i18n.global.t("minimap.file", { name: a.name })))
       .join(" ");
   }
   return normalizePreviewText(text.slice(0, maxLength));

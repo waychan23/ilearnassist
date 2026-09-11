@@ -9,6 +9,7 @@ import type {
   Workspace,
 } from "@guided-learning/shared";
 import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
+import { i18n } from "../../src/i18n.js";
 
 /**
  * The store is the only place the frontend's resolution order and streaming state machine
@@ -145,6 +146,9 @@ async function readyStore(options: { sessions?: Session[]; messages?: Message[] 
 }
 
 beforeEach(() => {
+  // The store renders some errors through i18n, and jsdom's navigator is en-US. Pin the
+  // locale so an assertion on wording is asserting the message, not the ambient locale.
+  i18n.global.locale.value = "zh-CN";
   setActivePinia(createPinia());
   vi.useFakeTimers();
   vi.clearAllMocks();

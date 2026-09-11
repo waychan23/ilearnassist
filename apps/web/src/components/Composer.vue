@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import AttachmentChips from "./AttachmentChips.vue";
 import TokenCountPopover from "./TokenCountPopover.vue";
@@ -7,6 +8,7 @@ import ModelSelector from "./ModelSelector.vue";
 import SessionSettingsDialog from "./dialogs/SessionSettingsDialog.vue";
 import { openSettings } from "../composables/ui";
 
+const { t } = useI18n();
 const store = useAppStore();
 const text = ref("");
 const uploading = ref(false);
@@ -101,17 +103,15 @@ function onKeydown(e: KeyboardEvent) {
   <div class="composer">
     <div class="inner-wrap">
       <div v-if="parsingDocuments" class="parse-notice" data-testid="composer-parsing">
-        正在解析附件，完成后即可发送…
+        {{ t("composer.parsing") }}
       </div>
 
       <div v-else-if="failedDocuments.length" class="vision-warning" data-testid="composer-parse-failed">
-        有 {{ failedDocuments.length }} 个附件解析失败，模型将无法读取其内容。可点击附件上的 ↻
-        重新解析，或先在「设置 → 文档解析」中配置云解析服务。
+        {{ t("composer.parseFailed", { count: failedDocuments.length }, failedDocuments.length) }}
       </div>
 
       <div v-if="imageWithoutVision" class="vision-warning">
-        当前模型「{{ store.effectiveModel?.name }}」未标记支持图片输入，图片将以文字占位符发送。
-        可在「设置 → Providers」中为它勾选「图片输入」。
+        {{ t("composer.visionWarning", { model: store.effectiveModel?.name ?? "" }) }}
       </div>
 
       <!-- One surface owns the input, the attachments and the toolbar (chatbox's
@@ -124,7 +124,7 @@ function onKeydown(e: KeyboardEvent) {
             data-testid="composer-input"
             rows="1"
             :placeholder="
-              store.streaming.active ? 'Agent 正在思考…' : '输入消息，Enter 发送，Shift+Enter 换行'
+              store.streaming.active ? t('composer.thinking') : t('composer.placeholder')
             "
             @keydown="onKeydown"
             @paste="onPaste"
@@ -136,10 +136,10 @@ function onKeydown(e: KeyboardEvent) {
             :disabled="!canSend"
             :title="
             store.streaming.active
-              ? 'Agent 正在思考…'
+              ? t('composer.thinking')
               : parsingDocuments
-                ? '附件解析中…'
-                : '发送 (Enter)'
+                ? t('composer.parsingShort')
+                : t('composer.send')
           "
             @click="send"
           >
@@ -160,7 +160,7 @@ function onKeydown(e: KeyboardEvent) {
           <div class="toolbar-left">
             <button
               class="icon-btn attach-btn"
-              title="添加图片或文件"
+              :title="t('composer.attach')"
               :disabled="uploading || store.streaming.active || parsingDocuments"
               @click="fileInput?.click()"
             >
@@ -168,7 +168,7 @@ function onKeydown(e: KeyboardEvent) {
             </button>
             <button
               class="icon-btn params-btn"
-              title="会话参数（Temperature、上下文长度、工具轮数…）"
+              :title="t('composer.settings')"
               @click="showSessionSettings = true"
             >
               🎛
