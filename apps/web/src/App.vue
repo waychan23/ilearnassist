@@ -37,9 +37,9 @@ onMounted(() => {
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  background: #3a1d1b;
-  border: 1px solid rgba(229, 83, 75, 0.5);
-  color: #f2a19c;
+  background: var(--panel);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
   padding: 10px 16px;
   border-radius: 10px;
   display: flex;

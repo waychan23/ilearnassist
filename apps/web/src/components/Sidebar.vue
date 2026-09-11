@@ -1,16 +1,34 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import type { Session } from "../api/types";
 import { openSettings } from "../composables/ui";
+import { useTheme } from "../composables/theme";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 
 const store = useAppStore();
+const theme = useTheme();
 
 const showCreateWorkspace = ref(false);
 const showNewSession = ref(false);
+
+/* ----------------------------------- theme ---------------------------------- */
+
+const THEME_META = {
+  light: { label: "浅色", icon: "☀️" },
+  dark: { label: "深色", icon: "🌙" },
+  auto: { label: "自动", icon: "🖥️" },
+} as const;
+
+const themeIcon = computed(() => THEME_META[theme.mode.value].icon);
+/** "自动（当前浅色）" reads clearer than just "自动" when the OS is doing the deciding. */
+const themeLabel = computed(() =>
+  theme.mode.value === "auto"
+    ? `自动（当前${THEME_META[theme.resolved.value].label}）`
+    : THEME_META[theme.mode.value].label
+);
 
 /* --------------------------------- rename ---------------------------------- */
 const renamingId = ref<string | null>(null);
@@ -137,6 +155,14 @@ async function onDeleteWorkspace() {
       <span class="dir" :title="store.config?.workspacesRootDir ?? ''">
         {{ store.config?.workspacesRootDir }}
       </span>
+      <button
+        class="icon-btn theme-toggle"
+        :title="`主题：${themeLabel}（点击切换）`"
+        data-testid="theme-toggle"
+        @click="theme.cycle()"
+      >
+        {{ themeIcon }}
+      </button>
     </div>
 
     <CreateWorkspaceDialog

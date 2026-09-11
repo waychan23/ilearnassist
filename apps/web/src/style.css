@@ -1,3 +1,20 @@
+/*
+ * Theme.
+ *
+ * Dark is the default (`:root`). Light overrides the palette when the user forces it
+ * (`data-theme="light"`) *or* follows the system (`data-theme="auto"` + light
+ * `prefers-color-scheme`). The two selectors apply the same light block; custom-property
+ * values cannot be shared between an attribute selector and a media query, so the light
+ * palette is spelt out twice.
+ *
+ * `color-scheme` is what tells the browser whether native controls and scrollbars render
+ * light or dark, so it flips alongside the palette.
+ *
+ * Code blocks stay dark in both themes — a deliberate choice (GitHub's own light theme
+ * keeps a light code background, but many editors invert it). `--code-bg` is therefore
+ * intentionally NOT overridden below, and `highlight.js/styles/github-dark.css` stays the
+ * single syntax theme.
+ */
 :root {
   --bg: #16181c;
   --sidebar: #1a1d21;
@@ -10,11 +27,61 @@
   --accent: #4c8bf5;
   --accent-hover: #5f97f7;
   --danger: #e5534b;
+  --danger-hover: #d0453d;
+  --danger-text: #f2a19c;
+  --danger-bg: rgba(229, 83, 75, 0.12);
+  --danger-border: rgba(229, 83, 75, 0.4);
   --warning: #e6b33c;
   --success: #4cc38a;
   --code-bg: #0d1117;
+  --scrollbar: #33373e;
+  --scrollbar-hover: #3f444c;
   --radius: 8px;
   color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --sidebar: #f6f8fa;
+  --panel: #ffffff;
+  --panel-2: #f0f2f5;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-2: #59636e;
+  --text-3: #818b98;
+  --accent: #2f6feb;
+  --accent-hover: #245cd0;
+  --danger: #d9433b;
+  --danger-hover: #bd372f;
+  --danger-text: #b3261e;
+  --danger-bg: rgba(217, 67, 59, 0.08);
+  --danger-border: rgba(217, 67, 59, 0.35);
+  --scrollbar: #c1c8d0;
+  --scrollbar-hover: #a5adb8;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    --bg: #ffffff;
+    --sidebar: #f6f8fa;
+    --panel: #ffffff;
+    --panel-2: #f0f2f5;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-2: #59636e;
+    --text-3: #818b98;
+    --accent: #2f6feb;
+    --accent-hover: #245cd0;
+    --danger: #d9433b;
+    --danger-hover: #bd372f;
+    --danger-text: #b3261e;
+    --danger-bg: rgba(217, 67, 59, 0.08);
+    --danger-border: rgba(217, 67, 59, 0.35);
+    --scrollbar: #c1c8d0;
+    --scrollbar-hover: #a5adb8;
+    color-scheme: light;
+  }
 }
 
 * {
@@ -45,11 +112,11 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #33373e;
+  background: var(--scrollbar);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f444c;
+  background: var(--scrollbar-hover);
 }
 
 /* ---------------------------------- layout ---------------------------------- */
@@ -448,9 +515,9 @@ body {
 }
 
 .error-banner {
-  background: rgba(229, 83, 75, 0.12);
-  border: 1px solid rgba(229, 83, 75, 0.4);
-  color: #f2a19c;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
   border-radius: var(--radius);
   padding: 8px 12px;
   margin-bottom: 8px;
@@ -615,7 +682,7 @@ body {
 }
 
 .btn.danger:hover {
-  background: #d0453d;
+  background: var(--danger-hover);
 }
 
 .btn.small {
