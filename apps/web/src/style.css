@@ -886,6 +886,29 @@ body {
   border: none;
   padding: 0;
 }
+
+/*
+ * Display math. KaTeX lays a `$$…$$` out as a centred, `nowrap` block, so a formula wider
+ * than the bubble would widen the message column instead of scrolling — `overflow-x` here
+ * is the same treatment `.markdown pre` gets, one rule up.
+ *
+ * The inner `display: inline-block` + `min-width: 100%` is what keeps centring *and*
+ * scrolling working at once. Centring alone is enough while the formula fits, but a
+ * wider one then overhangs both edges, and its left overhang lands past the scroll origin
+ * where no amount of dragging reaches it. Growing the box to the content means the
+ * vendor's `text-align: center` centres it when it fits and does nothing when it does not.
+ * Its `margin: 1em 0` is dropped for the block's own, which is the spacing every other
+ * block in a reply uses.
+ */
+.markdown .katex-block {
+  margin: 0 0 var(--space-5);
+  overflow-x: auto;
+}
+.markdown .katex-block > .katex-display {
+  display: inline-block;
+  min-width: 100%;
+  margin: 0;
+}
 .markdown blockquote {
   border-left: 3px solid var(--border);
   margin: 0 0 var(--space-5);
