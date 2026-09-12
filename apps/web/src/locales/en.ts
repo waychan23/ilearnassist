@@ -110,6 +110,25 @@ const en: typeof MessageSchema = {
     openNav: "Open navigation",
   },
 
+  files: {
+    tab: "Files",
+    refresh: "Refresh the file list",
+    empty: "This workspace has no files yet",
+    truncated: "Too many entries — showing the first {count}",
+    treeLabel: "Workspace files",
+    retry: "Try again",
+    preview: {
+      loading: "Reading…",
+      rendered: "Preview",
+      source: "Source",
+      viewLabel: "View as",
+      unsupported: "No preview for this format yet",
+      unsupportedHint: "Plain text and Markdown files can be previewed today.",
+      truncated: "Showing the first {size}",
+      size: "Size",
+    },
+  },
+
   session: {
     fallbackTitle: "New conversation",
     new: {
@@ -460,6 +479,10 @@ const en: typeof MessageSchema = {
     MESSAGE_REQUIRED: "A message is required.",
     QUESTION_NOT_PENDING: "Those questions no longer need an answer — they were submitted or retired already.",
     INVALID_ANSWER: "That answer is incomplete or out of date. Refresh the page and try again.",
+    FILE_NOT_FOUND: "That file or folder is gone — it was deleted or renamed.",
+    INVALID_FILE_PATH: "That location is outside the workspace and cannot be opened.",
+    NOT_A_DIRECTORY: "That path is not a folder.",
+    NOT_A_FILE: "That path is not a file.",
   },
 
   parseErrors: {

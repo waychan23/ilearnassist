@@ -1,17 +1,47 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import type { Session } from "../api/types";
 import { closeDrawer, openSettings, showWorkspaceHome, uiState } from "../composables/ui";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
+import FileTree from "./FileTree.vue";
 import Icon from "./Icon.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
 
 const showNewSession = ref(false);
+
+/* ---------------------------------- panels ---------------------------------- */
+
+/**
+ * Which panel the sidebar is showing. Component-local on purpose: nothing outside this
+ * component reads it, and `composables/ui.ts` is for the flags more than one place needs
+ * (`ui.ts` says so itself). The tree's freshness rule does not consult it — a loaded tree
+ * is refreshed after a turn whether or not it is on screen, which keeps that rule out of a
+ * component's state.
+ */
+const tab = ref<"sessions" | "files">("sessions");
+
+/**
+ * Make sure the open panel has something in it.
+ *
+ * Watched rather than called from the click: the same thing has to happen when the
+ * *workspace* changes underneath a sidebar sitting on the files tab, and the tab switch is
+ * only the easy half of that. No drawer handling here — switching tabs is not navigation,
+ * and the drawer the user opened to reach this control should stay open.
+ */
+function ensurePanel() {
+  if (tab.value !== "files" || store.fileListings[""]) return;
+  void store.loadDirectory("");
+}
+watch([() => store.activeWorkspaceId, tab], ensurePanel, { immediate: true });
+
+function onRefresh() {
+  void store.refreshFileTree();
+}
 
 /*
  * Every navigation closes the drawer, and none of them is a watcher.
@@ -121,15 +151,56 @@ async function onDeleteSession(session: Session) {
       </button>
     </div>
 
-    <div class="side-section">
-      <span>{{ t("sidebar.sessions") }}</span>
-      <button class="icon-btn" data-testid="new-session" :title="t('sidebar.newSession')"
-        :aria-label="t('sidebar.newSession')" @click="openNewSession">
+    <!--
+      The two panels, and the action that belongs to whichever is open.
+
+      The action is contextual — new conversation, or refresh the tree — because the strip and
+      its button share one row and the sidebar's vertical budget on a phone is real. The plain
+      `.tab` buttons mirror the settings dialog's strip rather than inventing a second kind;
+      see `docs/design-system.md` on why a shared class is not re-declared locally.
+    -->
+    <div class="tabs side-tabs">
+      <button
+        class="tab"
+        data-testid="sidebar-tab-sessions"
+        :class="{ active: tab === 'sessions' }"
+        @click="tab = 'sessions'"
+      >
+        {{ t("sidebar.sessions") }}
+      </button>
+      <button
+        class="tab"
+        data-testid="sidebar-tab-files"
+        :class="{ active: tab === 'files' }"
+        @click="tab = 'files'"
+      >
+        {{ t("files.tab") }}
+      </button>
+
+      <button
+        v-if="tab === 'sessions'"
+        class="icon-btn tab-action"
+        data-testid="new-session"
+        :title="t('sidebar.newSession')"
+        :aria-label="t('sidebar.newSession')"
+        @click="openNewSession"
+      >
         <Icon name="plus" />
+      </button>
+      <button
+        v-else
+        class="icon-btn tab-action"
+        data-testid="files-refresh"
+        :disabled="store.fileLoadingPath !== null"
+        :title="t('files.refresh')"
+        :aria-label="t('files.refresh')"
+        @click="onRefresh"
+      >
+        <Icon name="retry" />
       </button>
     </div>
 
-    <div class="side-scroll" data-testid="session-list">
+    <div v-if="tab === 'sessions'" class="side-scroll" data-testid="session-list">
       <div
         v-for="s in store.sessions"
         :key="s.id"
@@ -160,6 +231,12 @@ async function onDeleteSession(session: Session) {
         </template>
       </div>
       <div v-if="store.sessions.length === 0" class="muted">{{ t("sidebar.noSessions") }}</div>
+    </div>
+
+    <!-- The other panel takes the same scroller. One `.side-scroll` in the DOM either way —
+         the sidebar's pinned header and footer depend on exactly one. -->
+    <div v-else class="side-scroll" data-testid="file-panel">
+      <FileTree />
     </div>
 
     <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
@@ -216,5 +293,10 @@ async function onDeleteSession(session: Session) {
   padding: 3px var(--space-3);
   font-size: var(--fs-3);
   height: 26px;
+}
+/* Pushes the panel's action to the far end of the strip it shares with the tabs. */
+.tab-action {
+  margin-left: auto;
+  align-self: center;
 }
 </style>

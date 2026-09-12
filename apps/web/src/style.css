@@ -654,15 +654,13 @@ body {
 
 /* -------------------------------- sidebar bits ------------------------------ */
 
-.side-section {
-  padding: var(--space-5) var(--space-6) var(--space-3);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: var(--text-3);
-  font-size: var(--fs-2);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+/* The sidebar's tab strip: the shared `.tabs` at the sidebar's own padding, so its labels
+   line up with the workspace row above it and the rows below rather than floating at the
+   dialog's inset. A variant rather than a second strip — `.tool-checks` sets the precedent
+   of a shared class that keeps its own gap and padding at one site. */
+.side-tabs {
+  padding: var(--space-4) var(--space-4) 0;
+  flex-shrink: 0;
 }
 
 .side-scroll {
@@ -1365,6 +1363,55 @@ body {
 }
 .tab.active .tab-count {
   color: var(--text-2);
+}
+
+/*
+ * A segmented control: one choice among a few, expressed as a single control.
+ *
+ * The difference from a row of `.btn`s is the shared *track*. Two buttons side by side are
+ * two things that each do something, and whichever is highlighted reads as the one that is
+ * available; the segments sitting inside one sunken surface makes the same pair read as two
+ * states of one thing. That is the whole reason this class exists rather than `.btn.primary`
+ * on the active one — it is not a restyle.
+ *
+ * The tone is deliberately quieter than `.btn`: this changes what you are looking at, it does
+ * not do anything, and a view switcher that looks like a dialog's primary action competes
+ * with the action it is only a switch for.
+ *
+ * `--panel-2` under `--panel` is the track/raised pair `.badge` and `.tab-count` already use,
+ * and both spell a foreground of their own — the palette has no surface without one.
+ */
+.segmented {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.segment {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--fs-2);
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.segment:hover {
+  color: var(--text-2);
+}
+/*
+ * Keyed on the attribute rather than a `.active` class, so the segment that is *announced* as
+ * selected is the one that is *painted* as selected. A class would be a second copy of the
+ * same fact, and the two drift in the direction nobody sees: the control still works, and one
+ * of the two looks wrong to one of the two audiences.
+ */
+.segment[aria-pressed="true"] {
+  background: var(--panel);
+  color: var(--text);
 }
 
 /*

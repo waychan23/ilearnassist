@@ -176,6 +176,7 @@ apps/server/src/
   config.ts               # YAML + ${ENV} resolution + .env loader
   db.ts                   # better-sqlite3 schema + migrations + CRUD (snake_case cols)
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt
+  files.ts                # the workspace browser's read side: one level, one file
   attachments.ts          # upload storage + multimodal content building
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
@@ -200,9 +201,10 @@ apps/web/src/
   composables/locale.ts   # language selection (sibling of theme.ts, not a store)
   composables/theme.ts    # light/dark/auto
   utils/apiError.ts       # server code → user-facing message
+  utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
   utils/locale.ts         # browser-language detection + the alias table
   components/…            # App, WorkspaceHome, Sidebar, ChatView, MessageItem, ToolCallCard,
-                          #   AskUserCard, Composer, TopbarControls, dialogs
+                          #   AskUserCard, Composer, TopbarControls, FileTree, dialogs
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -230,6 +232,53 @@ Fuller map in `docs/reference.md`.
   through `resolveInWorkspace` (rejects `..` escapes and absolute escapes) and
   never operate outside the active workspace directory. Do not add a file tool
   that bypasses this.
+- **The file browser reads the same directory the tools do, and is stricter about how.**
+  `files.ts` resolves through `resolveInWorkspace` first — the same lexical boundary — and then
+  `realpath`s the result, because the lexical check cannot see a symlink inside the workspace
+  pointing at `/etc/passwd`, and in a browser a single click is enough to follow one. The
+  agent's own tools keep the lexical-only behaviour on purpose: the model has no tool that
+  creates a symlink, so one can only be there because the user put it there, and reading
+  through it is then their decision about their own machine. That asymmetry is a product
+  decision, not an oversight — do not "unify" the two without deciding which way.
+  An entry is never *hidden* because a read would be refused: a path that was silently
+  omitted is indistinguishable from one that was never there, so an escaping symlink is
+  listed and the failure is reported when it is opened.
+- **The file browser reads one directory level at a time, and its two endpoints are shaped
+  for the writes that come next.** `GET /api/workspaces/:id/files?path=` and
+  `…/files/content?path=` are the collection and the resource; a create, a save, a rename and
+  a delete are additions beside them, not a rename of them. Listing is per level on purpose:
+  a workspace with a `node_modules` in it costs one `readdir` until someone opens it, and a
+  refresh re-reads only the directories actually on screen.
+  `?path=` is a query parameter rather than a path segment because file names legitimately
+  contain `/`, `#`, `&` and CJK — and because `?path=a&path=b` parses to an *array*, which
+  `files.ts` refuses rather than letting a string operation on it become a 500.
+- **A file's preview `kind` is the extension point.** `FileContent.kind` is a union
+  (`text` / `markdown` / `unsupported`), so the next format is a new member and a branch in
+  `FilePreviewDialog` — not a second endpoint. The server decides it, not the client: it is
+  the side that can sniff the bytes, and an unfamiliar extension is decided by a NUL check and
+  a UTF-8 decode rather than a table, which is what makes `Makefile` and `LICENSE` readable.
+  Past the preview cap the reply is a 200 with `truncated: true`, never an error — a 2 GB log
+  is exactly the file someone opens to see the top of.
+- **There is one code highlighter, and `highlight.js` is it.** `markdown.ts` exposes
+  `highlightFile(code, fileName)` for the preview, and `renderMarkdown`'s fenced-code path
+  calls the *same* internal helper and the *same* escaper — a file and a message must not
+  colour one snippet two ways, and there must not be two escapers. The syntax palette is
+  injected at runtime by `composables/theme.ts` rather than imported as a stylesheet, so the
+  preview's `<pre>` carries `hljs` on the **`<pre>`** and not on the `<code>` (the vendor's
+  `pre code.hljs { padding }` is what the other placement wakes up). The language comes from
+  the file's extension via a short alias table, deliberately short because most extensions
+  already *are* the highlight.js name; `.vue` is left out on purpose, since no grammar
+  describes a template plus a script plus a style, and escaped plain text beats a wrong
+  colouring. Past `MAX_HIGHLIGHT_CHARS` the text is escaped rather than tokenised — the cap
+  exists because a minified bundle at the 256 KB preview cap costs a third of a second in
+  `hljs` alone.
+- **The file tree's freshness is the refresh button plus the end of a turn.** The post-turn
+  re-read hangs off `consume()`'s `finally` in `stores/app.ts`, which is the one point every
+  turn ends at, and it is gated on a tree having been loaded at all — a panel nobody opened
+  must not make every turn pay for a request. It reports nothing: a turn that wrote files is
+  not a turn that was about the file browser, and a toast for it would interrupt a
+  conversation that worked. Failures the user *did* ask for go to `fileTreeError` (the tree
+  pane) or `filePreviewError` (inside the dialog) — not the global toast.
 - **Uploads are sandboxed too.** Attachment paths go through `resolveStoredPath`
   over `data/uploads/`, and stored files are located by directory listing rather
   than by anything the client claims. Uploads live outside the workspace on

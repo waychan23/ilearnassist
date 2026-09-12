@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
@@ -250,4 +252,64 @@ test("layout: a resize back to desktop restores the inline sidebar", async ({ pa
   await expect(page.getByTestId("nav-toggle")).toBeHidden();
   await expect(page.getByTestId("sidebar")).toBeVisible();
   expect((await page.getByTestId("sidebar").boundingBox())?.width).toBeCloseTo(272, 0);
+});
+
+/** A workspace of its own with one file in it, entered with the files panel open. */
+async function drawerFiles(
+  page: import("@playwright/test").Page,
+  request: import("@playwright/test").APIRequestContext,
+  name: string,
+) {
+  const res = await request.post("/api/workspaces", { data: { name } });
+  expect(res.status()).toBe(201);
+  const { dirPath } = (await res.json()) as { dirPath: string };
+  writeFileSync(join(dirPath, "notes.txt"), "内容");
+
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  await page.getByTestId("nav-toggle").tap();
+  await page.getByTestId("sidebar-tab-files").tap();
+  await expect(page.getByTestId("file-row").first()).toBeVisible();
+}
+
+test("layout: the file preview is a bottom sheet that fits the screen", async ({ page, request }) => {
+  // The teleport check for the second overlay the sidebar can open. The drawer is
+  // `position: fixed` inside a `transform`, so a `.modal-overlay` left inside it would be laid
+  // out in the off-canvas panel and render off-screen — and the file tree lives in exactly
+  // that panel, which is what makes this the case worth pinning.
+  await drawerFiles(page, request, "抽屉预览");
+
+  const row = page.getByTestId("file-row").first();
+  // The phone's row is the 44px one, so the tap lands rather than missing a 26px target.
+  expect((await row.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await row.tap();
+
+  const dialog = page.locator("body > .modal-overlay");
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId("file-preview-text")).toHaveText("内容");
+
+  // Asserting the parent is `body` is the actual invariant; the box is the narrow-screen
+  // polish on top of it.
+  const box = await dialog.locator(".modal").boundingBox();
+  expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
+  expect(box?.width ?? 0).toBeLessThanOrEqual(412);
+});
+
+test("layout: one Escape closes the file preview, not the drawer under it", async ({
+  page,
+  request,
+}) => {
+  // The same guard the confirm prompt has, for the same reason: `FilePreviewDialog` listens on
+  // `window` for Escape too, so without `App.vue` returning early the dialog closes *and* the
+  // panel holding the tree slides away underneath it — leaving the user outside the drawer
+  // they were browsing from.
+  await drawerFiles(page, request, "抽屉退出");
+  await page.getByTestId("file-row").first().tap();
+  await expect(page.locator("body > .modal-overlay")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+
+  await expect(page.locator("body > .modal-overlay")).toHaveCount(0);
+  await expect(page.getByTestId("sidebar")).toBeVisible();
+  await expect(page.getByTestId("file-tree")).toBeVisible();
 });

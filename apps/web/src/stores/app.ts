@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import { api, streamAnswers, streamChat, fileToBase64 } from "../api/client";
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
+import { flattenTree } from "../utils/fileTree";
 import type {
   AskUserAnswers,
   Attachment,
@@ -12,10 +13,12 @@ import type {
   CopilotDefaults,
   CreateCopilotInput,
   CreateProviderInput,
+  DirectoryListing,
   DocumentParserConfig,
   DocumentParserKind,
   DocumentParsingConfig,
   DriverInfo,
+  FileContent,
   Message,
   MessageUsage,
   ProviderConfig,
@@ -79,6 +82,15 @@ export interface DocumentParserDraft {
 /** Whether an attachment is still queued or being read. */
 function isSettling(attachment: Attachment): boolean {
   return attachment.parseStatus === "pending" || attachment.parseStatus === "parsing";
+}
+
+/**
+ * A caught value as something worth showing. `ApiError` already carries a message the user
+ * can read — the catalog's sentence for the server's code — so this is only about the
+ * non-`Error` throws, which reach here as "[object Object]" if nobody says otherwise.
+ */
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 const EMPTY_STREAMING = (): StreamingState => ({
@@ -164,6 +176,58 @@ export const useAppStore = defineStore("app", () => {
 
   const streaming = ref<StreamingState>(EMPTY_STREAMING());
   const error = ref<string | null>(null);
+
+  /* ------------------------------ file browser ------------------------------ */
+
+  /**
+   * The workspace's file tree, held here rather than inside the component.
+   *
+   * The tree is domain state, not a widget's private business: it is filled from the API,
+   * it is invalidated by something that happens elsewhere (a turn that wrote files), and it
+   * is the one part of this feature a unit test can reach — components in this project are
+   * covered by Playwright and nothing else.
+   *
+   * Listings are keyed by the directory's workspace-relative path, `""` for the root, and a
+   * directory is fetched when it is first expanded. Nothing is recursive: a workspace with a
+   * `node_modules` in it costs one `readdir` until someone actually opens it.
+   */
+  const fileListings = ref<Record<string, DirectoryListing>>({});
+  /** Directories the user has opened, by path. Order is irrelevant; membership is not. */
+  const fileExpanded = ref<string[]>([]);
+  /** The directory whose listing is in flight, or null. One at a time — it is a click. */
+  const fileLoadingPath = ref<string | null>(null);
+  /**
+   * A listing failure, shown in the tree pane.
+   *
+   * Its own slot rather than the global toast: the failure belongs to the panel the user is
+   * looking at, and a toast is the app-wide channel for a failed *action*. The preview's
+   * failures are separate again, for the same reason — see `filePreviewError`.
+   */
+  const fileTreeError = ref<string | null>(null);
+
+  /** The file the preview dialog is showing, or null when it is closed. */
+  const filePreviewPath = ref<string | null>(null);
+  const fileContent = ref<FileContent | null>(null);
+  const fileContentLoading = ref(false);
+  const filePreviewError = ref<string | null>(null);
+
+  /** The visible rows, depth-first — see `utils/fileTree.ts` for the walk. */
+  const fileRows = computed(() => flattenTree(fileListings.value, fileExpanded.value));
+
+  /**
+   * How many entries the first truncated listing is showing, or null when none is.
+   *
+   * The count comes from the listing rather than from a constant the client would have to
+   * keep in step with the server: what the user needs to know is how much they are looking
+   * at, and that number is already in the reply.
+   */
+  const fileTruncatedAt = computed<number | null>(() => {
+    for (const path of ["", ...fileExpanded.value]) {
+      const listing = fileListings.value[path];
+      if (listing?.truncated) return listing.entries.length;
+    }
+    return null;
+  });
 
   /* ------------------------------- derived --------------------------------- */
   const activeWorkspace = computed(
@@ -289,6 +353,7 @@ export const useAppStore = defineStore("app", () => {
     activeCopilotId.value = null;
     draftSettings.value = {};
     messages.value = [];
+    resetFileTree();
     await loadSessions();
   }
 
@@ -309,6 +374,144 @@ export const useAppStore = defineStore("app", () => {
    */
   async function refreshWorkspaces(): Promise<void> {
     workspaces.value = await api.listWorkspaces();
+  }
+
+  /* ------------------------------ file browser ------------------------------ */
+
+  /**
+   * Forget the tree. The paths in it belong to the workspace being left, so keeping any of
+   * them would show one workspace's files under another's name — and an open preview would
+   * outlive the file it is showing.
+   */
+  function resetFileTree(): void {
+    fileListings.value = {};
+    fileExpanded.value = [];
+    fileLoadingPath.value = null;
+    fileTreeError.value = null;
+    closeFile();
+  }
+
+  /**
+   * Read one directory, and remember it. Returns whether it arrived.
+   *
+   * Reports its own failure into `fileTreeError` rather than throwing, because every caller
+   * wants the same thing done with it: shown in the panel the user is looking at. The one
+   * caller that does *not* want it reported is the post-turn re-read, and that one goes
+   * through `refreshFileTree`, which has the silent flag.
+   *
+   * A listing that is already cached is reused, which is what makes collapsing and reopening a
+   * directory free. Re-reading on demand is `refreshFileTree`, which is deliberately not this.
+   */
+  async function loadDirectory(path: string): Promise<boolean> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) return false;
+    if (fileListings.value[path]) return true;
+
+    fileLoadingPath.value = path;
+    try {
+      const listing = await api.listFiles(workspaceId, path);
+      /*
+       * Dropped if the workspace changed while this was in flight. The paths in a listing are
+       * relative to the workspace that answered, so writing one into a tree the user has
+       * since switched away from would show one workspace's files under another's name — and
+       * `selectWorkspace` has already cleared the tree by then, so this would be resurrecting
+       * it rather than appending to it.
+       */
+      if (activeWorkspaceId.value !== workspaceId) return false;
+      fileListings.value = { ...fileListings.value, [listing.path]: listing };
+      fileTreeError.value = null;
+      return true;
+    } catch (e) {
+      fileTreeError.value = messageOf(e);
+      return false;
+    } finally {
+      fileLoadingPath.value = null;
+    }
+  }
+
+  /**
+   * Open or close a directory. Opening fetches it the first time; closing only folds it
+   * away, leaving the listing cached so reopening does not go back to the server.
+   *
+   * A directory whose fetch failed is closed again rather than left open and empty: an empty
+   * expanded directory is indistinguishable from a directory that really is empty, which is
+   * the one thing a failure must not look like.
+   */
+  async function toggleDirectory(path: string): Promise<void> {
+    if (fileExpanded.value.includes(path)) {
+      fileExpanded.value = fileExpanded.value.filter((p) => p !== path);
+      return;
+    }
+
+    fileTreeError.value = null;
+    fileExpanded.value = [...fileExpanded.value, path];
+    if (!(await loadDirectory(path))) {
+      fileExpanded.value = fileExpanded.value.filter((p) => p !== path);
+    }
+  }
+
+  /**
+   * Re-read the root and every directory the user has open.
+   *
+   * This is the whole refresh story, and it is deliberately shallow: it re-reads what is on
+   * screen, not the workspace. Anything deeper is unopened and will be fetched when it is.
+   *
+   * `silent` is the post-turn re-read. It reports nothing, because a turn that wrote files
+   * is not a turn that was *about* the file browser — a failure there is a server problem
+   * the user did not ask about, and a toast for it would interrupt a conversation that
+   * worked. It also does nothing at all when the tree was never opened.
+   */
+  async function refreshFileTree(options: { silent?: boolean } = {}): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) return;
+    if (options.silent && fileListings.value[""] === undefined) return;
+
+    const targets = ["", ...fileExpanded.value];
+    fileLoadingPath.value = "";
+    try {
+      const listings = await Promise.all(targets.map((path) => api.listFiles(workspaceId, path)));
+      // Same guard as `loadDirectory`: a refresh that outlived its workspace must not land.
+      if (activeWorkspaceId.value !== workspaceId) return;
+      const next = { ...fileListings.value };
+      for (const listing of listings) next[listing.path] = listing;
+      fileListings.value = next;
+      fileTreeError.value = null;
+    } catch (e) {
+      if (!options.silent) fileTreeError.value = messageOf(e);
+    } finally {
+      fileLoadingPath.value = null;
+    }
+  }
+
+  /**
+   * Open a file in the preview.
+   *
+   * Unlike the rest of the store's actions this one reports its own failure instead of
+   * throwing, because its caller is a dialog that is already open: the error has one
+   * obvious home, and it is the body of the thing the user just asked for.
+   */
+  async function openFile(path: string): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) return;
+
+    filePreviewPath.value = path;
+    fileContent.value = null;
+    filePreviewError.value = null;
+    fileContentLoading.value = true;
+    try {
+      fileContent.value = await api.readFileContent(workspaceId, path);
+    } catch (e) {
+      filePreviewError.value = messageOf(e);
+    } finally {
+      fileContentLoading.value = false;
+    }
+  }
+
+  function closeFile(): void {
+    filePreviewPath.value = null;
+    fileContent.value = null;
+    filePreviewError.value = null;
+    fileContentLoading.value = false;
   }
 
   async function renameWorkspace(id: string, name: string): Promise<void> {
@@ -609,7 +812,7 @@ export const useAppStore = defineStore("app", () => {
       if (isSettling(attachment)) startParsePolling(sessionId);
       return attachment;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
       return null;
     }
   }
@@ -640,7 +843,7 @@ export const useAppStore = defineStore("app", () => {
       startParsePolling(sessionId, () => markingParsing.value.size > 0);
     } catch (e) {
       markingParsing.value.delete(attachment.id);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
     }
   }
 
@@ -737,13 +940,18 @@ export const useAppStore = defineStore("app", () => {
       for await (const ev of stream) applyEvent(ev);
     } catch (e) {
       requestFailed = true;
-      streaming.value.error = e instanceof Error ? e.message : String(e);
+      streaming.value.error = messageOf(e);
     } finally {
       streaming.value.active = false;
       stopReasoningTicker();
       // Pick up the server-assigned title and this turn's updated_at without clobbering
       // the optimistic bubbles already in `messages`.
       await loadSessions().catch(() => undefined);
+      // A turn is the one thing that reliably writes into the workspace, so the tree is
+      // re-read here — at the single point every turn ends, rather than from the two
+      // callers that start one. Silent, and a no-op when the tree was never opened: this
+      // is a courtesy to the panel, not part of finishing a turn.
+      await refreshFileTree({ silent: true }).catch(() => undefined);
     }
     return !requestFailed;
   }
@@ -861,7 +1069,17 @@ export const useAppStore = defineStore("app", () => {
     parserKinds,
     streaming,
     error,
+    fileListings,
+    fileExpanded,
+    fileLoadingPath,
+    fileTreeError,
+    filePreviewPath,
+    fileContent,
+    fileContentLoading,
+    filePreviewError,
     // derived
+    fileRows,
+    fileTruncatedAt,
     activeWorkspace,
     activeSession,
     activeCopilot,
@@ -908,5 +1126,11 @@ export const useAppStore = defineStore("app", () => {
     sendMessage,
     answerQuestion,
     setError,
+    loadDirectory,
+    toggleDirectory,
+    refreshFileTree,
+    openFile,
+    closeFile,
+    resetFileTree,
   };
 });

@@ -8,9 +8,11 @@ import type {
   CreateDocumentParserInput,
   CreateProviderInput,
   CreateSessionInput,
+  DirectoryListing,
   DocumentParserConfig,
   DocumentParsingConfig,
   DriverInfo,
+  FileContent,
   AttachmentParseRecord,
   Message,
   ProviderConfig,
@@ -94,6 +96,21 @@ export const api = {
     request<Copilot>(`/copilots/${id}`, { method: "PUT", body: JSON.stringify(input) }),
   deleteCopilot: (id: string) =>
     request<{ ok: boolean }>(`/copilots/${id}`, { method: "DELETE" }),
+
+  /**
+   * One directory level of the workspace, addressed by a path relative to its root (`""`
+   * for the root itself). The tree is expanded by the user, so only the levels they opened
+   * are ever fetched.
+   */
+  listFiles: (workspaceId: string, path: string) =>
+    request<DirectoryListing>(
+      `/workspaces/${workspaceId}/files?path=${encodeURIComponent(path)}`
+    ),
+  /** A file's metadata and, when it is text, its contents. */
+  readFileContent: (workspaceId: string, path: string) =>
+    request<FileContent>(
+      `/workspaces/${workspaceId}/files/content?path=${encodeURIComponent(path)}`
+    ),
 
   listSessions: (workspaceId: string) =>
     request<Session[]>(`/workspaces/${workspaceId}/sessions`),

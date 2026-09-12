@@ -77,6 +77,12 @@ export const ICON_PATHS = {
 
   file: ["M3.5 2.5H8.75L12.5 6.25V13.5H3.5Z", "M8.75 2.5V6.25H12.5"],
 
+  /* The file tree's two directory marks. One shape with the front folded down for the open
+   * state, so an expanded directory is legible without reading the caret beside it — the
+   * caret says which rows belong to it, the folder says whether it is open. */
+  folder: ["M2.5 12.5V4.5H6.5L8 6.5H13.5V12.5Z"],
+  "folder-open": ["M2.5 12.5V4.5H6.5L8 6.5H12V8.5", "M2.5 12.5L4.6 8.5H14L12 12.5Z"],
+
   image: [
     "M2.5 3.5H13.5V12.5H2.5Z",
     "M2.5 9.75L5.5 6.75L8.5 9.75L10.25 8L13.5 11.25",
