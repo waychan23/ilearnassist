@@ -690,18 +690,32 @@ export function createDb(dbPath: string): AppDb {
       WHERE ss.session_id = ? AND w.user_id = ?
       ORDER BY ss.created_at ASC, src.id ASC`
   );
+  /*
+   * `UNION ALL` under an explicit `MIN(linked_at)`, not a bare `UNION`.
+   *
+   * An upload links a source to the conversation *and* to its workspace, as two rows written
+   * by two separate `now()` calls. A `UNION` dedupes whole rows, so it collapsed these two
+   * arms only while the timestamps happened to agree to the millisecond — and the moment they
+   * did not, the same file came back twice, which is one file rendering as two chips. The
+   * union was never what made a source appear once; the id was. Collapsing on it and keeping
+   * the earliest link is what the ordering always meant, and it is the only version of this
+   * that cannot return one file twice.
+   */
   const stmtListReadableSources = db.prepare(
-    `SELECT src.*, ss.created_at AS linked_at FROM session_sources ss
-       JOIN sources src ON src.id = ss.source_id
-       JOIN sessions s ON s.id = ss.session_id
-       JOIN workspaces w ON w.id = s.workspace_id
-      WHERE ss.session_id = @sessionId AND w.user_id = @userId
-     UNION
-     SELECT src.*, ws.created_at AS linked_at FROM workspace_sources ws
-       JOIN sources src ON src.id = ws.source_id
-       JOIN workspaces w2 ON w2.id = ws.workspace_id
-      WHERE ws.workspace_id = @workspaceId AND w2.user_id = @userId
-     ORDER BY linked_at ASC, id ASC`
+    `SELECT src.*, arm.linked_at FROM (
+       SELECT source_id, MIN(linked_at) AS linked_at FROM (
+         SELECT ss.source_id AS source_id, ss.created_at AS linked_at FROM session_sources ss
+           JOIN sessions s ON s.id = ss.session_id
+           JOIN workspaces w ON w.id = s.workspace_id
+          WHERE ss.session_id = @sessionId AND w.user_id = @userId
+         UNION ALL
+         SELECT ws.source_id AS source_id, ws.created_at AS linked_at FROM workspace_sources ws
+           JOIN workspaces w2 ON w2.id = ws.workspace_id
+          WHERE ws.workspace_id = @workspaceId AND w2.user_id = @userId
+       ) GROUP BY source_id
+     ) arm
+     JOIN sources src ON src.id = arm.source_id
+     ORDER BY arm.linked_at ASC, src.id ASC`
   );
 
   /* ------------------------------ workspaces ------------------------------ */
