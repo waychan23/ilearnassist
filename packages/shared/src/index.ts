@@ -39,6 +39,7 @@ export const ALL_TOOL_NAMES = [
   "delete_file",
   "read_document",
   "ask_user",
+  "quiz",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
@@ -68,7 +69,7 @@ export interface AskUserQuestion {
 }
 
 /**
- * Where an `ask_user` call stands.
+ * Where a suspending tool call stands.
  *
  * `awaiting`  — the turn is suspended here; the card is live and answerable.
  * `answered`  — the user submitted; `output` and `answer` are both present.
@@ -77,8 +78,11 @@ export interface AskUserQuestion {
  *               keeps it out of the model's history.
  * `dismissed` — the user pressed cancel. Also answerless, but a decision rather than a
  *               drift, and worded differently in the UI.
+ *
+ * Named for the call rather than for `ask_user`, which is what it used to be: it is the
+ * vocabulary of every suspending tool, and `quiz` is the second one.
  */
-export type AskUserStatus = "awaiting" | "answered" | "skipped" | "dismissed";
+export type ToolCallStatus = "awaiting" | "answered" | "skipped" | "dismissed";
 
 /**
  * One question's answer.
@@ -95,14 +99,6 @@ export interface AskUserAnswer {
 /** Answers keyed by the question's index in the `ask_user` call, as a string ("0"…"3"). */
 export type AskUserAnswers = Record<string, AskUserAnswer>;
 
-/** What the client POSTs back to `/api/sessions/:id/answers`. */
-export interface AnswerToolCallInput {
-  toolCallId: string;
-  action: "submit" | "cancel";
-  /** Required (and complete) when `action` is `submit`. */
-  answers?: AskUserAnswers;
-}
-
 /**
  * Limits, exported as values rather than baked into the zod schema alone so the web
  * catalog's tests and the card's rendering can read the same numbers.
@@ -115,6 +111,133 @@ export const ASK_USER_HEADER_MAX = 12;
 /** Cap on a free-text "other" answer, so one reply cannot dwarf the context. */
 export const ASK_USER_OTHER_MAX = 500;
 
+/* -------------------------------------- quiz -------------------------------------- */
+
+/**
+ * The tool's name, shared for the same reason as `ASK_USER_TOOL_NAME`: the client switches
+ * on it to pick the answerable card out of an assistant message's tool calls.
+ */
+export const QUIZ_TOOL_NAME = "quiz";
+
+/**
+ * One choice the model offers.
+ *
+ * Its own interface rather than a reuse of `AskUserOption`, so that a later addition to
+ * either tool's options is not automatically a change to both.
+ */
+export interface QuizOption {
+  label: string;
+  description?: string;
+}
+
+/**
+ * One question as the model asked it, and **therefore without an `id`**.
+ *
+ * The numbering is the tool's: it comes from a session-scoped counter, so it is not
+ * something the model can compute, and an id a model invents is an id it can duplicate —
+ * the opposite of what an id is for. `QuizQuestion` below is this once numbered.
+ */
+export interface QuizQuestionInput {
+  /** The tab label. Short on purpose — the card is a strip of tabs, not a paragraph. */
+  header: string;
+  question: string;
+  /**
+   * Absent means single-select.
+   *
+   * Per question rather than per call, so one quiz may mix the two — a set of four
+   * questions can be three single-select and one "tick everything that applies".
+   */
+  multiSelect?: boolean;
+  /** How many the model offered, `QUIZ_MIN_OPTIONS`–`QUIZ_MAX_OPTIONS`, labels distinct. */
+  options: QuizOption[];
+}
+
+/**
+ * One question as it is persisted and shown: the model's question plus the id the tool
+ * assigned it (`Q1`, `Q2`, …), unique within its session.
+ *
+ * The id is the whole reason this is a type of its own. It travels in the tool call's
+ * `input`, which is what lets a reload re-render the same ids; it comes back in the tool
+ * result; and it keys the answer, so a later turn or tool can name a question exactly.
+ */
+export interface QuizQuestion extends QuizQuestionInput {
+  id: string;
+}
+
+/**
+ * One question's answer.
+ *
+ * `unsure` is a **third state, mutually exclusive with a choice** — "I don't know" or "the
+ * question itself is wrong". A multiple-choice list with no such escape forces a guess and
+ * then records that guess as knowledge, which is the failure this tool exists to avoid.
+ * `unsureReason` says which of the two it was, and `notes` is the user's own take; neither
+ * is an answer by itself, so neither substitutes for a choice or an `unsure`.
+ */
+export interface QuizAnswer {
+  /** Labels the model offered, validated against them. Empty when the user was unsure. */
+  selected: string[];
+  unsure?: boolean;
+  /** Why: they may not know, or may think the question is flawed. */
+  unsureReason?: string;
+  /** The user's own take on the question. Never graded, never required. */
+  notes?: string;
+}
+
+/**
+ * Answers keyed by question **id** (`"Q1"`…), where `ask_user` keys by position.
+ *
+ * The difference is deliberate. A quiz question has an id, the id is what later features
+ * refer to, and keying by it means an answer names its question instead of depending on two
+ * lists happening to line up.
+ */
+export type QuizAnswers = Record<string, QuizAnswer>;
+
+/**
+ * Limits, exported as values rather than baked into the zod schema alone so the card and
+ * the catalog's tests can read the same numbers.
+ *
+ * Wider than `ask_user`'s on purpose: a quiz is a set of questions about one subject rather
+ * than a handful of decisions, so ten questions and up to eight options (A–H) are ordinary.
+ */
+export const QUIZ_MAX_QUESTIONS = 10;
+export const QUIZ_MIN_OPTIONS = 2;
+export const QUIZ_MAX_OPTIONS = 8;
+/** Advisory for the tab label; the schema rejects longer rather than truncating. */
+export const QUIZ_HEADER_MAX = 12;
+/** Cap on the free-text "why are you unsure", so one reply cannot dwarf the context. */
+export const QUIZ_UNSURE_REASON_MAX = 500;
+/** Cap on one question's notes, for the same reason. */
+export const QUIZ_NOTES_MAX = 2000;
+
+/**
+ * The tools whose calls suspend the turn, and are therefore answered through a card rather
+ * than reported as a result.
+ *
+ * Shared because both sides need the same list and neither is a subset of the other: the
+ * server groups them to route an answer, the client to decide which card renders a call and
+ * which calls belong below the reply they were introduced by. Written once so a third one
+ * is added here rather than in four comparisons that are free to disagree.
+ */
+export const INTERACTIVE_TOOL_NAMES = [ASK_USER_TOOL_NAME, QUIZ_TOOL_NAME] as const;
+
+export function isInteractiveTool(name: string): boolean {
+  return (INTERACTIVE_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/** One answer shape per suspending tool; the tool call's `name` is the discriminant. */
+export type InteractiveAnswer = AskUserAnswers | QuizAnswers;
+
+/** What the client POSTs back to `/api/sessions/:id/answers`. */
+export interface AnswerToolCallInput {
+  toolCallId: string;
+  action: "submit" | "cancel";
+  /**
+   * Required (and complete) when `action` is `submit`, and keyed the way the answering
+   * tool keys its answers — by position for `ask_user`, by question id for `quiz`.
+   */
+  answers?: InteractiveAnswer;
+}
+
 /** A single tool invocation recorded on an assistant message (for rendering + history). */
 export interface ToolCall {
   id: string;
@@ -124,19 +247,20 @@ export interface ToolCall {
   /** Tool result returned to the model (present once the call completes). */
   output?: string;
   /**
-   * `ask_user` only, and absent on every other tool. Set to `awaiting` when the turn
-   * suspends on this call, so the UI knows to offer the controls rather than report a
-   * tool that is merely slow.
+   * A suspending tool only (`ask_user`, `quiz`), and absent on every other tool. Set to
+   * `awaiting` when the turn suspends on this call, so the UI knows to offer the controls
+   * rather than report a tool that is merely slow.
    */
-  status?: AskUserStatus;
+  status?: ToolCallStatus;
   /**
-   * `ask_user` only: the user's answer in structured form.
+   * A suspending tool only: the user's answer in structured form, whose shape the call's
+   * `name` selects.
    *
    * A second copy of something `output` also carries, which is deliberate — `output` is
    * the model's copy (a rendering that may be reworded), this is the UI's, and neither
    * can be derived from the other without the card parsing prose.
    */
-  answer?: AskUserAnswers;
+  answer?: InteractiveAnswer;
 }
 
 /**

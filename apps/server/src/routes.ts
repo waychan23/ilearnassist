@@ -5,7 +5,6 @@ import type {
   AnswerToolCallInput,
   ApiErrorBody,
   ApiErrorCode,
-  AskUserQuestion,
   Attachment,
   ChatInput,
   ChatStreamEvent,
@@ -66,7 +65,8 @@ import { classifyProviderError } from "./agent/providerErrors.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
 import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
-import { renderAskUserResult, validateAnswers } from "./tools/askUser.js";
+import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
+import { SUSPENDING_TOOLS } from "./tools/suspending.js";
 import {
   isSupportedMime,
   kindFor,
@@ -1270,6 +1270,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         sources: input.sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
+      // `quiz` numbers its questions from a counter scoped to this conversation, so a session
+      // numbers its questions once — across turns, across `ask_user` calls between them, and
+      // across a reload. The tool gets a closure rather than the db, and the counter's name
+      // travels with the tool that owns the sequence.
+      quiz: {
+        reserveQuestionNumbers: (count) =>
+          db.reserveCounter("session", session.id, QUIZ_QUESTION_COUNTER, count),
+      },
     });
 
     return {
@@ -1518,16 +1526,21 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       );
     }
 
-    const questions = readAskUserQuestions(pending.call);
-    if (!questions) {
+    // Which tool this call belongs to decides how its `input` is read and how a submission
+    // is judged — looked up by the *stored* call's name, so the client cannot pick the
+    // reading. An unregistered name is the same 409 as a stale question.
+    const resolved = SUSPENDING_TOOLS[pending.call.name]?.resolve(pending.call, {
+      ...body,
+      action,
+      toolCallId,
+    });
+    if (!resolved) {
       return reply.code(409).send(
         apiError("QUESTION_NOT_PENDING", "that tool call does not hold a question set")
       );
     }
-
-    const validated = validateAnswers(questions, { ...body, action, toolCallId });
-    if (!validated.ok) {
-      return reply.code(400).send(apiError("INVALID_ANSWER", validated.reason));
+    if (!resolved.ok) {
+      return reply.code(400).send(apiError("INVALID_ANSWER", resolved.reason));
     }
 
     // Two copies of one answer, for two readers. `output` is what the model replays as the
@@ -1538,12 +1551,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       pending.messageId,
       (message?.toolCalls ?? []).map((tc) =>
         tc.id === toolCallId
-          ? {
-              ...tc,
-              status,
-              answer: validated.answers,
-              output: renderAskUserResult(questions, validated.answers, action),
-            }
+          ? { ...tc, status, answer: resolved.answer, output: resolved.output }
           : tc
       )
     );
@@ -1615,24 +1623,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     turn?.abort();
     return { ok: turn !== undefined };
   });
-}
-
-/**
- * The question set a suspended `ask_user` call recorded, or undefined when the stored
- * `input` is not one.
- *
- * Returns undefined rather than throwing because a malformed `input` here means the row
- * predates this feature or was written by something other than the tool — a case the
- * caller turns into the same 409 as a question that has already been answered.
- */
-function readAskUserQuestions(call: ToolCall): AskUserQuestion[] | undefined {
-  try {
-    const parsed = JSON.parse(call.input) as { questions?: unknown };
-    if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) return undefined;
-    return parsed.questions as AskUserQuestion[];
-  } catch {
-    return undefined;
-  }
 }
 
 function isParsePolicy(value: unknown): value is DocumentParsePolicy {

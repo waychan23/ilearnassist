@@ -38,7 +38,7 @@ import type {
   User,
   Workspace,
 } from "../api/types";
-import { ASK_USER_TOOL_NAME, MAX_ATTACHMENT_BYTES } from "../api/types";
+import { MAX_ATTACHMENT_BYTES, isInteractiveTool, type InteractiveAnswer } from "../api/types";
 
 interface StreamingState {
   active: boolean;
@@ -1251,10 +1251,10 @@ export const useAppStore = defineStore("app", () => {
     return !requestFailed;
   }
 
-  /** Every `ask_user` call still waiting for an answer, across the loaded messages. */
+  /** Every question still waiting for an answer, across the loaded messages. */
   function awaitingToolCalls(): ToolCall[] {
     return messages.value.flatMap((m) =>
-      (m.toolCalls ?? []).filter((tc) => tc.name === ASK_USER_TOOL_NAME && tc.status === "awaiting")
+      (m.toolCalls ?? []).filter((tc) => isInteractiveTool(tc.name) && tc.status === "awaiting")
     );
   }
 
@@ -1305,17 +1305,18 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * Submit (or cancel) a pending `ask_user` call and stream the turn that resumes.
+   * Submit (or cancel) a pending question and stream the turn that resumes.
    *
-   * The card is flipped locally before the request goes out because no server event
-   * describes the change: nothing streams while the question is waiting, so the answer
-   * growing an `output` is something only this client knows about, right up until the
-   * resumed turn starts emitting. If the request fails the flip is undone, since the
-   * server will not have written it either.
+   * Name-agnostic on purpose: which tool asked decides how the server reads the payload, so
+   * this only has to carry it. The card is flipped locally before the request goes out
+   * because no server event describes the change: nothing streams while the question is
+   * waiting, so the answer growing an `output` is something only this client knows about,
+   * right up until the resumed turn starts emitting. If the request fails the flip is
+   * undone, since the server will not have written it either.
    */
   async function answerQuestion(
     toolCallId: string,
-    submission: { action: "submit" | "cancel"; answers?: AskUserAnswers }
+    submission: { action: "submit" | "cancel"; answers?: InteractiveAnswer }
   ): Promise<void> {
     const sessionId = activeSessionId.value;
     const toolCall = findToolCall(toolCallId);

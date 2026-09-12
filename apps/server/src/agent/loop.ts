@@ -19,7 +19,7 @@ import type {
 import type { ProviderRecord } from "../db.js";
 import type { UserLayout } from "../paths.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
-import { AskUserSuspension } from "../tools/askUser.js";
+import { Suspension } from "../tools/suspension.js";
 import { buildModel } from "./model.js";
 
 /** Fallback ReAct step budget when a session does not set one. */
@@ -431,10 +431,11 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         break;
       }
 
-      // `ask_user` ends the turn, so a step that contains one must run its *other* calls
-      // first and suspend after them. Dropping them instead would leave the model's own
-      // tool_calls block holding calls nobody ever answered, and the model with no record
-      // that it had asked for them — so nothing the model asked for is ever silently lost.
+      // A suspending tool (`ask_user`, `quiz`) ends the turn, so a step that contains one
+      // must run its *other* calls first and suspend after them. Dropping them instead would
+      // leave the model's own tool_calls block holding calls nobody ever answered, and the
+      // model with no record that it had asked for them — so nothing the model asked for is
+      // ever silently lost.
       let suspendedHere = false;
 
       for (const call of calls) {
@@ -452,19 +453,32 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
             output = typeof result === "string" ? result : JSON.stringify(result);
           } catch (err) {
             // A suspension is not an error and must not be reported as one: the model would
-            // be told its own question failed. Caught before the generic arm below.
-            if (err instanceof AskUserSuspension) {
+            // be told its own question failed. Caught before the generic arm below, and by
+            // base class rather than by tool name so a new suspending tool needs no change
+            // here.
+            if (err instanceof Suspension) {
               if (awaiting) {
                 // One suspension per step. Answering two sets of questions at once is a
                 // state the UI has no way to present, and the model can simply ask again.
-                output = "Tool error: only one ask_user call is allowed per step.";
+                output = "Tool error: only one question tool call is allowed per step.";
               } else {
                 awaiting = true;
                 suspendedHere = true;
                 // Recorded without an `output` on purpose: `buildHistoryMessages` replays
                 // only calls that have one, which is exactly what keeps a pending question
                 // out of the model's context until the user has answered it.
-                toolCalls.push({ id, name, input: args, status: "awaiting" });
+                //
+                // `recordedInput` rather than `args`, because a tool may have added
+                // something the model could not — a `quiz` numbers its questions from a
+                // counter, and those ids have to be in the record the card is re-rendered
+                // from. The `tool_start` above keeps the model's own args; the live card
+                // renders a placeholder until `message_done` replaces it with this.
+                toolCalls.push({
+                  id,
+                  name,
+                  input: JSON.stringify(err.recordedInput ?? call.args ?? {}),
+                  status: "awaiting",
+                });
                 // Note the deliberate absence of a `tool_end` event to match the
                 // `tool_start` above — there is no result to report yet.
                 continue;
@@ -473,8 +487,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
               // A stop is not a tool failure either. Reporting it as `Tool error: …` would
               // look like the tool broke and would carry the loop into another step, so it
               // unwinds to the handler below instead. Ordered after the suspension arm, not
-              // before it: `ask_user` never consults the signal, so an aborted signal must
-              // not be allowed to relabel a suspension as a stop.
+              // before it: a suspending tool never consults the signal, so an aborted signal
+              // must not be allowed to relabel a suspension as a stop.
               throw err;
             } else {
               output = `Tool error: ${err instanceof Error ? err.message : String(err)}`;

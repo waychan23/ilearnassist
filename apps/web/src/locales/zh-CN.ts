@@ -268,6 +268,7 @@ export default {
       delete_file: "删除文件",
       read_document: "读取文档",
       ask_user: "询问用户",
+      quiz: "小测",
     },
     done: "完成",
     running: "运行中",
@@ -300,6 +301,40 @@ export default {
     next: "下一题",
     submit: "提交",
     cancel: "取消询问",
+    unanswered: "未回答",
+    /** The disclosure that reveals the options the agent originally offered. */
+    details: "查看详情",
+    /** Heads the options list in the detail view, the chosen ones ticked. */
+    options: "选项",
+  },
+  quiz: {
+    title: "小测",
+    /** One per `ToolCallStatus`, plus the moment before the turn has finished persisting. */
+    preparing: "准备题目中",
+    awaiting: "等待你的作答",
+    answered: "已提交",
+    skipped: "已跳过",
+    dismissed: "已取消",
+    /** The status line under a card whose questions were never answered. */
+    skippedHint: "你直接发了新消息，这次小测已作废。",
+    dismissedHint: "你取消了这次小测，助手会自行判断。",
+    multiSelectHint: "可多选。",
+    /**
+     * The third state, mutually exclusive with a choice. Named for what the user means
+     * rather than for the control, because the box under it is where they say which.
+     */
+    unsure: "不确定",
+    unsureHint: "选它会清空上面的选择：这是第三种作答，不是其中一个选项。",
+    unsureReasonLabel: "不确定的原因",
+    unsureReasonPlaceholder: "可以说说为什么：没学过、记不清，或者觉得题目本身有问题…",
+    notesLabel: "我的想法",
+    notesPlaceholder: "写下你的理解或疑问（可选）",
+    /** `{current}` and `{total}` are 1-based. */
+    step: "第 {current} / {total} 题",
+    previous: "上一题",
+    next: "下一题",
+    submit: "提交",
+    cancel: "取消小测",
     unanswered: "未回答",
     /** The disclosure that reveals the options the agent originally offered. */
     details: "查看详情",

@@ -9,14 +9,25 @@ import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js"
 import { buildFileTools } from "./fileTools.js";
 import { buildWebFetchTool } from "./webFetch.js";
 import { buildWebSearchTool } from "./webSearch.js";
+import { buildQuizTool, type QuizToolContext } from "./quiz.js";
 
 /**
  * Tools that do not touch the workspace, and so survive `fileTools.enabled: false`.
  * `read_document` reads attachments from the uploads tree, not the workspace, so it
- * belongs here rather than being switched off with the file tools. `ask_user` reads
- * nothing at all.
+ * belongs here rather than being switched off with the file tools. `ask_user` and `quiz`
+ * read nothing at all.
+ *
+ * A literal list rather than the client's `INTERACTIVE_TOOL_NAMES`: the two answer
+ * different questions (does this tool touch the sandbox? versus which card renders it),
+ * and one of them is a client concern.
  */
-const NON_FILE_TOOLS = new Set<string>(["web_search", "web_fetch", "read_document", "ask_user"]);
+const NON_FILE_TOOLS = new Set<string>([
+  "web_search",
+  "web_fetch",
+  "read_document",
+  "ask_user",
+  "quiz",
+]);
 
 export interface BuildToolsInput {
   workspaceDir: string;
@@ -41,6 +52,14 @@ export interface BuildToolsInput {
    * still page through it on a turn that attaches nothing.
    */
   documents?: DocumentToolContext;
+  /**
+   * How `quiz` numbers its questions.
+   *
+   * Required rather than optional on purpose: a turn that forgot to wire it is a compile
+   * error, where an optional one would be a tool that throws the first time a model reaches
+   * for it. It is a callback because the tool must not know where a number comes from.
+   */
+  quiz: QuizToolContext;
 }
 
 /**
@@ -58,13 +77,14 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     files.deleteFile,
   ];
 
-  // `ask_user` depends on no config and reads nothing, so it is assembled like a file
-  // tool rather than behind a feature switch — the only thing that ever removes it is a
-  // Copilot whose tool list does not name it.
+  // The suspending tools depend on no config and read nothing, so they are assembled like
+  // file tools rather than behind a feature switch — the only thing that ever removes one is
+  // a Copilot whose tool list does not name it.
   const all: StructuredToolInterface[] = [
     ...fileTools,
     buildWebSearchTool(input.webSearch),
     buildAskUserTool(),
+    buildQuizTool(input.quiz),
   ];
   if (input.webFetch.enabled) all.push(buildWebFetchTool(input.webFetch));
   if (input.documents && input.documents.sources.length > 0) {

@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
-import { ASK_USER_TOOL_NAME, type Message, type ToolCall } from "../api/types";
+import { isInteractiveTool, type Message, type ToolCall } from "../api/types";
 import { renderMarkdown } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
 import ToolCallCard from "./ToolCallCard.vue";
@@ -39,18 +39,22 @@ const toolCalls = computed(() =>
 );
 
 /**
- * Tool cards that belong above the reply, and the `ask_user` ones that belong below it.
+ * Tool cards that belong above the reply, and the questions that belong below it.
  *
  * A question is not an action the agent took on the way to answering — it is the last thing
  * in the turn, and the sentence in front of it introduces it ("请先回答下面几个问题：").
  * Rendering it above that sentence put a card demanding an answer *before* the words
  * explaining it, and while streaming it read as though the message had already ended and
  * then started talking again.
+ *
+ * Grouped by the shared `isInteractiveTool` rather than a name comparison each, so a third
+ * question tool lands on the right side of the reply without an edit here. A *failed*
+ * question call is grouped the same way and renders as an ordinary card — see
+ * `ToolCallCard` — which is right because it happened in the same step as the one that
+ * suspended, so it is at the end of the turn either way.
  */
-const actionToolCalls = computed(() => toolCalls.value.filter((tc) => tc.name !== ASK_USER_TOOL_NAME));
-const questionToolCalls = computed(() =>
-  toolCalls.value.filter((tc) => tc.name === ASK_USER_TOOL_NAME)
-);
+const actionToolCalls = computed(() => toolCalls.value.filter((tc) => !isInteractiveTool(tc.name)));
+const questionToolCalls = computed(() => toolCalls.value.filter((tc) => isInteractiveTool(tc.name)));
 const error = computed(() => props.streaming?.error ?? null);
 /**
  * Whether the user cut this reply short.

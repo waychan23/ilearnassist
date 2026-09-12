@@ -230,6 +230,26 @@ const DDL = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  -- Monotonically increasing counters, one row per sequence. "value" is the highest number
+  -- issued so far and nothing reads it as anything else; a sequence is named by all three
+  -- of (scope, scope_id, name), so the same counter can exist per session, per user or per
+  -- workspace without the callers agreeing on anything beyond that triple.
+  --
+  -- Deliberately no foreign key: scope/scope_id name any entity at all, so there is no table
+  -- to point at, and a row left behind for a deleted session is a few bytes that nothing can
+  -- reach — ids are never reused, so a stale counter is not a hazard.
+  --
+  -- This is a new table, which is why it needs no SCHEMA_VERSION bump: the DDL above runs on
+  -- every open, so a database created before the table existed gains it. The bump rule is for
+  -- changing what an existing column means — see the note at the top of this file.
+  CREATE TABLE IF NOT EXISTS counters (
+    scope TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value INTEGER NOT NULL,
+    PRIMARY KEY (scope, scope_id, name)
+  );
 `;
 
 /**

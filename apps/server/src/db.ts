@@ -634,12 +634,14 @@ export interface AppDb {
   }): Message;
 
   /**
-   * Find a suspended `ask_user` call, with the id of the message holding it.
+   * Find a suspended call by the tool-call id the client sent back, with the id of the
+   * message holding it.
    *
    * Scoped to one session rather than looked up by tool-call id alone, because the id
    * comes from the client and a bare lookup would let one session answer another's
    * question. Returns undefined once the call is no longer `awaiting` — which is what
-   * makes a repeat submission a 409 rather than a silent overwrite.
+   * makes a repeat submission a 409 rather than a silent overwrite. Name-agnostic: which
+   * tool suspends, and how its answer is read, is the registry's business.
    */
   findAwaitingToolCall(
     sessionId: string,
@@ -650,13 +652,22 @@ export interface AppDb {
   updateMessageToolCalls(messageId: string, toolCalls: ToolCall[]): void;
 
   /**
-   * Retire every still-awaiting `ask_user` call in a session, returning how many.
+   * Retire every still-awaiting call in a session, returning how many.
    *
    * Called when the user sends a new message instead of answering: the turn those
    * questions belonged to is over, and a card that stayed answerable would resume a
    * conversation the user has already moved on from.
    */
   skipAwaitingToolCalls(sessionId: string): number;
+
+  /**
+   * Reserve `count` consecutive numbers from one sequence, returned in ascending order.
+   *
+   * A sequence is named by all three of `scope`, `scope_id` and `name` — the caller says
+   * what kind of thing it is counting against, which one, and what is being counted — so
+   * two sequences cannot collide by accident and neither needs a schema of its own.
+   */
+  reserveCounter(scope: string, scopeId: string, name: string, count: number): number[];
 
   listProviders(): ProviderRecord[];
   getProvider(id: string): ProviderRecord | undefined;
@@ -1017,6 +1028,22 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
 
+  /* ------------------------------- counters ------------------------------- */
+  /**
+   * Reserve a block from one counter, returning the highest number issued.
+   *
+   * An upsert rather than the `SELECT max(…) + 1` this file uses for provider ordering
+   * (`stmtNextProviderOrder`), and the difference is not a preference: that one reads and
+   * then writes, which is a race between two callers, whereas this is a single statement
+   * and therefore atomic on its own. `excluded.value` is the `count` from the INSERT arm,
+   * so the conflicting arm adds the whole block rather than one.
+   */
+  const stmtReserveCounter = db.prepare(
+    `INSERT INTO counters (scope, scope_id, name, value) VALUES (?, ?, ?, ?)
+     ON CONFLICT (scope, scope_id, name) DO UPDATE SET value = value + excluded.value
+     RETURNING value`
+  );
+
   /* ------------------------------ providers ------------------------------- */
   const stmtListProviders = db.prepare("SELECT * FROM providers ORDER BY sort_order ASC, created_at ASC");
   const stmtGetProvider = db.prepare("SELECT * FROM providers WHERE id = ?");
@@ -1354,6 +1381,16 @@ export function createDb(dbPath: string): AppDb {
         stmtUpdateToolCalls.run(JSON.stringify(next), message.id);
       }
       return skipped;
+    },
+
+    reserveCounter(scope, scopeId, name, count) {
+      // Returning before the statement is what keeps an empty block from writing a row: a
+      // counter at 0 for something that never asked for a number is a row nothing can use.
+      if (count <= 0) return [];
+      const row = stmtReserveCounter.get(scope, scopeId, name, count) as { value: number };
+      // `value` is the *last* number in the block, so the block is counted back from it.
+      const end = row.value;
+      return Array.from({ length: count }, (_, i) => end - count + i + 1);
     },
 
     listProviders() {

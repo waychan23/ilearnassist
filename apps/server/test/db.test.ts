@@ -683,6 +683,23 @@ describe("schema versioning", () => {
     }
   });
 
+  it("gains the counters table on an existing file of the current version", () => {
+    // The claim that a new *table* needs no `SCHEMA_VERSION` bump — the DDL runs on every
+    // open, so a database created before the table existed simply gains it. The bump rule
+    // is for changing what an existing column means, which this is not.
+    const path = join(root, "pre-counters.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    expect(tablesIn(path)).not.toContain("counters");
+
+    const opened = createDb(path);
+    try {
+      expect(tablesIn(path)).toContain("counters");
+      expect(opened.reserveCounter("session", "s1", "quiz_question", 2)).toEqual([1, 2]);
+    } finally {
+      opened.raw.close();
+    }
+  });
+
   it("gives Copilots an owner, and drops the ones written before they had one", () => {
     /*
      * The one migration in this change, and the one place rows are deleted on purpose — so all
@@ -952,5 +969,48 @@ describe("suspended ask_user calls", () => {
     db.skipAwaitingToolCalls("s1");
 
     expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]!.output).toBeUndefined();
+  });
+});
+
+describe("counters", () => {
+  it("reserves the first block from 1, then continues from where it stopped", () => {
+    expect(db.reserveCounter("session", "s1", "quiz_question", 3)).toEqual([1, 2, 3]);
+    expect(db.reserveCounter("session", "s1", "quiz_question", 2)).toEqual([4, 5]);
+  });
+
+  it("keeps each sequence independent of every other", () => {
+    // All three parts of the name are part of the identity, so the same counter can exist
+    // per session, per user or per workspace without the callers agreeing on more than that.
+    db.reserveCounter("session", "s1", "quiz_question", 2);
+
+    expect(db.reserveCounter("session", "s2", "quiz_question", 1)).toEqual([1]);
+    expect(db.reserveCounter("session", "s1", "other_thing", 1)).toEqual([1]);
+    expect(db.reserveCounter("workspace", "s1", "quiz_question", 1)).toEqual([1]);
+  });
+
+  it("writes no row for an empty block", () => {
+    // A counter sitting at 0 for a sequence nothing ever asked a number from is a row with
+    // no reader.
+    expect(db.reserveCounter("session", "s1", "quiz_question", 0)).toEqual([]);
+    expect((db.raw.prepare("SELECT COUNT(*) AS n FROM counters").get() as { n: number }).n).toBe(0);
+  });
+
+  it("survives a reopen of the same file", () => {
+    // The counter *is* the record rather than a cache of one: a second process must continue
+    // the sequence, not restart it, or a session's question ids would collide after a restart.
+    const path = join(root, "counters.sqlite");
+    const first = createDb(path);
+    try {
+      expect(first.reserveCounter("session", "s1", "quiz_question", 2)).toEqual([1, 2]);
+    } finally {
+      first.raw.close();
+    }
+
+    const second = createDb(path);
+    try {
+      expect(second.reserveCounter("session", "s1", "quiz_question", 1)).toEqual([3]);
+    } finally {
+      second.raw.close();
+    }
   });
 });
