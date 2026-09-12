@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
     updateSession: vi.fn(),
     deleteSession: vi.fn(),
     listMessages: vi.fn(),
+    stopSession: vi.fn(),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
     uploadAttachment: vi.fn(),
@@ -1234,6 +1235,99 @@ describe("answerQuestion", () => {
 
     expect(toolCall(store)!.status).toBe("answered");
     expect(toolCall(store)!.answer).toEqual({ "0": { selected: ["OAuth"] } });
+  });
+});
+
+describe("stopMessage", () => {
+  /** A turn held open, so the assertions land while the reply is still streaming. */
+  function heldStream(): { release: () => void; finished: Promise<void> } {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let done: () => void = () => undefined;
+    const finished = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { type: "text", delta: "half an answer" };
+      await gate;
+      yield { type: "done" };
+      done();
+    });
+    return { release, finished };
+  }
+
+  it("asks the server, and leaves the partial reply to arrive down the stream", async () => {
+    const store = await readyStore();
+    mocks.api.stopSession.mockResolvedValue({ ok: true });
+    const { release, finished } = heldStream();
+
+    const sending = store.sendMessage("讲个故事");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.streaming.active).toBe(true);
+
+    await store.stopMessage();
+    expect(mocks.api.stopSession).toHaveBeenCalledWith("s1");
+
+    // Nothing is invented locally: the server ends the turn with the usual `message_done`,
+    // and the store winds down through the path a completed turn takes.
+    release();
+    await sending;
+    await finished;
+    expect(store.streaming.active).toBe(false);
+    expect(store.streaming.stopping).toBe(false);
+  });
+
+  it("ignores a second press while the first is still in flight", async () => {
+    const store = await readyStore();
+    let settle: (v: { ok: boolean }) => void = () => undefined;
+    mocks.api.stopSession.mockImplementation(
+      () => new Promise((resolve) => (settle = resolve))
+    );
+    const { release } = heldStream();
+
+    const sending = store.sendMessage("讲个故事");
+    await vi.advanceTimersByTimeAsync(0);
+
+    void store.stopMessage();
+    expect(store.streaming.stopping).toBe(true);
+    await store.stopMessage();
+
+    expect(mocks.api.stopSession).toHaveBeenCalledTimes(1);
+
+    settle({ ok: true });
+    release();
+    await sending;
+  });
+
+  it("does nothing when no turn is streaming", async () => {
+    const store = await readyStore();
+
+    await store.stopMessage();
+    expect(mocks.api.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("stays pressable when the request fails", async () => {
+    // Nothing was stopped, so the control has to be usable again — a Stop that silently
+    // stops working is worse than no Stop at all.
+    const store = await readyStore();
+    mocks.api.stopSession.mockRejectedValue(new Error("network is down"));
+    const { release, finished } = heldStream();
+
+    const sending = store.sendMessage("讲个故事");
+    await vi.advanceTimersByTimeAsync(0);
+
+    await store.stopMessage();
+
+    expect(store.streaming.stopping).toBe(false);
+    expect(store.error).toBe("network is down");
+    // Still live, so the same control can be pressed again.
+    expect(store.streaming.active).toBe(true);
+
+    release();
+    await sending;
+    await finished;
   });
 });
 

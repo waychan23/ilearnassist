@@ -1,7 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type {
   Attachment,
@@ -53,11 +55,11 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-function provider(capabilities: ModelCapability[] = []): ProviderRecord {
+function provider(capabilities: ModelCapability[] = [], baseURL = llm.baseURL): ProviderRecord {
   return {
     id: "fake",
     name: "Fake",
-    baseURL: llm.baseURL,
+    baseURL,
     apiKey: "test-key",
     models: [{ id: "r1", modelId: "fake-model", name: "fake-model", capabilities }],
   };
@@ -75,13 +77,17 @@ interface RunOptions {
   toolUse?: boolean;
   /** Declared capabilities of the model record — `reasoning` gates the replay below. */
   capabilities?: ModelCapability[];
+  /** Aborts the turn; see `RunAgentInput.signal`. */
+  signal?: AbortSignal;
+  /** Overridden to point the provider at something that cannot answer. */
+  baseURL?: string;
 }
 
 async function run(options: RunOptions) {
   llm.setTurns(options.turns);
   const events: ChatStreamEvent[] = [];
   const result = await runAgentStream({
-    provider: provider(options.capabilities ?? []),
+    provider: provider(options.capabilities ?? [], options.baseURL),
     modelId: "fake-model",
     workspace: {
       id: "w1",
@@ -104,9 +110,14 @@ async function run(options: RunOptions) {
     userMessage: options.userMessage === undefined ? "hello" : options.userMessage,
     attachments: options.attachments ?? [],
     tools: options.tools ?? [],
+    signal: options.signal,
     onEvent: (event) => events.push(event),
   });
   return { events, result };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function message(overrides: Partial<Message> & Pick<Message, "role" | "content">): Message {
@@ -415,6 +426,116 @@ describe("runAgentStream — history handling", () => {
 
     expect(sent_ask_user).toBeDefined();
     expect(sent_ask_user!.function.description).toContain("just produced a plan");
+  });
+});
+
+describe("runAgentStream — stopped mid-turn", () => {
+  /*
+   * A pause after every frame is what makes any of this testable: without it the fake
+   * model writes a whole turn in one synchronous burst and there is no instant at which
+   * an abort could land.
+   */
+  const HELD = { content: "half an answer", holdMs: 100 };
+
+  it("resolves with what had streamed, and says the turn was stopped", async () => {
+    const controller = new AbortController();
+    const promise = run({ turns: [HELD], signal: controller.signal });
+    await sleep(120);
+    controller.abort();
+
+    const { events, result } = await promise;
+
+    // Not an error and not a failure: the caller persists this as a partial reply.
+    expect(result.stopped).toBe(true);
+    expect(result.content).toBe("half an answer");
+    expect(events.some((e) => e.type === "text")).toBe(true);
+    // The abort reached the provider rather than merely leaving it generating. Polled: the
+    // fake server learns of the hang-up from its own socket event, a moment after the loop
+    // has already unwound.
+    await vi.waitFor(() => expect(llm.abortedRequests()).toBe(1));
+  });
+
+  it("reports nothing rather than a half-step's usage", async () => {
+    const controller = new AbortController();
+    const promise = run({ turns: [HELD], signal: controller.signal });
+    await sleep(120);
+    controller.abort();
+
+    const { events, result } = await promise;
+    expect(result.usage).toEqual({});
+    expect(events.some((e) => e.type === "usage")).toBe(false);
+  });
+
+  it("does not claim the step budget ran out", async () => {
+    // The truncated-budget sentence is for a turn that ran out of steps. A stopped turn
+    // was ended by the user, so `OUT_OF_STEPS` would be a lie — and worse, one replayed to
+    // the model next turn. An empty reply here is legitimate.
+    const controller = new AbortController();
+    controller.abort();
+
+    const { result } = await run({ turns: [HELD], signal: controller.signal });
+    expect(result.stopped).toBe(true);
+    expect(result.content).toBe("");
+  });
+
+  it("lets a genuine failure through, with a signal that never fired", async () => {
+    // The catch is narrow on purpose. Swallowing everything there would dress any provider
+    // outage up as a silent, empty turn the user appeared to have stopped.
+    //
+    // A provider that rejects the request outright. A 400 and not a 5xx, and a live server
+    // and not an unreachable host: ChatOpenAI retries 5xx and connection failures with
+    // backoff, so either would fail slowly and for a reason this test is not about — while
+    // what is under test is only that a non-abort throw still leaves the loop.
+    const failing = createServer((_req, res) => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "the request is malformed" } }));
+    });
+    await new Promise<void>((resolve) => failing.listen(0, "127.0.0.1", resolve));
+    const port = (failing.address() as AddressInfo).port;
+
+    try {
+      await expect(
+        run({
+          turns: [{ content: "never sent" }],
+          signal: new AbortController().signal,
+          baseURL: `http://127.0.0.1:${port}/v1`,
+        })
+      ).rejects.toThrow();
+    } finally {
+      failing.closeAllConnections();
+      await new Promise<void>((resolve) => failing.close(() => resolve()));
+    }
+  });
+
+  it("does not report an aborted tool call as a tool failure", async () => {
+    // A stop is not the tool breaking. Reporting it as `Tool error: …` would carry the loop
+    // into another step and persist a `tool_calls` block with a result nobody produced.
+    const controller = new AbortController();
+    let passedSignal: AbortSignal | undefined;
+
+    const tool = {
+      name: "slow_tool",
+      description: "aborts itself",
+      invoke: async (_input: unknown, config?: { signal?: AbortSignal }) => {
+        passedSignal = config?.signal;
+        controller.abort();
+        throw new Error("this tool was interrupted");
+      },
+    } as unknown as StructuredToolInterface;
+
+    const { events, result } = await run({
+      turns: [{ toolCalls: [{ name: "slow_tool", args: {} }] }, { content: "unreachable" }],
+      tools: [tool],
+      signal: controller.signal,
+    });
+
+    // The signal reaches the tool at all — every part of this design rests on that.
+    expect(passedSignal).toBe(controller.signal);
+    expect(result.stopped).toBe(true);
+    expect(result.toolCalls).toEqual([]);
+    expect(events.some((e) => e.type === "tool_end")).toBe(false);
+    // And the loop did not carry on to the second step.
+    expect(result.content).not.toContain("unreachable");
   });
 });
 

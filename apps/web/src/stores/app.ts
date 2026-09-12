@@ -51,6 +51,11 @@ interface StreamingState {
   toolCalls: ToolCall[];
   usage: MessageUsage | null;
   error: string | null;
+  /**
+   * A stop has been asked for and the turn has not wound up yet. Client-only: nothing is
+   * persisted about it, it exists to keep the button from firing twice.
+   */
+  stopping: boolean;
 }
 
 export interface CopilotDraft {
@@ -110,6 +115,7 @@ const EMPTY_STREAMING = (): StreamingState => ({
   toolCalls: [],
   usage: null,
   error: null,
+  stopping: false,
 });
 
 export const useAppStore = defineStore("app", () => {
@@ -1072,6 +1078,7 @@ export const useAppStore = defineStore("app", () => {
         messages.value.push(ev.message);
         stopReasoningTicker();
         streaming.value.active = false;
+        streaming.value.stopping = false;
         streaming.value.content = "";
         streaming.value.reasoning = "";
         streaming.value.toolCalls = [];
@@ -1119,6 +1126,7 @@ export const useAppStore = defineStore("app", () => {
       streaming.value.error = messageOf(e);
     } finally {
       streaming.value.active = false;
+      streaming.value.stopping = false;
       stopReasoningTicker();
       // Pick up the server-assigned title and this turn's updated_at without clobbering
       // the optimistic bubbles already in `messages`.
@@ -1229,6 +1237,33 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  /**
+   * Cut the streaming turn short.
+   *
+   * It asks the server and then does nothing else, deliberately. The chat request is
+   * still open — stopping is not the same as abandoning — and the server answers by
+   * ending that stream with the usual `message_done` and `done`. So a stopped turn winds
+   * down through exactly the path a completed one takes: the partial reply arrives as an
+   * ordinary message, and there is no local copy to reconcile or reload.
+   *
+   * Covers both streams a turn can arrive on, because the server registers both.
+   */
+  async function stopMessage(): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || !streaming.value.active || streaming.value.stopping) return;
+
+    streaming.value.stopping = true;
+    try {
+      // The reply is deliberately ignored: `ok: false` means the stream is already
+      // delivering `message_done`, whose arm clears `stopping`.
+      await api.stopSession(sessionId);
+    } catch (e) {
+      // Nothing was stopped, so let the button be pressed again.
+      streaming.value.stopping = false;
+      setError(messageOf(e));
+    }
+  }
+
   return {
     // state
     account,
@@ -1309,6 +1344,7 @@ export const useAppStore = defineStore("app", () => {
     clearPendingAttachments,
     sendMessage,
     answerQuestion,
+    stopMessage,
     setError,
     loadDirectory,
     toggleDirectory,

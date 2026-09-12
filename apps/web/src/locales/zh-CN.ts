@@ -117,6 +117,8 @@ export default {
     thinking: "Agent 正在思考…",
     parsingShort: "附件解析中…",
     send: "发送 (Enter)",
+    stop: "停止生成",
+    stopping: "正在停止…",
     attach: "添加图片或文件",
     settings: "会话参数（Temperature、上下文长度、工具轮数…）",
   },
@@ -302,6 +304,7 @@ export default {
 
   message: {
     copyReply: "复制回复",
+    stopped: "已停止",
     contextTokens: "本轮上下文 {count} tokens",
     usage: {
       input: "输入",

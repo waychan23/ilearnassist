@@ -49,6 +49,16 @@ export interface RunAgentResult {
    * route, as a fresh run whose history already ends in the matching tool result.
    */
   awaiting: boolean;
+  /**
+   * The turn was cut short by `signal` rather than finishing. `content` holds only what
+   * had streamed by then — possibly nothing — and `usage` is empty, because a half-step
+   * cannot be billed to the context.
+   *
+   * Mutually exclusive with `awaiting`: a suspension only ends a step whose stream ran to
+   * completion, and that step breaks the loop, so there is no later step for an abort to
+   * interrupt.
+   */
+  stopped?: boolean;
 }
 
 export interface RunAgentInput {
@@ -84,6 +94,12 @@ export interface RunAgentInput {
   attachments?: Attachment[];
   tools: StructuredToolInterface[];
   onEvent: (event: ChatStreamEvent) => void;
+  /**
+   * Aborts the turn: the in-flight provider request and any running tool see it, so a
+   * stop costs no further tokens. Aborting is not an error — the call resolves with
+   * `stopped: true` and whatever text had already streamed.
+   */
+  signal?: AbortSignal;
 }
 
 /** Content-block types that carry chain-of-thought rather than the answer. */
@@ -348,124 +364,143 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   // The final step's input+output — how big the context had grown by the end of the turn.
   let contextTokens = 0;
   let sawUsage = false;
+  /** The turn was cut short by `input.signal`; see `RunAgentResult.stopped`. */
+  let stopped = false;
 
-  for (let step = 0; step < maxSteps; step++) {
-    const chunks: AIMessageChunk[] = [];
-    let stepText = "";
-    const stream = await modelWithTools.stream(messages);
+  // Only the step loop is guarded. Everything before it — reading the history, building the
+  // model — must keep throwing normally, so a missing provider is still a failed turn.
+  try {
+    for (let step = 0; step < maxSteps; step++) {
+      const chunks: AIMessageChunk[] = [];
+      let stepText = "";
+      const stream = await modelWithTools.stream(messages, { signal: input.signal });
 
-    for await (const chunk of stream) {
-      chunks.push(chunk);
+      for await (const chunk of stream) {
+        chunks.push(chunk);
 
-      const thought = chunkReasoning(chunk);
-      if (thought) {
-        reasoning += thought;
-        input.onEvent({ type: "reasoning", delta: thought });
-      }
-
-      const text = chunkText(chunk);
-      if (text) {
-        stepText += text;
-        finalContent += text;
-        input.onEvent({ type: "text", delta: text });
-      }
-    }
-
-    if (chunks.length === 0) {
-      ended = true;
-      break;
-    }
-    const aiMessage = chunks.reduce((acc, c) => acc.concat(c) as AIMessageChunk);
-    messages.push(aiMessage);
-
-    // Providers report usage on a dedicated chunk at the end of the step. Read it from the
-    // chunks rather than from `aiMessage`: `AIMessageChunk.concat` does *not* carry
-    // `usage_metadata` through the reduce, so the reduced message always reports none.
-    const stepUsage = chunks.reduce<AIMessageChunk["usage_metadata"] | undefined>(
-      (acc, c) => c.usage_metadata ?? acc,
-      undefined
-    );
-    if (stepUsage) {
-      sawUsage = true;
-      inputTokens += stepUsage.input_tokens ?? 0;
-      outputTokens += stepUsage.output_tokens ?? 0;
-      totalTokens += stepUsage.total_tokens ?? 0;
-      cachedInputTokens += stepUsage.input_token_details?.cache_read ?? 0;
-      contextTokens = (stepUsage.input_tokens ?? 0) + (stepUsage.output_tokens ?? 0);
-    }
-
-    if (stepText) lastUtterance = stepText;
-
-    const calls = aiMessage.tool_calls ?? [];
-    if (calls.length === 0) {
-      // No tool calls: the model's final answer is this message's content.
-      finalContent = chunkText(aiMessage) || lastUtterance;
-      ended = true;
-      break;
-    }
-
-    // `ask_user` ends the turn, so a step that contains one must run its *other* calls
-    // first and suspend after them. Dropping them instead would leave the model's own
-    // tool_calls block holding calls nobody ever answered, and the model with no record
-    // that it had asked for them — so nothing the model asked for is ever silently lost.
-    let suspendedHere = false;
-
-    for (const call of calls) {
-      const id = call.id ?? `call_${step}_${toolCalls.length}`;
-      const name = call.name ?? "unknown";
-      const args = JSON.stringify(call.args ?? {});
-
-      input.onEvent({ type: "tool_start", toolCall: { id, name, input: args } });
-
-      let output = "";
-      const t = toolByName.get(name);
-      if (t) {
-        try {
-          const result = await t.invoke(call.args ?? {});
-          output = typeof result === "string" ? result : JSON.stringify(result);
-        } catch (err) {
-          // A suspension is not an error and must not be reported as one: the model would
-          // be told its own question failed. Caught before the generic arm below.
-          if (err instanceof AskUserSuspension) {
-            if (awaiting) {
-              // One suspension per step. Answering two sets of questions at once is a
-              // state the UI has no way to present, and the model can simply ask again.
-              output = "Tool error: only one ask_user call is allowed per step.";
-            } else {
-              awaiting = true;
-              suspendedHere = true;
-              // Recorded without an `output` on purpose: `buildHistoryMessages` replays
-              // only calls that have one, which is exactly what keeps a pending question
-              // out of the model's context until the user has answered it.
-              toolCalls.push({ id, name, input: args, status: "awaiting" });
-              // Note the deliberate absence of a `tool_end` event to match the
-              // `tool_start` above — there is no result to report yet.
-              continue;
-            }
-          } else {
-            output = `Tool error: ${err instanceof Error ? err.message : String(err)}`;
-          }
+        const thought = chunkReasoning(chunk);
+        if (thought) {
+          reasoning += thought;
+          input.onEvent({ type: "reasoning", delta: thought });
         }
-      } else {
-        output = `Unknown tool "${name}".`;
+
+        const text = chunkText(chunk);
+        if (text) {
+          stepText += text;
+          finalContent += text;
+          input.onEvent({ type: "text", delta: text });
+        }
       }
 
-      toolCalls.push({ id, name, input: args, output });
-      input.onEvent({ type: "tool_end", toolCall: { id, name, input: args, output } });
+      if (chunks.length === 0) {
+        ended = true;
+        break;
+      }
+      const aiMessage = chunks.reduce((acc, c) => acc.concat(c) as AIMessageChunk);
+      messages.push(aiMessage);
 
-      messages.push(new ToolMessage({ tool_call_id: id, name, content: output }));
-    }
+      // Providers report usage on a dedicated chunk at the end of the step. Read it from the
+      // chunks rather than from `aiMessage`: `AIMessageChunk.concat` does *not* carry
+      // `usage_metadata` through the reduce, so the reduced message always reports none.
+      const stepUsage = chunks.reduce<AIMessageChunk["usage_metadata"] | undefined>(
+        (acc, c) => c.usage_metadata ?? acc,
+        undefined
+      );
+      if (stepUsage) {
+        sawUsage = true;
+        inputTokens += stepUsage.input_tokens ?? 0;
+        outputTokens += stepUsage.output_tokens ?? 0;
+        totalTokens += stepUsage.total_tokens ?? 0;
+        cachedInputTokens += stepUsage.input_token_details?.cache_read ?? 0;
+        contextTokens = (stepUsage.input_tokens ?? 0) + (stepUsage.output_tokens ?? 0);
+      }
 
-    if (suspendedHere) {
-      // The same rule the final answer gets: the message holds the model's most recent
-      // words, not every step's. A question is introduced by the sentence just before it,
-      // and the narration from earlier steps — which the live stream already showed — is
-      // not part of it. Falling back to the utterance rather than to the accumulation is
-      // what keeps a silent suspending step from re-joining everything after all.
-      finalContent = lastUtterance || finalContent;
-      ended = true;
-      break;
+      if (stepText) lastUtterance = stepText;
+
+      const calls = aiMessage.tool_calls ?? [];
+      if (calls.length === 0) {
+        // No tool calls: the model's final answer is this message's content.
+        finalContent = chunkText(aiMessage) || lastUtterance;
+        ended = true;
+        break;
+      }
+
+      // `ask_user` ends the turn, so a step that contains one must run its *other* calls
+      // first and suspend after them. Dropping them instead would leave the model's own
+      // tool_calls block holding calls nobody ever answered, and the model with no record
+      // that it had asked for them — so nothing the model asked for is ever silently lost.
+      let suspendedHere = false;
+
+      for (const call of calls) {
+        const id = call.id ?? `call_${step}_${toolCalls.length}`;
+        const name = call.name ?? "unknown";
+        const args = JSON.stringify(call.args ?? {});
+
+        input.onEvent({ type: "tool_start", toolCall: { id, name, input: args } });
+
+        let output = "";
+        const t = toolByName.get(name);
+        if (t) {
+          try {
+            const result = await t.invoke(call.args ?? {}, { signal: input.signal });
+            output = typeof result === "string" ? result : JSON.stringify(result);
+          } catch (err) {
+            // A suspension is not an error and must not be reported as one: the model would
+            // be told its own question failed. Caught before the generic arm below.
+            if (err instanceof AskUserSuspension) {
+              if (awaiting) {
+                // One suspension per step. Answering two sets of questions at once is a
+                // state the UI has no way to present, and the model can simply ask again.
+                output = "Tool error: only one ask_user call is allowed per step.";
+              } else {
+                awaiting = true;
+                suspendedHere = true;
+                // Recorded without an `output` on purpose: `buildHistoryMessages` replays
+                // only calls that have one, which is exactly what keeps a pending question
+                // out of the model's context until the user has answered it.
+                toolCalls.push({ id, name, input: args, status: "awaiting" });
+                // Note the deliberate absence of a `tool_end` event to match the
+                // `tool_start` above — there is no result to report yet.
+                continue;
+              }
+            } else if (input.signal?.aborted) {
+              // A stop is not a tool failure either. Reporting it as `Tool error: …` would
+              // look like the tool broke and would carry the loop into another step, so it
+              // unwinds to the handler below instead. Ordered after the suspension arm, not
+              // before it: `ask_user` never consults the signal, so an aborted signal must
+              // not be allowed to relabel a suspension as a stop.
+              throw err;
+            } else {
+              output = `Tool error: ${err instanceof Error ? err.message : String(err)}`;
+            }
+          }
+        } else {
+          output = `Unknown tool "${name}".`;
+        }
+
+        toolCalls.push({ id, name, input: args, output });
+        input.onEvent({ type: "tool_end", toolCall: { id, name, input: args, output } });
+
+        messages.push(new ToolMessage({ tool_call_id: id, name, content: output }));
+      }
+
+      if (suspendedHere) {
+        // The same rule the final answer gets: the message holds the model's most recent
+        // words, not every step's. A question is introduced by the sentence just before it,
+        // and the narration from earlier steps — which the live stream already showed — is
+        // not part of it. Falling back to the utterance rather than to the accumulation is
+        // what keeps a silent suspending step from re-joining everything after all.
+        finalContent = lastUtterance || finalContent;
+        ended = true;
+        break;
+      }
     }
+  } catch (err) {
+    // Stopping is not failing: the turn resolves with whatever had streamed, and the route
+    // persists that as a partial reply. Every other throw keeps its meaning — swallowing
+    // them here would turn any provider failure into a silent, empty "stopped" turn.
+    if (!input.signal?.aborted) throw err;
+    stopped = true;
   }
 
   // The budget ran out with the model still working. Its last utterance is kept — it is the
@@ -473,19 +508,24 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   // stops mid-work and reads as a finished answer is worse than one that admits it. The
   // sentence is always present, not only when the model said nothing: that used to be the
   // rule, and it meant every truncated turn that had narrated anything looked complete.
-  if (!ended) {
+  //
+  // A stopped turn never gets the note: an empty reply there is legitimate, because the
+  // user asked for the turn to end there.
+  if (!ended && !stopped) {
     finalContent = lastUtterance ? `${lastUtterance}\n\n${OUT_OF_STEPS}` : OUT_OF_STEPS;
   }
 
   // Empty (rather than all-zeros) when the provider reported nothing, so callers can tell
-  // "not reported" apart from "reported zero".
-  const usage: MessageUsage = sawUsage
-    ? { inputTokens, outputTokens, totalTokens, cachedInputTokens, contextTokens }
-    : {};
+  // "not reported" apart from "reported zero". A stopped turn reports nothing at all: the
+  // figures it has cover a half-finished step, which is not worth showing or summing.
+  const usage: MessageUsage =
+    sawUsage && !stopped
+      ? { inputTokens, outputTokens, totalTokens, cachedInputTokens, contextTokens }
+      : {};
 
-  if (sawUsage) input.onEvent({ type: "usage", usage });
+  if (sawUsage && !stopped) input.onEvent({ type: "usage", usage });
 
-  return { content: finalContent, reasoning: reasoning.trim(), toolCalls, usage, awaiting };
+  return { content: finalContent, reasoning: reasoning.trim(), toolCalls, usage, awaiting, stopped };
 }
 
 /** Re-exported for clarity at the call site. */

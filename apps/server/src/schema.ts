@@ -160,6 +160,7 @@ const DDL = `
     tool_calls TEXT,
     attachments TEXT,
     usage TEXT,
+    stopped INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);

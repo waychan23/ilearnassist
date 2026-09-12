@@ -96,6 +96,8 @@ const en: typeof MessageSchema = {
     thinking: "The agent is thinking…",
     parsingShort: "Parsing attachments…",
     send: "Send (Enter)",
+    stop: "Stop generating",
+    stopping: "Stopping…",
     attach: "Add an image or file",
     settings: "Session parameters (temperature, context length, tool steps…)",
   },
@@ -240,6 +242,7 @@ const en: typeof MessageSchema = {
 
   message: {
     copyReply: "Copy the reply",
+    stopped: "Stopped",
     contextTokens: "Context this turn: {count} tokens",
     usage: {
       input: "In",

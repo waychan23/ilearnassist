@@ -408,7 +408,9 @@ Fuller map in `docs/reference.md`.
 - **SSE framing** is `event: <type>\ndata: <json>\n\n`. Chat streams via
   `reply.hijack()`; the agent emits `text` deltas, `reasoning` deltas,
   `tool_start`/`tool_end`, `usage`, `message_done`, optionally `title`, `error`,
-  then `done`. The frontend expects exactly this.
+  then `done`. The frontend expects exactly this. `message_done` carries the whole
+  persisted `Message`, so a turn the user stopped arrives on the same event as any other —
+  the only difference is `stopped: true` on it. There is no `stopped` event type.
 - **`ask_user` suspending the turn is control flow, not an error.** The tool throws
   `AskUserSuspension` (the device LangGraph's `interrupt()` uses) and `runAgentStream`
   catches that class *before* its generic tool-error arm — a catch that swallowed it would
@@ -423,6 +425,33 @@ Fuller map in `docs/reference.md`.
   pair, so no synthetic user message is invented and no checkpointing is needed.
   Retiring a question (`skipped`) writes no `output` on purpose; only an explicit cancel
   gives the model a result, because only a cancel is a decision it should hear.
+- **Stopping a turn is a request, not a dropped connection.** `POST /api/sessions/:id/stop`
+  aborts the `AbortController` that `beginTurn()` registered for the session, and the turn's
+  own request — stream still open — persists what had streamed and ends the way every turn
+  does: `message_done` with `stopped: true`, then `done`. It is deliberately *not* the client
+  aborting its fetch: a fetch that was aborted has no stream left to report the partial reply
+  down, which would leave the client inventing a local copy or reloading to find it. Three
+  things follow, and each is load-bearing:
+  - **The signal reaches the provider request and every running tool**, so a stop stops
+    paying for tokens. `runAgentStream` catches narrowly — only `signal.aborted` becomes
+    `stopped`, and every other throw keeps its meaning, because swallowing them would dress
+    a provider outage as a turn the user appeared to have stopped. The tool-level catch
+    rethrows on an abort rather than reporting `Tool error: …`, which would look like the
+    tool broke and would carry the loop into another step. Order it *after* the
+    `AskUserSuspension` arm: `ask_user` never consults the signal, so an abort must never
+    relabel a suspension as a stop.
+  - **A stopped turn is persisted and still counts as the assistant's half of the exchange.**
+    Dropping it would leave the next turn's history opening on a user message with no reply.
+    It carries `stopped` and reports no `usage` — a half-finished step's token counts are not
+    a number worth showing or summing — and it gets no `OUT_OF_STEPS` note and no auto-title,
+    because a turn the user ended is not a turn that ran out of budget or that said anything
+    to name a conversation after.
+  - **`beginTurn()` is used by both turn routes**, so Stop works on a resumed `ask_user` turn
+    as well as a fresh one — the client renders the same control for both, and a control that
+    renders but does nothing is worse than no control. The same request's `close` event
+    aborts too, so a closed tab stops costing tokens; `finished` keeps that from firing on a
+    turn that ran to completion. `createSseWriter`'s `gone()` guard and its `error` listener
+    exist for the case a stop creates, where the response outlives the client.
 - **Reasoning is display-only, with one exception that is not optional.** Chain of
   thought is persisted on the message and rendered, and `buildHistoryMessages()` replays
   only `content` and `toolCalls` — most providers ignore or reject reasoning, so it must

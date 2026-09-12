@@ -176,6 +176,22 @@ function fileErrorReply(err: unknown): { status: 400 | 404; body: ApiErrorBody }
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
   const { config, db, documents, layout } = opts;
 
+  /**
+   * The turn currently streaming for each session, so another request can stop it.
+   *
+   * Stopping is its own route rather than the client aborting its fetch: the chat request
+   * has to outlive the decision in order to report the partial reply, and a fetch that was
+   * aborted has no stream left to send `message_done` down. So the stop route aborts this
+   * controller and returns, while the turn's own request — stream still open — persists
+   * what had streamed and ends normally.
+   *
+   * Scoped to the plugin instance, so one app never sees another's turns. Keyed by session id
+   * alone, which is only safe because the stop route resolves the session `ForUser` *before*
+   * consulting this map — without that read the map would be an id-guessing oracle for
+   * ending a stranger's turn.
+   */
+  const activeTurns = new Map<string, AbortController>();
+
   /* ---------------------------------- identity ---------------------------------- */
 
   /**
@@ -1205,6 +1221,39 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   /**
+   * Register a turn as stoppable, and hand back the signal it runs under.
+   *
+   * Every route that streams a turn uses this, so Stop works on a resumed `ask_user` turn
+   * exactly as it does on a fresh one — the client shows the same control for both, and a
+   * control that renders but does nothing is worse than no control.
+   *
+   * The `close` listener is the other way a turn ends early: a tab closed or a connection
+   * dropped should stop costing tokens just like a Stop would. `finished` separates that from
+   * a socket closing after a turn that ran to the end, which must not abort anything.
+   */
+  function beginTurn(request: FastifyRequest, sessionId: string) {
+    const controller = new AbortController();
+    activeTurns.set(sessionId, controller);
+
+    let finished = false;
+    const onDisconnect = () => {
+      if (!finished) controller.abort();
+    };
+    request.raw.on("close", onDisconnect);
+
+    return {
+      signal: controller.signal,
+      finish() {
+        finished = true;
+        request.raw.off("close", onDisconnect);
+        // Only clear our own entry: a later turn for the same session may already have
+        // registered itself while this one was unwinding.
+        if (activeTurns.get(sessionId) === controller) activeTurns.delete(sessionId);
+      },
+    };
+  }
+
+  /**
    * Persist what a turn produced and close the stream: the assistant message, its
    * `message_done`, the conversation title when this was the first turn, and `done`.
    *
@@ -1229,6 +1278,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       reasoning: result.reasoning || undefined,
       toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
       usage: Object.keys(result.usage).length > 0 ? result.usage : undefined,
+      stopped: result.stopped,
     });
     db.touchSession(id);
 
@@ -1236,9 +1286,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     // Name the conversation from its first exchange, unless the user already typed a
     // title (which flips `titleSource` to `user`) or this isn't the first turn. A resume
-    // has no user message to name it from, and is never the first turn anyway.
+    // has no user message to name it from, and is never the first turn anyway. A turn
+    // stopped before any text arrived has nothing to name it after either.
     const isFirstTurn = opts.historyLength === 0;
-    if (isFirstTurn && session.titleSource !== "user" && opts.userMessage !== null) {
+    if (
+      isFirstTurn &&
+      session.titleSource !== "user" &&
+      opts.userMessage !== null &&
+      result.content.trim()
+    ) {
       const title = await autoTitle({
         provider: ctx.provider,
         modelId: ctx.modelId,
@@ -1340,6 +1396,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const sse = createSseWriter(reply);
     sse.send({ type: "meta", sessionId: id });
 
+    const turn = beginTurn(request, id);
+
     try {
       const result = await runAgentStream({
         provider: ctx.provider,
@@ -1355,6 +1413,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         userMessage: message,
         attachments: storedAttachments,
         tools: ctx.tools,
+        signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
 
@@ -1365,6 +1424,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     } catch (err) {
       failTurn(id, err, sse);
     } finally {
+      // Before `sse.end()`: closing the socket is exactly the event the disconnect listener
+      // is watching for, and it must not read as the client having gone away.
+      turn.finish();
       sse.send({ type: "done" });
       sse.end();
     }
@@ -1440,6 +1502,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const sse = createSseWriter(reply);
     sse.send({ type: "meta", sessionId: id });
 
+    const turn = beginTurn(request, id);
+
     try {
       // Read history *after* the answer was written, so the resumed run sees it.
       const history = db.listMessagesForUser(id, userId);
@@ -1456,6 +1520,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         history,
         userMessage: null,
         tools: ctx.tools,
+        signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
 
@@ -1466,9 +1531,32 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     } catch (err) {
       failTurn(id, err, sse);
     } finally {
+      turn.finish();
       sse.send({ type: "done" });
       sse.end();
     }
+  });
+
+  /**
+   * Stop the turn streaming for a session.
+   *
+   * The session is resolved `ForUser` *before* the map is consulted, so another account's id
+   * is a 404 rather than an abort — without that read, `activeTurns` would be an id-guessing
+   * oracle for ending a stranger's turn.
+   *
+   * Answers `ok: false` rather than 404 when *your* session simply has nothing running: the
+   * client's Stop races the stream's own `done`, and losing that race means the stop already
+   * happened. That is an outcome, not a failure.
+   */
+  app.post("/api/sessions/:id/stop", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, actor(request).id)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    const turn = activeTurns.get(id);
+    turn?.abort();
+    return { ok: turn !== undefined };
   });
 }
 
