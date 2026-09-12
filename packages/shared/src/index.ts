@@ -188,6 +188,11 @@ export const API_ERROR_CODES = [
   "UNKNOWN_POLICY",
   "UNKNOWN_PARSER",
   "UNKNOWN_PROVIDER",
+  // Not a reply the server chooses to send: the provider rejected the request, and the only
+  // thing we can key on is its sentence. It is here because the cause is a *setting* the user
+  // can fix — a thinking model whose `reasoning` capability was never enabled — and the
+  // provider's own words say nothing about that. See `classifyProviderError`.
+  "REASONING_NOT_DECLARED",
   "MESSAGE_REQUIRED",
   "QUESTION_NOT_PENDING",
   "INVALID_ANSWER",
@@ -692,7 +697,16 @@ export type ChatStreamEvent =
   | { type: "message_done"; message: Message }
   /** Sent after the first turn when a model-written title replaced the placeholder. */
   | { type: "title"; sessionId: string; title: string }
-  | { type: "error"; message: string }
+  /**
+   * A turn that failed. `message` is the raw text and is what gets persisted into history,
+   * so it is never rewritten.
+   *
+   * `code` is absent for provider text we cannot key on, which is the ordinary case — the
+   * client then shows `message` as it stands. It is present only when the failure was
+   * recognisably a *setting* rather than a fault, so the UI can say what to change instead of
+   * repeating a sentence the user cannot act on.
+   */
+  | { type: "error"; message: string; code?: ApiErrorCode }
   | { type: "done" };
 
 /* ------------------------------------ constants ------------------------------------ */

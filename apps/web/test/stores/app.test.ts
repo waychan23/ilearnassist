@@ -639,6 +639,29 @@ describe("sendMessage", () => {
     expect(store.streaming.active).toBe(false);
   });
 
+  it("replaces a coded error event with the catalog's sentence", async () => {
+    // A code is present only when the server recognised the failure as a *setting* rather
+    // than a fault. Then the provider's own words are the wrong thing to show: they describe
+    // the symptom and name nothing the user can change.
+    const store = await readyStore();
+    streamOf(
+      {
+        type: "error",
+        message: "400 The `reasoning_content` in the thinking mode must be passed back to the API.",
+        code: "REASONING_NOT_DECLARED",
+      },
+      { type: "done" }
+    );
+
+    await store.sendMessage("q");
+
+    const expected = i18n.global.t("errors.REASONING_NOT_DECLARED");
+    expect(store.streaming.error).toBe(expected);
+    expect(store.streaming.error).not.toContain("reasoning_content");
+    // The toast too, not only the banner: the banner unmounts with the turn.
+    expect(store.error).toBe(expected);
+  });
+
   it("surfaces a transport failure", async () => {
     const store = await readyStore();
     mocks.streamChat.mockImplementation(async function* () {

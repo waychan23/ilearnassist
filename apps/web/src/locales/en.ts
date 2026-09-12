@@ -496,6 +496,7 @@ const en: typeof MessageSchema = {
     UNKNOWN_POLICY: "Unknown parsing policy: {policy}",
     UNKNOWN_PARSER: "Unknown parser.",
     UNKNOWN_PROVIDER: "Unknown provider.",
+    REASONING_NOT_DECLARED: "This model needs its reasoning passed back, but \"Reasoning model\" is not enabled for it in settings, so the provider rejected the request. Enable it for this model in Settings, then try again.",
     MESSAGE_REQUIRED: "A message is required.",
     QUESTION_NOT_PENDING: "Those questions no longer need an answer — they were submitted or retired already.",
     INVALID_ANSWER: "That answer is incomplete or out of date. Refresh the page and try again.",
