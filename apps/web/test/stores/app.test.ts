@@ -389,6 +389,52 @@ describe("signing in and out", () => {
     expect(uiState.view).toBe("login");
   });
 
+  it("lands on the login screen even when the logout request fails", async () => {
+    // The cookie is HttpOnly, so clearing it is the server's job and a failed logout cannot be
+    // retried locally — but leaving someone looking signed in because a request failed is the
+    // worse outcome of the two. The failure is reported rather than swallowed, because the
+    // cookie is still there and a reload will sign them back in.
+    mocks.api.logout.mockRejectedValue(new ApiError("INTERNAL", "boom", 500));
+    const store = await readyStore();
+
+    await store.signOut();
+
+    expect(store.account).toBeNull();
+    expect(store.workspaces).toEqual([]);
+    expect(uiState.view).toBe("login");
+    expect(store.error).toBeTruthy();
+  });
+
+  it("stops applying a turn that was still arriving when the account went away", async () => {
+    /*
+     * Signing out does not close the stream, so a turn the previous account started keeps
+     * delivering frames. Without the account-epoch check those deltas land in whatever state
+     * the *next* account has by then — one person's reply text appearing in another's
+     * conversation, which is exactly the kind of thing signing out is supposed to prevent.
+     */
+    const store = await readyStore();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { type: "text", delta: "before" } as ChatStreamEvent;
+      await gate;
+      yield { type: "text", delta: "after" } as ChatStreamEvent;
+    });
+
+    const turn = store.sendMessage("hi");
+    // Let the first frame be applied while the account is still there.
+    await vi.waitFor(() => expect(store.streaming.content).toBe("before"));
+
+    await store.signOut();
+    release();
+    await turn;
+
+    expect(store.streaming.content).toBe("");
+    expect(store.messages).toEqual([]);
+    expect(uiState.view).toBe("login");
+  });
+
   it("explains an expired session and clears the account when a request 401s", async () => {
     // The handler the client calls: the session went away under a tab that was open. Both
     // halves matter — the screen alone reads as the app having forgotten something, and the

@@ -27,6 +27,7 @@ const en: typeof MessageSchema = {
     edit: "Edit",
     rename: "Rename",
     settings: "Settings",
+    signOut: "Sign out",
   },
 
   app: {

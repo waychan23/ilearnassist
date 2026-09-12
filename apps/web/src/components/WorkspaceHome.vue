@@ -161,6 +161,15 @@ function activityLabel(workspace: Workspace): string {
       >
         <Icon name="gear" />
       </button>
+      <button
+        class="icon-btn"
+        data-testid="sign-out"
+        :title="t('common.signOut')"
+        :aria-label="t('common.signOut')"
+        @click="store.signOut()"
+      >
+        <Icon name="logout" />
+      </button>
     </header>
 
     <div class="home-scroll">

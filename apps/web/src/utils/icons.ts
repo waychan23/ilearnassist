@@ -34,6 +34,10 @@ export const ICON_PATHS = {
 
   check: ["M3 8.5L6.5 12L13 4"],
 
+  /* Leaving through the door: a doorway open on the right, and an arrow going through it.
+   * Not a `cross`, which is what a dialog dismisses with — signing out is not a dismissal. */
+  logout: ["M9.5 2.5H3.5V13.5H9.5", "M7 8H13.5", "M11 5.5L13.5 8L11 10.5"],
+
   trash: ["M2.5 4.5H13.5", "M6.25 4.5V3.25H9.75V4.5", "M4.5 4.5L5.15 12.75H10.85L11.5 4.5"],
 
   copy: ["M11.5 4.5H4.5V11.5", "M5.5 5.5H12.5V12.5H5.5Z"],

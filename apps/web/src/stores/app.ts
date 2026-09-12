@@ -391,13 +391,25 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Bumped whenever the signed-in account goes away.
+   *
+   * A turn already in flight outlives the account that started it: signing out does not close
+   * the stream, and its later deltas would otherwise be applied to whatever state the *next*
+   * account has by then — one person's reply text appearing in another's conversation. Not
+   * reactive, because nothing renders it: it exists to be compared inside `consume`.
+   */
+  let accountEpoch = 0;
+
+  /**
    * Drop everything that belonged to the account that was signed in.
    *
    * Called on sign-out and on an expired session, and it is deliberately total: a name, a
    * workspace list or a half-written conversation left on screen after someone signs out is
-   * the next person's problem, and on a shared machine it is a real one.
+   * the next person's problem, and on a shared machine it is a real one. Bumping the epoch is
+   * what makes it total for a turn that is still arriving too.
    */
   function forgetAccount(): void {
+    accountEpoch += 1;
     account.value = null;
     config.value = null;
     sources.value = [];
@@ -413,6 +425,9 @@ export const useAppStore = defineStore("app", () => {
     draftSettings.value = {};
     pendingAttachments.value = [];
     parseStatus.value = {};
+    // The half-arrived reply is as much a part of the account as the messages are, and the
+    // login screen has no business showing either.
+    streaming.value = EMPTY_STREAMING();
     resetFileTree();
     closeSettings();
     closeSources();
@@ -472,10 +487,25 @@ export const useAppStore = defineStore("app", () => {
     await loadApp();
   }
 
+  /**
+   * Sign out, and land on the login screen whatever the server says.
+   *
+   * The cookie is HttpOnly, so clearing it is the server's job and a logout that fails cannot
+   * be retried locally — but leaving someone looking signed in because a request failed is
+   * worse than the reverse. So the local state goes either way and the failure is reported
+   * rather than swallowed: the cookie is still there, and a reload will sign them back in,
+   * which is exactly the kind of thing to say out loud rather than let them discover.
+   */
   async function signOut(): Promise<void> {
-    await api.logout();
+    let failure: unknown;
+    try {
+      await api.logout();
+    } catch (e) {
+      failure = e;
+    }
     forgetAccount();
     showLogin();
+    if (failure) error.value = messageOf(failure);
   }
 
   /**
@@ -1188,24 +1218,35 @@ export const useAppStore = defineStore("app", () => {
    * that rolled back on this would be undoing something the server did write.
    */
   async function consume(stream: AsyncGenerator<ChatStreamEvent>): Promise<boolean> {
+    // Whose turn this is. If the account goes away mid-stream the events stop being applied at
+    // all, so a signed-out turn cannot write into the next account's conversation.
+    const epoch = accountEpoch;
     let requestFailed = false;
     try {
-      for await (const ev of stream) applyEvent(ev);
+      for await (const ev of stream) {
+        if (epoch !== accountEpoch) break;
+        applyEvent(ev);
+      }
     } catch (e) {
       requestFailed = true;
-      streaming.value.error = messageOf(e);
+      if (epoch === accountEpoch) streaming.value.error = messageOf(e);
     } finally {
       streaming.value.active = false;
       streaming.value.stopping = false;
       stopReasoningTicker();
-      // Pick up the server-assigned title and this turn's updated_at without clobbering
-      // the optimistic bubbles already in `messages`.
-      await loadSessions().catch(() => undefined);
-      // A turn is the one thing that reliably writes into the workspace, so the tree is
-      // re-read here — at the single point every turn ends, rather than from the two
-      // callers that start one. Silent, and a no-op when the tree was never opened: this
-      // is a courtesy to the panel, not part of finishing a turn.
-      await refreshFileTree({ silent: true }).catch(() => undefined);
+      // The two re-reads below are for the account that was signed in, so they are skipped
+      // rather than merely harmless: `loadSessions` would early-return on the cleared
+      // workspace id anyway, and neither is something to run on the login screen's behalf.
+      if (epoch === accountEpoch) {
+        // Pick up the server-assigned title and this turn's updated_at without clobbering
+        // the optimistic bubbles already in `messages`.
+        await loadSessions().catch(() => undefined);
+        // A turn is the one thing that reliably writes into the workspace, so the tree is
+        // re-read here — at the single point every turn ends, rather than from the two
+        // callers that start one. Silent, and a no-op when the tree was never opened: this
+        // is a courtesy to the panel, not part of finishing a turn.
+        await refreshFileTree({ silent: true }).catch(() => undefined);
+      }
     }
     return !requestFailed;
   }

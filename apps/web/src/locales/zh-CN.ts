@@ -44,6 +44,7 @@ export default {
      */
     rename: "重命名",
     settings: "设置",
+    signOut: "退出登录",
   },
 
   app: {

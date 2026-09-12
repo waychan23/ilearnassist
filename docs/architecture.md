@@ -615,7 +615,7 @@ attachments, providers and app defaults.
 | `POST /api/sources/:id/reparse` | re-run extraction |
 | `DELETE /api/sources/:id` | delete the file, its text and every reference to it |
 | `POST /api/auth/login` | sign in, creating the account if the name is new. Sets the session cookie. |
-| `POST /api/auth/logout` | clear it |
+| `POST /api/auth/logout` | clear it — reached from **Sign out** in the sidebar footer and on the workspace home |
 | `GET /api/auth/me` | who the caller is; a 401 is the answer, not a refusal |
 | `GET /api/auth/users` | the names that exist, so a returning visitor can pick one |
 | `GET /api/config` | public config: providers (keyless), defaults, this account's workspaces root |
@@ -764,6 +764,14 @@ after that point, and rendering both would show the answer twice for as long as 
 belonging to whichever is open (`+`, or refresh). The strip is the settings dialog's tier-2
 `.tabs`, not a second kind of tab; the panel below it is one `.side-scroll` either way, because
 the sidebar's pinned header and footer depend on there being exactly one.
+
+Below the panel sit the two account-level rows, **Settings** and **Sign out**, and they share
+every style except the divider, which is above the pair rather than between them — two rows of
+one footer group, not two entries of a list. Sign out takes no confirmation, because with no
+password to forget a misclick costs only typing a name again. It lands on the login screen even
+when the request fails: the cookie is HttpOnly, so a failure cannot be retried locally, and
+leaving someone looking signed in is the worse of the two outcomes. The same control is on the
+workspace home, beside its settings gear, since that page is reachable with no sidebar.
 
 `FileTree.vue` renders `store.fileRows`, which is `flattenTree` from
 [`utils/fileTree.ts`](../apps/web/src/utils/fileTree.ts) computed over a flat map of
