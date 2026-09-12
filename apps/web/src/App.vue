@@ -10,7 +10,7 @@ import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
 import SourcesDialog from "./components/dialogs/SourcesDialog.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
-import { closeDrawer, closeSettings, uiState } from "./composables/ui";
+import { closeDrawer, closeSettings, sidebarRail, uiState } from "./composables/ui";
 import { isCompact } from "./composables/breakpoints";
 import { confirmState } from "./composables/confirm";
 import Icon from "./components/Icon.vue";
@@ -103,7 +103,14 @@ watch(
   -->
   <div
     class="app"
-    :class="{ home: uiState.view === 'home', auth: uiState.view === 'login' }"
+    :class="{
+      home: uiState.view === 'home',
+      auth: uiState.view === 'login',
+      /* The rail is a grid *track*, not a width on the sidebar. See `sidebarRail` for the
+         two conditions inside it, and `style.css` for why the track is the element that
+         has to move. */
+      'sidebar-collapsed': sidebarRail,
+    }"
   >
     <LoginView v-if="uiState.authReady && uiState.view === 'login'" />
 

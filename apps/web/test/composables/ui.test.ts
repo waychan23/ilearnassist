@@ -7,6 +7,8 @@ import {
   showChat,
   showLogin,
   showWorkspaceHome,
+  sidebarRail,
+  toggleSidebar,
   uiState,
 } from "../../src/composables/ui.js";
 
@@ -17,6 +19,7 @@ import {
 beforeEach(() => {
   uiState.settingsOpen = false;
   uiState.drawerOpen = false;
+  uiState.sidebarCollapsed = false;
   uiState.view = "login";
   uiState.authReady = false;
 });
@@ -33,6 +36,7 @@ describe("uiState", () => {
     expect(uiState).toMatchObject({
       settingsOpen: false,
       drawerOpen: false,
+      sidebarCollapsed: false,
       view: "login",
       authReady: false,
     });
@@ -67,6 +71,58 @@ describe("uiState", () => {
 
     closeSettings();
     expect(uiState.settingsOpen).toBe(false);
+  });
+});
+
+describe("the sidebar rail", () => {
+  it("starts open, and toggles both ways", () => {
+    // Open is the default because the sidebar is how a conversation is reached at all; a
+    // first run that began as a rail would be a first run with nothing to click.
+    expect(uiState.sidebarCollapsed).toBe(false);
+
+    toggleSidebar();
+    expect(uiState.sidebarCollapsed).toBe(true);
+
+    toggleSidebar();
+    expect(uiState.sidebarCollapsed).toBe(false);
+  });
+
+  it("is a rail only in the chat view", () => {
+    // The other two views render one full-width child, so a rail left collapsed behind you
+    // would narrow the *workspace home*'s grid — the app's landing page, with no sidebar to
+    // put in the column it just created.
+    showChat();
+    toggleSidebar();
+    expect(sidebarRail.value).toBe(true);
+
+    showWorkspaceHome();
+    expect(sidebarRail.value).toBe(false);
+
+    showChat();
+    expect(sidebarRail.value).toBe(true);
+  });
+
+  it("keeps the collapsed flag across a view change", () => {
+    // The rail coming back on the way *in* is the point of the check above; the flag itself
+    // surviving is what makes "narrow the sidebar, go and make a workspace, come back" not
+    // undo the narrowing. It is not persisted across a reload — see `ui.ts`.
+    showChat();
+    toggleSidebar();
+    showWorkspaceHome();
+
+    expect(uiState.sidebarCollapsed).toBe(true);
+  });
+
+  it("is independent of the drawer", () => {
+    // They are two flags for two questions, and a compact viewport can have the drawer open
+    // while the wide-viewport flag sits wherever the last wide viewport left it.
+    openDrawer();
+    toggleSidebar();
+
+    expect(uiState).toMatchObject({ drawerOpen: true, sidebarCollapsed: true });
+
+    closeDrawer();
+    expect(uiState).toMatchObject({ drawerOpen: false, sidebarCollapsed: true });
   });
 });
 

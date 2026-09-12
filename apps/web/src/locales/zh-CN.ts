@@ -156,6 +156,10 @@ export default {
     renameHint: "双击重命名",
     noSessions: "暂无会话",
     openNav: "打开导航",
+    /** The header toggle's label, which names the *action* — so it changes with the state
+     *  rather than describing the button, and there is no second "current state" string. */
+    collapse: "收起侧边栏",
+    expand: "展开侧边栏",
   },
 
   /**
