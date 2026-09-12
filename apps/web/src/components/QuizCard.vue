@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   QUIZ_TOOL_NAME,
@@ -9,6 +9,7 @@ import {
   type ToolCall,
 } from "../api/types";
 import { useAppStore } from "../stores/app";
+import { autosizeTextarea } from "../utils/autosize";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{ toolCall: ToolCall }>();
@@ -183,6 +184,33 @@ function goTo(index: number): void {
   if (index >= 0 && index < questions.value.length) current.value = index;
 }
 
+/**
+ * Grow a box to its content as it is typed into.
+ *
+ * Driven by the event rather than by a watcher on the draft: the textarea's own value is
+ * already the new one by the time `input` fires, so there is nothing to wait for.
+ */
+function growFromEvent(event: Event): void {
+  autosizeTextarea(event.target as HTMLTextAreaElement);
+}
+
+/**
+ * …and size one that appears with text already in it.
+ *
+ * Two ways that happens, and neither produces an `input` event: the panel is keyed by the
+ * question, so switching tabs re-creates the box, and the unsure box is revealed by a
+ * checkbox that can be unticked and ticked again while its text stays in the draft.
+ *
+ * After the DOM flush rather than during it, which a ref callback would otherwise be: a box
+ * measured in the commit phase reports the height it had before its own styles applied, so
+ * a freshly mounted one came out at about half a row and the first keystroke was what
+ * corrected it.
+ */
+function growOnMount(el: unknown): void {
+  if (!(el instanceof HTMLTextAreaElement)) return;
+  void nextTick(() => autosizeTextarea(el));
+}
+
 function submit(): void {
   if (!allAnswered.value || busy.value) return;
   const answers: QuizAnswers = {};
@@ -349,8 +377,11 @@ const unsureReasonId = (index: number) => `${uid.value}-unsure-${index}`;
               :id="unsureReasonId(current)"
               v-model="draft[current]!.unsureReason"
               class="textarea"
+              rows="1"
+              :ref="growOnMount"
               :placeholder="t('quiz.unsureReasonPlaceholder')"
               :data-testid="`quiz-unsure-reason-${current}`"
+              @input="growFromEvent"
             />
           </div>
 
@@ -360,8 +391,11 @@ const unsureReasonId = (index: number) => `${uid.value}-unsure-${index}`;
               :id="notesId(current)"
               v-model="draft[current]!.notes"
               class="textarea"
+              rows="1"
+              :ref="growOnMount"
               :placeholder="t('quiz.notesPlaceholder')"
               :data-testid="`quiz-notes-${current}`"
+              @input="growFromEvent"
             />
           </div>
         </div>
@@ -654,6 +688,16 @@ const unsureReasonId = (index: number) => `${uid.value}-unsure-${index}`;
 .field-label {
   color: var(--text-3);
   font-size: var(--fs-2);
+}
+/*
+ * One row until the content needs more — `autosizeTextarea` grows it from there. The global
+ * `.textarea` carries a 96px floor and a manual resize grip, and neither belongs on a box
+ * that sizes itself: the grip's work would be undone by the next keystroke, and the floor is
+ * the thing standing between "one row" and three.
+ */
+.field .textarea {
+  min-height: 0;
+  resize: none;
 }
 
 .quiz-foot {

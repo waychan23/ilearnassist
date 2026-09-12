@@ -440,7 +440,7 @@ describe("renderQuizResult", () => {
 describe("readQuizQuestions", () => {
   const call = (input: unknown): ToolCall => ({
     id: "c1",
-    name: "quiz",
+    name: "ila_quiz",
     input: typeof input === "string" ? input : JSON.stringify(input),
   });
 

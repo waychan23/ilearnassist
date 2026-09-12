@@ -298,3 +298,127 @@ test("the reported shape: four questions after a tool call, one of them multi-se
 
   await expect(page.getByTestId("message-assistant").last()).toContainText("好的，按你的背景来设计。");
 });
+
+/**
+ * A card holding one single-select question sends itself the moment an option is picked.
+ *
+ * There is nothing else to say about such a question — the only other input one can offer is
+ * its free-text choice, and picking an offered option closes that — so a Submit button would
+ * exist only to be pressed after the answer was already complete. The three cases that must
+ * *not* do this are the ones below it, and each is a different reason.
+ */
+test("a single-question card submits on the pick, with no button to press", async ({
+  page,
+  request,
+}) => {
+  await scriptLlm(request, {
+    title: "加一个登录",
+    turns: [
+      {
+        content: "只有一件事要定。",
+        toolCalls: [{ id: "call_ask", name: "ask_user", args: { questions: [QUESTIONS[0]] } }],
+      },
+      { content: "好，就按 OAuth 来。" },
+    ],
+  });
+
+  await page.goto("/");
+  await createAndEnter(page, `问一问 ${Date.now()}`);
+  await page.getByTestId("composer-input").fill("帮我加个登录");
+  await page.getByTestId("composer-send").click();
+
+  const card = page.getByTestId("ask-user-card");
+  await expect(card.getByTestId("ask-user-status")).toHaveText("等待你的回答");
+
+  // Nothing to press, and the card says so rather than letting the click be a surprise: this
+  // commits on one action with nothing to undo it.
+  await expect(page.getByTestId("ask-user-submit")).toHaveCount(0);
+  await expect(page.getByTestId("ask-user-auto-hint")).toBeVisible();
+
+  await pick(page, 0, 0);
+
+  // No Submit click anywhere in this test: the turn resumes by itself.
+  await expect(page.getByTestId("message-assistant").last()).toContainText("好，就按 OAuth 来。");
+  await expect(card.getByTestId("ask-user-status")).toHaveText("已确认");
+  await expect(card.getByTestId("ask-user-answer-0")).toHaveText("OAuth");
+});
+
+test("a single multi-select question still waits for Submit", async ({ page, request }) => {
+  // Each pick is one of several and no click means "done", so there is no moment to send at.
+  const questions = [
+    {
+      header: "学习目标",
+      question: "你学 Flink 想达成哪些目标？（可多选）",
+      multiSelect: true,
+      options: [{ label: "流计算开发" }, { label: "集群运维" }],
+    },
+  ];
+
+  await scriptLlm(request, {
+    title: "学习目标",
+    turns: [
+      {
+        content: "先确认目标。",
+        toolCalls: [{ id: "call_ask", name: "ask_user", args: { questions } }],
+      },
+      { content: "好，按这两块来安排。" },
+    ],
+  });
+
+  await page.goto("/");
+  await createAndEnter(page, `问一问 ${Date.now()}`);
+  await page.getByTestId("composer-input").fill("我要学习 Flink");
+  await page.getByTestId("composer-send").click();
+
+  await expect(page.getByTestId("ask-user-status")).toHaveText("等待你的回答");
+  await expect(page.getByTestId("ask-user-auto-hint")).toHaveCount(0);
+  await expect(page.getByTestId("ask-user-submit")).toBeDisabled();
+
+  await pick(page, 0, 0);
+  await expect(page.getByTestId("ask-user-submit")).toBeEnabled();
+  // Still answerable after the first pick — that is the whole difference.
+  await expect(page.getByTestId("ask-user-question")).toBeVisible();
+
+  await pick(page, 0, 1);
+  await page.getByTestId("ask-user-submit").click();
+
+  await expect(page.getByTestId("ask-user-status")).toHaveText("已确认");
+  await expect(page.getByTestId("ask-user-answer-0")).toHaveText("流计算开发、集群运维");
+});
+
+test("a single question's free-text choice keeps its Submit", async ({ page, request }) => {
+  // The same one-question card as the first test, but the pick is the client's own free-text
+  // choice — which opens a box the user has yet to type in, so the card is a manual one
+  // again and the hint stops claiming otherwise.
+  await scriptLlm(request, {
+    title: "加一个登录",
+    turns: [
+      {
+        content: "只有一件事要定。",
+        toolCalls: [{ id: "call_ask", name: "ask_user", args: { questions: [QUESTIONS[0]] } }],
+      },
+      { content: "好，按 SAML 来。" },
+    ],
+  });
+
+  await page.goto("/");
+  await createAndEnter(page, `问一问 ${Date.now()}`);
+  await page.getByTestId("composer-input").fill("帮我加个登录");
+  await page.getByTestId("composer-send").click();
+
+  await expect(page.getByTestId("ask-user-status")).toHaveText("等待你的回答");
+
+  await page.getByTestId("ask-user-other-0").locator("input").click();
+
+  // Nothing was sent, and nothing says it will be: the box needs typing first.
+  await expect(page.getByTestId("ask-user-question")).toBeVisible();
+  await expect(page.getByTestId("ask-user-auto-hint")).toHaveCount(0);
+  await expect(page.getByTestId("ask-user-submit")).toBeDisabled();
+
+  await page.getByTestId("ask-user-other-input-0").fill("SAML");
+  await expect(page.getByTestId("ask-user-submit")).toBeEnabled();
+  await page.getByTestId("ask-user-submit").click();
+
+  await expect(page.getByTestId("message-assistant").last()).toContainText("好，按 SAML 来。");
+  await expect(page.getByTestId("ask-user-answer-0")).toHaveText("SAML");
+});

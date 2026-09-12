@@ -104,7 +104,7 @@ async function messagesOf(sessionId: string): Promise<Message[]> {
 /** Every `quiz` call the session has persisted, in message order. */
 async function quizCallsOf(sessionId: string): Promise<ToolCall[]> {
   const messages = await messagesOf(sessionId);
-  return messages.flatMap((m) => (m.toolCalls ?? []).filter((tc) => tc.name === "quiz"));
+  return messages.flatMap((m) => (m.toolCalls ?? []).filter((tc) => tc.name === "ila_quiz"));
 }
 
 /** The single quiz call still awaiting an answer. */
@@ -124,7 +124,7 @@ function scriptQuiz(continuation = "好，就按这个来。", questions = QUEST
   llm.setTurns([
     {
       content: "先测一下你现在的印象。",
-      toolCalls: [{ id: "call_quiz", name: "quiz", args: { questions } }],
+      toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions } }],
     },
     { content: continuation },
   ]);
@@ -157,7 +157,7 @@ describe("quiz over the wire", () => {
     ]);
 
     const call = callFrom(events);
-    expect(call).toMatchObject({ name: "quiz", status: "awaiting" });
+    expect(call).toMatchObject({ name: "ila_quiz", status: "awaiting" });
     expect(call.output).toBeUndefined();
     // The stream ends normally rather than being held open — that is what lets the answer
     // arrive from a later request, or after a reload.
@@ -222,7 +222,7 @@ describe("quiz over the wire", () => {
       }[];
     };
     expect(sent.messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool"]);
-    expect(sent.messages[2]!.tool_calls?.[0]!.function.name).toBe("quiz");
+    expect(sent.messages[2]!.tool_calls?.[0]!.function.name).toBe("ila_quiz");
     // The replayed call carries the recorded ids, so the model's own context lines up with
     // the ids the result refers to.
     expect(sent.messages[2]!.tool_calls?.[0]!.function.arguments).toContain("Q1");
@@ -289,11 +289,11 @@ describe("quiz over the wire", () => {
     llm.setTurns([
       {
         content: "先测两个。",
-        toolCalls: [{ id: "call_quiz_a", name: "quiz", args: { questions: QUESTIONS } }],
+        toolCalls: [{ id: "call_quiz_a", name: "ila_quiz", args: { questions: QUESTIONS } }],
       },
       {
         content: "再补一个。",
-        toolCalls: [{ id: "call_quiz_b", name: "quiz", args: { questions: ONE_QUESTION } }],
+        toolCalls: [{ id: "call_quiz_b", name: "ila_quiz", args: { questions: ONE_QUESTION } }],
       },
       { content: "记住了。" },
     ]);
