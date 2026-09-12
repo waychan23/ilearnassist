@@ -16,14 +16,25 @@ export function createSseWriter(reply: FastifyReply) {
 
   reply.raw.flushHeaders?.();
 
+  // A chat stream can outlive the client that asked for it: the user stops the turn, or
+  // closes the tab, and the socket is gone while the turn is still unwinding. Node reports
+  // that by emitting on the response, and with nothing listening it surfaces as an uncaught
+  // exception. A transport error here only ever means "nobody is reading any more" — which
+  // `gone()` below already answers by going quiet — so there is nothing to escalate.
+  reply.raw.on("error", () => {});
+
   let ended = false;
+
+  /** Whether the response can still take a write: not ended here, and not torn down below. */
+  const gone = () => ended || reply.raw.destroyed || reply.raw.writableEnded;
+
   return {
     send(event: ChatStreamEvent) {
-      if (ended) return;
+      if (gone()) return;
       reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     },
     end() {
-      if (ended) return;
+      if (gone()) return;
       ended = true;
       reply.raw.end();
     },

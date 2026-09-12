@@ -47,6 +47,12 @@ export interface FakeTurn {
   usage?: { input?: number; output?: number; cached?: number };
   /** Send no usage frame at all — exercises the "provider reported nothing" path. */
   omitUsage?: boolean;
+  /**
+   * Pause this many milliseconds after every frame, so the turn is still streaming while
+   * a test acts. Without it a turn is written in one synchronous burst and there is no
+   * moment at which anything can be interrupted.
+   */
+  holdMs?: number;
 }
 
 export interface FakeLlmOptions {
@@ -66,6 +72,11 @@ export interface FakeLlm {
   setTitle(title: string): void;
   /** Bodies of every `/chat/completions` request received, oldest first. */
   requests(): Record<string, unknown>[];
+  /**
+   * How many streaming requests were disconnected before their turn finished writing —
+   * i.e. how many times a caller really did cancel, rather than just stop reading.
+   */
+  abortedRequests(): number;
   /** Drop the queued turns and the request log, so one instance can serve many tests. */
   reset(): void;
   close(): Promise<void>;
@@ -164,10 +175,16 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLlm> {
   let queue: FakeTurn[] = [];
   let title = options.title ?? "Fake Conversation Title";
   const seen: Record<string, unknown>[] = [];
+  /** Streaming requests disconnected before their turn finished writing. */
+  let aborted = 0;
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -193,9 +210,15 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
         res.end(JSON.stringify(seen));
         return;
       }
+      if (url === "/__state") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ aborted }));
+        return;
+      }
       if (url === "/__reset") {
         queue = [];
         seen.length = 0;
+        aborted = 0;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
         return;
@@ -231,9 +254,37 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       });
+      // A client that hangs up mid-turn — the agent loop aborting its provider request —
+      // closes the connection while frames are still being written. Recording that is the
+      // only way a test can tell a real cancellation from a caller that merely stopped
+      // reading, so it is tracked rather than ignored as a write error.
+      let hungUp = false;
+      let notHungUp: () => void = () => {};
+      const closed = new Promise<void>((resolve) => {
+        notHungUp = resolve;
+      });
+      res.on("close", () => {
+        if (!res.writableEnded) {
+          hungUp = true;
+          aborted += 1;
+        }
+        notHungUp();
+      });
+
+      // Abandon the turn as soon as the client goes away. The socket is torn down rather
+      // than merely left alone: an aborted request can strand a half-open connection, and
+      // `close()` below would then sit on it until the keep-alive timeout.
+      const bail = () => {
+        if (!res.destroyed) res.destroy();
+      };
+
       for (const frame of turnFrames(turn)) {
         res.write(`data: ${JSON.stringify(frame)}\n\n`);
+        if (turn.holdMs) await Promise.race([sleep(turn.holdMs), closed]);
+        if (hungUp) return bail();
       }
+      if (turn.holdMs) await Promise.race([sleep(turn.holdMs), closed]);
+      if (hungUp) return bail();
       res.write("data: [DONE]\n\n");
       res.end();
     })().catch((err: unknown) => {
@@ -261,14 +312,22 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
     requests() {
       return seen;
     },
+    abortedRequests() {
+      return aborted;
+    },
     reset() {
       queue = [];
       seen.length = 0;
+      aborted = 0;
     },
     async close() {
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve()))
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+        // Destroy whatever is still parked, in flight or not. A turn that was stopped
+        // leaves the client's socket stranded rather than cleanly closed, and `close()`
+        // would otherwise wait it out — seconds, for a run that is already over.
+        server.closeAllConnections();
+      });
     },
   };
 }

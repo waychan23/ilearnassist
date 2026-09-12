@@ -591,6 +591,7 @@ attachments, providers and app defaults.
 | `PUT /api/document-parsing` | the parsing policy |
 | `POST /api/sessions/:id/chat` | the SSE chat stream |
 | `POST /api/sessions/:id/answers` | answer a suspended `ask_user` call, and stream the resumed turn |
+| `POST /api/sessions/:id/stop` | interrupt the turn streaming for this session; `{ ok }` says whether one was running |
 
 Provider responses **never** include `apiKey` — only `hasApiKey: boolean`. `PUT`
 treats an absent `apiKey` field as "leave unchanged" (an empty string clears it),
@@ -601,7 +602,41 @@ The two endpoints that run a turn share `turnContext()` — provider, model, Cop
 tool set, resolved identically — and `finishTurn()` — persist the assistant message, emit
 `message_done`, auto-title a first turn, emit `done`. They must agree: a resumed turn that
 rebuilt its tools differently from the one that asked the question could find `ask_user`
-missing from the conversation it is in the middle of.
+missing from the conversation it is in the middle of. They also share `beginTurn()`, which
+registers the turn in `activeTurns` so either can be stopped.
+
+#### Stopping a turn
+
+`POST /api/sessions/:id/stop` aborts the `AbortController` that `beginTurn()` registered
+for the session, and answers `{ ok }` — `false` rather than 404 when nothing was running,
+because the client's Stop races the stream's own `done` and losing that race means the stop
+already happened.
+
+**Stopping is an endpoint of its own, not the client aborting its own fetch.** The chat
+request has to *outlive* the decision in order to report what happened: a fetch that was
+aborted has no stream left to send `message_done` down, which would leave the client either
+inventing a local copy of the partial reply or reloading to find it. So the stop route
+aborts and returns, while the chat request — stream still open — persists what had streamed
+and ends exactly as a completed turn does.
+
+- The signal reaches the provider request (`modelWithTools.stream(messages, { signal })`)
+  and every running tool (`t.invoke(args, { signal })`), so a stop stops paying for tokens.
+- `runAgentStream` catches **narrowly**: only an abort becomes `stopped: true`, and any
+  other throw keeps its meaning. Swallowing everything there would dress every provider
+  outage up as a silent, empty turn the user appeared to have stopped. The tool-level catch
+  rethrows on an aborted signal rather than reporting `Tool error: …`, which would look like
+  the tool broke and would carry the loop into another step.
+- The turn ends with the usual `message_done` carrying the partial text flagged
+  `stopped: true`, then `done`. **No `error` event** — stopping is something the user did.
+- A stopped turn is still persisted, and still counts as the assistant's half of the
+  exchange, so the next turn replays it as context rather than opening on two user messages
+  in a row. It reports no `usage`: the figures it has cover a half-finished step.
+- The auto-titler is skipped when a stopped turn has no content — there are no words to name
+  the conversation after.
+
+The same request's `close` event aborts the controller too, so a closed tab stops costing
+tokens exactly as a Stop does. `finished` separates that from a socket closing after a turn
+that ran to completion, which must not abort anything.
 
 `/chat`:
 

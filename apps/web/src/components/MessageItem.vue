@@ -53,6 +53,13 @@ const questionToolCalls = computed(() =>
 );
 const error = computed(() => props.streaming?.error ?? null);
 /**
+ * Whether the user cut this reply short.
+ *
+ * Only a persisted message can carry this — the live stream has no equivalent state, and
+ * stopping is not an error, so it deliberately does not reuse `error`.
+ */
+const stopped = computed(() => props.message?.stopped === true);
+/**
  * Submitted attachments, with the live parse state overlaid.
  *
  * The message carries the state the server recorded when it was sent, which is correct on
@@ -158,6 +165,11 @@ const usageText = computed(() => {
       />
       <ToolCallCard v-for="tc in actionToolCalls" :key="tc.id" :tool-call="tc" />
       <div v-if="rendered" class="markdown" data-testid="message-content" v-html="rendered"></div>
+      <!-- Outside the content block above: a stop pressed before any text arrived leaves
+           an empty reply, and that one still needs to say why it is empty. -->
+      <div v-if="stopped" class="stopped-note" data-testid="message-stopped">
+        {{ t("message.stopped") }}
+      </div>
       <ToolCallCard v-for="tc in questionToolCalls" :key="tc.id" :tool-call="tc" />
       <div v-if="!props.streaming" class="actions">
         <button

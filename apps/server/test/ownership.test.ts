@@ -207,6 +207,9 @@ describe("over HTTP, with two signed-in accounts", () => {
       ["PATCH", `/api/sessions/${theirs.sessionId}`],
       ["DELETE", `/api/sessions/${theirs.sessionId}`],
       ["GET", `/api/sessions/${theirs.sessionId}/sources`],
+      // Reaches a process-local map of running turns, so if the `ForUser` read in front of
+      // it were dropped, an id guess would end someone else's generation.
+      ["POST", `/api/sessions/${theirs.sessionId}/stop`],
     ] as const;
 
     for (const [method, url] of attempts) {

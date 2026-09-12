@@ -179,6 +179,17 @@ export const api = {
 
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
 
+  /**
+   * Stop the turn currently streaming for a session.
+   *
+   * Deliberately a request of its own rather than aborting the chat fetch: the stream has
+   * to stay open for the server to report the partial reply down it. `ok: false` means
+   * nothing was running — the stop raced the turn's own ending, which is an outcome, not
+   * a failure.
+   */
+  stopSession: (sessionId: string) =>
+    request<{ ok: boolean }>(`/sessions/${sessionId}/stop`, { method: "POST" }),
+
   uploadAttachment: (sessionId: string, input: UploadAttachmentInput) =>
     request<Attachment>(`/sessions/${sessionId}/sources`, {
       method: "POST",

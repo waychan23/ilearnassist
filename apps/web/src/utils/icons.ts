@@ -60,6 +60,12 @@ export const ICON_PATHS = {
 
   send: ["M8 13.5V2.75", "M3.75 7L8 2.75L12.25 7"],
 
+  /* Ends something that is running, so it sits beside `send` at the call site and reads as
+   * its opposite. Deliberately an *outline* and not the filled square the character `■` was:
+   * the set is stroked by contract, and `Icon.vue` paints `fill="none"` — a filled square
+   * would render as an empty box. Same rectangle idiom as `image` and `file`. */
+  stop: ["M4.5 4.5H11.5V11.5H4.5Z"],
+
   menu: ["M2.75 4.5H13.25", "M2.75 8H13.25", "M2.75 11.5H13.25"],
 
   gear: [

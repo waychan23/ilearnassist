@@ -100,6 +100,8 @@ interface MessageRow {
   tool_calls: string | null;
   attachments: string | null;
   usage: string | null;
+  /** SQLite has no boolean: 0/1, and `null` on rows written before the column existed. */
+  stopped: number | null;
   created_at: string;
 }
 
@@ -275,6 +277,7 @@ const mapMessage = (r: MessageRow): Message => ({
   toolCalls: r.tool_calls ? safeParseArray<ToolCall>(r.tool_calls) : undefined,
   attachments: r.attachments ? safeParseArray<Attachment>(r.attachments) : undefined,
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
+  stopped: r.stopped ? true : undefined,
   createdAt: r.created_at,
 });
 
@@ -530,6 +533,8 @@ export interface AppDb {
     toolCalls?: ToolCall[];
     attachments?: Attachment[];
     usage?: MessageUsage;
+    /** The user cut this turn short; `content` is whatever had streamed by then. */
+    stopped?: boolean;
   }): Message;
 
   /**
@@ -623,6 +628,12 @@ export function createDb(dbPath: string): AppDb {
 
   // Creates the tables, or refuses a file this build cannot read. See `schema.ts`.
   applySchema(db);
+
+  // Columns added since `messages` was first written. `applySchema` is `CREATE TABLE IF NOT
+  // EXISTS`, so a database that already has the table never gains them from the DDL alone —
+  // which is exactly the gap `ensureColumn` exists to close. Nothing to backfill, so the
+  // return value is ignored.
+  ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
 
   const now = () => new Date().toISOString();
 
@@ -837,8 +848,8 @@ export function createDb(dbPath: string): AppDb {
   /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, usage, created_at)
-     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @usage, @createdAt)`
+    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, usage, stopped, created_at)
+     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @usage, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
 
@@ -1117,6 +1128,7 @@ export function createDb(dbPath: string): AppDb {
         toolCalls: input.toolCalls ? JSON.stringify(input.toolCalls) : null,
         attachments: input.attachments?.length ? JSON.stringify(input.attachments) : null,
         usage: input.usage ? JSON.stringify(input.usage) : null,
+        stopped: input.stopped ? 1 : 0,
         createdAt: now(),
       });
       const row = stmtGetMessageById.get(input.id) as MessageRow;

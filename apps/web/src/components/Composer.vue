@@ -38,14 +38,28 @@ const imageWithoutVision = computed(
  */
 const parsingDocuments = computed(() => store.documentsParsing);
 
-/** Why the send button cannot be used, in one place: it is both the tooltip and the name. */
+/**
+ * Why the send button cannot be used, in one place: it is both the tooltip and the name.
+ *
+ * No `streaming.active` branch: while a reply streams the corner holds Stop, so Send is not
+ * rendered for a state to describe. `composer.thinking` is still the textarea's placeholder
+ * there, which is the only place that sentence belongs.
+ */
 const sendLabel = computed(() =>
-  store.streaming.active
-    ? t("composer.thinking")
-    : parsingDocuments.value
-      ? t("composer.parsingShort")
-      : t("composer.send")
+  parsingDocuments.value ? t("composer.parsingShort") : t("composer.send")
 );
+
+/**
+ * The stop control's wording. It says so while the request is in flight, because on a slow
+ * link the round trip is long enough to press Stop twice.
+ */
+const stopLabel = computed(() =>
+  store.streaming.stopping ? t("composer.stopping") : t("composer.stop")
+);
+
+function stop() {
+  void store.stopMessage();
+}
 
 /** Documents that failed to parse and are still staged — the model will not read them. */
 const failedDocuments = computed(() =>
@@ -140,7 +154,24 @@ function onKeydown(e: KeyboardEvent) {
             @paste="onPaste"
           ></textarea>
 
+          <!--
+            The same corner holds Stop for as long as a reply is streaming, which is also
+            what chatbox does. Swapping the control rather than adding a second one keeps
+            the composer from growing a toolbar while the user is watching it answer.
+          -->
           <button
+            v-if="store.streaming.active"
+            class="send-btn stop-btn"
+            data-testid="composer-stop"
+            :disabled="store.streaming.stopping"
+            :title="stopLabel"
+            :aria-label="stopLabel"
+            @click="stop"
+          >
+            <Icon name="stop" />
+          </button>
+          <button
+            v-else
             class="send-btn"
             data-testid="composer-send"
             :disabled="!canSend"

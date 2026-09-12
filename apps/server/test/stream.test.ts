@@ -2,15 +2,37 @@ import type { FastifyReply } from "fastify";
 import { describe, expect, it } from "vitest";
 import { createSseWriter } from "../src/stream.js";
 
-/** A stand-in for `reply.raw` that records what the writer puts on the wire. */
+/**
+ * A stand-in for `reply.raw` that records what the writer puts on the wire.
+ *
+ * `destroyed` and `writableEnded` are settable so a test can reproduce a client that has
+ * gone away — the state a stopped turn's response outlives — and `listeners` records the
+ * `error` handler `createSseWriter` registers, so the test can prove it is there and that
+ * it swallows rather than rethrows.
+ */
 function fakeReply() {
-  const state = { headers: {} as Record<string, string>, chunks: [] as string[], ended: false };
+  const state = {
+    headers: {} as Record<string, string>,
+    chunks: [] as string[],
+    ended: false,
+    destroyed: false,
+    listeners: {} as Record<string, ((err?: unknown) => void)[]>,
+  };
   const raw = {
+    get writableEnded() {
+      return state.ended;
+    },
+    get destroyed() {
+      return state.destroyed;
+    },
     writeHead(_status: number, headers: Record<string, string>) {
       state.headers = headers;
     },
     flushHeaders() {
       /* present so the optional call in createSseWriter resolves */
+    },
+    on(event: string, listener: (err?: unknown) => void) {
+      (state.listeners[event] ??= []).push(listener);
     },
     write(chunk: string) {
       state.chunks.push(chunk);
@@ -76,5 +98,39 @@ describe("createSseWriter", () => {
     sse.end();
     sse.end();
     expect(state.ended).toBe(true);
+  });
+
+  /*
+   * The two guards a stopped turn depends on. A stop leaves the response writing for a
+   * moment after the client that asked for it has gone, and Node reports that on the
+   * response — so a write into a dead socket must go quiet rather than throw, and the
+   * `error` it emits must have a listener.
+   */
+  it("goes quiet once the response has been torn down, rather than writing into it", () => {
+    const { reply, state } = fakeReply();
+    const sse = createSseWriter(reply);
+    state.destroyed = true;
+
+    expect(() => sse.send({ type: "text", delta: "nobody is reading" })).not.toThrow();
+    expect(state.chunks).toEqual([]);
+  });
+
+  it("goes quiet once the response has ended from the other end", () => {
+    const { reply, state } = fakeReply();
+    const sse = createSseWriter(reply);
+    // Not through `sse.end()`: this is the socket closing underneath the writer.
+    state.ended = true;
+
+    sse.send({ type: "done" });
+    expect(state.chunks).toEqual([]);
+  });
+
+  it("listens for transport errors so a dead socket is not an uncaught exception", () => {
+    const { reply, state } = fakeReply();
+    createSseWriter(reply);
+
+    const handlers = state.listeners["error"] ?? [];
+    expect(handlers).toHaveLength(1);
+    expect(() => handlers[0]!()).not.toThrow();
   });
 });

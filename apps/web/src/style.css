@@ -1100,6 +1100,34 @@ body {
   cursor: not-allowed;
 }
 
+/*
+ * Stop keeps the send control's geometry and takes the danger colour, so the swap reads at
+ * a glance: it ends something that is running. No `font-size` override — the character this
+ * replaced needed one for its own weight, and an `<Icon>` is sized by the `1em` inherited
+ * from `.send-btn`. Disabled ("stopping") still lands on `.composer .send-btn:disabled`,
+ * whose `:disabled` makes it the more specific rule.
+ */
+.composer .stop-btn {
+  background: var(--danger);
+}
+
+.composer .stop-btn:hover:not(:disabled) {
+  background: var(--danger-hover);
+}
+
+/*
+ * Sits under the reply it annotates, as a marginal note rather than a second message: the
+ * turn is not an error, so it must not borrow `.error-banner`'s colour, and it is not part
+ * of what the model said, so it must not be inside the markdown block.
+ */
+.stopped-note {
+  margin-top: var(--space-3);
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--fs-2);
+}
+
 .composer .toolbar {
   display: flex;
   align-items: center;

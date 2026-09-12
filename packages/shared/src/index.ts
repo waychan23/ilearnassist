@@ -309,6 +309,15 @@ export interface Message {
   role: Role;
   content: string;
   /**
+   * The user interrupted this turn, so `content` is only as much as had streamed when Stop
+   * was pressed — possibly nothing at all.
+   *
+   * A stopped turn is still persisted, and still counts as the assistant's half of the
+   * exchange: dropping it would leave the next turn's history opening on a user message with
+   * no reply. Absent on every other message, including the `⚠️` one written when a turn fails.
+   */
+  stopped?: boolean;
+  /**
    * The model's chain of thought, when the provider exposes one (`reasoning_content`
    * on DeepSeek, `reasoning` on OpenRouter, reasoning content blocks elsewhere).
    *

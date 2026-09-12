@@ -301,6 +301,23 @@ describe("messages", () => {
     expect(created.reasoning).toBeUndefined();
   });
 
+  it("round-trips the stopped flag, and leaves it absent otherwise", () => {
+    const stopped = db.createMessage({
+      id: "m1",
+      sessionId: "s1",
+      role: "assistant",
+      content: "half an answer",
+      stopped: true,
+    });
+    expect(stopped.stopped).toBe(true);
+
+    // Absent rather than `false`, matching the other optional columns: a caller asking
+    // "was this stopped" must not have to tell "no" apart from "not recorded".
+    const ordinary = db.createMessage({ id: "m2", sessionId: "s1", role: "assistant", content: "an answer" });
+    expect(ordinary.stopped).toBeUndefined();
+    expect(db.getMessageForUser("m2", OWNER)?.stopped).toBeUndefined();
+  });
+
   it("stores an empty attachment list as absent rather than as '[]'", () => {
     const created = db.createMessage({
       id: "m1",
@@ -516,6 +533,49 @@ describe("schema versioning", () => {
     const path = join(root, "unversioned.sqlite");
     writeDbFile(path, 0, true);
     expect(() => createDb(path)).toThrow(/schema v0/);
+  });
+
+  it("adds a column a current-version file is missing, rather than reading it wrong", () => {
+    // `CREATE TABLE IF NOT EXISTS` skips a table that already exists, so a database written
+    // before `messages.stopped` existed would never gain it from the DDL alone — and every
+    // read of a stopped turn would then silently answer "not stopped". The `ensureColumn`
+    // call in `createDb` is what closes that gap, which is why this is asserted on a file
+    // that reports the *current* version: versioning cannot cover an added column.
+    const path = join(root, "pre-stopped.sqlite");
+    const pre = new Database(path);
+    pre.exec(`CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      reasoning TEXT,
+      tool_calls TEXT,
+      attachments TEXT,
+      usage TEXT,
+      created_at TEXT NOT NULL
+    )`);
+    pre.pragma(`user_version = ${SCHEMA_VERSION}`);
+    pre.close();
+
+    const opened = createDb(path);
+    try {
+      const columns = (
+        opened.raw.prepare("PRAGMA table_info(messages)").all() as { name: string }[]
+      ).map((c) => c.name);
+      expect(columns).toContain("stopped");
+
+      // And it is usable, not merely present: the default covers existing rows and a new
+      // one round-trips.
+      opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
+      opened.createWorkspace({ userId: OWNER, id: "w1", name: "W", slug: "w1", dirPath: join(root, "w1") });
+      opened.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
+      expect(
+        opened.createMessage({ id: "m1", sessionId: "s1", role: "assistant", content: "cut short", stopped: true })
+          .stopped
+      ).toBe(true);
+    } finally {
+      opened.raw.close();
+    }
   });
 
   it("refuses a file written by a different version", () => {
