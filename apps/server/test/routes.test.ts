@@ -783,6 +783,35 @@ describe("sources", () => {
     expect(listed.map((s) => s.id)).toEqual([attachment.id]);
   });
 
+  it("lists a file once when its conversation and its workspace both link it", async () => {
+    // Uploading writes *two* link rows — one to the conversation, one to the workspace — from
+    // two separate `now()` calls, and the read unioned them. A `UNION` dedupes whole rows, so
+    // it only collapsed the pair while both timestamps agreed to the millisecond; a
+    // millisecond apart and the same file came back twice, which is one file showing as two
+    // chips. Hence the wait: it puts the two links on opposite sides of a millisecond, which
+    // is the case a second conversation in the same workspace produces for free (its own link
+    // is written now, the workspace's keeps the time it was first uploaded).
+    const first = (
+      await upload({ name: "dup.txt", mimeType: "text/plain", data: "aGk=" })
+    ).json<Attachment>();
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const other = await newSession(env, workspace.id);
+    // The same bytes, so `UNIQUE (user_id, sha256)` makes this one source with two references
+    // rather than two sources — which is the whole reason both arms can name the same id.
+    await uploadAttachment(env, other.id, {
+      name: "dup.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("hi"),
+    });
+
+    const listed = (await inject({ method: "GET", url: `/api/sessions/${other.id}/sources` })).json<
+      { id: string }[]
+    >();
+
+    expect(listed.map((s) => s.id)).toEqual([first.id]);
+  });
+
   it("lists the account's files, newest first, across every conversation", async () => {
     // Account-wide rather than per-conversation: this is the list the sources dialog manages,
     // and the only place a file with no remaining references is still visible.
