@@ -315,6 +315,18 @@ Fuller map in `docs/reference.md`.
   not a turn that was about the file browser, and a toast for it would interrupt a
   conversation that worked. Failures the user *did* ask for go to `fileTreeError` (the tree
   pane) or `filePreviewError` (inside the dialog) — not the global toast.
+- **A turn in flight is tied to the account that started it.** Signing out does not close the
+  stream, so `consume()` records an **account epoch** on the way in and stops applying events once
+  `forgetAccount()` has bumped it — otherwise a signed-out turn's later deltas land in whatever
+  state the *next* account has by then, which is one person's reply appearing in another's
+  conversation. `forgetAccount()` resets `streaming` for the same reason, and the two re-reads in
+  `consume()`'s `finally` are skipped rather than merely harmless, since they are for the account
+  that was signed in. Sign out is a click in the sidebar and on the workspace home, so this is a
+  reachable path and not a theoretical one. It deliberately **does not** confirm first — with no
+  password to forget, a misclick costs typing a name again — and it lands on the login screen even
+  when the logout request fails, because the cookie is HttpOnly, a failed logout cannot be retried
+  locally, and leaving someone looking signed in is the worse of the two outcomes (the failure is
+  surfaced, since a reload will sign them back in).
 - **An uploaded file is a `source`: owned by the account, indexed by the database, and
   referenced rather than owned by a conversation.** It lives at
   `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose, so chat

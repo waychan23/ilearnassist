@@ -251,6 +251,20 @@ async function onDeleteSession(session: Session) {
       <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
     </button>
 
+    <!-- Sign out sits beside Settings rather than on a menu of its own: with no password to
+         forget, it is one action and one click costs nothing. No confirmation either — the
+         only thing a misclick loses is typing your name again. -->
+    <button
+      class="menu-item side-signout"
+      :title="t('common.signOut')"
+      data-testid="sign-out"
+      @click="store.signOut()"
+    >
+      <span class="gear"><Icon name="logout" /></span>
+      <span class="label">{{ t("common.signOut") }}</span>
+      <span class="sub truncate">{{ store.account?.username ?? "" }}</span>
+    </button>
+
     <div class="side-footer">
       <span class="dir truncate" :title="store.config?.workspacesRootDir ?? ''">
         {{ store.config?.workspacesRootDir }}
@@ -269,21 +283,29 @@ async function onDeleteSession(session: Session) {
 }
 /* `.menu-item` gives the row its reset, spacing and hover. It is full-bleed at the foot of
    the sidebar, so it takes a top border instead of the radius a floating row would have. */
-.side-settings {
+/* Settings and Sign out are two rows of one footer group, so they share everything except the
+ * divider — which belongs above the pair, not between them. */
+.side-settings,
+.side-signout {
   gap: var(--space-5);
   padding: var(--space-5) var(--space-6);
-  border-top: 1px solid var(--border);
   border-radius: 0;
   flex-shrink: 0;
 }
-.side-settings .gear {
+.side-settings {
+  border-top: 1px solid var(--border);
+}
+.side-settings .gear,
+.side-signout .gear {
   font-size: var(--fs-4);
   flex-shrink: 0;
 }
-.side-settings .label {
+.side-settings .label,
+.side-signout .label {
   flex-shrink: 0;
 }
-.side-settings .sub {
+.side-settings .sub,
+.side-signout .sub {
   flex: 1;
   text-align: right;
   color: var(--text-3);
