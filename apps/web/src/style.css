@@ -344,15 +344,17 @@ body {
 }
 
 /*
- * The workspace home is a single full-width child, so the two-column track collapses to
- * one. Without this it would be laid out in the 272px sidebar column and the rest of the
- * page would be empty — the grid has no reason to know how many children it has.
+ * The workspace home and the login screen are each a single full-width child, so the
+ * two-column track collapses to one. Without this they would be laid out in the 272px
+ * sidebar column and the rest of the page would be empty — the grid has no reason to know
+ * how many children it has.
  *
- * Set here rather than in the responsive block: this is not a breakpoint, it is the other
- * view. The `max-width: 900px` rule further down also lands on one column, which is
- * correct on both views and needs no variant.
+ * Set here rather than in the responsive block: this is not a breakpoint, it is a different
+ * view. The `max-width: 900px` rule further down also lands on one column, which is correct
+ * on all three views and needs no variant.
  */
-.app.home {
+.app.home,
+.app.auth {
   grid-template-columns: 1fr;
 }
 

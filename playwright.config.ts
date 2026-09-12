@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AUTH_STATE } from "./e2e/auth.js";
 
 /**
  * Browser end-to-end run.
@@ -67,9 +68,28 @@ export default defineConfig({
   // second time would buy runtime and flake rather than coverage.
   projects: [
     {
+      /**
+       * Signs in once and saves the cookie.
+       *
+       * A project of its own rather than a `globalSetup`, because a `globalSetup` may run
+       * before the `webServer` entries are up and this has to reach one; `dependencies`
+       * orders it after them by construction. Everything below depends on it and loads the
+       * state it writes, which is what keeps the ~70 specs that are not about authentication
+       * from having to know it exists.
+       *
+       * `testMatch` is stated because the filename is `auth.setup.ts`, which the default
+       * glob (`*.spec.ts` / `*.test.ts`) does not match — so the other two projects do not
+       * pick it up, and no `testIgnore` is needed to keep them off it.
+       */
+      name: "setup",
+      testMatch: /.*\.setup\.ts/,
+      use: { ...devices["Desktop Chrome"], locale: "zh-CN" },
+    },
+    {
       name: "chromium",
       testIgnore: /mobile\.spec\.ts$/,
-      use: { ...devices["Desktop Chrome"], locale: "zh-CN" },
+      use: { ...devices["Desktop Chrome"], locale: "zh-CN", storageState: AUTH_STATE },
+      dependencies: ["setup"],
     },
     {
       // `Pixel 7` gives 412×915 with `hasTouch` and `isMobile`. The last of those is what
@@ -79,7 +99,14 @@ export default defineConfig({
       // states it, and repeating it keeps the reason visible next to the pin.
       name: "mobile",
       testMatch: /mobile\.spec\.ts$/,
-      use: { ...devices["Pixel 7"], locale: "zh-CN", hasTouch: true, isMobile: true },
+      use: {
+        ...devices["Pixel 7"],
+        locale: "zh-CN",
+        hasTouch: true,
+        isMobile: true,
+        storageState: AUTH_STATE,
+      },
+      dependencies: ["setup"],
     },
   ],
 

@@ -183,6 +183,12 @@ on a home network; not reasonable to have happen on a café's. So it is off unti
 stays on until turned off, and the panel carries a **Stop sharing** control for as long as it
 is on.
 
+**It also decides who can sign in.** There are no passwords — a username is the whole
+credential — so anything that can reach the address can become any name on it, and the
+login screen says as much. That makes this switch the real access control: with sharing off,
+only this machine can reach the app at all. It is a second reason to leave it off unless
+someone actually wants to read their notes from the sofa.
+
 The bind address follows the switch rather than the config, always — including when the
 switch is off and the address is loopback. Leaving the loopback case to `config.yaml` would
 mean a user who had hand-edited `server.host` there could have the panel report "not shared"

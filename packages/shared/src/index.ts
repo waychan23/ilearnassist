@@ -193,6 +193,9 @@ export const API_ERROR_CODES = [
   "INVALID_FILE_PATH",
   "NOT_A_DIRECTORY",
   "NOT_A_FILE",
+  "UNAUTHENTICATED",
+  "USERNAME_REQUIRED",
+  "USERNAME_TOO_LONG",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

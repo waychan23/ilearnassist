@@ -40,7 +40,7 @@ beforeEach(() => {
 });
 
 async function chat(sessionId: string, payload: Record<string, unknown>) {
-  const res = await env.server.app.inject({
+  const res = await env.inject({
     method: "POST",
     url: `/api/sessions/${sessionId}/chat`,
     payload,
@@ -49,7 +49,7 @@ async function chat(sessionId: string, payload: Record<string, unknown>) {
 }
 
 async function messagesOf(sessionId: string): Promise<Message[]> {
-  return (await env.server.app.inject({ method: "GET", url: `/api/sessions/${sessionId}/messages` })).json<Message[]>();
+  return (await env.inject({ method: "GET", url: `/api/sessions/${sessionId}/messages` })).json<Message[]>();
 }
 
 /** The workspace owning the session under test, set by `freshSession`. */
@@ -57,7 +57,7 @@ let currentWorkspaceId: string;
 
 async function sessionOf(sessionId: string): Promise<Session> {
   const sessions = (
-    await env.server.app.inject({ method: "GET", url: `/api/workspaces/${currentWorkspaceId}/sessions` })
+    await env.inject({ method: "GET", url: `/api/workspaces/${currentWorkspaceId}/sessions` })
   ).json<Session[]>();
   return sessions.find((s) => s.id === sessionId)!;
 }
@@ -73,9 +73,9 @@ describe("POST /api/sessions/:id/chat", () => {
   it("validates the request", async () => {
     const { session } = await freshSession();
 
-    expect((await env.server.app.inject({ method: "POST", url: "/api/sessions/nope/chat", payload: { message: "hi" } })).statusCode).toBe(404);
+    expect((await env.inject({ method: "POST", url: "/api/sessions/nope/chat", payload: { message: "hi" } })).statusCode).toBe(404);
 
-    const empty = await env.server.app.inject({
+    const empty = await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/chat`,
       payload: { message: "   " },
@@ -171,7 +171,7 @@ describe("POST /api/sessions/:id/chat", () => {
 
   it("never overwrites a title the user typed", async () => {
     const { session } = await freshSession();
-    await env.server.app.inject({
+    await env.inject({
       method: "PATCH",
       url: `/api/sessions/${session.id}`,
       payload: { title: "My Own Title" },
@@ -216,7 +216,7 @@ describe("POST /api/sessions/:id/chat", () => {
     const { session } = await freshSession();
     llm.setTurns([{ content: "still works" }]);
 
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/chat`,
       payload: { message: "hi", provider: "keyless-for-error" },
@@ -232,7 +232,7 @@ describe("POST /api/sessions/:id/chat", () => {
     const { session } = await freshSession();
     // Seed a provider that serves a model but has no API key, then point the turn at it.
     // (`buildModel` checks for a model before it checks for a key, so it needs both.)
-    await env.server.app.inject({
+    await env.inject({
       method: "POST",
       url: "/api/providers",
       payload: {
@@ -242,7 +242,7 @@ describe("POST /api/sessions/:id/chat", () => {
       },
     });
     const keyless = (
-      await env.server.app.inject({ method: "GET", url: "/api/providers" })
+      await env.inject({ method: "GET", url: "/api/providers" })
     ).json<{ id: string; name: string }[]>().find((p) => p.name === "Keyless")!;
 
     const { events } = await chat(session.id, { message: "hi", provider: keyless.id });
@@ -261,7 +261,7 @@ describe("POST /api/sessions/:id/chat", () => {
   it("sends an attached image to a vision model as image content", async () => {
     const { session } = await freshSession();
     const attachment = (
-      await env.server.app.inject({
+      await env.inject({
         method: "POST",
         url: `/api/sessions/${session.id}/attachments`,
         payload: { name: "shot.png", mimeType: "image/png", data: Buffer.from("fake-png").toString("base64") },
@@ -284,7 +284,7 @@ describe("POST /api/sessions/:id/chat", () => {
   it("degrades an attached image to a placeholder for a non-vision model", async () => {
     const { session } = await freshSession();
     const attachment = (
-      await env.server.app.inject({
+      await env.inject({
         method: "POST",
         url: `/api/sessions/${session.id}/attachments`,
         payload: { name: "shot.png", mimeType: "image/png", data: Buffer.from("fake-png").toString("base64") },
@@ -320,7 +320,7 @@ describe("POST /api/sessions/:id/chat", () => {
   it("switches the session's copilot when the turn asks for one", async () => {
     const { session } = await freshSession();
     const copilot = (
-      await env.server.app.inject({
+      await env.inject({
         method: "POST",
         url: "/api/copilots",
         payload: { name: "Coach", systemPrompt: "Be terse.", tools: [] },

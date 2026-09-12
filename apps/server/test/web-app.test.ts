@@ -106,9 +106,27 @@ describe("a server with a frontend beside its API", () => {
     // `buildServer` is what keeps `/api` reachable at all.
     const env = await startTestServer({ webDir: fakeWebBuild() });
     try {
-      const res = await env.server.app.inject({ method: "GET", url: "/api/config" });
+      const res = await env.inject({ method: "GET", url: "/api/config" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toHaveProperty("providers");
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("guards the API but not the page that logs into it", async () => {
+    // The auth gate is a hook on the `routes` plugin, so it covers the API and stops there —
+    // which it has to, because a browser cannot present a cookie to load the login screen
+    // that would give it one. Both halves matter: an unguarded API is the whole feature
+    // missing, and a guarded `index.html` is an app nobody can open.
+    const env = await startTestServer({ webDir: fakeWebBuild() });
+    try {
+      const api = await env.server.app.inject({ method: "GET", url: "/api/config" });
+      expect(api.statusCode).toBe(401);
+      expect(api.json()).toMatchObject({ error: { code: "UNAUTHENTICATED" } });
+
+      const page = await env.server.app.inject({ method: "GET", url: "/" });
+      expect(page.statusCode).toBe(200);
     } finally {
       await env.cleanup();
     }

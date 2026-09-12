@@ -36,7 +36,7 @@ let env: TestEnv;
 let workspace: Workspace;
 
 async function config(): Promise<PublicConfig> {
-  const res = await env.server.app.inject({ method: "GET", url: "/api/config" });
+  const res = await env.inject({ method: "GET", url: "/api/config" });
   return res.json<PublicConfig>();
 }
 
@@ -45,7 +45,7 @@ async function statusOf(
 ): Promise<
   Record<string, { status: string; error?: string; parseErrorCode?: string; parsedChars?: number }>
 > {
-  const res = await env.server.app.inject({
+  const res = await env.inject({
     method: "GET",
     url: `/api/sessions/${sessionId}/attachments`,
   });
@@ -67,7 +67,7 @@ afterEach(async () => {
 
 describe("document parser settings", () => {
   it("publishes the supported protocol kinds for the settings form", async () => {
-    const res = await env.server.app.inject({ method: "GET", url: "/api/document-parsers/kinds" });
+    const res = await env.inject({ method: "GET", url: "/api/document-parsers/kinds" });
     const kinds = res.json<{ kind: string; requiresApiKey: boolean }[]>();
     expect(kinds.map((k) => k.kind)).toEqual(expect.arrayContaining(["sync", "mineru", "llamaparse"]));
   });
@@ -81,7 +81,7 @@ describe("document parser settings", () => {
   });
 
   it("creates, edits and deletes a parser", async () => {
-    const created = await env.server.app.inject({
+    const created = await env.inject({
       method: "POST",
       url: "/api/document-parsers",
       payload: { name: "Docling", kind: "sync", baseURL: "http://127.0.0.1:5001/v1/convert/file" },
@@ -91,7 +91,7 @@ describe("document parser settings", () => {
     expect(parserConfig.enabled).toBe(true);
     expect(parserConfig.hasApiKey).toBe(false);
 
-    const updated = await env.server.app.inject({
+    const updated = await env.inject({
       method: "PUT",
       url: `/api/document-parsers/${parserConfig.id}`,
       payload: { name: "Renamed", enabled: false },
@@ -99,7 +99,7 @@ describe("document parser settings", () => {
     expect(updated.json<DocumentParserConfig>().name).toBe("Renamed");
     expect(updated.json<DocumentParserConfig>().enabled).toBe(false);
 
-    const deleted = await env.server.app.inject({
+    const deleted = await env.inject({
       method: "DELETE",
       url: `/api/document-parsers/${parserConfig.id}`,
     });
@@ -107,14 +107,14 @@ describe("document parser settings", () => {
   });
 
   it("rejects an unknown kind and a missing baseURL", async () => {
-    const badKind = await env.server.app.inject({
+    const badKind = await env.inject({
       method: "POST",
       url: "/api/document-parsers",
       payload: { name: "Nope", kind: "carrier-pigeon", baseURL: "http://x" },
     });
     expect(badKind.statusCode).toBe(400);
 
-    const noUrl = await env.server.app.inject({
+    const noUrl = await env.inject({
       method: "POST",
       url: "/api/document-parsers",
       payload: { name: "Nope", kind: "sync" },
@@ -123,7 +123,7 @@ describe("document parser settings", () => {
   });
 
   it("keeps a stored API key when the update omits it, and never returns it", async () => {
-    const created = await env.server.app.inject({
+    const created = await env.inject({
       method: "POST",
       url: "/api/document-parsers",
       payload: { name: "MinerU", kind: "mineru", baseURL: "http://x/api/v4", apiKey: "secret" },
@@ -133,7 +133,7 @@ describe("document parser settings", () => {
     expect(created.body).not.toContain("secret");
 
     // An absent key means "leave it alone" — the same contract as LLM providers.
-    const renamed = await env.server.app.inject({
+    const renamed = await env.inject({
       method: "PUT",
       url: `/api/document-parsers/${id}`,
       payload: { name: "Renamed" },
@@ -141,7 +141,7 @@ describe("document parser settings", () => {
     expect(renamed.json<DocumentParserConfig>().hasApiKey).toBe(true);
 
     // An explicit empty string clears it.
-    const cleared = await env.server.app.inject({
+    const cleared = await env.inject({
       method: "PUT",
       url: `/api/document-parsers/${id}`,
       payload: { apiKey: "" },
@@ -151,18 +151,18 @@ describe("document parser settings", () => {
 
   it("allows deleting the last parser", async () => {
     // Unlike LLM providers, zero cloud parsers is a valid configuration (local-only).
-    const created = await env.server.app.inject({
+    const created = await env.inject({
       method: "POST",
       url: "/api/document-parsers",
       payload: { name: "Only", kind: "sync", baseURL: "http://x" },
     });
     const { id } = created.json<DocumentParserConfig>();
-    const res = await env.server.app.inject({ method: "DELETE", url: `/api/document-parsers/${id}` });
+    const res = await env.inject({ method: "DELETE", url: `/api/document-parsers/${id}` });
     expect(res.statusCode).toBe(200);
   });
 
   it("updates the parsing policy", async () => {
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "PUT",
       url: "/api/document-parsing",
       payload: { policy: "cloud-first", fallbackEnabled: false, localEnabled: false },
@@ -174,7 +174,7 @@ describe("document parser settings", () => {
   });
 
   it("rejects an unknown policy", async () => {
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "PUT",
       url: "/api/document-parsing",
       payload: { policy: "whenever" },
@@ -242,7 +242,7 @@ describe("parsing an uploaded document", () => {
     expect((await statusOf(session.id))[attachment.id]!.status).toBe("failed");
 
     // Point the failure at something that works, then retry.
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/attachments/${attachment.id}/reparse`,
       payload: { name: "scanned.pdf" },
@@ -274,7 +274,7 @@ describe("parsing an uploaded document", () => {
 
   it("404s a re-parse of an attachment that does not exist", async () => {
     const session = await newSession(env, workspace.id);
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/attachments/ghost/reparse`,
     });
@@ -318,7 +318,7 @@ describe("parsing through a cloud provider", () => {
   it("falls back to the cloud when local extraction finds no text layer", async () => {
     const ws = await withParser("sync");
     const session = await newSession(env, ws.id);
-    await env.server.app.inject({
+    await env.inject({
       method: "PUT",
       url: "/api/document-parsing",
       payload: { policy: "local-first" },
@@ -347,7 +347,7 @@ describe("parsing through a cloud provider", () => {
         ],
       });
 
-      const res = await env.server.app.inject({ method: "POST", url: "/api/document-parsers/bad/test" });
+      const res = await env.inject({ method: "POST", url: "/api/document-parsers/bad/test" });
       expect(res.statusCode).toBe(400);
       // The code is what the client renders; the server's own sentence rides along only as
       // a fallback, so assert the code rather than the wording.
@@ -366,7 +366,7 @@ describe("parsing through a cloud provider", () => {
       documentParsers: [{ id: "good", name: "Good", kind: "sync", baseURL: parser.baseURL }],
     });
 
-    const res = await env.server.app.inject({ method: "POST", url: "/api/document-parsers/good/test" });
+    const res = await env.inject({ method: "POST", url: "/api/document-parsers/good/test" });
     expect(res.statusCode).toBe(200);
   });
 });
@@ -382,7 +382,7 @@ describe("documents in the prompt", () => {
     await waitForParsing(env, session.id);
 
     llm.setTurns([{ content: "the answer" }]);
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/chat`,
       payload: { message: "summarise this", attachments: [attachment] },
@@ -405,13 +405,13 @@ describe("documents in the prompt", () => {
     await waitForParsing(env, session.id);
 
     llm.setTurns([{ content: "ok" }]);
-    await env.server.app.inject({
+    await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/chat`,
       payload: { message: "hi", attachments: [attachment] },
     });
 
-    const messages = await env.server.app.inject({
+    const messages = await env.inject({
       method: "GET",
       url: `/api/sessions/${session.id}/messages`,
     });
@@ -440,7 +440,7 @@ describe("documents in the prompt", () => {
       await waitForParsing(env, session.id);
 
       llm.setTurns([{ content: "answer" }]);
-      await env.server.app.inject({
+      await env.inject({
         method: "POST",
         url: `/api/sessions/${session.id}/chat`,
         payload: { message: "summarise", attachments: [attachment] },
@@ -491,7 +491,7 @@ describe("documents in the prompt", () => {
       await waitForParsing(env, session.id);
 
       llm.setTurns([{ content: "answer" }]);
-      await env.server.app.inject({
+      await env.inject({
         method: "POST",
         url: `/api/sessions/${session.id}/chat`,
         payload: { message: "summarise", attachments: [attachment] },
@@ -518,7 +518,7 @@ describe("documents in the prompt", () => {
     await waitForParsing(env, session.id);
 
     llm.setTurns([{ content: "ok" }]);
-    await env.server.app.inject({
+    await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/chat`,
       payload: { message: "read this", attachments: [attachment] },

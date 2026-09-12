@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { mkdirSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -35,6 +35,7 @@ import type {
   UpdateSessionInput,
   UpdateWorkspaceInput,
   UploadAttachmentInput,
+  User,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
@@ -76,9 +77,39 @@ import {
   removeSessionUploads,
   resolveStoredPath,
 } from "./attachments.js";
-import { sessionDir, type UserLayout } from "./paths.js";
+import {
+  MAX_USERNAME_LENGTH,
+  authSecret,
+  clearedSessionCookie,
+  currentUser,
+  ensureUser,
+  sessionCookie,
+} from "./auth.js";
+import { sessionDir, userLayout, type DataLayout, type UserLayout } from "./paths.js";
 import { createWorkspaceDir, removeWorkspaceDir, uniqueSlug } from "./workspace.js";
 import { FileAccessError, listDirectory, readFileContent } from "./files.js";
+
+/**
+ * The signed-in account, put on the request by the gate below.
+ *
+ * Optional because the gate lets the public routes through without setting it; see `actor()`
+ * for how a route gets it safely.
+ */
+declare module "fastify" {
+  interface FastifyRequest {
+    user?: User;
+  }
+  interface FastifyContextConfig {
+    /**
+     * Opt a route out of the auth gate.
+     *
+     * Declared rather than read off a cast, so `{ config: { public: true } }` is a thing the
+     * type system knows about: a typo in the flag is a compile error rather than a route that
+     * silently requires a session.
+     */
+    public?: boolean;
+  }
+}
 
 interface RoutesOptions {
   config: AppConfig;
@@ -88,16 +119,13 @@ interface RoutesOptions {
   /** Owns document text extraction and the parse-state sidecars. */
   documents: DocumentService;
   /**
-   * The owner of everything this server serves.
+   * The data root, so a route can derive the acting user's tree.
    *
-   * Read from here rather than from the request because there is nothing on the request to
-   * read yet: signing in is the next change, and when it lands this option is what
-   * disappears — the owner becomes the request's user, and none of the routes below change,
-   * having never asked where the id came from.
+   * The tree is not passed in any more: it depends on *who is asking*, which is a fact about
+   * the request rather than about the server, so it is derived per request from this and the
+   * account the gate resolved.
    */
-  userId: string;
-  /** The acting user's tree: where its workspaces are created, and deleted from. */
-  userLayout: UserLayout;
+  layout: DataLayout;
 }
 
 /** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
@@ -148,7 +176,112 @@ function fileErrorReply(err: unknown): { status: 400 | 404; body: ApiErrorBody }
 }
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
-  const { config, db, documents, uploadsRoot, userId, userLayout } = opts;
+  const { config, db, documents, uploadsRoot, layout } = opts;
+
+  /* ---------------------------------- identity ---------------------------------- */
+
+  /**
+   * The signing secret, read per request rather than captured once.
+   *
+   * One indexed read of a local `app_settings` row, against a property worth having: deleting
+   * that row — or replacing its value — invalidates every cookie *immediately* rather than
+   * from the next restart. "Sign everyone out" is the lever you reach for when something has
+   * gone wrong, and a lever that needs a restart is the wrong shape for that moment.
+   */
+  const requireSecret = (): string => authSecret(db);
+
+  /**
+   * The signed-in account, for a route the gate has already let through.
+   *
+   * Throws instead of returning undefined. The gate sets this on every route that is not
+   * marked `public`, so a miss means a route ended up on the wrong side of that flag — and
+   * failing here says so, where `undefined.id` a few lines later would say something much
+   * less useful.
+   */
+  function actor(request: FastifyRequest): User {
+    if (!request.user) throw new Error("No signed-in user on this route; is it marked public?");
+    return request.user;
+  }
+
+  /** The acting user's tree: where its workspaces are created, and deleted from. */
+  const treeFor = (user: User): UserLayout => userLayout(layout, user.slug);
+
+  /**
+   * The gate: every route needs a signed-in account unless it opts out.
+   *
+   * Deny by default rather than a list of protected routes, so a route added tomorrow
+   * without a thought about auth is *refused* — the same move as the `read_document`
+   * whitelist, where the safe state is the one you get by doing nothing. Exactly four routes
+   * opt out, each with a reason.
+   *
+   * This hook belongs to the `routes` plugin, so it covers the API and nothing else: the
+   * built frontend served by `webApp.ts` is a sibling plugin and stays public, which is what
+   * lets a browser load the login screen in the first place.
+   */
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.routeOptions.config?.public === true) return;
+    const user = currentUser(request, db, requireSecret());
+    if (!user) return reply.code(401).send(apiError("UNAUTHENTICATED", "sign in to continue"));
+    request.user = user;
+  });
+
+  /* ----------------------------------- auth ----------------------------------- */
+
+  /**
+   * Sign in, creating the account if the name is new.
+   *
+   * There is no password, so this is the whole of authentication — whoever can reach the
+   * address can be anyone. That is a real property of this build and not an oversight: the
+   * login screen states it, and the panel's LAN switch is the control that decides who can
+   * reach the address at all.
+   */
+  app.post("/api/auth/login", { config: { public: true } }, async (request, reply) => {
+    const body = request.body as { username?: unknown } | undefined;
+    const username = typeof body?.username === "string" ? body.username.trim() : "";
+    if (!username) {
+      return reply.code(400).send(apiError("USERNAME_REQUIRED", "username is required"));
+    }
+    if (username.length > MAX_USERNAME_LENGTH) {
+      return reply
+        .code(400)
+        .send(apiError("USERNAME_TOO_LONG", "username is too long", { max: MAX_USERNAME_LENGTH }));
+    }
+
+    const { user } = ensureUser(db, layout, username);
+    reply.header("set-cookie", sessionCookie(user.id, requireSecret()));
+    return user;
+  });
+
+  app.post("/api/auth/logout", { config: { public: true } }, async (_request, reply) => {
+    reply.header("set-cookie", clearedSessionCookie());
+    return { ok: true };
+  });
+
+  /**
+   * Who the caller is, or a 401.
+   *
+   * Public, because a 401 here is the *answer* rather than a refusal: the cookie is HttpOnly,
+   * so a cold load has no other way to ask whether anyone is signed in. The client knows that
+   * and keeps this route's 401 out of the "your session expired" path — otherwise every first
+   * visit would open with an error about a session that never existed.
+   */
+  app.get("/api/auth/me", { config: { public: true } }, async (request, reply) => {
+    const user = currentUser(request, db, requireSecret());
+    if (!user) return reply.code(401).send(apiError("UNAUTHENTICATED", "sign in to continue"));
+    return user;
+  });
+
+  /**
+   * The accounts that already exist, so a returning user can pick one instead of remembering
+   * exactly what they typed.
+   *
+   * Public, and it does leak usernames — which the no-password design already leaks to anyone
+   * who types a name and is let in. Naming them is the honest version: a bare text field with
+   * nothing behind it reads as a password prompt whose field is missing.
+   */
+  app.get("/api/auth/users", { config: { public: true } }, async () => ({
+    usernames: db.listUsers().map((u) => u.username),
+  }));
 
   /* --------------------------------- resolution -------------------------------- */
   /*
@@ -236,12 +369,20 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       defaultParserId: config.documentParsing.defaultParserId ?? null,
     });
 
-  function publicConfig(): PublicConfig {
+  /**
+   * What the client is allowed to know about this installation.
+   *
+   * Takes the caller because one field is per-account: `workspacesRootDir` is the *caller's*
+   * tree, which is a fact about them rather than about the server. Providers and parsing
+   * policy stay installation-wide — see the note in `docs/architecture.md` about what that
+   * does and does not leak.
+   */
+  function publicConfig(user: User): PublicConfig {
     return {
       defaultProvider: resolveDefaultProviderId(),
       defaultModel: db.getSetting(SETTING_DEFAULT_MODEL) ?? config.defaultModel,
       providers: providerConfigs(),
-      workspacesRootDir: userLayout.workspacesRoot,
+      workspacesRootDir: treeFor(user).workspacesRoot,
       webSearchProvider: config.tools.webSearch.provider,
       documentParsers: documentParserConfigs(),
       documentParsing: documentParsing(),
@@ -275,25 +416,28 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /* ------------------------------- config/health ------------------------------- */
 
-  app.get("/api/health", async () => ({ ok: true }));
+  // Public: a liveness probe that needs a session cannot do its job, and it reports nothing
+  // about the data.
+  app.get("/api/health", { config: { public: true } }, async () => ({ ok: true }));
 
-  app.get("/api/config", async () => publicConfig());
+  app.get("/api/config", async (request) => publicConfig(actor(request)));
 
   /* -------------------------------- workspaces -------------------------------- */
 
-  app.get("/api/workspaces", async () => db.listWorkspaces(userId));
+  app.get("/api/workspaces", async (request) => db.listWorkspaces(actor(request).id));
 
   app.post("/api/workspaces", async (request, reply) => {
+    const user = actor(request);
     const body = request.body as CreateWorkspaceInput;
     const name = body?.name?.trim();
     if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
-    const slug = uniqueSlug(userLayout.workspacesRoot, name);
+    const slug = uniqueSlug(treeFor(user).workspacesRoot, name);
     // Creates the workspace's own directory *and* the two inside it — `workdir/` for the
     // agent to work in, `sessions/` for its conversations. One call, so neither can be
     // forgotten and a workspace is never half-made.
-    const dirPath = createWorkspaceDir(userLayout.workspacesRoot, slug);
-    const workspace = db.createWorkspace({ id: newId(), userId, name, slug, dirPath });
+    const dirPath = createWorkspaceDir(treeFor(user).workspacesRoot, slug);
+    const workspace = db.createWorkspace({ id: newId(), userId: user.id, name, slug, dirPath });
     return reply.code(201).send(workspace);
   });
 
@@ -303,6 +447,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * running agent.
    */
   app.patch("/api/workspaces/:id", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as UpdateWorkspaceInput;
     if (!db.getWorkspaceForUser(id, userId)) {
@@ -316,6 +461,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/workspaces/:id", async (request, reply) => {
+    const user = actor(request);
+    const userId = user.id;
     const { id } = request.params as { id: string };
     const workspace = db.getWorkspaceForUser(id, userId);
     if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
@@ -323,7 +470,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // The workspace's *own* directory, so `sessions/` goes with it. The guard inside
     // `removeWorkspaceDir` is written against this level — "a direct child of the
     // workspaces root" — which is why `dirPath` holds this and not the sandbox.
-    removeWorkspaceDir(userLayout.workspacesRoot, workspace.dirPath);
+    removeWorkspaceDir(treeFor(user).workspacesRoot, workspace.dirPath);
     return { ok: true };
   });
 
@@ -344,6 +491,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * and its URL shape are chosen so that is an addition rather than a rename.
    */
   app.get("/api/workspaces/:workspaceId/files", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
     // `string[]` is not hypothetical: `?path=a&path=b` parses to an array, and the module
     // refuses it rather than letting a string operation on it become a 500.
@@ -362,6 +510,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.get("/api/workspaces/:workspaceId/files/content", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
     const { path } = request.query as { path?: string | string[] };
     const workspace = db.getWorkspaceForUser(workspaceId, userId);
@@ -419,6 +568,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* --------------------------------- sessions --------------------------------- */
 
   app.get("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
     const workspace = db.getWorkspaceForUser(workspaceId, userId);
     if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
@@ -426,6 +576,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.post("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
     const body = request.body as CreateSessionInput;
     const workspace = db.getWorkspaceForUser(workspaceId, userId);
@@ -457,6 +608,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** Rename and/or update per-conversation generation parameters. */
   app.patch("/api/sessions/:id", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as UpdateSessionInput;
     if (!db.getSessionForUser(id, userId)) {
@@ -469,6 +621,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/sessions/:id", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const found = db.getSessionForUser(id, userId);
     if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
@@ -489,6 +642,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.get("/api/sessions/:id/messages", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     if (!db.getSessionForUser(id, userId)) {
       return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
@@ -507,6 +661,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     "/api/sessions/:id/attachments",
     { bodyLimit: ATTACHMENT_BODY_LIMIT },
     async (request, reply) => {
+      const userId = actor(request).id;
       const { id } = request.params as { id: string };
       if (!db.getSessionForUser(id, userId)) {
         return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
@@ -586,6 +741,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** Parse state for every attachment in a session, keyed by attachment id. */
   app.get("/api/sessions/:id/attachments", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     if (!db.getSessionForUser(id, userId)) {
       return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
@@ -612,6 +768,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** Re-run extraction, e.g. after a failure or a change of parser settings. */
   app.post("/api/sessions/:id/attachments/:attachmentId/reparse", async (request, reply) => {
+    const userId = actor(request).id;
     const { id, attachmentId } = request.params as { id: string; attachmentId: string };
     if (!db.getSessionForUser(id, userId)) {
       return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
@@ -852,7 +1009,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       db.setSetting(SETTING_DEFAULT_PROVIDER, body.providerId);
     }
     if (body?.modelId !== undefined) db.setSetting(SETTING_DEFAULT_MODEL, body.modelId);
-    return publicConfig();
+    return publicConfig(actor(request));
   });
 
   /**
@@ -987,6 +1144,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    */
   async function finishTurn(
     id: string,
+    userId: string,
     session: Session,
     ctx: TurnContext,
     result: RunAgentResult,
@@ -1038,6 +1196,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   app.post("/api/sessions/:id/chat", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as ChatInput;
 
@@ -1108,7 +1267,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
 
-      await finishTurn(id, session, ctx, result, sse, {
+      await finishTurn(id, userId, session, ctx, result, sse, {
         historyLength: history.length,
         userMessage: message,
       });
@@ -1130,6 +1289,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * — nothing about the pending state lives in a process.
    */
   app.post("/api/sessions/:id/answers", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as AnswerToolCallInput;
 
@@ -1207,7 +1367,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
 
-      await finishTurn(id, session, ctx, result, sse, {
+      await finishTurn(id, userId, session, ctx, result, sse, {
         historyLength: history.length,
         userMessage: null,
       });

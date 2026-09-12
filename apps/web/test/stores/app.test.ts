@@ -8,10 +8,12 @@ import type {
   Message,
   PublicConfig,
   Session,
+  User,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
 import { i18n } from "../../src/i18n.js";
+import { uiState } from "../../src/composables/ui.js";
 
 /**
  * The store is the only place the frontend's resolution order and streaming state machine
@@ -49,10 +51,21 @@ const mocks = vi.hoisted(() => ({
     updateDocumentParsing: vi.fn(),
     deleteProvider: vi.fn(),
     deleteModel: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
+    me: vi.fn(),
+    listUsers: vi.fn(),
   },
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
   fileToBase64: vi.fn(),
+  /**
+   * The client's 401 callback, captured rather than stubbed.
+   *
+   * The store registers one at setup, and most tests only need it to *exist* — but the
+   * session-expiry path is worth a test of its own, and that needs to be able to fire it.
+   */
+  setUnauthenticatedHandler: vi.fn(),
 }));
 
 vi.mock("../../src/api/client", () => ({
@@ -60,6 +73,7 @@ vi.mock("../../src/api/client", () => ({
   streamChat: mocks.streamChat,
   streamAnswers: mocks.streamAnswers,
   fileToBase64: mocks.fileToBase64,
+  setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
   attachmentUrl: (sessionId: string, attachmentId: string) =>
     `/api/sessions/${sessionId}/attachments/${attachmentId}`,
 }));
@@ -68,6 +82,13 @@ const { useAppStore } = await import("../../src/stores/app.js");
 const { ApiError } = await import("../../src/utils/apiError.js");
 
 /* --------------------------------- fixtures -------------------------------- */
+
+const ACCOUNT: User = {
+  id: "u1",
+  username: "Ada",
+  slug: "ada",
+  createdAt: "2026-01-01T00:00:00.000Z",
+};
 
 const WORKSPACE: Workspace = {
   id: "w1",
@@ -164,6 +185,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
 
+  // Signed in by default, because that is the state almost every test is about; the
+  // signed-out and expired cases say so themselves.
+  mocks.api.me.mockResolvedValue(structuredClone(ACCOUNT));
   mocks.api.getConfig.mockResolvedValue(structuredClone(CONFIG));
   mocks.api.listWorkspaces.mockResolvedValue([structuredClone(WORKSPACE)]);
   mocks.api.listCopilots.mockResolvedValue([]);
@@ -203,6 +227,82 @@ describe("init", () => {
 
     expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Default");
     expect(store.workspaces).toHaveLength(1);
+  });
+
+  it("asks who the caller is before loading anything", async () => {
+    // Order matters, and not as a style point: everything below is scoped to an account, so
+    // loading first would be a set of requests that are about to 401.
+    const store = useAppStore();
+    await store.init();
+
+    expect(mocks.api.me).toHaveBeenCalled();
+    expect(store.account).toEqual(ACCOUNT);
+    expect(uiState.view).toBe("home");
+    expect(uiState.authReady).toBe(true);
+  });
+
+  it("shows the login screen when nobody is signed in, and loads nothing", async () => {
+    // The 401 is caught rather than reported: on a fresh installation this is the ordinary
+    // first visit, not a failure, and a toast about it would be the first thing anyone sees.
+    mocks.api.me.mockRejectedValue(new ApiError("UNAUTHENTICATED", "no session", 401));
+
+    const store = useAppStore();
+    await store.init();
+
+    expect(store.account).toBeNull();
+    expect(uiState).toMatchObject({ view: "login", authReady: true });
+    expect(store.error).toBeNull();
+    expect(mocks.api.getConfig).not.toHaveBeenCalled();
+    expect(mocks.api.listWorkspaces).not.toHaveBeenCalled();
+  });
+});
+
+describe("signing in and out", () => {
+  it("loads the app for whoever just signed in", async () => {
+    mocks.api.login.mockResolvedValue(structuredClone(ACCOUNT));
+
+    const store = useAppStore();
+    await store.signIn("  Ada  ");
+
+    // Trimmed here rather than at the field: the screen accepts a name with a stray space and
+    // the account it creates must be the one the user meant.
+    expect(mocks.api.login).toHaveBeenCalledWith("Ada");
+    expect(store.account).toEqual(ACCOUNT);
+    expect(uiState.view).toBe("home");
+    expect(mocks.api.listWorkspaces).toHaveBeenCalled();
+  });
+
+  it("forgets everything on the way out", async () => {
+    // Not just the name: a workspace list or a half-written conversation left on screen is
+    // the next person's problem, and on a shared machine that is a real one.
+    mocks.api.logout.mockResolvedValue({ ok: true });
+    const store = await readyStore();
+    expect(store.workspaces).toHaveLength(1);
+
+    await store.signOut();
+
+    expect(store.account).toBeNull();
+    expect(store.workspaces).toEqual([]);
+    expect(store.copilots).toEqual([]);
+    expect(store.sessions).toEqual([]);
+    expect(store.messages).toEqual([]);
+    expect(store.activeWorkspaceId).toBeNull();
+    expect(uiState.view).toBe("login");
+  });
+
+  it("explains an expired session and clears the account when a request 401s", async () => {
+    // The handler the client calls: the session went away under a tab that was open. Both
+    // halves matter — the screen alone reads as the app having forgotten something, and the
+    // toast alone leaves the user on a page none of whose controls will work.
+    const store = await readyStore();
+
+    const handler = mocks.setUnauthenticatedHandler.mock.calls.at(-1)?.[0] as () => void;
+    handler();
+
+    expect(store.account).toBeNull();
+    expect(store.workspaces).toEqual([]);
+    expect(uiState.view).toBe("login");
+    expect(store.error).toBe(i18n.global.t("errors.UNAUTHENTICATED"));
   });
 });
 

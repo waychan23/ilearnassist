@@ -517,6 +517,40 @@ present, the read failure is what the user is shown — otherwise a scanned PDF 
 `local-first` with nothing configured would report "unsupported file type" instead of
 "no text layer, this looks like a scan".
 
+### Authentication (`auth.ts`)
+
+**There is no password.** A username is the whole credential, so the server's job is to
+*identify* the caller rather than to authenticate anyone: `POST /api/auth/login` finds the
+account by name and creates it if it is new, and answers with a signed cookie. The login
+screen states the property rather than leaving a user to assume a privacy it does not have,
+and the panel's LAN switch is what decides who can reach the address at all.
+
+Two things are built the way they would be with a password, because they are the parts that
+would be painful to retrofit:
+
+- **The cookie is signed** — `<userId>.<HMAC>` rather than a bare id, `HttpOnly`,
+  `SameSite=Lax`, 30 days. A bare id would be *almost* as good (ids are UUIDs and never leave
+  the server), but a signature costs one HMAC and means the growth path is a change of
+  *value* rather than of shape: when passwords arrive the cookie carries an opaque token id,
+  and only `currentUser` learns to look it up.
+- **The secret lives in `app_settings`**, so it travels with the data root it protects and a
+  cookie issued against one installation's accounts means nothing to another's. It is read
+  **per request** rather than captured at boot, which is one indexed read against a property
+  worth having: deleting or replacing that row logs everyone out immediately, which is the
+  lever you want when something has gone wrong.
+
+**Every route requires a session unless it says `config: { public: true }`.** One `onRequest`
+hook, deny by default, so a route added without a thought about auth is refused rather than
+open — the same move as the `read_document` whitelist. Four routes opt out: `health`,
+`auth/login`, `auth/me` and `auth/users`. `auth/me` answering 401 without a cookie is its
+*answer* rather than a refusal, which is why the browser client exempts `/auth/*` from its
+session-expiry handler — routing that 401 into "your session expired" would open every first
+visit with an error about a session that never existed.
+
+The hook belongs to the `routes` plugin, so it covers the API and stops there. The built
+frontend is served by a sibling plugin and stays public, which it has to be: a browser cannot
+present a cookie in order to fetch the page that would give it one.
+
 ### Routes (`routes.ts`)
 
 REST endpoints for config/health, workspaces, copilots, sessions, messages,
@@ -524,6 +558,10 @@ attachments, providers and app defaults.
 
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /api/auth/login` | sign in, creating the account if the name is new. Sets the session cookie. |
+| `POST /api/auth/logout` | clear it |
+| `GET /api/auth/me` | who the caller is; a 401 is the answer, not a refusal |
+| `GET /api/auth/users` | the names that exist, so a returning visitor can pick one |
 | `GET /api/config` | public config: providers (keyless), defaults, this account's workspaces root |
 | `PUT /api/defaults` | set the global default provider/model |
 | `GET/POST /api/providers`, `PUT/DELETE /api/providers/:id` | provider CRUD |

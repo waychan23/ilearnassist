@@ -1,13 +1,11 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { User } from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
-import { createDb, newId, seedDocumentParsersFromConfig, seedFromConfig, type AppDb } from "./db.js";
+import { createDb, seedDocumentParsersFromConfig, seedFromConfig, type AppDb } from "./db.js";
 import { DocumentService } from "./documents/service.js";
-import { dataLayout, ensureUserLayout, userLayout, type DataLayout, type UserLayout } from "./paths.js";
-import { uniqueUserSlug } from "./workspace.js";
+import { dataLayout, type DataLayout } from "./paths.js";
 import { registerWebApp } from "./webApp.js";
 import routes from "./routes.js";
 
@@ -42,10 +40,8 @@ export interface BuiltServer {
   db: AppDb;
   /** The chosen data root, as given. */
   dataRoot: string;
-  /** The user this process runs as. See `ensureBootstrapUser`. */
-  user: User;
-  /** That user's tree — the workspaces root the routes create and delete under. */
-  userLayout: UserLayout;
+  /** The tree that root describes. Exported because tests make accounts and check them. */
+  layout: DataLayout;
   /** Where uploads are written — handed to the routes so tests can redirect it. */
   uploadsRoot: string;
   /** Owns document text extraction; exported so tests can await quiescence. */
@@ -54,56 +50,19 @@ export interface BuiltServer {
   servesWebApp: boolean;
 }
 
-/**
- * The username of the account this process runs as, until there is a login screen.
- *
- * Ownership is already real in the schema and the tree is already per-user, so the server
- * needs *a* user rather than a nullable owner in every query. Signing in is the next change,
- * and when it lands this constant is the whole of what goes: every route already reads its
- * owner from one place (`routes`' `userId` option), and that place becomes the request's
- * user instead.
- *
- * Well-known and created on first boot, so a fresh data root is usable immediately and its
- * directory is predictable rather than a random slug.
- */
-const BOOTSTRAP_USERNAME = "default";
-
-/**
- * Find or create the running user, and make sure its tree exists.
- *
- * The slug is chosen once and stored; a later rename of the username will not move the
- * directory, for the same reason a workspace's rename does not. Uniqueness is checked
- * against the database first and the filesystem second — the database is the authority
- * (the column is `UNIQUE`), and a filesystem-only check races two sign-ins that arrive
- * together.
- */
-function ensureBootstrapUser(
-  db: AppDb,
-  root: DataLayout
-): { user: User; tree: UserLayout } {
-  let user = db.findUserByUsername(BOOTSTRAP_USERNAME);
-  if (!user) {
-    const slug = uniqueUserSlug(
-      BOOTSTRAP_USERNAME,
-      (candidate) =>
-        db.listUsers().some((u) => u.slug === candidate) ||
-        existsSync(join(root.usersRoot, candidate))
-    );
-    user = db.createUser({ id: newId(), username: BOOTSTRAP_USERNAME, slug });
-  }
-  const tree = userLayout(root, user.slug);
-  ensureUserLayout(tree);
-  return { user, tree };
-}
-
 export async function buildServer(input: BuildServerInput): Promise<BuiltServer> {
   const { config, dataRoot } = input;
-  const root = dataLayout(dataRoot);
+  const layout = dataLayout(dataRoot);
 
-  const db = createDb(root.sqliteFile);
+  const db = createDb(layout.sqliteFile);
 
-  // System boot: the running user's tree must exist before any route can write into it.
-  const { user, tree } = ensureBootstrapUser(db, root);
+  /*
+   * No account is created here. There used to be one — a well-known "default" the server ran
+   * as while ownership was real but signing in was not — and removing it is exactly what
+   * this change is: the server now serves whoever the cookie names, so a fresh installation
+   * has no accounts rather than one nobody chose. The first name typed on the login screen
+   * is the first account.
+   */
 
   /*
    * Attachments still live here rather than under the user's own `sources/`, which is where
@@ -137,14 +96,7 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
 
   const app = Fastify({ logger: input.logger ?? true });
   await app.register(cors, { origin: true });
-  await app.register(routes, {
-    config,
-    db,
-    uploadsRoot,
-    documents,
-    userId: user.id,
-    userLayout: tree,
-  });
+  await app.register(routes, { config, db, uploadsRoot, documents, layout });
 
   // After the API, so a concrete route always wins over the static wildcard.
   const servesWebApp = await registerWebApp(app, input.webDir);
@@ -158,8 +110,7 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
     app,
     db,
     dataRoot,
-    user,
-    userLayout: tree,
+    layout,
     uploadsRoot,
     documents,
     servesWebApp,

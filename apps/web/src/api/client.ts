@@ -24,6 +24,7 @@ import type {
   UpdateProviderInput,
   UpdateSessionInput,
   UploadAttachmentInput,
+  User,
   Workspace,
 } from "@ilearnassist/shared";
 import { ApiError, translateApiError } from "../utils/apiError";
@@ -64,6 +65,33 @@ function toApiError(body: RawErrorBody, status: number): ApiError {
   return new ApiError(undefined, body.message ?? error ?? `Request failed (${status})`, status);
 }
 
+/**
+ * Called when a request comes back 401, so the app can put the login screen back up.
+ *
+ * A callback rather than importing `showLogin` here, because the store imports this module
+ * and the two would circle. `stores/app.ts` is what sets it, once.
+ */
+let onUnauthenticated: (() => void) | undefined;
+
+export function setUnauthenticatedHandler(handler: () => void): void {
+  onUnauthenticated = handler;
+}
+
+/**
+ * Whether a path is part of signing in rather than something that needs a session.
+ *
+ * These are exempt from the 401 handler, and the exemption is load-bearing: `GET /auth/me`
+ * answering 401 is the *expected* reply on a cold load — it is how the app asks whether
+ * anyone is signed in — so treating it as an expiry would open every first visit with an
+ * error about a session that never existed.
+ */
+const isAuthPath = (path: string): boolean => path.startsWith("/auth/");
+
+/** A 401 from anywhere else means the session is gone; report it and rethrow. */
+function reportExpiry(status: number, path: string): void {
+  if (status === 401 && !isAuthPath(path)) onUnauthenticated?.();
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Only send a JSON content-type when there is actually a body. Fastify (5.x)
   // rejects body-less requests that claim `application/json` with a 400
@@ -73,12 +101,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     options.headers = { "Content-Type": "application/json" };
   }
 
+  // No `credentials` option, and none is needed: `fetch` defaults to `same-origin`, the app
+  // is served from one origin, and the Vite dev proxy puts `/api` on that same origin too.
+  // The session cookie rides along. Serving the API from somewhere else would break this.
   const res = await fetch(`/api${path}`, options);
-  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  if (!res.ok) {
+    const body = await errorBody(res);
+    reportExpiry(res.status, path);
+    throw toApiError(body, res.status);
+  }
   return res.json() as Promise<T>;
 }
 
 export const api = {
+  /* ----------------------------------- auth ----------------------------------- */
+
+  /**
+   * Sign in, creating the account if the name is new.
+   *
+   * One field, because there is one credential: a username, and no password at all. The
+   * screen says so rather than leaving a user to guess what they are meant to type.
+   */
+  login: (username: string) =>
+    request<User>("/auth/login", { method: "POST", body: JSON.stringify({ username }) }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  /** Who the caller is. A 401 here is the answer, not an expiry — see `isAuthPath`. */
+  me: () => request<User>("/auth/me"),
+  /** The names that exist, so a returning visitor can pick one rather than recall it. */
+  listUsers: () => request<{ usernames: string[] }>("/auth/users"),
+
+  /* ---------------------------------- the app ---------------------------------- */
+
   getConfig: () => request<PublicConfig>("/config"),
 
   listWorkspaces: () => request<Workspace[]>("/workspaces"),
@@ -238,7 +291,14 @@ async function* streamPost(path: string, body: unknown): AsyncGenerator<ChatStre
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  if (!res.ok) {
+    const body_ = await errorBody(res);
+    // Same rule as `request`: a turn that 401s means the session went away mid-conversation,
+    // and the user has to be sent back to the login screen rather than left with an error
+    // about a message they cannot send.
+    reportExpiry(res.status, path);
+    throw toApiError(body_, res.status);
+  }
   // A 200 with no body breaks the SSE contract below rather than being a server-reported
   // error, so it stays a plain Error — there is no code to translate.
   if (!res.body) throw new Error("No response body.");

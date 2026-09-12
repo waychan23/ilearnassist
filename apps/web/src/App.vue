@@ -5,6 +5,7 @@ import { useAppStore } from "./stores/app";
 import Sidebar from "./components/Sidebar.vue";
 import ChatView from "./components/ChatView.vue";
 import WorkspaceHome from "./components/WorkspaceHome.vue";
+import LoginView from "./components/LoginView.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
@@ -86,33 +87,47 @@ watch(
 
 <template>
   <!--
-    Two views, and the flag that picks between them lives in `composables/ui.ts`. There is no
-    router: a route table for one boolean would be a dependency and a URL nobody types.
+    Three views, and the flag that picks between them lives in `composables/ui.ts`. There is
+    still no router: a route table for one flag would be a dependency and a URL nobody types.
 
-    The overlays below sit outside the branch because both views reach them — Settings from
-    the sidebar footer, from the composer's model picker *and* from the workspace home.
+    Nothing renders until `authReady`, and that gate is not tidiness. The session cookie is
+    HttpOnly, so the page cannot know whether anyone is signed in until `/api/auth/me`
+    answers — and treating the login screen as the initial guess would flash it at a
+    signed-in user on every single refresh. Rendering neither view for those few hundred
+    milliseconds is the only honest option.
+
+    The overlays below sit outside the branch because the signed-in views all reach them —
+    Settings from the sidebar footer, from the composer's model picker *and* from the
+    workspace home.
   -->
-  <div class="app" :class="{ home: uiState.workspaceHome }">
-    <WorkspaceHome v-if="uiState.workspaceHome" />
+  <div
+    class="app"
+    :class="{ home: uiState.view === 'home', auth: uiState.view === 'login' }"
+  >
+    <LoginView v-if="uiState.authReady && uiState.view === 'login'" />
 
-    <template v-else>
-      <Sidebar :inert="!uiState.drawerOpen && isCompact" />
+    <template v-else-if="uiState.authReady">
+      <WorkspaceHome v-if="uiState.view === 'home'" />
 
-      <!--
-        Only on a compact viewport, and only while the drawer is open. `inert` takes the pane
-        behind the drawer out of the tab order and the accessibility tree, which is the same
-        job a focus trap does with a fraction of the state. `ChatView` is single-root, so the
-        attribute falls through to `<main>`.
-      -->
-      <ChatView :inert="uiState.drawerOpen && isCompact" />
+      <template v-else>
+        <Sidebar :inert="!uiState.drawerOpen && isCompact" />
 
-      <div
-        v-if="isCompact && uiState.drawerOpen"
-        class="drawer-backdrop"
-        data-testid="drawer-backdrop"
-        aria-hidden="true"
-        @click="closeDrawer"
-      />
+        <!--
+          Only on a compact viewport, and only while the drawer is open. `inert` takes the pane
+          behind the drawer out of the tab order and the accessibility tree, which is the same
+          job a focus trap does with a fraction of the state. `ChatView` is single-root, so the
+          attribute falls through to `<main>`.
+        -->
+        <ChatView :inert="uiState.drawerOpen && isCompact" />
+
+        <div
+          v-if="isCompact && uiState.drawerOpen"
+          class="drawer-backdrop"
+          data-testid="drawer-backdrop"
+          aria-hidden="true"
+          @click="closeDrawer"
+        />
+      </template>
     </template>
 
     <!-- Hosted once so every `confirm()` call from anywhere lands in the same prompt. -->

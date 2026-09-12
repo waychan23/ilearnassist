@@ -5,6 +5,7 @@ import {
   openDrawer,
   openSettings,
   showChat,
+  showLogin,
   showWorkspaceHome,
   uiState,
 } from "../../src/composables/ui.js";
@@ -16,19 +17,24 @@ import {
 beforeEach(() => {
   uiState.settingsOpen = false;
   uiState.drawerOpen = false;
-  uiState.workspaceHome = true;
+  uiState.view = "login";
+  uiState.authReady = false;
 });
 
 describe("uiState", () => {
-  it("starts on the workspace home, with every overlay closed", () => {
+  it("starts on the login screen, unready, with every overlay closed", () => {
     // A drawer or a dialog that opens on its own is the failure this pins: it would be
-    // invisible in review, because the state is only read by components. The home page is
-    // the opposite assertion — the app is *meant* to open there, so a regression that went
-    // straight into a conversation would otherwise pass every other test in this file.
+    // invisible in review, because the state is only read by components.
+    //
+    // Starting on `"login"` is not the same claim as *showing* the login screen — `App.vue`
+    // withholds both views until `authReady`, so this initial value is never painted. It is
+    // the safe guess rather than the visible one, and the flag beside it is what keeps a
+    // signed-in user from seeing it on a refresh.
     expect(uiState).toMatchObject({
       settingsOpen: false,
       drawerOpen: false,
-      workspaceHome: true,
+      view: "login",
+      authReady: false,
     });
   });
 
@@ -65,12 +71,24 @@ describe("uiState", () => {
 });
 
 describe("the view switch", () => {
-  it("moves between the workspace home and the chat pane", () => {
+  it("moves between the three views", () => {
     showChat();
-    expect(uiState.workspaceHome).toBe(false);
+    expect(uiState.view).toBe("chat");
 
     showWorkspaceHome();
-    expect(uiState.workspaceHome).toBe(true);
+    expect(uiState.view).toBe("home");
+
+    showLogin();
+    expect(uiState.view).toBe("login");
+  });
+
+  it("closes the drawer on the way to the login screen", () => {
+    // Signing out with the mobile drawer open is the case: the drawer belongs to the view
+    // being torn down, and the login screen has no toggle to close it with — so it would sit
+    // over the form with no way out.
+    openDrawer();
+    showLogin();
+    expect(uiState.drawerOpen).toBe(false);
   });
 
   it("closes the drawer on the way to the workspace home", () => {

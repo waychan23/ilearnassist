@@ -1,16 +1,20 @@
 # ilearnassist
 
-A self-hosted, single-user agent product with a chatbox-style UI. Give the
-agent a **workspace** (a sandboxed directory), pick a **Copilot** (a preset
-system prompt + allowed tools), choose a **provider/model**, and chat. The agent
-runs a ReAct loop and can search the web and read/write files inside its
-workspace.
+A self-hosted agent product for one person, with a chatbox-style UI. Sign in
+under any username, give the agent a **workspace** (a sandboxed directory), pick
+a **Copilot** (a preset system prompt + allowed tools), choose a
+**provider/model**, and chat. The agent runs a ReAct loop and can search the web
+and read/write files inside its workspace. Each account has its own workspaces,
+conversations and uploads, all inside a data directory you choose.
 
 Browser/Server architecture: a Node/TypeScript backend (Fastify + SQLite +
 LangChain.js) and a Vue 3 frontend.
 
 ## Features
 
+- **Accounts** — a username is the whole credential (no passwords yet), and each
+  account owns its workspaces, conversations and uploads. Nothing one account
+  creates is reachable from another.
 - **Agent loop** — a manual ReAct loop (`model.bindTools` → stream → run tools →
   feed `ToolMessage` back), streaming responses token-by-token over SSE.
 - **Workspaces** — sessions are scoped to a workspace, and all file tools are
@@ -42,6 +46,11 @@ pnpm dev
 ```
 
 Open <http://localhost:5173>. The backend listens on `127.0.0.1:3720`.
+
+It opens on a login screen: type any username and you are in, and that name becomes your
+account with its own workspaces. **There are no passwords yet** — the screen says so, because
+anyone who can reach the address can sign in as any name. Leave LAN sharing off unless you
+mean it.
 
 > **`ILA_DATA_DIR` is required and `.env.example` already sets it** to `./data`, relative to
 > the project root. There is no default in the code on purpose: that directory holds the

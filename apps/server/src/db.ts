@@ -149,6 +149,15 @@ export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId"
  * the user deliberately deleted.
  */
 export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
+/**
+ * The secret session cookies are signed with, created on first use.
+ *
+ * In the database rather than in a file or an environment variable, so that it travels with
+ * the data root it protects: a cookie issued against one installation's accounts means
+ * nothing to another's. Deleting the row rotates it and signs everyone out, which is the
+ * lever to reach for if one ever leaks.
+ */
+export const SETTING_AUTH_SECRET = "auth.secret";
 
 /**
  * The title a conversation gets at creation, before the auto-titler replaces it.

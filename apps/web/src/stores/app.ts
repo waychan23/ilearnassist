@@ -1,9 +1,16 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { api, streamAnswers, streamChat, fileToBase64 } from "../api/client";
+import {
+  api,
+  setUnauthenticatedHandler,
+  streamAnswers,
+  streamChat,
+  fileToBase64,
+} from "../api/client";
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
+import { closeSettings, showLogin, showWorkspaceHome, uiState } from "../composables/ui";
 import type {
   AskUserAnswers,
   Attachment,
@@ -27,6 +34,7 @@ import type {
   SessionSettings,
   ToolCall,
   UpdateProviderInput,
+  User,
   Workspace,
 } from "../api/types";
 import { ASK_USER_TOOL_NAME, MAX_ATTACHMENT_BYTES } from "../api/types";
@@ -106,6 +114,15 @@ const EMPTY_STREAMING = (): StreamingState => ({
 
 export const useAppStore = defineStore("app", () => {
   /* --------------------------------- state --------------------------------- */
+  /**
+   * The signed-in account, or null before the first answer and after signing out.
+   *
+   * Held because the UI needs a name to show and because "who am I" is the first question the
+   * app asks, but it is not the *authority* on anything: every request is authenticated by the
+   * cookie, and the server is what decides. Clearing this does not sign anyone out.
+   */
+  const account = ref<User | null>(null);
+
   const config = ref<PublicConfig | null>(null);
   const workspaces = ref<Workspace[]>([]);
   const copilots = ref<Copilot[]>([]);
@@ -324,7 +341,60 @@ export const useAppStore = defineStore("app", () => {
     if (idx !== -1) sessions.value[idx] = updated;
   }
 
+  /**
+   * Drop everything that belonged to the account that was signed in.
+   *
+   * Called on sign-out and on an expired session, and it is deliberately total: a name, a
+   * workspace list or a half-written conversation left on screen after someone signs out is
+   * the next person's problem, and on a shared machine it is a real one.
+   */
+  function forgetAccount(): void {
+    account.value = null;
+    config.value = null;
+    workspaces.value = [];
+    copilots.value = [];
+    sessions.value = [];
+    messages.value = [];
+    activeWorkspaceId.value = null;
+    activeSessionId.value = null;
+    activeCopilotId.value = null;
+    draftSettings.value = {};
+    pendingAttachments.value = [];
+    parseStatus.value = {};
+    resetFileTree();
+    closeSettings();
+  }
+
+  /**
+   * Work out who is asking, then load the app for them — or show the login screen.
+   *
+   * Runs on every page load, because the cookie is HttpOnly and there is nothing on the page
+   * that can tell whether it is there. `me()` answering 401 is the ordinary "nobody is signed
+   * in" case rather than a failure, which is why it is caught here instead of being allowed
+   * to reach the toast — the first visit to a fresh installation is not an error.
+   *
+   * `authReady` is set before either branch, and that ordering is the whole reason the flag
+   * exists: rendering the login screen first would flash it at a signed-in user on every
+   * refresh.
+   */
   async function init(): Promise<void> {
+    try {
+      account.value = await api.me();
+    } catch {
+      account.value = null;
+    }
+
+    uiState.authReady = true;
+    if (!account.value) {
+      showLogin();
+      return;
+    }
+    showWorkspaceHome();
+    await loadApp();
+  }
+
+  /** Everything that needs a session. The half of `init` that a signed-out user must not run. */
+  async function loadApp(): Promise<void> {
     config.value = await api.getConfig();
     workspaces.value = await api.listWorkspaces();
     if (workspaces.value.length === 0) {
@@ -334,6 +404,42 @@ export const useAppStore = defineStore("app", () => {
     if (!activeWorkspaceId.value) activeWorkspaceId.value = workspaces.value[0]!.id;
     await loadSessions();
   }
+
+  /**
+   * Sign in, creating the account if the name is new.
+   *
+   * One argument and no password: see `api.login`. The screen states the same thing, because
+   * a user who believes they typed a password is a user who will be surprised later.
+   */
+  async function signIn(username: string): Promise<void> {
+    account.value = await api.login(username.trim());
+    uiState.authReady = true;
+    error.value = null;
+    showWorkspaceHome();
+    await loadApp();
+  }
+
+  async function signOut(): Promise<void> {
+    await api.logout();
+    forgetAccount();
+    showLogin();
+  }
+
+  /**
+   * What a 401 from anywhere means: the session went away under us.
+   *
+   * A toast *and* the login screen. The screen alone reads as the app having forgotten
+   * something, and the toast alone leaves the user looking at a page none of whose controls
+   * will work. Registered here rather than in `client.ts` because the client would have to
+   * import the store to know any of this, and the two would circle.
+   */
+  setUnauthenticatedHandler(() => {
+    forgetAccount();
+    showLogin();
+    // Through the code, not a message of its own: the server sends UNAUTHENTICATED for
+    // exactly this, and one sentence in the catalog is one place to keep it right.
+    setError(translateApiError("UNAUTHENTICATED", undefined, undefined));
+  });
 
   async function refreshConfig(): Promise<void> {
     config.value = await api.getConfig();
@@ -1055,6 +1161,7 @@ export const useAppStore = defineStore("app", () => {
 
   return {
     // state
+    account,
     config,
     workspaces,
     copilots,
@@ -1094,6 +1201,8 @@ export const useAppStore = defineStore("app", () => {
     documentsParsing,
     // actions
     init,
+    signIn,
+    signOut,
     refreshConfig,
     loadSessions,
     selectWorkspace,

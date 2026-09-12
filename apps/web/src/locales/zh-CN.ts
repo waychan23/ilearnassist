@@ -47,13 +47,32 @@ export default {
   },
 
   app: {
-    /** Shown when there is no session and no workspace to name the topbar after. */
+    /**
+     * The product name. Shown when there is no session and no workspace to name the topbar
+     * after, and on the login screen — which is the one page with nothing else to call itself.
+     */
     title: "ilearnassist",
     configBanner: {
       before: "尚未配置可用的 API Key。点击右上角",
       action: "设置 → Providers",
       after: "添加一个 Provider 并填入 Key，保存后即刻生效。",
     },
+  },
+
+  /**
+   * The login screen.
+   *
+   * `noPassword` is not decoration: this build has no passwords, and a user who believes the
+   * field in front of them is a password field will assume a privacy the app does not have.
+   * Stating it is the honest half of not implementing it yet.
+   */
+  login: {
+    lead: "输入一个用户名即可开始。",
+    username: "用户名",
+    usernamePlaceholder: "例如：你的名字",
+    existing: "已有账号：",
+    submit: "进入",
+    noPassword: "这个实例没有设置密码：任何能访问这个地址的人，都可以用任意用户名进入。",
   },
 
   /**
@@ -536,6 +555,9 @@ export default {
     INVALID_FILE_PATH: "这个位置不在工作区内，无法访问。",
     NOT_A_DIRECTORY: "该路径不是一个目录。",
     NOT_A_FILE: "该路径不是一个文件。",
+    UNAUTHENTICATED: "登录已失效，请重新登录。",
+    USERNAME_REQUIRED: "用户名不能为空。",
+    USERNAME_TOO_LONG: "用户名不能超过 {max} 个字符。",
   },
 
   /**

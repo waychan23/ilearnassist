@@ -1,6 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// From `fastify`, which re-exports both, rather than from `light-my-request` directly: that
+// package is a transitive dependency and is not something this one may name.
+import type { InjectOptions, LightMyRequestResponse } from "fastify";
 import type { Attachment, Session, User, Workspace } from "@ilearnassist/shared";
 import type {
   AppConfig,
@@ -11,7 +14,7 @@ import type {
   WebFetchConfig,
   WebSearchConfig,
 } from "../../src/config.js";
-import type { UserLayout } from "../../src/paths.js";
+import { userLayout, type UserLayout } from "../../src/paths.js";
 import { buildServer, type BuiltServer } from "../../src/server.js";
 import type { FakeLlm } from "./fakeLlm.js";
 import type { FakeParser } from "./fakeParser.js";
@@ -36,6 +39,8 @@ export interface TestServerOptions {
    * what they assert about routing.
    */
   webDir?: string;
+  /** The name to sign in as. Defaults to `tester`; a second account is `env.asUser`. */
+  username?: string;
   /**
    * Boot against an existing data root instead of a fresh one.
    *
@@ -74,15 +79,64 @@ export interface TestEnv {
   config: AppConfig;
   /** The chosen data root. `users/` and `db/` live here, and nothing writes above it. */
   dataRoot: string;
-  /** The running user's tree — where its workspaces and (later) its sources live. */
-  userLayout: UserLayout;
-  /** The running user, created by the server on boot. See `ensureBootstrapUser`. */
+  /** The account tests act as. Created by signing in; see `asUser` for a second one. */
   user: User;
+  /** That account's tree — where its workspaces and (later) its sources live. */
+  userLayout: UserLayout;
   /** Shorthand for `userLayout.workspacesRoot`, which is what most tests reach for. */
   workspacesRoot: string;
   uploadsRoot: string;
   server: BuiltServer;
+  /**
+   * `app.inject`, with the signed-in account's cookie already attached.
+   *
+   * The point is that almost every test wants a request *as somebody* and none of them wants
+   * to think about cookies — the session is the harness's business, not the assertion's. The
+   * raw `server.app.inject` is still there for the tests that are about the gate itself,
+   * where the missing cookie is the subject.
+   */
+  inject(opts: InjectOptions): Promise<LightMyRequestResponse>;
+  /** Sign in as another account, creating it if it is new. */
+  asUser(username: string): Promise<{ user: User; inject: TestEnv["inject"] }>;
   cleanup(): Promise<void>;
+}
+
+/** The header name the cookie travels in — lowercase, as Node's HTTP layer reports it. */
+const COOKIE = "cookie";
+
+/**
+ * Sign in over the real route and keep the cookie.
+ *
+ * Deliberately the real route rather than a hand-built cookie: the signing, the response
+ * header and the parsing are exactly the parts a test would get subtly wrong if it made its
+ * own, and the login route is one of the things worth exercising.
+ */
+async function signIn(
+  server: BuiltServer,
+  username: string
+): Promise<{ user: User; cookie: string; inject: TestEnv["inject"] }> {
+  const res = await server.app.inject({
+    method: "POST",
+    url: "/api/auth/login",
+    payload: { username },
+  });
+  if (res.statusCode !== 200) {
+    throw new Error(`sign-in failed for "${username}": ${res.statusCode} ${res.body}`);
+  }
+
+  const header = res.headers["set-cookie"];
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) throw new Error(`sign-in for "${username}" returned no cookie`);
+  // Only the `name=value` pair: the attributes (`Path`, `Max-Age`, …) are instructions to a
+  // browser, and sending them back is not what a cookie header looks like.
+  const cookie = String(raw).split(";")[0] ?? "";
+
+  return {
+    user: res.json<User>(),
+    cookie,
+    inject: (opts) =>
+      server.app.inject({ ...opts, headers: { ...opts.headers, [COOKIE]: cookie } }),
+  };
 }
 
 /** A provider record pointing at a fake LLM. `apiKey` is required by `buildModel`. */
@@ -167,14 +221,25 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   const server = await buildServer({ config, dataRoot, logger: false, webDir: options.webDir });
   await server.app.ready();
 
+  // Signing in is what creates the account, so the harness has somebody to be before any
+  // test runs — and it goes through the real route, which means the cookie in `inject` is a
+  // cookie the server actually issued.
+  const signedIn = await signIn(server, options.username ?? "tester");
+  const userLayout_ = userLayout(server.layout, signedIn.user.slug);
+
   return {
     config,
     dataRoot,
-    userLayout: server.userLayout,
-    user: server.user,
-    workspacesRoot: server.userLayout.workspacesRoot,
+    user: signedIn.user,
+    userLayout: userLayout_,
+    workspacesRoot: userLayout_.workspacesRoot,
     uploadsRoot: server.uploadsRoot,
     server,
+    inject: signedIn.inject,
+    async asUser(username) {
+      const other = await signIn(server, username);
+      return { user: other.user, inject: other.inject };
+    },
     async cleanup() {
       await server.app.close();
       server.db.raw.close();
@@ -223,7 +288,7 @@ export async function uploadAttachment(
   sessionId: string,
   file: { name: string; mimeType: string; data: Buffer }
 ): Promise<Attachment> {
-  const res = await env.server.app.inject({
+  const res = await env.inject({
     method: "POST",
     url: `/api/sessions/${sessionId}/attachments`,
     payload: { name: file.name, mimeType: file.mimeType, data: file.data.toString("base64") },
@@ -237,7 +302,7 @@ export async function uploadAttachment(
 /* ------------------------------- API shorthands ------------------------------ */
 
 export async function newWorkspace(env: TestEnv, name = "Test Workspace"): Promise<Workspace> {
-  const res = await env.server.app.inject({
+  const res = await env.inject({
     method: "POST",
     url: "/api/workspaces",
     payload: { name },
@@ -251,7 +316,7 @@ export async function newSession(
   workspaceId: string,
   payload: Record<string, unknown> = {}
 ): Promise<Session> {
-  const res = await env.server.app.inject({
+  const res = await env.inject({
     method: "POST",
     url: `/api/workspaces/${workspaceId}/sessions`,
     payload,

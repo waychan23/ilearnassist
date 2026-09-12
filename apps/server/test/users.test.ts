@@ -107,40 +107,55 @@ describe("users", () => {
   });
 });
 
-describe("the account the server runs as", () => {
+describe("signing in", () => {
   let env: TestEnv | undefined;
 
   afterEach(async () => {
     await env?.cleanup();
   });
 
-  it("exists, and its tree exists under the chosen data root", async () => {
-    env = await startTestServer();
+  it("creates the account and its whole tree under the chosen data root", async () => {
+    // The harness signs in, so this is also the assertion that a first sign-in is what
+    // materialises `users/<slug>/` — there is no account until somebody names one.
+    env = await startTestServer({ username: "Ada" });
 
-    expect(env.user.username).toBe("default");
-    expect(env.user.slug).toBe("default");
-    expect(env.workspacesRoot).toBe(
-      join(env.dataRoot, "users", "default", "workspaces")
-    );
+    expect(env.user.username).toBe("Ada");
+    expect(env.user.slug).toBe("ada");
+    expect(env.workspacesRoot).toBe(join(env.dataRoot, "users", "ada", "workspaces"));
     expect(existsSync(env.workspacesRoot)).toBe(true);
     expect(existsSync(env.userLayout.rawDir)).toBe(true);
     expect(existsSync(env.userLayout.parsedDir)).toBe(true);
   });
 
-  it("is reused rather than recreated when the same data root boots twice", async () => {
-    // The rule that keeps a restart from orphaning a tree: the account is found by name.
-    // The root is made here rather than by the helper, because a caller-named root is the
-    // caller's to remove — which is what makes booting it a second time possible at all.
+  it("reuses an existing account rather than making a second one", async () => {
+    // The rule that keeps a restart — or a second device — from orphaning a tree: the name
+    // is the identity. The root is made here rather than by the helper, because a
+    // caller-named root is the caller's to remove, which is what makes booting it twice
+    // possible at all.
     const shared = mkdtempSync(join(tmpdir(), "ila-restart-"));
     try {
-      const first = await startTestServer({ dataRoot: shared });
+      const first = await startTestServer({ dataRoot: shared, username: "Ada" });
       const firstId = first.user.id;
       await first.cleanup();
 
-      env = await startTestServer({ dataRoot: shared });
+      // A different case, deliberately: the lookup is case-insensitive, so this is the same
+      // person and the stored spelling is the one they first used.
+      env = await startTestServer({ dataRoot: shared, username: "ada" });
       expect(env.user.id).toBe(firstId);
+      expect(env.user.username).toBe("Ada");
     } finally {
       rmSync(shared, { recursive: true, force: true });
     }
+  });
+
+  it("gives two accounts different trees under one data root", async () => {
+    env = await startTestServer({ username: "Ada" });
+    const bob = await env.asUser("Bob");
+
+    expect(bob.user.slug).toBe("bob");
+    expect(env.workspacesRoot).not.toBe(
+      join(env.dataRoot, "users", "bob", "workspaces")
+    );
+    expect(existsSync(join(env.dataRoot, "users", "bob", "workspaces"))).toBe(true);
   });
 });

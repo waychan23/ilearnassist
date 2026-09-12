@@ -4,9 +4,9 @@ Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-**ilearnassist** is a self-hosted, single-user agent product (Browser/Server
-architecture). It provides a chatbox-like UI over a manual ReAct agent loop with
-tool calling. Three apps share a types package:
+**ilearnassist** is a self-hosted agent product for one person, with accounts
+(Browser/Server architecture). It provides a chatbox-like UI over a manual ReAct
+agent loop with tool calling. Three apps share a types package:
 
 - `apps/server` — Fastify 5 + better-sqlite3 + LangChain.js (`@langchain/core`,
   `@langchain/openai`). Runs the agent loop, streams results over SSE, and serves
@@ -94,6 +94,8 @@ pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromiu
 | `apps/desktop/test/` | the control panel's paths, launch spec, process supervision and catalogs |
 | `e2e/*.spec.ts` | browser flows against the real stack |
 | `e2e/workspaces.ts` | `enterWorkspace()` / `leaveWorkspace()` — the front door, for specs |
+| `e2e/auth.ts` | `signIn()` + the account and state-file the browser suite shares |
+| `e2e/auth.setup.ts` | the `setup` project: signs in once, saves `storageState` for the rest |
 
 Each app's `tsconfig` includes its `test/` directory, so **`pnpm typecheck` checks the
 tests too**. For `apps/web` that also means `pnpm build` (which runs `vue-tsc`) fails on a
@@ -164,6 +166,17 @@ every spec renders Chinese and inherits the pin. `e2e/i18n.spec.ts` is the only 
 other locales are exercised, and it scopes its `test.use({ locale })` overrides to its own
 `describe` blocks.
 
+**Every browser spec starts signed in, and does not have to say so.** The API refuses
+everything without a session, so the `setup` project signs in once and saves the cookie as
+`storageState`, which both real projects load. That is why ~70 specs that are not about
+authentication needed no edit when sign-in arrived. A new spec inherits it and should not
+think about it; the one file that must *not* — `e2e/login.spec.ts` — clears the cookie with a
+file-scoped `test.use({ storageState: { cookies: [], origins: [] } })`, which is why it is a
+file of its own rather than a `describe` block: a `describe`-scoped override can be inherited
+by a sibling that did not mean to. It is also a project **dependency** rather than a
+`globalSetup`, because a `globalSetup` may run before the `webServer` entries are up and this
+has to reach one.
+
 ### What is deliberately *not* unit tested
 
 The Vue components. The Playwright suite covers them, which is why the Vitest coverage
@@ -196,6 +209,7 @@ apps/server/src/
   config.ts               # YAML + ${ENV} resolution + .env loader + resolveDataRoot
   paths.ts                # the on-disk layout: data root → users/<slug> → workspaces, sources, db
   schema.ts               # the DDL + the `user_version` guard that refuses a foreign database
+  auth.ts                 # accounts: the signed session cookie, and find-or-create by name
   db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
   files.ts                # the workspace browser's read side: one level, one file
@@ -225,8 +239,9 @@ apps/web/src/
   utils/apiError.ts       # server code → user-facing message
   utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
   utils/locale.ts         # browser-language detection + the alias table
-  components/…            # App, WorkspaceHome, Sidebar, ChatView, MessageItem, ToolCallCard,
-                          #   AskUserCard, Composer, TopbarControls, FileTree, dialogs
+  components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
+                          #   ToolCallCard, AskUserCard, Composer, TopbarControls, FileTree,
+                          #   dialogs
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -505,17 +520,44 @@ Fuller map in `docs/reference.md`.
   provider deletes go through `confirm()` from `composables/confirm.ts`. The
   agent's own `delete_file` tool is deliberately *not* gated.
 - **The app opens on the workspace home, and a card there is the only way into a
-  conversation.** There is still no router: `App.vue` renders `WorkspaceHome` *or* the
-  `Sidebar + ChatView` pair, chosen by `uiState.workspaceHome` in `composables/ui.ts` —
-  a flag, where two views and a boolean do not need a dependency and a URL nobody types.
-  The sidebar's old workspace `<select>` went in the same change: with the home page as
-  the switcher it was a second, duplicate way to change workspace, and it could name the
-  workspaces without saying anything about them. `selectWorkspace` is now reached only
-  through a card, and neither the workspace nor the session is persisted — the app landing
-  directly in a conversation is the regression, not the feature. Navigation goes through
-  `showWorkspaceHome()` / `showChat()`, never a component-local flag. `e2e/workspaces.ts`
-  is the same rule for the specs; a spec that skips it fails on a composer that never
-  renders.
+  conversation.** There is still no router: `App.vue` renders `LoginView`,
+  `WorkspaceHome` *or* the `Sidebar + ChatView` pair, chosen by `uiState.view` in
+  `composables/ui.ts` — a three-valued flag, where three views do not need a dependency
+  and a route table nobody types. The sidebar's old workspace `<select>` went in the same
+  change as the home page: with the home page as the switcher it was a second, duplicate
+  way to change workspace, and it could name the workspaces without saying anything about
+  them. `selectWorkspace` is now reached only through a card, and neither the workspace nor
+  the session is persisted — the app landing directly in a conversation is the regression,
+  not the feature. Navigation goes through `showLogin()` / `showWorkspaceHome()` /
+  `showChat()`, never a component-local flag. `e2e/workspaces.ts` is the same rule for the
+  specs; a spec that skips it fails on a composer that never renders.
+- **Nothing is painted until `uiState.authReady`.** The session cookie is HttpOnly, so the
+  page cannot tell whether anyone is signed in until `/api/auth/me` answers — which means
+  the right view is genuinely unknown for the first moments after a reload. `view` starts on
+  `"login"` as the safe guess, and `App.vue` withholds *both* branches until the flag flips,
+  because rendering the login screen as the initial guess would flash it at a signed-in user
+  on every single refresh.
+- **Every API route requires a signed-in account unless it says `config: { public: true }`.**
+  One `onRequest` hook in `routes.ts`, deny-by-default: a route added tomorrow without a
+  thought about auth is refused, which is the same "the safe state is the one you get by
+  doing nothing" move as the `read_document` whitelist. Exactly four routes opt out —
+  `health`, `auth/login`, `auth/me`, `auth/users` — and `auth/me` answering 401 is its
+  *answer* rather than a refusal, which is why `client.ts` exempts `/auth/*` from the
+  session-expiry handler: routing that 401 into "your session expired" would open every first
+  visit with an error about a session that never existed. The hook belongs to the `routes`
+  plugin, so it covers the API and stops there — `webApp.ts` serves the built frontend from a
+  sibling plugin, and a guarded `index.html` is an app nobody can open.
+- **There is no password yet, and the login screen says so.** A username is the whole
+  credential, so the server's job is to *identify* the caller rather than to authenticate
+  anyone. Two things are nonetheless built the way they would be with a password, because
+  they are the parts that would be painful to retrofit: the cookie is an HMAC-signed
+  `<userId>.<signature>` rather than a bare id, and the secret lives in `app_settings` — so it
+  travels with the data root, and rotating it (delete the row) logs everyone out *immediately*,
+  since it is read per request rather than captured at boot. When passwords arrive the cookie
+  carries an opaque token id and only `currentUser` learns to look it up. Until then, **the
+  panel's LAN switch is the control that decides who can reach the address**, and the login
+  screen states the no-password property rather than leaving a user to assume a privacy it
+  does not have.
 - **A workspace's conversation count and last activity are derived, never stored.**
   `GET /api/workspaces` computes them in the same query that lists workspaces (a LEFT JOIN,
   so a workspace with no conversations still appears with `0`/`null`), and the client

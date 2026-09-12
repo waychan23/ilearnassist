@@ -30,12 +30,33 @@ const en: typeof MessageSchema = {
   },
 
   app: {
+    /**
+     * The product name. Shown when there is no session and no workspace to name the topbar
+     * after, and on the login screen — which is the one page with nothing else to call itself.
+     */
     title: "ilearnassist",
     configBanner: {
       before: "No API key is configured yet. Click",
       action: "Settings → Providers",
       after: "in the top right to add a Provider and its key; it takes effect as soon as you save.",
     },
+  },
+
+  /**
+   * The login screen.
+   *
+   * `noPassword` is not decoration: this build has no passwords, and a user who believes the
+   * field in front of them is a password field will assume a privacy the app does not have.
+   * Stating it is the honest half of not implementing it yet.
+   */
+  login: {
+    lead: "Enter a username to begin.",
+    username: "Username",
+    usernamePlaceholder: "For example: your name",
+    existing: "Existing accounts:",
+    submit: "Continue",
+    noPassword:
+      "This instance has no passwords: anyone who can reach this address can sign in as any name.",
   },
 
   // Autonyms: intentionally identical to the zh-CN catalog. See the note there.
@@ -483,6 +504,9 @@ const en: typeof MessageSchema = {
     INVALID_FILE_PATH: "That location is outside the workspace and cannot be opened.",
     NOT_A_DIRECTORY: "That path is not a folder.",
     NOT_A_FILE: "That path is not a file.",
+    UNAUTHENTICATED: "Your session has ended. Sign in again.",
+    USERNAME_REQUIRED: "A username is required.",
+    USERNAME_TOO_LONG: "A username cannot be longer than {max} characters.",
   },
 
   parseErrors: {

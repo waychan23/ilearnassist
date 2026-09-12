@@ -44,7 +44,7 @@ const inject = (options: {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   url: string;
   payload?: object;
-}) => env.server.app.inject(options);
+}) => env.inject(options);
 
 describe("GET /api/health and /api/config", () => {
   it("reports health", async () => {
@@ -528,7 +528,7 @@ describe("providers", () => {
     // uses a dedicated server rather than mutating the shared one.
     const solo = await startTestServer({ providers: [keylessProvider("only")], defaultProvider: "only", defaultModel: "fake-model" });
     try {
-      const res = await solo.server.app.inject({ method: "DELETE", url: "/api/providers/only" });
+      const res = await solo.inject({ method: "DELETE", url: "/api/providers/only" });
       expect(res.statusCode).toBe(409);
       expect(res.json<ApiErrorBody>().error.code).toBe("ONLY_PROVIDER");
     } finally {
