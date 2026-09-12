@@ -4,9 +4,9 @@ Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-**ilearnassist** is a self-hosted, single-user agent product (Browser/Server
-architecture). It provides a chatbox-like UI over a manual ReAct agent loop with
-tool calling. Three apps share a types package:
+**ilearnassist** is a self-hosted agent product for one person, with accounts
+(Browser/Server architecture). It provides a chatbox-like UI over a manual ReAct
+agent loop with tool calling. Three apps share a types package:
 
 - `apps/server` — Fastify 5 + better-sqlite3 + LangChain.js (`@langchain/core`,
   `@langchain/openai`). Runs the agent loop, streams results over SSE, and serves
@@ -16,6 +16,25 @@ tool calling. Three apps share a types package:
   the app, packaged as a Mac `.dmg` for people who do not want a terminal. Supervises
   the server as a child process; reimplements none of it. See `docs/desktop.md`.
 - `packages/shared` — dependency-free API/domain types used by both sides.
+
+Everything a person makes lives in a **data root they choose at launch**, not next to the
+code — so uninstalling the app leaves it behind. `apps/server/src/paths.ts` is the one
+description of that tree:
+
+```
+<dataRoot>/
+  users/<userSlug>/
+    workspaces/<wsSlug>/
+      workdir/                 the agent's file-tool sandbox and the file browser's root
+      sessions/<sessionId>/    created with the conversation; nothing writes here yet
+    sources/
+      raw/<sourceId>.<ext>     an uploaded file, one per distinct content per account
+      parsed/<sourceId>.txt    its extracted text
+  db/sqlite/ilearnassist.sqlite
+```
+
+`sessions/` is **reserved**: it is created so the layout is a thing you can look at rather
+than a thing that materialises by accident, and nothing writes into it yet.
 
 ## Commands
 
@@ -74,6 +93,8 @@ pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromiu
 | `apps/desktop/test/` | the control panel's paths, launch spec, process supervision and catalogs |
 | `e2e/*.spec.ts` | browser flows against the real stack |
 | `e2e/workspaces.ts` | `enterWorkspace()` / `leaveWorkspace()` — the front door, for specs |
+| `e2e/auth.ts` | `signIn()` + the account and state-file the browser suite shares |
+| `e2e/auth.setup.ts` | the `setup` project: signs in once, saves `storageState` for the rest |
 
 Each app's `tsconfig` includes its `test/` directory, so **`pnpm typecheck` checks the
 tests too**. For `apps/web` that also means `pnpm build` (which runs `vue-tsc`) fails on a
@@ -144,6 +165,17 @@ every spec renders Chinese and inherits the pin. `e2e/i18n.spec.ts` is the only 
 other locales are exercised, and it scopes its `test.use({ locale })` overrides to its own
 `describe` blocks.
 
+**Every browser spec starts signed in, and does not have to say so.** The API refuses
+everything without a session, so the `setup` project signs in once and saves the cookie as
+`storageState`, which both real projects load. That is why ~70 specs that are not about
+authentication needed no edit when sign-in arrived. A new spec inherits it and should not
+think about it; the one file that must *not* — `e2e/login.spec.ts` — clears the cookie with a
+file-scoped `test.use({ storageState: { cookies: [], origins: [] } })`, which is why it is a
+file of its own rather than a `describe` block: a `describe`-scoped override can be inherited
+by a sibling that did not mean to. It is also a project **dependency** rather than a
+`globalSetup`, because a `globalSetup` may run before the `webServer` entries are up and this
+has to reach one.
+
 ### What is deliberately *not* unit tested
 
 The Vue components. The Playwright suite covers them, which is why the Vitest coverage
@@ -171,13 +203,16 @@ apps/desktop/src/
   preload/preload.ts      # contextBridge surface — seven commands, nothing else
   renderer/               # the panel page (plain HTML/CSS + one bundled IIFE)
 apps/server/src/
-  index.ts                # bootstrap + seedFromConfig + the listening line + SIGTERM
+  index.ts                # bootstrap + the listening line + SIGTERM (resolves the data root first)
   webApp.ts               # serves the built frontend beside the API, when there is one
-  config.ts               # YAML + ${ENV} resolution + .env loader
-  db.ts                   # better-sqlite3 schema + migrations + CRUD (snake_case cols)
-  workspace.ts            # resolveInWorkspace sandboxing + dir mgmt
+  config.ts               # YAML + ${ENV} resolution + .env loader + resolveDataRoot
+  paths.ts                # the on-disk layout: data root → users/<slug> → workspaces, sources, db
+  schema.ts               # the DDL + the `user_version` guard that refuses a foreign database
+  auth.ts                 # accounts: the signed session cookie, and find-or-create by name
+  db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
+  workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
   files.ts                # the workspace browser's read side: one level, one file
-  attachments.ts          # upload storage + multimodal content building
+  attachments.ts          # source paths + the sandbox guard + multimodal content building
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
@@ -188,7 +223,7 @@ apps/server/src/
   documents/drivers/      # one file per wire protocol (sync / mineru / llamaparse)
   tools/index.ts          # tool assembly + ALL_TOOL_NAMES
   tools/fileTools.ts      # list/read/write/create_dir/delete_file (sandboxed)
-  tools/documentTools.ts  # read_document — pages through an attachment's text
+  tools/documentTools.ts  # read_document — pages through a source's text, by whitelist
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
@@ -203,8 +238,9 @@ apps/web/src/
   utils/apiError.ts       # server code → user-facing message
   utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
   utils/locale.ts         # browser-language detection + the alias table
-  components/…            # App, WorkspaceHome, Sidebar, ChatView, MessageItem, ToolCallCard,
-                          #   AskUserCard, Composer, TopbarControls, FileTree, dialogs
+  components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
+                          #   ToolCallCard, AskUserCard, Composer, TopbarControls, FileTree,
+                          #   dialogs (Settings, Sources, FilePreview, Confirm)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -279,10 +315,39 @@ Fuller map in `docs/reference.md`.
   not a turn that was about the file browser, and a toast for it would interrupt a
   conversation that worked. Failures the user *did* ask for go to `fileTreeError` (the tree
   pane) or `filePreviewError` (inside the dialog) — not the global toast.
-- **Uploads are sandboxed too.** Attachment paths go through `resolveStoredPath`
-  over `data/uploads/`, and stored files are located by directory listing rather
-  than by anything the client claims. Uploads live outside the workspace on
-  purpose, so chat attachments never show up in the agent's `list_files`.
+- **An uploaded file is a `source`: owned by the account, indexed by the database, and
+  referenced rather than owned by a conversation.** It lives at
+  `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose, so chat
+  uploads never show up in the agent's `list_files`. Three things follow, and each is load
+  bearing:
+  - **`UNIQUE (user_id, sha256)`** makes identical bytes one row, one file and two
+    references. The hash is *scoped* — `findSourceByHash(userId, hash)`, never by hash alone,
+    or the second account to upload the same file would be handed the first one's bytes.
+  - **`raw_path` is stored, and re-validated on every read** through `resolveInSources`. It is
+    stored because that is what removes the directory glob an attachment lookup used to need —
+    and with it a whole class of collision (see the `parsed/` note that this retired). It is
+    re-validated because a database row is not a trust boundary: it travels through backups,
+    and a future bug that wrote one column would otherwise become an arbitrary file read.
+  - **Parse state is columns on the row**, not a `<id>.json` sidecar. A reparse is then
+    visible in every conversation at once, and a source shared by two conversations is parsed
+    once. Only the extracted *text* stays a file. `attachments.ts` has no root constant: the
+    tree belongs to a user under a data directory the process chose at launch, so every
+    function takes the layout — which is also what keeps any data path out of import time.
+- **A source's bytes outlive the message that referenced them, and deleting is two different
+  acts.** `DELETE /api/sessions/:id` removes the conversation's *references* — the links
+  cascade with the row — and leaves the files alone, because another conversation may be
+  reading them. `DELETE /api/sources/:id` is the one that means "delete this file": it removes
+  the bytes, the extracted text and every reference. So the deletion matrix is asymmetric on
+  purpose, and `DocumentService.cancelSource` is per *source* rather than per session for the
+  same reason — cancelling by session would abort a parse another conversation is waiting on.
+- **A message's attachment is a snapshot, and its two halves come from different sides.** The
+  **name** is the client's, because it is the one that message used — a shared source can only
+  remember the first name it ever saw. The **parse state** is the server's, re-read from the
+  source row when the turn is persisted: a tab that has been open for an hour would otherwise
+  write whatever it last saw into the record of a turn, and a document that failed to parse
+  would reach the model as "still parsing". The snapshot is never rewritten, so a later
+  reparse does not alter history; the *live* state is the overlay `stores/app.ts` keeps and
+  `/api/sessions/:id/sources` feeds.
 - **`web_fetch` SSRF guard is a security boundary.** It is the only tool that
   makes the server issue an arbitrary outbound request. Keep the scheme check,
   the check on *every DNS-resolved address*, and the manual per-hop redirect
@@ -420,23 +485,125 @@ Fuller map in `docs/reference.md`.
   indistinguishable from a button that does nothing — which is how one was reported. The
   store's `answerQuestion` follows the same rule: a submission it cannot place is
   reported, never silently dropped.
-- **Schema changes need `ensureColumn`.** `CREATE TABLE IF NOT EXISTS` silently
-  skips existing tables, so an existing database would never gain a new column.
-- **Destructive UI actions confirm first.** Session, Copilot, workspace and
-  provider deletes go through `confirm()` from `composables/confirm.ts`. The
-  agent's own `delete_file` tool is deliberately *not* gated.
+- **Schema changes follow one of two rules, and they cover different things.** *Adding* a
+  column goes through `ensureColumn` in `db.ts`: `CREATE TABLE IF NOT EXISTS` silently skips
+  existing tables, so a database created before the column would never gain it. *Changing
+  what an existing column means* bumps `SCHEMA_VERSION` in `schema.ts`, which refuses the
+  file outright — no missing column can signal that, so without a version an old database is
+  simply opened and read wrong (`dir_path` resolving to the wrong directory, ids referring to
+  a different kind of thing) with no error anywhere to explain it. The guard reads
+  `PRAGMA user_version`, which is in the file header and therefore readable *before* anything
+  is created; a version row in `app_settings` cannot be, because reading it means having
+  already touched the file you meant to refuse.
+- **Every user-owned read takes the owner and puts it in the `WHERE`.** `getWorkspaceForUser`,
+  `getSessionForUser`, `listMessagesForUser` — the `ForUser` suffix is the rule, and another
+  account's id returns `undefined` rather than a row. Looking a row up and *then* comparing
+  its owner is a check somebody will eventually forget on a new route, and the failure is
+  another person's data rather than an error. "Not yours" and "does not exist" answer the
+  same way on purpose: a route turns both into a 404, so an id cannot be probed. `sessions`
+  and `messages` carry no `user_id` — they reach their owner through `workspaces` by join,
+  because a second copy of the owner is a second thing to keep in agreement. The handful of
+  accessors that *do* take a bare session id (`touchSession`, `createMessage`,
+  `skipAwaitingToolCalls`, …) are documented as such in `AppDb`: every caller reaches them
+  after a scoped read has already resolved the session.
+- **A workspace has two directories, and they are not interchangeable.** `Workspace.dirPath`
+  is the workspace's own — the parent of `workdir/` and `sessions/`, what `DELETE` removes,
+  and what the home page's card names. `Workspace.workdirPath` is `dirPath/workdir`: the
+  agent's file-tool sandbox, the file browser's root, and what the system prompt names. Both
+  are on the wire so that "which one do I write into" is a decision each caller makes by name;
+  deriving the second by convention is how the system prompt ended up naming a directory
+  containing `sessions/`. `dir_path` stores the *root* and not the sandbox because
+  `removeWorkspaceDir` only removes a direct child of the user's workspaces root, and because
+  removing `workdir/` alone would strand `sessions/` beside it.
+- **Renaming is display-only, for accounts as well as workspaces.** A workspace's directory
+  keeps the slug it was created with, and so does a user's — `users.slug` is chosen once by
+  `uniqueUserSlug` and a later change to the username does not move it. Every path in the
+  user's own workspaces, and every path the agent has already written into a conversation, is
+  built on top of it. Uniqueness is checked against the database first and the filesystem
+  second: the column is `UNIQUE`, and a filesystem-only check would race two sign-ins that
+  arrive at the same instant.
+- **The data root is chosen, never defaulted.** `ILA_DATA_DIR` is required and
+  `resolveDataRoot()` throws without it — deliberately, because that path decides how much of
+  the user's work survives an uninstall, and a default is only ever the choice nobody made. It
+  is read from the environment rather than from `config.yaml`, for the same reason `ILA_HOST`
+  is: the launcher sets it per launch, and a value in a config file cannot differ between two
+  runs of the same install. `.env` counts as the environment (which is what keeps a checkout
+  working) and a *relative* value resolves against the project root, not the working
+  directory — `pnpm dev` runs the server with cwd set to `apps/server`, so "relative to cwd"
+  would mean something different from one launcher to the next. The throw lives in `main()`
+  and not at module scope: `config.ts` is imported by the whole test suite, and a top-level
+  throw would take out every test that never starts a server.
+- **Documents cross a sandbox boundary that files cannot, and that asymmetry is deliberate.**
+  `read_document` is bound to a whitelist resolved per turn — a conversation's own sources
+  **unioned with its workspace's** — rather than to any root, so a guessed id fails a `Map`
+  lookup before a path is touched. The file tools are sandboxed by `resolveInWorkspace`
+  instead, and can never reach a source: it is outside every workspace by construction. So a
+  document uploaded in one conversation is readable from another in the same workspace, while
+  no path in that workspace could reach it as a file.
+  That is defensible because a workspace is *already* a shared sandbox — every conversation in
+  it can `read_file` the same tree — so a document there is not more privileged than a file
+  there; and it is the whole point of the tool, since a model shown a 200-page PDF in turn one
+  could not previously page through it in turn three. It rests on a workspace never being
+  shared between accounts, which the `ForUser` scoping is what guarantees. Two corollaries:
+  `/api/sessions/:id/sources` returns **the same union**, because the model and the chips must
+  not disagree about what is available; and `buildTools` gates the tool on "the whitelist is
+  non-empty" rather than "this turn has attachments", so a turn that attaches nothing can still
+  read last week's file.
+- **Destructive UI actions confirm first.** Session, Copilot, workspace, provider and source
+  deletes go through `confirm()` from `composables/confirm.ts`. The agent's own `delete_file`
+  tool is deliberately *not* gated.
+- **`ConfirmDialog` sits above every other overlay, and that is a token rather than an
+  ordering.** Two `.modal-overlay`s at the same `z-index` stack by DOM order, and
+  `ConfirmDialog` is `App.vue`'s first child — so a confirm raised from *inside* a dialog
+  (Settings deleting a provider, the sources list deleting a file) was painted underneath the
+  dialog that asked for it, with its buttons visible and unclickable by pointer. `--z-confirm`
+  is what fixes it; do not "tidy" the component back to sharing `--z-overlay`, and do not rely
+  on where a component happens to sit in `App.vue` for paint order.
+- **A dialog that is always mounted loads on *open*, not on mount.** `SourcesDialog` renders
+  nothing while closed and `App.vue` has no `v-if` on it, so `onMounted` fires once at app
+  start — loading there left the list as it was at boot, and the dialog opened on a correct
+  empty list for an account that had files. A `watch` on the flag with `immediate: true` is the
+  shape; `SettingsDialog` is `v-if`'d and so never had the problem, which is exactly why the
+  difference is easy to miss.
 - **The app opens on the workspace home, and a card there is the only way into a
-  conversation.** There is still no router: `App.vue` renders `WorkspaceHome` *or* the
-  `Sidebar + ChatView` pair, chosen by `uiState.workspaceHome` in `composables/ui.ts` —
-  a flag, where two views and a boolean do not need a dependency and a URL nobody types.
-  The sidebar's old workspace `<select>` went in the same change: with the home page as
-  the switcher it was a second, duplicate way to change workspace, and it could name the
-  workspaces without saying anything about them. `selectWorkspace` is now reached only
-  through a card, and neither the workspace nor the session is persisted — the app landing
-  directly in a conversation is the regression, not the feature. Navigation goes through
-  `showWorkspaceHome()` / `showChat()`, never a component-local flag. `e2e/workspaces.ts`
-  is the same rule for the specs; a spec that skips it fails on a composer that never
-  renders.
+  conversation.** There is still no router: `App.vue` renders `LoginView`,
+  `WorkspaceHome` *or* the `Sidebar + ChatView` pair, chosen by `uiState.view` in
+  `composables/ui.ts` — a three-valued flag, where three views do not need a dependency
+  and a route table nobody types. The sidebar's old workspace `<select>` went in the same
+  change as the home page: with the home page as the switcher it was a second, duplicate
+  way to change workspace, and it could name the workspaces without saying anything about
+  them. `selectWorkspace` is now reached only through a card, and neither the workspace nor
+  the session is persisted — the app landing directly in a conversation is the regression,
+  not the feature. Navigation goes through `showLogin()` / `showWorkspaceHome()` /
+  `showChat()`, never a component-local flag. `e2e/workspaces.ts` is the same rule for the
+  specs; a spec that skips it fails on a composer that never renders.
+- **Nothing is painted until `uiState.authReady`.** The session cookie is HttpOnly, so the
+  page cannot tell whether anyone is signed in until `/api/auth/me` answers — which means
+  the right view is genuinely unknown for the first moments after a reload. `view` starts on
+  `"login"` as the safe guess, and `App.vue` withholds *both* branches until the flag flips,
+  because rendering the login screen as the initial guess would flash it at a signed-in user
+  on every single refresh.
+- **Every API route requires a signed-in account unless it says `config: { public: true }`.**
+  One `onRequest` hook in `routes.ts`, deny-by-default: a route added tomorrow without a
+  thought about auth is refused, which is the same "the safe state is the one you get by
+  doing nothing" move as the `read_document` whitelist. Exactly four routes opt out —
+  `health`, `auth/login`, `auth/me`, `auth/users` — and `auth/me` answering 401 is its
+  *answer* rather than a refusal, which is why `client.ts` exempts `/auth/*` from the
+  session-expiry handler: routing that 401 into "your session expired" would open every first
+  visit with an error about a session that never existed. The hook belongs to the `routes`
+  plugin, so it covers the API and stops there — `webApp.ts` serves the built frontend from a
+  sibling plugin, and a guarded `index.html` is an app nobody can open.
+- **There is no password yet, and the login screen says so.** A username is the whole
+  credential, so the server's job is to *identify* the caller rather than to authenticate
+  anyone. Two things are nonetheless built the way they would be with a password, because
+  they are the parts that would be painful to retrofit: the cookie is an HMAC-signed
+  `<userId>.<signature>` rather than a bare id, and the secret lives in `app_settings` — so it
+  travels with the data root, and rotating it (delete the row) logs everyone out *immediately*,
+  since it is read per request rather than captured at boot. When passwords arrive the cookie
+  carries an opaque token id and only `currentUser` learns to look it up. Until then, **the
+  panel's LAN switch is the control that decides who can reach the address**, and the login
+  screen states the no-password property rather than leaving a user to assume a privacy it
+  does not have.
 - **A workspace's conversation count and last activity are derived, never stored.**
   `GET /api/workspaces` computes them in the same query that lists workspaces (a LEFT JOIN,
   so a workspace with no conversations still appears with `0`/`null`), and the client
@@ -484,11 +651,24 @@ Fuller map in `docs/reference.md`.
   Fastify's own "Server listening at …" banner, which is logged from inside `listen`
   before the process is necessarily ready. A control panel that claims a server is up
   when it is not is worse than one that says nothing, because the user has no way to tell.
-- **The desktop app never writes into its own bundle.** Writable state lives under
-  `app.getPath("userData")`, reached through `ILA_PROJECT_ROOT`; the bundle is read-only
-  and is replaced wholesale on every update. First-run seeding is idempotent and **never
-  overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the
-  user typed into the Settings UI from vanishing on the next launch.
+- **The desktop app never writes into its own bundle.** The *app's* state lives under
+  `app.getPath("userData")`, reached through `ILA_PROJECT_ROOT`; the bundle is read-only and
+  is replaced wholesale on every update. First-run seeding is idempotent and **never
+  overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the user
+  typed into the Settings UI from vanishing on the next launch.
+- **The app's directory and the user's are two different directories.** The app's holds
+  `config/` and `.env`; the user's holds the database, every account's workspaces and their
+  uploads. That split is what makes "back up my work" a copy of one directory and "reinstall
+  the app" a replacement of another, so it is worth keeping in mind whenever a path is
+  added. The user's is chosen at launch and remembered in `desktop.json`
+  (`DesktopSettings.dataDir`) — precedence is `ILA_DATA_DIR` first, then that file, then the
+  folder picker, which is what lets `desktop:dev` and the e2e harness run without a human at a
+  dialog. Two consequences worth stating: first-run seeding deliberately does **not** create a
+  data folder, because an empty one looks exactly like the data root the user was supposed to
+  pick; and the picker warns — but never refuses — when the chosen folder holds no database,
+  because starting in a new folder is the normal first-run case and looking identical to
+  "everything is gone" is the failure it prevents. `suggestedDataDir` is only where the picker
+  opens.
 - **The panel's LAN switch owns the bind address, and `ILA_HOST` is always set.** Including
   when sharing is off and the address is loopback. Leaving that case to `config.yaml` would
   let a hand-edited `server.host` there put the server on the network while the switch still
@@ -514,20 +694,25 @@ Fuller map in `docs/reference.md`.
   `better-sqlite3` v13's prebuilds are N-API and therefore already ABI-correct for
   Electron. Flip `npmRebuild` only if a dependency ships a non-N-API native module.
   Rationale in full in `docs/desktop.md`.
-- **Extracted document text lives in `parsed/`, never beside the bytes.** An
-  attachment's derived data goes to `uploads/<sessionId>/parsed/<attachmentId>.txt`,
-  not `uploads/<sessionId>/<attachmentId>.txt`. `findStoredAttachment()` globs
-  `<id>.*` in the session directory and `txt` is a valid extension in the MIME table,
-  so a flat sibling would let the download endpoint serve extracted text instead of
-  the original PDF. Pinned by a test in `apps/server/test/documents/store.test.ts`.
-- **`read_document` is scoped to the current turn's attachments.** It is bound to a
-  whitelist of attachment ids, not to the uploads root, because ids are guessable and
-  a bare-id tool would let a model read another session's uploads. Adding a document
-  tool that takes an id without checking it against the whitelist reintroduces that.
+- **Extracted text lives in `parsed/`, beside the bytes but never mixed with them.** A
+  source's derived data goes to `<userRoot>/sources/parsed/<sourceId>.txt`, never
+  `sources/raw/<sourceId>.txt`. The split used to be *load-bearing* — `findStoredAttachment()`
+  globbed `<id>.*` and `txt` is a valid extension in the MIME table, so a flat sibling could
+  be served in place of the original PDF. That hazard is gone: nothing globs any more, because
+  the path is a column. The split stays because raw bytes and derived text are different kinds
+  of thing, and a reader should never have to check which it is holding. Both the retired
+  hazard and the current shape are pinned in `apps/server/test/documents/store.test.ts`.
+- **A document tool takes an id *and* a whitelist, or it reintroduces the hole.**
+  `read_document` resolves through a `Map` built from that whitelist, so an id it was not
+  handed fails before any path is touched — the discipline is the lookup, not the narrowness
+  of the list (see the sandbox bullet above for what is on it). Ids are guessable; a tool that
+  took a bare one would let a model read files it was never given.
 - **A document that could not be read must never look like one that was.** An empty
   extraction is reported as `no_text_layer`, not as empty text — a model told it read
-  a file it never saw will answer about it anyway. `parseStatus` on the attachment is
-  what the UI renders, and the composer blocks sending until extraction has settled.
+  a file it never saw will answer about it anyway. `parseStatus` is what the UI renders and
+  what `buildUserContent` puts in the prompt, and the composer blocks sending until extraction
+  has settled. A source no extraction was *needed* for reads `none`, not `ready`: the two are
+  different claims and the chip shows different things.
 - **`pdfjs-dist` is pinned to 4.x.** 5.7+ and 6.x require Node ≥ 22.13 while
   `package.json` advertises Node ≥ 20; bumping that floor is a separate,
   user-visible change and must not ride along with an unrelated dependency update.
@@ -545,9 +730,15 @@ Fuller map in `docs/reference.md`.
 - Config loads `config/config.yaml`, overlaid by a git-ignored
   `config/config.local.yaml`, with `${ENV_VAR}` references resolved from `.env`
   + real env vars. Real env vars win over `.env`. `ILA_CONFIG_PATH` swaps the
-  *overlay* path, and `ILA_DATA_DIR` moves the sqlite database + uploads tree —
-  both exist for tests and the e2e run, and both must be set before the config
-  module is first imported.
+  *overlay* path — it exists for tests and the e2e run — and must be set before the
+  config module is first imported.
+- **`ILA_DATA_DIR` is required, and a bare `pnpm dev` will not start without it.** That
+  is the intended failure, not a regression: the message names the variable and the two
+  ways to set it. A checkout puts `ILA_DATA_DIR=./data` in `.env` (see `.env.example`);
+  the desktop app asks and passes an absolute path down. The test suite and the e2e run
+  each point it at a throwaway directory. Because `loadDotEnv()` runs at module scope in
+  `config.ts`, `.env` is read early enough for this to work — which is also why that call
+  is not inside `loadConfig()` where it used to be.
 - `pnpm test:e2e` starts its own fake LLM, backend and Vite on 3898 / 3899 / 5199,
   so a `pnpm dev` instance can keep running. Its scratch data lives in the
   git-ignored `.e2e/`, removed on teardown. It bundles `apps/desktop` first, because

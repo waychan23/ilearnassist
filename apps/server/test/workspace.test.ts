@@ -4,11 +4,11 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createWorkspaceDir,
-  ensureWorkspacesRoot,
   removeWorkspaceDir,
   resolveInWorkspace,
   slugify,
   uniqueSlug,
+  uniqueUserSlug,
 } from "../src/workspace.js";
 
 /**
@@ -99,6 +99,12 @@ describe("slugify", () => {
     expect(slugify("   ")).toBe("workspace");
   });
 
+  it("falls back to whatever the caller says instead, when asked", () => {
+    // A user's directory named "workspace" would be a quiet lie. The fallback is the
+    // caller's to name because only the caller knows what the slug is *for*.
+    expect(slugify("!!!", "user")).toBe("user");
+  });
+
   it("caps the length", () => {
     expect(slugify("a".repeat(100)).length).toBe(48);
   });
@@ -116,17 +122,48 @@ describe("uniqueSlug", () => {
   });
 });
 
-describe("workspace directories", () => {
-  it("creates the workspaces root, including missing parents", () => {
-    const target = join(root, "deep", "nested", "root");
-    ensureWorkspacesRoot(target);
-    expect(existsSync(target)).toBe(true);
+describe("uniqueUserSlug", () => {
+  it("returns the plain slug when the name is not taken", () => {
+    expect(uniqueUserSlug("Ada", () => false)).toBe("ada");
   });
 
-  it("creates a workspace directory under the root", () => {
+  it("suffixes until the name is free", () => {
+    const taken = new Set(["ada", "ada-1"]);
+    expect(uniqueUserSlug("Ada", (slug) => taken.has(slug))).toBe("ada-2");
+  });
+
+  it("asks about the name it is considering, not just the first candidate", () => {
+    // The predicate is consulted with each candidate in turn, which is what lets the caller
+    // check the database *and* the filesystem rather than either alone.
+    const asked: string[] = [];
+    uniqueUserSlug("Ada", (slug) => {
+      asked.push(slug);
+      return slug !== "ada-3";
+    });
+    expect(asked).toEqual(["ada", "ada-1", "ada-2", "ada-3"]);
+  });
+
+  it("falls back to 'user' rather than 'workspace'", () => {
+    expect(uniqueUserSlug("!!!", () => false)).toBe("user");
+  });
+});
+
+describe("workspace directories", () => {
+  it("creates the workspace directory and both directories inside it", () => {
+    // All three at once: `workdir/` is the sandbox the agent works in and `sessions/` holds
+    // the conversations' own directories. A workspace missing either is half-made, and
+    // nothing downstream would notice until something tried to write into it.
     const dir = createWorkspaceDir(root, "alpha");
     expect(dir).toBe(resolve(root, "alpha"));
     expect(existsSync(dir)).toBe(true);
+    expect(existsSync(join(dir, "workdir"))).toBe(true);
+    expect(existsSync(join(dir, "sessions"))).toBe(true);
+  });
+
+  it("creates a workspace directory under the root, including missing parents", () => {
+    const nested = join(root, "deep", "nested");
+    const dir = createWorkspaceDir(nested, "alpha");
+    expect(existsSync(join(dir, "workdir"))).toBe(true);
   });
 
   it("removes a direct child of the root", () => {

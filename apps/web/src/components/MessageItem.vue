@@ -61,12 +61,15 @@ const error = computed(() => props.streaming?.error ?? null);
  */
 const attachments = computed(() =>
   (props.message?.attachments ?? []).map((a) => {
+    // The message's own snapshot is a *source* — the server reassembled it when the turn was
+    // sent — so the live overlay is the same object, later. `status` used to be the field
+    // name; there is no trimming step any more, which is why this reads `parseStatus`.
     const live = store.parseStatus[a.id];
     if (!live) return a;
     return {
       ...a,
-      parseStatus: live.status,
-      parseError: live.error,
+      parseStatus: live.parseStatus,
+      parseError: live.parseError,
       parserId: live.parserId,
       parsedChars: live.parsedChars,
       pageCount: live.pageCount,
@@ -128,7 +131,6 @@ const usageText = computed(() => {
     <div class="user-stack">
       <AttachmentChips
         v-if="attachments.length"
-        :session-id="props.message?.sessionId ?? ''"
         :attachments="attachments"
       />
       <div v-if="content" class="bubble">{{ content }}</div>

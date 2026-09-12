@@ -1,78 +1,51 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import type { ParseErrorCode, ParseStatus } from "@ilearnassist/shared";
 import { isSafeId } from "../ids.js";
+import type { UserLayout } from "../paths.js";
 
 /**
- * Extracted document text and its parse state, kept beside the uploaded bytes:
+ * Extracted document text, one file per source.
  *
  * ```
- * <uploadsRoot>/<sessionId>/
- *   <attachmentId>.pdf          the original bytes
- *   parsed/
- *     <attachmentId>.txt        extracted plain text
- *     <attachmentId>.json       { status, error?, parserId?, parsedChars?, pageCount? }
+ * <userRoot>/sources/
+ *   raw/<sourceId>.<ext>      the uploaded bytes
+ *   parsed/<sourceId>.txt     the extracted plain text
  * ```
  *
- * **The `parsed/` subdirectory is load-bearing.** `findStoredAttachment()` locates an
- * attachment with `entries.find(name => name.startsWith(id + "."))`, and `txt` is a
- * legitimate extension in `EXT_MIME` — so a sibling `<id>.txt` could be picked ahead of
- * `<id>.pdf` and the download endpoint would serve extracted text instead of the original
- * file. Keeping derived data in its own directory makes that collision impossible.
+ * **Parse state is not here any more.** It lives in the `sources` row, which is where every
+ * reader consults it — so a reparse is visible in every conversation at once rather than only
+ * in the messages written after it, and a source uploaded once and referenced twice is parsed
+ * once. This module is now only about the text, which is the one part too large for a column
+ * and which `read_document` streams by offset.
  *
- * State lives on disk rather than in sqlite because the uploads tree is already the
- * authority for attachment bytes and MIME types (derived by directory listing), and
- * because `removeSessionUploads()` deletes the whole session directory — so a session
- * delete cleans up parse state for free, with no migration and no cascade to maintain.
+ * The two directories are siblings, which used to be *load-bearing*: `findStoredAttachment()`
+ * located an attachment by globbing `<id>.*` inside the session directory, and `txt` is a
+ * legitimate upload extension — so a flat `<id>.txt` could be found ahead of the original PDF
+ * and the download endpoint would serve extracted text instead of the file. Nothing globs any
+ * more, because the path is a column, so that particular collision is unreachable rather than
+ * merely avoided. The split stays because raw bytes and derived text are different kinds of
+ * thing and a reader should not have to check which it is holding.
  */
 
-/** State of one attachment's extraction. Mirrors the client-facing `Attachment` fields. */
-export interface ParseRecord {
-  status: ParseStatus;
-  /** A message aimed at the user. Never contains a credential. */
-  error?: string;
-  /**
-   * The machine code behind `error`, so the client can render it in the user's language.
-   * Absent on records written before i18n; `error` alone is then the fallback.
-   */
-  code?: ParseErrorCode;
-  /** `"local"`, or the id of the document parser record that produced the text. */
-  parserId?: string;
-  parsedChars?: number;
-  pageCount?: number;
-  updatedAt: string;
-}
-
-/** Absolute path of the derived-data directory, or undefined for an unsafe id. */
-export function parsedDir(uploadRoot: string, sessionId: string): string | undefined {
-  if (!isSafeId(sessionId)) return undefined;
-  return join(uploadRoot, sessionId, "parsed");
-}
-
-function parsedPaths(
-  uploadRoot: string,
-  sessionId: string,
-  attachmentId: string
-): { dir: string; text: string; meta: string } | undefined {
-  const dir = parsedDir(uploadRoot, sessionId);
-  if (!dir || !isSafeId(attachmentId)) return undefined;
-  return { dir, text: join(dir, `${attachmentId}.txt`), meta: join(dir, `${attachmentId}.json`) };
+/** Absolute path of one source's extracted text, or undefined for an unsafe id. */
+export function sourceParsedPath(user: UserLayout, sourceId: string): string | undefined {
+  if (!isSafeId(sourceId)) return undefined;
+  return join(user.parsedDir, `${sourceId}.txt`);
 }
 
 /** Read only the first `maxChars` characters, without slurping a multi-MB file. */
 export async function readParsedTextHead(
-  uploadRoot: string,
-  sessionId: string,
-  attachmentId: string,
+  user: UserLayout,
+  sourceId: string,
   maxChars: number
 ): Promise<string | undefined> {
-  const paths = parsedPaths(uploadRoot, sessionId, attachmentId);
-  if (!paths) return undefined;
+  const path = sourceParsedPath(user, sourceId);
+  if (!path) return undefined;
 
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(paths.text, "r");
-    // A UTF-8 code point is at most 4 bytes, so this is a safe upper bound on bytes
+    handle = await fs.open(path, "r");
+    // A UTF-8 code point is at most 4 bytes, so this is a safe upper bound on the bytes
     // needed for `maxChars` characters. Trimming happens below.
     const buf = Buffer.alloc(maxChars * 4);
     const { bytesRead } = await handle.read(buf, 0, buf.byteLength, 0);
@@ -87,96 +60,32 @@ export async function readParsedTextHead(
 }
 
 export async function readParsedText(
-  uploadRoot: string,
-  sessionId: string,
-  attachmentId: string
+  user: UserLayout,
+  sourceId: string
 ): Promise<string | undefined> {
-  const paths = parsedPaths(uploadRoot, sessionId, attachmentId);
-  if (!paths) return undefined;
+  const path = sourceParsedPath(user, sourceId);
+  if (!path) return undefined;
   try {
-    return await fs.readFile(paths.text, "utf8");
+    return await fs.readFile(path, "utf8");
   } catch {
     return undefined;
   }
 }
 
 export async function writeParsedText(
-  uploadRoot: string,
-  sessionId: string,
-  attachmentId: string,
+  user: UserLayout,
+  sourceId: string,
   text: string
 ): Promise<void> {
-  const paths = parsedPaths(uploadRoot, sessionId, attachmentId);
-  if (!paths) throw new Error("Invalid attachment id.");
-  await fs.mkdir(paths.dir, { recursive: true });
-  await fs.writeFile(paths.text, text, "utf8");
+  const path = sourceParsedPath(user, sourceId);
+  if (!path) throw new Error("Invalid source id.");
+  await fs.mkdir(user.parsedDir, { recursive: true });
+  await fs.writeFile(path, text, "utf8");
 }
 
-export async function readParseRecord(
-  uploadRoot: string,
-  sessionId: string,
-  attachmentId: string
-): Promise<ParseRecord | undefined> {
-  const paths = parsedPaths(uploadRoot, sessionId, attachmentId);
-  if (!paths) return undefined;
-  try {
-    const raw = await fs.readFile(paths.meta, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") return undefined;
-    return parsed as ParseRecord;
-  } catch {
-    return undefined;
-  }
-}
-
-export async function writeParseRecord(
-  uploadRoot: string,
-  sessionId: string,
-  attachmentId: string,
-  record: Omit<ParseRecord, "updatedAt">
-): Promise<void> {
-  const paths = parsedPaths(uploadRoot, sessionId, attachmentId);
-  if (!paths) throw new Error("Invalid attachment id.");
-  await fs.mkdir(paths.dir, { recursive: true });
-  const full: ParseRecord = { ...record, updatedAt: new Date().toISOString() };
-  await fs.writeFile(paths.meta, JSON.stringify(full), "utf8");
-}
-
-/** Every parse record for a session, keyed by attachment id. Missing dir → empty map. */
-export async function listParseRecords(
-  uploadRoot: string,
-  sessionId: string
-): Promise<Map<string, ParseRecord>> {
-  const out = new Map<string, ParseRecord>();
-  const dir = parsedDir(uploadRoot, sessionId);
-  if (!dir) return out;
-
-  let entries: string[];
-  try {
-    entries = await fs.readdir(dir);
-  } catch {
-    return out;
-  }
-
-  for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
-    const id = entry.slice(0, -".json".length);
-    const record = await readParseRecord(uploadRoot, sessionId, id);
-    if (record) out.set(id, record);
-  }
-  return out;
-}
-
-/** Drop derived data for one attachment, so a re-parse starts clean. */
-export async function removeParsed(
-  uploadRoot: string,
-  sessionId: string,
-  attachmentId: string
-): Promise<void> {
-  const paths = parsedPaths(uploadRoot, sessionId, attachmentId);
-  if (!paths) return;
-  await Promise.all([
-    fs.rm(paths.text, { force: true }).catch(() => undefined),
-    fs.rm(paths.meta, { force: true }).catch(() => undefined),
-  ]);
+/** Drop the extracted text, so a re-parse starts from nothing rather than from a stale read. */
+export async function removeParsedText(user: UserLayout, sourceId: string): Promise<void> {
+  const path = sourceParsedPath(user, sourceId);
+  if (!path) return;
+  await fs.rm(path, { force: true }).catch(() => undefined);
 }

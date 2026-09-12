@@ -19,6 +19,15 @@ export const PANEL_CHANNELS = {
   shareOnLan: "panel:share-on-lan",
   openApp: "panel:open-app",
   openInBrowser: "panel:open-in-browser",
+  /**
+   * Ask the user where their data should live, and start the server there.
+   *
+   * A folder picker in main rather than in the renderer: only main can open a native
+   * dialog, and the question the picker has to ask — "this folder has no ilearnassist data
+   * in it; a new, empty database will be created there" — is one the operating system is
+   * better at asking than a page is.
+   */
+  chooseDataDir: "panel:choose-data-dir",
   revealDataDir: "panel:reveal-data-dir",
   quit: "panel:quit",
   /** main → renderer, pushed on every change so the panel never has to poll. */
@@ -47,7 +56,7 @@ export interface ServerStatus {
   url: string | null;
   /** Set when `state` is `failed`; null otherwise. */
   fault: ServerFault | null;
-  /** Where the database, uploads and workspaces live. Shown so a user can find them. */
+  /** The chosen data root: the database, every account's workspaces, and their uploads. */
   dataDir: string;
   /** Newest last, capped. Diagnostics for a start that never reached `running`. */
   logs: string[];
@@ -72,6 +81,14 @@ export interface PanelState {
   lanUrl: string | null;
   /** This machine's network address, so it can be typed by hand if scanning is awkward. */
   lanAddress: string | null;
+  /**
+   * Nobody has said where the data should live, so there is nowhere to put it.
+   *
+   * The server has not been started and cannot be: it refuses to run without a data root,
+   * by design, because the alternative is a path it invented. The panel's whole job in this
+   * state is to ask — every control that needs a running server is inert until it does.
+   */
+  needsDataDir: boolean;
 }
 
 export interface PanelApi {
@@ -80,6 +97,13 @@ export interface PanelApi {
   stop(): Promise<PanelState>;
   /** Turn LAN sharing on or off. Restarts the server, so it resolves when that settles. */
   shareOnLan(on: boolean): Promise<PanelState>;
+  /**
+   * Open a folder picker, record the choice, and start the server there.
+   *
+   * Resolves with the state *after* the start, or with an unchanged state if the picker was
+   * dismissed — cancelling is not an error and needs no reply.
+   */
+  chooseDataDir(): Promise<PanelState>;
   /** Opens (or focuses) the app window. A no-op unless the server is running. */
   openApp(): Promise<void>;
   /** Opens the same URL in the user's own browser, for bookmarks and devtools. */

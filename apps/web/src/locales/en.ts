@@ -30,12 +30,33 @@ const en: typeof MessageSchema = {
   },
 
   app: {
+    /**
+     * The product name. Shown when there is no session and no workspace to name the topbar
+     * after, and on the login screen — which is the one page with nothing else to call itself.
+     */
     title: "ilearnassist",
     configBanner: {
       before: "No API key is configured yet. Click",
       action: "Settings → Providers",
       after: "in the top right to add a Provider and its key; it takes effect as soon as you save.",
     },
+  },
+
+  /**
+   * The login screen.
+   *
+   * `noPassword` is not decoration: this build has no passwords, and a user who believes the
+   * field in front of them is a password field will assume a privacy the app does not have.
+   * Stating it is the honest half of not implementing it yet.
+   */
+  login: {
+    lead: "Enter a username to begin.",
+    username: "Username",
+    usernamePlaceholder: "For example: your name",
+    existing: "Existing accounts:",
+    submit: "Continue",
+    noPassword:
+      "This instance has no passwords: anyone who can reach this address can sign in as any name.",
   },
 
   // Autonyms: intentionally identical to the zh-CN catalog. See the note there.
@@ -458,9 +479,8 @@ const en: typeof MessageSchema = {
     SESSION_NOT_FOUND: "That conversation no longer exists.",
     TITLE_EMPTY: "The title cannot be empty.",
     UNSUPPORTED_FILE_TYPE: "Unsupported file type: {mimeType}",
-    INVALID_ATTACHMENT_PATH: "That attachment path is not valid.",
-    ATTACHMENT_NOT_FOUND: "That attachment no longer exists.",
-    ATTACHMENT_STORE_FAILED: "Could not save the attachment. Please try again.",
+    SOURCE_NOT_FOUND: "That file no longer exists.",
+    SOURCE_STORE_FAILED: "Could not save the file. Please try again.",
     DATA_REQUIRED: "The file contents are missing.",
     INVALID_BASE64: "The file contents are not valid base64.",
     EMPTY_FILE: "That file is empty.",
@@ -483,6 +503,34 @@ const en: typeof MessageSchema = {
     INVALID_FILE_PATH: "That location is outside the workspace and cannot be opened.",
     NOT_A_DIRECTORY: "That path is not a folder.",
     NOT_A_FILE: "That path is not a file.",
+    UNAUTHENTICATED: "Your session has ended. Sign in again.",
+    USERNAME_REQUIRED: "A username is required.",
+    USERNAME_TOO_LONG: "A username cannot be longer than {max} characters.",
+  },
+
+  /**
+   * The account's uploaded files.
+   *
+   * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
+   * *not* delete this file, and which way round the two actions are. Without it, "delete"
+   * reads as tidying up something already gone.
+   */
+  sources: {
+    title: "Uploaded files",
+    lead: "Everything you have uploaded. These belong to your account rather than to one conversation — a file referenced from several conversations is stored and parsed once.",
+    open: "Uploaded files",
+    loading: "Loading…",
+    empty: "Nothing uploaded yet. Use the paperclip in the composer, or paste a screenshot.",
+    parsed: "Read",
+    parsedChars: "{count} characters read",
+    parsing: "Reading…",
+    parseFailed: "Could not be read",
+    delete: {
+      title: "Delete file",
+      message: 'Delete "{name}"?',
+      detail: "The file, its extracted text and every reference to it will be removed for good. Messages that were sent with it still show the attachment, but it will no longer open.",
+      action: "Delete file",
+    },
   },
 
   parseErrors: {

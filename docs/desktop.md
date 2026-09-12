@@ -64,13 +64,23 @@ exists to prevent it; see [Signing](#signing).
 │                                                                      │
 └──────────────────────────────────────────────────────────────────────┘
 
-        writes to   ~/Library/Application Support/ilearnassist/
-                      ├── config/config.yaml         (seeded once)
-                      ├── config/config.local.yaml   (port: 0)
-                      ├── data/ilearnassist.sqlite
-                      ├── data/uploads/
-                      └── workspaces/
+  app state   ~/Library/Application Support/ilearnassist/
+                ├── config/config.yaml         (seeded once)
+                ├── config/config.local.yaml   (port: 0)
+                └── desktop.json               (this app's preferences)
+
+  your data   wherever you chose on first launch
+                ├── db/sqlite/ilearnassist.sqlite
+                ├── users/<name>/workspaces/<name>/
+                ├── users/<name>/sources/
+                └── uploads/
 ```
+
+**Two directories, and the split is the point.** The app's own tree holds the config and the
+panel's preferences and is replaced when the app updates; yours holds the database, your
+workspaces and your uploads, and nothing here ever writes to it except the server you told it
+to run. Backing up your work means copying the second one; reinstalling the app touches only
+the first.
 
 That directory is named after `app.setName()` in `apps/desktop/src/main/main.ts`, which is also
 why renaming the app moves it: it used to be `~/Library/Application Support/guided-learning/`,
@@ -121,15 +131,38 @@ necessarily ready. Entering `running` has exactly one cause (that line) and exac
 A control panel that reports "Running" for a server that is not running is worse than one
 that reports nothing, because the user has no way to tell.
 
-### All state lives under the user's data directory (`src/main/paths.ts`)
+### The app's state lives under `userData`, and yours does not (`src/main/paths.ts`)
 
-A checkout keeps `config/`, `data/` and `workspaces/` next to the source. A `.dmg` cannot:
-the bundle is read-only and is replaced wholesale on every update. The desktop app therefore
-sets `ILA_PROJECT_ROOT` to `~/Library/Application Support/ilearnassist`, seeds a
-`config.yaml` there on first launch, and lets the server resolve everything else against it.
+A checkout keeps `config/` next to the source. A `.dmg` cannot: the bundle is read-only and is
+replaced wholesale on every update. The desktop app therefore sets `ILA_PROJECT_ROOT` to
+`~/Library/Application Support/ilearnassist` and seeds a `config.yaml` there on first launch.
 
 Seeding is **idempotent and non-destructive** — an existing `config.yaml` or overlay is never
 rewritten, so an API key typed into the Settings UI on a previous launch survives an update.
+It also deliberately **does not create a data folder**: the data root is the user's to choose,
+and an empty directory made on their behalf looks exactly like the one they were supposed to
+pick.
+
+### Choosing where your data goes
+
+The server will not start without a data root — no default, by design, because that path
+decides how much of your work survives an uninstall. So the first launch asks: the panel shows
+**Choose folder…** and will not start the server until a folder is picked.
+
+Two things make that question honest. The picker starts in
+`~/Library/Application Support/ilearnassist/data`, which is *outside* the application bundle —
+dragging the `.app` to the Trash does not take it with you. And if the folder you pick holds no
+database, the panel says so before accepting it, because an empty folder and a wrong folder are
+indistinguishable from the outside and one of them starts a second, empty database that looks
+exactly like having lost everything. It warns; it does not refuse, since a new folder is the
+normal first-run case.
+
+The choice is remembered in `desktop.json` and passed to the server as `ILA_DATA_DIR` on every
+launch — not written into a config file, which is what lets **Choose folder…** take effect on
+the restart that follows. Precedence is `ILA_DATA_DIR` from the environment first, then
+`desktop.json`, then the picker; the environment wins so that `pnpm desktop:dev` and the e2e
+harness can run without a human at a dialog. Changing the folder restarts the server, and the
+conversations you had on screen stay where they were.
 
 The app also writes a `config.local.yaml` overlay (via the existing `ILA_CONFIG_PATH`
 mechanism, not a fork of the config format) setting `port: 0`, so the OS assigns a free port
@@ -149,6 +182,12 @@ on that device, the configured provider keys reachable by anything on the networ
 on a home network; not reasonable to have happen on a café's. So it is off until asked for,
 stays on until turned off, and the panel carries a **Stop sharing** control for as long as it
 is on.
+
+**It also decides who can sign in.** There are no passwords — a username is the whole
+credential — so anything that can reach the address can become any name on it, and the
+login screen says as much. That makes this switch the real access control: with sharing off,
+only this machine can reach the app at all. It is a second reason to leave it off unless
+someone actually wants to read their notes from the sofa.
 
 The bind address follows the switch rather than the config, always — including when the
 switch is off and the address is loopback. Leaving the loopback case to `config.yaml` would

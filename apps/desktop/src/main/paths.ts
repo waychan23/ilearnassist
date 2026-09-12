@@ -2,28 +2,40 @@ import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
- * Where the packaged app keeps everything, and how it gets there on first launch.
+ * Where the packaged app keeps its own state, and how it gets there on first launch.
  *
- * A checkout keeps `config/`, `data/` and `workspaces/` next to the source, which is fine
- * for a developer and impossible for a `.dmg`: the app bundle is read-only, and it is
- * replaced wholesale on every update. So the packed build keeps the code in the bundle and
- * all mutable state under the OS's per-user data directory, and tells the server where to
- * look with `ILA_PROJECT_ROOT`.
+ * A checkout keeps `config/` next to the source, which is fine for a developer and
+ * impossible for a `.dmg`: the app bundle is read-only, and it is replaced wholesale on every
+ * update. So the packed build keeps the code in the bundle and the config under the OS's
+ * per-user data directory, and tells the server where to look with `ILA_PROJECT_ROOT`.
  *
- * Keeping the split in one module (rather than inlining `join(userData, …)` at each use
+ * The *user's* data — the database, their workspaces, their uploads — is not here at all.
+ * It lives wherever they chose, recorded in `desktop.json` and handed to the server as
+ * `ILA_DATA_DIR`. Splitting the two is what makes "back up my work" a copy of one directory
+ * and "reinstall the app" a replacement of another.
+ *
+ * Keeping the paths in one module (rather than inlining `join(userData, …)` at each use
  * site) is what makes it testable without an Electron runtime: every path below is derived
  * from two strings the caller supplies.
  */
 
 export interface AppPaths {
-  /** `ILA_PROJECT_ROOT` — holds `config/`, `data/` and `workspaces/`. Per-user, writable. */
+  /** `ILA_PROJECT_ROOT` — holds `config/` and `.env`. Per-user, writable. */
   root: string;
   configDir: string;
   /** The seeded `config.yaml`. Written once, then the user's. */
   configFile: string;
   /** `ILA_CONFIG_PATH` — the app's own overlay, merged over `configFile` on every boot. */
   overlayFile: string;
-  dataDir: string;
+  /**
+   * Where the file picker opens, and nothing more.
+   *
+   * The data root itself is the *user's* to choose and lives in `desktop.json` — see
+   * `DesktopSettings.dataDir`. This is only the sensible place to start looking, and it is
+   * under the app's own per-user directory because that is out of the application bundle:
+   * dragging the `.app` to the trash does not take `~/Library/Application Support` with it.
+   */
+  suggestedDataDir: string;
   /** The built frontend shipped inside the app bundle. Read-only. */
   webDir: string;
   /** The `config.yaml` template shipped inside the app bundle. Read-only. */
@@ -44,10 +56,27 @@ export function resolveAppPaths(input: ResolveAppPathsInput): AppPaths {
     configDir,
     configFile: join(configDir, "config.yaml"),
     overlayFile: join(configDir, "config.local.yaml"),
-    dataDir: join(input.userDataDir, "data"),
+    suggestedDataDir: join(input.userDataDir, "data"),
     webDir: join(input.resourcesDir, "web"),
     templateConfig: join(input.resourcesDir, "config", "config.yaml"),
   };
+}
+
+/** The database file a chosen data root would hold. The one marker of "there is data here". */
+export function databaseIn(dataRoot: string): string {
+  return join(dataRoot, "db", "sqlite", "ilearnassist.sqlite");
+}
+
+/**
+ * Whether a directory already holds this app's data.
+ *
+ * The question the file picker has to answer before it accepts a path, because an empty
+ * directory and a corrupted one look identical from the outside and one of them silently
+ * starts a second, empty database. The panel asks this to decide whether it needs to say so
+ * out loud; it never refuses.
+ */
+export function hasExistingData(dataRoot: string): boolean {
+  return existsSync(databaseIn(dataRoot));
 }
 
 /**
@@ -75,12 +104,17 @@ server:
 `;
 
 /**
- * Create the per-user tree and plant the seed config, once.
+ * Create the app's own tree and plant the seed config, once.
  *
  * Idempotent, and deliberately non-destructive: an existing `config.yaml` or overlay is
  * never rewritten. That is the same contract `config.yaml` already has in a checkout — it
  * is bootstrap and seed data, and the Settings UI owns the database afterwards — so a user
  * who edits either file keeps their edit across updates.
+ *
+ * **Nothing here creates a data directory.** It used to create `<userData>/data` as the
+ * server's default; now that the root is the user's to choose, making a folder for them
+ * would produce an empty directory that looks exactly like the data root they were supposed
+ * to pick — and a second, empty database if they picked it by mistake.
  *
  * Throws if the template is missing, because the alternative is a server that boots with no
  * providers and dies with "No providers configured", which names the symptom and not the
@@ -88,7 +122,6 @@ server:
  */
 export function seedFirstRun(paths: AppPaths): void {
   mkdirSync(paths.configDir, { recursive: true });
-  mkdirSync(paths.dataDir, { recursive: true });
 
   if (!existsSync(paths.configFile)) {
     if (!existsSync(paths.templateConfig)) {

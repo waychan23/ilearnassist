@@ -1,6 +1,16 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, nativeTheme, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  dialog,
+  ipcMain,
+  nativeImage,
+  nativeTheme,
+  shell,
+} from "electron";
 import { networkInterfaces } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { PANEL_CHANNELS, type PanelState } from "../shared/panelApi.js";
 import {
   PANEL_MESSAGES,
@@ -15,7 +25,7 @@ import {
   serverEntryFor,
 } from "./launch.js";
 import { findLanAddress, lanUrlFor } from "./lan.js";
-import { resolveAppPaths, seedFirstRun, type AppPaths } from "./paths.js";
+import { hasExistingData, resolveAppPaths, seedFirstRun, type AppPaths } from "./paths.js";
 import { readSettings, writeSettings, type DesktopSettings } from "./settings.js";
 import { ServerProcess } from "./serverProcess.js";
 
@@ -78,6 +88,24 @@ const chromeColour = (): string => (nativeTheme.shouldUseDarkColors ? "#16181c" 
 // ---- state -----------------------------------------------------------------
 
 /**
+ * Where the user's data lives: the environment first, then the choice they made.
+ *
+ * Environment first for the same reason `ILA_HOST` is: `pnpm desktop:dev` and the e2e
+ * harness have to run without a human at a folder picker, and an environment variable is the
+ * only channel that can differ per launch without rewriting a file the user owns. An empty
+ * answer means nobody has said yet, and the panel asks.
+ *
+ * Resolved rather than returned verbatim because the child's working directory is not
+ * something to build a data path on — a relative `ILA_DATA_DIR` in a hand-edited
+ * `desktop.json` would land somewhere different on every launch.
+ */
+function resolveDataDir(): string {
+  const fromEnv = process.env.ILA_DATA_DIR?.trim();
+  if (fromEnv) return resolve(fromEnv);
+  return settings.dataDir ? resolve(settings.dataDir) : "";
+}
+
+/**
  * Everything the panel renders.
  *
  * `sharedOnLan` is read from the setting rather than from the process, because it is what
@@ -96,6 +124,7 @@ function currentState(): PanelState {
     // to open a URL that cannot work — the switch is the promise, so it gates the offer.
     lanUrl: settings.sharedOnLan ? lanUrlFor(status.url, lanAddress) : null,
     lanAddress,
+    needsDataDir: !resolveDataDir(),
   };
 }
 
@@ -129,6 +158,65 @@ async function shareOnLan(on: boolean): Promise<PanelState> {
   const wasUp = ["running", "starting"].includes(server.status().state);
   await server.stop();
   if (wasUp) await server.start();
+
+  broadcast();
+  return currentState();
+}
+
+/**
+ * Ask where the data should live, remember it, and start the server there.
+ *
+ * Two questions, not one. The folder picker collects a path; the confirm that follows — shown
+ * only when that path holds no database — exists because an empty folder and a *wrong* folder
+ * are indistinguishable from here, and picking the wrong one creates a second, empty database
+ * that looks exactly like having lost everything. It warns and permits, because starting in a
+ * new folder is the normal first-run case.
+ *
+ * Dismissing either one changes nothing. A cancelled dialog is not a failure, and the panel
+ * is still in the state it was.
+ */
+async function chooseDataDir(): Promise<PanelState> {
+  const properties: Array<"openDirectory" | "createDirectory"> = ["openDirectory", "createDirectory"];
+  const options = {
+    title: t("dataDir.chooseTitle"),
+    // The last choice as the starting point, so changing one's mind about a sibling folder is
+    // two clicks rather than a walk back down the filesystem.
+    defaultPath: resolveDataDir() || paths.suggestedDataDir,
+    buttonLabel: t("dataDir.chooseButton"),
+    properties,
+  };
+  const picked = panelWindow
+    ? await dialog.showOpenDialog(panelWindow, options)
+    : await dialog.showOpenDialog(options);
+  const dir = picked.canceled ? "" : picked.filePaths[0] ?? "";
+  if (!dir) return currentState();
+
+  if (!hasExistingData(dir)) {
+    const { response } = await dialog.showMessageBox({
+      type: "warning",
+      message: t("dataDir.confirmTitle"),
+      detail: t("dataDir.confirmDetail", { dir }),
+      buttons: [t("dataDir.confirmProceed"), t("action.cancel")],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response !== 0) return currentState();
+  }
+
+  settings = { ...settings, dataDir: dir };
+  try {
+    writeSettings(settingsFile, settings);
+  } catch (err) {
+    // Worth continuing, exactly as in `shareOnLan`: the choice still applies to this run, and
+    // refusing to start because a preferences file could not be written would make the picker
+    // look broken.
+    console.error("Could not save the desktop settings:", err);
+  }
+
+  // Restarted unconditionally rather than only when it was up: the point of choosing is to
+  // end up with a running server in the chosen place.
+  await server.stop();
+  await server.start();
 
   broadcast();
   return currentState();
@@ -303,6 +391,11 @@ function refreshTrayMenu(): void {
 function registerIpc(): void {
   ipcMain.handle(PANEL_CHANNELS.getState, () => currentState());
   ipcMain.handle(PANEL_CHANNELS.start, async () => {
+    // With nowhere to put the data there is nothing to start, so this button means "choose a
+    // folder". The alternative — letting it through — is a start that fails with the
+    // server's own sentence about an unset environment variable, which names the cause and
+    // offers the user nothing.
+    if (!resolveDataDir()) return chooseDataDir();
     await server.start();
     return currentState();
   });
@@ -310,6 +403,7 @@ function registerIpc(): void {
     await server.stop();
     return currentState();
   });
+  ipcMain.handle(PANEL_CHANNELS.chooseDataDir, () => chooseDataDir());
   ipcMain.handle(PANEL_CHANNELS.shareOnLan, (_event, on: unknown) => shareOnLan(on === true));
   ipcMain.handle(PANEL_CHANNELS.openApp, () => openAppWindow());
   ipcMain.handle(PANEL_CHANNELS.openInBrowser, async () => {
@@ -317,9 +411,12 @@ function registerIpc(): void {
     if (url) await shell.openExternal(url);
   });
   ipcMain.handle(PANEL_CHANNELS.revealDataDir, async () => {
-    // `openPath` resolves to an error string rather than rejecting, so the failure is
-    // logged rather than thrown into an unhandled rejection.
-    const failure = await shell.openPath(paths.root);
+    // The *user's* data, not the app's own directory: this is the folder they might want to
+    // look inside or back up. Falls back to the app's tree when nothing has been chosen —
+    // there is no data folder to show yet, and the config the app owns is the nearest thing.
+    // `openPath` resolves to an error string rather than rejecting, so the failure is logged
+    // rather than thrown into an unhandled rejection.
+    const failure = await shell.openPath(resolveDataDir() || paths.root);
     if (failure) console.error("Could not open the data folder:", failure);
   });
   ipcMain.handle(PANEL_CHANNELS.quit, () => {
@@ -412,17 +509,18 @@ if (!app.requestSingleInstanceLock()) {
     settings = readSettings(settingsFile);
 
     server = new ServerProcess(
-      // Read at every start, so flipping the switch takes effect on the restart that
-      // follows it without replacing this object — which would drop the subscription the
-      // panel's state arrives through.
+      // Read at every start, so flipping the switch — or choosing a different data folder —
+      // takes effect on the restart that follows it without replacing this object, which
+      // would drop the subscription the panel's state arrives through.
       () =>
         buildLaunchSpec({
           electronExecPath: process.execPath,
           serverEntry: serverEntryFor(appRoot),
           paths,
+          dataDir: resolveDataDir(),
           host: settings.sharedOnLan ? ANY_INTERFACE_HOST : LOOPBACK_HOST,
         }),
-      { dataDir: paths.root }
+      { dataDir: resolveDataDir() }
     );
     server.subscribe(broadcast);
 
@@ -433,9 +531,14 @@ if (!app.requestSingleInstanceLock()) {
     panelWindow = createPanelWindow();
 
     // Auto-start, because the panel's whole purpose is to be the thing that has the server
-    // running. A user who wants it stopped has a button; a user who has to remember to
-    // press "start" before anything works has a puzzle.
-    await server.start();
+    // running. A user who wants it stopped has a button; a user who has to remember to press
+    // "start" before anything works has a puzzle.
+    //
+    // Except when nobody has said where the data goes: then there is nothing to start, and
+    // the panel's job is to ask. Starting anyway would fail with the server's own message
+    // about an unset environment variable, which is a sentence about our implementation
+    // rather than a question the user can answer.
+    if (resolveDataDir()) await server.start();
 
     app.on("activate", () => showPanel());
   });

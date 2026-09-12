@@ -18,12 +18,16 @@
                                               │  └─ db.ts (SQLite)           │
                                               └──────────────┬───────────────┘
                                                              │
-                                          ┌──────────────────┴───────────────┐
-                                          │  filesystem:  workspaces/<slug>/  │
-                                          │  data/:        app.sqlite (WAL)   │
-                                          │                uploads/<sess>/    │
-                                          └──────────────────────────────────┘
+                                          ┌────────────────────────────────────┐
+                                          │  <dataRoot>/ (chosen at launch)     │
+                                          │    db/sqlite/ilearnassist.sqlite    │
+                                          │    users/<slug>/workspaces/<slug>/  │
+                                          │    users/<slug>/sources/{raw,parsed}│
+                                          └────────────────────────────────────┘
 ```
+
+`<dataRoot>` is **required** and has no default: it is the `ILA_DATA_DIR` the launcher
+supplies, and the server refuses to start without it. See "Config" below for why.
 
 The frontend is a thin client: all state lives in a single Pinia store
 (`apps/web/src/stores/app.ts`). It talks to the backend over JSON for CRUD and
@@ -36,9 +40,25 @@ over **Server-Sent Events** for chat streaming.
 `loadConfig()` reads `config/config.yaml`, overlays `config/config.local.yaml`
 (git-ignored), then resolves every `${ENV_VAR}` reference against `.env` +
 real environment variables (real env wins). Missing env vars resolve to `""`.
-The result is a typed `AppConfig` with providers, models, tool settings and the
-workspaces root. A separate `publicConfig()` strips `apiKey` before sending it
-to the client.
+The result is a typed `AppConfig` with providers, models and tool settings. A
+separate `publicConfig()` strips `apiKey` before sending it to the client.
+
+**Where the data lives is not in the config file.** `ILA_DATA_DIR` names the data root —
+the database, every account's workspaces, their uploads — and `resolveDataRoot()` throws
+without it. There is deliberately no default: that path decides how much of the user's work
+survives an uninstall, so it is not the code's to choose. It is an environment variable
+rather than a YAML key for the same reason `ILA_HOST` is — the launcher sets it per launch,
+and a value in a config file cannot differ between two runs of the same install, which is
+exactly what the desktop app's folder picker has to do. `.env` counts as the environment:
+`loadDotEnv()` runs at module scope (not inside `loadConfig()`, where it used to live) so
+that a checkout can supply the value in `.env` without the code carrying a fallback. A
+relative value resolves against the *project root*, not the working directory — `pnpm dev`
+runs the server with cwd set to `apps/server`, so "relative to cwd" would mean something
+different from one launcher to the next.
+
+The config file therefore holds no `data:` or `workspaces:` key. Where a workspace lives is
+derived from the chosen root, the account and the workspace slug, all in
+`apps/server/src/paths.ts`.
 
 **`config.yaml` is bootstrap + seed data, not live config.** Providers, models and
 document parsers are seeded into SQLite on first boot (`seedFromConfig`,
@@ -58,7 +78,9 @@ seeded", or every boot would resurrect entries the user deliberately deleted.
 `better-sqlite3` with `journal_mode=WAL` and `foreign_keys=ON`. Tables in
 snake_case, mapped to camelCase objects in code:
 
-- `workspaces` — id, name, slug, dir_path, created_at
+- `users` — id, username (unique, `COLLATE NOCASE`), slug (unique), created_at
+- `workspaces` — id, user_id (FK, CASCADE), name, slug, dir_path, created_at;
+  `UNIQUE (user_id, slug)` — the slug is only unique among one account's workspaces
 - `copilots` — …, system_prompt, tools (JSON), settings (JSON), timestamps
 - `sessions` — id, workspace_id, copilot_id, title, title_source, settings (JSON), timestamps
 - `messages` — id, session_id, role, content, reasoning, tool_calls (JSON),
@@ -70,11 +92,31 @@ snake_case, mapped to camelCase objects in code:
 - `app_settings` — key/value (`defaultProvider`, `defaultModel`, and the
   `documentParsing.*` policy keys)
 
-Schema changes are applied **in place** by `ensureColumn()` (`PRAGMA table_info`
-+ `ALTER TABLE ADD COLUMN`), because `CREATE TABLE IF NOT EXISTS` silently skips
-tables that already exist — an existing database would otherwise never gain a new
-column. A legacy `copilots.model` column is folded into `settings.modelId` on
-open and then left dormant (`DROP COLUMN` is version-sensitive in SQLite).
+**Ownership is scoped in the query, not checked afterwards.** Every user-owned read is
+named `...ForUser`, takes the owner, and puts it in the `WHERE` — so another account's id is
+simply not found, and a route turns that into a 404 like any other missing row. `sessions`
+and `messages` carry no `user_id`: they reach their owner through `workspaces` by join,
+because a second copy of the owner is a second thing that has to stay in agreement. The few
+accessors that do take a bare session id are documented as such in `AppDb` — every caller
+reaches them after a scoped read has already resolved the session.
+
+There is no account yet beyond a username: the server runs as one well-known account
+(`ensureBootstrapUser` in `server.ts`) and the login screen comes next.
+
+Schema changes follow one of two rules, and they are for different things:
+
+- **Adding** a column goes through `ensureColumn()` (`PRAGMA table_info` +
+  `ALTER TABLE ADD COLUMN`), because `CREATE TABLE IF NOT EXISTS` silently skips tables that
+  already exist — an existing database would otherwise never gain it.
+- **Changing what an existing column means** bumps `SCHEMA_VERSION` in `schema.ts`, which
+  refuses the file outright with a message naming both versions. No missing column can
+  signal that kind of change, and without a version the file is simply opened and read wrong
+  — `dir_path` resolving somewhere else, ids referring to a different kind of thing — with
+  no error to explain it. The guard reads `PRAGMA user_version`, which lives in the file
+  header and is therefore readable *before* anything is created; a version row in
+  `app_settings` cannot be, because reading it means having already touched the file you
+  meant to refuse. A file with tables but `user_version = 0` predates versioning and is
+  refused rather than adopted.
 
 `settings` on both `copilots` and `sessions` is a `SessionSettings`:
 `{ providerId, modelId, temperature, topP, maxTokens, maxContextMessages, maxSteps }`.
@@ -113,12 +155,20 @@ machine, whereas a click is not. That is a product decision, deliberately left a
 
 ### Workspace sandboxing (`workspace.ts`)
 
-The global workspaces root (default `./workspaces`) holds one sub-directory per
-workspace. `resolveInWorkspace(dir, userPath)` resolves a tool-supplied path
-against the workspace and **rejects any result outside the workspace** via a
-`path.relative` check — this is the security boundary that prevents a model from
-reading `/etc/passwd` or escaping with `../..`. Deletes are additionally guarded
-to only remove direct children of the root.
+Each account has a workspaces root (`users/<slug>/workspaces/`) holding one directory per
+workspace, and a workspace's directory holds two things: `workdir/`, which is what the agent's
+tools are sandboxed to, and `sessions/`, reserved for per-conversation files.
+
+`resolveInWorkspace(dir, userPath)` resolves a tool-supplied path against the workspace and
+**rejects any result outside the workspace** via a `path.relative` check — this is the security
+boundary that prevents a model from reading `/etc/passwd` or escaping with `../..`. Deletes are
+additionally guarded to only remove direct children of the workspaces root, which is why
+`Workspace.dirPath` stores the workspace's *own* directory rather than `workdir/`: deleting
+`workdir/` alone would strand `sessions/`, and the guard would not recognise the deeper path.
+
+Because the sandbox root and the workspace's own directory are different things, both are
+carried on the `Workspace` type. The agent's system prompt names `workdirPath`; `DELETE`
+removes `dirPath`.
 
 ### Tools (`tools/`)
 
@@ -131,7 +181,7 @@ to only remove direct children of the root.
 | `delete_file`   | delete a file/dir inside the workspace    | workspace |
 | `web_search`    | search the web (bing/duckduckgo/tavily/searxng) | —   |
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
-| `read_document` | page through an attachment's extracted text | turn's attachments |
+| `read_document` | page through an uploaded file's extracted text | per-turn whitelist: the conversation's sources ∪ its workspace's |
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
 
 `buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
@@ -329,14 +379,30 @@ OpenAI-compatible with DeepSeek, OpenAI, Ollama, etc. Streaming is always on.
 Generation parameters (`temperature`, `topP`, `maxTokens`) are passed through
 only when explicitly set, so unset values keep ChatOpenAI's own defaults.
 
-### Attachments (`attachments.ts`)
+### Uploaded files (`attachments.ts`)
 
-Bytes live at `data/uploads/<sessionId>/<attachmentId>.<ext>` — deliberately
-outside the workspace, so chat uploads never pollute the user's project directory
-or appear in the agent's `list_files`. `resolveStoredPath()` mirrors the
-`resolveInWorkspace` guard, refusing anything that escapes the uploads root, and
-`findStoredAttachment()` derives the MIME type from the directory listing rather
-than trusting the client.
+Bytes live at `<userRoot>/sources/raw/<sourceId>.<ext>` — deliberately outside the
+workspace, so chat uploads never pollute the user's project directory or appear in the
+agent's `list_files`. `resolveInSources()` mirrors the `resolveInWorkspace` guard, refusing
+anything that escapes the account's sources tree, and it is applied on **every** read of a
+stored path — including one that came out of the database, because a row is not a trust
+boundary.
+
+A file is a **source**: owned by the account, indexed by the `sources` table, and
+*referenced* by conversations and workspaces rather than owned by them. Two consequences
+worth knowing before reading the rest of this section:
+
+- **Identical bytes are one source.** `UNIQUE (user_id, sha256)`, with the hash scoped to the
+  account — a lookup by hash alone would hand one account's file to another who uploaded the
+  same content. Re-uploading a PDF reuses the row, the file and whatever parse it already has.
+- **A file can outlive every conversation that referenced it.** Deleting a conversation
+  cascades its links away and touches nothing on disk; `DELETE /api/sources/:id` is the one
+  that deletes bytes.
+
+The sources tree is **passed in** as a `UserLayout`, not a module constant: it belongs to an
+account under a data root the process chose at launch, so there is nothing to compute at
+import time. That is also what keeps `config.ts` importable by the test suite — see "Config"
+above.
 
 `buildUserContent()` turns a turn into model content:
 
@@ -357,35 +423,36 @@ installed) at the cost of a ~33% larger body.
 
 ### Document parsing (`documents/`)
 
-PDF and Office attachments are converted to text before they reach the model. Local
-extraction is always available; cloud parsers are optional and configured like LLM
-providers.
+PDF and Office files are converted to text before they reach the model. Local extraction is
+always available; cloud parsers are optional and configured like LLM providers.
 
 ```
-data/uploads/<sessionId>/
-  <attachmentId>.pdf        the original bytes
-  parsed/
-    <attachmentId>.txt      extracted text
-    <attachmentId>.json     { status, error?, parserId?, parsedChars?, pageCount? }
+<userRoot>/sources/
+  raw/<sourceId>.pdf        the original bytes
+  parsed/<sourceId>.txt     extracted text
 ```
 
-**The `parsed/` subdirectory is load-bearing.** `findStoredAttachment()` locates an
-attachment with `entries.find(name => name.startsWith(id + "."))`, and `txt` is a
-legitimate extension in `EXT_MIME` — a flat sibling `<id>.txt` could be picked ahead of
-the PDF, and the download endpoint would serve extracted text instead of the original
-file. Derived data in its own directory makes that collision unrepresentable.
+**Parse state is not there.** It lives in columns on the `sources` row — that is the "index
+it in the database" half of the design, and it buys two things a `parsed/<id>.json` sidecar
+could not: a reparse is visible in **every** conversation that references the file at once,
+rather than only in the messages written after it; and a file referenced by two conversations
+is parsed **once**, not once per reference. Only the extracted text stays a file: it is large,
+and `read_document` streams it by offset.
 
-Parse state lives on disk rather than in sqlite because the uploads tree is already the
-authority for attachment bytes and MIME types, and because `removeSessionUploads()`
-deletes the whole session directory — so a session delete cleans up parse state for
-free, with no migration and no cascade to maintain.
+The two directories are siblings, which used to be *load-bearing*: `findStoredAttachment()`
+located an attachment by globbing `<id>.*` in the session directory, and `txt` is a legitimate
+extension in the MIME table — so a flat `<id>.txt` could be found ahead of the original PDF
+and the download endpoint would serve extracted text instead of the file. Nothing globs any
+more, because the path is a column, so that collision is unreachable rather than merely
+avoided. The split stays because raw bytes and derived text are different kinds of thing.
 
 **Extraction is asynchronous.** A cloud job routinely takes tens of seconds (five
-minutes is the ceiling), so the upload endpoint returns `201` with `parseStatus:
-"pending"` and a background `DocumentService` queue does the work. The client polls
-`GET /api/sessions/:id/attachments` and the composer **blocks sending until every
-attachment has settled** — the text is injected when the message is built, so sending
-early would produce a turn where the model never saw the document the user attached.
+minutes is the ceiling), so the upload endpoint answers immediately with `parseStatus:
+"pending"` and a background `DocumentService` queue does the work — keyed by **source id**,
+because the work belongs to the file rather than to the conversation that happened to upload
+it. The client polls `GET /api/sessions/:id/sources` and the composer **blocks sending until
+every staged attachment has settled** — the text is injected when the message is built, so
+sending early would produce a turn where the model never saw the document the user attached.
 
 #### Local extraction
 
@@ -456,6 +523,40 @@ present, the read failure is what the user is shown — otherwise a scanned PDF 
 `local-first` with nothing configured would report "unsupported file type" instead of
 "no text layer, this looks like a scan".
 
+### Authentication (`auth.ts`)
+
+**There is no password.** A username is the whole credential, so the server's job is to
+*identify* the caller rather than to authenticate anyone: `POST /api/auth/login` finds the
+account by name and creates it if it is new, and answers with a signed cookie. The login
+screen states the property rather than leaving a user to assume a privacy it does not have,
+and the panel's LAN switch is what decides who can reach the address at all.
+
+Two things are built the way they would be with a password, because they are the parts that
+would be painful to retrofit:
+
+- **The cookie is signed** — `<userId>.<HMAC>` rather than a bare id, `HttpOnly`,
+  `SameSite=Lax`, 30 days. A bare id would be *almost* as good (ids are UUIDs and never leave
+  the server), but a signature costs one HMAC and means the growth path is a change of
+  *value* rather than of shape: when passwords arrive the cookie carries an opaque token id,
+  and only `currentUser` learns to look it up.
+- **The secret lives in `app_settings`**, so it travels with the data root it protects and a
+  cookie issued against one installation's accounts means nothing to another's. It is read
+  **per request** rather than captured at boot, which is one indexed read against a property
+  worth having: deleting or replacing that row logs everyone out immediately, which is the
+  lever you want when something has gone wrong.
+
+**Every route requires a session unless it says `config: { public: true }`.** One `onRequest`
+hook, deny by default, so a route added without a thought about auth is refused rather than
+open — the same move as the `read_document` whitelist. Four routes opt out: `health`,
+`auth/login`, `auth/me` and `auth/users`. `auth/me` answering 401 without a cookie is its
+*answer* rather than a refusal, which is why the browser client exempts `/auth/*` from its
+session-expiry handler — routing that 401 into "your session expired" would open every first
+visit with an error about a session that never existed.
+
+The hook belongs to the `routes` plugin, so it covers the API and stops there. The built
+frontend is served by a sibling plugin and stays public, which it has to be: a browser cannot
+present a cookie in order to fetch the page that would give it one.
+
 ### Routes (`routes.ts`)
 
 REST endpoints for config/health, workspaces, copilots, sessions, messages,
@@ -463,7 +564,16 @@ attachments, providers and app defaults.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/config` | public config: providers (keyless), defaults, workspaces root |
+| `POST /api/sessions/:id/sources` | upload a file and reference it from this conversation (and its workspace) |
+| `GET /api/sessions/:id/sources` | every file this conversation can read, with its parse state — **the model's whitelist too** |
+| `GET /api/sources/:id/raw` | a file's bytes, for a thumbnail or a download |
+| `POST /api/sources/:id/reparse` | re-run extraction |
+| `DELETE /api/sources/:id` | delete the file, its text and every reference to it |
+| `POST /api/auth/login` | sign in, creating the account if the name is new. Sets the session cookie. |
+| `POST /api/auth/logout` | clear it |
+| `GET /api/auth/me` | who the caller is; a 401 is the answer, not a refusal |
+| `GET /api/auth/users` | the names that exist, so a returning visitor can pick one |
+| `GET /api/config` | public config: providers (keyless), defaults, this account's workspaces root |
 | `PUT /api/defaults` | set the global default provider/model |
 | `GET/POST /api/providers`, `PUT/DELETE /api/providers/:id` | provider CRUD |
 | `POST /api/providers/:id/models`, `DELETE /api/providers/:providerId/models/:modelId` | model CRUD |
@@ -471,8 +581,8 @@ attachments, providers and app defaults.
 | `GET /api/workspaces/:id/files?path=` | one directory level of the workspace, for the sidebar's file tree |
 | `GET /api/workspaces/:id/files/content?path=` | a file's metadata, and its text when it is text |
 | `PATCH /api/sessions/:id` | rename and/or update per-conversation settings (a title also flips `titleSource` to `user`) |
-| `POST /api/sessions/:id/attachments` | upload (base64 JSON); schedules parsing |
-| `GET /api/sessions/:id/attachments` | parse state for every attachment, by id |
+| `POST /api/sessions/:id/sources` | upload (base64 JSON); schedules parsing |
+| `GET /api/sessions/:id/sources` | what this conversation can read, with parse state |
 | `GET /api/sessions/:sessionId/attachments/:attachmentId` | serve the bytes back |
 | `POST /api/sessions/:id/attachments/:attachmentId/reparse` | re-run extraction |
 | `GET/POST /api/document-parsers`, `PUT/DELETE /api/document-parsers/:id` | cloud parser CRUD |

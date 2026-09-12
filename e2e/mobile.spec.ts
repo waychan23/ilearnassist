@@ -262,8 +262,8 @@ async function drawerFiles(
 ) {
   const res = await request.post("/api/workspaces", { data: { name } });
   expect(res.status()).toBe(201);
-  const { dirPath } = (await res.json()) as { dirPath: string };
-  writeFileSync(join(dirPath, "notes.txt"), "内容");
+  const { workdirPath } = (await res.json()) as { workdirPath: string };
+  writeFileSync(join(workdirPath, "notes.txt"), "内容");
 
   await page.goto("/");
   await enterWorkspace(page, name);

@@ -1,5 +1,6 @@
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { workspaceSessionsDir, workspaceWorkdir } from "./paths.js";
 
 /**
  * Workspace directory management and — critically — the path sandbox that all
@@ -8,13 +9,17 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
  * the constrained working-directory model of the DeepSeek harness.
  */
 
-export function ensureWorkspacesRoot(rootDir: string): void {
-  mkdirSync(rootDir, { recursive: true });
-}
-
+/**
+ * Create a workspace's own directory, and the two directories inside it.
+ *
+ * All three at once, because they are one unit: `workdir/` is the sandbox and `sessions/`
+ * is where a conversation's own files go. The caller passes the *workspace* root, so a
+ * `sessions/` left behind by a later delete is not something the layout can produce.
+ */
 export function createWorkspaceDir(rootDir: string, slug: string): string {
   const dirPath = resolve(rootDir, slug);
-  mkdirSync(dirPath, { recursive: true });
+  mkdirSync(workspaceWorkdir(dirPath), { recursive: true });
+  mkdirSync(workspaceSessionsDir(dirPath), { recursive: true });
   return dirPath;
 }
 
@@ -69,8 +74,15 @@ export function resolveInWorkspace(
   return { ok: true, path: candidate };
 }
 
-/** Generate a filesystem-safe slug from a workspace name. */
-export function slugify(name: string): string {
+/**
+ * Generate a filesystem-safe slug from a name.
+ *
+ * `fallback` is what a name made entirely of characters that do not survive the filter
+ * becomes — a name of punctuation, say. It is a parameter because the caller is the only
+ * one who knows what the slug is *for*, and "workspace" as a user's directory name would
+ * be a quiet lie rather than a default.
+ */
+export function slugify(name: string, fallback = "workspace"): string {
   const base = name
     .toLowerCase()
     .trim()
@@ -78,14 +90,39 @@ export function slugify(name: string): string {
     .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48);
-  return base || "workspace";
+  return base || fallback;
 }
 
+/**
+ * A slug for a new workspace's directory, unique within its user's workspaces root.
+ *
+ * Checks the filesystem rather than the database because the filesystem is what a collision
+ * would actually break — two workspaces resolving to one directory.
+ */
 export function uniqueSlug(rootDir: string, name: string): string {
   const candidate = slugify(name);
   let slug = candidate;
   let i = 1;
   while (existsSync(resolve(rootDir, slug))) {
+    slug = `${candidate}-${i++}`;
+  }
+  return slug;
+}
+
+/**
+ * A slug for a new user's directory, unique among `users/`.
+ *
+ * `isTaken` rather than a root directory, because for a user the *database* is the
+ * authority and the filesystem is only the backstop: the slug is a column with a `UNIQUE`
+ * constraint, and a check that looked only at the directory would let two sign-ins arriving
+ * at the same instant both pick the same name — one of them then failing on the constraint,
+ * or worse, sharing a tree.
+ */
+export function uniqueUserSlug(username: string, isTaken: (slug: string) => boolean): string {
+  const candidate = slugify(username, "user");
+  let slug = candidate;
+  let i = 1;
+  while (isTaken(slug)) {
     slug = `${candidate}-${i++}`;
   }
   return slug;

@@ -8,10 +8,13 @@ import type {
   Message,
   PublicConfig,
   Session,
+  Source,
+  User,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
 import { i18n } from "../../src/i18n.js";
+import { uiState } from "../../src/composables/ui.js";
 
 /**
  * The store is the only place the frontend's resolution order and streaming state machine
@@ -38,8 +41,10 @@ const mocks = vi.hoisted(() => ({
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
     uploadAttachment: vi.fn(),
-    listAttachmentStatus: vi.fn(),
-    reparseAttachment: vi.fn(),
+    listSessionSources: vi.fn(),
+    listSources: vi.fn(),
+    deleteSource: vi.fn(),
+    reparseSource: vi.fn(),
     listParserKinds: vi.fn(),
     listDocumentParsers: vi.fn(),
     createDocumentParser: vi.fn(),
@@ -49,10 +54,21 @@ const mocks = vi.hoisted(() => ({
     updateDocumentParsing: vi.fn(),
     deleteProvider: vi.fn(),
     deleteModel: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
+    me: vi.fn(),
+    listUsers: vi.fn(),
   },
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
   fileToBase64: vi.fn(),
+  /**
+   * The client's 401 callback, captured rather than stubbed.
+   *
+   * The store registers one at setup, and most tests only need it to *exist* — but the
+   * session-expiry path is worth a test of its own, and that needs to be able to fire it.
+   */
+  setUnauthenticatedHandler: vi.fn(),
 }));
 
 vi.mock("../../src/api/client", () => ({
@@ -60,8 +76,8 @@ vi.mock("../../src/api/client", () => ({
   streamChat: mocks.streamChat,
   streamAnswers: mocks.streamAnswers,
   fileToBase64: mocks.fileToBase64,
-  attachmentUrl: (sessionId: string, attachmentId: string) =>
-    `/api/sessions/${sessionId}/attachments/${attachmentId}`,
+  setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
+  attachmentUrl: (sourceId: string) => `/api/sources/${sourceId}/raw`,
 }));
 
 const { useAppStore } = await import("../../src/stores/app.js");
@@ -69,11 +85,19 @@ const { ApiError } = await import("../../src/utils/apiError.js");
 
 /* --------------------------------- fixtures -------------------------------- */
 
+const ACCOUNT: User = {
+  id: "u1",
+  username: "Ada",
+  slug: "ada",
+  createdAt: "2026-01-01T00:00:00.000Z",
+};
+
 const WORKSPACE: Workspace = {
   id: "w1",
   name: "Notes",
   slug: "notes",
   dirPath: "/tmp/notes",
+  workdirPath: "/tmp/notes/workdir",
   createdAt: "2026-01-01T00:00:00.000Z",
   sessionCount: 0,
   lastActivityAt: null,
@@ -136,6 +160,19 @@ function message(overrides: Partial<Message> & Pick<Message, "role">): Message {
   };
 }
 
+/** A source as the parse-status poll reports it — the server's own row for the file. */
+function sourceOf(overrides: Partial<Source> & Pick<Source, "id">): Source {
+  return {
+    name: "lecture.pdf",
+    mimeType: "application/pdf",
+    size: 1000,
+    kind: "file",
+    parseStatus: "pending",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function streamOf(...events: ChatStreamEvent[]) {
   mocks.streamChat.mockImplementation(async function* () {
     for (const event of events) yield event;
@@ -163,6 +200,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
 
+  // Signed in by default, because that is the state almost every test is about; the
+  // signed-out and expired cases say so themselves.
+  mocks.api.me.mockResolvedValue(structuredClone(ACCOUNT));
   mocks.api.getConfig.mockResolvedValue(structuredClone(CONFIG));
   mocks.api.listWorkspaces.mockResolvedValue([structuredClone(WORKSPACE)]);
   mocks.api.listCopilots.mockResolvedValue([]);
@@ -202,6 +242,143 @@ describe("init", () => {
 
     expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Default");
     expect(store.workspaces).toHaveLength(1);
+  });
+
+  it("asks who the caller is before loading anything", async () => {
+    // Order matters, and not as a style point: everything below is scoped to an account, so
+    // loading first would be a set of requests that are about to 401.
+    const store = useAppStore();
+    await store.init();
+
+    expect(mocks.api.me).toHaveBeenCalled();
+    expect(store.account).toEqual(ACCOUNT);
+    expect(uiState.view).toBe("home");
+    expect(uiState.authReady).toBe(true);
+  });
+
+  it("shows the login screen when nobody is signed in, and loads nothing", async () => {
+    // The 401 is caught rather than reported: on a fresh installation this is the ordinary
+    // first visit, not a failure, and a toast about it would be the first thing anyone sees.
+    mocks.api.me.mockRejectedValue(new ApiError("UNAUTHENTICATED", "no session", 401));
+
+    const store = useAppStore();
+    await store.init();
+
+    expect(store.account).toBeNull();
+    expect(uiState).toMatchObject({ view: "login", authReady: true });
+    expect(store.error).toBeNull();
+    expect(mocks.api.getConfig).not.toHaveBeenCalled();
+    expect(mocks.api.listWorkspaces).not.toHaveBeenCalled();
+  });
+});
+
+describe("uploaded files", () => {
+  it("loads the account's files on demand, not with everything else", async () => {
+    // `init` must not fetch the whole library: this is a dialog most sessions never open.
+    const store = useAppStore();
+    await store.init();
+    expect(mocks.api.listSources).not.toHaveBeenCalled();
+
+    mocks.api.listSources.mockResolvedValue([sourceOf({ id: "a1", name: "one.pdf" })]);
+    await store.loadSources();
+
+    expect(store.sources.map((s) => s.name)).toEqual(["one.pdf"]);
+    expect(store.sourcesLoading).toBe(false);
+  });
+
+  it("reports a failed load inside the dialog, not as a toast", async () => {
+    // The user asked for this, so the place to say it failed is where they are looking.
+    mocks.api.listSources.mockRejectedValue(new ApiError("SOURCE_NOT_FOUND", "gone", 404));
+
+    const store = useAppStore();
+    await store.loadSources();
+
+    expect(store.sourcesError).toBe("gone");
+    expect(store.error).toBeNull();
+  });
+
+  it("drops a deleted file from the list and from the live overlay", async () => {
+    mocks.api.listSources.mockResolvedValue([
+      sourceOf({ id: "a1" }),
+      sourceOf({ id: "a2", name: "keep.pdf" }),
+    ]);
+    mocks.api.deleteSource.mockResolvedValue({ ok: true });
+
+    const store = useAppStore();
+    await store.loadSources();
+    // A chip on a sent message is being overlaid from this map; leaving the entry behind
+    // would keep showing parse state for a file that no longer exists.
+    store.parseStatus = { a1: sourceOf({ id: "a1" }), a2: sourceOf({ id: "a2" }) };
+
+    await store.deleteSource("a1");
+
+    expect(mocks.api.deleteSource).toHaveBeenCalledWith("a1");
+    expect(store.sources.map((s) => s.id)).toEqual(["a2"]);
+    expect(store.parseStatus["a1"]).toBeUndefined();
+    expect(store.parseStatus["a2"]).toBeDefined();
+  });
+
+  it("keeps the row when the delete fails, and says why", async () => {
+    mocks.api.listSources.mockResolvedValue([sourceOf({ id: "a1" })]);
+    mocks.api.deleteSource.mockRejectedValue(new ApiError("SOURCE_NOT_FOUND", "gone", 404));
+
+    const store = useAppStore();
+    await store.loadSources();
+    await store.deleteSource("a1");
+
+    // The file is still there as far as the server is concerned, so the list must not have
+    // pretended otherwise — a row that vanishes and comes back is worse than an error.
+    expect(store.sources.map((s) => s.id)).toEqual(["a1"]);
+    expect(store.sourcesError).toBe("gone");
+  });
+});
+
+describe("signing in and out", () => {
+  it("loads the app for whoever just signed in", async () => {
+    mocks.api.login.mockResolvedValue(structuredClone(ACCOUNT));
+
+    const store = useAppStore();
+    await store.signIn("  Ada  ");
+
+    // Trimmed here rather than at the field: the screen accepts a name with a stray space and
+    // the account it creates must be the one the user meant.
+    expect(mocks.api.login).toHaveBeenCalledWith("Ada");
+    expect(store.account).toEqual(ACCOUNT);
+    expect(uiState.view).toBe("home");
+    expect(mocks.api.listWorkspaces).toHaveBeenCalled();
+  });
+
+  it("forgets everything on the way out", async () => {
+    // Not just the name: a workspace list or a half-written conversation left on screen is
+    // the next person's problem, and on a shared machine that is a real one.
+    mocks.api.logout.mockResolvedValue({ ok: true });
+    const store = await readyStore();
+    expect(store.workspaces).toHaveLength(1);
+
+    await store.signOut();
+
+    expect(store.account).toBeNull();
+    expect(store.workspaces).toEqual([]);
+    expect(store.copilots).toEqual([]);
+    expect(store.sessions).toEqual([]);
+    expect(store.messages).toEqual([]);
+    expect(store.activeWorkspaceId).toBeNull();
+    expect(uiState.view).toBe("login");
+  });
+
+  it("explains an expired session and clears the account when a request 401s", async () => {
+    // The handler the client calls: the session went away under a tab that was open. Both
+    // halves matter — the screen alone reads as the app having forgotten something, and the
+    // toast alone leaves the user on a page none of whose controls will work.
+    const store = await readyStore();
+
+    const handler = mocks.setUnauthenticatedHandler.mock.calls.at(-1)?.[0] as () => void;
+    handler();
+
+    expect(store.account).toBeNull();
+    expect(store.workspaces).toEqual([]);
+    expect(uiState.view).toBe("login");
+    expect(store.error).toBe(i18n.global.t("errors.UNAUTHENTICATED"));
   });
 });
 
@@ -684,9 +861,11 @@ describe("document parsing", () => {
   it("polls for parse state while a document is settling, then stops", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listAttachmentStatus
-      .mockResolvedValueOnce({ d1: { status: "parsing", updatedAt: "" } })
-      .mockResolvedValue({ d1: { status: "ready", parsedChars: 4200, pageCount: 3, updatedAt: "" } });
+    mocks.api.listSessionSources
+      .mockResolvedValueOnce([sourceOf({ id: "d1", parseStatus: "parsing" })])
+      .mockResolvedValue([
+        sourceOf({ id: "d1", parseStatus: "ready", parsedChars: 4200, pageCount: 3 }),
+      ]);
 
     await store.uploadAttachment(new File(["x"], "lecture.pdf"));
     // The first poll fires immediately rather than after a full interval.
@@ -700,9 +879,9 @@ describe("document parsing", () => {
     expect(store.documentsParsing).toBe(false);
 
     // Settled: no further polling, so an idle composer does not keep asking the server.
-    const calls = mocks.api.listAttachmentStatus.mock.calls.length;
+    const calls = mocks.api.listSessionSources.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.api.listAttachmentStatus).toHaveBeenCalledTimes(calls);
+    expect(mocks.api.listSessionSources).toHaveBeenCalledTimes(calls);
   });
 
   it("does not poll for an attachment that needs no parsing", async () => {
@@ -717,16 +896,16 @@ describe("document parsing", () => {
 
     await store.uploadAttachment(new File(["hi"], "a.txt"));
     await vi.advanceTimersByTimeAsync(3000);
-    expect(mocks.api.listAttachmentStatus).not.toHaveBeenCalled();
+    expect(mocks.api.listSessionSources).not.toHaveBeenCalled();
     expect(store.documentsParsing).toBe(false);
   });
 
   it("surfaces a parse failure on the attachment", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listAttachmentStatus.mockResolvedValue({
-      d1: { status: "failed", error: "未检测到文本层", updatedAt: "" },
-    });
+    mocks.api.listSessionSources.mockResolvedValue([
+      sourceOf({ id: "d1", parseStatus: "failed", parseError: "未检测到文本层" }),
+    ]);
 
     await store.uploadAttachment(new File(["x"], "lecture.pdf"));
     await vi.advanceTimersByTimeAsync(2000);
@@ -740,21 +919,23 @@ describe("document parsing", () => {
     const store = await readyStore();
     const failed = { ...PDF, parseStatus: "failed" as const, parseError: "boom" };
     store.pendingAttachments = [failed];
-    mocks.api.reparseAttachment.mockResolvedValue({ status: "pending" });
+    mocks.api.reparseSource.mockResolvedValue({ status: "pending" });
     // First poll still in progress, second one done — that is what makes the loop keep
     // going for a re-parse when nothing is staged in the composer.
-    mocks.api.listAttachmentStatus
-      .mockResolvedValueOnce({ d1: { status: "parsing", updatedAt: "" } })
-      .mockResolvedValue({ d1: { status: "ready", parsedChars: 10, updatedAt: "" } });
+    mocks.api.listSessionSources
+      .mockResolvedValueOnce([sourceOf({ id: "d1", parseStatus: "parsing" })])
+      .mockResolvedValue([sourceOf({ id: "d1", parseStatus: "ready", parsedChars: 10 })]);
 
     await store.reparseAttachment(failed);
-    expect(mocks.api.reparseAttachment).toHaveBeenCalledWith("s1", "d1", "lecture.pdf");
+    // By the source alone: the file belongs to the account, so the conversation it was
+    // uploaded through is not part of its identity.
+    expect(mocks.api.reparseSource).toHaveBeenCalledWith("d1", "lecture.pdf");
     // Nothing is *pending* in the composer, so polling would stop immediately were it not
     // for the re-parse being tracked — this is the case that needs the extra bookkeeping.
     expect(store.pendingAttachments[0]!.parseStatus).not.toBe("failed");
 
     await vi.advanceTimersByTimeAsync(2000);
-    expect(mocks.api.listAttachmentStatus.mock.calls.length).toBeGreaterThan(1);
+    expect(mocks.api.listSessionSources.mock.calls.length).toBeGreaterThan(1);
     expect(store.pendingAttachments[0]!.parseStatus).toBe("ready");
     expect(store.pendingAttachments[0]!.parseError).toBeUndefined();
   });
@@ -762,7 +943,7 @@ describe("document parsing", () => {
   it("stops polling when the staged attachments are cleared", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listAttachmentStatus.mockResolvedValue({
+    mocks.api.listSessionSources.mockResolvedValue({
       d1: { status: "parsing", updatedAt: "" },
     });
 
@@ -770,9 +951,9 @@ describe("document parsing", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     store.clearPendingAttachments();
-    const calls = mocks.api.listAttachmentStatus.mock.calls.length;
+    const calls = mocks.api.listSessionSources.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.api.listAttachmentStatus).toHaveBeenCalledTimes(calls);
+    expect(mocks.api.listSessionSources).toHaveBeenCalledTimes(calls);
   });
 });
 

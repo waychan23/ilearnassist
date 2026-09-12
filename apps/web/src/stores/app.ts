@@ -1,13 +1,19 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { api, streamAnswers, streamChat, fileToBase64 } from "../api/client";
+import {
+  api,
+  setUnauthenticatedHandler,
+  streamAnswers,
+  streamChat,
+  fileToBase64,
+} from "../api/client";
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
+import { closeSettings, closeSources, showLogin, showWorkspaceHome, uiState } from "../composables/ui";
 import type {
   AskUserAnswers,
   Attachment,
-  AttachmentParseRecord,
   ChatStreamEvent,
   Copilot,
   CopilotDefaults,
@@ -25,8 +31,10 @@ import type {
   PublicConfig,
   Session,
   SessionSettings,
+  Source,
   ToolCall,
   UpdateProviderInput,
+  User,
   Workspace,
 } from "../api/types";
 import { ASK_USER_TOOL_NAME, MAX_ATTACHMENT_BYTES } from "../api/types";
@@ -106,7 +114,27 @@ const EMPTY_STREAMING = (): StreamingState => ({
 
 export const useAppStore = defineStore("app", () => {
   /* --------------------------------- state --------------------------------- */
+  /**
+   * The signed-in account, or null before the first answer and after signing out.
+   *
+   * Held because the UI needs a name to show and because "who am I" is the first question the
+   * app asks, but it is not the *authority* on anything: every request is authenticated by the
+   * cookie, and the server is what decides. Clearing this does not sign anyone out.
+   */
+  const account = ref<User | null>(null);
+
   const config = ref<PublicConfig | null>(null);
+  /**
+   * Every file this account has uploaded, as the sources dialog lists them.
+   *
+   * Loaded on demand rather than with `init`: it is a page most sessions never open, and the
+   * account's whole library is not something to fetch on every cold start.
+   */
+  const sources = ref<Source[]>([]);
+  const sourcesLoading = ref(false);
+  /** A load or delete failure, shown inside the dialog — not the global toast. */
+  const sourcesError = ref<string | null>(null);
+
   const workspaces = ref<Workspace[]>([]);
   const copilots = ref<Copilot[]>([]);
   const sessions = ref<Session[]>([]);
@@ -126,13 +154,13 @@ export const useAppStore = defineStore("app", () => {
   const pendingAttachments = ref<Attachment[]>([]);
 
   /**
-   * Parse state for attachments already sent in this conversation, keyed by attachment id.
+   * Live parse state per source id, as the server last reported it.
    *
-   * Historical messages carry whatever state the server recorded when they were sent, which
-   * is right for a reload but goes stale the moment the user re-parses from the composer.
-   * This map is the live overlay on top of that.
+   * Overlaid on a message's stored snapshots so a reparse is visible in history without a
+   * reload. Holds whole `Source` rows rather than a trimmed shape, because the live state and
+   * the stored state are the same object read at different moments.
    */
-  const parseStatus = ref<Record<string, AttachmentParseRecord>>({});
+  const parseStatus = ref<Record<string, Source>>({});
 
   /** The protocol kinds the server implements, for the parser settings form. */
   const parserKinds = ref<DriverInfo[]>([]);
@@ -324,7 +352,64 @@ export const useAppStore = defineStore("app", () => {
     if (idx !== -1) sessions.value[idx] = updated;
   }
 
+  /**
+   * Drop everything that belonged to the account that was signed in.
+   *
+   * Called on sign-out and on an expired session, and it is deliberately total: a name, a
+   * workspace list or a half-written conversation left on screen after someone signs out is
+   * the next person's problem, and on a shared machine it is a real one.
+   */
+  function forgetAccount(): void {
+    account.value = null;
+    config.value = null;
+    sources.value = [];
+    sourcesLoading.value = false;
+    sourcesError.value = null;
+    workspaces.value = [];
+    copilots.value = [];
+    sessions.value = [];
+    messages.value = [];
+    activeWorkspaceId.value = null;
+    activeSessionId.value = null;
+    activeCopilotId.value = null;
+    draftSettings.value = {};
+    pendingAttachments.value = [];
+    parseStatus.value = {};
+    resetFileTree();
+    closeSettings();
+    closeSources();
+  }
+
+  /**
+   * Work out who is asking, then load the app for them — or show the login screen.
+   *
+   * Runs on every page load, because the cookie is HttpOnly and there is nothing on the page
+   * that can tell whether it is there. `me()` answering 401 is the ordinary "nobody is signed
+   * in" case rather than a failure, which is why it is caught here instead of being allowed
+   * to reach the toast — the first visit to a fresh installation is not an error.
+   *
+   * `authReady` is set before either branch, and that ordering is the whole reason the flag
+   * exists: rendering the login screen first would flash it at a signed-in user on every
+   * refresh.
+   */
   async function init(): Promise<void> {
+    try {
+      account.value = await api.me();
+    } catch {
+      account.value = null;
+    }
+
+    uiState.authReady = true;
+    if (!account.value) {
+      showLogin();
+      return;
+    }
+    showWorkspaceHome();
+    await loadApp();
+  }
+
+  /** Everything that needs a session. The half of `init` that a signed-out user must not run. */
+  async function loadApp(): Promise<void> {
     config.value = await api.getConfig();
     workspaces.value = await api.listWorkspaces();
     if (workspaces.value.length === 0) {
@@ -334,6 +419,42 @@ export const useAppStore = defineStore("app", () => {
     if (!activeWorkspaceId.value) activeWorkspaceId.value = workspaces.value[0]!.id;
     await loadSessions();
   }
+
+  /**
+   * Sign in, creating the account if the name is new.
+   *
+   * One argument and no password: see `api.login`. The screen states the same thing, because
+   * a user who believes they typed a password is a user who will be surprised later.
+   */
+  async function signIn(username: string): Promise<void> {
+    account.value = await api.login(username.trim());
+    uiState.authReady = true;
+    error.value = null;
+    showWorkspaceHome();
+    await loadApp();
+  }
+
+  async function signOut(): Promise<void> {
+    await api.logout();
+    forgetAccount();
+    showLogin();
+  }
+
+  /**
+   * What a 401 from anywhere means: the session went away under us.
+   *
+   * A toast *and* the login screen. The screen alone reads as the app having forgotten
+   * something, and the toast alone leaves the user looking at a page none of whose controls
+   * will work. Registered here rather than in `client.ts` because the client would have to
+   * import the store to know any of this, and the two would circle.
+   */
+  setUnauthenticatedHandler(() => {
+    forgetAccount();
+    showLogin();
+    // Through the code, not a message of its own: the server sends UNAUTHENTICATED for
+    // exactly this, and one sentence in the catalog is one place to keep it right.
+    setError(translateApiError("UNAUTHENTICATED", undefined, undefined));
+  });
 
   async function refreshConfig(): Promise<void> {
     config.value = await api.getConfig();
@@ -738,19 +859,26 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  /** Fold freshly polled parse state onto the pending attachments and the live map. */
-  function mergeParseStatus(statuses: Record<string, AttachmentParseRecord>): void {
-    parseStatus.value = { ...parseStatus.value, ...statuses };
+  /**
+   * Fold freshly polled parse state onto the staged attachments and the live map.
+   *
+   * The polled object is a **source** — the server's own row for the file — which is why the
+   * map holds sources rather than a smaller ad-hoc shape: the live state and the stored state
+   * are the same thing, read at different moments.
+   */
+  function mergeParseStatus(sources: Source[]): void {
+    const byId = new Map(sources.map((s) => [s.id, s]));
+    parseStatus.value = { ...parseStatus.value, ...Object.fromEntries(byId) };
     pendingAttachments.value = pendingAttachments.value.map((attachment) => {
-      const record = statuses[attachment.id];
-      if (!record) return attachment;
+      const source = byId.get(attachment.id);
+      if (!source) return attachment;
       return {
         ...attachment,
-        parseStatus: record.status,
-        parseError: record.error,
-        parserId: record.parserId,
-        parsedChars: record.parsedChars,
-        pageCount: record.pageCount,
+        parseStatus: source.parseStatus,
+        parseError: source.parseError,
+        parserId: source.parserId,
+        parsedChars: source.parsedChars,
+        pageCount: source.pageCount,
       };
     });
   }
@@ -767,10 +895,10 @@ export const useAppStore = defineStore("app", () => {
 
     const tick = async (): Promise<void> => {
       try {
-        const statuses = await api.listAttachmentStatus(sessionId);
-        mergeParseStatus(statuses);
+        const sources = await api.listSessionSources(sessionId);
+        mergeParseStatus(sources);
         for (const id of [...markingParsing.value]) {
-          const status = statuses[id]?.status;
+          const status = sources.find((s) => s.id === id)?.parseStatus;
           if (status && status !== "pending" && status !== "parsing") markingParsing.value.delete(id);
         }
       } catch {
@@ -824,22 +952,63 @@ export const useAppStore = defineStore("app", () => {
    * — the latter is why the live `parseStatus` map exists, since nothing about a historical
    * message changes when the server re-parses it.
    */
+  /* ------------------------------ uploaded files ---------------------------- */
+
+  /**
+   * Read the account's uploaded files.
+   *
+   * Errors go to `sourcesError` rather than the toast: the dialog is open and the user asked
+   * for this, so the place to say it failed is where they are looking.
+   */
+  async function loadSources(): Promise<void> {
+    sourcesLoading.value = true;
+    sourcesError.value = null;
+    try {
+      sources.value = await api.listSources();
+    } catch (e) {
+      sourcesError.value = messageOf(e);
+    } finally {
+      sourcesLoading.value = false;
+    }
+  }
+
+  /**
+   * Delete a file, its extracted text and every reference to it.
+   *
+   * The confirmation is the caller's (`composables/confirm`), because this is the app's one
+   * action that destroys something the user cannot get back by retrying — and the copy has to
+   * say so, which a store cannot.
+   *
+   * Chips on messages that referenced the file are deliberately left alone: they render from
+   * each message's own snapshot, so history keeps reading the way it was written, and the
+   * thumbnail starts 404ing. Dropping them here would make a past turn look like it never
+   * happened.
+   */
+  async function deleteSource(sourceId: string): Promise<void> {
+    try {
+      await api.deleteSource(sourceId);
+      sources.value = sources.value.filter((s) => s.id !== sourceId);
+      // The live overlay must forget it too, or a chip would keep showing parse state for a
+      // file that is gone.
+      const { [sourceId]: _removed, ...rest } = parseStatus.value;
+      parseStatus.value = rest;
+    } catch (e) {
+      sourcesError.value = messageOf(e);
+    }
+  }
+
   async function reparseAttachment(attachment: Attachment): Promise<void> {
     const sessionId = activeSessionId.value;
     if (!sessionId) return;
     try {
-      await api.reparseAttachment(sessionId, attachment.id, attachment.name);
+      await api.reparseSource(attachment.id, attachment.name);
       markingParsing.value.add(attachment.id);
-      parseStatus.value = {
-        ...parseStatus.value,
-        [attachment.id]: {
-          status: "pending",
-          updatedAt: new Date().toISOString(),
-        },
-      };
       pendingAttachments.value = pendingAttachments.value.map((a) =>
         a.id === attachment.id ? { ...a, parseStatus: "pending", parseError: undefined } : a
       );
+      // No optimistic write to the live map: `startParsePolling` ticks immediately, and the
+      // server has already written `pending` — so the first answer is both sooner and more
+      // truthful than anything assembled here.
       startParsePolling(sessionId, () => markingParsing.value.size > 0);
     } catch (e) {
       markingParsing.value.delete(attachment.id);
@@ -1055,7 +1224,11 @@ export const useAppStore = defineStore("app", () => {
 
   return {
     // state
+    account,
     config,
+    sources,
+    sourcesLoading,
+    sourcesError,
     workspaces,
     copilots,
     sessions,
@@ -1094,6 +1267,10 @@ export const useAppStore = defineStore("app", () => {
     documentsParsing,
     // actions
     init,
+    signIn,
+    signOut,
+    loadSources,
+    deleteSource,
     refreshConfig,
     loadSessions,
     selectWorkspace,

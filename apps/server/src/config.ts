@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import type { DocumentParsePolicy, DocumentParserKind } from "@ilearnassist/shared";
@@ -67,7 +67,6 @@ export interface DocumentsConfig {
 
 export interface AppConfig {
   server: { host: string; port: number };
-  workspaces: { rootDir: string };
   defaultProvider: string;
   defaultModel: string;
   providers: ProviderDef[];
@@ -82,13 +81,18 @@ export interface AppConfig {
 }
 
 /**
- * Root holding `config/`, `data/`, `.env` and the default `workspaces/` tree.
+ * Root holding `config/` and `.env` — the *application's* writable state, as opposed to the
+ * user's data, which lives under the chosen data root (`resolveDataRoot`) instead.
+ *
+ * Keeping them apart is what makes "move my data to a new machine" a copy of one directory:
+ * the bundle is read-only, `config/` is seeded once and then belongs to the user, and the
+ * database, workspaces and uploads are wherever they chose to put them. The two are not
+ * interchangeable, and a backup that takes only one of them is incomplete.
  *
  * Defaults to the project root, derived from this file's own location
  * (`<root>/apps/server/src/config.ts`). That is right for a checkout and wrong for a
- * packaged desktop build, where the code sits in a read-only bundle and everything
- * writable belongs under the OS's per-user data directory — so the desktop shell sets
- * `ILA_PROJECT_ROOT` and this defers to it. Same contract as `ILA_DATA_DIR`: read once,
+ * packaged desktop build, where the code sits in a read-only bundle — so the desktop shell
+ * sets `ILA_PROJECT_ROOT` and this defers to it. Same contract as `ILA_DATA_DIR`: read once,
  * at import time, so it must be set before this module is first imported.
  */
 const PROJECT_ROOT = process.env.ILA_PROJECT_ROOT
@@ -107,6 +111,12 @@ export function resolveEnv(value: string): string {
 /**
  * Load a project-root `.env` file (KEY=VALUE) into process.env. Only sets keys
  * that aren't already present, so real environment variables always win.
+ *
+ * Called once, at module scope and below, rather than from `loadConfig()` where it used to
+ * live. The reason is ordering: `resolveDataRoot()` reads `ILA_DATA_DIR` from the
+ * environment and is called by `main()` *before* the config is loaded, so a `.env` that
+ * carries the data root would otherwise be read too late to be honoured. Idempotent, so
+ * the move costs nothing.
  */
 function loadDotEnv(): void {
   const envPath = resolve(PROJECT_ROOT, ".env");
@@ -128,6 +138,11 @@ function loadDotEnv(): void {
     if (key && process.env[key] === undefined) process.env[key] = value;
   }
 }
+
+// Deliberately here, one line below the definition, and deliberately before any reader of
+// the environment below it: `resolveDataRoot` reads `ILA_DATA_DIR`, and `PROJECT_ROOT` —
+// which is what locates the `.env` file in the first place — is already computed above.
+loadDotEnv();
 
 /** Recursively resolve env placeholders on any string value. */
 function resolveEnvDeep(node: unknown): unknown {
@@ -198,7 +213,6 @@ function asBool(v: unknown, fallback: boolean): boolean {
 
 export function withDefaults(raw: Record<string, unknown>): AppConfig {
   const server = asObj(raw["server"]);
-  const workspaces = asObj(raw["workspaces"]);
   const tools = asObj(raw["tools"]);
   const webSearch = asObj(tools["webSearch"]);
   const webFetch = asObj(tools["webFetch"]);
@@ -206,15 +220,11 @@ export function withDefaults(raw: Record<string, unknown>): AppConfig {
   const documents = asObj(tools["documents"]);
   const documentParsing = asObj(raw["documentParsing"]);
 
-  const rootDirRaw = asStr(workspaces["rootDir"], "./workspaces");
-  const rootDir = resolve(PROJECT_ROOT, rootDirRaw);
-
   return {
     server: {
       host: asStr(server["host"], "127.0.0.1"),
       port: asNum(server["port"], 3720),
     },
-    workspaces: { rootDir },
     defaultProvider: asStr(raw["defaultProvider"], "openai"),
     defaultModel: asStr(raw["defaultModel"], ""),
     providers: Array.isArray(raw["providers"])
@@ -311,8 +321,6 @@ let cached: AppConfig | undefined;
 export function loadConfig(): AppConfig {
   if (cached) return cached;
 
-  loadDotEnv();
-
   const basePath = resolve(CONFIG_DIR, "config.yaml");
   const localPath = process.env.ILA_CONFIG_PATH
     ? process.env.ILA_CONFIG_PATH
@@ -376,16 +384,50 @@ export function getProviderConfig(config: AppConfig, providerId?: string): Provi
   return provider;
 }
 
+/** The environment variable naming the data root. Spelled once, used by the error below. */
+export const DATA_DIR_ENV = "ILA_DATA_DIR";
+
 /**
- * Runtime data root — the sqlite database and the uploads tree live here.
+ * The runtime data root, which holds the database, every user's workspaces and their
+ * uploaded files. **Required, with no default.**
  *
- * `ILA_DATA_DIR` redirects it, which is what keeps the test suite and the e2e
- * harness from writing into the repo's real `data/` directory. It must be set
- * before this module is first imported: the value is read once, at import time.
+ * There is deliberately nothing to fall back to. The previous default was
+ * `<PROJECT_ROOT>/data`, which for a packed build is inside the application bundle — so
+ * uninstalling or updating the app took the user's notes, conversations and documents with
+ * it. A path that decides how much of their work survives is the user's to choose, and a
+ * default is only ever the choice nobody made.
+ *
+ * Read from the environment rather than from `config.yaml`, for the same reason `ILA_HOST`
+ * is: the launcher sets it *per launch* (the desktop panel asks, then passes it to the
+ * child), and a value in a config file cannot differ between two runs of the same install.
+ * `.env` counts as the environment, which is what lets a checkout take the checked-in
+ * default in `config/config.yaml` without the code carrying one — `loadDotEnv()` runs at
+ * import time, above.
+ *
+ * A *relative* value resolves against the project root, not the working directory.
+ * `ILA_DATA_DIR=./data` in the project's `.env` has to mean the project's `data/`, and the
+ * working directory is not that: `pnpm dev` runs the server script with its cwd set to
+ * `apps/server`, so resolving against cwd would quietly put the data in a subdirectory of the
+ * package. The project root is also the stable answer — it does not depend on who launched
+ * the process.
+ *
+ * Throws rather than exiting, so the caller decides how to report it. Called by `main()` and
+ * never at module scope: this file is imported by the test suite, and a top-level throw
+ * would take out every test that never starts a server.
  */
-const DATA_DIR = process.env.ILA_DATA_DIR
-  ? resolve(process.env.ILA_DATA_DIR)
-  : resolve(PROJECT_ROOT, "data");
+export function resolveDataRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env[DATA_DIR_ENV]?.trim();
+  if (!raw) {
+    throw new Error(
+      `${DATA_DIR_ENV} is not set. ilearnassist keeps its database, uploaded documents and ` +
+        `workspaces in a directory you choose, so it will not guess one — and it must live ` +
+        `outside the application bundle, or uninstalling the app would take your data with ` +
+        `it. Set ${DATA_DIR_ENV} to a path, or launch the desktop app, which asks for one and ` +
+        `passes it down. A checkout can put it in .env (see .env.example).`
+    );
+  }
+  return isAbsolute(raw) ? resolve(raw) : resolve(PROJECT_ROOT, raw);
+}
 
 /**
  * The built frontend (`apps/web/dist`), which this server also serves so the whole app
@@ -403,6 +445,5 @@ const WEB_DIR = process.env.ILA_WEB_DIR
 export const PROJECT_PATHS = {
   projectRoot: PROJECT_ROOT,
   configDir: CONFIG_DIR,
-  dataDir: DATA_DIR,
   webDir: WEB_DIR,
 } as const;

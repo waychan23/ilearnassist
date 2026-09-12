@@ -13,13 +13,24 @@ import {
   type AppDb,
 } from "../src/db.js";
 import type { ToolCall } from "@ilearnassist/shared";
+import { SCHEMA_VERSION } from "../src/schema.js";
 
 let root: string;
 let db: AppDb;
 
+/**
+ * The account every test below acts as.
+ *
+ * Reads take an owner now — see `AppDb` — and naming it once keeps these assertions about
+ * workspaces and sessions legible. The tests that are *about* ownership need two accounts,
+ * so they live in their own file.
+ */
+const OWNER = "u1";
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gl-db-"));
   db = createDb(join(root, "test.sqlite"));
+  db.createUser({ id: OWNER, username: "tester", slug: "tester" });
 });
 
 afterEach(() => {
@@ -32,31 +43,31 @@ afterEach(() => {
 });
 
 function addWorkspace(id = "w1"): string {
-  db.createWorkspace({ id, name: "W", slug: id, dirPath: join(root, id) });
+  db.createWorkspace({ userId: OWNER, id, name: "W", slug: id, dirPath: join(root, id) });
   return id;
 }
 
 describe("workspaces", () => {
   it("creates and reads back a workspace", () => {
-    const created = db.createWorkspace({ id: "w1", name: "Notes", slug: "notes", dirPath: "/tmp/notes" });
+    const created = db.createWorkspace({ userId: OWNER, id: "w1", name: "Notes", slug: "notes", dirPath: "/tmp/notes" });
     expect(created).toMatchObject({ id: "w1", name: "Notes", slug: "notes", dirPath: "/tmp/notes" });
-    expect(db.getWorkspace("w1")).toEqual(created);
+    expect(db.getWorkspaceForUser("w1", OWNER)).toEqual(created);
   });
 
   it("returns undefined for an unknown id", () => {
-    expect(db.getWorkspace("nope")).toBeUndefined();
+    expect(db.getWorkspaceForUser("nope", OWNER)).toBeUndefined();
   });
 
   it("lists workspaces oldest first", () => {
     addWorkspace("w1");
     addWorkspace("w2");
-    expect(db.listWorkspaces().map((w) => w.id)).toEqual(["w1", "w2"]);
+    expect(db.listWorkspaces(OWNER).map((w) => w.id)).toEqual(["w1", "w2"]);
   });
 
   it("deletes a workspace", () => {
     addWorkspace("w1");
-    db.deleteWorkspace("w1");
-    expect(db.getWorkspace("w1")).toBeUndefined();
+    db.deleteWorkspaceForUser("w1", OWNER);
+    expect(db.getWorkspaceForUser("w1", OWNER)).toBeUndefined();
   });
 
   it("counts each workspace's sessions and dates its last activity", () => {
@@ -65,7 +76,7 @@ describe("workspaces", () => {
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "a" });
     db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "b" });
 
-    const [first, second] = db.listWorkspaces();
+    const [first, second] = db.listWorkspaces(OWNER);
 
     // A workspace nobody has talked to still appears, with no activity — that is the
     // LEFT JOIN doing its job, and the state of every workspace a user has just created.
@@ -82,7 +93,7 @@ describe("workspaces", () => {
     addWorkspace("w1");
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "a" });
 
-    const renamed = db.renameWorkspace("w1", "Renamed")!;
+    const renamed = db.renameWorkspaceForUser("w1", OWNER, "Renamed")!;
 
     expect(renamed.name).toBe("Renamed");
     // Not an identity change: the directory is where the agent's files already live.
@@ -92,20 +103,20 @@ describe("workspaces", () => {
     // that card renders rather than the bare-row defaults.
     expect(renamed.sessionCount).toBe(1);
     expect(renamed.lastActivityAt).toBeTruthy();
-    expect(db.getWorkspace("w1")?.name).toBe("Renamed");
+    expect(db.getWorkspaceForUser("w1", OWNER)?.name).toBe("Renamed");
   });
 
   it("returns undefined when renaming a workspace that is not there", () => {
-    expect(db.renameWorkspace("nope", "x")).toBeUndefined();
+    expect(db.renameWorkspaceForUser("nope", OWNER, "x")).toBeUndefined();
   });
 
   it("does not hand back a bare row from createWorkspace or getWorkspace", () => {
     // Both default the stats rather than joining for them, which is only safe because a
     // brand-new workspace cannot have conversations and getWorkspace is an existence check.
-    const created = db.createWorkspace({ id: "w1", name: "W", slug: "w1", dirPath: "/tmp/w1" });
+    const created = db.createWorkspace({ userId: OWNER, id: "w1", name: "W", slug: "w1", dirPath: "/tmp/w1" });
     expect(created.sessionCount).toBe(0);
     expect(created.lastActivityAt).toBeNull();
-    expect(db.getWorkspace("w1")).toEqual(created);
+    expect(db.getWorkspaceForUser("w1", OWNER)).toEqual(created);
   });
 });
 
@@ -176,22 +187,22 @@ describe("sessions", () => {
 
   it("flips to user-titled when a title is supplied", () => {
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: DEFAULT_SESSION_TITLE });
-    const renamed = db.updateSession("s1", { title: "  My Notes  " });
+    const renamed = db.updateSessionForUser("s1", OWNER, { title: "  My Notes  " });
     expect(renamed!.title).toBe("My Notes");
     expect(renamed!.titleSource).toBe("user");
   });
 
   it("ignores a blank title, leaving the existing one in place", () => {
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "Kept" });
-    const updated = db.updateSession("s1", { title: "   " });
+    const updated = db.updateSessionForUser("s1", OWNER, { title: "   " });
     expect(updated!.title).toBe("Kept");
     expect(updated!.titleSource).toBe("auto");
   });
 
   it("keeps the title ownership flag on a settings-only update", () => {
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: DEFAULT_SESSION_TITLE });
-    db.updateSession("s1", { title: "Mine" });
-    const updated = db.updateSession("s1", { settings: { temperature: 0.7 } });
+    db.updateSessionForUser("s1", OWNER, { title: "Mine" });
+    const updated = db.updateSessionForUser("s1", OWNER, { settings: { temperature: 0.7 } });
     expect(updated!.titleSource).toBe("user");
     expect(updated!.title).toBe("Mine");
   });
@@ -204,23 +215,23 @@ describe("sessions", () => {
       title: "t",
       settings: { temperature: 0.1, maxSteps: 5 },
     });
-    const updated = db.updateSession("s1", { settings: { maxSteps: 9 } });
+    const updated = db.updateSessionForUser("s1", OWNER, { settings: { maxSteps: 9 } });
     expect(updated!.settings).toEqual({ temperature: 0.1, maxSteps: 9 });
   });
 
   it("lets the auto-titler rename without taking ownership", () => {
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: DEFAULT_SESSION_TITLE });
-    const titled = db.setAutoTitle("s1", "Model Chose This");
+    const titled = db.setAutoTitleForUser("s1", OWNER, "Model Chose This");
     expect(titled!.title).toBe("Model Chose This");
     expect(titled!.titleSource).toBe("auto");
   });
 
   it("returns undefined from setAutoTitle for a missing session", () => {
-    expect(db.setAutoTitle("nope", "x")).toBeUndefined();
+    expect(db.setAutoTitleForUser("nope", OWNER, "x")).toBeUndefined();
   });
 
   it("returns undefined from updateSession for a missing session", () => {
-    expect(db.updateSession("nope", { title: "x" })).toBeUndefined();
+    expect(db.updateSessionForUser("nope", OWNER, { title: "x" })).toBeUndefined();
   });
 
   it("lists a workspace's sessions, most recently updated first", () => {
@@ -232,24 +243,24 @@ describe("sessions", () => {
     const stamp = db.raw.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?");
     stamp.run("2026-01-01T00:00:00.000Z", "s1");
     stamp.run("2026-01-02T00:00:00.000Z", "s2");
-    expect(db.listSessions("w1").map((s) => s.id)).toEqual(["s2", "s1"]);
+    expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s2", "s1"]);
 
     db.touchSession("s1"); // bumps s1 to now, which is later than both
-    expect(db.listSessions("w1").map((s) => s.id)).toEqual(["s1", "s2"]);
+    expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s1", "s2"]);
   });
 
   it("repoints the session at another copilot", () => {
     db.createCopilot({ id: "c1", name: "C", description: "", systemPrompt: "", tools: [], settings: {} });
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
     db.setSessionCopilot("s1", "c1");
-    expect(db.getSession("s1")!.copilotId).toBe("c1");
+    expect(db.getSessionForUser("s1", OWNER)!.session.copilotId).toBe("c1");
   });
 
   it("cascades messages away with the session", () => {
     db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
     db.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "hi" });
-    db.deleteSession("s1");
-    expect(db.listMessages("s1")).toEqual([]);
+    db.deleteSessionForUser("s1", OWNER);
+    expect(db.listMessagesForUser("s1", OWNER)).toEqual([]);
   });
 });
 
@@ -309,13 +320,13 @@ describe("messages", () => {
   it("lists a session's messages oldest first", () => {
     db.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "one" });
     db.createMessage({ id: "m2", sessionId: "s1", role: "assistant", content: "two" });
-    expect(db.listMessages("s1").map((m) => m.content)).toEqual(["one", "two"]);
+    expect(db.listMessagesForUser("s1", OWNER).map((m) => m.content)).toEqual(["one", "two"]);
   });
 
   it("keeps messages of different sessions apart", () => {
     db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "t" });
     db.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "in s1" });
-    expect(db.listMessages("s2")).toEqual([]);
+    expect(db.listMessagesForUser("s2", OWNER)).toEqual([]);
   });
 });
 
@@ -455,102 +466,77 @@ describe("seedFromConfig", () => {
   });
 });
 
-describe("migrations", () => {
-  /** A database as it existed before attachments/usage/reasoning/settings/title_source. */
-  function writeLegacyDb(path: string): void {
-    const legacy = new Database(path);
-    legacy.exec(`
-      CREATE TABLE workspaces (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
-        dir_path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
-      );
-      CREATE TABLE copilots (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-        system_prompt TEXT NOT NULL, model TEXT, tools TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-      );
-      CREATE TABLE sessions (
-        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, copilot_id TEXT,
-        title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-      );
-      CREATE TABLE messages (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
-        content TEXT NOT NULL, tool_calls TEXT, created_at TEXT NOT NULL
-      );
-      CREATE TABLE providers (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT,
-        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-      );
-      CREATE TABLE models (
-        id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, model_id TEXT NOT NULL, name TEXT NOT NULL,
-        context_window INTEGER, max_output INTEGER, capabilities TEXT NOT NULL DEFAULT '[]',
-        sort_order INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    `);
-
-    const now = new Date().toISOString();
-    legacy
-      .prepare("INSERT INTO workspaces VALUES (?,?,?,?,?)")
-      .run("w1", "W", "w1", "/tmp/w1", now);
-    legacy
-      .prepare("INSERT INTO copilots VALUES (?,?,?,?,?,?,?,?)")
-      .run("c1", "Legacy", "", "prompt", "legacy-model", "[]", now, now);
-    const insertSession = legacy.prepare("INSERT INTO sessions VALUES (?,?,?,?,?,?)");
-    insertSession.run("s-auto", "w1", "c1", "New conversation", now, now);
-    insertSession.run("s-hand", "w1", null, "Hand written title", now, now);
-    insertSession.run("s-blank", "w1", null, "", now, now);
-    legacy
-      .prepare("INSERT INTO messages VALUES (?,?,?,?,?,?)")
-      .run("m1", "s-auto", "user", "hello", null, now);
-    legacy.close();
+describe("schema versioning", () => {
+  /** A database file carrying `version` in its header, optionally with one table in it. */
+  function writeDbFile(path: string, version: number, withTable: boolean): void {
+    const raw = new Database(path);
+    if (withTable) raw.exec("CREATE TABLE something (id TEXT PRIMARY KEY)");
+    raw.pragma(`user_version = ${version}`);
+    raw.close();
   }
 
-  it("adds the missing columns and backfills without losing data", () => {
-    const path = join(root, "legacy.sqlite");
-    writeLegacyDb(path);
-    const migrated = createDb(path);
+  const tablesIn = (path: string): string[] => {
+    const raw = new Database(path);
     try {
-      // Rows survive the ALTER TABLEs.
-      expect(migrated.listWorkspaces()).toHaveLength(1);
-      expect(migrated.getMessage("m1")).toMatchObject({ content: "hello" });
-
-      // New columns exist and default sensibly on old rows.
-      expect(migrated.getMessage("m1")!.reasoning).toBeUndefined();
-      expect(migrated.getMessage("m1")!.usage).toBeUndefined();
-      expect(migrated.getMessage("m1")!.attachments).toBeUndefined();
-
-      // The legacy `copilots.model` column is folded into settings.modelId.
-      expect(migrated.getCopilot("c1")!.settings).toEqual({ modelId: "legacy-model" });
-
-      // A pre-existing non-placeholder title is assumed to be hand-written.
-      expect(migrated.getSession("s-hand")!.titleSource).toBe("user");
-      expect(migrated.getSession("s-auto")!.titleSource).toBe("auto");
-      expect(migrated.getSession("s-blank")!.titleSource).toBe("auto");
+      const rows = raw
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .all() as { name: string }[];
+      return rows.map((r) => r.name).sort();
     } finally {
-      migrated.raw.close();
+      raw.close();
+    }
+  };
+
+  it("stamps a brand-new file with the current version", () => {
+    const path = join(root, "fresh.sqlite");
+    const opened = createDb(path);
+    try {
+      expect(opened.raw.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+    } finally {
+      opened.raw.close();
     }
   });
 
-  it("does not re-run the title backfill on later boots", () => {
-    // Regression: run on every boot, the backfill also rewrote titles the *auto-titler*
-    // had written (it stores them with title_source = 'auto'), permanently locking
-    // conversations no person ever renamed.
-    const path = join(root, "restart.sqlite");
-    const first = createDb(path);
-    first.createWorkspace({ id: "w1", name: "W", slug: "w1", dirPath: join(root, "w1") });
-    first.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: DEFAULT_SESSION_TITLE });
-    first.setAutoTitle("s1", "Model Wrote This");
-    first.raw.close();
-
-    const second = createDb(path);
+  it("creates the tables on a genuinely empty file", () => {
+    const path = join(root, "empty.sqlite");
+    writeDbFile(path, 0, false);
+    const opened = createDb(path);
     try {
-      expect(second.getSession("s1")).toMatchObject({
-        title: "Model Wrote This",
-        titleSource: "auto",
-      });
+      expect(opened.listUsers()).toEqual([]);
     } finally {
-      second.raw.close();
+      opened.raw.close();
+    }
+  });
+
+  it("refuses a file that predates versioning, rather than adopting it", () => {
+    // Version 0 *with tables* is a database written before the guard existed, not a new one.
+    // Adopting it is how a file whose columns mean something else gets stamped as current
+    // and then read with the wrong meaning for every path it holds — with no error anywhere
+    // to say so.
+    const path = join(root, "unversioned.sqlite");
+    writeDbFile(path, 0, true);
+    expect(() => createDb(path)).toThrow(/schema v0/);
+  });
+
+  it("refuses a file written by a different version", () => {
+    const path = join(root, "other.sqlite");
+    writeDbFile(path, SCHEMA_VERSION + 1, true);
+    expect(() => createDb(path)).toThrow(new RegExp(`schema v${SCHEMA_VERSION + 1}`));
+  });
+
+  it("leaves a refused file's schema and version exactly as they were", () => {
+    // The refusal is only worth having if it is inert. A file half-changed on the way out
+    // would be worse than an untouched one, because the next attempt would find it modified.
+    const path = join(root, "refused.sqlite");
+    writeDbFile(path, SCHEMA_VERSION + 7, true);
+    expect(() => createDb(path)).toThrow();
+
+    expect(tablesIn(path)).toEqual(["something"]);
+    const raw = new Database(path);
+    try {
+      expect(raw.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION + 7);
+    } finally {
+      raw.close();
     }
   });
 });
@@ -601,7 +587,7 @@ describe("suspended ask_user calls", () => {
       ],
     });
 
-    expect(db.getMessage("m1")!.toolCalls![0]).toMatchObject({
+    expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]).toMatchObject({
       status: "answered",
       answer: { "0": { selected: ["OAuth"] } },
     });
@@ -624,19 +610,19 @@ describe("suspended ask_user calls", () => {
 
   it("rewrites a message's tool calls wholesale", () => {
     askMessage("m1", "s1", "call_1", "awaiting");
-    const calls = db.getMessage("m1")!.toolCalls!;
+    const calls = db.getMessageForUser("m1", OWNER)!.toolCalls!;
 
     db.updateMessageToolCalls(
       "m1",
       calls.map((tc) => (tc.id === "call_1" ? { ...tc, status: "answered" as const, output: "{}" } : tc))
     );
 
-    expect(db.getMessage("m1")!.toolCalls![0]).toMatchObject({
+    expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]).toMatchObject({
       status: "answered",
       output: "{}",
     });
     // The sibling call is untouched — the update is per call, not per message.
-    expect(db.getMessage("m1")!.toolCalls![1]).toMatchObject({ id: "call_1-read", output: "ok" });
+    expect(db.getMessageForUser("m1", OWNER)!.toolCalls![1]).toMatchObject({ id: "call_1-read", output: "ok" });
   });
 
   it("skips every awaiting call in a session and reports how many", () => {
@@ -646,17 +632,17 @@ describe("suspended ask_user calls", () => {
 
     expect(db.skipAwaitingToolCalls("s1")).toBe(2);
 
-    expect(db.getMessage("m1")!.toolCalls![0]!.status).toBe("skipped");
-    expect(db.getMessage("m2")!.toolCalls![0]!.status).toBe("skipped");
+    expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]!.status).toBe("skipped");
+    expect(db.getMessageForUser("m2", OWNER)!.toolCalls![0]!.status).toBe("skipped");
     // Another session's question is none of this one's business.
-    expect(db.getMessage("m3")!.toolCalls![0]!.status).toBe("awaiting");
+    expect(db.getMessageForUser("m3", OWNER)!.toolCalls![0]!.status).toBe("awaiting");
   });
 
   it("leaves a settled call alone", () => {
     askMessage("m1", "s1", "call_1", "answered");
 
     expect(db.skipAwaitingToolCalls("s1")).toBe(0);
-    expect(db.getMessage("m1")!.toolCalls![0]!.status).toBe("answered");
+    expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]!.status).toBe("answered");
   });
 
   it("does not give a skipped call an output", () => {
@@ -666,6 +652,6 @@ describe("suspended ask_user calls", () => {
 
     db.skipAwaitingToolCalls("s1");
 
-    expect(db.getMessage("m1")!.toolCalls![0]!.output).toBeUndefined();
+    expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]!.output).toBeUndefined();
   });
 });

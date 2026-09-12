@@ -47,13 +47,32 @@ export default {
   },
 
   app: {
-    /** Shown when there is no session and no workspace to name the topbar after. */
+    /**
+     * The product name. Shown when there is no session and no workspace to name the topbar
+     * after, and on the login screen — which is the one page with nothing else to call itself.
+     */
     title: "ilearnassist",
     configBanner: {
       before: "尚未配置可用的 API Key。点击右上角",
       action: "设置 → Providers",
       after: "添加一个 Provider 并填入 Key，保存后即刻生效。",
     },
+  },
+
+  /**
+   * The login screen.
+   *
+   * `noPassword` is not decoration: this build has no passwords, and a user who believes the
+   * field in front of them is a password field will assume a privacy the app does not have.
+   * Stating it is the honest half of not implementing it yet.
+   */
+  login: {
+    lead: "输入一个用户名即可开始。",
+    username: "用户名",
+    usernamePlaceholder: "例如：你的名字",
+    existing: "已有账号：",
+    submit: "进入",
+    noPassword: "这个实例没有设置密码：任何能访问这个地址的人，都可以用任意用户名进入。",
   },
 
   /**
@@ -511,9 +530,8 @@ export default {
     SESSION_NOT_FOUND: "会话不存在，可能已被删除。",
     TITLE_EMPTY: "标题不能为空。",
     UNSUPPORTED_FILE_TYPE: "不支持该文件类型：{mimeType}",
-    INVALID_ATTACHMENT_PATH: "附件路径无效。",
-    ATTACHMENT_NOT_FOUND: "附件不存在，可能已被删除。",
-    ATTACHMENT_STORE_FAILED: "附件保存失败，请重试。",
+    SOURCE_NOT_FOUND: "文件不存在，可能已被删除。",
+    SOURCE_STORE_FAILED: "文件保存失败，请重试。",
     DATA_REQUIRED: "缺少文件内容。",
     INVALID_BASE64: "文件内容不是合法的 base64 编码。",
     EMPTY_FILE: "文件是空的。",
@@ -536,6 +554,34 @@ export default {
     INVALID_FILE_PATH: "这个位置不在工作区内，无法访问。",
     NOT_A_DIRECTORY: "该路径不是一个目录。",
     NOT_A_FILE: "该路径不是一个文件。",
+    UNAUTHENTICATED: "登录已失效，请重新登录。",
+    USERNAME_REQUIRED: "用户名不能为空。",
+    USERNAME_TOO_LONG: "用户名不能超过 {max} 个字符。",
+  },
+
+  /**
+   * The account's uploaded files.
+   *
+   * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
+   * *not* delete this file, and which way round the two actions are. Without it, "delete"
+   * reads as tidying up something already gone.
+   */
+  sources: {
+    title: "已上传的文件",
+    lead: "这些是你上传过的全部文件，属于你的账号，不属于某一次对话。同一个文件在多个对话里被引用时，只会保存和解析一次。",
+    open: "已上传的文件",
+    loading: "读取中…",
+    empty: "还没有上传过文件。在输入框点回形针、或直接粘贴截图即可上传。",
+    parsed: "已解析",
+    parsedChars: "已解析 {count} 字",
+    parsing: "解析中…",
+    parseFailed: "解析失败",
+    delete: {
+      title: "删除文件",
+      message: "确定要删除「{name}」吗？",
+      detail: "文件本身、已解析的文本，以及在所有对话里的引用都会被删除，无法恢复。这些对话里已发出的消息仍会显示附件，但打不开了。",
+      action: "删除文件",
+    },
   },
 
   /**

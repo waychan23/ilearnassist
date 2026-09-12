@@ -64,7 +64,7 @@ async function freshSession(): Promise<Session> {
 }
 
 async function chat(sessionId: string, message: string) {
-  const res = await env.server.app.inject({
+  const res = await env.inject({
     method: "POST",
     url: `/api/sessions/${sessionId}/chat`,
     payload: { message },
@@ -73,7 +73,7 @@ async function chat(sessionId: string, message: string) {
 }
 
 async function answer(sessionId: string, payload: Record<string, unknown>) {
-  const res = await env.server.app.inject({
+  const res = await env.inject({
     method: "POST",
     url: `/api/sessions/${sessionId}/answers`,
     payload,
@@ -88,7 +88,7 @@ async function answer(sessionId: string, payload: Record<string, unknown>) {
 
 async function messagesOf(sessionId: string): Promise<Message[]> {
   return (
-    await env.server.app.inject({ method: "GET", url: `/api/sessions/${sessionId}/messages` })
+    await env.inject({ method: "GET", url: `/api/sessions/${sessionId}/messages` })
   ).json<Message[]>();
 }
 
@@ -277,7 +277,7 @@ describe("ask_user — retiring a question the user walked away from", () => {
 
 describe("POST /api/sessions/:id/answers — validation", () => {
   it("404s an unknown session", async () => {
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "POST",
       url: "/api/sessions/nope/answers",
       payload: { toolCallId: "c1", action: "submit", answers: {} },
@@ -289,7 +289,7 @@ describe("POST /api/sessions/:id/answers — validation", () => {
     const session = await freshSession();
     scriptAsk();
 
-    const res = await env.server.app.inject({
+    const res = await env.inject({
       method: "POST",
       url: `/api/sessions/${session.id}/answers`,
       payload: { toolCallId: "never-existed", action: "submit", answers: {} },

@@ -154,7 +154,6 @@ function onKeydown(e: KeyboardEvent) {
 
         <AttachmentChips
           v-if="store.pendingAttachments.length"
-          :session-id="store.activeSessionId ?? ''"
           :attachments="store.pendingAttachments"
           removable
           @remove="store.removePendingAttachment"

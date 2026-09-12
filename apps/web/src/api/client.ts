@@ -13,17 +13,18 @@ import type {
   DocumentParsingConfig,
   DriverInfo,
   FileContent,
-  AttachmentParseRecord,
   Message,
   ProviderConfig,
   PublicConfig,
   Session,
+  Source,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
   UpdateProviderInput,
   UpdateSessionInput,
   UploadAttachmentInput,
+  User,
   Workspace,
 } from "@ilearnassist/shared";
 import { ApiError, translateApiError } from "../utils/apiError";
@@ -64,6 +65,33 @@ function toApiError(body: RawErrorBody, status: number): ApiError {
   return new ApiError(undefined, body.message ?? error ?? `Request failed (${status})`, status);
 }
 
+/**
+ * Called when a request comes back 401, so the app can put the login screen back up.
+ *
+ * A callback rather than importing `showLogin` here, because the store imports this module
+ * and the two would circle. `stores/app.ts` is what sets it, once.
+ */
+let onUnauthenticated: (() => void) | undefined;
+
+export function setUnauthenticatedHandler(handler: () => void): void {
+  onUnauthenticated = handler;
+}
+
+/**
+ * Whether a path is part of signing in rather than something that needs a session.
+ *
+ * These are exempt from the 401 handler, and the exemption is load-bearing: `GET /auth/me`
+ * answering 401 is the *expected* reply on a cold load — it is how the app asks whether
+ * anyone is signed in — so treating it as an expiry would open every first visit with an
+ * error about a session that never existed.
+ */
+const isAuthPath = (path: string): boolean => path.startsWith("/auth/");
+
+/** A 401 from anywhere else means the session is gone; report it and rethrow. */
+function reportExpiry(status: number, path: string): void {
+  if (status === 401 && !isAuthPath(path)) onUnauthenticated?.();
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Only send a JSON content-type when there is actually a body. Fastify (5.x)
   // rejects body-less requests that claim `application/json` with a 400
@@ -73,12 +101,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     options.headers = { "Content-Type": "application/json" };
   }
 
+  // No `credentials` option, and none is needed: `fetch` defaults to `same-origin`, the app
+  // is served from one origin, and the Vite dev proxy puts `/api` on that same origin too.
+  // The session cookie rides along. Serving the API from somewhere else would break this.
   const res = await fetch(`/api${path}`, options);
-  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  if (!res.ok) {
+    const body = await errorBody(res);
+    reportExpiry(res.status, path);
+    throw toApiError(body, res.status);
+  }
   return res.json() as Promise<T>;
 }
 
 export const api = {
+  /* ----------------------------------- auth ----------------------------------- */
+
+  /**
+   * Sign in, creating the account if the name is new.
+   *
+   * One field, because there is one credential: a username, and no password at all. The
+   * screen says so rather than leaving a user to guess what they are meant to type.
+   */
+  login: (username: string) =>
+    request<User>("/auth/login", { method: "POST", body: JSON.stringify({ username }) }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  /** Who the caller is. A 401 here is the answer, not an expiry — see `isAuthPath`. */
+  me: () => request<User>("/auth/me"),
+  /** The names that exist, so a returning visitor can pick one rather than recall it. */
+  listUsers: () => request<{ usernames: string[] }>("/auth/users"),
+
+  /* ---------------------------------- the app ---------------------------------- */
+
   getConfig: () => request<PublicConfig>("/config"),
 
   listWorkspaces: () => request<Workspace[]>("/workspaces"),
@@ -127,7 +180,7 @@ export const api = {
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
 
   uploadAttachment: (sessionId: string, input: UploadAttachmentInput) =>
-    request<Attachment>(`/sessions/${sessionId}/attachments`, {
+    request<Attachment>(`/sessions/${sessionId}/sources`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
@@ -171,19 +224,40 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  /** Parse state for every attachment in a session, keyed by attachment id. */
-  listAttachmentStatus: (sessionId: string) =>
-    request<Record<string, AttachmentParseRecord>>(`/sessions/${sessionId}/attachments`),
-  reparseAttachment: (sessionId: string, attachmentId: string, name?: string) =>
-    request<{ status: string }>(`/sessions/${sessionId}/attachments/${attachmentId}/reparse`, {
+  /**
+   * The files a conversation can read, with the parse state as it is now.
+   *
+   * Not "this conversation's attachments": a source can be shared with the workspace, and this
+   * is what the composer overlays onto its chips so a reparse shows up without a reload.
+   */
+  listSessionSources: (sessionId: string) => request<Source[]>(`/sessions/${sessionId}/sources`),
+  /** Every file the account has uploaded — the list the sources dialog manages. */
+  listSources: () => request<Source[]>("/sources"),
+  /**
+   * Delete a file for good: its bytes, its extracted text, and every reference to it.
+   *
+   * Distinct from deleting a conversation, which leaves files alone. The messages that were
+   * sent with it keep their snapshots, so history still shows what was sent.
+   */
+  deleteSource: (sourceId: string) =>
+    request<{ ok: boolean }>(`/sources/${sourceId}`, { method: "DELETE" }),
+  /** Addressed by the source, not by a conversation: the file is the account's. */
+  reparseSource: (sourceId: string, name?: string) =>
+    request<{ status: string }>(`/sources/${sourceId}/reparse`, {
       method: "POST",
       body: JSON.stringify(name ? { name } : {}),
     }),
 };
 
-/** URL for an attachment's bytes (used as an `<img src>`), not an API call. */
-export function attachmentUrl(sessionId: string, attachmentId: string): string {
-  return `/api/sessions/${sessionId}/attachments/${attachmentId}`;
+/**
+ * URL for a source's bytes (used as an `<img src>`), not an API call.
+ *
+ * Addressed by the source alone, which is also why the response can be cached immutably: two
+ * conversations referencing the same file resolve to the same URL, and that URL's content
+ * never changes.
+ */
+export function attachmentUrl(sourceId: string): string {
+  return `/api/sources/${sourceId}/raw`;
 }
 
 /** Read a File as bare base64 (no `data:` prefix), matching `UploadAttachmentInput`. */
@@ -238,7 +312,14 @@ async function* streamPost(path: string, body: unknown): AsyncGenerator<ChatStre
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  if (!res.ok) {
+    const body_ = await errorBody(res);
+    // Same rule as `request`: a turn that 401s means the session went away mid-conversation,
+    // and the user has to be sent back to the login screen rather than left with an error
+    // about a message they cannot send.
+    reportExpiry(res.status, path);
+    throw toApiError(body_, res.status);
+  }
   // A 200 with no body breaks the SSE contract below rather than being a server-reported
   // error, so it stays a plain Error — there is no code to translate.
   if (!res.body) throw new Error("No response body.");

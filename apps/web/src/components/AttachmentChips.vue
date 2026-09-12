@@ -7,8 +7,15 @@ import { formatBytes } from "../utils/format";
 import type { Attachment } from "../api/types";
 import Icon from "./Icon.vue";
 
+/**
+ * Chips for the files on a message, or staged in the composer.
+ *
+ * There is no `sessionId` here, unlike the name this used to carry: a chip's thumbnail is
+ * addressed by the **source**, which is what owns the bytes. The same file referenced from two
+ * conversations therefore resolves to one URL — which is also why its response can be cached
+ * immutably.
+ */
 const props = defineProps<{
-  sessionId: string;
   attachments: Attachment[];
   /** Composer mode: shows a remove control on each chip. */
   removable?: boolean;
@@ -78,7 +85,7 @@ function describe(a: Attachment): { detail: string; title: string } {
 const chips = computed<Chip[]>(() =>
   props.attachments.map((a) => {
     const { detail, title } = describe(a);
-    return { attachment: a, url: attachmentUrl(props.sessionId, a.id), detail, title };
+    return { attachment: a, url: attachmentUrl(a.id), detail, title };
   })
 );
 

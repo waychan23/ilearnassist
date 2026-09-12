@@ -1,13 +1,12 @@
-import type { FastifyInstance } from "fastify";
-import { readFile, writeFile } from "node:fs/promises";
-import { basename } from "node:path";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { mkdirSync, rmSync } from "node:fs";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import type {
   AnswerToolCallInput,
   ApiErrorBody,
   ApiErrorCode,
   AskUserQuestion,
   Attachment,
-  AttachmentParseRecord,
   ChatInput,
   ChatStreamEvent,
   Copilot,
@@ -26,6 +25,7 @@ import type {
   PublicConfig,
   Session,
   SessionSettings,
+  Source,
   ToolCall,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
@@ -34,11 +34,13 @@ import type {
   UpdateSessionInput,
   UpdateWorkspaceInput,
   UploadAttachmentInput,
+  User,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
 import {
+  DEFAULT_SESSION_TITLE,
   newId,
   readDocumentParsing,
   SETTING_DEFAULT_MODEL,
@@ -49,6 +51,7 @@ import {
   SETTING_DOCUMENT_POLICY,
   type AppDb,
   type ProviderRecord,
+  type SourceRecord,
 } from "./db.js";
 import {
   describeParseError,
@@ -58,7 +61,7 @@ import {
   parseErrorDetail,
 } from "./documents/index.js";
 import type { DocumentService } from "./documents/service.js";
-import { listParseRecords } from "./documents/store.js";
+import { removeParsedText } from "./documents/store.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
@@ -66,28 +69,60 @@ import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { renderAskUserResult, validateAnswers } from "./tools/askUser.js";
 import {
-  ensureSessionUploadDir,
-  findStoredAttachment,
   isSupportedMime,
   kindFor,
   normalizeMime,
-  removeSessionUploads,
-  resolveStoredPath,
-  UPLOADS_ROOT,
+  resolveInSources,
+  sha256Of,
+  sourceRawPath,
 } from "./attachments.js";
+import {
+  MAX_USERNAME_LENGTH,
+  authSecret,
+  clearedSessionCookie,
+  currentUser,
+  ensureUser,
+  sessionCookie,
+} from "./auth.js";
+import { sessionDir, userLayout, type DataLayout, type UserLayout } from "./paths.js";
 import { createWorkspaceDir, removeWorkspaceDir, uniqueSlug } from "./workspace.js";
 import { FileAccessError, listDirectory, readFileContent } from "./files.js";
+
+/**
+ * The signed-in account, put on the request by the gate below.
+ *
+ * Optional because the gate lets the public routes through without setting it; see `actor()`
+ * for how a route gets it safely.
+ */
+declare module "fastify" {
+  interface FastifyRequest {
+    user?: User;
+  }
+  interface FastifyContextConfig {
+    /**
+     * Opt a route out of the auth gate.
+     *
+     * Declared rather than read off a cast, so `{ config: { public: true } }` is a thing the
+     * type system knows about: a typo in the flag is a compile error rather than a route that
+     * silently requires a session.
+     */
+    public?: boolean;
+  }
+}
 
 interface RoutesOptions {
   config: AppConfig;
   db: AppDb;
-  /**
-   * Where uploaded attachment bytes are stored. Defaults to the project's own
-   * `data/uploads`; tests redirect it at a temp directory.
-   */
-  uploadsRoot?: string;
-  /** Owns document text extraction and the parse-state sidecars. */
+  /** Owns document text extraction. */
   documents: DocumentService;
+  /**
+   * The data root, so a route can derive the acting user's tree.
+   *
+   * The tree is not passed in any more: it depends on *who is asking*, which is a fact about
+   * the request rather than about the server, so it is derived per request from this and the
+   * account the gate resolved.
+   */
+  layout: DataLayout;
 }
 
 /** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
@@ -138,8 +173,112 @@ function fileErrorReply(err: unknown): { status: 400 | 404; body: ApiErrorBody }
 }
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
-  const { config, db, documents } = opts;
-  const uploadsRoot = opts.uploadsRoot ?? UPLOADS_ROOT;
+  const { config, db, documents, layout } = opts;
+
+  /* ---------------------------------- identity ---------------------------------- */
+
+  /**
+   * The signing secret, read per request rather than captured once.
+   *
+   * One indexed read of a local `app_settings` row, against a property worth having: deleting
+   * that row — or replacing its value — invalidates every cookie *immediately* rather than
+   * from the next restart. "Sign everyone out" is the lever you reach for when something has
+   * gone wrong, and a lever that needs a restart is the wrong shape for that moment.
+   */
+  const requireSecret = (): string => authSecret(db);
+
+  /**
+   * The signed-in account, for a route the gate has already let through.
+   *
+   * Throws instead of returning undefined. The gate sets this on every route that is not
+   * marked `public`, so a miss means a route ended up on the wrong side of that flag — and
+   * failing here says so, where `undefined.id` a few lines later would say something much
+   * less useful.
+   */
+  function actor(request: FastifyRequest): User {
+    if (!request.user) throw new Error("No signed-in user on this route; is it marked public?");
+    return request.user;
+  }
+
+  /** The acting user's tree: where its workspaces are created, and deleted from. */
+  const treeFor = (user: User): UserLayout => userLayout(layout, user.slug);
+
+  /**
+   * The gate: every route needs a signed-in account unless it opts out.
+   *
+   * Deny by default rather than a list of protected routes, so a route added tomorrow
+   * without a thought about auth is *refused* — the same move as the `read_document`
+   * whitelist, where the safe state is the one you get by doing nothing. Exactly four routes
+   * opt out, each with a reason.
+   *
+   * This hook belongs to the `routes` plugin, so it covers the API and nothing else: the
+   * built frontend served by `webApp.ts` is a sibling plugin and stays public, which is what
+   * lets a browser load the login screen in the first place.
+   */
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.routeOptions.config?.public === true) return;
+    const user = currentUser(request, db, requireSecret());
+    if (!user) return reply.code(401).send(apiError("UNAUTHENTICATED", "sign in to continue"));
+    request.user = user;
+  });
+
+  /* ----------------------------------- auth ----------------------------------- */
+
+  /**
+   * Sign in, creating the account if the name is new.
+   *
+   * There is no password, so this is the whole of authentication — whoever can reach the
+   * address can be anyone. That is a real property of this build and not an oversight: the
+   * login screen states it, and the panel's LAN switch is the control that decides who can
+   * reach the address at all.
+   */
+  app.post("/api/auth/login", { config: { public: true } }, async (request, reply) => {
+    const body = request.body as { username?: unknown } | undefined;
+    const username = typeof body?.username === "string" ? body.username.trim() : "";
+    if (!username) {
+      return reply.code(400).send(apiError("USERNAME_REQUIRED", "username is required"));
+    }
+    if (username.length > MAX_USERNAME_LENGTH) {
+      return reply
+        .code(400)
+        .send(apiError("USERNAME_TOO_LONG", "username is too long", { max: MAX_USERNAME_LENGTH }));
+    }
+
+    const { user } = ensureUser(db, layout, username);
+    reply.header("set-cookie", sessionCookie(user.id, requireSecret()));
+    return user;
+  });
+
+  app.post("/api/auth/logout", { config: { public: true } }, async (_request, reply) => {
+    reply.header("set-cookie", clearedSessionCookie());
+    return { ok: true };
+  });
+
+  /**
+   * Who the caller is, or a 401.
+   *
+   * Public, because a 401 here is the *answer* rather than a refusal: the cookie is HttpOnly,
+   * so a cold load has no other way to ask whether anyone is signed in. The client knows that
+   * and keeps this route's 401 out of the "your session expired" path — otherwise every first
+   * visit would open with an error about a session that never existed.
+   */
+  app.get("/api/auth/me", { config: { public: true } }, async (request, reply) => {
+    const user = currentUser(request, db, requireSecret());
+    if (!user) return reply.code(401).send(apiError("UNAUTHENTICATED", "sign in to continue"));
+    return user;
+  });
+
+  /**
+   * The accounts that already exist, so a returning user can pick one instead of remembering
+   * exactly what they typed.
+   *
+   * Public, and it does leak usernames — which the no-password design already leaks to anyone
+   * who types a name and is let in. Naming them is the honest version: a bare text field with
+   * nothing behind it reads as a password prompt whose field is missing.
+   */
+  app.get("/api/auth/users", { config: { public: true } }, async () => ({
+    usernames: db.listUsers().map((u) => u.username),
+  }));
 
   /* --------------------------------- resolution -------------------------------- */
   /*
@@ -227,85 +366,83 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       defaultParserId: config.documentParsing.defaultParserId ?? null,
     });
 
-  function publicConfig(): PublicConfig {
+  /**
+   * What the client is allowed to know about this installation.
+   *
+   * Takes the caller because one field is per-account: `workspacesRootDir` is the *caller's*
+   * tree, which is a fact about them rather than about the server. Providers and parsing
+   * policy stay installation-wide — see the note in `docs/architecture.md` about what that
+   * does and does not leak.
+   */
+  function publicConfig(user: User): PublicConfig {
     return {
       defaultProvider: resolveDefaultProviderId(),
       defaultModel: db.getSetting(SETTING_DEFAULT_MODEL) ?? config.defaultModel,
       providers: providerConfigs(),
-      workspacesRootDir: config.workspaces.rootDir,
+      workspacesRootDir: treeFor(user).workspacesRoot,
       webSearchProvider: config.tools.webSearch.provider,
       documentParsers: documentParserConfigs(),
       documentParsing: documentParsing(),
     };
   }
 
-  /**
-   * Fold parse state into the attachment metadata that gets persisted with a message.
-   *
-   * The prompt itself reads the sidecar directly, so this is purely for the UI: without it
-   * a conversation reloaded tomorrow would show every document as unparsed, having lost the
-   * only record of what happened.
-   */
-  async function withParseState(sessionId: string, list: Attachment[]): Promise<Attachment[]> {
-    if (list.length === 0) return list;
-    const records = await listParseRecords(uploadsRoot, sessionId);
-    return list.map((att) => {
-      const record = records.get(att.id);
-      if (!record) return att;
-      return {
-        ...att,
-        parseStatus: record.status,
-        parseError: record.error,
-        parseErrorCode: record.code,
-        parserId: record.parserId,
-        parsedChars: record.parsedChars,
-        pageCount: record.pageCount,
-      };
-    });
-  }
-
   /* ------------------------------- config/health ------------------------------- */
 
-  app.get("/api/health", async () => ({ ok: true }));
+  // Public: a liveness probe that needs a session cannot do its job, and it reports nothing
+  // about the data.
+  app.get("/api/health", { config: { public: true } }, async () => ({ ok: true }));
 
-  app.get("/api/config", async () => publicConfig());
+  app.get("/api/config", async (request) => publicConfig(actor(request)));
 
   /* -------------------------------- workspaces -------------------------------- */
 
-  app.get("/api/workspaces", async () => db.listWorkspaces());
+  app.get("/api/workspaces", async (request) => db.listWorkspaces(actor(request).id));
 
   app.post("/api/workspaces", async (request, reply) => {
+    const user = actor(request);
     const body = request.body as CreateWorkspaceInput;
     const name = body?.name?.trim();
     if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
-    const slug = uniqueSlug(config.workspaces.rootDir, name);
-    const dirPath = createWorkspaceDir(config.workspaces.rootDir, slug);
-    const workspace = db.createWorkspace({ id: newId(), name, slug, dirPath });
+    const slug = uniqueSlug(treeFor(user).workspacesRoot, name);
+    // Creates the workspace's own directory *and* the two inside it — `workdir/` for the
+    // agent to work in, `sessions/` for its conversations. One call, so neither can be
+    // forgotten and a workspace is never half-made.
+    const dirPath = createWorkspaceDir(treeFor(user).workspacesRoot, slug);
+    const workspace = db.createWorkspace({ id: newId(), userId: user.id, name, slug, dirPath });
     return reply.code(201).send(workspace);
   });
 
   /**
-   * Rename. The directory keeps its original slug — see `renameWorkspace` in `db.ts` — so
-   * this is a display-name change and nothing on disk moves underneath a running agent.
+   * Rename. The directory keeps its original slug — see `renameWorkspaceForUser` in
+   * `db.ts` — so this is a display-name change and nothing on disk moves underneath a
+   * running agent.
    */
   app.patch("/api/workspaces/:id", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as UpdateWorkspaceInput;
-    if (!db.getWorkspace(id)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    if (!db.getWorkspaceForUser(id, userId)) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
 
     const name = body?.name?.trim();
     if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
-    return db.renameWorkspace(id, name);
+    return db.renameWorkspaceForUser(id, userId, name);
   });
 
   app.delete("/api/workspaces/:id", async (request, reply) => {
+    const user = actor(request);
+    const userId = user.id;
     const { id } = request.params as { id: string };
-    const workspace = db.getWorkspace(id);
+    const workspace = db.getWorkspaceForUser(id, userId);
     if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
-    db.deleteWorkspace(id);
-    removeWorkspaceDir(config.workspaces.rootDir, workspace.dirPath);
+    db.deleteWorkspaceForUser(id, userId);
+    // The workspace's *own* directory, so `sessions/` goes with it. The guard inside
+    // `removeWorkspaceDir` is written against this level — "a direct child of the
+    // workspaces root" — which is why `dirPath` holds this and not the sandbox.
+    removeWorkspaceDir(treeFor(user).workspacesRoot, workspace.dirPath);
     return { ok: true };
   });
 
@@ -326,17 +463,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * and its URL shape are chosen so that is an addition rather than a rename.
    */
   app.get("/api/workspaces/:workspaceId/files", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
     // `string[]` is not hypothetical: `?path=a&path=b` parses to an array, and the module
     // refuses it rather than letting a string operation on it become a 500.
     const { path } = request.query as { path?: string | string[] };
-    const workspace = db.getWorkspace(workspaceId);
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
     if (!workspace) {
       return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
     }
 
     try {
-      return await listDirectory(workspace.dirPath, path);
+      return await listDirectory(workspace.workdirPath, path);
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -344,15 +482,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.get("/api/workspaces/:workspaceId/files/content", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
     const { path } = request.query as { path?: string | string[] };
-    const workspace = db.getWorkspace(workspaceId);
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
     if (!workspace) {
       return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
     }
 
     try {
-      return await readFileContent(workspace.dirPath, path);
+      return await readFileContent(workspace.workdirPath, path);
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -401,15 +540,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* --------------------------------- sessions --------------------------------- */
 
   app.get("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
-    if (!db.getWorkspace(workspaceId)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
-    return db.listSessions(workspaceId);
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
+    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    return db.listSessionsForUser(workspaceId, userId);
   });
 
   app.post("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
+    const userId = actor(request).id;
     const { workspaceId } = request.params as { workspaceId: string };
     const body = request.body as CreateSessionInput;
-    if (!db.getWorkspace(workspaceId)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
+    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
 
     const copilotId = body?.copilotId ?? null;
     const copilot = copilotId ? db.getCopilot(copilotId) : undefined;
@@ -418,54 +561,132 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       id: newId(),
       workspaceId,
       copilotId,
-      title: body?.title?.trim() || "New conversation",
+      title: body?.title?.trim() || DEFAULT_SESSION_TITLE,
       // The Copilot's defaults are copied in, not referenced — changing a Copilot later
       // must not silently rewrite the parameters of conversations already underway.
       settings: copilot ? { ...copilot.settings } : {},
     });
+    // The conversation's own directory, made now rather than the first time something wants
+    // it, so that reserving it means it is *there*. Best-effort: nothing writes into it yet,
+    // and a data root on a read-only volume must not turn starting a conversation into an
+    // error over a directory nobody is using.
+    try {
+      mkdirSync(sessionDir(workspace.dirPath, session.id), { recursive: true });
+    } catch {
+      // Ignored on purpose — see above.
+    }
     return reply.code(201).send(session);
   });
 
   /** Rename and/or update per-conversation generation parameters. */
   app.patch("/api/sessions/:id", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as UpdateSessionInput;
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
     if (body?.title !== undefined && !body.title.trim()) {
       return reply.code(400).send(apiError("TITLE_EMPTY", "title must not be empty"));
     }
-    return db.updateSession(id, { title: body?.title, settings: body?.settings });
+    return db.updateSessionForUser(id, userId, { title: body?.title, settings: body?.settings });
   });
 
+  /**
+   * Delete a conversation.
+   *
+   * **The uploaded files stay.** This used to abort any in-flight parse and remove the whole
+   * session upload directory, because the bytes and the parse sidecars lived inside it. A
+   * source belongs to the account now, so neither happens: deleting a conversation removes
+   * its *references* (the links cascade with the row) and leaves the files alone, because
+   * another conversation may be reading them — and because a file the user uploaded is not
+   * something to delete as a side effect of tidying up a chat. `DELETE /api/sources/:id` is
+   * the one that means "delete this file".
+   */
   app.delete("/api/sessions/:id", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
-    // Abort before deleting: a parse still running would finish by writing a sidecar back
-    // into the directory we are about to remove, recreating it as an orphan.
-    documents.cancelSession(id);
-    db.deleteSession(id);
-    await removeSessionUploads(uploadsRoot, id);
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+
+    db.deleteSessionForUser(id, userId);
+    // The reserved directory goes with the conversation. Best-effort, same as the create
+    // above: a directory nothing wrote to is not worth failing a delete over.
+    try {
+      rmSync(sessionDir(found.workspace.dirPath, id), { recursive: true, force: true });
+    } catch {
+      // Ignored on purpose.
+    }
     return { ok: true };
   });
 
   app.get("/api/sessions/:id/messages", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    return db.listMessages(id);
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return db.listMessagesForUser(id, userId);
   });
 
-  /* -------------------------------- attachments -------------------------------- */
+  /* ---------------------------------- sources ---------------------------------- */
 
   /**
+   * A source as a client may see it.
+   *
+   * `SourceRecord` carries two fields that never leave the server — who owns the file, and
+   * where it sits on disk. Dropping them here rather than at each `reply.send` is what makes
+   * that a property of the module instead of of whoever remembered: a route that forgets has
+   * to deliberately reach past this function to leak, which is a much harder mistake to make.
+   */
+  function toSource(record: SourceRecord): Source {
+    const { userId, rawPath, ...source } = record;
+    return source;
+  }
+
+  /**
+   * A source as one message's attachment: the same facts, under the name that upload used.
+   *
+   * The name is the only difference, and it is deliberate rather than redundant. A source
+   * keeps the first name it was uploaded under — that is what dedupe means — so without this
+   * a second upload of the same bytes would show someone else's filename on its chip.
+   *
+   * Spread-with-omit rather than a field list, so a field added to `Attachment` later travels
+   * here without anyone having to remember this function. `createdAt` is left out because it
+   * is a fact about the source, not about the message that referenced it.
+   */
+  function toAttachment(record: SourceRecord, name: string): Attachment {
+    const { createdAt, ...rest } = toSource(record);
+    return { ...rest, name };
+  }
+
+  /**
+   * Upload a file, and reference it from this conversation.
+   *
    * Uploads arrive as base64 JSON rather than multipart, which keeps this dependency-free
    * (`@fastify/multipart` is not installed) at the cost of a ~33% larger body — hence the
    * raised per-route `bodyLimit`.
+   *
+   * **Two links, not one.** The source is referenced by the conversation *and* by its
+   * workspace, which is what makes a document uploaded here readable from another
+   * conversation in the same workspace. Writing only the session link would leave the
+   * workspace half of the read whitelist permanently empty.
+   *
+   * **Identical bytes are one source.** The hash is looked up first, scoped to the account,
+   * so re-uploading the same PDF reuses the row, the file and whatever parse it already has —
+   * the second upload is instant, costs no cloud call, and does not restart a parse that
+   * failed.
    */
   app.post(
-    "/api/sessions/:id/attachments",
+    "/api/sessions/:id/sources",
     { bodyLimit: ATTACHMENT_BODY_LIMIT },
     async (request, reply) => {
+      const user = actor(request);
+      const userId = user.id;
       const { id } = request.params as { id: string };
-      if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      const session = db.getSessionForUser(id, userId);
+      if (!session) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      const tree = treeFor(user);
 
       const body = request.body as UploadAttachmentInput;
       const name = body?.name?.trim();
@@ -503,112 +724,164 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           );
       }
 
-      const attachment: Attachment = {
-        id: newId(),
-        name,
-        mimeType,
-        size: bytes.byteLength,
-        kind: kindFor(mimeType),
-      };
+      const existing = db.findSourceByHash(userId, sha256Of(bytes));
+      let source = existing;
+      if (!source) {
+        const sourceId = newId();
+        // Both inputs to the path are server-side — an id we just made and a MIME type from
+        // the table — so nothing the client sent can steer the write out of this user's
+        // `sources/raw/`. Same reasoning as `resolveInWorkspace`, applied at the write.
+        const rawPath = sourceRawPath(tree, sourceId, mimeType);
+        try {
+          await writeFile(rawPath, bytes);
+        } catch (err) {
+          request.log.error(err, "failed to store source bytes");
+          return reply.code(500).send(apiError("SOURCE_STORE_FAILED", "failed to store the file"));
+        }
 
-      await ensureSessionUploadDir(uploadsRoot, id);
-      // resolveStoredPath re-derives the filename from the id + MIME type, so nothing the
-      // client sent can steer the write outside `<uploads>/<sessionId>/`.
-      const path = resolveStoredPath(uploadsRoot, id, attachment);
-      if (!path) return reply.code(400).send(apiError("INVALID_ATTACHMENT_PATH", "invalid attachment path"));
+        source = db.createSource({
+          id: sourceId,
+          userId,
+          sha256: sha256Of(bytes),
+          name,
+          mimeType,
+          size: bytes.byteLength,
+          kind: kindFor(mimeType),
+          rawPath,
+        });
 
-      try {
-        await writeFile(path, bytes);
-      } catch (err) {
-        request.log.error(err, "failed to store attachment");
-        return reply.code(500).send(apiError("ATTACHMENT_STORE_FAILED", "failed to store attachment"));
+        // Extraction runs *after* the response: a cloud parse can take minutes and the
+        // composer must not hold the upload open for it. `schedule` writes `pending`
+        // synchronously, so the status a poll reads next is never a gap.
+        if (documents.handles(source)) {
+          void documents.schedule(tree, userId, source).catch((err: unknown) => {
+            request.log.error(err, "failed to schedule document parsing");
+          });
+        }
       }
 
-      // Text extraction runs *after* the response: a cloud parse can take minutes, and the
-      // composer must not hold the upload open for it. The client polls the parse state,
-      // which `schedule` has already written as `pending` before this returns.
-      void documents.schedule(id, attachment).catch((err: unknown) => {
-        request.log.error(err, "failed to schedule document parsing");
-      });
+      db.linkSourceToSession(userId, id, source.id);
+      db.linkSourceToWorkspace(userId, session.workspace.id, source.id);
 
-      // Report the pending state immediately so the client never has to guess.
-      const pending = documents.handles(attachment)
-        ? { ...attachment, parseStatus: "pending" as ParseStatus }
-        : attachment;
-      return reply.code(201).send(pending);
+      /*
+       * A source that was just created reports `pending` rather than being re-read. Re-reading
+       * would race the work it just queued — a small local PDF can be `ready` before this line
+       * runs, and a status that races the parse is not a status. The client polls
+       * `/sessions/:id/sources` for the outcome, so what it needs from the upload is a stable
+       * "we started", which is what it gets.
+       *
+       * A *reused* source reports what it already has, because nothing was started for it: its
+       * parse may be finished, or gone stale, or never have been needed.
+       */
+      const reported =
+        existing || !documents.handles(source)
+          ? source
+          : { ...source, parseStatus: "pending" as ParseStatus };
+      return reply.code(201).send(toAttachment(reported, name));
     }
   );
 
-  /** Parse state for every attachment in a session, keyed by attachment id. */
-  app.get("/api/sessions/:id/attachments", async (request, reply) => {
+  /**
+   * Every source this conversation can read, with the parse state as it is now.
+   *
+   * **This is the model's whitelist, verbatim** — its own sources unioned with its
+   * workspace's — and that is deliberate. The two must not disagree: a document the model may
+   * page through is one the user should see a chip for, and a chip the user can see is one
+   * the model can be asked about. Two definitions of "available" would drift, and the drift
+   * would show up as an answer referring to a file that is not on screen.
+   *
+   * The composer polls it to keep those chips current: parse status is a column rather than a
+   * snapshot folded into each message, so a reparse is reflected here, and in every
+   * conversation that shares the file, at once.
+   */
+  app.get("/api/sessions/:id/sources", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    const records = await listParseRecords(uploadsRoot, id);
-    // Mapped rather than passed through: the sidecar stores the code as `code`, while the
-    // client-facing type calls it `parseErrorCode`. The rename is deliberate — the record
-    // is an internal representation and should not become the wire contract by accident.
-    return Object.fromEntries(
-      [...records].map(([attachmentId, r]) => [
-        attachmentId,
-        {
-          status: r.status,
-          error: r.error,
-          parseErrorCode: r.code,
-          parserId: r.parserId,
-          parsedChars: r.parsedChars,
-          pageCount: r.pageCount,
-          updatedAt: r.updatedAt,
-        } satisfies AttachmentParseRecord,
-      ])
-    );
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    return db.listReadableSources(userId, id, found.workspace.id).map(toSource);
+  });
+
+  /**
+   * Every file this account has uploaded, newest first.
+   *
+   * Account-wide rather than per-conversation, because that is what a source *is* — the same
+   * file referenced from three conversations is one row here and three chips in history. This
+   * is the list a user manages their uploads from, and the only place a file with no
+   * remaining references is still visible.
+   */
+  app.get("/api/sources", async (request) => {
+    const userId = actor(request).id;
+    return db
+      .listSourcesForUser(userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(toSource);
+  });
+
+  /** Serve a source's bytes back, for a thumbnail or a download. */
+  app.get("/api/sources/:id/raw", async (request, reply) => {
+    const user = actor(request);
+    const { id: sourceId } = request.params as { id: string };
+    const source = db.getSourceForUser(sourceId, user.id);
+    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+
+    // From the row, and validated again before the read: `resolveInSources` is what keeps a
+    // path that travelled through a backup — or through a future bug — from being a read of
+    // whatever it happens to name.
+    const path = resolveInSources(treeFor(user), source.rawPath);
+    if (!path) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+
+    try {
+      const bytes = await readFile(path);
+      return reply
+        .header("Cache-Control", "private, max-age=31536000, immutable")
+        .type(source.mimeType)
+        .send(bytes);
+    } catch {
+      return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    }
   });
 
   /** Re-run extraction, e.g. after a failure or a change of parser settings. */
-  app.post("/api/sessions/:id/attachments/:attachmentId/reparse", async (request, reply) => {
-    const { id, attachmentId } = request.params as { id: string; attachmentId: string };
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-
-    const found = await findStoredAttachment(uploadsRoot, id, attachmentId);
-    if (!found) return reply.code(404).send(apiError("ATTACHMENT_NOT_FOUND", "attachment not found"));
-
-    const body = (request.body ?? {}) as { name?: string };
-    // Cloud parsers branch on the filename extension, so the on-disk name is a sound
-    // fallback when the caller does not supply the original — the MIME type came from that
-    // same extension a moment ago.
-    const name = body.name?.trim() || basename(found.path);
+  app.post("/api/sources/:id/reparse", async (request, reply) => {
+    const user = actor(request);
+    const { id: sourceId } = request.params as { id: string };
+    const source = db.getSourceForUser(sourceId, user.id);
+    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
 
     try {
-      await documents.reparse(id, {
-        id: attachmentId,
-        name,
-        mimeType: found.mimeType,
-        size: 0,
-        kind: kindFor(found.mimeType),
-      });
+      await documents.reparse(treeFor(user), user.id, source);
     } catch (err) {
       return reply.code(400).send(parseApiError(err));
     }
     return reply.code(202).send({ status: "pending" });
   });
 
-  /** Serve an attachment back for preview/thumbnail rendering. */
-  app.get("/api/sessions/:sessionId/attachments/:attachmentId", async (request, reply) => {
-    const { sessionId, attachmentId } = request.params as {
-      sessionId: string;
-      attachmentId: string;
-    };
-    const found = await findStoredAttachment(uploadsRoot, sessionId, attachmentId);
-    if (!found) return reply.code(404).send(apiError("ATTACHMENT_NOT_FOUND", "attachment not found"));
+  /**
+   * Delete a file for good, everywhere it is used.
+   *
+   * The bytes and the extracted text go, and every reference to it cascades away — so a
+   * conversation that used it simply stops listing it. The `messages.attachments` snapshots
+   * stay, deliberately: a message that was sent with a PDF should keep showing what was sent,
+   * and its thumbnail starts 404ing, rather than the chip vanishing from history it was part
+   * of. That is the cost of a shared source, and it is the right way round.
+   */
+  app.delete("/api/sources/:id", async (request, reply) => {
+    const user = actor(request);
+    const { id: sourceId } = request.params as { id: string };
+    const source = db.getSourceForUser(sourceId, user.id);
+    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
 
-    try {
-      const bytes = await readFile(found.path);
-      return reply
-        .header("Cache-Control", "private, max-age=31536000, immutable")
-        .type(found.mimeType)
-        .send(bytes);
-    } catch {
-      return reply.code(404).send(apiError("ATTACHMENT_NOT_FOUND", "attachment not found"));
-    }
+    // Stop a run before removing anything: a parse still going would finish by writing text
+    // for a source that no longer exists, and recreate the file we just deleted.
+    documents.cancelSource(source.id);
+
+    const tree = treeFor(user);
+    db.deleteSourceForUser(source.id, user.id);
+    await removeParsedText(tree, source.id).catch(() => undefined);
+    const raw = resolveInSources(tree, source.rawPath);
+    if (raw) await rm(raw, { force: true }).catch(() => undefined);
+    return { ok: true };
   });
 
   /* -------------------------------- providers --------------------------------- */
@@ -803,7 +1076,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       db.setSetting(SETTING_DEFAULT_PROVIDER, body.providerId);
     }
     if (body?.modelId !== undefined) db.setSetting(SETTING_DEFAULT_MODEL, body.modelId);
-    return publicConfig();
+    return publicConfig(actor(request));
   });
 
   /**
@@ -887,8 +1160,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       copilotId: string | null;
       provider?: string;
       model?: string;
-      /** This turn's attachments, which scope the `read_document` tool. */
-      attachments: Attachment[];
+      /** Whose sources tree `read_document` reads from. */
+      user: UserLayout;
+      /**
+       * Every source this conversation can read, resolved per turn.
+       *
+       * A whitelist rather than "whatever ids the model names": a guessed id fails a `Map`
+       * lookup before any path is touched, which is what makes wandering into another
+       * conversation's uploads unrepresentable rather than merely forbidden. It is wider than
+       * the turn's own attachments on purpose — see `read_document`'s note.
+       */
+      sources: Source[];
     }
   ): TurnContext {
     const copilot = input.copilotId ? db.getCopilot(input.copilotId) : undefined;
@@ -899,21 +1181,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const modelId = resolveModelId(provider, input.model, session.settings, copilot?.settings);
 
     const tools = buildTools({
-      workspaceDir: workspace.dirPath,
+      workspaceDir: workspace.workdirPath,
       webSearch: config.tools.webSearch,
       webFetch: config.tools.webFetch,
       fileToolsEnabled: config.tools.fileTools.enabled,
       allowedNames: copilot?.tools,
-      // The tool is scoped to *this turn's* attachments, so a model cannot read a document
-      // from another conversation even if it guesses an id.
       documents: {
-        uploadRoot: uploadsRoot,
-        sessionId: session.id,
-        attachments: input.attachments.map((a) => ({
-          id: a.id,
-          name: a.name,
-          mimeType: a.mimeType,
-        })),
+        user: input.user,
+        sources: input.sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
     });
@@ -938,6 +1213,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    */
   async function finishTurn(
     id: string,
+    userId: string,
     session: Session,
     ctx: TurnContext,
     result: RunAgentResult,
@@ -969,7 +1245,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         assistantMessage: result.content,
       });
       if (title) {
-        db.setAutoTitle(id, title);
+        db.setAutoTitleForUser(id, userId, title);
         sse.send({ type: "title", sessionId: id, title });
       }
     }
@@ -989,13 +1265,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   app.post("/api/sessions/:id/chat", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as ChatInput;
 
-    const session = db.getSession(id);
-    if (!session) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    const workspace = db.getWorkspace(session.workspaceId);
-    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    const { session, workspace } = found;
 
     const message = body?.message?.trim();
     const attachments = body?.attachments ?? [];
@@ -1009,10 +1285,26 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
     const copilotId = body.copilotId ?? session.copilotId ?? null;
 
-    // Drop anything whose id/MIME would not resolve to a path under this session's upload
-    // directory. A stale or hostile client cannot point the reader at an arbitrary file
-    // (a well-formed id for a missing file still degrades to a placeholder downstream).
-    const storedAttachments = attachments.filter((a) => resolveStoredPath(uploadsRoot, id, a));
+    /*
+     * The sources this conversation can actually read — its own links plus its workspace's.
+     * A whitelist membership test rather than a path check: a stale or hostile client cannot
+     * name another conversation's upload at all, and an id for a deleted file degrades to a
+     * placeholder downstream rather than failing the turn.
+     *
+     * Both halves of the snapshot are reassembled here, and each comes from the side that
+     * knows it. The **name** is the client's, because it is the one this message used — a
+     * source shared between conversations can only remember the first. The **parse state** is
+     * the server's, read from the row at this moment: a tab that has been sitting open would
+     * otherwise write whatever it last saw into the record of a turn, so a document that
+     * failed to parse would reach the model as "still parsing" and it would answer about a
+     * file it was told was coming.
+     */
+    const readable = new Map(
+      db.listReadableSources(userId, id, workspace.id).map((s) => [s.id, s])
+    );
+    const storedAttachments = attachments
+      .map((a) => (readable.has(a.id) ? toAttachment(readable.get(a.id)!, a.name) : undefined))
+      .filter((a): a is Attachment => a !== undefined);
 
     // Any question still waiting for an answer belongs to a turn the user has now moved
     // on from. Retiring it here — before the new user turn is written — is what makes the
@@ -1023,18 +1315,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       copilotId,
       provider: body.provider,
       model: body.model,
-      attachments: storedAttachments,
+      user: treeFor(actor(request)),
+      sources: db.listReadableSources(userId, id, workspace.id),
     });
 
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
-    const history = db.listMessages(id);
+    const history = db.listMessagesForUser(id, userId);
 
     db.createMessage({
       id: newId(),
       sessionId: id,
       role: "user",
       content: message,
-      attachments: storedAttachments.length > 0 ? await withParseState(id, storedAttachments) : undefined,
+      attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
     });
 
     // Take over the response so we can stream Server-Sent Events.
@@ -1049,7 +1342,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         workspace,
         copilot: ctx.copilot,
         settings: session.settings,
-        uploadRoot: uploadsRoot,
+        user: treeFor(actor(request)),
         sessionId: id,
         vision: ctx.vision,
         toolUse: ctx.toolUse,
@@ -1060,7 +1353,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
 
-      await finishTurn(id, session, ctx, result, sse, {
+      await finishTurn(id, userId, session, ctx, result, sse, {
         historyLength: history.length,
         userMessage: message,
       });
@@ -1082,13 +1375,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * — nothing about the pending state lives in a process.
    */
   app.post("/api/sessions/:id/answers", async (request, reply) => {
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as AnswerToolCallInput;
 
-    const session = db.getSession(id);
-    if (!session) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    const workspace = db.getWorkspace(session.workspaceId);
-    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    const { session, workspace } = found;
 
     const toolCallId = typeof body?.toolCallId === "string" ? body.toolCallId : "";
     const action = body?.action === "cancel" ? "cancel" : "submit";
@@ -1117,7 +1410,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // Two copies of one answer, for two readers. `output` is what the model replays as the
     // tool result; `answer` is what the card renders, so the UI never parses prose.
     const status = action === "cancel" ? "dismissed" : "answered";
-    const message = db.getMessage(pending.messageId);
+    const message = db.getMessageForUser(pending.messageId, userId);
     db.updateMessageToolCalls(
       pending.messageId,
       (message?.toolCalls ?? []).map((tc) =>
@@ -1134,7 +1427,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     const ctx = turnContext(session, workspace, {
       copilotId: session.copilotId ?? null,
-      attachments: [],
+      user: treeFor(actor(request)),
+      sources: db.listReadableSources(userId, id, workspace.id),
     });
 
     await reply.hijack();
@@ -1143,14 +1437,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     try {
       // Read history *after* the answer was written, so the resumed run sees it.
-      const history = db.listMessages(id);
+      const history = db.listMessagesForUser(id, userId);
       const result = await runAgentStream({
         provider: ctx.provider,
         modelId: ctx.modelId,
         workspace,
         copilot: ctx.copilot,
         settings: session.settings,
-        uploadRoot: uploadsRoot,
+        user: treeFor(actor(request)),
         sessionId: id,
         vision: ctx.vision,
         toolUse: ctx.toolUse,
@@ -1160,7 +1454,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
 
-      await finishTurn(id, session, ctx, result, sse, {
+      await finishTurn(id, userId, session, ctx, result, sse, {
         historyLength: history.length,
         userMessage: null,
       });

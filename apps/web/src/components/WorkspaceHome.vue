@@ -3,7 +3,7 @@ import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
-import { openSettings, showChat } from "../composables/ui";
+import { openSettings, openSources, showChat } from "../composables/ui";
 import { formatRelativeTime } from "../utils/format";
 import type { Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
@@ -138,6 +138,20 @@ function activityLabel(workspace: Workspace): string {
       <!-- Reachable before a workspace has been chosen: the theme and the language are
            properties of the app, not of a conversation. -->
       <TopbarControls />
+      <!--
+        Next to Settings rather than in the sidebar, because a source belongs to the account:
+        the same file is reachable from every workspace, and an entry inside one of them would
+        say otherwise.
+      -->
+      <button
+        class="icon-btn"
+        data-testid="open-sources"
+        :title="t('sources.open')"
+        :aria-label="t('sources.open')"
+        @click="openSources"
+      >
+        <Icon name="folder" />
+      </button>
       <button
         class="icon-btn"
         data-testid="open-settings"

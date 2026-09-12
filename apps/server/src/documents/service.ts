@@ -1,8 +1,9 @@
 import { promises as fs } from "node:fs";
-import type { Attachment } from "@ilearnassist/shared";
-import { resolveStoredPath } from "../attachments.js";
+import type { Attachment, Source } from "@ilearnassist/shared";
+import { resolveInSources } from "../attachments.js";
 import type { AppConfig } from "../config.js";
-import { readDocumentParsing, type AppDb } from "../db.js";
+import { readDocumentParsing, type AppDb, type SourceRecord } from "../db.js";
+import type { UserLayout } from "../paths.js";
 import {
   driverFor,
   isDocumentParserKind,
@@ -13,38 +14,36 @@ import {
 } from "./index.js";
 import { ParseError, asParseError, describeParseError } from "./errors.js";
 import { isDocumentMime } from "./formats.js";
-import {
-  readParseRecord,
-  removeParsed,
-  writeParsedText,
-  writeParseRecord,
-  type ParseRecord,
-} from "./store.js";
+import { removeParsedText, writeParsedText } from "./store.js";
 
 /**
- * Owns everything that happens to a document attachment *after* its bytes are stored:
- * deciding whether to parse it, running the work off the request path, and recording the
- * outcome where the prompt builder and the UI can both read it.
+ * Owns everything that happens to a document *after* its bytes are stored: deciding whether
+ * to parse it, running the work off the request path, and recording the outcome in the
+ * source's row — which is where the prompt builder and the UI both read it from.
  *
  * Parsing is deliberately asynchronous. A cloud job routinely takes tens of seconds — five
  * minutes is the configured ceiling — and the upload endpoint has to answer immediately or
  * the composer hangs on every PDF. The trade is a small state machine the client polls.
+ *
+ * **Keyed by source, not by attachment.** A source belongs to the account, so the work
+ * cannot be described by a conversation: two conversations can reference the same file, and
+ * the parse is one job whose result both of them read. The user layout therefore arrives per
+ * call rather than in the constructor — which user's tree the bytes live in is a fact about
+ * the request that started the parse, not about this object.
  */
 
 /** Bound on how many parses run at once; extraction is CPU-heavy and cloud calls bill. */
 export class DocumentService {
-  readonly #uploadRoot: string;
   readonly #db: AppDb;
   readonly #config: AppConfig;
 
-  /** Aborters for in-flight runs, keyed by `sessionId/attachmentId`. */
+  /** Aborters for in-flight runs, keyed by source id. */
   readonly #inFlight = new Map<string, AbortController>();
   readonly #queue: { key: string; run: () => Promise<void> }[] = [];
   #running = 0;
   #closed = false;
 
-  constructor(opts: { uploadRoot: string; db: AppDb; config: AppConfig }) {
-    this.#uploadRoot = opts.uploadRoot;
+  constructor(opts: { db: AppDb; config: AppConfig }) {
     this.#db = opts.db;
     this.#config = opts.config;
   }
@@ -82,49 +81,50 @@ export class DocumentService {
       }));
   }
 
-  /** Whether this attachment is a document we would parse at all. */
-  handles(attachment: Attachment): boolean {
-    return isDocumentMime(attachment.mimeType);
+  /** Whether this is a document we would parse at all. */
+  handles(file: Pick<Attachment, "mimeType">): boolean {
+    return isDocumentMime(file.mimeType);
   }
 
   /**
-   * Queue extraction for a freshly uploaded attachment.
+   * Queue extraction for a source that has just been created.
    *
    * Writes `pending` before returning so a status poll issued immediately after the upload
    * response sees a real state rather than a gap between the two.
    */
-  async schedule(sessionId: string, attachment: Attachment): Promise<void> {
-    if (!this.handles(attachment)) return;
-
-    await writeParseRecord(this.#uploadRoot, sessionId, attachment.id, { status: "pending" });
-    this.#enqueue(`${sessionId}/${attachment.id}`, () => this.#execute(sessionId, attachment));
+  async schedule(user: UserLayout, userId: string, source: SourceRecord): Promise<void> {
+    if (!this.handles(source)) return;
+    this.#db.updateSourceParse(source.id, userId, { status: "pending" });
+    this.#enqueue(source.id, () => this.#execute(user, userId, source));
   }
 
   /**
    * Re-run extraction, for a file that failed or was parsed before the settings changed.
    *
-   * Cancels any run already in flight for the same attachment: two writers racing for the
-   * same sidecar is how a stale result overwrites a fresh one.
+   * Cancels any run already in flight for the same source: two writers racing for the same
+   * text file is how a stale result overwrites a fresh one.
    */
-  async reparse(sessionId: string, attachment: Attachment): Promise<void> {
-    if (!this.handles(attachment)) {
-      throw new ParseError("unsupported_type", `${attachment.name} 不是可解析的文档类型。`);
+  async reparse(user: UserLayout, userId: string, source: SourceRecord): Promise<void> {
+    if (!this.handles(source)) {
+      throw new ParseError("unsupported_type", `${source.name} 不是可解析的文档类型。`);
     }
-    const key = `${sessionId}/${attachment.id}`;
-    this.#cancel(key);
-    await removeParsed(this.#uploadRoot, sessionId, attachment.id).catch(() => undefined);
-    await writeParseRecord(this.#uploadRoot, sessionId, attachment.id, { status: "pending" });
-    this.#enqueue(key, () => this.#execute(sessionId, attachment));
+    this.#cancel(source.id);
+    await removeParsedText(user, source.id).catch(() => undefined);
+    this.#db.updateSourceParse(source.id, userId, { status: "pending" });
+    this.#enqueue(source.id, () => this.#execute(user, userId, source));
   }
 
-  /** Drop everything queued or running for a session — used when the session is deleted. */
-  cancelSession(sessionId: string): void {
-    for (const key of [...this.#inFlight.keys()]) {
-      if (key.startsWith(`${sessionId}/`)) this.#cancel(key);
-    }
-    for (let i = this.#queue.length - 1; i >= 0; i -= 1) {
-      if (this.#queue[i]!.key.startsWith(`${sessionId}/`)) this.#queue.splice(i, 1);
-    }
+  /**
+   * Stop whatever is running or queued for one source.
+   *
+   * There used to be a `cancelSession`, called when a conversation was deleted because the
+   * parse would have written a sidecar back into the directory being removed. That reason is
+   * gone — a source outlives the conversation — and the method went with it rather than being
+   * renamed: cancelling by *session* would now abort a parse that another conversation is
+   * waiting on, for a file that conversation still has.
+   */
+  cancelSource(sourceId: string): void {
+    this.#cancel(sourceId);
   }
 
   /** Probe a parser's endpoint and credential. Throws `ParseError` when it does not work. */
@@ -150,11 +150,6 @@ export class DocumentService {
     } finally {
       clearTimeout(timer);
     }
-  }
-
-  /** Parse state for one attachment, or undefined when nothing has been attempted. */
-  async record(sessionId: string, attachmentId: string): Promise<ParseRecord | undefined> {
-    return readParseRecord(this.#uploadRoot, sessionId, attachmentId);
   }
 
   /** Stop accepting work and abort whatever is running. Called on server shutdown. */
@@ -198,26 +193,27 @@ export class DocumentService {
   }
 
   /**
-   * One extraction run, from bytes to sidecar.
+   * One extraction run, from bytes to extracted text.
    *
    * Failures are recorded rather than thrown: this runs detached from any request, so the
-   * only place a user can learn what happened is the parse record.
+   * only place a user can learn what happened is the source's row.
    */
-  async #execute(sessionId: string, attachment: Attachment): Promise<void> {
-    const key = `${sessionId}/${attachment.id}`;
+  async #execute(user: UserLayout, userId: string, source: SourceRecord): Promise<void> {
     const controller = new AbortController();
-    this.#inFlight.set(key, controller);
+    this.#inFlight.set(source.id, controller);
 
-    const path = resolveStoredPath(this.#uploadRoot, sessionId, attachment);
+    // The stored path is ours, but read it back through the same containment check every
+    // other reader uses: a row is not a trust boundary, and this one holds a filesystem path.
+    const path = resolveInSources(user, source.rawPath);
     if (!path) {
-      await writeParseRecord(this.#uploadRoot, sessionId, attachment.id, {
+      this.#db.updateSourceParse(source.id, userId, {
         status: "failed",
         error: "附件路径无效。",
       });
       return;
     }
 
-    await writeParseRecord(this.#uploadRoot, sessionId, attachment.id, { status: "parsing" });
+    this.#db.updateSourceParse(source.id, userId, { status: "parsing" });
 
     try {
       const stat = await fs.stat(path).catch(() => undefined);
@@ -225,8 +221,8 @@ export class DocumentService {
 
       const outcome = await parseDocument({
         path,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
+        name: source.name,
+        mimeType: source.mimeType,
         size: stat.size,
         policy: this.policy,
         parsers: this.parsers,
@@ -236,8 +232,8 @@ export class DocumentService {
         signal: controller.signal,
       });
 
-      await writeParsedText(this.#uploadRoot, sessionId, attachment.id, outcome.text);
-      await writeParseRecord(this.#uploadRoot, sessionId, attachment.id, {
+      await writeParsedText(user, source.id, outcome.text);
+      this.#db.updateSourceParse(source.id, userId, {
         status: "ready",
         parserId: outcome.parserId,
         parsedChars: outcome.text.length,
@@ -245,10 +241,10 @@ export class DocumentService {
       });
     } catch (err) {
       const error = asParseError(err);
-      // A cancelled run belongs to a reparse that is already queued — recording a failure
-      // here would flash "failed" over the status the newer run is about to set.
+      // A cancelled run is one a reparse has already superseded — recording a failure here
+      // would flash "failed" over the status the newer run is about to set.
       if (error.code === "cancelled") return;
-      await writeParseRecord(this.#uploadRoot, sessionId, attachment.id, {
+      this.#db.updateSourceParse(source.id, userId, {
         status: "failed",
         error: describeParseError(error),
         code: error.code,
