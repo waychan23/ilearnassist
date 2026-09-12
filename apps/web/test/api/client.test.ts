@@ -143,6 +143,56 @@ describe("request", () => {
   });
 });
 
+describe("workspace files", () => {
+  it("asks for one directory level, with the path encoded", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ path: "", entries: [], truncated: false }));
+    await api.listFiles("w1", "docs/sub dir");
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      "/api/workspaces/w1/files?path=docs%2Fsub%20dir"
+    );
+  });
+
+  it("encodes the root as an empty path rather than omitting the parameter", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ path: "", entries: [], truncated: false }));
+    await api.listFiles("w1", "");
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/workspaces/w1/files?path=");
+  });
+
+  it("reads a file's contents from its own route", async () => {
+    const fetchMock = stubFetch(() =>
+      jsonResponse({
+        path: "a.md",
+        name: "a.md",
+        size: 1,
+        modifiedAt: "2026-01-01T00:00:00.000Z",
+        kind: "markdown",
+        text: "#",
+        truncated: false,
+      })
+    );
+    await api.readFileContent("w1", "notes/a.md");
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      "/api/workspaces/w1/files/content?path=notes%2Fa.md"
+    );
+  });
+
+  it("shows the catalog's sentence when the server refuses a path", async () => {
+    i18n.global.locale.value = "zh-CN";
+    stubFetch(() =>
+      jsonResponse(
+        { error: { code: "INVALID_FILE_PATH", message: "outside the workspace" } },
+        { status: 400 }
+      )
+    );
+
+    await expect(api.listFiles("w1", "../..")).rejects.toBeInstanceOf(ApiError);
+    await expect(api.listFiles("w1", "../..")).rejects.toThrow("这个位置不在工作区内，无法访问。");
+  });
+});
+
 describe("attachmentUrl", () => {
   it("points at the attachment route", () => {
     expect(attachmentUrl("s1", "a1")).toBe("/api/sessions/s1/attachments/a1");

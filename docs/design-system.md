@@ -206,6 +206,7 @@ Tier 1, in `style.css`:
 | --- | --- | --- |
 | `.btn` | `.primary`, `.danger`, `.small`, `:disabled` | Every text button |
 | `.icon-btn` | `.danger` | Square button holding one glyph |
+| `.segmented` → `.segment` | `[aria-pressed="true"]` | One choice among a few, as a single control. The shared track is the point — two `.btn`s side by side read as two actions, not two states of one thing |
 | `.input`, `.textarea`, `.select` | | Form controls |
 | `.field` | child `label`, child `.hint` | A labelled form row |
 | `.modal-overlay` → `.modal` → `.modal-head` / `.modal-body` / `.modal-foot` | | Every dialog |
@@ -213,6 +214,11 @@ Tier 1, in `style.css`:
 Tier 1 is the vocabulary to reach for first. A component that defines `.model-btn`,
 `.token-btn` or `.tab` from scratch instead of using `.btn` or `.icon-btn` is the
 duplication this tier exists to prevent.
+
+**`.segment` is keyed on `aria-pressed`, not on a class.** The state a screen reader announces
+and the state the sheet paints are then the same fact, so they cannot drift — and the drift is
+invisible to whoever is not in the affected audience. A `.active` class would be a second copy
+of it.
 
 Tier 2, in `style.css`, for structures several components need:
 

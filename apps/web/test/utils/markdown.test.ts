@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderMarkdown } from "../../src/utils/markdown.js";
+import { highlightFile, renderMarkdown } from "../../src/utils/markdown.js";
 
 describe("renderMarkdown", () => {
   it("renders basic markdown", () => {
@@ -151,5 +151,85 @@ describe("renderMarkdown", () => {
 
   it("returns an empty string for empty input", () => {
     expect(renderMarkdown("")).toBe("");
+  });
+});
+
+describe("highlightFile", () => {
+  /** The class the token spans carry — its presence is what "highlighted" means. */
+  const isHighlighted = (html: string) => html.includes("hljs-");
+
+  it("highlights a language named by its own extension", () => {
+    // No alias entry for any of these: the extension *is* the highlight.js name, which is the
+    // common case and the reason the table stays short.
+    for (const [name, code] of [
+      ["data.json", '{"a": 1}'],
+      ["Main.java", "public class Main {}"],
+      ["q.sql", "SELECT * FROM t"],
+      ["main.go", "package main"],
+    ] as const) {
+      expect(isHighlighted(highlightFile(code, name)), name).toBe(true);
+    }
+  });
+
+  it("resolves the extensions that are not language names", () => {
+    expect(isHighlighted(highlightFile("const a = 1;", "app.js"))).toBe(true);
+    expect(isHighlighted(highlightFile("x: number = 1", "a.ts"))).toBe(true);
+    expect(isHighlighted(highlightFile("def f(): pass", "a.py"))).toBe(true);
+    expect(isHighlighted(highlightFile("key: value", "ci.yml"))).toBe(true);
+    expect(isHighlighted(highlightFile("fun main() {}", "a.kt"))).toBe(true);
+  });
+
+  it("highlights LaTeX", () => {
+    expect(isHighlighted(highlightFile("\\frac{1}{2}", "paper.tex"))).toBe(true);
+  });
+
+  it("highlights Markdown source", () => {
+    // The source view's whole reason for being: rendering hides what was written, and the
+    // file browser is often opened to see exactly that.
+    expect(isHighlighted(highlightFile("# Title\n\n**bold**", "README.md"))).toBe(true);
+  });
+
+  it("ignores the directory part of the path", () => {
+    expect(isHighlighted(highlightFile("const a = 1;", "src/deep/app.js"))).toBe(true);
+  });
+
+  it("escapes instead of colouring a language it does not know", () => {
+    // `.vue` is the deliberate case: a template, a script and a style in one file, which no
+    // highlight.js language describes. A wrong colouring would be worse than none.
+    const html = highlightFile("<template><b>x</b></template>", "App.vue");
+    expect(isHighlighted(html)).toBe(false);
+    expect(html).toBe("&lt;template&gt;&lt;b&gt;x&lt;/b&gt;&lt;/template&gt;");
+  });
+
+  it("escapes a file with no extension", () => {
+    expect(highlightFile("a < b", "NOTES")).toBe("a &lt; b");
+  });
+
+  it("never lets a file's contents become markup", () => {
+    // The preview renders this with `v-html`, so a script tag surviving as a tag would be
+    // injection from a file the agent may have written.
+    for (const html of [
+      highlightFile("<script>alert(1)</script>", "a.js"),
+      highlightFile("<script>alert(1)</script>", "a.txt"),
+      highlightFile('<img src=x onerror="alert(1)">', "a.html"),
+    ]) {
+      expect(html).not.toContain("<script>");
+      expect(html).not.toContain("<img");
+    }
+  });
+
+  it("falls back to escaped text past the size cap rather than colouring it", () => {
+    // A quarter-megabyte is the preview cap and is reachable in one click on a minified
+    // bundle; the text still arrives, it just is not tokenised.
+    const huge = "const a = 1;\n".repeat(15_000);
+    expect(huge.length).toBeGreaterThan(120_000);
+
+    const html = highlightFile(huge, "bundle.js");
+    expect(isHighlighted(html)).toBe(false);
+    expect(html).toContain("const a = 1;");
+  });
+
+  it("keeps multi-byte characters intact", () => {
+    expect(highlightFile("// 工作空间\nconst a = 1;", "a.ts")).toContain("工作空间");
   });
 });

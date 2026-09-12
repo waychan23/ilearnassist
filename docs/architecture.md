@@ -81,6 +81,36 @@ open and then left dormant (`DROP COLUMN` is version-sensitive in SQLite).
 A Copilot's copy is *copied into* a new session, not referenced — editing a
 Copilot later must not rewrite conversations already underway.
 
+### The workspace file browser (`files.ts`)
+
+The sidebar's second panel: a read-only tree of the active workspace, expanded one level at a
+time. It is the only part of the app that reads the workspace *for a human* rather than for a
+model, which is why it is a module of its own rather than a set of extra routes.
+
+- **`GET /api/workspaces/:id/files?path=`** — one level, directories first then files, each
+  `localeCompare`-sorted, exactly as the agent's `list_files` orders them so the two ways of
+  looking at a workspace agree. Capped at 2,000 entries with `truncated` set, because a
+  listing that quietly stops reads as "this directory has 2,000 files".
+- **`GET /api/workspaces/:id/files/content?path=`** — `{ path, name, size, modifiedAt, kind,
+  text, truncated }`. `kind` is `text`, `markdown` or `unsupported`; `text` is null for the
+  last, which is the whole point — bytes that cannot be rendered are never sent, so no caller
+  can accidentally show a binary as mojibake.
+
+`kind` is decided by the server, by extension first and content second. A known-binary
+extension is refused without reading at all; Markdown is named; everything else is sniffed for
+a NUL byte and decoded as UTF-8, which is what makes an extensionless `Makefile`, `LICENSE` or
+`Dockerfile` readable — most of what a workspace actually holds. Past `MAX_PREVIEW_BYTES`
+(256 KB) the reply is still a 200 with `truncated: true`: a 2 GB log is the file someone opens
+to look at the top of, and the read is bounded with `open`+`read` so the whole thing is never
+in memory.
+
+**The sandbox is stricter here than for the tools, on purpose.** Both go through
+`resolveInWorkspace`; the browser additionally `realpath`s the result, because that check is
+lexical and says nothing about a symlink inside the workspace pointing outward — and in a
+browser, one click follows it. The agent's tools keep the lexical behaviour: the model has no
+tool that creates a symlink, so reading through one is the user's own decision about their own
+machine, whereas a click is not. That is a product decision, deliberately left asymmetric.
+
 ### Workspace sandboxing (`workspace.ts`)
 
 The global workspaces root (default `./workspaces`) holds one sub-directory per
@@ -438,6 +468,8 @@ attachments, providers and app defaults.
 | `GET/POST /api/providers`, `PUT/DELETE /api/providers/:id` | provider CRUD |
 | `POST /api/providers/:id/models`, `DELETE /api/providers/:providerId/models/:modelId` | model CRUD |
 | `POST /api/workspaces/:workspaceId/sessions` | create a conversation (copies the Copilot's defaults in) |
+| `GET /api/workspaces/:id/files?path=` | one directory level of the workspace, for the sidebar's file tree |
+| `GET /api/workspaces/:id/files/content?path=` | a file's metadata, and its text when it is text |
 | `PATCH /api/sessions/:id` | rename and/or update per-conversation settings (a title also flips `titleSource` to `user`) |
 | `POST /api/sessions/:id/attachments` | upload (base64 JSON); schedules parsing |
 | `GET /api/sessions/:id/attachments` | parse state for every attachment, by id |
@@ -525,6 +557,51 @@ after that point, and rendering both would show the answer twice for as long as 
 
   The styling conventions — the token tables, the shared classes, the breakpoints — live in
   `docs/design-system.md`, and `apps/web/test/style.test.ts` is what holds the sheet to them.
+
+### The file tree
+
+`Sidebar` carries two panels behind a tab strip — conversations and files — with the action
+belonging to whichever is open (`+`, or refresh). The strip is the settings dialog's tier-2
+`.tabs`, not a second kind of tab; the panel below it is one `.side-scroll` either way, because
+the sidebar's pinned header and footer depend on there being exactly one.
+
+`FileTree.vue` renders `store.fileRows`, which is `flattenTree` from
+[`utils/fileTree.ts`](../apps/web/src/utils/fileTree.ts) computed over a flat map of
+`path → listing`. The rows are a **flat list carrying their own depth**, not nested lists:
+indentation is `calc(var(--depth) * var(--space-6))`, expansion is one array of paths, and
+keyboard movement is an index. Everything with arithmetic in it lives in that util and in the
+store, because a `.vue` file is covered by Playwright and by nothing else — and "which row does
+ArrowLeft go to" is exactly the kind of thing that is wrong without anyone noticing. Focus moves
+by **path**, never by row index: expanding or collapsing renumbers every row after it, and
+`focus()` on a detached node silently does nothing, which leaves focus behind and makes the next
+key press act on the wrong row.
+
+`FilePreviewDialog` is hosted once in `App.vue` and teleported to `body`, like every other
+overlay. It renders by `kind`: Markdown through the messages' own renderer (`html: false` is
+what keeps a file from injecting markup), text syntax-highlighted into a `<pre>`, and anything
+else as the file's name, size and a note that the format is not previewable yet. That last
+branch is the extension point. Escape is handled on `window` and `App.vue`'s drawer handler
+returns early while it is open, for the same reason the confirm prompt's does.
+
+Highlighting is `highlight.js`, which the app already shipped for code fences — the preview
+adds no dependency and no server work, because the client has the file's name and can resolve
+the language itself. `markdown.ts` exposes `highlightFile(code, fileName)` beside
+`renderMarkdown`, and the fenced-code path in `renderMarkdown` calls the *same* internal
+highlighter and the same escaper, so a snippet cannot be coloured one way in a message and
+another in a file. Extensions are looked up as language names first and run through a short
+alias table second (`py`, `ts`, `yml`, `tex`), which is what keeps that table small: most
+extensions already *are* the highlight.js name. `.vue` is deliberately absent — it is a
+template, a script and a style in one file, and no grammar describes that, so it falls back to
+escaped plain text rather than being mis-coloured. Above `MAX_HIGHLIGHT_CHARS` (120,000) the
+text is likewise escaped rather than tokenised: a quarter-megabyte is the preview cap, which
+makes it reachable in one click on a minified bundle, and nobody reads that much coloured
+source.
+
+**Markdown has two views, not one.** Rendered is what a document is for; *source* is what you
+switch to in order to see what the agent actually wrote, and it is the only place Markdown's
+own highlighting appears. They are a segmented control (`.segmented`, a tier-1 class) rather
+than two buttons, because it is one choice in two states — and the switch resets per file,
+because it is a property of what is on screen rather than a preference.
 
 ### Where controls live
 

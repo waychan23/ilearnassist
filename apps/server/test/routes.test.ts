@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
@@ -6,6 +6,8 @@ import type {
   ApiErrorBody,
   Attachment,
   Copilot,
+  DirectoryListing,
+  FileContent,
   ProviderConfig,
   Session,
   Workspace,
@@ -195,6 +197,101 @@ describe("workspaces", () => {
     // The blank attempt left the name alone.
     const listed = (await inject({ method: "GET", url: "/api/workspaces" })).json<Workspace[]>();
     expect(listed.find((w) => w.id === workspace.id)?.name).toBe("Keep");
+  });
+});
+
+describe("workspace files", () => {
+  /** A workspace with a couple of things in it, written through the real `dirPath`. */
+  async function seededWorkspace() {
+    const workspace = await newWorkspace(env, "Files");
+    writeFileSync(join(workspace.dirPath, "notes.md"), "# Notes\n");
+    writeFileSync(join(workspace.dirPath, "app.ts"), "export const x = 1;\n");
+    return workspace;
+  }
+
+  it("lists the workspace root", async () => {
+    const workspace = await seededWorkspace();
+
+    const res = await inject({ method: "GET", url: `/api/workspaces/${workspace.id}/files` });
+    expect(res.statusCode).toBe(200);
+
+    const listing = res.json<DirectoryListing>();
+    expect(listing.path).toBe("");
+    expect(listing.entries.map((e) => e.name)).toEqual(["app.ts", "notes.md"]);
+    expect(listing.truncated).toBe(false);
+  });
+
+  it("lists one level, keyed by the path it was asked for", async () => {
+    const workspace = await seededWorkspace();
+    mkdirSync(join(workspace.dirPath, "src"));
+    writeFileSync(join(workspace.dirPath, "src", "index.ts"), "x");
+
+    const res = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files?path=${encodeURIComponent("src")}`,
+    });
+    expect(res.json<DirectoryListing>().entries.map((e) => e.path)).toEqual(["src/index.ts"]);
+  });
+
+  it("returns a text file and a markdown file differently", async () => {
+    const workspace = await seededWorkspace();
+
+    const md = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files/content?path=notes.md`,
+    });
+    expect(md.json<FileContent>()).toMatchObject({ kind: "markdown", text: "# Notes\n" });
+
+    const ts = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files/content?path=app.ts`,
+    });
+    expect(ts.json<FileContent>()).toMatchObject({ kind: "text", truncated: false });
+  });
+
+  it("reports a file it will not render without sending its bytes", async () => {
+    const workspace = await seededWorkspace();
+    writeFileSync(join(workspace.dirPath, "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const res = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files/content?path=shot.png`,
+    });
+    expect(res.json<FileContent>()).toMatchObject({ kind: "unsupported", text: null });
+  });
+
+  it("404s a workspace that does not exist", async () => {
+    const res = await inject({ method: "GET", url: "/api/workspaces/nope/files" });
+    expect(res.statusCode).toBe(404);
+    expect(res.json<ApiErrorBody>().error.code).toBe("WORKSPACE_NOT_FOUND");
+  });
+
+  it("400s a path that escapes the workspace, and a missing file differently", async () => {
+    const workspace = await seededWorkspace();
+
+    const escape = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files?path=${encodeURIComponent("../..")}`,
+    });
+    expect(escape.statusCode).toBe(400);
+    expect(escape.json<ApiErrorBody>().error.code).toBe("INVALID_FILE_PATH");
+
+    const missing = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files/content?path=gone.txt`,
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json<ApiErrorBody>().error.code).toBe("FILE_NOT_FOUND");
+  });
+
+  it("400s asking a file for its children", async () => {
+    const workspace = await seededWorkspace();
+    const res = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files?path=notes.md`,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<ApiErrorBody>().error.code).toBe("NOT_A_DIRECTORY");
   });
 });
 

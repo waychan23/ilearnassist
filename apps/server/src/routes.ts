@@ -76,6 +76,7 @@ import {
   UPLOADS_ROOT,
 } from "./attachments.js";
 import { createWorkspaceDir, removeWorkspaceDir, uniqueSlug } from "./workspace.js";
+import { FileAccessError, listDirectory, readFileContent } from "./files.js";
 
 interface RoutesOptions {
   config: AppConfig;
@@ -112,6 +113,28 @@ function apiError(
 function parseApiError(err: unknown): ApiErrorBody {
   const detail = parseErrorDetail(err);
   return apiError(parseErrorCodeOf(err), describeParseError(err), detail ? { detail } : undefined);
+}
+
+/**
+ * Map a workspace-read failure onto the envelope and the status that carries it.
+ *
+ * `FileAccessError` already knows which of the three it is, because that is decided where
+ * the failure is detected — the only place that can tell a path that does not exist from one
+ * that resolves out of the workspace. Anything else is a genuine server fault and is
+ * rethrown, so Fastify answers with its own 500: a curated reply for a bug would tell the
+ * user to read a friendly sentence about a file when what happened was the server breaking.
+ */
+function fileErrorReply(err: unknown): { status: 400 | 404; body: ApiErrorBody } {
+  if (err instanceof FileAccessError) {
+    // Only "there is nothing there" is a 404. Everything else — an escaping path, a
+    // directory asked for as a file — is a bad request, and saying 404 would send the
+    // client looking for a file that was never the problem.
+    return {
+      status: err.code === "FILE_NOT_FOUND" ? 404 : 400,
+      body: apiError(err.code, err.message),
+    };
+  }
+  throw err;
 }
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
@@ -284,6 +307,56 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     db.deleteWorkspace(id);
     removeWorkspaceDir(config.workspaces.rootDir, workspace.dirPath);
     return { ok: true };
+  });
+
+  /* ------------------------------ workspace files ------------------------------ */
+
+  /**
+   * The browser's two reads. Both are keyed on the workspace id and a path *relative to the
+   * workspace root*, and both answer from disk — there is no index and nothing cached, so a
+   * file the agent wrote a moment ago is there on the next request.
+   *
+   * Listing one level at a time is what keeps this usable on a workspace with a
+   * `node_modules` in it: a tree is expanded by the user, so only the levels they opened are
+   * ever read. The client caches each level under its own path, which is why the reply
+   * echoes the path back rather than leaving the caller to assume it.
+   *
+   * Write endpoints belong here beside them when they land (`POST` for a new file,
+   * `PUT /api/workspaces/:id/files/content` to save one, `DELETE` on a path) — the resource
+   * and its URL shape are chosen so that is an addition rather than a rename.
+   */
+  app.get("/api/workspaces/:workspaceId/files", async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    // `string[]` is not hypothetical: `?path=a&path=b` parses to an array, and the module
+    // refuses it rather than letting a string operation on it become a 500.
+    const { path } = request.query as { path?: string | string[] };
+    const workspace = db.getWorkspace(workspaceId);
+    if (!workspace) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
+
+    try {
+      return await listDirectory(workspace.dirPath, path);
+    } catch (err) {
+      const { status, body } = fileErrorReply(err);
+      return reply.code(status).send(body);
+    }
+  });
+
+  app.get("/api/workspaces/:workspaceId/files/content", async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const { path } = request.query as { path?: string | string[] };
+    const workspace = db.getWorkspace(workspaceId);
+    if (!workspace) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
+
+    try {
+      return await readFileContent(workspace.dirPath, path);
+    } catch (err) {
+      const { status, body } = fileErrorReply(err);
+      return reply.code(status).send(body);
+    }
   });
 
   /* --------------------------------- copilots --------------------------------- */

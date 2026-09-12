@@ -135,6 +135,41 @@ export default {
     openNav: "打开导航",
   },
 
+  /**
+   * The workspace file browser. Its own domain rather than a corner of `sidebar`, because
+   * the tree is not a part of the sidebar conceptually — the sidebar is just where it lives.
+   */
+  files: {
+    tab: "文件",
+    refresh: "刷新文件列表",
+    empty: "这个工作区还没有文件",
+    /**
+     * Shown under a directory that held more entries than one reply carries. Says how many
+     * are shown rather than only that some are missing: "too many files" alone leaves the
+     * reader guessing whether they are looking at 200 of 201 or 200 of 20,000.
+     */
+    truncated: "内容过多，仅显示前 {count} 项",
+    /** The accessible name of the tree; the rows carry their own names. */
+    treeLabel: "工作区文件",
+    retry: "重试",
+    preview: {
+      loading: "正在读取…",
+      /** Markdown's two views. Rendered first, because reading a document is the common case;
+       *  source is what you switch to in order to see what was actually written. */
+      rendered: "预览",
+      source: "源码",
+      /** The accessible name of the two-segment control those labels sit in. */
+      viewLabel: "查看方式",
+      /** The whole of what an unrenderable file gets: no bytes are fetched, so there is
+       *  nothing to show but the name and the reason. */
+      unsupported: "暂不支持预览这种格式",
+      unsupportedHint: "目前可以预览纯文本与 Markdown 文件。",
+      /** Appended to the metadata line when the file was longer than the preview cap. */
+      truncated: "仅显示前 {size}",
+      size: "大小",
+    },
+  },
+
   session: {
     /** Shown in place of a title before the auto-titler has produced one. */
     fallbackTitle: "新会话",
@@ -497,6 +532,10 @@ export default {
     MESSAGE_REQUIRED: "消息内容不能为空。",
     QUESTION_NOT_PENDING: "这组问题已经不需要回答了，可能已经提交或作废。",
     INVALID_ANSWER: "提交的回答不完整或已失效，请刷新页面后重试。",
+    FILE_NOT_FOUND: "文件或目录不存在，可能已被删除或重命名。",
+    INVALID_FILE_PATH: "这个位置不在工作区内，无法访问。",
+    NOT_A_DIRECTORY: "该路径不是一个目录。",
+    NOT_A_FILE: "该路径不是一个文件。",
   },
 
   /**

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatStreamEvent,
   Copilot,
+  DirectoryListing,
+  FileEntry,
   Message,
   PublicConfig,
   Session,
@@ -33,6 +35,8 @@ const mocks = vi.hoisted(() => ({
     updateSession: vi.fn(),
     deleteSession: vi.fn(),
     listMessages: vi.fn(),
+    listFiles: vi.fn(),
+    readFileContent: vi.fn(),
     uploadAttachment: vi.fn(),
     listAttachmentStatus: vi.fn(),
     reparseAttachment: vi.fn(),
@@ -1026,5 +1030,332 @@ describe("answerQuestion", () => {
 
     expect(toolCall(store)!.status).toBe("answered");
     expect(toolCall(store)!.answer).toEqual({ "0": { selected: ["OAuth"] } });
+  });
+});
+
+/* ------------------------------- file browser -------------------------------- */
+
+const dirEntry = (path: string): FileEntry => ({
+  name: path.slice(path.lastIndexOf("/") + 1),
+  path,
+  type: "dir",
+  size: null,
+  modifiedAt: null,
+});
+
+const fileEntry = (path: string, size = 12): FileEntry => ({
+  name: path.slice(path.lastIndexOf("/") + 1),
+  path,
+  type: "file",
+  size,
+  modifiedAt: "2026-01-01T00:00:00.000Z",
+});
+
+const listing = (path: string, entries: FileEntry[], truncated = false): DirectoryListing => ({
+  path,
+  entries,
+  truncated,
+});
+
+const ROOT = listing("", [dirEntry("src"), fileEntry("README.md")]);
+const SRC = listing("src", [fileEntry("src/index.ts")]);
+
+/** A promise the test resolves by hand, for asserting on what happens mid-flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("file browser", () => {
+  it("reads a directory once and reuses it", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockResolvedValue(ROOT);
+
+    await store.loadDirectory("");
+    expect(store.fileListings[""]).toEqual(ROOT);
+    expect(mocks.api.listFiles).toHaveBeenCalledWith("w1", "");
+
+    await store.loadDirectory("");
+    expect(mocks.api.listFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches a directory when it is opened, and only folds it away when closed", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockImplementation(async (_w: string, path: string) =>
+      path === "" ? ROOT : SRC
+    );
+
+    await store.toggleDirectory("src");
+    expect(store.fileExpanded).toEqual(["src"]);
+    expect(store.fileListings["src"]).toEqual(SRC);
+
+    await store.toggleDirectory("src");
+    expect(store.fileExpanded).toEqual([]);
+    // Folded away, not forgotten: reopening goes back to the cache, not to the server.
+    await store.toggleDirectory("src");
+    expect(store.fileExpanded).toEqual(["src"]);
+    expect(mocks.api.listFiles).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * An expanded directory with no children is indistinguishable from an empty one, so a
+   * failed read must not leave one on screen.
+   */
+  it("closes a directory whose listing failed, and says why", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockRejectedValue(new Error("读取失败"));
+
+    await store.toggleDirectory("src");
+
+    expect(store.fileExpanded).toEqual([]);
+    expect(store.fileTreeError).toBe("读取失败");
+  });
+
+  it("clears a previous error once something succeeds", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockRejectedValueOnce(new Error("读取失败"));
+    await store.toggleDirectory("src");
+
+    mocks.api.listFiles.mockResolvedValue(ROOT);
+    await store.loadDirectory("");
+
+    expect(store.fileTreeError).toBeNull();
+  });
+
+  it("re-reads the root and every open directory on refresh", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockImplementation(async (_w: string, path: string) =>
+      path === "" ? ROOT : SRC
+    );
+    await store.loadDirectory("");
+    await store.toggleDirectory("src");
+    mocks.api.listFiles.mockClear();
+
+    await store.refreshFileTree();
+
+    expect(mocks.api.listFiles.mock.calls.map((c) => c[1]).sort()).toEqual(["", "src"]);
+  });
+
+  it("reports a failed manual refresh but not a silent one", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockResolvedValue(ROOT);
+    await store.loadDirectory("");
+
+    mocks.api.listFiles.mockRejectedValue(new Error("服务器错误"));
+    await store.refreshFileTree({ silent: true });
+    expect(store.fileTreeError).toBeNull();
+
+    await store.refreshFileTree();
+    expect(store.fileTreeError).toBe("服务器错误");
+  });
+
+  it("does nothing on a silent refresh before the tree has ever been opened", async () => {
+    const store = await readyStore();
+    await store.refreshFileTree({ silent: true });
+    expect(mocks.api.listFiles).not.toHaveBeenCalled();
+  });
+
+  it("shows a preview's path immediately, and its contents when they arrive", async () => {
+    const store = await readyStore();
+    const content = {
+      path: "README.md",
+      name: "README.md",
+      size: 12,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+      kind: "markdown" as const,
+      text: "# hi",
+      truncated: false,
+    };
+    const gate = deferred<void>();
+    mocks.api.readFileContent.mockImplementation(async () => {
+      await gate.promise;
+      return content;
+    });
+
+    const promise = store.openFile("README.md");
+    expect(store.filePreviewPath).toBe("README.md");
+    expect(store.fileContentLoading).toBe(true);
+
+    gate.resolve();
+    await promise;
+    expect(store.fileContent).toEqual(content);
+    expect(store.fileContentLoading).toBe(false);
+  });
+
+  /**
+   * The dialog is already open and the user asked for this file, so a failure has one
+   * obvious home. Throwing would leave the dialog blank and the click looking inert.
+   */
+  it("keeps the dialog open with the reason when a file cannot be read", async () => {
+    const store = await readyStore();
+    mocks.api.readFileContent.mockRejectedValue(new Error("文件不存在"));
+
+    await store.openFile("gone.txt");
+
+    expect(store.filePreviewPath).toBe("gone.txt");
+    expect(store.filePreviewError).toBe("文件不存在");
+    expect(store.fileContent).toBeNull();
+    expect(store.fileContentLoading).toBe(false);
+  });
+
+  it("clears the preview on close", async () => {
+    const store = await readyStore();
+    mocks.api.readFileContent.mockResolvedValue({
+      path: "a.txt",
+      name: "a.txt",
+      size: 1,
+      modifiedAt: "2026-01-01T00:00:00.000Z",
+      kind: "text",
+      text: "x",
+      truncated: false,
+    });
+    await store.openFile("a.txt");
+
+    store.closeFile();
+
+    expect(store.filePreviewPath).toBeNull();
+    expect(store.fileContent).toBeNull();
+    expect(store.filePreviewError).toBeNull();
+  });
+
+  it("drops the tree and the open preview when the workspace changes", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockResolvedValue(ROOT);
+    await store.loadDirectory("");
+    await store.toggleDirectory("src").catch(() => undefined);
+    store.filePreviewPath = "README.md";
+
+    await store.selectWorkspace("w1");
+
+    expect(store.fileListings).toEqual({});
+    expect(store.fileExpanded).toEqual([]);
+    expect(store.filePreviewPath).toBeNull();
+  });
+
+  /**
+   * Paths are relative to the workspace that answered, so a reply that outlived its
+   * workspace would put one workspace's files under another's name — and by then the tree
+   * has been cleared, so it would be resurrecting it rather than appending to it.
+   */
+  it("drops a listing that arrives after the workspace changed", async () => {
+    const store = await readyStore();
+    const gate = deferred<DirectoryListing>();
+    mocks.api.listFiles.mockReturnValue(gate.promise);
+
+    const loading = store.loadDirectory("");
+    await store.selectWorkspace("w2");
+    gate.resolve(ROOT);
+    await loading;
+
+    expect(store.fileListings).toEqual({});
+  });
+
+  it("derives the visible rows from what is open", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockImplementation(async (_w: string, path: string) =>
+      path === "" ? ROOT : SRC
+    );
+    await store.loadDirectory("");
+    expect(store.fileRows.map((r) => r.entry.path)).toEqual(["src", "README.md"]);
+
+    await store.toggleDirectory("src");
+    expect(store.fileRows.map((r) => r.entry.path)).toEqual([
+      "src",
+      "src/index.ts",
+      "README.md",
+    ]);
+  });
+
+  it("reports how much of a truncated listing is on screen", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockResolvedValue(listing("", [fileEntry("a.txt")], true));
+
+    await store.loadDirectory("");
+
+    expect(store.fileTruncatedAt).toBe(1);
+  });
+});
+
+describe("the file tree after a turn", () => {
+  it("re-reads an open tree, because a turn is what writes files", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockResolvedValue(ROOT);
+    await store.loadDirectory("");
+    mocks.api.listFiles.mockClear();
+    streamOf({ type: "done" });
+
+    await store.sendMessage("写一个文件");
+
+    expect(mocks.api.listFiles).toHaveBeenCalledWith("w1", "");
+  });
+
+  it("costs nothing when the tree was never opened", async () => {
+    const store = await readyStore();
+    streamOf({ type: "done" });
+
+    await store.sendMessage("你好");
+
+    expect(mocks.api.listFiles).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The re-read is a courtesy to a panel the user may not even be looking at, so it must not
+   * reach the toast — a turn that succeeded should not report a failure of something nobody
+   * asked for.
+   */
+  it("swallows a failure so a good turn stays good", async () => {
+    const store = await readyStore();
+    mocks.api.listFiles.mockResolvedValue(ROOT);
+    await store.loadDirectory("");
+    mocks.api.listFiles.mockRejectedValue(new Error("服务器错误"));
+    streamOf({ type: "done" });
+
+    await store.sendMessage("你好");
+
+    expect(store.error).toBeNull();
+    expect(store.fileTreeError).toBeNull();
+  });
+
+  it("also covers a turn resumed by answering a question", async () => {
+    const store = await readyStore({
+      messages: [
+        message({
+          id: "a1",
+          role: "assistant",
+          content: "先确认一下",
+          toolCalls: [
+            {
+              id: "call_ask",
+              name: "ask_user",
+              input: JSON.stringify({
+                questions: [
+                  {
+                    header: "认证方式",
+                    question: "要用哪种认证方式？",
+                    options: [{ label: "OAuth" }, { label: "API Key" }],
+                  },
+                ],
+              }),
+              status: "awaiting",
+            },
+          ],
+        }),
+      ],
+    });
+    mocks.api.listFiles.mockResolvedValue(ROOT);
+    await store.loadDirectory("");
+    mocks.api.listFiles.mockClear();
+    mocks.streamAnswers.mockImplementation(async function* () {
+      yield { type: "done" };
+    });
+
+    await store.answerQuestion("call_ask", { action: "submit", answers: { "0": { selected: ["OAuth"] } } });
+
+    expect(mocks.api.listFiles).toHaveBeenCalledWith("w1", "");
   });
 });

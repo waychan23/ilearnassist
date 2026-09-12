@@ -7,6 +7,7 @@ import ChatView from "./components/ChatView.vue";
 import WorkspaceHome from "./components/WorkspaceHome.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
+import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import { closeDrawer, closeSettings, uiState } from "./composables/ui";
 import { isCompact } from "./composables/breakpoints";
 import { confirmState } from "./composables/confirm";
@@ -27,11 +28,12 @@ onMounted(() => {
  * `ConfirmDialog` listens on `window` for the same key, so with a confirm prompt raised over
  * an open drawer a single press would close both: the prompt vanishes and the thing that
  * asked for it slides away underneath. The same applies to Settings, which the sidebar's own
- * footer opens. Returning early while either is up leaves the topmost layer to handle it.
+ * footer opens, and to the file preview, which the sidebar opens too. Returning early while
+ * any of them is up leaves the topmost layer to handle it.
  */
 function onKeydown(event: KeyboardEvent) {
   if (event.key !== "Escape" || !uiState.drawerOpen) return;
-  if (confirmState.open || uiState.settingsOpen) return;
+  if (confirmState.open || uiState.settingsOpen || store.filePreviewPath) return;
   closeDrawer();
 }
 
@@ -60,6 +62,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
  * `ChatView`, and an emit chain to hand `App` an element reference would be more moving
  * parts than a selector for something that is on screen exactly once.
  *
+ * The open target is *whichever panel action is on screen*, and the comma selector is what
+ * makes that one expression: the sidebar's strip swaps `new-session` for the files refresh,
+ * so naming only the first would leave the drawer opening with focus nowhere when the files
+ * panel is the one showing.
+ *
  * Together with the backdrop, the `inert` on the pane behind it and the Escape handler this
  * is the whole focus story — a hand-rolled trap would be a state machine doing what `inert`
  * already does.
@@ -69,7 +76,9 @@ watch(
   async (open) => {
     if (!isCompact.value) return;
     await nextTick();
-    const selector = open ? "[data-testid='new-session']" : '[data-testid="nav-toggle"]';
+    const selector = open
+      ? "[data-testid='new-session'], [data-testid='files-refresh']"
+      : '[data-testid="nav-toggle"]';
     document.querySelector<HTMLElement>(selector)?.focus();
   }
 );
@@ -110,6 +119,10 @@ watch(
     <ConfirmDialog />
     <!-- Reachable from the sidebar footer, the composer's model picker and the home page. -->
     <SettingsDialog v-if="uiState.settingsOpen" @close="closeSettings" />
+    <!-- Mounted for its lifetime rather than behind a `v-if` on the file: it renders nothing
+         until one is opened, and the Sidebar — which would be the natural host — unmounts on
+         the way back to the workspace home. -->
+    <FilePreviewDialog />
     <Transition name="fade">
       <div v-if="store.error" class="toast">
         <span>{{ store.error }}</span>

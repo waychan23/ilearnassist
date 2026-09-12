@@ -189,6 +189,10 @@ export const API_ERROR_CODES = [
   "MESSAGE_REQUIRED",
   "QUESTION_NOT_PENDING",
   "INVALID_ANSWER",
+  "FILE_NOT_FOUND",
+  "INVALID_FILE_PATH",
+  "NOT_A_DIRECTORY",
+  "NOT_A_FILE",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -292,6 +296,67 @@ export interface Workspace {
    */
   sessionCount: number;
   lastActivityAt: string | null;
+}
+
+/**
+ * One entry in a workspace directory listing.
+ *
+ * `path` is workspace-relative and always `/`-separated, whatever the host platform uses —
+ * it is the key the client caches a directory's children under and the value it sends back
+ * as `?path=`, so it has to mean the same thing on both sides of the wire. `name` is the
+ * basename, which is all a row renders.
+ *
+ * `size` and `modifiedAt` are null for directories: a directory has no meaningful size, and
+ * a listing that stat'ed every child to invent one would be slower for a number no row shows.
+ */
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  size: number | null;
+  modifiedAt: string | null;
+}
+
+/** One directory level. Children are fetched per level, so this is always a single layer. */
+export interface DirectoryListing {
+  /** The directory listed, workspace-relative — `""` for the workspace root. */
+  path: string;
+  entries: FileEntry[];
+  /**
+   * True when the directory held more entries than the server will return in one reply.
+   *
+   * Reported rather than silently dropped: a listing that quietly stops at the cap reads as
+   * "this directory has 200 files" to anyone looking at it.
+   */
+  truncated: boolean;
+}
+
+/**
+ * What the server could make of a file's bytes, and therefore what the client can render.
+ *
+ * A union rather than a boolean because the next formats are already planned — an image or
+ * a PDF is a new member plus a branch, not a second endpoint and a rewrite. The client
+ * switches exhaustively, so adding one is a compile error at every site that must handle it.
+ */
+export const FILE_CONTENT_KINDS = ["text", "markdown", "unsupported"] as const;
+export type FileContentKind = (typeof FILE_CONTENT_KINDS)[number];
+
+/**
+ * A file's metadata, plus its text when the server decided there was any to send.
+ *
+ * `text` is null for `unsupported` on purpose — the bytes are never read past the sniff in
+ * that case, so there is nothing to send and no way for a caller to render a binary as
+ * mojibake. `truncated` says the file is longer than the preview cap, which the UI states
+ * outright rather than letting a file look like it ends there.
+ */
+export interface FileContent {
+  path: string;
+  name: string;
+  size: number;
+  modifiedAt: string;
+  kind: FileContentKind;
+  text: string | null;
+  truncated: boolean;
 }
 
 /** What a model can do — drives vision handling and UI badges. */
