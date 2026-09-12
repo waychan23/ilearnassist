@@ -31,9 +31,9 @@ import { ServerProcess } from "./serverProcess.js";
 
 // Must happen before the first `getPath("userData")`. Electron derives that path from the
 // app name, and the packaged bundle's `productName` is not visible when running unpacked —
-// without this, `pnpm desktop:dev` would write to `Application Support/@guided-learning/desktop`
-// while the .dmg writes next to `guided-learning`, and the two would never share state.
-app.setName("guided-learning");
+// without this, `pnpm desktop:dev` would write to `Application Support/@ilearnassist/desktop`
+// while the .dmg writes next to `ilearnassist`, and the two would never share state.
+app.setName("ilearnassist");
 
 const appRoot = app.getAppPath();
 /**
@@ -220,7 +220,7 @@ async function openAppWindow(): Promise<void> {
     height: 880,
     minWidth: 720,
     minHeight: 520,
-    title: "guided-learning",
+    title: "ilearnassist",
     backgroundColor: chromeColour(),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });

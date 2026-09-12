@@ -1,13 +1,13 @@
 # Reference project: chatbox
 
-guided-learning is modeled on [chatbox](https://github.com/chatboxai/chatbox), a
+ilearnassist is modeled on [chatbox](https://github.com/chatboxai/chatbox), a
 popular desktop chat client for LLMs. A clone of the upstream repo is kept
 locally for reference during development.
 
 - **Upstream:** <https://github.com/chatboxai/chatbox> (chatboxai/chatbox)
 - **Local clone:** `/Users/waychan23/Documents/work/spaces/trae/chatbox`
 
-chatbox is Electron + React (a monorepo: `src/` + `packages/`); guided-learning
+chatbox is Electron + React (a monorepo: `src/` + `packages/`); ilearnassist
 is Fastify + Vue 3 + SQLite (our own `apps/` + `packages/shared`). Treat the
 clone as a behavioral/UX reference — port ideas, don't lift code verbatim.
 
@@ -31,13 +31,13 @@ clone as a behavioral/UX reference — port ideas, don't lift code verbatim.
   `https://html.duckduckgo.com/html/`, and `bing-news.ts` hits Bing's news
   infinite-scroll endpoint — all from the Electron renderer.
 
-  → guided-learning adopts the *same keyless scheme* but **server-side** in
+  → ilearnassist adopts the *same keyless scheme* but **server-side** in
   [`apps/server/src/tools/webSearch.ts`](../apps/server/src/tools/webSearch.ts)
   (default `bing`, plus `duckduckgo`/`tavily`/`searxng`). Moving it server-side
   keeps it provider-agnostic and independent of the client's network/CORS, which
   was the explicit requirement ("采用同样的方案，同时支持配置").
 
 - **Copilot ≈ chatbox "agents".** chatbox groups a system prompt, model choice,
-  and enabled capabilities into agent presets. guided-learning's `copilots`
+  and enabled capabilities into agent presets. ilearnassist's `copilots`
   table (`name` / `description` / `systemPrompt` / `model` / `tools`) is the
   equivalent, surfaced in the sidebar.

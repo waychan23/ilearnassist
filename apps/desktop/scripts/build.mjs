@@ -148,7 +148,7 @@ function copyTrayIcons() {
 /** The frontend, built by its own toolchain and then staged as a resource. */
 function buildWeb() {
   console.log("[desktop] building the web app…");
-  execFileSync("pnpm", ["--filter", "@guided-learning/web", "build"], {
+  execFileSync("pnpm", ["--filter", "@ilearnassist/web", "build"], {
     cwd: repoRoot,
     stdio: "inherit",
   });

@@ -6,7 +6,7 @@ import type {
   FileContent,
   FileContentKind,
   FileEntry,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 import { resolveInWorkspace } from "./workspace.js";
 
 /**

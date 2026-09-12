@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
  * Four processes are started, all of them local and offline:
  *   1. the fake OpenAI-compatible LLM  (`apps/server/test/helpers/fakeLlm.ts`)
  *   2. a fake cloud document parser    (`apps/server/test/helpers/fakeParser.ts`)
- *   3. the real guided-learning server, pointed at both fakes and at a throwaway
+ *   3. the real ilearnassist server, pointed at both fakes and at a throwaway
  *      database under `.e2e/`
  *   4. the Vite dev server, which proxies `/api` to (3)
  *
@@ -85,7 +85,7 @@ export default defineConfig({
 
   webServer: [
     {
-      command: "pnpm --filter @guided-learning/server fake-llm",
+      command: "pnpm --filter @ilearnassist/server fake-llm",
       port: FAKE_LLM_PORT,
       env: { FAKE_LLM_PORT: String(FAKE_LLM_PORT) },
       reuseExistingServer: false,
@@ -93,7 +93,7 @@ export default defineConfig({
       stderr: "pipe",
     },
     {
-      command: "pnpm --filter @guided-learning/server fake-parser",
+      command: "pnpm --filter @ilearnassist/server fake-parser",
       port: FAKE_PARSER_PORT,
       env: { FAKE_PARSER_PORT: String(FAKE_PARSER_PORT) },
       reuseExistingServer: false,
@@ -101,23 +101,23 @@ export default defineConfig({
       stderr: "pipe",
     },
     {
-      command: "pnpm --filter @guided-learning/server start",
+      command: "pnpm --filter @ilearnassist/server start",
       port: SERVER_PORT,
       env: {
-        GL_DATA_DIR: join(E2E_DIR, "data"),
-        GL_CONFIG_PATH: join(ROOT, "e2e", "config.local.yaml"),
-        GL_SERVER_PORT: String(SERVER_PORT),
-        GL_FAKE_LLM_URL: `http://127.0.0.1:${FAKE_LLM_PORT}/v1`,
-        GL_FAKE_PARSER_URL: `http://127.0.0.1:${FAKE_PARSER_PORT}`,
+        ILA_DATA_DIR: join(E2E_DIR, "data"),
+        ILA_CONFIG_PATH: join(ROOT, "e2e", "config.local.yaml"),
+        ILA_SERVER_PORT: String(SERVER_PORT),
+        ILA_FAKE_LLM_URL: `http://127.0.0.1:${FAKE_LLM_PORT}/v1`,
+        ILA_FAKE_PARSER_URL: `http://127.0.0.1:${FAKE_PARSER_PORT}`,
       },
       reuseExistingServer: false,
       stdout: "pipe",
       stderr: "pipe",
     },
     {
-      command: "pnpm --filter @guided-learning/web dev",
+      command: "pnpm --filter @ilearnassist/web dev",
       port: WEB_PORT,
-      env: { GL_SERVER_PORT: String(SERVER_PORT), GL_WEB_PORT: String(WEB_PORT) },
+      env: { ILA_SERVER_PORT: String(SERVER_PORT), ILA_WEB_PORT: String(WEB_PORT) },
       reuseExistingServer: false,
       stdout: "pipe",
       stderr: "pipe",

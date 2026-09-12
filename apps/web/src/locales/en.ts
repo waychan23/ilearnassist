@@ -30,7 +30,7 @@ const en: typeof MessageSchema = {
   },
 
   app: {
-    title: "guided-learning",
+    title: "ilearnassist",
     configBanner: {
       before: "No API key is configured yet. Click",
       action: "Settings → Providers",

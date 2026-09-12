@@ -34,8 +34,8 @@ const RUNNING: PanelState = {
     state: "running",
     url: LOOPBACK,
     fault: null,
-    dataDir: "/Users/someone/Library/Application Support/guided-learning",
-    logs: ["seeding providers", `[guided-learning] listening on ${LOOPBACK}`],
+    dataDir: "/Users/someone/Library/Application Support/ilearnassist",
+    logs: ["seeding providers", `[ilearnassist] listening on ${LOOPBACK}`],
   },
   sharedOnLan: false,
   lanUrl: null,
@@ -172,7 +172,7 @@ test.describe("the control panel", () => {
 
     await expect(page.locator('[data-action="logs"]')).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator('[data-role="logs"]')).toBeVisible();
-    await expect(page.locator('[data-role="logs"]')).toContainText("[guided-learning] listening on");
+    await expect(page.locator('[data-role="logs"]')).toContainText("[ilearnassist] listening on");
   });
 
   test("sends the command when a button is pressed", async ({ page }) => {

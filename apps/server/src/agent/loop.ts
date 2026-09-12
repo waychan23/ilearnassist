@@ -16,7 +16,7 @@ import type {
   SessionSettings,
   ToolCall,
   Workspace,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
 import { AskUserSuspension } from "../tools/askUser.js";

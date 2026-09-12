@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Attachment, ChatStreamEvent, Message, Session } from "@guided-learning/shared";
+import type { Attachment, ChatStreamEvent, Message, Session } from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
 import { eventTypes, parseSse } from "./helpers/sse.js";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";

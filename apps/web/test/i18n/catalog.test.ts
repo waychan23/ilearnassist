@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { API_ERROR_CODES, PARSE_ERROR_CODES } from "@guided-learning/shared";
+import { API_ERROR_CODES, PARSE_ERROR_CODES } from "@ilearnassist/shared";
 import zhCN from "../../src/locales/zh-CN";
 import en from "../../src/locales/en";
 import { flatten, placeholders, textOf, translationCallSites } from "../helpers/catalog";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DirectoryListing, FileEntry } from "@guided-learning/shared";
+import type { DirectoryListing, FileEntry } from "@ilearnassist/shared";
 import { flattenTree, moveIndex, parentRowIndex } from "../../src/utils/fileTree";
 
 /**

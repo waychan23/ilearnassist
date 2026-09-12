@@ -1,5 +1,5 @@
 # ============================================================================
-# guided-learning configuration
+# ilearnassist configuration
 # ----------------------------------------------------------------------------
 # This is the single source of truth for providers, models and tools.
 # Credentials may be given inline OR referenced from an environment variable

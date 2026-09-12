@@ -1,4 +1,4 @@
-import type { DocumentParsePolicy, DocumentParserKind } from "@guided-learning/shared";
+import type { DocumentParsePolicy, DocumentParserKind } from "@ilearnassist/shared";
 import {
   ParseError,
   asParseError,
@@ -22,7 +22,7 @@ export { documentFormatFor, isDocumentMime, FORMAT_LABEL } from "./formats.js";
 export type { DocumentFormat } from "./formats.js";
 export { buildPdf, probePdf } from "./sample.js";
 export { driverFor, driverInfos, DRIVER_KINDS, isDocumentParserKind } from "./drivers/index.js";
-export type { DriverInfo } from "@guided-learning/shared";
+export type { DriverInfo } from "@ilearnassist/shared";
 export type { DriverTuning } from "./drivers/index.js";
 
 /** A cloud parser as the orchestrator sees it (includes the key, and the ordering). */

@@ -4,7 +4,7 @@ import { join } from "node:path";
 /**
  * Ad-hoc sign the app when nothing better is available.
  *
- * Without this the `.dmg` installs an app that macOS refuses to open with **"guided-learning
+ * Without this the `.dmg` installs an app that macOS refuses to open with **"ilearnassist
  * is damaged and can't be opened"** — and unlike the ordinary unsigned-app warning, that one
  * cannot be dismissed with right-click → Open, because it is not a trust decision. It is the
  * signature being *inconsistent with the bundle*: Electron ships its binary linker-signed,

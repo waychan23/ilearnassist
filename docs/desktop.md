@@ -1,7 +1,7 @@
 # Desktop app
 
 `apps/desktop` wraps the product in an Electron shell — the **control panel**. It exists so
-that someone who is not a developer can install guided-learning the way they install any
+that someone who is not a developer can install ilearnassist the way they install any
 other Mac application: drag it into Applications, double-click it, and get a window with a
 button that opens the app.
 
@@ -23,10 +23,10 @@ The backend is unchanged by this. The desktop app supervises the same Fastify se
 
 ```bash
 pnpm install
-pnpm desktop:package          # → apps/desktop/release/guided-learning-0.1.0-arm64.dmg
+pnpm desktop:package          # → apps/desktop/release/ilearnassist-0.1.0-arm64.dmg
 ```
 
-Open the `.dmg`, drag **guided-learning** onto the Applications shortcut, and launch it. The
+Open the `.dmg`, drag **ilearnassist** onto the Applications shortcut, and launch it. The
 control panel appears, starts the server, and the **Open app** button loads the chat UI in a
 second window.
 
@@ -35,18 +35,18 @@ launch shows *"cannot be opened because Apple cannot check it for malicious soft
 wording is alarming and the fix is mundane:
 
 - **Right-click the app → Open**, then confirm. One time only, per machine.
-- Or, from a terminal: `xattr -dr com.apple.quarantine /Applications/guided-learning.app`
+- Or, from a terminal: `xattr -dr com.apple.quarantine /Applications/ilearnassist.app`
 
-What you should *not* see is *"guided-learning is damaged and can't be opened"* — that one
+What you should *not* see is *"ilearnassist is damaged and can't be opened"* — that one
 is not a trust prompt and right-click → Open will not clear it. `scripts/after-sign.mjs`
 exists to prevent it; see [Signing](#signing).
 
 ## How it fits together
 
 ```text
-┌─ guided-learning.app ────────────────────────────────────────────────┐
+┌─ ilearnassist.app ────────────────────────────────────────────────┐
 │                                                                      │
-│  Contents/MacOS/guided-learning        ← Electron                    │
+│  Contents/MacOS/ilearnassist        ← Electron                    │
 │      │                                                               │
 │      │ spawns, with ELECTRON_RUN_AS_NODE=1                           │
 │      ▼                                                               │
@@ -64,13 +64,20 @@ exists to prevent it; see [Signing](#signing).
 │                                                                      │
 └──────────────────────────────────────────────────────────────────────┘
 
-        writes to   ~/Library/Application Support/guided-learning/
+        writes to   ~/Library/Application Support/ilearnassist/
                       ├── config/config.yaml         (seeded once)
                       ├── config/config.local.yaml   (port: 0)
-                      ├── data/guided-learning.sqlite
+                      ├── data/ilearnassist.sqlite
                       ├── data/uploads/
                       └── workspaces/
 ```
+
+That directory is named after `app.setName()` in `apps/desktop/src/main/main.ts`, which is also
+why renaming the app moves it: it used to be `~/Library/Application Support/guided-learning/`,
+and nothing is read from there any more. An install that predates the rename has to be carried
+across by hand — `config/config.yaml` and `.env`, which hold the API keys. A freshly seeded
+`config.yaml` is not a substitute, because its `apiKey` fields are `${ENV_VAR}` references and
+the new directory has no `.env` beside them yet.
 
 Four decisions hold this up. Each of them is a comment in the code; together they are why a
 packaged build behaves like the checkout.
@@ -104,7 +111,7 @@ than being killed mid-write.
 The server prints one line once it is actually accepting connections:
 
 ```text
-[guided-learning] listening on http://127.0.0.1:50896
+[ilearnassist] listening on http://127.0.0.1:50896
 ```
 
 The panel keys on that line and nothing else — not on a fixed port, and not on Fastify's own
@@ -118,13 +125,13 @@ that reports nothing, because the user has no way to tell.
 
 A checkout keeps `config/`, `data/` and `workspaces/` next to the source. A `.dmg` cannot:
 the bundle is read-only and is replaced wholesale on every update. The desktop app therefore
-sets `GL_PROJECT_ROOT` to `~/Library/Application Support/guided-learning`, seeds a
+sets `ILA_PROJECT_ROOT` to `~/Library/Application Support/ilearnassist`, seeds a
 `config.yaml` there on first launch, and lets the server resolve everything else against it.
 
 Seeding is **idempotent and non-destructive** — an existing `config.yaml` or overlay is never
 rewritten, so an API key typed into the Settings UI on a previous launch survives an update.
 
-The app also writes a `config.local.yaml` overlay (via the existing `GL_CONFIG_PATH`
+The app also writes a `config.local.yaml` overlay (via the existing `ILA_CONFIG_PATH`
 mechanism, not a fork of the config format) setting `port: 0`, so the OS assigns a free port
 on every launch. A fixed port is the wrong default for a desktop app: it turns "another copy
 is already running" or "something else likes 3720" into a failed launch whose error a
@@ -147,7 +154,7 @@ The bind address follows the switch rather than the config, always — including
 switch is off and the address is loopback. Leaving the loopback case to `config.yaml` would
 mean a user who had hand-edited `server.host` there could have the panel report "not shared"
 while the port was open to the network they were sitting on, and a control whose stated state
-and actual state can disagree is worse than no control. That is what `GL_HOST` is for, and
+and actual state can disagree is worse than no control. That is what `ILA_HOST` is for, and
 why `buildLaunchSpec` always sets it.
 
 Rebinding needs a restart, because a bind address is chosen once at `listen` and there is no
@@ -289,7 +296,7 @@ Two things to know before adding them:
 Electron ships its binaries linker-signed. electron-builder then adds our entire application
 under `Contents/Resources/` — and the result is a signature that claims to seal no resources
 on a bundle that now has some. macOS reads that inconsistency as damage, and reports it as
-*"guided-learning is damaged and can't be opened"*, which is the one Gatekeeper message
+*"ilearnassist is damaged and can't be opened"*, which is the one Gatekeeper message
 **right-click → Open cannot dismiss**: it is not a trust decision, so there is nothing for
 the user to consent to. The only way out is a terminal, which is the opposite of the point
 of this app.
@@ -376,7 +383,7 @@ The panel reports its own state in the DOM, so a built app can be inspected with
 screenshot or a click, and without any accessibility permission:
 
 ```bash
-/Applications/guided-learning.app/Contents/MacOS/guided-learning --remote-debugging-port=9222 &
+/Applications/ilearnassist.app/Contents/MacOS/ilearnassist --remote-debugging-port=9222 &
 curl -s localhost:9222/json        # one page target per open window
 ```
 

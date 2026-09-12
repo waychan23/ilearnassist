@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join, relative, resolve as resolvePath, extname } from "node:path";
-import type { Attachment } from "@guided-learning/shared";
+import type { Attachment } from "@ilearnassist/shared";
 import { PROJECT_PATHS } from "./config.js";
 import { isDocumentMime } from "./documents/formats.js";
 import { readParseRecord, readParsedTextHead } from "./documents/store.js";

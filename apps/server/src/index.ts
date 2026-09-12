@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   // reports the address Fastify actually bound rather than `config.server.port`, which
   // is what makes `port: 0` usable: the OS picks a free port and the shell still ends
   // up with the URL, with no separate probe to race against.
-  console.log(`[guided-learning] listening on ${address}`);
+  console.log(`[ilearnassist] listening on ${address}`);
 
   // The desktop shell stops the server with SIGTERM. Closing through Fastify runs the
   // `onClose` hooks, so an in-flight document parse settles and the sqlite connection
@@ -41,6 +41,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("Failed to start guided-learning server:", err);
+  console.error("Failed to start ilearnassist server:", err);
   process.exit(1);
 });

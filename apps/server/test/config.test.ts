@@ -6,23 +6,23 @@ import { deepMerge, resolveEnv, validateConfig, withDefaults, type AppConfig } f
 
 describe("resolveEnv", () => {
   beforeEach(() => {
-    vi.stubEnv("GL_TEST_KEY", "sk-secret");
+    vi.stubEnv("ILA_TEST_KEY", "sk-secret");
   });
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
   it("substitutes a known variable", () => {
-    expect(resolveEnv("Bearer ${GL_TEST_KEY}")).toBe("Bearer sk-secret");
+    expect(resolveEnv("Bearer ${ILA_TEST_KEY}")).toBe("Bearer sk-secret");
   });
 
   it("substitutes every occurrence", () => {
-    expect(resolveEnv("${GL_TEST_KEY}-${GL_TEST_KEY}")).toBe("sk-secret-sk-secret");
+    expect(resolveEnv("${ILA_TEST_KEY}-${ILA_TEST_KEY}")).toBe("sk-secret-sk-secret");
   });
 
   it("substitutes an unknown variable with an empty string rather than leaving the placeholder", () => {
     // Leaves no literal `${...}` behind for a provider to choke on.
-    expect(resolveEnv("x${GL_TOTALLY_UNSET}y")).toBe("xy");
+    expect(resolveEnv("x${ILA_TOTALLY_UNSET}y")).toBe("xy");
   });
 
   it("leaves strings without placeholders alone", () => {
@@ -156,13 +156,13 @@ describe("loadConfig", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "gl-config-"));
     vi.resetModules();
-    vi.stubEnv("GL_CONFIG_KEY", "from-env");
+    vi.stubEnv("ILA_CONFIG_KEY", "from-env");
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
-    delete process.env.GL_CONFIG_PATH;
+    delete process.env.ILA_CONFIG_PATH;
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -173,7 +173,7 @@ describe("loadConfig", () => {
   }
 
   async function load(yaml: string) {
-    process.env.GL_CONFIG_PATH = writeConfig(yaml);
+    process.env.ILA_CONFIG_PATH = writeConfig(yaml);
     const mod = await import("../src/config.js");
     return mod.loadConfig();
   }
@@ -187,14 +187,14 @@ providers:
   - id: p
     name: P
     baseURL: http://x
-    apiKey: \${GL_CONFIG_KEY}
+    apiKey: \${ILA_CONFIG_KEY}
     models: [{ id: m, name: M }]
 `);
     expect(config.providers[0]!.apiKey).toBe("from-env");
   });
 
   it("caches the result for the life of the module", async () => {
-    process.env.GL_CONFIG_PATH = writeConfig(`
+    process.env.ILA_CONFIG_PATH = writeConfig(`
 defaultProvider: p
 defaultModel: m
 providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
@@ -207,11 +207,11 @@ providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
     await expect(load("providers: []\n")).rejects.toThrow(/No providers configured/);
   });
 
-  it("lets GL_HOST override the configured bind address", async () => {
+  it("lets ILA_HOST override the configured bind address", async () => {
     // The desktop shell's "open on your phone" switch rebinds the server to every
     // interface. It cannot do that by editing a config file — the overlay belongs to the
     // user once seeded — so the override has to come from the environment.
-    vi.stubEnv("GL_HOST", "0.0.0.0");
+    vi.stubEnv("ILA_HOST", "0.0.0.0");
     const config = await load(`
 server: { host: 127.0.0.1, port: 3720 }
 defaultProvider: p
@@ -221,7 +221,7 @@ providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
     expect(config.server.host).toBe("0.0.0.0");
   });
 
-  it("leaves the configured host alone when GL_HOST is unset", async () => {
+  it("leaves the configured host alone when ILA_HOST is unset", async () => {
     const config = await load(`
 server: { host: 127.0.0.1, port: 3720 }
 defaultProvider: p
@@ -231,10 +231,10 @@ providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
     expect(config.server.host).toBe("127.0.0.1");
   });
 
-  it("ignores a blank GL_HOST rather than binding to nothing", async () => {
+  it("ignores a blank ILA_HOST rather than binding to nothing", async () => {
     // An empty string would be passed straight to `listen`, which rejects it — turning an
     // unset-but-present variable into a boot failure.
-    vi.stubEnv("GL_HOST", "   ");
+    vi.stubEnv("ILA_HOST", "   ");
     const config = await load(`
 server: { host: 127.0.0.1, port: 3720 }
 defaultProvider: p

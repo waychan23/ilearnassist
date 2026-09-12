@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
+import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
 import type {
   ApiErrorBody,
   Attachment,
@@ -11,7 +11,7 @@ import type {
   ProviderConfig,
   Session,
   Workspace,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 import { keylessProvider, newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
 /**

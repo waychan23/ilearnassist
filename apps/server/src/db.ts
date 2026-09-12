@@ -16,7 +16,7 @@ import type {
   SessionSettings,
   ToolCall,
   Workspace,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 
 /* ---------------------------------- row shapes ---------------------------------- */
 

@@ -1,5 +1,5 @@
 {
-  "name": "guided-learning",
+  "name": "ilearnassist",
   "private": true,
   "type": "module",
   "version": "0.1.0",
@@ -9,18 +9,18 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @guided-learning/server --filter @guided-learning/web dev",
-    "dev:server": "pnpm --filter @guided-learning/server dev",
-    "dev:web": "pnpm --filter @guided-learning/web dev",
+    "dev": "pnpm --parallel --filter @ilearnassist/server --filter @ilearnassist/web dev",
+    "dev:server": "pnpm --filter @ilearnassist/server dev",
+    "dev:web": "pnpm --filter @ilearnassist/web dev",
     "typecheck": "pnpm -r typecheck && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "pnpm --filter @guided-learning/desktop bundle && playwright test",
-    "build": "pnpm --filter @guided-learning/web build",
-    "desktop:dev": "pnpm --filter @guided-learning/desktop dev",
-    "desktop:build": "pnpm --filter @guided-learning/desktop build",
-    "desktop:package": "pnpm --filter @guided-learning/desktop package"
+    "test:e2e": "pnpm --filter @ilearnassist/desktop bundle && playwright test",
+    "build": "pnpm --filter @ilearnassist/web build",
+    "desktop:dev": "pnpm --filter @ilearnassist/desktop dev",
+    "desktop:build": "pnpm --filter @ilearnassist/desktop build",
+    "desktop:package": "pnpm --filter @ilearnassist/desktop package"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

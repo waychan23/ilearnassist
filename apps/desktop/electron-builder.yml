@@ -1,12 +1,12 @@
 # Packaging for the desktop control panel.
 #
-# `pnpm --filter @guided-learning/desktop package` produces `release/*.dmg`.
+# `pnpm --filter @ilearnassist/desktop package` produces `release/*.dmg`.
 #
 # Two settings below are load-bearing and not the defaults. Read their comments before
 # changing them.
 
-appId: com.guidedlearning.desktop
-productName: guided-learning
+appId: com.ilearnassist.desktop
+productName: ilearnassist
 
 directories:
   # Not the conventional `build/`: that name is ignored by the repo-wide `.gitignore`, and
@@ -68,7 +68,7 @@ mac:
         - arm64
 
 dmg:
-  title: guided-learning ${version}
+  title: ilearnassist ${version}
   # The standard install gesture: drag the app onto Applications. Spelling it out rather
   # than relying on the default layout, because the default leaves the two icons overlapping
   # the window edge at some sizes.

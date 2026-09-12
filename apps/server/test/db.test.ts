@@ -12,7 +12,7 @@ import {
   SETTING_DEFAULT_PROVIDER,
   type AppDb,
 } from "../src/db.js";
-import type { ToolCall } from "@guided-learning/shared";
+import type { ToolCall } from "@ilearnassist/shared";
 
 let root: string;
 let db: AppDb;

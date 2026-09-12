@@ -10,7 +10,7 @@ import { deflateSync } from "node:zlib";
  * Committed as a script rather than as a binary so the mark is reviewable and changeable:
  * a `.icns` in the repository is a file nobody can read, and the next person who wants the
  * accent colour to move cannot tell whether it did. Run `pnpm --filter
- * @guided-learning/desktop icon` after editing anything below, and commit the result — the
+ * @ilearnassist/desktop icon` after editing anything below, and commit the result — the
  * build does not depend on this script, only the icon does.
  *
  * Rasterised with signed distance fields rather than through a drawing library, so the

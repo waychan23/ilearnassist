@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
  * for a developer and impossible for a `.dmg`: the app bundle is read-only, and it is
  * replaced wholesale on every update. So the packed build keeps the code in the bundle and
  * all mutable state under the OS's per-user data directory, and tells the server where to
- * look with `GL_PROJECT_ROOT`.
+ * look with `ILA_PROJECT_ROOT`.
  *
  * Keeping the split in one module (rather than inlining `join(userData, …)` at each use
  * site) is what makes it testable without an Electron runtime: every path below is derived
@@ -16,12 +16,12 @@ import { dirname, join } from "node:path";
  */
 
 export interface AppPaths {
-  /** `GL_PROJECT_ROOT` — holds `config/`, `data/` and `workspaces/`. Per-user, writable. */
+  /** `ILA_PROJECT_ROOT` — holds `config/`, `data/` and `workspaces/`. Per-user, writable. */
   root: string;
   configDir: string;
   /** The seeded `config.yaml`. Written once, then the user's. */
   configFile: string;
-  /** `GL_CONFIG_PATH` — the app's own overlay, merged over `configFile` on every boot. */
+  /** `ILA_CONFIG_PATH` — the app's own overlay, merged over `configFile` on every boot. */
   overlayFile: string;
   dataDir: string;
   /** The built frontend shipped inside the app bundle. Read-only. */
@@ -31,7 +31,7 @@ export interface AppPaths {
 }
 
 export interface ResolveAppPathsInput {
-  /** `app.getPath("userData")` — `~/Library/Application Support/guided-learning` on macOS. */
+  /** `app.getPath("userData")` — `~/Library/Application Support/ilearnassist` on macOS. */
   userDataDir: string;
   /** `process.resourcesPath` packed; a directory under `apps/desktop` when running unpacked. */
   resourcesDir: string;
@@ -59,11 +59,11 @@ export function resolveAppPaths(input: ResolveAppPathsInput): AppPaths {
  * user cannot act on. With an OS-assigned port that cannot happen — and the server prints
  * the address it actually bound, which is what the panel opens.
  *
- * This is a `config.local.yaml`, i.e. exactly the file `GL_CONFIG_PATH` exists to relocate,
+ * This is a `config.local.yaml`, i.e. exactly the file `ILA_CONFIG_PATH` exists to relocate,
  * so it composes with the base config rather than forking it. It is written once: a user who
  * wants a stable port edits it (or deletes the line) and the app never overwrites it again.
  */
-const OVERLAY = `# Written by the guided-learning desktop app.
+const OVERLAY = `# Written by the ilearnassist desktop app.
 #
 # Everything here overrides config.yaml. Delete this file to fall back to the defaults.
 #

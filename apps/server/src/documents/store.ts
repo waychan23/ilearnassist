@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import type { ParseErrorCode, ParseStatus } from "@guided-learning/shared";
+import type { ParseErrorCode, ParseStatus } from "@ilearnassist/shared";
 import { isSafeId } from "../ids.js";
 
 /**

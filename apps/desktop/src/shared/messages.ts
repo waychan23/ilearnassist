@@ -88,7 +88,7 @@ export interface PanelMessages {
 }
 
 const zhCN: PanelMessages = {
-  "window.title": "guided-learning 控制面板",
+  "window.title": "ilearnassist 控制面板",
   "app.tagline": "本地服务控制面板",
   "status.stopped": "已停止",
   "status.starting": "启动中…",
@@ -122,7 +122,7 @@ const zhCN: PanelMessages = {
   "qr.preparing": "正在开启局域网访问…",
   "qr.notRunning": "服务还没有运行，暂时无法访问。请先启动服务。",
   "qr.noNetwork": "没有找到可用的局域网地址。请先让这台电脑连上 Wi-Fi 或网线。",
-  "tray.tooltip": "guided-learning",
+  "tray.tooltip": "ilearnassist",
   "tray.openPanel": "打开控制面板",
   "tray.stopAndQuit": "停止服务器并退出",
   "fault.spawn_failed": "无法启动服务进程：{message}",
@@ -130,8 +130,8 @@ const zhCN: PanelMessages = {
   "fault.exitedWithSignal": "服务被信号 {signal} 终止。",
   "fault.exitedUnknown": "服务意外退出，原因未知。",
   "fault.timeout": "{seconds} 秒内没有收到服务就绪的信号，请查看日志。",
-  "menu.about": "关于 guided-learning",
-  "menu.app": "guided-learning",
+  "menu.about": "关于 ilearnassist",
+  "menu.app": "ilearnassist",
   "menu.file": "文件",
   "menu.view": "显示",
   "menu.reload": "重新载入",
@@ -140,7 +140,7 @@ const zhCN: PanelMessages = {
 };
 
 const en: PanelMessages = {
-  "window.title": "guided-learning control panel",
+  "window.title": "ilearnassist control panel",
   "app.tagline": "Local server control panel",
   "status.stopped": "Stopped",
   "status.starting": "Starting…",
@@ -172,7 +172,7 @@ const en: PanelMessages = {
   "qr.preparing": "Turning on network access…",
   "qr.notRunning": "The server is not running yet, so there is nothing to open. Start it first.",
   "qr.noNetwork": "No network address available. Connect this Mac to Wi-Fi or Ethernet first.",
-  "tray.tooltip": "guided-learning",
+  "tray.tooltip": "ilearnassist",
   "tray.openPanel": "Open control panel",
   "tray.stopAndQuit": "Stop server and quit",
   "fault.spawn_failed": "Could not start the server process: {message}",
@@ -180,8 +180,8 @@ const en: PanelMessages = {
   "fault.exitedWithSignal": "The server was terminated by signal {signal}.",
   "fault.exitedUnknown": "The server exited unexpectedly for an unknown reason.",
   "fault.timeout": "The server did not report itself ready within {seconds}s. Check the output.",
-  "menu.about": "About guided-learning",
-  "menu.app": "guided-learning",
+  "menu.about": "About ilearnassist",
+  "menu.app": "ilearnassist",
   "menu.file": "File",
   "menu.view": "View",
   "menu.reload": "Reload",

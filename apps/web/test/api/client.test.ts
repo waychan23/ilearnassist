@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatStreamEvent } from "@guided-learning/shared";
+import type { ChatStreamEvent } from "@ilearnassist/shared";
 import { api, attachmentUrl, fileToBase64, streamAnswers, streamChat } from "../../src/api/client.js";
 import { ApiError } from "../../src/utils/apiError.js";
 import { i18n } from "../../src/i18n.js";

@@ -106,8 +106,8 @@ tests and the e2e run:
 
 | Variable | Effect |
 | --- | --- |
-| `GL_CONFIG_PATH` | Replace the path of the *overlay* normally read from `config/config.local.yaml`. `config/config.yaml` is still the base. |
-| `GL_DATA_DIR` | Move the runtime data directory (the sqlite database and `uploads/`) away from `<project>/data`. |
+| `ILA_CONFIG_PATH` | Replace the path of the *overlay* normally read from `config/config.local.yaml`. `config/config.yaml` is still the base. |
+| `ILA_DATA_DIR` | Move the runtime data directory (the sqlite database and `uploads/`) away from `<project>/data`. |
 
 Both are read once, when the config module is first imported — set them before the
 server starts, not at runtime. `pnpm test:e2e` uses both to keep a run off your real

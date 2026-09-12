@@ -11,7 +11,7 @@ import { enterWorkspace } from "./workspaces";
  * it creates the workspace it needs rather than assuming an empty database.
  */
 
-const FAKE_PARSER = `http://127.0.0.1:${process.env.GL_FAKE_PARSER_PORT ?? 3897}`;
+const FAKE_PARSER = `http://127.0.0.1:${process.env.ILA_FAKE_PARSER_PORT ?? 3897}`;
 
 /** The last chat (streaming) request the fake LLM received, as raw JSON. */
 async function lastChatRequest(request: APIRequestContext): Promise<string> {

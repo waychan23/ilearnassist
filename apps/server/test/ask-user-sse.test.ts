@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { ChatStreamEvent, Message, Session, ToolCall } from "@guided-learning/shared";
+import type { ChatStreamEvent, Message, Session, ToolCall } from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
 import { eventTypes, parseSse } from "./helpers/sse.js";
 import { startFakeLlm, type FakeLlm, type FakeTurn } from "./helpers/fakeLlm.js";

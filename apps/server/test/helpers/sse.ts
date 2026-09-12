@@ -1,4 +1,4 @@
-import type { ChatStreamEvent } from "@guided-learning/shared";
+import type { ChatStreamEvent } from "@ilearnassist/shared";
 
 /**
  * Parse an `event: <type>\ndata: <json>\n\n` transcript into typed events.

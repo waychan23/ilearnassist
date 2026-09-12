@@ -7,7 +7,7 @@
  * would have handled in one call.
  */
 
-import type { ParseErrorCode } from "@guided-learning/shared";
+import type { ParseErrorCode } from "@ilearnassist/shared";
 
 /**
  * Re-exported so the server modules that import the code union from this file keep
