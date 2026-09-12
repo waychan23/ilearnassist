@@ -29,20 +29,37 @@ const LOOPBACK = "http://127.0.0.1:51452";
 const LAN_ADDRESS = "192.168.1.42";
 const LAN_URL = `http://${LAN_ADDRESS}:51452`;
 
+/** The folder the user chose. Deliberately not under the app's own directory. */
+const DATA_DIR = "/Users/someone/Documents/ilearnassist";
+
 const RUNNING: PanelState = {
   server: {
     state: "running",
     url: LOOPBACK,
     fault: null,
-    dataDir: "/Users/someone/Library/Application Support/ilearnassist",
+    dataDir: DATA_DIR,
     logs: ["seeding providers", `[ilearnassist] listening on ${LOOPBACK}`],
   },
   sharedOnLan: false,
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
+  needsDataDir: false,
 };
 
 const SHARED: PanelState = { ...RUNNING, sharedOnLan: true, lanUrl: LAN_URL };
+
+/**
+ * Before anyone has said where the data goes. The server cannot be started in this state —
+ * it refuses to run without a data root — so the panel's job is to ask, and nothing that
+ * needs a running server should look available.
+ */
+const NEEDS_DATA_DIR: PanelState = {
+  server: { state: "stopped", url: null, fault: null, dataDir: "", logs: [] },
+  sharedOnLan: false,
+  lanUrl: null,
+  lanAddress: LAN_ADDRESS,
+  needsDataDir: true,
+};
 
 const FAILED: PanelState = {
   ...RUNNING,
@@ -80,6 +97,10 @@ async function openPanel(page: Page, initial: PanelState): Promise<PanelHandle> 
       },
       shareOnLan: async (on: boolean) => {
         await record(`shareOnLan:${on}`);
+        return w["__status"];
+      },
+      chooseDataDir: async () => {
+        await record("chooseDataDir");
         return w["__status"];
       },
       openApp: async () => {
@@ -186,6 +207,25 @@ test.describe("the control panel", () => {
     await openPanel(page, RUNNING);
     // A user who needs to back up, or to send someone a log, has to be able to find this.
     await expect(page.locator('[data-role="data-dir"]')).toHaveText(RUNNING.server.dataDir);
+  });
+
+  test("asks where the data should go, and says why nothing is running", async ({ page }) => {
+    // The server refuses to start without a data root, so before one is chosen every control
+    // that needs it is inert and the row explains itself. An empty path box and a start
+    // button that does nothing is what this replaces.
+    await openPanel(page, NEEDS_DATA_DIR);
+
+    await expect(page.locator('[data-role="data-dir"]')).toBeHidden();
+    await expect(page.locator('[data-role="data-dir-hint"]')).toContainText("数据存放位置");
+    await expect(page.locator('[data-action="reveal"]')).toBeDisabled();
+    await expect(page.getByRole("button", { name: "选择文件夹…" })).toBeEnabled();
+  });
+
+  test("hands the choice to the main process rather than making it", async ({ page }) => {
+    // The dialog is native and lives in main, so the page's whole part in this is the ask.
+    const panel = await openPanel(page, NEEDS_DATA_DIR);
+    await page.getByRole("button", { name: "选择文件夹…" }).click();
+    expect(panel.calls).toContain("chooseDataDir");
   });
 
   test("tells a user that closing the window does not stop the server", async ({ page }) => {

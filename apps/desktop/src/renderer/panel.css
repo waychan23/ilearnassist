@@ -378,11 +378,17 @@ body.is-mac {
 }
 
 /*
- * The one line of chrome that explains why the red button did not quit. Small and dim,
- * because it is reassurance rather than information — a user who already knows will read
- * past it, and one who does not would otherwise assume the app ignored them.
+ * A line that answers a question the chrome cannot: why the red button did not quit, and why
+ * there is no server running yet. Small and dim, because it is reassurance rather than
+ * information — a user who already knows will read past it, and one who does not would
+ * otherwise assume the app ignored them.
+ *
+ * Two classes rather than one: the quit note is the only `.note` on the page and the e2e
+ * suite selects it that way, so a second element wearing the same class would make that
+ * locator ambiguous. They share the look, not the name.
  */
-.note {
+.note,
+.field__hint {
   margin: 0;
   color: var(--text-3);
   font-size: var(--fs-1);

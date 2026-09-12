@@ -1,15 +1,21 @@
-import { loadConfig, PROJECT_PATHS } from "./config.js";
+import { loadConfig, PROJECT_PATHS, resolveDataRoot } from "./config.js";
 import { buildServer } from "./server.js";
 
 /**
- * Process entry point. All the wiring lives in `buildServer`; this module only loads
- * the config, binds the port, and turns a startup failure into a non-zero exit.
+ * Process entry point. All the wiring lives in `buildServer`; this module only resolves
+ * the data root, loads the config, binds the port, and turns a startup failure into a
+ * non-zero exit.
  */
 async function main(): Promise<void> {
+  // First, and deliberately here rather than in `config.ts`: the data root is a launcher
+  // decision, not a config value, and a missing one should produce one actionable sentence
+  // and a non-zero exit rather than a stack trace from a module that every test imports.
+  const dataRoot = resolveDataRoot();
+
   const config = loadConfig();
   const { app, db } = await buildServer({
     config,
-    dataDir: PROJECT_PATHS.dataDir,
+    dataRoot,
     webDir: PROJECT_PATHS.webDir,
   });
 

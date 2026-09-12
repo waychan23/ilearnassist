@@ -168,8 +168,11 @@ function buildSystemPrompt(workspace: Workspace, copilot?: Copilot): string {
     copilot?.systemPrompt?.trim() ||
     "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
 
+  // `workdirPath`, not `dirPath`: the sandbox is the workspace's `workdir/`, and naming the
+  // parent here would tell the model that `sessions/` is inside the directory it may write
+  // to — a claim the tools would then refuse to honour.
   const workspaceNote =
-    `\n\nThe user is working inside a workspace located at:\n${workspace.dirPath}\n` +
+    `\n\nThe user is working inside a workspace located at:\n${workspace.workdirPath}\n` +
     `All file tools are sandboxed to this directory. Use paths relative to it ` +
     `(or absolute paths under it). Never attempt to access files outside this directory.`;
 

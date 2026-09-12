@@ -25,9 +25,21 @@ export interface DesktopSettings {
    * on a home network and a bad thing to have happen by accident on a café's.
    */
   sharedOnLan: boolean;
+  /**
+   * The chosen data root: the sqlite database, every account's workspaces, and the files
+   * they upload. Empty until someone has chosen one.
+   *
+   * Stored here rather than in the server's config for the reason this module exists: it is
+   * a decision the *launcher* makes and passes down, and a value in a config file could not
+   * differ between two launches of the same install. It is also the one preference whose
+   * loss is not merely inconvenient — it is what says where the user's work is, so
+   * `readSettings` falling back to `""` on a corrupt file means "ask again", never "use
+   * somewhere else".
+   */
+  dataDir: string;
 }
 
-export const DEFAULT_SETTINGS: DesktopSettings = { sharedOnLan: false };
+export const DEFAULT_SETTINGS: DesktopSettings = { sharedOnLan: false, dataDir: "" };
 
 /**
  * Read the file, falling back to the defaults for anything missing or unreadable.
@@ -52,6 +64,14 @@ export function readSettings(file: string): DesktopSettings {
     return {
       sharedOnLan:
         typeof value["sharedOnLan"] === "boolean" ? value["sharedOnLan"] : DEFAULT_SETTINGS.sharedOnLan,
+      // A non-string (or a blank one) is treated as "not chosen yet" rather than as a path,
+      // so the panel asks. Falling back to some other directory would be the one kind of
+      // tolerance this file must not have: it would point the app at data that is not the
+      // user's.
+      dataDir:
+        typeof value["dataDir"] === "string" && value["dataDir"].trim()
+          ? value["dataDir"]
+          : DEFAULT_SETTINGS.dataDir,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

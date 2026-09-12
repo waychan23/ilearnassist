@@ -18,12 +18,17 @@
                                               │  └─ db.ts (SQLite)           │
                                               └──────────────┬───────────────┘
                                                              │
-                                          ┌──────────────────┴───────────────┐
-                                          │  filesystem:  workspaces/<slug>/  │
-                                          │  data/:        app.sqlite (WAL)   │
-                                          │                uploads/<sess>/    │
-                                          └──────────────────────────────────┘
+                                          ┌────────────────────────────────────┐
+                                          │  <dataRoot>/ (chosen at launch)     │
+                                          │    db/sqlite/ilearnassist.sqlite    │
+                                          │    users/<slug>/workspaces/<slug>/  │
+                                          │    users/<slug>/sources/ (reserved) │
+                                          │    uploads/<sess>/                  │
+                                          └────────────────────────────────────┘
 ```
+
+`<dataRoot>` is **required** and has no default: it is the `ILA_DATA_DIR` the launcher
+supplies, and the server refuses to start without it. See "Config" below for why.
 
 The frontend is a thin client: all state lives in a single Pinia store
 (`apps/web/src/stores/app.ts`). It talks to the backend over JSON for CRUD and
@@ -36,9 +41,25 @@ over **Server-Sent Events** for chat streaming.
 `loadConfig()` reads `config/config.yaml`, overlays `config/config.local.yaml`
 (git-ignored), then resolves every `${ENV_VAR}` reference against `.env` +
 real environment variables (real env wins). Missing env vars resolve to `""`.
-The result is a typed `AppConfig` with providers, models, tool settings and the
-workspaces root. A separate `publicConfig()` strips `apiKey` before sending it
-to the client.
+The result is a typed `AppConfig` with providers, models and tool settings. A
+separate `publicConfig()` strips `apiKey` before sending it to the client.
+
+**Where the data lives is not in the config file.** `ILA_DATA_DIR` names the data root —
+the database, every account's workspaces, their uploads — and `resolveDataRoot()` throws
+without it. There is deliberately no default: that path decides how much of the user's work
+survives an uninstall, so it is not the code's to choose. It is an environment variable
+rather than a YAML key for the same reason `ILA_HOST` is — the launcher sets it per launch,
+and a value in a config file cannot differ between two runs of the same install, which is
+exactly what the desktop app's folder picker has to do. `.env` counts as the environment:
+`loadDotEnv()` runs at module scope (not inside `loadConfig()`, where it used to live) so
+that a checkout can supply the value in `.env` without the code carrying a fallback. A
+relative value resolves against the *project root*, not the working directory — `pnpm dev`
+runs the server with cwd set to `apps/server`, so "relative to cwd" would mean something
+different from one launcher to the next.
+
+The config file therefore holds no `data:` or `workspaces:` key. Where a workspace lives is
+derived from the chosen root, the account and the workspace slug, all in
+`apps/server/src/paths.ts`.
 
 **`config.yaml` is bootstrap + seed data, not live config.** Providers, models and
 document parsers are seeded into SQLite on first boot (`seedFromConfig`,
@@ -58,7 +79,9 @@ seeded", or every boot would resurrect entries the user deliberately deleted.
 `better-sqlite3` with `journal_mode=WAL` and `foreign_keys=ON`. Tables in
 snake_case, mapped to camelCase objects in code:
 
-- `workspaces` — id, name, slug, dir_path, created_at
+- `users` — id, username (unique, `COLLATE NOCASE`), slug (unique), created_at
+- `workspaces` — id, user_id (FK, CASCADE), name, slug, dir_path, created_at;
+  `UNIQUE (user_id, slug)` — the slug is only unique among one account's workspaces
 - `copilots` — …, system_prompt, tools (JSON), settings (JSON), timestamps
 - `sessions` — id, workspace_id, copilot_id, title, title_source, settings (JSON), timestamps
 - `messages` — id, session_id, role, content, reasoning, tool_calls (JSON),
@@ -70,11 +93,31 @@ snake_case, mapped to camelCase objects in code:
 - `app_settings` — key/value (`defaultProvider`, `defaultModel`, and the
   `documentParsing.*` policy keys)
 
-Schema changes are applied **in place** by `ensureColumn()` (`PRAGMA table_info`
-+ `ALTER TABLE ADD COLUMN`), because `CREATE TABLE IF NOT EXISTS` silently skips
-tables that already exist — an existing database would otherwise never gain a new
-column. A legacy `copilots.model` column is folded into `settings.modelId` on
-open and then left dormant (`DROP COLUMN` is version-sensitive in SQLite).
+**Ownership is scoped in the query, not checked afterwards.** Every user-owned read is
+named `...ForUser`, takes the owner, and puts it in the `WHERE` — so another account's id is
+simply not found, and a route turns that into a 404 like any other missing row. `sessions`
+and `messages` carry no `user_id`: they reach their owner through `workspaces` by join,
+because a second copy of the owner is a second thing that has to stay in agreement. The few
+accessors that do take a bare session id are documented as such in `AppDb` — every caller
+reaches them after a scoped read has already resolved the session.
+
+There is no account yet beyond a username: the server runs as one well-known account
+(`ensureBootstrapUser` in `server.ts`) and the login screen comes next.
+
+Schema changes follow one of two rules, and they are for different things:
+
+- **Adding** a column goes through `ensureColumn()` (`PRAGMA table_info` +
+  `ALTER TABLE ADD COLUMN`), because `CREATE TABLE IF NOT EXISTS` silently skips tables that
+  already exist — an existing database would otherwise never gain it.
+- **Changing what an existing column means** bumps `SCHEMA_VERSION` in `schema.ts`, which
+  refuses the file outright with a message naming both versions. No missing column can
+  signal that kind of change, and without a version the file is simply opened and read wrong
+  — `dir_path` resolving somewhere else, ids referring to a different kind of thing — with
+  no error to explain it. The guard reads `PRAGMA user_version`, which lives in the file
+  header and is therefore readable *before* anything is created; a version row in
+  `app_settings` cannot be, because reading it means having already touched the file you
+  meant to refuse. A file with tables but `user_version = 0` predates versioning and is
+  refused rather than adopted.
 
 `settings` on both `copilots` and `sessions` is a `SessionSettings`:
 `{ providerId, modelId, temperature, topP, maxTokens, maxContextMessages, maxSteps }`.
@@ -113,12 +156,20 @@ machine, whereas a click is not. That is a product decision, deliberately left a
 
 ### Workspace sandboxing (`workspace.ts`)
 
-The global workspaces root (default `./workspaces`) holds one sub-directory per
-workspace. `resolveInWorkspace(dir, userPath)` resolves a tool-supplied path
-against the workspace and **rejects any result outside the workspace** via a
-`path.relative` check — this is the security boundary that prevents a model from
-reading `/etc/passwd` or escaping with `../..`. Deletes are additionally guarded
-to only remove direct children of the root.
+Each account has a workspaces root (`users/<slug>/workspaces/`) holding one directory per
+workspace, and a workspace's directory holds two things: `workdir/`, which is what the agent's
+tools are sandboxed to, and `sessions/`, reserved for per-conversation files.
+
+`resolveInWorkspace(dir, userPath)` resolves a tool-supplied path against the workspace and
+**rejects any result outside the workspace** via a `path.relative` check — this is the security
+boundary that prevents a model from reading `/etc/passwd` or escaping with `../..`. Deletes are
+additionally guarded to only remove direct children of the workspaces root, which is why
+`Workspace.dirPath` stores the workspace's *own* directory rather than `workdir/`: deleting
+`workdir/` alone would strand `sessions/`, and the guard would not recognise the deeper path.
+
+Because the sandbox root and the workspace's own directory are different things, both are
+carried on the `Workspace` type. The agent's system prompt names `workdirPath`; `DELETE`
+removes `dirPath`.
 
 ### Tools (`tools/`)
 
@@ -331,12 +382,16 @@ only when explicitly set, so unset values keep ChatOpenAI's own defaults.
 
 ### Attachments (`attachments.ts`)
 
-Bytes live at `data/uploads/<sessionId>/<attachmentId>.<ext>` — deliberately
+Bytes live at `<dataRoot>/uploads/<sessionId>/<attachmentId>.<ext>` — deliberately
 outside the workspace, so chat uploads never pollute the user's project directory
 or appear in the agent's `list_files`. `resolveStoredPath()` mirrors the
 `resolveInWorkspace` guard, refusing anything that escapes the uploads root, and
 `findStoredAttachment()` derives the MIME type from the directory listing rather
 than trusting the client.
+
+The uploads root is **passed in**, not a module constant: it sits under the data root the
+process was launched with, so there is nothing to compute at import time. That is also what
+keeps `config.ts` importable by the test suite — see "Config" above.
 
 `buildUserContent()` turns a turn into model content:
 
@@ -362,12 +417,18 @@ extraction is always available; cloud parsers are optional and configured like L
 providers.
 
 ```
-data/uploads/<sessionId>/
+<dataRoot>/uploads/<sessionId>/
   <attachmentId>.pdf        the original bytes
   parsed/
     <attachmentId>.txt      extracted text
     <attachmentId>.json     { status, error?, parserId?, parsedChars?, pageCount? }
 ```
+
+This is the arrangement today. Uploaded files are on their way to a **user-level `sources/`
+tree indexed by the database**, where one file can be referenced by several workspaces
+rather than belonging to the session it was uploaded in; `users/<slug>/sources/` is created
+and reserved for that. The `parsed/` note below is about the current layout and will go with
+it.
 
 **The `parsed/` subdirectory is load-bearing.** `findStoredAttachment()` locates an
 attachment with `entries.find(name => name.startsWith(id + "."))`, and `txt` is a
@@ -463,7 +524,7 @@ attachments, providers and app defaults.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/config` | public config: providers (keyless), defaults, workspaces root |
+| `GET /api/config` | public config: providers (keyless), defaults, this account's workspaces root |
 | `PUT /api/defaults` | set the global default provider/model |
 | `GET/POST /api/providers`, `PUT/DELETE /api/providers/:id` | provider CRUD |
 | `POST /api/providers/:id/models`, `DELETE /api/providers/:providerId/models/:modelId` | model CRUD |

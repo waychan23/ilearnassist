@@ -201,11 +201,17 @@ describe("workspaces", () => {
 });
 
 describe("workspace files", () => {
-  /** A workspace with a couple of things in it, written through the real `dirPath`. */
+  /**
+   * A workspace with a couple of things in it, written straight into `workdir/`.
+   *
+   * That is the directory the browser lists and the agent is sandboxed to — not the
+   * workspace's own directory above it, which holds `workdir/` and `sessions/` and is
+   * therefore not something the browser ever shows.
+   */
   async function seededWorkspace() {
     const workspace = await newWorkspace(env, "Files");
-    writeFileSync(join(workspace.dirPath, "notes.md"), "# Notes\n");
-    writeFileSync(join(workspace.dirPath, "app.ts"), "export const x = 1;\n");
+    writeFileSync(join(workspace.workdirPath, "notes.md"), "# Notes\n");
+    writeFileSync(join(workspace.workdirPath, "app.ts"), "export const x = 1;\n");
     return workspace;
   }
 
@@ -223,8 +229,8 @@ describe("workspace files", () => {
 
   it("lists one level, keyed by the path it was asked for", async () => {
     const workspace = await seededWorkspace();
-    mkdirSync(join(workspace.dirPath, "src"));
-    writeFileSync(join(workspace.dirPath, "src", "index.ts"), "x");
+    mkdirSync(join(workspace.workdirPath, "src"));
+    writeFileSync(join(workspace.workdirPath, "src", "index.ts"), "x");
 
     const res = await inject({
       method: "GET",
@@ -251,7 +257,7 @@ describe("workspace files", () => {
 
   it("reports a file it will not render without sending its bytes", async () => {
     const workspace = await seededWorkspace();
-    writeFileSync(join(workspace.dirPath, "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(join(workspace.workdirPath, "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
     const res = await inject({
       method: "GET",

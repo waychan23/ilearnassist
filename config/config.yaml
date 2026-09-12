@@ -13,11 +13,14 @@ server:
   host: 127.0.0.1
   port: 3720
 
-# Where the global workspaces directory lives. Every workspace that is created
-# through the UI/API gets its own sub-directory under this root. All file tools
-# are sandboxed to the active workspace directory.
-workspaces:
-  rootDir: ./workspaces
+# NOTE: where the data lives is *not* here. There is no `data:` or `workspaces:`
+# key because the data root is a launcher decision, not a config value: the
+# server requires the `ILA_DATA_DIR` environment variable (see `.env.example`)
+# and refuses to start without it, so that a path deciding how much of your work
+# survives an uninstall is never a default it invented.
+#
+# Everything per-user lives underneath it — the database at `db/sqlite/`, and
+# each account's workspaces and uploaded files under `users/<name>/`.
 
 # The provider used when a conversation has no explicit provider selected.
 defaultProvider: deepseek

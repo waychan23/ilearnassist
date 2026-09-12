@@ -45,9 +45,19 @@
       <section class="field">
         <div class="field__head">
           <span class="field__label" data-i18n="label.dataDir"></span>
-          <button type="button" class="button button--link" data-action="reveal"></button>
+          <span class="field__actions">
+            <button type="button" class="button button--link" data-action="reveal"></button>
+            <button type="button" class="button button--link" data-action="choose-data-dir"></button>
+          </span>
         </div>
         <code class="field__value" data-role="data-dir"></code>
+        <!--
+          Only until someone has chosen. The server cannot start without a data root, so this
+          is the answer to "why is nothing happening" — and it is the only place the reason is
+          stated, because the failure it prevents would otherwise be a sentence about an
+          environment variable.
+        -->
+        <p class="field__hint" data-role="data-dir-hint" hidden></p>
       </section>
 
       <section class="field">

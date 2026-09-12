@@ -15,13 +15,24 @@ import type {
   Session,
   SessionSettings,
   ToolCall,
+  User,
   Workspace,
 } from "@ilearnassist/shared";
+import { workspaceWorkdir } from "./paths.js";
+import { applySchema } from "./schema.js";
 
 /* ---------------------------------- row shapes ---------------------------------- */
 
+interface UserRow {
+  id: string;
+  username: string;
+  slug: string;
+  created_at: string;
+}
+
 interface WorkspaceRow {
   id: string;
+  user_id: string;
   name: string;
   slug: string;
   dir_path: string;
@@ -140,16 +151,30 @@ export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId"
 export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
 
 /**
- * The title a conversation gets at creation, before the auto-titler replaces it. Kept as
- * a constant because the migration uses it to tell "never renamed" from "renamed".
+ * The title a conversation gets at creation, before the auto-titler replaces it.
+ *
+ * A constant because two places have to agree on it: the create route, which writes it, and
+ * anything asking whether a title is still the placeholder rather than something a person
+ * typed. Spelled twice, the two would drift and a rename would start looking like a default.
  */
 export const DEFAULT_SESSION_TITLE = "New conversation";
+
+const mapUser = (r: UserRow): User => ({
+  id: r.id,
+  username: r.username,
+  slug: r.slug,
+  createdAt: r.created_at,
+});
 
 const mapWorkspace = (r: WorkspaceRow): Workspace => ({
   id: r.id,
   name: r.name,
   slug: r.slug,
   dirPath: r.dir_path,
+  // Derived, not stored: `dir_path` is the workspace's own directory, and the sandbox is
+  // always its `workdir/` child. Computing it here is what lets a row move between the two
+  // meanings without the column having to say which one it now holds.
+  workdirPath: workspaceWorkdir(r.dir_path),
   createdAt: r.created_at,
   sessionCount: r.session_count ?? 0,
   lastActivityAt: r.last_activity_at ?? null,
@@ -244,15 +269,45 @@ function ensureColumn(db: Database.Database, table: string, column: string, ddl:
 
 export interface AppDb {
   raw: Database.Database;
-  listWorkspaces(): Workspace[];
-  getWorkspace(id: string): Workspace | undefined;
-  createWorkspace(input: { id: string; name: string; slug: string; dirPath: string }): Workspace;
+
+  /**
+   * Accounts. There is no password yet, so `findUserByUsername` + `createUser` *is* signing
+   * in — the login route looks the name up and makes the account if it is new. The lookup
+   * is case-insensitive (`idx_users_username` is `COLLATE NOCASE`), so "Ada" and "ada" are
+   * one account rather than two that look identical on the login screen.
+   */
+  listUsers(): User[];
+  getUser(id: string): User | undefined;
+  findUserByUsername(username: string): User | undefined;
+  createUser(input: { id: string; username: string; slug: string }): User;
+
+  /**
+   * Workspaces — and the pattern every user-owned accessor below follows.
+   *
+   * Each one takes the owner and puts it in the `WHERE`, so an id on its own can never
+   * reach a row. The alternative — look the row up, then compare its owner — is a check
+   * somebody will eventually forget on a new route, and the failure is another user's data
+   * rather than an error. Naming these `ForUser` keeps that visible at every call site.
+   *
+   * "Not yours" and "does not exist" are the same answer, deliberately: a route turns both
+   * into a 404, so probing an id cannot tell you whether someone else's workspace is there.
+   */
+  listWorkspaces(userId: string): Workspace[];
+  getWorkspaceForUser(id: string, userId: string): Workspace | undefined;
+  createWorkspace(input: {
+    id: string;
+    userId: string;
+    name: string;
+    slug: string;
+    dirPath: string;
+  }): Workspace;
   /**
    * Rename only. The directory on disk keeps the slug it was created with — a rename that
    * moved files would break every path the agent has already written into a conversation.
    */
-  renameWorkspace(id: string, name: string): Workspace | undefined;
-  deleteWorkspace(id: string): void;
+  renameWorkspaceForUser(id: string, userId: string, name: string): Workspace | undefined;
+  /** Returns false when no such workspace existed, or it belonged to someone else. */
+  deleteWorkspaceForUser(id: string, userId: string): boolean;
 
   listCopilots(): Copilot[];
   getCopilot(id: string): Copilot | undefined;
@@ -276,8 +331,19 @@ export interface AppDb {
   ): Copilot | undefined;
   deleteCopilot(id: string): void;
 
-  listSessions(workspaceId: string): Session[];
-  getSession(id: string): Session | undefined;
+  listSessionsForUser(workspaceId: string, userId: string): Session[];
+  /**
+   * A session together with the workspace holding it.
+   *
+   * They are almost always wanted as a pair — the chat, answers and file routes each
+   * resolve a session and then immediately need its workspace — and returning both is what
+   * removes the second, unscoped lookup those routes used to make. Ownership is checked
+   * through the workspace join, so a session from another account simply is not found.
+   */
+  getSessionForUser(
+    id: string,
+    userId: string
+  ): { session: Session; workspace: Workspace } | undefined;
   createSession(input: {
     id: string;
     workspaceId: string;
@@ -289,18 +355,31 @@ export interface AppDb {
    * A supplied `title` also marks the session as user-titled, which stops the
    * auto-titler from ever overwriting it. Settings-only updates leave the flag alone.
    */
-  updateSession(
+  updateSessionForUser(
     id: string,
+    userId: string,
     input: { title?: string; settings?: SessionSettings }
   ): Session | undefined;
   /** Replace the title on behalf of the auto-titler, keeping `titleSource: "auto"`. */
-  setAutoTitle(id: string, title: string): Session | undefined;
-  deleteSession(id: string): void;
+  setAutoTitleForUser(id: string, userId: string, title: string): Session | undefined;
+  /** Returns false when no such session existed, or it belonged to someone else. */
+  deleteSessionForUser(id: string, userId: string): boolean;
+
+  /*
+   * The session-id-only accessors below — this pair, and `createMessage`,
+   * `findAwaitingToolCall`, `updateMessageToolCalls` and `skipAwaitingToolCalls` further
+   * down — take an id and nothing else on purpose. Every caller reaches them *after* a
+   * `...ForUser` read has
+   * resolved the session, so they act by primary key on a path that is already guarded, and
+   * a second join here would buy nothing at the cost of a query on every turn. This is the
+   * one deliberate asymmetry in the scoping: a comment rather than a signature, because the
+   * guard is genuinely upstream rather than merely inconvenient here.
+   */
   touchSession(id: string): void;
   setSessionCopilot(id: string, copilotId: string | null): void;
 
-  listMessages(sessionId: string): Message[];
-  getMessage(id: string): Message | undefined;
+  listMessagesForUser(sessionId: string, userId: string): Message[];
+  getMessageForUser(id: string, userId: string): Message | undefined;
   createMessage(input: {
     id: string;
     sessionId: string;
@@ -401,118 +480,21 @@ export function createDb(dbPath: string): AppDb {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS workspaces (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      dir_path TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS copilots (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      system_prompt TEXT NOT NULL,
-      model TEXT,
-      tools TEXT NOT NULL DEFAULT '[]',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      copilot_id TEXT REFERENCES copilots(id) ON DELETE SET NULL,
-      title TEXT NOT NULL,
-      title_source TEXT NOT NULL DEFAULT 'auto',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      reasoning TEXT,
-      tool_calls TEXT,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS providers (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      base_url TEXT NOT NULL,
-      api_key TEXT,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS models (
-      id TEXT PRIMARY KEY,
-      provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-      model_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      context_window INTEGER,
-      max_output INTEGER,
-      capabilities TEXT NOT NULL DEFAULT '[]',
-      sort_order INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS document_parsers (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      base_url TEXT NOT NULL,
-      api_key TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at);
-    CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id, sort_order);
-  `);
-
-  // --- in-place migrations for databases created by an earlier schema ---
-  ensureColumn(db, "messages", "attachments", "attachments TEXT");
-  ensureColumn(db, "messages", "usage", "usage TEXT");
-  ensureColumn(db, "messages", "reasoning", "reasoning TEXT");
-  ensureColumn(db, "sessions", "settings", "settings TEXT NOT NULL DEFAULT '{}'");
-  const addedTitleSource = ensureColumn(db, "sessions", "title_source", "title_source TEXT NOT NULL DEFAULT 'auto'");
-  ensureColumn(db, "copilots", "settings", "settings TEXT NOT NULL DEFAULT '{}'");
-
-  // Everything that already existed predates auto-titling. A title that is not the
-  // create-time placeholder was almost certainly typed by hand, so protect it from the
-  // auto-titler by marking it as user-owned.
-  //
-  // Gated on the migration that just added the column: run unconditionally it would also
-  // rewrite every *model-written* title on each subsequent boot (the auto-titler stores
-  // its result with `title_source = 'auto'`), silently locking conversations that were
-  // never renamed by a person.
-  if (addedTitleSource) {
-    db.prepare(
-      `UPDATE sessions SET title_source = 'user'
-       WHERE title_source = 'auto' AND title IS NOT NULL AND title != '' AND title != ?`
-    ).run(DEFAULT_SESSION_TITLE);
-  }
-
-  // Fold the legacy `copilots.model` column into `settings.modelId`. The old column is
-  // left dormant rather than dropped (DROP COLUMN is version-sensitive in SQLite).
-  const legacyModels = db
-    .prepare("SELECT id, model, settings FROM copilots WHERE model IS NOT NULL AND model != ''")
-    .all() as { id: string; model: string; settings: string | null }[];
-  for (const row of legacyModels) {
-    const settings = safeParseObject<CopilotDefaults>(row.settings);
-    if (!settings.modelId) {
-      settings.modelId = row.model;
-      db.prepare("UPDATE copilots SET settings = ? WHERE id = ?").run(JSON.stringify(settings), row.id);
-    }
-  }
+  // Creates the tables, or refuses a file this build cannot read. See `schema.ts`.
+  applySchema(db);
 
   const now = () => new Date().toISOString();
+
+  /* --------------------------------- users -------------------------------- */
+  const stmtListUsers = db.prepare("SELECT * FROM users ORDER BY username COLLATE NOCASE ASC");
+  const stmtGetUser = db.prepare("SELECT * FROM users WHERE id = ?");
+  // `COLLATE NOCASE` on the comparison, not just on the index: the index is what makes it
+  // fast, but spelling it here is what makes it true for a `username` written by anything
+  // other than this statement.
+  const stmtFindUserByUsername = db.prepare("SELECT * FROM users WHERE username = ? COLLATE NOCASE");
+  const stmtCreateUser = db.prepare(
+    "INSERT INTO users (id, username, slug, created_at) VALUES (@id, @username, @slug, @createdAt)"
+  );
 
   /* ------------------------------ workspaces ------------------------------ */
   /*
@@ -522,30 +504,40 @@ export function createDb(dbPath: string): AppDb {
    * workspace with no conversations in the result at all, with a count of 0 and no activity
    * — an inner join would silently drop the empty ones, which are exactly the workspaces a
    * user has just created and is looking for.
+   *
+   * The `user_id` filter rides `idx_workspaces_user` and comes before the grouping, so it
+   * narrows the rows the join sees rather than filtering its result.
    */
   const stmtListWorkspaces = db.prepare(
     `SELECT w.*, COUNT(s.id) AS session_count, MAX(s.updated_at) AS last_activity_at
      FROM workspaces w LEFT JOIN sessions s ON s.workspace_id = w.id
-     GROUP BY w.id ORDER BY w.created_at ASC`
+     WHERE w.user_id = ? GROUP BY w.id ORDER BY w.created_at ASC`
   );
-  const stmtGetWorkspace = db.prepare("SELECT * FROM workspaces WHERE id = ?");
+  const stmtGetWorkspaceForUser = db.prepare(
+    "SELECT * FROM workspaces WHERE id = ? AND user_id = ?"
+  );
   /*
-   * The same row as `stmtGetWorkspace`, with the stats a card needs. Separate rather than
-   * folded in because `getWorkspace` is mostly an existence check on the hot path of every
-   * session route, where a join for a number nobody reads is a cost with no payer. It exists
-   * for the rename response: handing the client back a workspace whose `sessionCount` had
-   * collapsed to 0 would blank the card it was written to refresh.
+   * The same row as `stmtGetWorkspaceForUser`, with the stats a card needs. Separate rather
+   * than folded in because the plain lookup is mostly an existence check on the hot path of
+   * every session route, where a join for a number nobody reads is a cost with no payer. It
+   * exists for the rename response: handing the client back a workspace whose
+   * `sessionCount` had collapsed to 0 would blank the card it was written to refresh.
    */
-  const stmtGetWorkspaceWithStats = db.prepare(
+  const stmtGetWorkspaceWithStatsForUser = db.prepare(
     `SELECT w.*, COUNT(s.id) AS session_count, MAX(s.updated_at) AS last_activity_at
      FROM workspaces w LEFT JOIN sessions s ON s.workspace_id = w.id
-     WHERE w.id = ? GROUP BY w.id`
+     WHERE w.id = ? AND w.user_id = ? GROUP BY w.id`
   );
   const stmtCreateWorkspace = db.prepare(
-    "INSERT INTO workspaces (id, name, slug, dir_path, created_at) VALUES (@id, @name, @slug, @dirPath, @createdAt)"
+    `INSERT INTO workspaces (id, user_id, name, slug, dir_path, created_at)
+     VALUES (@id, @userId, @name, @slug, @dirPath, @createdAt)`
   );
-  const stmtRenameWorkspace = db.prepare("UPDATE workspaces SET name = ? WHERE id = ?");
-  const stmtDeleteWorkspace = db.prepare("DELETE FROM workspaces WHERE id = ?");
+  const stmtRenameWorkspaceForUser = db.prepare(
+    "UPDATE workspaces SET name = ? WHERE id = ? AND user_id = ?"
+  );
+  const stmtDeleteWorkspaceForUser = db.prepare(
+    "DELETE FROM workspaces WHERE id = ? AND user_id = ?"
+  );
 
   /* ------------------------------- copilots ------------------------------- */
   const stmtListCopilots = db.prepare("SELECT * FROM copilots ORDER BY created_at ASC");
@@ -561,28 +553,67 @@ export function createDb(dbPath: string): AppDb {
   const stmtDeleteCopilot = db.prepare("DELETE FROM copilots WHERE id = ?");
 
   /* ------------------------------- sessions ------------------------------- */
-  const stmtListSessions = db.prepare(
-    "SELECT * FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC"
+  /*
+   * A session's owner is reached through its workspace, so these joins *are* the scoping.
+   * There is no `sessions.user_id` and deliberately so: a second copy of the owner is a
+   * second thing that has to stay in agreement, and the day the two disagree is the day one
+   * account reads another's conversation.
+   */
+  const stmtListSessionsForUser = db.prepare(
+    `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+     WHERE s.workspace_id = ? AND w.user_id = ? ORDER BY s.updated_at DESC`
   );
+  const stmtGetSessionForUser = db.prepare(
+    `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+     WHERE s.id = ? AND w.user_id = ?`
+  );
+  /** Unscoped: for the accessors documented as taking an already-resolved session id. */
   const stmtGetSession = db.prepare("SELECT * FROM sessions WHERE id = ?");
   const stmtCreateSession = db.prepare(
     `INSERT INTO sessions (id, workspace_id, copilot_id, title, title_source, settings, created_at, updated_at)
      VALUES (@id, @workspaceId, @copilotId, @title, @titleSource, @settings, @createdAt, @updatedAt)`
   );
-  const stmtSetAutoTitle = db.prepare(
-    "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?"
+  const stmtUpdateSessionForUser = db.prepare(
+    `UPDATE sessions SET title = ?, title_source = ?, settings = ?, updated_at = ?
+      WHERE id = ? AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ?)`
   );
-  const stmtDeleteSession = db.prepare("DELETE FROM sessions WHERE id = ?");
+  const stmtSetAutoTitleForUser = db.prepare(
+    `UPDATE sessions SET title = ?, updated_at = ?
+      WHERE id = ? AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ?)`
+  );
+  const stmtDeleteSessionForUser = db.prepare(
+    `DELETE FROM sessions
+      WHERE id = ? AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ?)`
+  );
   const stmtTouchSession = db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?");
   const stmtSetSessionCopilot = db.prepare(
     "UPDATE sessions SET copilot_id = ?, updated_at = ? WHERE id = ?"
   );
 
   /* ------------------------------- messages ------------------------------- */
+  /*
+   * Two ways to read the same rows, and the pair is the point: `stmtListMessages` is the
+   * unscoped one, used only by the session-id-only accessors above, and the `ForUser` pair
+   * is what a route can reach. They are not interchangeable.
+   */
   const stmtListMessages = db.prepare(
     "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC"
   );
-  const stmtGetMessage = db.prepare("SELECT * FROM messages WHERE id = ?");
+  const stmtListMessagesForUser = db.prepare(
+    `SELECT m.* FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE m.session_id = ? AND w.user_id = ?
+      ORDER BY m.created_at ASC`
+  );
+  const stmtGetMessageForUser = db.prepare(
+    `SELECT m.* FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE m.id = ? AND w.user_id = ?`
+  );
+  /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
+  const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
     `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, usage, created_at)
      VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @usage, @createdAt)`
@@ -647,33 +678,56 @@ export function createDb(dbPath: string): AppDb {
     models: modelsFor(row.id),
   });
 
-  const getSessionRow = (id: string) => stmtGetSession.get(id) as SessionRow | undefined;
+  const workspaceForUser = (id: string, userId: string): Workspace | undefined => {
+    const r = stmtGetWorkspaceForUser.get(id, userId) as WorkspaceRow | undefined;
+    return r ? mapWorkspace(r) : undefined;
+  };
 
+  const getSessionRowForUser = (id: string, userId: string) =>
+    stmtGetSessionForUser.get(id, userId) as SessionRow | undefined;
+
+  /** Unscoped, for the session-id-only accessors listed in `AppDb`. */
   const listMessagesOf = (sessionId: string): Message[] =>
     (stmtListMessages.all(sessionId) as MessageRow[]).map(mapMessage);
 
   return {
     raw: db,
 
-    listWorkspaces() {
-      return (stmtListWorkspaces.all() as WorkspaceRow[]).map(mapWorkspace);
+    listUsers() {
+      return (stmtListUsers.all() as UserRow[]).map(mapUser);
     },
-    getWorkspace(id) {
-      const r = stmtGetWorkspace.get(id) as WorkspaceRow | undefined;
-      return r ? mapWorkspace(r) : undefined;
+    getUser(id) {
+      const r = stmtGetUser.get(id) as UserRow | undefined;
+      return r ? mapUser(r) : undefined;
+    },
+    findUserByUsername(username) {
+      const r = stmtFindUserByUsername.get(username) as UserRow | undefined;
+      return r ? mapUser(r) : undefined;
+    },
+    createUser(input) {
+      stmtCreateUser.run({ ...input, createdAt: now() });
+      const r = stmtGetUser.get(input.id) as UserRow;
+      return mapUser(r);
+    },
+
+    listWorkspaces(userId) {
+      return (stmtListWorkspaces.all(userId) as WorkspaceRow[]).map(mapWorkspace);
+    },
+    getWorkspaceForUser(id, userId) {
+      return workspaceForUser(id, userId);
     },
     createWorkspace(input) {
       stmtCreateWorkspace.run({ ...input, createdAt: now() });
-      const r = stmtGetWorkspace.get(input.id) as WorkspaceRow;
+      const r = stmtGetWorkspaceForUser.get(input.id, input.userId) as WorkspaceRow;
       return mapWorkspace(r);
     },
-    renameWorkspace(id, name) {
-      stmtRenameWorkspace.run(name, id);
-      const r = stmtGetWorkspaceWithStats.get(id) as WorkspaceRow | undefined;
+    renameWorkspaceForUser(id, userId, name) {
+      stmtRenameWorkspaceForUser.run(name, id, userId);
+      const r = stmtGetWorkspaceWithStatsForUser.get(id, userId) as WorkspaceRow | undefined;
       return r ? mapWorkspace(r) : undefined;
     },
-    deleteWorkspace(id) {
-      stmtDeleteWorkspace.run(id);
+    deleteWorkspaceForUser(id, userId) {
+      return stmtDeleteWorkspaceForUser.run(id, userId).changes > 0;
     },
 
     listCopilots() {
@@ -710,12 +764,18 @@ export function createDb(dbPath: string): AppDb {
       stmtDeleteCopilot.run(id);
     },
 
-    listSessions(workspaceId) {
-      return (stmtListSessions.all(workspaceId) as SessionRow[]).map(mapSession);
+    listSessionsForUser(workspaceId, userId) {
+      return (stmtListSessionsForUser.all(workspaceId, userId) as SessionRow[]).map(mapSession);
     },
-    getSession(id) {
-      const r = getSessionRow(id);
-      return r ? mapSession(r) : undefined;
+    getSessionForUser(id, userId) {
+      const r = getSessionRowForUser(id, userId);
+      if (!r) return undefined;
+      const session = mapSession(r);
+      // Through the workspace's own scoped accessor rather than read off the join: the
+      // caller wants a whole `Workspace` (stats included), and the row was just proved
+      // reachable, so the second lookup is one indexed read that cannot come back empty.
+      const workspace = workspaceForUser(session.workspaceId, userId);
+      return workspace ? { session, workspace } : undefined;
     },
     createSession(input) {
       const ts = now();
@@ -729,8 +789,8 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetSession.get(input.id) as SessionRow;
       return mapSession(r);
     },
-    updateSession(id, input) {
-      const existing = getSessionRow(id);
+    updateSessionForUser(id, userId, input) {
+      const existing = getSessionRowForUser(id, userId);
       if (!existing) return undefined;
 
       const renamed = input.title !== undefined && !!input.title.trim();
@@ -739,26 +799,25 @@ export function createDb(dbPath: string): AppDb {
         ? { ...safeParseObject<SessionSettings>(existing.settings), ...input.settings }
         : safeParseObject<SessionSettings>(existing.settings);
 
-      db.prepare(
-        "UPDATE sessions SET title = ?, title_source = ?, settings = ?, updated_at = ? WHERE id = ?"
-      ).run(
+      stmtUpdateSessionForUser.run(
         title,
         renamed ? "user" : existing.title_source ?? "auto",
         JSON.stringify(settings),
         now(),
-        id
+        id,
+        userId
       );
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);
     },
-    setAutoTitle(id, title) {
-      if (!stmtGetSession.get(id)) return undefined;
-      stmtSetAutoTitle.run(title, now(), id);
+    setAutoTitleForUser(id, userId, title) {
+      const { changes } = stmtSetAutoTitleForUser.run(title, now(), id, userId);
+      if (changes === 0) return undefined;
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);
     },
-    deleteSession(id) {
-      stmtDeleteSession.run(id);
+    deleteSessionForUser(id, userId) {
+      return stmtDeleteSessionForUser.run(id, userId).changes > 0;
     },
     touchSession(id) {
       stmtTouchSession.run(now(), id);
@@ -767,11 +826,11 @@ export function createDb(dbPath: string): AppDb {
       stmtSetSessionCopilot.run(copilotId, now(), id);
     },
 
-    listMessages(sessionId) {
-      return listMessagesOf(sessionId);
+    listMessagesForUser(sessionId, userId) {
+      return (stmtListMessagesForUser.all(sessionId, userId) as MessageRow[]).map(mapMessage);
     },
-    getMessage(id) {
-      const r = stmtGetMessage.get(id) as MessageRow | undefined;
+    getMessageForUser(id, userId) {
+      const r = stmtGetMessageForUser.get(id, userId) as MessageRow | undefined;
       return r ? mapMessage(r) : undefined;
     },
     createMessage(input) {
@@ -786,7 +845,7 @@ export function createDb(dbPath: string): AppDb {
         usage: input.usage ? JSON.stringify(input.usage) : null,
         createdAt: now(),
       });
-      const row = stmtGetMessage.get(input.id) as MessageRow;
+      const row = stmtGetMessageById.get(input.id) as MessageRow;
       return mapMessage(row);
     },
 

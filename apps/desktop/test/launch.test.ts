@@ -15,10 +15,16 @@ const paths: AppPaths = {
   configFile: "/Users/someone/Library/Application Support/ilearnassist/config/config.yaml",
   overlayFile:
     "/Users/someone/Library/Application Support/ilearnassist/config/config.local.yaml",
-  dataDir: "/Users/someone/Library/Application Support/ilearnassist/data",
+  suggestedDataDir: "/Users/someone/Library/Application Support/ilearnassist/data",
   webDir: "/Applications/ilearnassist.app/Contents/Resources/web",
   templateConfig: "/Applications/ilearnassist.app/Contents/Resources/config/config.yaml",
 };
+
+/**
+ * Deliberately *not* under `paths.root`, because that is the arrangement this change exists
+ * to make possible: the app's tree is the app's, and the user's data is wherever they put it.
+ */
+const DATA_DIR = "/Users/someone/Documents/my-notes";
 
 describe("parseListeningLine", () => {
   it("extracts the address the server bound", () => {
@@ -55,6 +61,7 @@ describe("buildLaunchSpec", () => {
       electronExecPath: "/Applications/ilearnassist.app/Contents/MacOS/ilearnassist",
       serverEntry: "/Applications/ilearnassist.app/Contents/Resources/app/dist/server/index.mjs",
       paths,
+      dataDir: DATA_DIR,
       host,
       baseEnv: { PATH: "/usr/bin" },
     });
@@ -75,6 +82,15 @@ describe("buildLaunchSpec", () => {
     expect(spec.env["ILA_PROJECT_ROOT"]).toBe(paths.root);
     expect(spec.env["ILA_CONFIG_PATH"]).toBe(paths.overlayFile);
     expect(spec.env["ILA_WEB_DIR"]).toBe(paths.webDir);
+  });
+
+  it("points the server at the chosen data root, which is the user's and not the app's", () => {
+    // The server refuses to start without this, by design — so a launch spec that dropped it
+    // would be a panel that can never get past "starting". It is passed on every launch
+    // rather than written into a config file, which is what lets the folder picker change it
+    // without anything on disk being rewritten.
+    expect(spec.env["ILA_DATA_DIR"]).toBe(DATA_DIR);
+    expect(spec.env["ILA_DATA_DIR"]).not.toBe(paths.root);
   });
 
   it("keeps the ambient environment", () => {

@@ -23,9 +23,6 @@ server:
   host: 127.0.0.1        # bind address
   port: 3720             # backend port (Vite proxies /api here)
 
-workspaces:
-  rootDir: ./workspaces  # global dir; each workspace becomes a sub-directory
-
 defaultProvider: deepseek   # seed value; change it in the UI afterwards
 defaultModel: deepseek-chat # seed value; change it in the UI afterwards
 
@@ -101,17 +98,37 @@ TAVILY_API_KEY=…     # only if webSearch.provider = tavily
 
 Copy `.env.example` to `.env` to get started.
 
-Two more variables are read from the real environment (not `.env`), and exist for
-tests and the e2e run:
+## Where the data lives
+
+`ILA_DATA_DIR` names the data root — the sqlite database, every account's workspaces, and the
+files they upload. **It is required, and the server refuses to start without it.**
 
 | Variable | Effect |
 | --- | --- |
-| `ILA_CONFIG_PATH` | Replace the path of the *overlay* normally read from `config/config.local.yaml`. `config/config.yaml` is still the base. |
-| `ILA_DATA_DIR` | Move the runtime data directory (the sqlite database and `uploads/`) away from `<project>/data`. |
+| `ILA_DATA_DIR` | The data root. **Required.** No default, deliberately: that path decides how much of your work survives an uninstall, so the code will not guess one. |
+| `ILA_CONFIG_PATH` | Replace the path of the *overlay* normally read from `config/config.local.yaml`. `config/config.yaml` is still the base. Exists for tests and the e2e run. |
 
-Both are read once, when the config module is first imported — set them before the
-server starts, not at runtime. `pnpm test:e2e` uses both to keep a run off your real
-data.
+```
+<dataRoot>/
+  db/sqlite/ilearnassist.sqlite
+  users/<name>/workspaces/<name>/     workdir/ is the agent's sandbox; sessions/ is reserved
+  users/<name>/sources/               reserved for uploaded files
+  uploads/<sessionId>/                where attachments are today
+```
+
+Put it somewhere outside the checkout and outside the application bundle, and somewhere you
+back up. **`config/` and `.env` are not inside it** — they live under the project root (the
+desktop app's `userData` directory when packed), so "move my data to a new machine" means
+copying both.
+
+A *relative* value resolves against the project root, not the working directory: `pnpm dev`
+runs the server with its cwd set to `apps/server`, so "relative to cwd" would mean something
+different from one launcher to the next. The desktop app asks for a folder on first launch and
+passes an absolute path down — see [desktop.md](desktop.md).
+
+Both variables are read once, when the config module is first imported — set them before the
+server starts, not at runtime. `.env` counts: `loadDotEnv()` runs at module scope, before
+anything reads the environment, so a checkout can put `ILA_DATA_DIR` there.
 
 Note that `${…}` placeholders are substituted *after* YAML parsing, so a numeric
 field written as `port: ${PORT}` arrives as a string — numeric fields accept a
@@ -224,8 +241,8 @@ defaults.
 ## Attachments
 
 Files and images can be attached in the composer (paperclip, or paste a
-screenshot). Bytes are stored under `data/uploads/<sessionId>/` — outside the
-workspace, so they never appear in the agent's `list_files`. Each file is capped
+screenshot). Bytes are stored under `<dataRoot>/uploads/<sessionId>/` — outside
+the workspace, so they never appear in the agent's `list_files`. Each file is capped
 at 10 MB, and only a known set of MIME types is accepted (images, text-like files,
 PDF and the Office/OpenDocument formats). Images are sent to the model as real
 multimodal content when the selected model is marked `vision`; text-like files are

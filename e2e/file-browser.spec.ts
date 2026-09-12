@@ -22,18 +22,18 @@ const BIG_FILE_CHARS = 300_000;
 async function seedWorkspace(request: APIRequestContext, name: string): Promise<string> {
   const res = await request.post("/api/workspaces", { data: { name } });
   expect(res.status()).toBe(201);
-  const { dirPath } = (await res.json()) as { dirPath: string };
+  const { workdirPath } = (await res.json()) as { workdirPath: string };
 
-  mkdirSync(join(dirPath, "src", "utils"), { recursive: true });
-  mkdirSync(join(dirPath, "empty-dir"), { recursive: true });
-  writeFileSync(join(dirPath, "README.md"), "# 工作区说明\n\n**重点** 和 `代码`\n");
-  writeFileSync(join(dirPath, "notes.txt"), "纯文本内容\n");
-  writeFileSync(join(dirPath, "app.js"), "const answer = 42;\n");
-  writeFileSync(join(dirPath, "src", "index.ts"), "export const answer = 42;\n");
-  writeFileSync(join(dirPath, "src", "utils", "format.ts"), "export const pad = 1;\n");
-  writeFileSync(join(dirPath, "data.bin"), Buffer.from([0x00, 0x01, 0x02, 0x89, 0x50, 0x4e]));
-  writeFileSync(join(dirPath, "big.log"), "x".repeat(BIG_FILE_CHARS));
-  return dirPath;
+  mkdirSync(join(workdirPath, "src", "utils"), { recursive: true });
+  mkdirSync(join(workdirPath, "empty-dir"), { recursive: true });
+  writeFileSync(join(workdirPath, "README.md"), "# 工作区说明\n\n**重点** 和 `代码`\n");
+  writeFileSync(join(workdirPath, "notes.txt"), "纯文本内容\n");
+  writeFileSync(join(workdirPath, "app.js"), "const answer = 42;\n");
+  writeFileSync(join(workdirPath, "src", "index.ts"), "export const answer = 42;\n");
+  writeFileSync(join(workdirPath, "src", "utils", "format.ts"), "export const pad = 1;\n");
+  writeFileSync(join(workdirPath, "data.bin"), Buffer.from([0x00, 0x01, 0x02, 0x89, 0x50, 0x4e]));
+  writeFileSync(join(workdirPath, "big.log"), "x".repeat(BIG_FILE_CHARS));
+  return workdirPath;
 }
 
 /** The sidebar's files panel. The root listing may be empty, so only the panel is awaited. */
@@ -104,7 +104,7 @@ test("a file's contents open in a preview, per format", async ({ page, request }
 });
 
 test("the tree picks up a change on refresh, and after a turn", async ({ page, request }) => {
-  const dirPath = await seedWorkspace(request, "文件刷新");
+  const workdirPath = await seedWorkspace(request, "文件刷新");
   await page.goto("/");
   await enterWorkspace(page, "文件刷新");
   await openFilesTab(page);
@@ -112,7 +112,7 @@ test("the tree picks up a change on refresh, and after a turn", async ({ page, r
   // The manual refresh is what makes a file that appeared outside the conversation visible.
   const rows = page.getByTestId("file-row");
   await expect(rows.filter({ hasText: "added-by-hand.txt" })).toHaveCount(0);
-  writeFileSync(join(dirPath, "added-by-hand.txt"), "hi");
+  writeFileSync(join(workdirPath, "added-by-hand.txt"), "hi");
   await page.getByTestId("files-refresh").click();
   await expect(rows.filter({ hasText: "added-by-hand.txt" })).toBeVisible();
 

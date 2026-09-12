@@ -74,6 +74,7 @@ const WORKSPACE: Workspace = {
   name: "Notes",
   slug: "notes",
   dirPath: "/tmp/notes",
+  workdirPath: "/tmp/notes/workdir",
   createdAt: "2026-01-01T00:00:00.000Z",
   sessionCount: 0,
   lastActivityAt: null,

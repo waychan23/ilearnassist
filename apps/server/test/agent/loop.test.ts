@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -24,6 +24,14 @@ import { startFakeLlm, type FakeLlm, type FakeTurn } from "../helpers/fakeLlm.js
 
 let llm: FakeLlm;
 let scratch: string;
+/**
+ * The workspace's sandbox — `scratch/ws/workdir`, the shape a real `Workspace` describes.
+ *
+ * Tests that exercise the file tools pass *this*, not `scratch`, because it is what the
+ * agent is actually sandboxed to; using the parent would make a passing test that proves
+ * the tools work somewhere they never run.
+ */
+let workdir: string;
 
 beforeAll(async () => {
   llm = await startFakeLlm();
@@ -36,6 +44,8 @@ afterAll(async () => {
 beforeEach(() => {
   llm.reset();
   scratch = mkdtempSync(join(tmpdir(), "gl-loop-"));
+  workdir = join(scratch, "ws", "workdir");
+  mkdirSync(workdir, { recursive: true });
 });
 
 afterEach(() => {
@@ -76,7 +86,8 @@ async function run(options: RunOptions) {
       id: "w1",
       name: "W",
       slug: "w",
-      dirPath: scratch,
+      dirPath: join(scratch, "ws"),
+      workdirPath: workdir,
       createdAt: new Date().toISOString(),
       sessionCount: 0,
       lastActivityAt: null,
@@ -206,7 +217,7 @@ describe("runAgentStream — chain of thought", () => {
 
 describe("runAgentStream — tool calling", () => {
   it("runs a real tool and feeds the result back for a final answer", async () => {
-    const files = buildFileTools(scratch);
+    const files = buildFileTools(workdir);
     const { events, result } = await run({
       tools: [files.writeFile],
       turns: [
@@ -220,7 +231,7 @@ describe("runAgentStream — tool calling", () => {
     });
 
     // The tool really executed, against the real sandbox helpers.
-    expect(readFileSync(join(scratch, "notes/a.txt"), "utf8")).toBe("hello");
+    expect(readFileSync(join(workdir, "notes/a.txt"), "utf8")).toBe("hello");
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0]).toMatchObject({ id: "call_1", name: "write_file" });
     expect(result.toolCalls[0]!.output).toContain("Wrote 5 characters");
@@ -233,7 +244,7 @@ describe("runAgentStream — tool calling", () => {
   });
 
   it("hands the tool result back to the model as a tool message", async () => {
-    const files = buildFileTools(scratch);
+    const files = buildFileTools(workdir);
     await run({
       tools: [files.writeFile],
       turns: [
@@ -258,7 +269,7 @@ describe("runAgentStream — tool calling", () => {
   });
 
   it("turns a tool failure into a tool result rather than a failed turn", async () => {
-    const files = buildFileTools(scratch);
+    const files = buildFileTools(workdir);
     const { result, events } = await run({
       tools: [files.readFile],
       turns: [
@@ -273,7 +284,7 @@ describe("runAgentStream — tool calling", () => {
   });
 
   it("refuses a tool call that escapes the workspace sandbox", async () => {
-    const files = buildFileTools(scratch);
+    const files = buildFileTools(workdir);
     const { result } = await run({
       tools: [files.readFile],
       turns: [
@@ -365,7 +376,10 @@ describe("runAgentStream — history handling", () => {
 
     const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
     expect(sent.messages[0]!.role).toBe("system");
-    expect(JSON.stringify(sent.messages[0]!.content)).toContain(scratch);
+    // The *sandbox*, not the workspace's own directory: naming the parent would tell the
+    // model that `sessions/` sits inside the place it may write to.
+    expect(JSON.stringify(sent.messages[0]!.content)).toContain(workdir);
+    expect(JSON.stringify(sent.messages[0]!.content)).not.toContain(join(scratch, "ws") + "/sessions");
     expect(JSON.stringify(sent.messages[0]!.content)).toContain("sandboxed");
   });
 });
@@ -377,7 +391,7 @@ describe("runAgentStream — known inconsistencies (pinned)", () => {
    */
 
   it("streams tool-step narration but persists only the final answer", async () => {
-    const files = buildFileTools(scratch);
+    const files = buildFileTools(workdir);
     const { events, result } = await run({
       tools: [files.writeFile],
       turns: [
@@ -468,7 +482,7 @@ describe("runAgentStream — ask_user suspends the turn", () => {
   it("runs the step's other tool calls before suspending", async () => {
     // Nothing the model asked for is silently dropped: the read still happens, and the
     // question is the only thing left outstanding.
-    const files = buildFileTools(scratch);
+    const files = buildFileTools(workdir);
     await files.writeFile.invoke({ path: "a.txt", content: "hello" });
 
     const { result } = await run({

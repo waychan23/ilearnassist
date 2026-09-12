@@ -1,8 +1,16 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deepMerge, resolveEnv, validateConfig, withDefaults, type AppConfig } from "../src/config.js";
+import {
+  PROJECT_PATHS,
+  deepMerge,
+  resolveDataRoot,
+  resolveEnv,
+  validateConfig,
+  withDefaults,
+  type AppConfig,
+} from "../src/config.js";
 
 describe("resolveEnv", () => {
   beforeEach(() => {
@@ -71,10 +79,6 @@ describe("withDefaults", () => {
     expect(config.tools.webFetch).toEqual({ enabled: true, maxChars: 20_000 });
   });
 
-  it("nests the fallback workspaces dir under the project root", () => {
-    expect(withDefaults({}).workspaces.rootDir).toMatch(/\/workspaces$/);
-  });
-
   it("honours explicit values over the defaults", () => {
     const config = withDefaults({
       server: { host: "0.0.0.0", port: 9999 },
@@ -97,12 +101,6 @@ describe("withDefaults", () => {
     expect(withDefaults({ server: { port: "not a port" } }).server.port).toBe(3720);
     expect(withDefaults({ server: { port: null } }).server.port).toBe(3720);
     expect(withDefaults({ server: { port: Number.NaN } }).server.port).toBe(3720);
-  });
-
-  it("keeps an absolute workspaces rootDir as-is", () => {
-    expect(withDefaults({ workspaces: { rootDir: "/tmp/somewhere" } }).workspaces.rootDir).toBe(
-      "/tmp/somewhere"
-    );
   });
 
   it("maps providers and their models", () => {
@@ -180,7 +178,6 @@ describe("loadConfig", () => {
 
   it("resolves ${ENV} placeholders from the environment", async () => {
     const config = await load(`
-workspaces: { rootDir: ${dir}/ws }
 defaultProvider: p
 defaultModel: m
 providers:
@@ -242,5 +239,45 @@ defaultModel: m
 providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
 `);
     expect(config.server.host).toBe("127.0.0.1");
+  });
+});
+
+describe("resolveDataRoot", () => {
+  it("throws when the variable is unset, rather than inventing a path", () => {
+    // Removing the default is the point: a path that decides how much of the user's work
+    // survives an uninstall is not the code's to choose. Blank counts as unset — an empty
+    // string would otherwise resolve to the working directory and look like a real answer.
+    expect(() => resolveDataRoot({})).toThrow(/ILA_DATA_DIR is not set/);
+    expect(() => resolveDataRoot({ ILA_DATA_DIR: "   " })).toThrow(/ILA_DATA_DIR is not set/);
+  });
+
+  it("resolves a relative path against the project root, not the working directory", () => {
+    // A relative value in the project's `.env` has to mean the project's own directory.
+    // `pnpm dev` runs the server script with its cwd set to `apps/server`, so resolving
+    // against cwd would quietly scatter the data into a subdirectory of the package — and
+    // give a different answer depending on who launched the process.
+    //
+    // Asserted against the project root rather than by comparing with `process.cwd()`,
+    // because under this runner the two happen to be the same directory and a comparison
+    // would pass whatever the rule was.
+    const resolved = resolveDataRoot({ ILA_DATA_DIR: "./somewhere" });
+    expect(resolved).toBe(resolve(PROJECT_PATHS.projectRoot, "somewhere"));
+    expect(resolved.startsWith(PROJECT_PATHS.projectRoot + "/")).toBe(true);
+  });
+
+  it("takes an absolute path as given", () => {
+    expect(resolveDataRoot({ ILA_DATA_DIR: "/tmp/elsewhere" })).toBe("/tmp/elsewhere");
+  });
+
+  it("reads the real environment by default, which is the door `.env` comes in through", () => {
+    // `loadDotEnv()` runs at module scope and writes only into `process.env`, so a value in
+    // `.env` arrives here by exactly the same route as one exported by a shell — no separate
+    // code path, and nothing to keep in step.
+    vi.stubEnv("ILA_DATA_DIR", "/tmp/from-env");
+    try {
+      expect(resolveDataRoot()).toBe("/tmp/from-env");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

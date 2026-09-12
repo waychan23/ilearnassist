@@ -32,10 +32,35 @@ describe("readSettings", () => {
   });
 
   it("round-trips what was written, creating the directory", () => {
-    writeSettings(file, { sharedOnLan: true });
-    expect(readSettings(file)).toEqual({ sharedOnLan: true });
+    writeSettings(file, { sharedOnLan: true, dataDir: "/Users/someone/My Notes" });
+    expect(readSettings(file)).toEqual({ sharedOnLan: true, dataDir: "/Users/someone/My Notes" });
     // The file is the user's too, so it is written to be read.
     expect(readFileSync(file, "utf8")).toContain('"sharedOnLan": true');
+  });
+
+  it("keeps a chosen data folder verbatim, spaces and all", () => {
+    // Not trimmed on the way out: a path may legitimately end in a space, and resolving it is
+    // the launcher's job rather than this file's.
+    writeSettings(file, { sharedOnLan: false, dataDir: "/Users/someone/My Notes" });
+    expect(readSettings(file).dataDir).toBe("/Users/someone/My Notes");
+  });
+
+  it("treats a missing, blank or non-string data folder as not chosen yet", () => {
+    // Never a fallback to some other directory. Everywhere else in this file a bad value
+    // becomes the safe default; here the safe default is to *ask*, because silently pointing
+    // the app at a folder that is not the user's is the one failure this setting can cause
+    // that loses work.
+    mkdirSync(join(dir, "nested"), { recursive: true });
+    for (const content of [
+      '{"sharedOnLan":false}',
+      '{"dataDir":""}',
+      '{"dataDir":"   "}',
+      '{"dataDir":42}',
+      '{"dataDir":null}',
+    ]) {
+      writeFileSync(file, content, "utf8");
+      expect(readSettings(file).dataDir).toBe("");
+    }
   });
 
   it("survives a file truncated by a crash mid-write", () => {

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { mkdirSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type {
@@ -39,6 +40,7 @@ import type {
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
 import {
+  DEFAULT_SESSION_TITLE,
   newId,
   readDocumentParsing,
   SETTING_DEFAULT_MODEL,
@@ -73,21 +75,29 @@ import {
   normalizeMime,
   removeSessionUploads,
   resolveStoredPath,
-  UPLOADS_ROOT,
 } from "./attachments.js";
+import { sessionDir, type UserLayout } from "./paths.js";
 import { createWorkspaceDir, removeWorkspaceDir, uniqueSlug } from "./workspace.js";
 import { FileAccessError, listDirectory, readFileContent } from "./files.js";
 
 interface RoutesOptions {
   config: AppConfig;
   db: AppDb;
-  /**
-   * Where uploaded attachment bytes are stored. Defaults to the project's own
-   * `data/uploads`; tests redirect it at a temp directory.
-   */
-  uploadsRoot?: string;
+  /** Where uploaded attachment bytes are stored — under the chosen data root. */
+  uploadsRoot: string;
   /** Owns document text extraction and the parse-state sidecars. */
   documents: DocumentService;
+  /**
+   * The owner of everything this server serves.
+   *
+   * Read from here rather than from the request because there is nothing on the request to
+   * read yet: signing in is the next change, and when it lands this option is what
+   * disappears — the owner becomes the request's user, and none of the routes below change,
+   * having never asked where the id came from.
+   */
+  userId: string;
+  /** The acting user's tree: where its workspaces are created, and deleted from. */
+  userLayout: UserLayout;
 }
 
 /** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
@@ -138,8 +148,7 @@ function fileErrorReply(err: unknown): { status: 400 | 404; body: ApiErrorBody }
 }
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
-  const { config, db, documents } = opts;
-  const uploadsRoot = opts.uploadsRoot ?? UPLOADS_ROOT;
+  const { config, db, documents, uploadsRoot, userId, userLayout } = opts;
 
   /* --------------------------------- resolution -------------------------------- */
   /*
@@ -232,7 +241,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       defaultProvider: resolveDefaultProviderId(),
       defaultModel: db.getSetting(SETTING_DEFAULT_MODEL) ?? config.defaultModel,
       providers: providerConfigs(),
-      workspacesRootDir: config.workspaces.rootDir,
+      workspacesRootDir: userLayout.workspacesRoot,
       webSearchProvider: config.tools.webSearch.provider,
       documentParsers: documentParserConfigs(),
       documentParsing: documentParsing(),
@@ -272,40 +281,49 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /* -------------------------------- workspaces -------------------------------- */
 
-  app.get("/api/workspaces", async () => db.listWorkspaces());
+  app.get("/api/workspaces", async () => db.listWorkspaces(userId));
 
   app.post("/api/workspaces", async (request, reply) => {
     const body = request.body as CreateWorkspaceInput;
     const name = body?.name?.trim();
     if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
-    const slug = uniqueSlug(config.workspaces.rootDir, name);
-    const dirPath = createWorkspaceDir(config.workspaces.rootDir, slug);
-    const workspace = db.createWorkspace({ id: newId(), name, slug, dirPath });
+    const slug = uniqueSlug(userLayout.workspacesRoot, name);
+    // Creates the workspace's own directory *and* the two inside it — `workdir/` for the
+    // agent to work in, `sessions/` for its conversations. One call, so neither can be
+    // forgotten and a workspace is never half-made.
+    const dirPath = createWorkspaceDir(userLayout.workspacesRoot, slug);
+    const workspace = db.createWorkspace({ id: newId(), userId, name, slug, dirPath });
     return reply.code(201).send(workspace);
   });
 
   /**
-   * Rename. The directory keeps its original slug — see `renameWorkspace` in `db.ts` — so
-   * this is a display-name change and nothing on disk moves underneath a running agent.
+   * Rename. The directory keeps its original slug — see `renameWorkspaceForUser` in
+   * `db.ts` — so this is a display-name change and nothing on disk moves underneath a
+   * running agent.
    */
   app.patch("/api/workspaces/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateWorkspaceInput;
-    if (!db.getWorkspace(id)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    if (!db.getWorkspaceForUser(id, userId)) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
 
     const name = body?.name?.trim();
     if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
-    return db.renameWorkspace(id, name);
+    return db.renameWorkspaceForUser(id, userId, name);
   });
 
   app.delete("/api/workspaces/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const workspace = db.getWorkspace(id);
+    const workspace = db.getWorkspaceForUser(id, userId);
     if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
-    db.deleteWorkspace(id);
-    removeWorkspaceDir(config.workspaces.rootDir, workspace.dirPath);
+    db.deleteWorkspaceForUser(id, userId);
+    // The workspace's *own* directory, so `sessions/` goes with it. The guard inside
+    // `removeWorkspaceDir` is written against this level — "a direct child of the
+    // workspaces root" — which is why `dirPath` holds this and not the sandbox.
+    removeWorkspaceDir(userLayout.workspacesRoot, workspace.dirPath);
     return { ok: true };
   });
 
@@ -330,13 +348,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // `string[]` is not hypothetical: `?path=a&path=b` parses to an array, and the module
     // refuses it rather than letting a string operation on it become a 500.
     const { path } = request.query as { path?: string | string[] };
-    const workspace = db.getWorkspace(workspaceId);
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
     if (!workspace) {
       return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
     }
 
     try {
-      return await listDirectory(workspace.dirPath, path);
+      return await listDirectory(workspace.workdirPath, path);
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -346,13 +364,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.get("/api/workspaces/:workspaceId/files/content", async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
     const { path } = request.query as { path?: string | string[] };
-    const workspace = db.getWorkspace(workspaceId);
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
     if (!workspace) {
       return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
     }
 
     try {
-      return await readFileContent(workspace.dirPath, path);
+      return await readFileContent(workspace.workdirPath, path);
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -402,14 +420,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   app.get("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
-    if (!db.getWorkspace(workspaceId)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
-    return db.listSessions(workspaceId);
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
+    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    return db.listSessionsForUser(workspaceId, userId);
   });
 
   app.post("/api/workspaces/:workspaceId/sessions", async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
     const body = request.body as CreateSessionInput;
-    if (!db.getWorkspace(workspaceId)) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
+    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
 
     const copilotId = body?.copilotId ?? null;
     const copilot = copilotId ? db.getCopilot(copilotId) : undefined;
@@ -418,11 +438,20 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       id: newId(),
       workspaceId,
       copilotId,
-      title: body?.title?.trim() || "New conversation",
+      title: body?.title?.trim() || DEFAULT_SESSION_TITLE,
       // The Copilot's defaults are copied in, not referenced — changing a Copilot later
       // must not silently rewrite the parameters of conversations already underway.
       settings: copilot ? { ...copilot.settings } : {},
     });
+    // The conversation's own directory, made now rather than the first time something wants
+    // it, so that reserving it means it is *there*. Best-effort: nothing writes into it yet,
+    // and a data root on a read-only volume must not turn starting a conversation into an
+    // error over a directory nobody is using.
+    try {
+      mkdirSync(sessionDir(workspace.dirPath, session.id), { recursive: true });
+    } catch {
+      // Ignored on purpose — see above.
+    }
     return reply.code(201).send(session);
   });
 
@@ -430,27 +459,41 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.patch("/api/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateSessionInput;
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
     if (body?.title !== undefined && !body.title.trim()) {
       return reply.code(400).send(apiError("TITLE_EMPTY", "title must not be empty"));
     }
-    return db.updateSession(id, { title: body?.title, settings: body?.settings });
+    return db.updateSessionForUser(id, userId, { title: body?.title, settings: body?.settings });
   });
 
   app.delete("/api/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+
     // Abort before deleting: a parse still running would finish by writing a sidecar back
     // into the directory we are about to remove, recreating it as an orphan.
     documents.cancelSession(id);
-    db.deleteSession(id);
+    db.deleteSessionForUser(id, userId);
+    // The reserved directory goes with the conversation. Best-effort, same as the create
+    // above: a directory nothing wrote to is not worth failing a delete over.
+    try {
+      rmSync(sessionDir(found.workspace.dirPath, id), { recursive: true, force: true });
+    } catch {
+      // Ignored on purpose.
+    }
     await removeSessionUploads(uploadsRoot, id);
     return { ok: true };
   });
 
   app.get("/api/sessions/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    return db.listMessages(id);
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return db.listMessagesForUser(id, userId);
   });
 
   /* -------------------------------- attachments -------------------------------- */
@@ -465,7 +508,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     { bodyLimit: ATTACHMENT_BODY_LIMIT },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      if (!db.getSessionForUser(id, userId)) {
+        return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      }
 
       const body = request.body as UploadAttachmentInput;
       const name = body?.name?.trim();
@@ -542,7 +587,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /** Parse state for every attachment in a session, keyed by attachment id. */
   app.get("/api/sessions/:id/attachments", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
     const records = await listParseRecords(uploadsRoot, id);
     // Mapped rather than passed through: the sidecar stores the code as `code`, while the
     // client-facing type calls it `parseErrorCode`. The rename is deliberate — the record
@@ -566,7 +613,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /** Re-run extraction, e.g. after a failure or a change of parser settings. */
   app.post("/api/sessions/:id/attachments/:attachmentId/reparse", async (request, reply) => {
     const { id, attachmentId } = request.params as { id: string; attachmentId: string };
-    if (!db.getSession(id)) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
 
     const found = await findStoredAttachment(uploadsRoot, id, attachmentId);
     if (!found) return reply.code(404).send(apiError("ATTACHMENT_NOT_FOUND", "attachment not found"));
@@ -899,7 +948,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const modelId = resolveModelId(provider, input.model, session.settings, copilot?.settings);
 
     const tools = buildTools({
-      workspaceDir: workspace.dirPath,
+      workspaceDir: workspace.workdirPath,
       webSearch: config.tools.webSearch,
       webFetch: config.tools.webFetch,
       fileToolsEnabled: config.tools.fileTools.enabled,
@@ -969,7 +1018,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         assistantMessage: result.content,
       });
       if (title) {
-        db.setAutoTitle(id, title);
+        db.setAutoTitleForUser(id, userId, title);
         sse.send({ type: "title", sessionId: id, title });
       }
     }
@@ -992,10 +1041,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const { id } = request.params as { id: string };
     const body = request.body as ChatInput;
 
-    const session = db.getSession(id);
-    if (!session) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    const workspace = db.getWorkspace(session.workspaceId);
-    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    const { session, workspace } = found;
 
     const message = body?.message?.trim();
     const attachments = body?.attachments ?? [];
@@ -1027,7 +1075,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     });
 
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
-    const history = db.listMessages(id);
+    const history = db.listMessagesForUser(id, userId);
 
     db.createMessage({
       id: newId(),
@@ -1085,10 +1133,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const { id } = request.params as { id: string };
     const body = request.body as AnswerToolCallInput;
 
-    const session = db.getSession(id);
-    if (!session) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    const workspace = db.getWorkspace(session.workspaceId);
-    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    const { session, workspace } = found;
 
     const toolCallId = typeof body?.toolCallId === "string" ? body.toolCallId : "";
     const action = body?.action === "cancel" ? "cancel" : "submit";
@@ -1117,7 +1164,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // Two copies of one answer, for two readers. `output` is what the model replays as the
     // tool result; `answer` is what the card renders, so the UI never parses prose.
     const status = action === "cancel" ? "dismissed" : "answered";
-    const message = db.getMessage(pending.messageId);
+    const message = db.getMessageForUser(pending.messageId, userId);
     db.updateMessageToolCalls(
       pending.messageId,
       (message?.toolCalls ?? []).map((tc) =>
@@ -1143,7 +1190,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     try {
       // Read history *after* the answer was written, so the resumed run sees it.
-      const history = db.listMessages(id);
+      const history = db.listMessagesForUser(id, userId);
       const result = await runAgentStream({
         provider: ctx.provider,
         modelId: ctx.modelId,

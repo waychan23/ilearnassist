@@ -66,6 +66,17 @@ export interface BuildLaunchSpecInput {
    * and the file it was seeded from describes everything else.
    */
   host: string;
+  /**
+   * The chosen data root — `ILA_DATA_DIR`, and required by the server.
+   *
+   * Passed on every launch rather than written into a config file, because it is the one
+   * setting a user can change while the app is installed: the picker changes it, the server
+   * restarts, and nothing on disk has to be rewritten for the change to take.
+   *
+   * Empty means nobody has chosen one yet, and the server will refuse to start with a
+   * message naming the variable. The panel does not let it get that far — it asks first.
+   */
+  dataDir: string;
   /** Defaults to `process.env`; injectable so tests can spawn a plain `node`. */
   baseEnv?: Record<string, string | undefined>;
 }
@@ -77,10 +88,12 @@ export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
     env: {
       ...(input.baseEnv ?? process.env),
       ELECTRON_RUN_AS_NODE: "1",
-      // The server resolves config/, data/ and workspaces/ against this, which is how the
-      // packed app ends up writing to the user's Application Support directory instead of
-      // into its own read-only bundle.
+      // The server resolves `config/` against this, which is how the packed app ends up
+      // reading the user's Application Support directory instead of its own read-only bundle.
       ILA_PROJECT_ROOT: input.paths.root,
+      // ...and the user's data against this, which is a different directory on purpose. One
+      // is the app's to replace, the other is the user's to keep.
+      ILA_DATA_DIR: input.dataDir,
       // Points at the overlay the app seeds, not at whatever a checkout might have.
       ILA_CONFIG_PATH: input.paths.overlayFile,
       // The built frontend, shipped in the bundle. The server serves it from the same

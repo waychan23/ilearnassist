@@ -17,6 +17,26 @@ tool calling. Three apps share a types package:
   the server as a child process; reimplements none of it. See `docs/desktop.md`.
 - `packages/shared` — dependency-free API/domain types used by both sides.
 
+Everything a person makes lives in a **data root they choose at launch**, not next to the
+code — so uninstalling the app leaves it behind. `apps/server/src/paths.ts` is the one
+description of that tree:
+
+```
+<dataRoot>/
+  users/<userSlug>/
+    workspaces/<wsSlug>/
+      workdir/                 the agent's file-tool sandbox and the file browser's root
+      sessions/<sessionId>/    created with the conversation; nothing writes here yet
+    sources/{raw,parsed}/      reserved for uploaded files; nothing writes here yet
+  db/sqlite/ilearnassist.sqlite
+  uploads/<sessionId>/         where attachments actually are, for now — see the note below
+```
+
+`sessions/` and `sources/` are **reserved**: they are created so the layout is a thing you
+can look at rather than a thing that materialises by accident, and nothing writes into them
+yet. Attachments still live under `uploads/` next to `users/`, because moving them onto a
+per-user `sources/` table is a separate change that has to bring the indexing with it.
+
 ## Commands
 
 ```bash
@@ -171,11 +191,13 @@ apps/desktop/src/
   preload/preload.ts      # contextBridge surface — seven commands, nothing else
   renderer/               # the panel page (plain HTML/CSS + one bundled IIFE)
 apps/server/src/
-  index.ts                # bootstrap + seedFromConfig + the listening line + SIGTERM
+  index.ts                # bootstrap + the listening line + SIGTERM (resolves the data root first)
   webApp.ts               # serves the built frontend beside the API, when there is one
-  config.ts               # YAML + ${ENV} resolution + .env loader
-  db.ts                   # better-sqlite3 schema + migrations + CRUD (snake_case cols)
-  workspace.ts            # resolveInWorkspace sandboxing + dir mgmt
+  config.ts               # YAML + ${ENV} resolution + .env loader + resolveDataRoot
+  paths.ts                # the on-disk layout: data root → users/<slug> → workspaces, sources, db
+  schema.ts               # the DDL + the `user_version` guard that refuses a foreign database
+  db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
+  workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
   files.ts                # the workspace browser's read side: one level, one file
   attachments.ts          # upload storage + multimodal content building
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
@@ -280,9 +302,14 @@ Fuller map in `docs/reference.md`.
   conversation that worked. Failures the user *did* ask for go to `fileTreeError` (the tree
   pane) or `filePreviewError` (inside the dialog) — not the global toast.
 - **Uploads are sandboxed too.** Attachment paths go through `resolveStoredPath`
-  over `data/uploads/`, and stored files are located by directory listing rather
+  over `<dataRoot>/uploads/`, and stored files are located by directory listing rather
   than by anything the client claims. Uploads live outside the workspace on
   purpose, so chat attachments never show up in the agent's `list_files`.
+  `attachments.ts` has no root of its own any more: the uploads tree is under the
+  *chosen* data directory, so every function takes the root rather than reading a
+  module-scope constant. That is also what keeps `config.ts` importable by the test
+  suite — nothing computes a data path before the process has decided where its data
+  goes.
 - **`web_fetch` SSRF guard is a security boundary.** It is the only tool that
   makes the server issue an arbitrary outbound request. Keep the scheme check,
   the check on *every DNS-resolved address*, and the manual per-hop redirect
@@ -420,8 +447,60 @@ Fuller map in `docs/reference.md`.
   indistinguishable from a button that does nothing — which is how one was reported. The
   store's `answerQuestion` follows the same rule: a submission it cannot place is
   reported, never silently dropped.
-- **Schema changes need `ensureColumn`.** `CREATE TABLE IF NOT EXISTS` silently
-  skips existing tables, so an existing database would never gain a new column.
+- **Schema changes follow one of two rules, and they cover different things.** *Adding* a
+  column goes through `ensureColumn` in `db.ts`: `CREATE TABLE IF NOT EXISTS` silently skips
+  existing tables, so a database created before the column would never gain it. *Changing
+  what an existing column means* bumps `SCHEMA_VERSION` in `schema.ts`, which refuses the
+  file outright — no missing column can signal that, so without a version an old database is
+  simply opened and read wrong (`dir_path` resolving to the wrong directory, ids referring to
+  a different kind of thing) with no error anywhere to explain it. The guard reads
+  `PRAGMA user_version`, which is in the file header and therefore readable *before* anything
+  is created; a version row in `app_settings` cannot be, because reading it means having
+  already touched the file you meant to refuse.
+- **Every user-owned read takes the owner and puts it in the `WHERE`.** `getWorkspaceForUser`,
+  `getSessionForUser`, `listMessagesForUser` — the `ForUser` suffix is the rule, and another
+  account's id returns `undefined` rather than a row. Looking a row up and *then* comparing
+  its owner is a check somebody will eventually forget on a new route, and the failure is
+  another person's data rather than an error. "Not yours" and "does not exist" answer the
+  same way on purpose: a route turns both into a 404, so an id cannot be probed. `sessions`
+  and `messages` carry no `user_id` — they reach their owner through `workspaces` by join,
+  because a second copy of the owner is a second thing to keep in agreement. The handful of
+  accessors that *do* take a bare session id (`touchSession`, `createMessage`,
+  `skipAwaitingToolCalls`, …) are documented as such in `AppDb`: every caller reaches them
+  after a scoped read has already resolved the session.
+- **A workspace has two directories, and they are not interchangeable.** `Workspace.dirPath`
+  is the workspace's own — the parent of `workdir/` and `sessions/`, what `DELETE` removes,
+  and what the home page's card names. `Workspace.workdirPath` is `dirPath/workdir`: the
+  agent's file-tool sandbox, the file browser's root, and what the system prompt names. Both
+  are on the wire so that "which one do I write into" is a decision each caller makes by name;
+  deriving the second by convention is how the system prompt ended up naming a directory
+  containing `sessions/`. `dir_path` stores the *root* and not the sandbox because
+  `removeWorkspaceDir` only removes a direct child of the user's workspaces root, and because
+  removing `workdir/` alone would strand `sessions/` beside it.
+- **Renaming is display-only, for accounts as well as workspaces.** A workspace's directory
+  keeps the slug it was created with, and so does a user's — `users.slug` is chosen once by
+  `uniqueUserSlug` and a later change to the username does not move it. Every path in the
+  user's own workspaces, and every path the agent has already written into a conversation, is
+  built on top of it. Uniqueness is checked against the database first and the filesystem
+  second: the column is `UNIQUE`, and a filesystem-only check would race two sign-ins that
+  arrive at the same instant.
+- **The data root is chosen, never defaulted.** `ILA_DATA_DIR` is required and
+  `resolveDataRoot()` throws without it — deliberately, because that path decides how much of
+  the user's work survives an uninstall, and a default is only ever the choice nobody made. It
+  is read from the environment rather than from `config.yaml`, for the same reason `ILA_HOST`
+  is: the launcher sets it per launch, and a value in a config file cannot differ between two
+  runs of the same install. `.env` counts as the environment (which is what keeps a checkout
+  working) and a *relative* value resolves against the project root, not the working
+  directory — `pnpm dev` runs the server with cwd set to `apps/server`, so "relative to cwd"
+  would mean something different from one launcher to the next. The throw lives in `main()`
+  and not at module scope: `config.ts` is imported by the whole test suite, and a top-level
+  throw would take out every test that never starts a server.
+- **A document and a file are reached by different doors.** `read_document` is bound to a
+  whitelist built per turn (`turnContext`) rather than to the uploads root, so a guessed
+  attachment id fails a `Map` lookup before any path is touched; the file tools are sandboxed
+  by `resolveInWorkspace` instead. Both are boundaries, and neither substitutes for the
+  other — the whitelist is what makes another conversation's uploads *unrepresentable* rather
+  than merely forbidden.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace and
   provider deletes go through `confirm()` from `composables/confirm.ts`. The
   agent's own `delete_file` tool is deliberately *not* gated.
@@ -484,11 +563,24 @@ Fuller map in `docs/reference.md`.
   Fastify's own "Server listening at …" banner, which is logged from inside `listen`
   before the process is necessarily ready. A control panel that claims a server is up
   when it is not is worse than one that says nothing, because the user has no way to tell.
-- **The desktop app never writes into its own bundle.** Writable state lives under
-  `app.getPath("userData")`, reached through `ILA_PROJECT_ROOT`; the bundle is read-only
-  and is replaced wholesale on every update. First-run seeding is idempotent and **never
-  overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the
-  user typed into the Settings UI from vanishing on the next launch.
+- **The desktop app never writes into its own bundle.** The *app's* state lives under
+  `app.getPath("userData")`, reached through `ILA_PROJECT_ROOT`; the bundle is read-only and
+  is replaced wholesale on every update. First-run seeding is idempotent and **never
+  overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the user
+  typed into the Settings UI from vanishing on the next launch.
+- **The app's directory and the user's are two different directories.** The app's holds
+  `config/` and `.env`; the user's holds the database, every account's workspaces and their
+  uploads. That split is what makes "back up my work" a copy of one directory and "reinstall
+  the app" a replacement of another, so it is worth keeping in mind whenever a path is
+  added. The user's is chosen at launch and remembered in `desktop.json`
+  (`DesktopSettings.dataDir`) — precedence is `ILA_DATA_DIR` first, then that file, then the
+  folder picker, which is what lets `desktop:dev` and the e2e harness run without a human at a
+  dialog. Two consequences worth stating: first-run seeding deliberately does **not** create a
+  data folder, because an empty one looks exactly like the data root the user was supposed to
+  pick; and the picker warns — but never refuses — when the chosen folder holds no database,
+  because starting in a new folder is the normal first-run case and looking identical to
+  "everything is gone" is the failure it prevents. `suggestedDataDir` is only where the picker
+  opens.
 - **The panel's LAN switch owns the bind address, and `ILA_HOST` is always set.** Including
   when sharing is off and the address is loopback. Leaving that case to `config.yaml` would
   let a hand-edited `server.host` there put the server on the network while the switch still
@@ -545,9 +637,15 @@ Fuller map in `docs/reference.md`.
 - Config loads `config/config.yaml`, overlaid by a git-ignored
   `config/config.local.yaml`, with `${ENV_VAR}` references resolved from `.env`
   + real env vars. Real env vars win over `.env`. `ILA_CONFIG_PATH` swaps the
-  *overlay* path, and `ILA_DATA_DIR` moves the sqlite database + uploads tree —
-  both exist for tests and the e2e run, and both must be set before the config
-  module is first imported.
+  *overlay* path — it exists for tests and the e2e run — and must be set before the
+  config module is first imported.
+- **`ILA_DATA_DIR` is required, and a bare `pnpm dev` will not start without it.** That
+  is the intended failure, not a regression: the message names the variable and the two
+  ways to set it. A checkout puts `ILA_DATA_DIR=./data` in `.env` (see `.env.example`);
+  the desktop app asks and passes an absolute path down. The test suite and the e2e run
+  each point it at a throwaway directory. Because `loadDotEnv()` runs at module scope in
+  `config.ts`, `.env` is read early enough for this to work — which is also why that call
+  is not inside `loadConfig()` where it used to be.
 - `pnpm test:e2e` starts its own fake LLM, backend and Vite on 3898 / 3899 / 5199,
   so a `pnpm dev` instance can keep running. Its scratch data lives in the
   git-ignored `.e2e/`, removed on teardown. It bundles `apps/desktop` first, because

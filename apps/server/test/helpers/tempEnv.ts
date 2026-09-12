@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Attachment, Session, Workspace } from "@ilearnassist/shared";
+import type { Attachment, Session, User, Workspace } from "@ilearnassist/shared";
 import type {
   AppConfig,
   DocumentParserDef,
@@ -11,6 +11,7 @@ import type {
   WebFetchConfig,
   WebSearchConfig,
 } from "../../src/config.js";
+import type { UserLayout } from "../../src/paths.js";
 import { buildServer, type BuiltServer } from "../../src/server.js";
 import type { FakeLlm } from "./fakeLlm.js";
 import type { FakeParser } from "./fakeParser.js";
@@ -35,6 +36,14 @@ export interface TestServerOptions {
    * what they assert about routing.
    */
   webDir?: string;
+  /**
+   * Boot against an existing data root instead of a fresh one.
+   *
+   * The default (a new temp directory per boot) is what keeps tests independent. Passing
+   * one is how a test asks the question a restart asks: what happens on the *second* boot
+   * of a root that already has state in it.
+   */
+  dataRoot?: string;
   tools?: {
     webSearch?: Partial<WebSearchConfig>;
     webFetch?: Partial<WebFetchConfig>;
@@ -63,7 +72,13 @@ export function parserFor(
 
 export interface TestEnv {
   config: AppConfig;
-  dataDir: string;
+  /** The chosen data root. `users/` and `db/` live here, and nothing writes above it. */
+  dataRoot: string;
+  /** The running user's tree — where its workspaces and (later) its sources live. */
+  userLayout: UserLayout;
+  /** The running user, created by the server on boot. See `ensureBootstrapUser`. */
+  user: User;
+  /** Shorthand for `userLayout.workspacesRoot`, which is what most tests reach for. */
   workspacesRoot: string;
   uploadsRoot: string;
   server: BuiltServer;
@@ -96,10 +111,14 @@ export function keylessProvider(id = "keyless"): ProviderDef {
 }
 
 export async function startTestServer(options: TestServerOptions = {}): Promise<TestEnv> {
-  const root = mkdtempSync(join(tmpdir(), "ilearnassist-test-"));
-  const dataDir = join(root, "data");
-  const workspacesRoot = join(root, "workspaces");
-  mkdirSync(dataDir, { recursive: true });
+  // Only a root this helper created is removed on cleanup. One the caller named is theirs,
+  // which is what lets a test boot the same tree twice and watch the second boot find what
+  // the first one left behind.
+  const ownsRoot = options.dataRoot === undefined;
+  const dataRoot = options.dataRoot ?? mkdtempSync(join(tmpdir(), "ilearnassist-test-"));
+  // Nothing is created here: `createDb` makes the database's directory and the server makes
+  // the running user's tree, both recursively. A temp root that pre-built the layout could
+  // hide a missing `mkdir` in the code that is supposed to do it.
 
   const providers = options.providers ?? [keylessProvider("test")];
   const first = providers[0]!;
@@ -117,7 +136,6 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     // The port is unused here — `buildServer` never binds. Tests that need a real
     // socket call `listen({ port: 0 })` and read the assigned port back.
     server: { host: "127.0.0.1", port: 0 },
-    workspaces: { rootDir: workspacesRoot },
     defaultProvider: options.defaultProvider ?? first.id,
     defaultModel: options.defaultModel ?? first.models[0]?.id ?? "",
     providers,
@@ -146,19 +164,21 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     },
   };
 
-  const server = await buildServer({ config, dataDir, logger: false, webDir: options.webDir });
+  const server = await buildServer({ config, dataRoot, logger: false, webDir: options.webDir });
   await server.app.ready();
 
   return {
     config,
-    dataDir,
-    workspacesRoot,
+    dataRoot,
+    userLayout: server.userLayout,
+    user: server.user,
+    workspacesRoot: server.userLayout.workspacesRoot,
     uploadsRoot: server.uploadsRoot,
     server,
     async cleanup() {
       await server.app.close();
       server.db.raw.close();
-      rmSync(root, { recursive: true, force: true });
+      if (ownsRoot) rmSync(dataRoot, { recursive: true, force: true });
     },
   };
 }

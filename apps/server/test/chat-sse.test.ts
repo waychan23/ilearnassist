@@ -62,11 +62,11 @@ async function sessionOf(sessionId: string): Promise<Session> {
   return sessions.find((s) => s.id === sessionId)!;
 }
 
-async function freshSession(): Promise<{ session: Session; dirPath: string }> {
+async function freshSession(): Promise<{ session: Session; workdirPath: string }> {
   const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
   currentWorkspaceId = workspace.id;
   const session = await newSession(env, workspace.id);
-  return { session, dirPath: workspace.dirPath };
+  return { session, workdirPath: workspace.workdirPath };
 }
 
 describe("POST /api/sessions/:id/chat", () => {
@@ -121,7 +121,7 @@ describe("POST /api/sessions/:id/chat", () => {
   });
 
   it("runs a tool call and records it on the assistant message", async () => {
-    const { session, dirPath } = await freshSession();
+    const { session, workdirPath } = await freshSession();
     llm.setTurns([
       { content: "Writing the file.", toolCalls: [{ id: "call_1", name: "write_file", args: { path: "out.txt", content: "done" } }] },
       { content: "Wrote it." },
@@ -145,8 +145,8 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(started.toolCall.name).toBe("write_file");
 
     // The tool really ran, inside the session's own workspace.
-    expect(existsSync(join(dirPath, "out.txt"))).toBe(true);
-    expect(readFileSync(join(dirPath, "out.txt"), "utf8")).toBe("done");
+    expect(existsSync(join(workdirPath, "out.txt"))).toBe(true);
+    expect(readFileSync(join(workdirPath, "out.txt"), "utf8")).toBe("done");
 
     const persisted = await messagesOf(session.id);
     expect(persisted[1]!.toolCalls).toHaveLength(1);

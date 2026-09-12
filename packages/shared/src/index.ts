@@ -279,11 +279,52 @@ export interface Message {
   createdAt: string;
 }
 
+/**
+ * One account. There is no password yet — a username is the whole credential, and the
+ * login screen says so — so this carries no secret and nothing about it is private.
+ */
+export interface User {
+  id: string;
+  username: string;
+  /**
+   * The directory name under `users/`, fixed when the account is created. Renaming the
+   * username does not change it, for the same reason a workspace's does not: every path in
+   * the user's own workspaces, and every path the agent has already written into a
+   * conversation, is built on top of it.
+   */
+  slug: string;
+  createdAt: string;
+}
+
+/**
+ * A user as the login screen needs them: a name to offer, and nothing to identify.
+ *
+ * Deliberately without an `id`. The screen does not need one, and not sending it keeps
+ * user ids out of a response that anyone who can reach the address may read.
+ */
+export interface UserSummary {
+  username: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
   slug: string;
+  /**
+   * The workspace's **own** directory — the parent of `workdir/` and `sessions/`. This is
+   * what deleting a workspace removes, and what the card on the home page names.
+   */
   dirPath: string;
+  /**
+   * The directory the agent's file tools are sandboxed to, and the root the file browser
+   * lists: `dirPath/workdir`.
+   *
+   * Carried alongside `dirPath` rather than left to each caller to append, because the two
+   * are read for different reasons and a convention is invisible: the agent's system prompt
+   * names the sandbox, `DELETE` removes the parent, and writing the sandbox's files into
+   * the parent would leave them outside the sandbox and inside the workspace's own state.
+   */
+  workdirPath: string;
   createdAt: string;
   /**
    * How many conversations the workspace holds, and when the most recent one was last

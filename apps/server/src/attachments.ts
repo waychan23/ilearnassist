@@ -1,20 +1,20 @@
 import { promises as fs } from "node:fs";
 import { join, relative, resolve as resolvePath, extname } from "node:path";
 import type { Attachment } from "@ilearnassist/shared";
-import { PROJECT_PATHS } from "./config.js";
 import { isDocumentMime } from "./documents/formats.js";
 import { readParseRecord, readParsedTextHead } from "./documents/store.js";
 
-/** Root directory holding every session's uploaded bytes. */
-export const UPLOADS_ROOT = join(PROJECT_PATHS.dataDir, "uploads");
-
 /**
- * Uploaded attachments. Bytes live under `<dataDir>/uploads/<sessionId>/<attachmentId>.<ext>`,
+ * Uploaded attachments. Bytes live under `<uploadsRoot>/<sessionId>/<attachmentId>.<ext>`,
  * deliberately outside the workspace so chat uploads never pollute the user's project
  * directory (or show up in the agent's `list_files`).
  *
  * The file extension is derived deterministically from the MIME type, so a later request
  * only needs the `Attachment` metadata (id + mimeType) to find the bytes again.
+ *
+ * There is no `UPLOADS_ROOT` constant any more, and that is the point: the root is under
+ * the *chosen* data directory, which is not known until the process starts, so every
+ * function here takes it. A module-scope default would have to invent one.
  */
 
 /** Accepted MIME types → the extension used on disk. */

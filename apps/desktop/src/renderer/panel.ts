@@ -51,6 +51,7 @@ const detail = element<HTMLElement>('[data-role="detail"]');
 const urlRow = element<HTMLElement>('[data-role="url-row"]');
 const urlCode = element<HTMLElement>('[data-role="url"]');
 const dataDirCode = element<HTMLElement>('[data-role="data-dir"]');
+const dataDirHint = element<HTMLElement>('[data-role="data-dir-hint"]');
 const lanUrlCode = element<HTMLElement>('[data-role="lan-url"]');
 const logsLabel = element<HTMLElement>('[data-role="logs-label"]');
 const logOutput = element<HTMLPreElement>('[data-role="logs"]');
@@ -72,6 +73,7 @@ const buttons = {
   browser: action("browser"),
   copy: action("copy"),
   reveal: action("reveal"),
+  chooseDataDir: action("choose-data-dir"),
   share: action("share"),
   unshare: action("unshare"),
   qrCopy: action("qr-copy"),
@@ -91,6 +93,7 @@ buttons.browser.textContent = t("action.openInBrowser");
 buttons.copy.textContent = t("action.copyUrl");
 buttons.qrCopy.textContent = t("action.copyUrl");
 buttons.reveal.textContent = t("action.reveal");
+buttons.chooseDataDir.textContent = t("action.chooseDataDir");
 buttons.share.textContent = t("action.share");
 buttons.unshare.textContent = t("action.unshare");
 document.title = t("window.title");
@@ -118,7 +121,7 @@ function refreshLogsHeader(): void {
 
 function render(next: PanelState): void {
   state = next;
-  const { server, sharedOnLan, lanUrl } = next;
+  const { server, sharedOnLan, lanUrl, needsDataDir } = next;
   const running = server.state === "running";
   const busy = server.state === "starting" || server.state === "stopping";
 
@@ -138,12 +141,19 @@ function render(next: PanelState): void {
   urlCode.textContent = server.url ?? "";
   urlRow.hidden = !running || !server.url;
   dataDirCode.textContent = server.dataDir;
+  // An empty path box reads as a bug. Until one is chosen, the row shows the reason instead
+  // — and there is nothing to reveal, so that action goes inert with it.
+  dataDirCode.hidden = needsDataDir;
+  dataDirHint.textContent = needsDataDir ? t("hint.chooseDataDir") : "";
+  dataDirHint.hidden = !needsDataDir;
 
   buttons.open.disabled = !running;
   buttons.browser.disabled = !running;
   buttons.copy.disabled = !running;
   buttons.start.disabled = busy || running;
   buttons.stop.disabled = !(busy || running);
+  buttons.reveal.disabled = needsDataDir;
+  buttons.chooseDataDir.disabled = busy;
   buttons.open.title = running ? "" : t("hint.notRunning");
 
   // The switch, and the address it produces. `lanUrl` is null unless sharing is on, so the
@@ -292,6 +302,9 @@ buttons.stop.addEventListener("click", () => void window.panel.stop().then(rende
 buttons.open.addEventListener("click", () => void window.panel.openApp());
 buttons.browser.addEventListener("click", () => void window.panel.openInBrowser());
 buttons.reveal.addEventListener("click", () => void window.panel.revealDataDir());
+buttons.chooseDataDir.addEventListener("click", () =>
+  void window.panel.chooseDataDir().then(render)
+);
 logsToggle.addEventListener("click", () => setLogsOpen(!logsOpen));
 
 buttons.share.addEventListener("click", () => void openQrOverlay());
