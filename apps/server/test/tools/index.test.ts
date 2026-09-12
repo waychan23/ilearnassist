@@ -76,7 +76,7 @@ describe("buildTools", () => {
     // talking to the user.
     expect(names({ fileToolsEnabled: false }).sort()).toEqual([
       "ask_user",
-      "quiz",
+      "ila_quiz",
       "web_fetch",
       "web_search",
     ]);
@@ -119,8 +119,8 @@ describe("buildTools", () => {
   it("offers quiz by default, and keeps it when the file tools are off", () => {
     // Like `ask_user`, it reads nothing from the workspace, so switching the file tools off
     // must not take a conversation's ability to be quizzed with them.
-    expect(names()).toContain("quiz");
-    expect(names({ fileToolsEnabled: false })).toContain("quiz");
+    expect(names()).toContain("ila_quiz");
+    expect(names({ fileToolsEnabled: false })).toContain("ila_quiz");
   });
 
   it("lets a Copilot allow-list exclude quiz", () => {

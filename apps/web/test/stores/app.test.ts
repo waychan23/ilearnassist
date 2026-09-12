@@ -1368,7 +1368,7 @@ describe("a quiz call, through the same plumbing", () => {
       role: "assistant",
       content: "先测一下。",
       toolCalls: [
-        { id: "call_quiz", name: "quiz", input: JSON.stringify({ questions: QS }), status: "awaiting" },
+        { id: "call_quiz", name: "ila_quiz", input: JSON.stringify({ questions: QS }), status: "awaiting" },
       ],
     });
   }

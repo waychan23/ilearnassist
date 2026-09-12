@@ -26,7 +26,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "web_fetch",
   "read_document",
   "ask_user",
-  "quiz",
+  "ila_quiz",
 ]);
 
 export interface BuildToolsInput {

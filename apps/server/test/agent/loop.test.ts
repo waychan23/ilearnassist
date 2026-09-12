@@ -722,12 +722,12 @@ describe("runAgentStream — a suspending tool ends the turn", () => {
     // half: an id comes from the counter, not from the question's position in the list.
     const { events, result } = await run({
       tools: quiz(5),
-      turns: [{ toolCalls: [{ id: "call_quiz", name: "quiz", args: { questions: quizQuestions } }] }],
+      turns: [{ toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: quizQuestions } }] }],
     });
 
     expect(result.awaiting).toBe(true);
     const call = result.toolCalls[0]!;
-    expect(call).toMatchObject({ name: "quiz", status: "awaiting" });
+    expect(call).toMatchObject({ name: "ila_quiz", status: "awaiting" });
     expect(call.output).toBeUndefined();
     // No `tool_end` either, for the same reason as `ask_user`: there is no result yet.
     expect(events.filter((e) => e.type === "tool_start")).toHaveLength(1);
@@ -747,7 +747,7 @@ describe("runAgentStream — a suspending tool ends the turn", () => {
         {
           toolCalls: [
             { id: "call_ask", name: "ask_user", args: { questions } },
-            { id: "call_quiz", name: "quiz", args: { questions: [quizQuestions[0]] } },
+            { id: "call_quiz", name: "ila_quiz", args: { questions: [quizQuestions[0]] } },
           ],
         },
       ],

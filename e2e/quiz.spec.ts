@@ -74,7 +74,7 @@ test("answers a three-question quiz through the tabs, and the record survives a 
     turns: [
       {
         content: "先测一下你的印象。",
-        toolCalls: [{ id: "call_quiz", name: "quiz", args: { questions: QUESTIONS } }],
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: QUESTIONS } }],
       },
       { content: "好，那我们从窗口讲起。" },
     ],
@@ -191,13 +191,64 @@ test("answers a three-question quiz through the tabs, and the record survives a 
   );
 });
 
+test("the multi-line boxes start one row tall and grow with their content", async ({
+  page,
+  request,
+}) => {
+  await scriptLlm(request, {
+    title: "Flink 入门",
+    turns: [
+      {
+        content: "一个问题。",
+        toolCalls: [
+          { id: "call_quiz", name: "ila_quiz", args: { questions: QUESTIONS.slice(0, 1) } },
+        ],
+      },
+      { content: "好。" },
+    ],
+  });
+
+  await startQuiz(page);
+
+  const notes = page.getByTestId("quiz-notes-0");
+  // One row to begin with, rather than the global `.textarea`'s 96px floor.
+  await expect(notes).toHaveAttribute("rows", "1");
+  const oneRow = (await notes.boundingBox())!.height;
+
+  // Two lines needs more room than one, and four needs more than two — which is what
+  // "grows with its content" means, stated without depending on a line height.
+  await notes.fill("一\n二");
+  const twoLines = (await notes.boundingBox())!.height;
+  await notes.fill("一\n二\n三\n四");
+  const fourLines = (await notes.boundingBox())!.height;
+
+  expect(twoLines).toBeGreaterThan(oneRow);
+  expect(fourLines).toBeGreaterThan(twoLines);
+
+  // And back down again. A box that only ever grew would leave a four-line gap behind the
+  // text it was sized for, which is the half a bare `scrollHeight` read cannot do.
+  await notes.fill("");
+  expect(Math.round((await notes.boundingBox())!.height)).toBe(Math.round(oneRow));
+
+  // The unsure box is the other call site, and starts at the same one-row height — a missed
+  // `rows="1"` there would show up here rather than only under a long reason.
+  await unsureOf(page, 0).click();
+  const reason = page.getByTestId("quiz-unsure-reason-0");
+  await expect(reason).toHaveAttribute("rows", "1");
+  const reasonOneRow = (await reason.boundingBox())!.height;
+  expect(Math.round(reasonOneRow)).toBe(Math.round(oneRow));
+
+  await reason.fill("一\n二\n三\n四");
+  expect((await reason.boundingBox())!.height).toBeGreaterThan(reasonOneRow);
+});
+
 test("unsure and a choice exclude each other in both directions", async ({ page, request }) => {
   await scriptLlm(request, {
     title: "Flink 入门",
     turns: [
       {
         content: "一个问题。",
-        toolCalls: [{ id: "call_quiz", name: "quiz", args: { questions: QUESTIONS.slice(0, 1) } }],
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: QUESTIONS.slice(0, 1) } }],
       },
       { content: "好。" },
     ],
@@ -226,7 +277,7 @@ test("a quiz the user walks away from is retired, not left waiting", async ({ pa
     turns: [
       {
         content: "先测一下。",
-        toolCalls: [{ id: "call_quiz", name: "quiz", args: { questions: QUESTIONS.slice(0, 1) } }],
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: QUESTIONS.slice(0, 1) } }],
       },
       { content: "好，那我先讲别的。" },
     ],
@@ -259,8 +310,8 @@ test("a rejected second quiz in one step renders as a failed call, not a stuck c
       {
         content: "先测两个。",
         toolCalls: [
-          { id: "call_a", name: "quiz", args: { questions: QUESTIONS.slice(0, 1) } },
-          { id: "call_b", name: "quiz", args: { questions: QUESTIONS.slice(1, 2) } },
+          { id: "call_a", name: "ila_quiz", args: { questions: QUESTIONS.slice(0, 1) } },
+          { id: "call_b", name: "ila_quiz", args: { questions: QUESTIONS.slice(1, 2) } },
         ],
       },
       { content: "好。" },

@@ -268,7 +268,7 @@ export default {
       delete_file: "删除文件",
       read_document: "读取文档",
       ask_user: "询问用户",
-      quiz: "小测",
+      ila_quiz: "小测",
     },
     done: "完成",
     running: "运行中",
@@ -295,6 +295,8 @@ export default {
     other: "其他（手动输入）",
     otherPlaceholder: "请输入…",
     multiSelectHint: "可多选。",
+    /** A one-question card sends itself on a pick; this is what stops that being a surprise. */
+    autoSubmitHint: "只有一道题，选择后会自动提交。",
     /** `{current}` and `{total}` are 1-based. */
     step: "第 {current} / {total} 题",
     previous: "上一题",

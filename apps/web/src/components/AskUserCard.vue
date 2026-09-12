@@ -108,6 +108,29 @@ function isAnswered(index: number): boolean {
 const allAnswered = computed(() => questions.value.every((_, index) => isAnswered(index)));
 const isLast = computed(() => current.value === questions.value.length - 1);
 
+/**
+ * Whether this card finishes itself the moment one of the model's options is picked.
+ *
+ * True for exactly one shape: a single question, single-select. Picking an option there
+ * leaves nothing else to say — the only other input a question offers is its free-text
+ * choice, and choosing one of the offered options closes that — so a Submit button would be
+ * a control whose only job is to be pressed after the answer is already complete. Never true
+ * for a multi-select question, where each pick is one of several and no click means "done",
+ * and never true for a card holding several questions, where the set still needs sending.
+ */
+const autoSubmits = computed(
+  () => questions.value.length === 1 && !questions.value[0]?.multiSelect
+);
+
+/**
+ * Whether a Submit button has anything left to do.
+ *
+ * Not simply the negation of `autoSubmits`: inside an auto-submitting card, choosing the
+ * free-text option opens a box the user has yet to type in and send, so Submit comes back
+ * for as long as that choice is the one in force.
+ */
+const needsSubmit = computed(() => !autoSubmits.value || !!draft[current.value]?.useOther);
+
 function toStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
@@ -152,9 +175,17 @@ function toggleOption(index: number, label: string): void {
   d.selected = [label];
   d.useOther = false;
 
-  // A single choice *is* the answer to its question, so there is nothing left to do here
-  // and the wizard steps on by itself. Neither of the other two cases can: multi-select
-  // has no "I am done" the user ever gave, and the free-text choice below needs typing.
+  // A single choice *is* the answer to its question, so there is nothing left to do here.
+  // On a one-question card that means sending it, rather than making the user press a button
+  // whose only job was to be pressed after the point was already made. Neither of the other
+  // two cases can: multi-select has no "I am done" the user ever gave, and the free-text
+  // choice below needs typing.
+  if (autoSubmits.value) {
+    submit();
+    return;
+  }
+
+  // On a longer card the wizard steps on by itself instead.
   if (index < questions.value.length - 1) {
     goTo(index + 1);
     // The panel is keyed by the question, so the radio just clicked has been destroyed and
@@ -256,6 +287,18 @@ const panelId = `${uid.value}-panel`;
       >
         <p class="question" data-testid="ask-user-question">{{ questions[current]?.question }}</p>
         <p v-if="questions[current]?.multiSelect" class="hint">{{ t("askUser.multiSelectHint") }}</p>
+        <!--
+          Shown only while it is still true: picking the free-text choice turns the card back
+          into a manual one, and a hint describing the opposite of what a click does is worse
+          than no hint at all.
+        -->
+        <p
+          v-if="autoSubmits && !draft[current]?.useOther"
+          class="hint"
+          data-testid="ask-user-auto-hint"
+        >
+          {{ t("askUser.autoSubmitHint") }}
+        </p>
 
         <!--
           Keyed by the question, so Vue rebuilds this subtree instead of reusing the
@@ -335,7 +378,7 @@ const panelId = `${uid.value}-panel`;
           {{ t("askUser.next") }} <Icon name="caret-right" />
         </button>
         <button
-          v-if="isLast"
+          v-if="isLast && needsSubmit"
           type="button"
           class="btn primary small"
           :disabled="!allAnswered || busy"

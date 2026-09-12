@@ -7,6 +7,7 @@ import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
 import SessionSettingsDialog from "./dialogs/SessionSettingsDialog.vue";
 import { openSettings } from "../composables/ui";
+import { autosizeTextarea } from "../utils/autosize";
 import Icon from "./Icon.vue";
 
 const { t } = useI18n();
@@ -67,14 +68,11 @@ const failedDocuments = computed(() =>
 );
 
 /**
- * Grow the textarea with its content. Height is reset first so the box can shrink
- * again after a send, which `scrollHeight` alone would never do.
+ * Grow the textarea with its content — including shrinking it again after a send, which is
+ * what the reset inside `autosizeTextarea` is for.
  */
 function autosize() {
-  const el = textarea.value;
-  if (!el) return;
-  el.style.height = "auto";
-  el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  if (textarea.value) autosizeTextarea(textarea.value);
 }
 
 watch(text, () => nextTick(autosize));

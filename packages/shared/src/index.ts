@@ -39,7 +39,7 @@ export const ALL_TOOL_NAMES = [
   "delete_file",
   "read_document",
   "ask_user",
-  "quiz",
+  "ila_quiz",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
@@ -116,8 +116,15 @@ export const ASK_USER_OTHER_MAX = 500;
 /**
  * The tool's name, shared for the same reason as `ASK_USER_TOOL_NAME`: the client switches
  * on it to pick the answerable card out of an assistant message's tool calls.
+ *
+ * Namespaced with the product's prefix, unlike `ask_user`, because this is the first of a
+ * family of tools specific to what this app is *for* rather than to what a chatbox does —
+ * and `quiz` alone is a name a general tool would plausibly claim, at which point the
+ * collision would be in a Copilot's allow-list and in every stored conversation's history.
+ * The TypeScript symbols stay `Quiz*`, following `read_document`, whose code is
+ * `Document*`: a symbol is scoped by its module, a tool name is global.
  */
-export const QUIZ_TOOL_NAME = "quiz";
+export const QUIZ_TOOL_NAME = "ila_quiz";
 
 /**
  * One choice the model offers.

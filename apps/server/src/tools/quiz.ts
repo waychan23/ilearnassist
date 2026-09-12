@@ -51,9 +51,11 @@ export class QuizSuspension extends Suspension {
   readonly questions: QuizQuestion[];
 
   constructor(questions: QuizQuestion[]) {
-    super("QuizSuspension", `quiz: suspended awaiting the user (${questions.length} question(s))`, {
-      questions,
-    });
+    super(
+      "QuizSuspension",
+      `ila_quiz: suspended awaiting the user (${questions.length} question(s))`,
+      { questions }
+    );
     this.questions = questions;
   }
 }
@@ -142,7 +144,8 @@ export function buildQuizTool(ctx: QuizToolContext) {
         // A context that reserved a short block would otherwise hand two questions the same
         // id — a card with one answer slot for two questions. Louder as a tool error.
         if (number === undefined) {
-          throw new Error(`quiz: no question number was reserved for question ${index}`);
+          // Named as the tool the model called: this one reaches it as a `Tool error:`.
+          throw new Error(`ila_quiz: no question number was reserved for question ${index}`);
         }
         return { ...question, id: `Q${number}` };
       });
