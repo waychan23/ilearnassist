@@ -64,6 +64,12 @@ export const ICON_PATHS = {
 
   send: ["M8 13.5V2.75", "M3.75 7L8 2.75L12.25 7"],
 
+  /* The way back down a list that is still being written into: `send`'s shaft and head,
+   * turned around. Built on the same measurements as `arrow-left` so the two read as one
+   * family, and named for the direction rather than for the button it sits on — the button
+   * is "回到最新", which is not a direction. */
+  "arrow-down": ["M8 3V13", "M4 9L8 13L12 9"],
+
   /* Ends something that is running, so it sits beside `send` at the call site and reads as
    * its opposite. Deliberately an *outline* and not the filled square the character `■` was:
    * the set is stroked by contract, and `Icon.vue` paints `fill="none"` — a filled square

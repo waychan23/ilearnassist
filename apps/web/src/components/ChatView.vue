@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { isCompact } from "../composables/breakpoints";
+import { useScrollFollow } from "../composables/scrollFollow";
 import { openDrawer, showWorkspaceHome, uiState } from "../composables/ui";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
 import MessageItem from "./MessageItem.vue";
@@ -89,22 +90,48 @@ function jumpToAnchor(anchor: MessageMinimapAnchor) {
   });
 }
 
-function scrollToBottom() {
-  nextTick(() => {
-    if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight;
-  });
-}
+/**
+ * Keeping the viewport at the end is a decision, not a reflex — see `scrollFollow`.
+ *
+ * It is released by any scroll away from the end, which is what stops a reply being written
+ * from dragging a reader back down on every token. The release is also what the return
+ * control below is rendered from, so there is always a way back to a moving end.
+ */
+const { following, onScroll, scrollToBottom, follow } = useScrollFollow(messagesEl);
 
+/**
+ * Every shape a growing turn takes: text, chain of thought, a tool call appearing, and a tool
+ * call's *output* landing. The last is watched by size rather than by count on purpose —
+ * `tool_end` fills in a card that is already in the array, so its length does not change and
+ * a watcher on the length alone would sit out the tallest growth of a turn.
+ *
+ * Growing the list also covers both halves of an exchange arriving — the reader's own bubble,
+ * and the persisted assistant message that replaces the streaming one.
+ */
 watch(
   () => [
     store.messages.length,
     store.streaming.content,
     store.streaming.reasoning,
     store.streaming.toolCalls.length,
+    store.streaming.toolCalls.reduce((chars, call) => chars + (call.output?.length ?? 0), 0),
   ],
-  () => scrollToBottom()
+  () => follow()
 );
 
+/**
+ * A turn starting is the reader having just sent something — a message, or an answer to a
+ * question the agent asked — so go to the end for it even if they had scrolled away. Asking
+ * and then not showing the answer would be the release working against the person it is for.
+ */
+watch(
+  () => store.streaming.active,
+  (active) => {
+    if (active) scrollToBottom();
+  }
+);
+
+/** Another conversation is a different list, and it opens at its end. */
 watch(
   () => store.activeSessionId,
   () => scrollToBottom()
@@ -223,6 +250,7 @@ watch(
         class="messages"
         data-testid="messages"
         :class="{ 'with-rail': showMinimap }"
+        @scroll.passive="onScroll"
       >
         <div v-if="store.messages.length === 0 && !store.streaming.active" class="empty-state">
           <h2>{{ store.activeCopilotName ?? t("chat.start") }}</h2>
@@ -239,6 +267,23 @@ watch(
         :anchors="minimapAnchors"
         @jump="jumpToAnchor"
       />
+
+      <!--
+        Only while the end has been let go of. Shown by the position rather than by the turn
+        being live: a reader who has scrolled up into a finished conversation wants the same
+        thing, and gating it on `streaming.active` would take the control away at the moment
+        the reply they were reading was finally complete.
+      -->
+      <button
+        v-if="!following"
+        class="btn jump-to-latest"
+        data-testid="jump-to-latest"
+        :title="t('chat.jumpToLatest')"
+        :aria-label="t('chat.jumpToLatest')"
+        @click="scrollToBottom"
+      >
+        <Icon name="arrow-down" /> <span>{{ t("chat.jumpToLatest") }}</span>
+      </button>
     </div>
 
     <Composer />

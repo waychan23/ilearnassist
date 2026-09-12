@@ -106,6 +106,7 @@ export default {
     startHint: "在下方输入消息，Agent 将按需调用工具。",
     startAction: "新建会话（选择 Copilot）",
     backToWorkspaces: "返回工作区列表",
+    jumpToLatest: "回到最新",
   },
 
   composer: {
