@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { AskUserAnswer, AskUserAnswers, AskUserQuestion, ToolCall } from "../api/types";
+import {
+  ASK_USER_TOOL_NAME,
+  type AskUserAnswer,
+  type AskUserAnswers,
+  type AskUserQuestion,
+  type ToolCall,
+} from "../api/types";
 import { useAppStore } from "../stores/app";
 import Icon from "./Icon.vue";
 
@@ -80,8 +86,18 @@ const settled = computed(
 const preparing = computed(() => !answerable.value && !settled.value);
 const busy = computed(() => store.streaming.active);
 
-/** The recorded answer, once there is one. Absent while the card is still live. */
-const recorded = computed<AskUserAnswers | undefined>(() => props.toolCall.answer);
+/**
+ * The recorded answer, once there is one. Absent while the card is still live.
+ *
+ * Narrowed by the tool name rather than read straight off `toolCall.answer`, which carries
+ * one shape per suspending tool. The compiler will not insist: both shapes are records of
+ * `{ selected, …optionals }`, so a `QuizAnswers` satisfies `AskUserAnswers` structurally
+ * while being keyed by question id instead of by position — a runtime difference the types
+ * cannot see. This card is the one that knows which tool it renders for.
+ */
+const recorded = computed<AskUserAnswers | undefined>(() =>
+  props.toolCall.name === ASK_USER_TOOL_NAME ? (props.toolCall.answer as AskUserAnswers) : undefined
+);
 
 function isAnswered(index: number): boolean {
   const d = draft[index];

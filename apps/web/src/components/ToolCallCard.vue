@@ -1,18 +1,29 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { ASK_USER_TOOL_NAME, type ToolCall } from "../api/types";
+import { QUIZ_TOOL_NAME, isInteractiveTool, type ToolCall } from "../api/types";
 import AskUserCard from "./AskUserCard.vue";
+import QuizCard from "./QuizCard.vue";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{ toolCall: ToolCall }>();
 
 /**
- * `ask_user` is not a tool call to report, it is a question to answer — so it renders as
- * its own thing rather than through the args/result disclosure below, which has no way to
- * offer controls and would hide the very answer the card exists to record.
+ * A suspending tool's call is not a tool call to report, it is a question to answer — so it
+ * renders as its own card rather than through the args/result disclosure below, which has no
+ * way to offer controls and would hide the very answer the card exists to record.
+ *
+ * The second half of the test is not a detail. A suspending call that *failed* — a second
+ * one in the same step, or a question set that failed validation — is persisted with an
+ * `output` and no `status`, which is also the shape of one mid-`tool_start`. Rendering the
+ * card on the name alone left it showing its "preparing" placeholder forever; falling
+ * through to the ordinary card shows the `Tool error: …` the model actually got.
  */
-const isAskUser = computed(() => props.toolCall.name === ASK_USER_TOOL_NAME);
+const card = computed<"ask" | "quiz" | null>(() => {
+  if (!isInteractiveTool(props.toolCall.name)) return null;
+  if (props.toolCall.status === undefined && props.toolCall.output !== undefined) return null;
+  return props.toolCall.name === QUIZ_TOOL_NAME ? "quiz" : "ask";
+});
 const open = ref(false);
 const { t, te } = useI18n();
 
@@ -52,7 +63,8 @@ const prettyInput = computed(() => {
 </script>
 
 <template>
-  <AskUserCard v-if="isAskUser" :tool-call="toolCall" />
+  <AskUserCard v-if="card === 'ask'" :tool-call="toolCall" />
+  <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
   <div v-else class="tool-card" data-testid="tool-call">
     <div class="tool-head" @click="open = !open">
       <Icon :name="done ? 'check' : 'retry'" :class="done ? 'ok' : 'run'" />

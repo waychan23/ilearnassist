@@ -10,29 +10,29 @@ import {
   type AnswerToolCallInput,
   type AskUserAnswers,
   type AskUserQuestion,
+  type ToolCall,
 } from "@ilearnassist/shared";
+import { Suspension } from "./suspension.js";
 
 export { ASK_USER_TOOL_NAME };
 
 /**
  * Thrown by `ask_user` to suspend the turn until the user answers.
  *
- * **This is control flow, not failure.** It is the same trick LangGraph's `interrupt()`
- * uses, and for the same reason: a tool cannot return "please pause the loop now" through
- * its normal return value without inventing a sentinel string that every other reader of
- * a tool result would then have to know about. `runAgentStream` catches this class
- * *before* its generic tool-error catch, so it never becomes a `Tool error:` string —
- * and it must stay that way, or the model would be told its own question failed.
- *
- * Do not wrap `interrupt`-style code in a bare `try/catch` on the way out: a catch that
- * swallows this would turn a suspension into a silent no-op.
+ * Control flow rather than failure — `Suspension` owns that reasoning and the loop's arm,
+ * and this class exists for the questions it carries, which is how the answers route reads
+ * back what was asked. It adds nothing to `recordedInput`: the model's own arguments are
+ * already everything the card needs, because an `ask_user` question set is exactly what the
+ * model sent.
  */
-export class AskUserSuspension extends Error {
+export class AskUserSuspension extends Suspension {
   readonly questions: AskUserQuestion[];
 
   constructor(questions: AskUserQuestion[]) {
-    super(`ask_user: suspended awaiting the user (${questions.length} question(s))`);
-    this.name = "AskUserSuspension";
+    super(
+      "AskUserSuspension",
+      `ask_user: suspended awaiting the user (${questions.length} question(s))`
+    );
     this.questions = questions;
   }
 }
@@ -132,7 +132,8 @@ export function validateAnswers(
 ): { ok: true; answers: AskUserAnswers } | { ok: false; reason: string } {
   if (input.action === "cancel") return { ok: true, answers: {} };
 
-  const submitted = input.answers ?? {};
+  // The tool call's name selected this validator, so the payload is this tool's shape.
+  const submitted = (input.answers ?? {}) as AskUserAnswers;
   const answers: AskUserAnswers = {};
 
   for (const [index, question] of questions.entries()) {
@@ -196,4 +197,22 @@ export function renderAskUserResult(
   });
 
   return JSON.stringify({ user_answers: rendered }, null, 2);
+}
+
+/**
+ * The question set a suspended `ask_user` call recorded, or undefined when the stored
+ * `input` is not one.
+ *
+ * Returns undefined rather than throwing because a malformed `input` here means the row
+ * predates this feature or was written by something other than the tool — a case the caller
+ * turns into the same 409 as a question that has already been answered.
+ */
+export function readAskUserQuestions(call: ToolCall): AskUserQuestion[] | undefined {
+  try {
+    const parsed = JSON.parse(call.input) as { questions?: unknown };
+    if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) return undefined;
+    return parsed.questions as AskUserQuestion[];
+  } catch {
+    return undefined;
+  }
 }

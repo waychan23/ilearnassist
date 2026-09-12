@@ -5,16 +5,30 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebFetchConfig, WebSearchConfig } from "../../src/config.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
+import type { QuizToolContext } from "../../src/tools/quiz.js";
 
 let workspace: string;
 
 const webSearch: WebSearchConfig = { provider: "bing", maxResults: 5 };
 const webFetch: WebFetchConfig = { enabled: true, maxChars: 20_000 };
 
+/**
+ * `quiz` numbers its questions from a counter the route supplies; a stub keeps these cases
+ * off a database. Nothing here is about the numbering itself.
+ */
+const quiz: QuizToolContext = {
+  reserveQuestionNumbers: (count) => Array.from({ length: count }, (_, i) => i + 1),
+};
+
 function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] {
-  return buildTools({ workspaceDir: workspace, webSearch, webFetch, fileToolsEnabled: true, ...input }).map(
-    (t) => t.name
-  );
+  return buildTools({
+    workspaceDir: workspace,
+    webSearch,
+    webFetch,
+    fileToolsEnabled: true,
+    quiz,
+    ...input,
+  }).map((t) => t.name);
 }
 
 beforeEach(() => {
@@ -57,9 +71,15 @@ describe("buildTools", () => {
   });
 
   it("keeps the non-workspace tools but drops the file tools when fileTools is disabled", () => {
-    // `ask_user` is here with the web tools because it reads nothing at all — switching off
-    // the workspace sandbox is a statement about file access, not about talking to the user.
-    expect(names({ fileToolsEnabled: false }).sort()).toEqual(["ask_user", "web_fetch", "web_search"]);
+    // The suspending tools are here with the web tools because they read nothing at all —
+    // switching off the workspace sandbox is a statement about file access, not about
+    // talking to the user.
+    expect(names({ fileToolsEnabled: false }).sort()).toEqual([
+      "ask_user",
+      "quiz",
+      "web_fetch",
+      "web_search",
+    ]);
   });
 
   it("keeps read_document when the file tools are disabled", () => {
@@ -96,6 +116,17 @@ describe("buildTools", () => {
     expect(names({ allowedNames: ["read_file"], documents })).toEqual(["read_file"]);
   });
 
+  it("offers quiz by default, and keeps it when the file tools are off", () => {
+    // Like `ask_user`, it reads nothing from the workspace, so switching the file tools off
+    // must not take a conversation's ability to be quizzed with them.
+    expect(names()).toContain("quiz");
+    expect(names({ fileToolsEnabled: false })).toContain("quiz");
+  });
+
+  it("lets a Copilot allow-list exclude quiz", () => {
+    expect(names({ allowedNames: ["ask_user"] })).toEqual(["ask_user"]);
+  });
+
   it("applies the allow-list on top of the config gates", () => {
     expect(names({ allowedNames: ["web_fetch", "write_file"], fileToolsEnabled: false })).toEqual([
       "web_fetch",
@@ -109,6 +140,7 @@ describe("buildTools", () => {
       webFetch,
       fileToolsEnabled: true,
       allowedNames: ["write_file"],
+      quiz,
     });
     await writeFile!.invoke({ path: "a.txt", content: "x" });
     // Written under the given workspace, proving the closure captured it.

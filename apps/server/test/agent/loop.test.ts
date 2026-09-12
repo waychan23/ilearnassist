@@ -15,6 +15,7 @@ import type {
 import { runAgentStream } from "../../src/agent/loop.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
 import { buildAskUserTool } from "../../src/tools/askUser.js";
+import { buildQuizTool } from "../../src/tools/quiz.js";
 import { buildFileTools } from "../../src/tools/fileTools.js";
 import type { ProviderRecord } from "../../src/db.js";
 import { startFakeLlm, type FakeLlm, type FakeTurn } from "../helpers/fakeLlm.js";
@@ -585,7 +586,7 @@ describe("runAgentStream — known inconsistencies (pinned)", () => {
   });
 });
 
-describe("runAgentStream — ask_user suspends the turn", () => {
+describe("runAgentStream — a suspending tool ends the turn", () => {
   const questions = [
     {
       header: "认证方式",
@@ -595,6 +596,23 @@ describe("runAgentStream — ask_user suspends the turn", () => {
   ];
 
   const askUser = () => [buildAskUserTool()];
+
+  /**
+   * `quiz` numbers its questions from the turn's context. The loop holds no database by
+   * design — which store is authoritative is the route's business — so a stand-in keeps
+   * these cases off one. The start number is a parameter because the id coming from the
+   * *counter* rather than from the question's position is one of the things pinned here.
+   */
+  const quiz = (start = 1) => [
+    buildQuizTool({
+      reserveQuestionNumbers: (count) => Array.from({ length: count }, (_, i) => start + i),
+    }),
+  ];
+
+  const quizQuestions = [
+    { header: "窗口", question: "哪种窗口？", options: [{ label: "滚动" }, { label: "滑动" }] },
+    { header: "状态", question: "状态后端？", options: [{ label: "RocksDB" }, { label: "内存" }] },
+  ];
 
   it("stops the turn, records the call as awaiting, and emits no end for it", async () => {
     const { events, result } = await run({
@@ -694,7 +712,52 @@ describe("runAgentStream — ask_user suspends the turn", () => {
     expect(result.awaiting).toBe(true);
     const second = result.toolCalls.find((tc) => tc.id === "call_b");
     expect(second?.status).toBeUndefined();
-    expect(second?.output).toMatch(/only one ask_user call is allowed per step/);
+    expect(second?.output).toMatch(/only one question tool call is allowed per step/);
+  });
+
+  it("records the ids quiz assigned, which the model itself never sent", async () => {
+    // The loop stringifies a call's arguments *before* invoking the tool, and the numbering
+    // happens inside the tool — so `recordedInput` is the only path those ids have into the
+    // persisted record that the card is re-rendered from. Numbering from 5 pins the other
+    // half: an id comes from the counter, not from the question's position in the list.
+    const { events, result } = await run({
+      tools: quiz(5),
+      turns: [{ toolCalls: [{ id: "call_quiz", name: "quiz", args: { questions: quizQuestions } }] }],
+    });
+
+    expect(result.awaiting).toBe(true);
+    const call = result.toolCalls[0]!;
+    expect(call).toMatchObject({ name: "quiz", status: "awaiting" });
+    expect(call.output).toBeUndefined();
+    // No `tool_end` either, for the same reason as `ask_user`: there is no result yet.
+    expect(events.filter((e) => e.type === "tool_start")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "tool_end")).toEqual([]);
+
+    const recorded = JSON.parse(call.input) as { questions: { id: string }[] };
+    expect(recorded.questions.map((q) => q.id)).toEqual(["Q5", "Q6"]);
+  });
+
+  it("rejects a second suspension in the same step, from the other tool too", async () => {
+    // The rule is one live question set per step, not one per tool: two cards at once is a
+    // state the UI has no way to present, whichever tools produced them. The losing call
+    // becomes an ordinary tool error the model can read.
+    const { result } = await run({
+      tools: [...askUser(), ...quiz()],
+      turns: [
+        {
+          toolCalls: [
+            { id: "call_ask", name: "ask_user", args: { questions } },
+            { id: "call_quiz", name: "quiz", args: { questions: [quizQuestions[0]] } },
+          ],
+        },
+      ],
+    });
+
+    expect(result.awaiting).toBe(true);
+    expect(result.toolCalls.find((tc) => tc.id === "call_ask")?.status).toBe("awaiting");
+    const second = result.toolCalls.find((tc) => tc.id === "call_quiz");
+    expect(second?.status).toBeUndefined();
+    expect(second?.output).toMatch(/only one question tool call is allowed per step/);
   });
 
   it("turns a malformed question set into a tool error, so no card is ever rendered", async () => {

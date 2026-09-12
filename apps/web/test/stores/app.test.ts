@@ -1350,6 +1350,83 @@ describe("answerQuestion", () => {
   });
 });
 
+describe("a quiz call, through the same plumbing", () => {
+  const QS = [
+    { id: "Q1", header: "窗口", question: "哪种窗口？", options: [{ label: "滚动" }, { label: "滑动" }] },
+    {
+      id: "Q2",
+      header: "状态",
+      question: "状态后端？",
+      multiSelect: true,
+      options: [{ label: "RocksDB" }, { label: "内存" }],
+    },
+  ];
+
+  /** An assistant message holding one live `quiz` call, numbered as the tool would. */
+  function pendingQuiz(): Message {
+    return message({
+      role: "assistant",
+      content: "先测一下。",
+      toolCalls: [
+        { id: "call_quiz", name: "quiz", input: JSON.stringify({ questions: QS }), status: "awaiting" },
+      ],
+    });
+  }
+
+  const quizCall = (store: ReturnType<typeof useAppStore>) =>
+    store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "call_quiz");
+
+  function answers(store: ReturnType<typeof useAppStore>, payload: unknown) {
+    return store.answerQuestion("call_quiz", { action: "submit", answers: payload as never });
+  }
+
+  it("carries an answer keyed by question id, and records it locally", async () => {
+    // The two suspending tools key their answers differently — by id, by position — and the
+    // store is deliberately name-agnostic about it: it carries whichever shape the card
+    // built, and the server reads it through the call's own registered spec.
+    const store = await readyStore({ messages: [pendingQuiz()] });
+    mocks.streamAnswers.mockImplementation(async function* () {
+      yield { type: "done" } as ChatStreamEvent;
+    });
+
+    const payload = {
+      Q1: { selected: ["滚动"] },
+      Q2: { selected: ["RocksDB"], notes: "记不太准" },
+    };
+    await answers(store, payload);
+
+    expect(quizCall(store)).toMatchObject({ status: "answered", answer: payload });
+    expect(mocks.streamAnswers).toHaveBeenCalledWith("s1", {
+      toolCallId: "call_quiz",
+      action: "submit",
+      answers: payload,
+    });
+  });
+
+  it("puts the card back when the server refuses the answer", async () => {
+    const store = await readyStore({ messages: [pendingQuiz()] });
+    mocks.streamAnswers.mockImplementation(async function* () {
+      throw new ApiError("QUESTION_NOT_PENDING", "这次小测已经不需要作答了", 409);
+    });
+
+    await answers(store, { Q1: { selected: ["滚动"] }, Q2: { selected: ["内存"] } });
+
+    expect(quizCall(store)).toMatchObject({ status: "awaiting" });
+    expect(quizCall(store)!.answer).toBeUndefined();
+  });
+
+  it("counts as a pending question when the user sends a message instead", async () => {
+    // `awaitingToolCalls` is what `sendMessage` retires, and it has to see a quiz: a card
+    // left answerable on a conversation that has moved on is the bug that list prevents.
+    const store = await readyStore({ messages: [pendingQuiz()] });
+    streamOf({ type: "done" });
+
+    await store.sendMessage("算了，先讲别的");
+
+    expect(quizCall(store)!.status).toBe("skipped");
+  });
+});
+
 describe("stopMessage", () => {
   /** A turn held open, so the assertions land while the reply is still streaming. */
   function heldStream(): { release: () => void; finished: Promise<void> } {
