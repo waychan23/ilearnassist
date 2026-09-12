@@ -64,6 +64,7 @@ import type { DocumentService } from "./documents/service.js";
 import { removeParsedText } from "./documents/store.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
+import { classifyProviderError } from "./agent/providerErrors.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
 import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
@@ -1254,7 +1255,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /** Report a failed turn and keep history well-formed. */
   function failTurn(id: string, err: unknown, sse: ReturnType<typeof createSseWriter>): void {
     const errorText = err instanceof Error ? err.message : String(err);
-    sse.send({ type: "error", message: errorText });
+    // The code is additive and lives only on the event: `errorText` below is persisted
+    // verbatim, because that `⚠️` line is replayed to the model next turn. Rewriting the
+    // provider's sentence into something friendlier would change what the model is told about
+    // its own failure, which is a different decision from what the *user* is shown.
+    sse.send({ type: "error", message: errorText, code: classifyProviderError(errorText) });
     // Persist a balanced assistant message so history stays user/assistant.
     db.createMessage({
       id: newId(),

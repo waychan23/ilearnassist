@@ -547,6 +547,7 @@ export default {
     UNKNOWN_POLICY: "未知的解析策略：{policy}",
     UNKNOWN_PARSER: "未知的解析服务。",
     UNKNOWN_PROVIDER: "未知的 Provider。",
+    REASONING_NOT_DECLARED: "这个模型需要回传推理内容，但设置里没有为它开启「推理模型」，服务商因此拒绝了请求。请在设置中为这个模型勾选「推理模型」后重试。",
     MESSAGE_REQUIRED: "消息内容不能为空。",
     QUESTION_NOT_PENDING: "这组问题已经不需要回答了，可能已经提交或作废。",
     INVALID_ANSWER: "提交的回答不完整或已失效，请刷新页面后重试。",

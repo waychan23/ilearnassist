@@ -1082,14 +1082,21 @@ export const useAppStore = defineStore("app", () => {
         if (session) session.title = ev.title;
         break;
       }
-      case "error":
+      case "error": {
+        // `translateApiError` falls back to the provider's own sentence, which is what almost
+        // every failure gets: there is no code to key on for text we cannot recognise, and
+        // inventing one would put words in the provider's mouth. A code is present only when
+        // the failure was a *setting*, and then it replaces a sentence the user can do
+        // nothing with by one naming the thing to change.
+        const text = translateApiError(ev.code, undefined, ev.message) || ev.message;
         // Recorded in two places on purpose. The banner belongs to the turn and unmounts
         // with it — the streaming block is only rendered while `active` — so on its own it
         // leaves a failed turn with *nothing* on screen a moment later. The toast outlives
         // the turn, which is what makes a failure something the user can actually read.
-        streaming.value.error = ev.message;
-        error.value = ev.message;
+        streaming.value.error = text;
+        error.value = text;
         break;
+      }
       default:
         break;
     }

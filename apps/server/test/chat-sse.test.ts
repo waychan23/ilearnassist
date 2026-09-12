@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Attachment, ChatStreamEvent, Message, Session } from "@ilearnassist/shared";
@@ -256,6 +258,60 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(persisted).toHaveLength(2);
     expect(persisted[1]!.role).toBe("assistant");
     expect(persisted[1]!.content).toMatch(/^⚠️ /);
+  });
+
+  it("names the setting to change when a provider demands the reasoning echo", async () => {
+    // The state this catches: a thinking model whose record omits the `reasoning`
+    // capability, so `createReasoningFetch` is never handed a replay map and the request
+    // goes out without the field. The provider's sentence describes the symptom and says
+    // nothing about the cause, so the turn has to name the checkbox that fixes it.
+    const rejecting = createServer((_req, res) => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: "The `reasoning_content` in the thinking mode must be passed back to the API.",
+          },
+        })
+      );
+    });
+    await new Promise<void>((resolve) => rejecting.listen(0, "127.0.0.1", resolve));
+    const { port } = rejecting.address() as AddressInfo;
+
+    try {
+      const { session } = await freshSession();
+      await env.inject({
+        method: "POST",
+        url: "/api/providers",
+        payload: {
+          name: "Rejecting",
+          baseURL: `http://127.0.0.1:${port}/v1`,
+          apiKey: "test-key",
+          models: [{ modelId: "deepseek-v4-pro", name: "deepseek-v4-pro" }],
+        },
+      });
+      const rejectingProvider = (
+        await env.inject({ method: "GET", url: "/api/providers" })
+      ).json<{ id: string; name: string }[]>().find((p) => p.name === "Rejecting")!;
+
+      const { events } = await chat(session.id, { message: "hi", provider: rejectingProvider.id });
+
+      const error = events.find((e) => e.type === "error") as
+        | { message: string; code?: string }
+        | undefined;
+      expect(error?.code).toBe("REASONING_NOT_DECLARED");
+      // The code adds to the event; it does not replace what the provider said.
+      expect(error?.message).toMatch(/reasoning_content/);
+
+      // And the provider's words are what history keeps. That `⚠️` line is replayed to the
+      // model next turn, so rewriting it into the sentence the *user* is shown would change
+      // what the model is told about its own failure — a different decision entirely.
+      const persisted = await messagesOf(session.id);
+      expect(persisted[1]!.content).toMatch(/^⚠️ 400/);
+      expect(persisted[1]!.content).toContain("reasoning_content");
+    } finally {
+      await new Promise<void>((resolve) => rejecting.close(() => resolve()));
+    }
   });
 
   it("sends an attached image to a vision model as image content", async () => {
