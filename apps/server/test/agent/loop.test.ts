@@ -385,6 +385,37 @@ describe("runAgentStream — history handling", () => {
     expect(JSON.stringify(sent.messages[0]!.content)).not.toContain(join(scratch, "ws") + "/sessions");
     expect(JSON.stringify(sent.messages[0]!.content)).toContain("sandboxed");
   });
+
+  it("tells the built-in assistant to confirm a deliverable it has finished", async () => {
+    // What a conversation with no Copilot gets. The prompt used to offer `ask_user` only for
+    // a choice made *before* the work — several defensible options and no way to tell which
+    // — so a turn that had just produced a plan could read itself as finished and ask in
+    // prose, which draws no card. The tool's own description carries the same rule and is
+    // the half that survives a Copilot's prompt replacing this string; this is the policy.
+    await run({ turns: [{ content: "ok" }] });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    expect(sent.messages[0]!.role).toBe("system");
+
+    const system = JSON.stringify(sent.messages[0]!.content);
+    expect(system).toContain("put it to them for confirmation");
+    expect(system).toContain("ask_user");
+  });
+
+  it("puts the ask_user description on the wire", async () => {
+    // `askUser.test.ts` asserts the string is on the tool *object*; this closes the gap to
+    // "the model is actually sent it", which is the whole claim a wording change rests on.
+    // A description that never reaches the request is not guidance, it is a comment.
+    await run({ turns: [{ content: "ok" }], tools: [buildAskUserTool()] });
+
+    const sent = llm.requests()[0] as {
+      tools?: { function: { name: string; description: string } }[];
+    };
+    const sent_ask_user = sent.tools?.find((t) => t.function.name === "ask_user");
+
+    expect(sent_ask_user).toBeDefined();
+    expect(sent_ask_user!.function.description).toContain("just produced a plan");
+  });
 });
 
 describe("runAgentStream — known inconsistencies (pinned)", () => {

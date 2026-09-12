@@ -167,7 +167,7 @@ function safeParseArgs(json: string): Record<string, unknown> {
 function buildSystemPrompt(workspace: Workspace, copilot?: Copilot): string {
   const base =
     copilot?.systemPrompt?.trim() ||
-    "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
+    "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Do the same once you have produced a plan or another substantial artifact: put it to them for confirmation rather than assuming it is accepted. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
 
   // `workdirPath`, not `dirPath`: the sandbox is the workspace's `workdir/`, and naming the
   // parent here would tell the model that `sessions/` is inside the directory it may write
