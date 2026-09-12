@@ -133,6 +133,8 @@ const en: typeof MessageSchema = {
     renameHint: "Double-click to rename",
     noSessions: "No conversations yet",
     openNav: "Open navigation",
+    collapse: "Collapse the sidebar",
+    expand: "Expand the sidebar",
   },
 
   files: {

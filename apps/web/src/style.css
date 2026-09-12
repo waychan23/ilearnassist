@@ -354,6 +354,24 @@ body {
 }
 
 /*
+ * The same grid with the sidebar collapsed to its rail.
+ *
+ * The track and not `.sidebar { width }`, because the track is what actually sizes this
+ * column — a width on the item would fight the track that is already 272px and lose, and
+ * `.app.home, .app.auth` below is the same kind of rule pointing the other way. Its
+ * position here, above that pair, is not load-bearing: `sidebarRail` is false on those two
+ * views, so the two never meet. It reads better next to the rule it varies, which is why it
+ * is here rather than at the end of the sheet.
+ *
+ * 52px, not `auto`: the rail's content is one icon and its width should not depend on which
+ * icon. 272 and 52 are the sheet's only two layout widths, and both are literals by the
+ * same argument — a width token would claim a spacing relationship that does not exist.
+ */
+.app.sidebar-collapsed {
+  grid-template-columns: 52px 1fr;
+}
+
+/*
  * The workspace home and the login screen are each a single full-width child, so the
  * two-column track collapses to one. Without this they would be laid out in the 272px
  * sidebar column and the rest of the page would be empty — the grid has no reason to know
@@ -722,38 +740,73 @@ body {
 }
 
 /*
- * The breadcrumb back to the workspace home.
+ * The sidebar's header: the way out of the workspace on the left, the workspace's name in
+ * the middle, the rail's toggle on the right.
  *
- * A block holding one full-width button, rather than the flex row it was when the
- * new-workspace glyph sat beside it. The wrapper is kept for its margins: `.sidebar` is a
- * column flexbox, and giving the button horizontal margins directly would put them *outside*
- * its `width: 100%` and push it past the sidebar's clipped edge.
+ * The name holds the middle with `flex: 1` between two icon buttons of the same size, and
+ * that symmetry is what makes it *centred* rather than nearly centred — the alternative, an
+ * absolutely positioned label, needs the header to have a height it does not have and stops
+ * being centred the moment one flanker is a different size.
+ *
+ * It is primary text now. It used to trail "all workspaces" at `--fs-1` in `--text-3`, sized
+ * as a subtitle to the button it was inside, which put the label that matters least at
+ * `--fs-3` and the one that matters most beneath it — and the name is the only thing on
+ * screen saying which workspace this is once the topbar moves on to naming the conversation.
+ *
+ * Still a wrapper with margins rather than margins on its children: `.sidebar` is a column
+ * flexbox and the row is full-bleed inside it.
  */
 .workspace-head {
-  margin: var(--space-5) var(--space-6) var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) var(--space-4) var(--space-2);
 }
 
-.workspace-back {
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-}
-
-.workspace-back .arrow {
-  flex-shrink: 0;
-  color: var(--text-3);
-}
-
-.workspace-back .label {
+/* A symmetric pair either side of the name, which is what its centring rests on. */
+.workspace-back,
+.sidebar-toggle {
+  font-size: var(--fs-4);
   flex-shrink: 0;
 }
 
-/* The current workspace, set apart from the label it follows so the row reads as
-   "all workspaces › this one" rather than as one long name. */
-.workspace-back .sub {
+.workspace-name {
   flex: 1;
-  text-align: right;
-  color: var(--text-3);
-  font-size: var(--fs-1);
+  min-width: 0;
+  text-align: center;
+  color: var(--text);
+  font-size: var(--fs-3);
+  font-weight: 600;
+}
+
+/*
+ * The rail: the sidebar collapsed to a column holding nothing but its toggle.
+ *
+ * The panels are hidden by name rather than left to clip. `.sidebar` is `overflow: hidden`,
+ * so a 52px column would show the first characters of every conversation title — wide
+ * enough to look deliberate, narrow enough to be useless — and would leave every one of
+ * them focusable. This buys that with `display: none`; the closed drawer needs `visibility`
+ * for the same thing because it also has to be there to slide.
+ *
+ * Listing what a rail hides, rather than wrapping the content in one element to hide, is
+ * what keeps the sidebar's flex structure as it is: one pinned header, one scroller, two
+ * footer rows. The un-hiding is the class's absence, so there is no second list of the same
+ * selectors to keep in step.
+ */
+.sidebar.collapsed .side-tabs,
+.sidebar.collapsed .side-scroll,
+.sidebar.collapsed .side-settings,
+.sidebar.collapsed .side-signout,
+.sidebar.collapsed .side-footer,
+.sidebar.collapsed .workspace-back,
+.sidebar.collapsed .workspace-name {
+  display: none;
+}
+
+/* One control left in the header, so it centres itself instead of sitting at the start. The
+   icon buttons beside it are what normally does that, and they are gone. */
+.sidebar.collapsed .workspace-head {
+  justify-content: center;
 }
 
 .session-item {

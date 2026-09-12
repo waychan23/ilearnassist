@@ -1,4 +1,5 @@
-import { reactive } from "vue";
+import { computed, reactive } from "vue";
+import { isCompact } from "./breakpoints";
 
 /**
  * Cross-component UI state for the few globals that more than one place needs to open.
@@ -25,6 +26,10 @@ import { reactive } from "vue";
  * The account is the same case one level up: it is the *server's* fact, held in a cookie the
  * page cannot read, so there is nothing here to persist and nothing to trust on the way back
  * in. See `authReady`.
+ *
+ * `sidebarCollapsed` is the drawer's near neighbour and the one pair worth reading together:
+ * the drawer says where the sidebar *is*, this says how wide it is, and the sidebar's own
+ * toggle is a different control on each viewport because of it. The field carries the rest.
  */
 export type View = "login" | "home" | "chat";
 
@@ -40,6 +45,22 @@ export const uiState = reactive({
    */
   sourcesOpen: false,
   drawerOpen: false,
+  /**
+   * The chat sidebar collapsed to its rail.
+   *
+   * A second flag rather than a third value on `drawerOpen`, because the two answer
+   * different questions and can be true at once: the drawer is *where the sidebar is* on a
+   * compact viewport (off-canvas, over the pane, dismissed by its backdrop), and this is
+   * *how wide it is* on a wide one (a 52px rail, in flow, still there). A single flag would
+   * have to mean "hidden" on one viewport and "narrow" on the other, and the resize between
+   * them would leave whichever meaning it did not have.
+   *
+   * Not persisted, like the drawer and unlike the theme. The drawer's reason does not carry
+   * over — a remembered rail is defensible in a way a remembered drawer is not — so this is
+   * a decision rather than an inheritance: a rail is what you narrow the window for, and it
+   * defaults to open because the sidebar is how you reach a conversation at all.
+   */
+  sidebarCollapsed: false,
   view: "login" as View,
   /**
    * Whether `/api/auth/me` has answered yet.
@@ -77,6 +98,41 @@ export function openDrawer(): void {
 export function closeDrawer(): void {
   uiState.drawerOpen = false;
 }
+
+/**
+ * Narrow the sidebar to its rail, or widen it back.
+ *
+ * One function rather than a `collapse`/`expand` pair, because the only control that reaches
+ * it is a toggle and a pair would put the "which one am I" question at the call site — where
+ * it would be answered by reading the flag it is about to write, which is the state the
+ * control already renders from.
+ *
+ * Wide viewports only. A compact one's sidebar is a drawer and has no rail to narrow to, so
+ * the toggle closes the drawer there instead — that branch is in `Sidebar.vue`, next to the
+ * button, since it is about which control the button *is* rather than about this flag.
+ */
+export function toggleSidebar(): void {
+  uiState.sidebarCollapsed = !uiState.sidebarCollapsed;
+}
+
+/**
+ * Whether the chat view is rendering its sidebar as a rail.
+ *
+ * The derived half of the flag above, and here rather than in either component because
+ * *two* of them need it and they are not in a parent-child relation that would let one pass
+ * it down: `Sidebar.vue` puts it on the element that hides the panels, `App.vue` puts it on
+ * `.app` to pick the grid track. Written out twice, they are also two chances to drop a
+ * term — and every term is load-bearing:
+ *
+ * - `view === "chat"`, because the other two views render one full-width child. Without it a
+ *   rail left collapsed behind you on the workspace home would narrow the home page's grid.
+ * - `!isCompact`, because a compact viewport's sidebar is a fixed 272px drawer. A 52px
+ *   track would tie with the drawer's own rule on specificity and win on source order,
+ *   leaving a sliver of empty column beside a drawer nobody could read.
+ */
+export const sidebarRail = computed(
+  () => uiState.view === "chat" && uiState.sidebarCollapsed && !isCompact.value,
+);
 
 /**
  * Ask who the caller is: the login screen.

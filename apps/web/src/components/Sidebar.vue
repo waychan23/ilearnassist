@@ -3,8 +3,16 @@ import { nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
+import { isCompact } from "../composables/breakpoints";
 import type { Session } from "../api/types";
-import { closeDrawer, openSettings, showWorkspaceHome, uiState } from "../composables/ui";
+import {
+  closeDrawer,
+  openSettings,
+  showWorkspaceHome,
+  sidebarRail,
+  toggleSidebar,
+  uiState,
+} from "../composables/ui";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 import FileTree from "./FileTree.vue";
 import Icon from "./Icon.vue";
@@ -13,6 +21,20 @@ const { t } = useI18n();
 const store = useAppStore();
 
 const showNewSession = ref(false);
+
+/**
+ * The header toggle, which is a different button on each viewport.
+ *
+ * On a wide one it narrows the sidebar to its rail; on a compact one there is no rail to
+ * narrow to, so it does what the topbar's `nav-toggle` does and closes the drawer.
+ * `toggleSidebar()` is not consulted at all in that case, which is deliberate: a compact
+ * viewport must not remember a collapsed flag it could not show, or the sidebar would come
+ * back as a rail on the next resize.
+ */
+function onSidebarToggle() {
+  if (isCompact.value) closeDrawer();
+  else toggleSidebar();
+}
 
 /* ---------------------------------- panels ---------------------------------- */
 
@@ -124,30 +146,61 @@ async function onDeleteSession(session: Session) {
     id="app-sidebar"
     class="sidebar"
     data-testid="sidebar"
-    :class="{ open: uiState.drawerOpen }"
+    :class="{ open: uiState.drawerOpen, collapsed: sidebarRail }"
   >
     <!--
-      The workspace switcher, now a breadcrumb rather than a dropdown. The dropdown listed
-      every workspace and moved you sideways between them; the home page does that job now,
-      with room to say what is in each one, so this row does the only thing left: go back.
-      The current workspace stays named here because the topbar names the *conversation*,
-      and on the welcome screen it falls back to the workspace — a name worth confirming.
+      The sidebar's header: out on the left, where you are in the middle, the rail's toggle
+      on the right.
 
-      Creating one is on the home page too, and deliberately not repeated here. This row is
-      the way out of a workspace, and a `+` beside it made the two most different actions on
-      the sidebar — go back, and make something new — sit a few pixels apart under one
-      cursor. The workspace list is one click away and has a card for it.
+      The back control is a glyph now, and the workspace's name is no longer inside it. It
+      used to be one full-width button reading "all workspaces › this one", which spent the
+      width of the sidebar on the one label that matters least — the way *out* — and set the
+      name that matters most at `--fs-1` in `--text-3`, as if it were a subtitle to it. The
+      name is the only thing on screen saying which workspace you are in once the topbar has
+      moved on to naming the conversation, and on the welcome screen it is the only name
+      there is, so it holds the middle in primary text and the two controls flank it.
+
+      The two flankers being icon buttons of the same size is what makes that middle
+      genuinely centred, rather than a label that looks centred until one side is wider.
+
+      Creating a workspace is on the home page and deliberately not repeated here — the `+`
+      that used to sit in this row put the two most different actions on the sidebar, go back
+      and make something new, a few pixels apart under one cursor.
     -->
     <div class="workspace-head">
       <button
-        class="menu-item workspace-back"
+        class="icon-btn workspace-back"
         data-testid="all-workspaces"
         :title="t('sidebar.allWorkspaces')"
+        :aria-label="t('sidebar.allWorkspaces')"
         @click="backToWorkspaces"
       >
-        <span class="arrow"><Icon name="arrow-left" /></span>
-        <span class="label">{{ t("sidebar.allWorkspaces") }}</span>
-        <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
+        <Icon name="arrow-left" />
+      </button>
+
+      <span
+        class="workspace-name truncate"
+        data-testid="workspace-name"
+        :title="store.activeWorkspace?.name ?? ''"
+      >
+        {{ store.activeWorkspace?.name ?? "" }}
+      </span>
+
+      <!--
+        One control, two jobs, and which one is decided by the viewport rather than by the
+        flag: on a wide screen it narrows the sidebar to its rail, and on a compact one —
+        where the sidebar *is* the drawer — it closes it. The label carries the difference,
+        which is why it is `aria-label` and `title` and not `aria-expanded` over a region
+        that is the button's own ancestor.
+      -->
+      <button
+        class="icon-btn sidebar-toggle"
+        data-testid="sidebar-toggle"
+        :title="sidebarRail ? t('sidebar.expand') : t('sidebar.collapse')"
+        :aria-label="sidebarRail ? t('sidebar.expand') : t('sidebar.collapse')"
+        @click="onSidebarToggle"
+      >
+        <Icon name="panel-left" />
       </button>
     </div>
 

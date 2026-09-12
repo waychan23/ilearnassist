@@ -75,8 +75,9 @@ test("clicking a card enters that workspace, on its welcome screen", async ({ pa
   // The welcome screen, not the last conversation: entering a workspace is not the same as
   // resuming whatever was open in it.
   await expect(page.getByText("开始对话")).toBeVisible();
-  // And it is *this* workspace's pane — named in the sidebar's breadcrumb.
-  await expect(page.getByTestId("all-workspaces")).toContainText(name);
+  // And it is *this* workspace's pane — named in the middle of the sidebar's header. Not on
+  // the back button beside it: that is a glyph now, and the name has an element of its own.
+  await expect(page.getByTestId("workspace-name")).toHaveText(name);
 });
 
 test("the chat pane's back button returns to the list", async ({ page }) => {
@@ -90,18 +91,21 @@ test("the chat pane's back button returns to the list", async ({ page }) => {
   await expect(page.getByTestId("sidebar")).toHaveCount(0);
 });
 
-test("the sidebar's breadcrumb leaves the workspace too, and carries nothing else", async ({
+test("the sidebar's header leaves the workspace too, and carries nothing else", async ({
   page,
 }) => {
   // The two ways out are reached from different places — one from the topbar, one from the
-  // drawer — and on a phone the drawer is the only one of them on screen.
+  // sidebar — and on a phone the sidebar is the only one of them on screen.
   await page.goto("/");
   await enterWorkspace(page);
 
-  // The row is the way *out* of a workspace and holds exactly one control. Creating one
-  // lives on the home page, a click away, rather than a few pixels from the button that
-  // goes back to it — where a mis-click would start a workspace instead of leaving one.
-  await expect(page.locator(".workspace-head button")).toHaveCount(1);
+  // Two controls, and neither creates anything: out on the left, the rail's toggle on the
+  // right. Creating a workspace lives on the home page, a click away, rather than a few
+  // pixels from the button that goes back to it — where a mis-click would start a workspace
+  // instead of leaving one. The toggle is named rather than counted, so an icon button
+  // added here later has to say what it is.
+  await expect(page.locator(".workspace-head button")).toHaveCount(2);
+  await expect(page.getByTestId("sidebar-toggle")).toBeVisible();
 
   await page.getByTestId("all-workspaces").click();
 

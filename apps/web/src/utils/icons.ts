@@ -78,6 +78,16 @@ export const ICON_PATHS = {
 
   menu: ["M2.75 4.5H13.25", "M2.75 8H13.25", "M2.75 11.5H13.25"],
 
+  /* The sidebar, as a frame with the panel in its left third — the only mark in the set that
+   * says "this control is about the layout" rather than about the thing it acts on. Same
+   * rectangle idiom as `image` and `monitor`, with the divider the sidebar's own edge.
+   *
+   * Deliberately one icon for both states rather than a pair that swaps: the direction is
+   * not a fact about the sidebar (a rail is not "leftwards"), and two glyphs a pixel apart
+   * are the kind of difference nobody sees — the label on the button says which way it
+   * goes, and it is the label that changes. */
+  "panel-left": ["M2.5 3.5H13.5V12.5H2.5Z", "M6.5 3.5V12.5"],
+
   gear: [
     "M6.7 2L9.3 2L8.9 3.7L10.4 4.4L11.3 2.9L13.1 4.7L11.6 5.6L12.3 7.1L14 6.7L14 9.3L12.3 8.9L11.6 10.4L13.1 11.3L11.3 13.1L10.4 11.6L8.9 12.3L9.3 14L6.7 14L7.1 12.3L5.6 11.6L4.7 13.1L2.9 11.3L4.4 10.4L3.7 8.9L2 9.3L2 6.7L3.7 7.1L4.4 5.6L2.9 4.7L4.7 2.9L5.6 4.4L7.1 3.7Z",
     "M10.3 8a2.3 2.3 0 1 1-4.6 0 2.3 2.3 0 1 1 4.6 0",
