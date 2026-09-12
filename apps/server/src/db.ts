@@ -1191,6 +1191,16 @@ export function createDb(dbPath: string): AppDb {
       return r ? mapCopilot(r) : undefined;
     },
     createCopilot(input) {
+      /*
+       * Refused rather than written.
+       *
+       * `undefined` binds as SQL NULL in silence — only a *missing* key throws — and the column
+       * is nullable because the migration that adds it must be. So a caller that had lost the
+       * owner would get a row that every read then refuses: invisible to its own author, with
+       * nothing logged anywhere to say why. That is a genuinely confusing failure to debug from
+       * the outside, and it has happened once. Failing here instead names the cause.
+       */
+      if (!input.userId) throw new Error("createCopilot: a Copilot must have an owner");
       const ts = now();
       stmtCreateCopilot.run({
         ...input,

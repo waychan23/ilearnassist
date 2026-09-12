@@ -351,6 +351,46 @@ describe("over HTTP, with two signed-in accounts", () => {
     }
   });
 
+  it("tells the creator a Copilot is theirs, by an id that matches their account", async () => {
+    /*
+     * The client splits the list into "mine" and "published by someone else" by comparing
+     * `copilot.userId` with the id `/auth/me` gave it, so those two have to be the same id — and
+     * an owner must never be shown the read-only view of their own Copilot. Asserted over HTTP
+     * rather than at the db, because it is the *wire* shape the client reads.
+     */
+    env = await startTestServer({ username: "Ada" });
+
+    const created = (
+      await env.inject({
+        method: "POST",
+        url: "/api/copilots",
+        payload: { name: "Mine", systemPrompt: "" },
+      })
+    ).json<{ id: string; userId: string }>();
+    const me = (await env.inject({ method: "GET", url: "/api/auth/me" })).json<{ id: string }>();
+
+    expect(me.id).toBeTruthy();
+    expect(created.userId).toBe(me.id);
+
+    const bob = await env.asUser("Bob");
+    await seedFor(bob); // one of Bob's too, so the listing is not all one account's
+
+    const listed = (await env.inject({ method: "GET", url: "/api/copilots" })).json<
+      { id: string; userId: string }[]
+    >();
+    expect(listed.find((c) => c.id === created.id)?.userId).toBe(me.id);
+
+    /*
+     * And every row that reaches the client carries an owner. The client decides "may I edit
+     * this" by comparing `userId` with its own account id, so a row that arrived without one
+     * would be handed to its owner as somebody else's Copilot — read-only, with a "copy to
+     * mine" button. That is the shape of an ownerless row, which is why the column being
+     * nullable must not mean a row can be *served* without it.
+     */
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed.every((c) => !!c.userId)).toBe(true);
+  });
+
   it("refuses to start a conversation from another account's private Copilot", async () => {
     /*
      * The regression this whole change exists for. A Copilot id arriving on a session-create was

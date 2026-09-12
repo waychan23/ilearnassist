@@ -166,6 +166,19 @@ describe("copilots", () => {
     expect(created.settings).toEqual({ temperature: 0.3, modelId: "m1" });
   });
 
+  it("refuses to write a Copilot with no owner", () => {
+    /*
+     * `undefined` binds as NULL in silence, and an ownerless row is one every read refuses —
+     * invisible to the person who made it, with nothing to explain it. That is worse than an
+     * error at the call site, and it has already happened once: two Copilots created while a
+     * dev server was mid-reload ended up with no owner and simply never appeared.
+     */
+    expect(() => db.createCopilot({ ...input, userId: undefined as unknown as string })).toThrow(
+      /must have an owner/
+    );
+    expect(() => db.createCopilot({ ...input, userId: "" })).toThrow(/must have an owner/);
+  });
+
   it("records the owner and defaults nothing about visibility", () => {
     const created = db.createCopilot(input);
     expect(created.userId).toBe(OWNER);
