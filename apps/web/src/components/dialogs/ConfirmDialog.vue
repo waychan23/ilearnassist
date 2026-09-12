@@ -40,7 +40,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
     properties cascade from there.
   -->
   <Teleport to="body">
-    <div v-if="confirmState.open" class="modal-overlay" @click.self="settleConfirm(false)">
+    <div
+      v-if="confirmState.open"
+      class="modal-overlay confirm-overlay"
+      @click.self="settleConfirm(false)"
+    >
       <div class="modal sm">
         <div class="modal-head">
           <h3>{{ confirmState.title }}</h3>
@@ -78,6 +82,15 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 </template>
 
 <style scoped>
+/*
+ * Above any dialog that can raise it. Two overlays at the same z-index stack by DOM order,
+ * and this component is the first child in `App.vue` — so without this a confirm asked for by
+ * Settings or the sources list is painted underneath the very dialog that asked, and its
+ * buttons are visible but unreachable by pointer.
+ */
+.confirm-overlay {
+  z-index: var(--z-confirm);
+}
 .confirm-message {
   margin: 0;
   word-break: break-word;

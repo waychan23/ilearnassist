@@ -255,9 +255,9 @@ by design).
 
 That has a consequence for deleting, and it is worth knowing before you tidy up: **deleting a
 conversation does not delete its files.** It removes the references and leaves the bytes where
-they are, because another conversation may be reading them. Deleting a file is its own action — `DELETE /api/sources/:id`, which the sources
-UI will call — and it removes the bytes everywhere at once, while the messages that were sent
-with it keep showing what they were sent with.
+they are, because another conversation may be reading them. Deleting a file is its own action, from the **Uploaded files** list on the home
+page — and it removes the bytes everywhere at once, while the messages that were sent with it
+keep showing what they were sent with.
 
 ## Document parsing
 

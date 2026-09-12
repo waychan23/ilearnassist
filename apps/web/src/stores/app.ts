@@ -10,7 +10,7 @@ import {
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
-import { closeSettings, showLogin, showWorkspaceHome, uiState } from "../composables/ui";
+import { closeSettings, closeSources, showLogin, showWorkspaceHome, uiState } from "../composables/ui";
 import type {
   AskUserAnswers,
   Attachment,
@@ -124,6 +124,17 @@ export const useAppStore = defineStore("app", () => {
   const account = ref<User | null>(null);
 
   const config = ref<PublicConfig | null>(null);
+  /**
+   * Every file this account has uploaded, as the sources dialog lists them.
+   *
+   * Loaded on demand rather than with `init`: it is a page most sessions never open, and the
+   * account's whole library is not something to fetch on every cold start.
+   */
+  const sources = ref<Source[]>([]);
+  const sourcesLoading = ref(false);
+  /** A load or delete failure, shown inside the dialog — not the global toast. */
+  const sourcesError = ref<string | null>(null);
+
   const workspaces = ref<Workspace[]>([]);
   const copilots = ref<Copilot[]>([]);
   const sessions = ref<Session[]>([]);
@@ -351,6 +362,9 @@ export const useAppStore = defineStore("app", () => {
   function forgetAccount(): void {
     account.value = null;
     config.value = null;
+    sources.value = [];
+    sourcesLoading.value = false;
+    sourcesError.value = null;
     workspaces.value = [];
     copilots.value = [];
     sessions.value = [];
@@ -363,6 +377,7 @@ export const useAppStore = defineStore("app", () => {
     parseStatus.value = {};
     resetFileTree();
     closeSettings();
+    closeSources();
   }
 
   /**
@@ -937,6 +952,51 @@ export const useAppStore = defineStore("app", () => {
    * — the latter is why the live `parseStatus` map exists, since nothing about a historical
    * message changes when the server re-parses it.
    */
+  /* ------------------------------ uploaded files ---------------------------- */
+
+  /**
+   * Read the account's uploaded files.
+   *
+   * Errors go to `sourcesError` rather than the toast: the dialog is open and the user asked
+   * for this, so the place to say it failed is where they are looking.
+   */
+  async function loadSources(): Promise<void> {
+    sourcesLoading.value = true;
+    sourcesError.value = null;
+    try {
+      sources.value = await api.listSources();
+    } catch (e) {
+      sourcesError.value = messageOf(e);
+    } finally {
+      sourcesLoading.value = false;
+    }
+  }
+
+  /**
+   * Delete a file, its extracted text and every reference to it.
+   *
+   * The confirmation is the caller's (`composables/confirm`), because this is the app's one
+   * action that destroys something the user cannot get back by retrying — and the copy has to
+   * say so, which a store cannot.
+   *
+   * Chips on messages that referenced the file are deliberately left alone: they render from
+   * each message's own snapshot, so history keeps reading the way it was written, and the
+   * thumbnail starts 404ing. Dropping them here would make a past turn look like it never
+   * happened.
+   */
+  async function deleteSource(sourceId: string): Promise<void> {
+    try {
+      await api.deleteSource(sourceId);
+      sources.value = sources.value.filter((s) => s.id !== sourceId);
+      // The live overlay must forget it too, or a chip would keep showing parse state for a
+      // file that is gone.
+      const { [sourceId]: _removed, ...rest } = parseStatus.value;
+      parseStatus.value = rest;
+    } catch (e) {
+      sourcesError.value = messageOf(e);
+    }
+  }
+
   async function reparseAttachment(attachment: Attachment): Promise<void> {
     const sessionId = activeSessionId.value;
     if (!sessionId) return;
@@ -1166,6 +1226,9 @@ export const useAppStore = defineStore("app", () => {
     // state
     account,
     config,
+    sources,
+    sourcesLoading,
+    sourcesError,
     workspaces,
     copilots,
     sessions,
@@ -1206,6 +1269,8 @@ export const useAppStore = defineStore("app", () => {
     init,
     signIn,
     signOut,
+    loadSources,
+    deleteSource,
     refreshConfig,
     loadSessions,
     selectWorkspace,

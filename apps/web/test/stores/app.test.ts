@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
     readFileContent: vi.fn(),
     uploadAttachment: vi.fn(),
     listSessionSources: vi.fn(),
+    listSources: vi.fn(),
+    deleteSource: vi.fn(),
     reparseSource: vi.fn(),
     listParserKinds: vi.fn(),
     listDocumentParsers: vi.fn(),
@@ -267,6 +269,67 @@ describe("init", () => {
     expect(store.error).toBeNull();
     expect(mocks.api.getConfig).not.toHaveBeenCalled();
     expect(mocks.api.listWorkspaces).not.toHaveBeenCalled();
+  });
+});
+
+describe("uploaded files", () => {
+  it("loads the account's files on demand, not with everything else", async () => {
+    // `init` must not fetch the whole library: this is a dialog most sessions never open.
+    const store = useAppStore();
+    await store.init();
+    expect(mocks.api.listSources).not.toHaveBeenCalled();
+
+    mocks.api.listSources.mockResolvedValue([sourceOf({ id: "a1", name: "one.pdf" })]);
+    await store.loadSources();
+
+    expect(store.sources.map((s) => s.name)).toEqual(["one.pdf"]);
+    expect(store.sourcesLoading).toBe(false);
+  });
+
+  it("reports a failed load inside the dialog, not as a toast", async () => {
+    // The user asked for this, so the place to say it failed is where they are looking.
+    mocks.api.listSources.mockRejectedValue(new ApiError("SOURCE_NOT_FOUND", "gone", 404));
+
+    const store = useAppStore();
+    await store.loadSources();
+
+    expect(store.sourcesError).toBe("gone");
+    expect(store.error).toBeNull();
+  });
+
+  it("drops a deleted file from the list and from the live overlay", async () => {
+    mocks.api.listSources.mockResolvedValue([
+      sourceOf({ id: "a1" }),
+      sourceOf({ id: "a2", name: "keep.pdf" }),
+    ]);
+    mocks.api.deleteSource.mockResolvedValue({ ok: true });
+
+    const store = useAppStore();
+    await store.loadSources();
+    // A chip on a sent message is being overlaid from this map; leaving the entry behind
+    // would keep showing parse state for a file that no longer exists.
+    store.parseStatus = { a1: sourceOf({ id: "a1" }), a2: sourceOf({ id: "a2" }) };
+
+    await store.deleteSource("a1");
+
+    expect(mocks.api.deleteSource).toHaveBeenCalledWith("a1");
+    expect(store.sources.map((s) => s.id)).toEqual(["a2"]);
+    expect(store.parseStatus["a1"]).toBeUndefined();
+    expect(store.parseStatus["a2"]).toBeDefined();
+  });
+
+  it("keeps the row when the delete fails, and says why", async () => {
+    mocks.api.listSources.mockResolvedValue([sourceOf({ id: "a1" })]);
+    mocks.api.deleteSource.mockRejectedValue(new ApiError("SOURCE_NOT_FOUND", "gone", 404));
+
+    const store = useAppStore();
+    await store.loadSources();
+    await store.deleteSource("a1");
+
+    // The file is still there as far as the server is concerned, so the list must not have
+    // pretended otherwise — a row that vanishes and comes back is worse than an error.
+    expect(store.sources.map((s) => s.id)).toEqual(["a1"]);
+    expect(store.sourcesError).toBe("gone");
   });
 });
 

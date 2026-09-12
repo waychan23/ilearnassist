@@ -10,6 +10,7 @@ import type {
   DirectoryListing,
   FileContent,
   ProviderConfig,
+  Source,
   Session,
   Workspace,
 } from "@ilearnassist/shared";
@@ -780,6 +781,45 @@ describe("sources", () => {
       { id: string }[]
     >();
     expect(listed.map((s) => s.id)).toEqual([attachment.id]);
+  });
+
+  it("lists the account's files, newest first, across every conversation", async () => {
+    // Account-wide rather than per-conversation: this is the list the sources dialog manages,
+    // and the only place a file with no remaining references is still visible.
+    const first = await uploadAttachment(env, session.id, {
+      name: "older.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("one"),
+    });
+    const other = await newSession(env, workspace.id);
+    const second = await uploadAttachment(env, other.id, {
+      name: "newer.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("two"),
+    });
+
+    const listed = (await inject({ method: "GET", url: "/api/sources" })).json<Source[]>();
+    const ids = listed.map((s) => s.id);
+    expect(ids).toContain(first.id);
+    expect(ids).toContain(second.id);
+    // Newest first, so the file just uploaded is the one at the top.
+    expect(ids.indexOf(second.id)).toBeLessThan(ids.indexOf(first.id));
+    expect(listed.find((s) => s.id === second.id)?.name).toBe("newer.txt");
+  });
+
+  it("does not list another account's files", async () => {
+    const mine = await uploadAttachment(env, session.id, {
+      name: "mine.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("private"),
+    });
+
+    const bob = await env.asUser("Bob");
+    const theirs = (await bob.inject({ method: "GET", url: "/api/sources" })).json<Source[]>();
+    expect(theirs.map((s) => s.id)).not.toContain(mine.id);
+
+    // And Bob's empty list is empty, not a 404 — he has an account, it just holds nothing.
+    expect(theirs).toEqual([]);
   });
 
   it("deletes a file for good, everywhere it is used", async () => {

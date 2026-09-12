@@ -30,6 +30,15 @@ export type View = "login" | "home" | "chat";
 
 export const uiState = reactive({
   settingsOpen: false,
+  /**
+   * The uploaded-files dialog.
+   *
+   * Its own flag rather than a tab of Settings, because the two answer different questions:
+   * Settings is how the app is configured, and this is what the account has stored. Opening
+   * it from the home page is also the only route to a file that no conversation references
+   * any more — which is exactly the file someone goes looking for here.
+   */
+  sourcesOpen: false,
   drawerOpen: false,
   view: "login" as View,
   /**
@@ -50,6 +59,14 @@ export function openSettings(): void {
 
 export function closeSettings(): void {
   uiState.settingsOpen = false;
+}
+
+export function openSources(): void {
+  uiState.sourcesOpen = true;
+}
+
+export function closeSources(): void {
+  uiState.sourcesOpen = false;
 }
 
 /** Only meaningful on a compact viewport; wider ones render the sidebar in place. */

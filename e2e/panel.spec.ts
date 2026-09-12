@@ -228,6 +228,17 @@ test.describe("the control panel", () => {
     expect(panel.calls).toContain("chooseDataDir");
   });
 
+  test("offers changing the folder once one is chosen, and revealing it", async ({ page }) => {
+    // The same control in both states — the first-run prompt and the later "move my data"
+    // — because they are the same question, and the panel has no separate settings screen
+    // to put the second one in.
+    await openPanel(page, RUNNING);
+
+    await expect(page.getByRole("button", { name: "选择文件夹…" })).toBeEnabled();
+    await expect(page.locator('[data-action="reveal"]')).toBeEnabled();
+    await expect(page.locator('[data-role="data-dir-hint"]')).toBeHidden();
+  });
+
   test("tells a user that closing the window does not stop the server", async ({ page }) => {
     // The tray is invisible until it is needed, so the one window that can explain it does.
     await openPanel(page, RUNNING);

@@ -560,6 +560,31 @@ export default {
   },
 
   /**
+   * The account's uploaded files.
+   *
+   * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
+   * *not* delete this file, and which way round the two actions are. Without it, "delete"
+   * reads as tidying up something already gone.
+   */
+  sources: {
+    title: "已上传的文件",
+    lead: "这些是你上传过的全部文件，属于你的账号，不属于某一次对话。同一个文件在多个对话里被引用时，只会保存和解析一次。",
+    open: "已上传的文件",
+    loading: "读取中…",
+    empty: "还没有上传过文件。在输入框点回形针、或直接粘贴截图即可上传。",
+    parsed: "已解析",
+    parsedChars: "已解析 {count} 字",
+    parsing: "解析中…",
+    parseFailed: "解析失败",
+    delete: {
+      title: "删除文件",
+      message: "确定要删除「{name}」吗？",
+      detail: "文件本身、已解析的文本，以及在所有对话里的引用都会被删除，无法恢复。这些对话里已发出的消息仍会显示附件，但打不开了。",
+      action: "删除文件",
+    },
+  },
+
+  /**
    * One message per `ParseErrorCode`. `{detail}` is only present for `cloud_failed` and
    * `corrupt` — the two codes whose sentence cannot stand without the provider's words.
    */

@@ -508,6 +508,31 @@ const en: typeof MessageSchema = {
     USERNAME_TOO_LONG: "A username cannot be longer than {max} characters.",
   },
 
+  /**
+   * The account's uploaded files.
+   *
+   * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
+   * *not* delete this file, and which way round the two actions are. Without it, "delete"
+   * reads as tidying up something already gone.
+   */
+  sources: {
+    title: "Uploaded files",
+    lead: "Everything you have uploaded. These belong to your account rather than to one conversation — a file referenced from several conversations is stored and parsed once.",
+    open: "Uploaded files",
+    loading: "Loading…",
+    empty: "Nothing uploaded yet. Use the paperclip in the composer, or paste a screenshot.",
+    parsed: "Read",
+    parsedChars: "{count} characters read",
+    parsing: "Reading…",
+    parseFailed: "Could not be read",
+    delete: {
+      title: "Delete file",
+      message: 'Delete "{name}"?',
+      detail: "The file, its extracted text and every reference to it will be removed for good. Messages that were sent with it still show the attachment, but it will no longer open.",
+      action: "Delete file",
+    },
+  },
+
   parseErrors: {
     password_protected: "This file is encrypted; its contents need a password.",
     no_text_layer:

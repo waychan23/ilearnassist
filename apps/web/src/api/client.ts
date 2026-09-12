@@ -231,6 +231,16 @@ export const api = {
    * is what the composer overlays onto its chips so a reparse shows up without a reload.
    */
   listSessionSources: (sessionId: string) => request<Source[]>(`/sessions/${sessionId}/sources`),
+  /** Every file the account has uploaded — the list the sources dialog manages. */
+  listSources: () => request<Source[]>("/sources"),
+  /**
+   * Delete a file for good: its bytes, its extracted text, and every reference to it.
+   *
+   * Distinct from deleting a conversation, which leaves files alone. The messages that were
+   * sent with it keep their snapshots, so history still shows what was sent.
+   */
+  deleteSource: (sourceId: string) =>
+    request<{ ok: boolean }>(`/sources/${sourceId}`, { method: "DELETE" }),
   /** Addressed by the source, not by a conversation: the file is the account's. */
   reparseSource: (sourceId: string, name?: string) =>
     request<{ status: string }>(`/sources/${sourceId}/reparse`, {

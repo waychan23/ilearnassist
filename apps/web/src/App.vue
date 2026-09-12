@@ -8,6 +8,7 @@ import WorkspaceHome from "./components/WorkspaceHome.vue";
 import LoginView from "./components/LoginView.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
+import SourcesDialog from "./components/dialogs/SourcesDialog.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import { closeDrawer, closeSettings, uiState } from "./composables/ui";
 import { isCompact } from "./composables/breakpoints";
@@ -134,6 +135,9 @@ watch(
     <ConfirmDialog />
     <!-- Reachable from the sidebar footer, the composer's model picker and the home page. -->
     <SettingsDialog v-if="uiState.settingsOpen" @close="closeSettings" />
+    <!-- The account's uploaded files. Opened from the home page, because a source belongs to
+         the account rather than to the workspace you happen to be in. -->
+    <SourcesDialog />
     <!-- Mounted for its lifetime rather than behind a `v-if` on the file: it renders nothing
          until one is opened, and the Sidebar — which would be the natural host — unmounts on
          the way back to the workspace home. -->

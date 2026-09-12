@@ -240,7 +240,7 @@ apps/web/src/
   utils/locale.ts         # browser-language detection + the alias table
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, AskUserCard, Composer, TopbarControls, FileTree,
-                          #   dialogs
+                          #   dialogs (Settings, Sources, FilePreview, Confirm)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -549,9 +549,22 @@ Fuller map in `docs/reference.md`.
   not disagree about what is available; and `buildTools` gates the tool on "the whitelist is
   non-empty" rather than "this turn has attachments", so a turn that attaches nothing can still
   read last week's file.
-- **Destructive UI actions confirm first.** Session, Copilot, workspace and
-  provider deletes go through `confirm()` from `composables/confirm.ts`. The
-  agent's own `delete_file` tool is deliberately *not* gated.
+- **Destructive UI actions confirm first.** Session, Copilot, workspace, provider and source
+  deletes go through `confirm()` from `composables/confirm.ts`. The agent's own `delete_file`
+  tool is deliberately *not* gated.
+- **`ConfirmDialog` sits above every other overlay, and that is a token rather than an
+  ordering.** Two `.modal-overlay`s at the same `z-index` stack by DOM order, and
+  `ConfirmDialog` is `App.vue`'s first child — so a confirm raised from *inside* a dialog
+  (Settings deleting a provider, the sources list deleting a file) was painted underneath the
+  dialog that asked for it, with its buttons visible and unclickable by pointer. `--z-confirm`
+  is what fixes it; do not "tidy" the component back to sharing `--z-overlay`, and do not rely
+  on where a component happens to sit in `App.vue` for paint order.
+- **A dialog that is always mounted loads on *open*, not on mount.** `SourcesDialog` renders
+  nothing while closed and `App.vue` has no `v-if` on it, so `onMounted` fires once at app
+  start — loading there left the list as it was at boot, and the dialog opened on a correct
+  empty list for an account that had files. A `watch` on the flag with `immediate: true` is the
+  shape; `SettingsDialog` is `v-if`'d and so never had the problem, which is exactly why the
+  difference is easy to miss.
 - **The app opens on the workspace home, and a card there is the only way into a
   conversation.** There is still no router: `App.vue` renders `LoginView`,
   `WorkspaceHome` *or* the `Sidebar + ChatView` pair, chosen by `uiState.view` in

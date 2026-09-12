@@ -802,6 +802,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return db.listReadableSources(userId, id, found.workspace.id).map(toSource);
   });
 
+  /**
+   * Every file this account has uploaded, newest first.
+   *
+   * Account-wide rather than per-conversation, because that is what a source *is* — the same
+   * file referenced from three conversations is one row here and three chips in history. This
+   * is the list a user manages their uploads from, and the only place a file with no
+   * remaining references is still visible.
+   */
+  app.get("/api/sources", async (request) => {
+    const userId = actor(request).id;
+    return db
+      .listSourcesForUser(userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(toSource);
+  });
+
   /** Serve a source's bytes back, for a thumbnail or a download. */
   app.get("/api/sources/:id/raw", async (request, reply) => {
     const user = actor(request);
