@@ -43,6 +43,9 @@ pnpm install           # first time — see "Gotchas" below
 pnpm dev               # run server + web together (backend :3720, web :5173)
 pnpm dev:server        # tsx watch src/index.ts (backend only)
 pnpm dev:web           # vite (frontend only)
+pnpm dev:restart       # stop this repo's leftover dev servers, then start (see Gotchas)
+pnpm dev:stop          # stop them and start nothing
+pnpm dev:status        # report what is running and which ports are held
 pnpm typecheck         # tsc (server) + vue-tsc (web) + the e2e specs
 pnpm test              # vitest: unit + integration (server + web), no network
 pnpm test:coverage     # the same, with a coverage report (see "Testing")
@@ -190,6 +193,7 @@ config/config.yaml        # bootstrap (server/workspaces/tools) + seed data (pro
 vitest.config.ts          # root vitest entry (server + web projects; coverage scope)
 playwright.config.ts      # starts the fake LLM, the server and vite for e2e
 e2e/                      # playwright specs + the e2e config overlay + teardown
+scripts/dev.sh            # restart `pnpm dev` from a clean slate — see Gotchas
 apps/desktop/src/
   shared/panelApi.ts      # the IPC contract (channels, ServerStatus, PanelApi)
   shared/messages.ts      # the panel's two catalogs + fault → sentence
@@ -798,6 +802,21 @@ Fuller map in `docs/reference.md`.
 
 ## Gotchas
 
+- **`pnpm dev` does not reliably take its children with it, and the leftovers are worse than
+  nothing.** It is `pnpm --parallel` over a `tsx watch` and a `vite`, and signalling the middle
+  process reparents the grandchildren to init. Two things follow, and both have happened here:
+  an orphaned `tsx watch` keeps **3720**, so the next `pnpm dev` cannot bind it — and because it
+  is still watching the tree it reloads through whatever edits happen next, which is how a
+  half-applied change reached a real database once. An orphaned **vite** is quieter and worse:
+  it does not fail, it takes the next port, so each abandoned run leaves a server one port
+  further along still serving that day's code — one evening left eight of them on 5175–5182, and
+  whichever port you have open answers from a build nobody is editing. `pnpm dev:restart`
+  (`scripts/dev.sh`) is the answer to both: it sweeps this repo's leftover dev servers before
+  starting and runs `pnpm dev` in a **process group of its own**, so one signal reaches the whole
+  tree on the way out — including when the script itself is killed. `pnpm dev:status` reports
+  what it sees without touching anything. A process is only ever a candidate when its working
+  directory is this repo's `apps/server` or `apps/web`, so another project's vite on the same
+  port, or an editor's tooling, is left alone.
 - `pnpm-workspace.yaml`'s `allowBuilds` gates every package whose postinstall does real
   work. Without the entries it fails with `ERR_PNPM_IGNORED_BUILDS`. `better-sqlite3` and
   `esbuild` are native/bundler; `electron` downloads the ~130 MB binary the desktop app
