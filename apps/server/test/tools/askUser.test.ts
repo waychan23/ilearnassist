@@ -91,6 +91,45 @@ describe("ask_user schema", () => {
     expect(tool.description).toMatch(/Never offer an option like "Other"/);
     expect(tool.description).toMatch(/the client appends its own free-text choice/);
   });
+
+  it("tells the model that confirming a finished artifact is a reason to ask", () => {
+    // The trigger used to describe only pre-work ambiguity — "the choice changes what you
+    // build" — so a model that had just written a plan had no stated reason to put it to
+    // the user, and asked in prose instead, which produces no card. No schema can express
+    // "ask about something you already made"; the sentence is the whole mechanism.
+    expect(tool.description).toMatch(/just produced a plan/);
+    expect(tool.description).toMatch(/the user's approval decides what happens next/);
+  });
+
+  it("permits other tools in the same step, and still forbids a second ask_user", () => {
+    // The runtime runs a step's other calls *before* suspending — `runAgentStream` continues
+    // past the suspension rather than abandoning them — so the description used to forbid
+    // something the engine does. It now states the ordering. The once-per-step rule is the
+    // guard that is real (two live question sets is a state the UI cannot show), so both
+    // halves are pinned here: an edit that drops the first must not take the second with it.
+    expect(tool.description).not.toMatch(/Do not call this alongside other tools/);
+    expect(tool.description).toMatch(/any other tool calls in that step still run first/);
+    expect(tool.description).toMatch(/Do not call it more than once per step/);
+  });
+
+  it("claims the instructions that ask for a confirmation or a choice", () => {
+    // The instruction competing with this tool is usually written as a *procedure* in a
+    // system prompt — "after generating a plan, wait for the user's confirmation" — and a
+    // model satisfies it with the cheapest compliant action: a sentence ending in "?".
+    // That drew no card. Naming those phrasings here is what lets the tool recognise
+    // territory that is described in a prompt this file cannot see.
+    expect(tool.description).toMatch(/wait for the user's confirmation/);
+    expect(tool.description).toMatch(/rather than ending your message with a question in prose/);
+  });
+
+  it("exempts the user's approval from the 'answer from context' rule", () => {
+    // The economy rule — prefer answering from context — otherwise reads as a blanket
+    // reason not to ask, and on its own it would suppress the very confirmation case the
+    // trigger above exists to enable. The rule is kept intact and given a stated edge;
+    // dropping the rule instead would have traded one failure for its opposite.
+    expect(tool.description).toMatch(/worse than a wrong guess the user can correct/);
+    expect(tool.description).toMatch(/nothing in the conversation can supply it/);
+  });
 });
 
 describe("validateAnswers", () => {
