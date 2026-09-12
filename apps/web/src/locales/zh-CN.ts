@@ -48,7 +48,7 @@ export default {
 
   app: {
     /** Shown when there is no session and no workspace to name the topbar after. */
-    title: "guided-learning",
+    title: "ilearnassist",
     configBanner: {
       before: "尚未配置可用的 API Key。点击右上角",
       action: "设置 → Providers",

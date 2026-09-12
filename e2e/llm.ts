@@ -7,7 +7,7 @@ import { expect, type APIRequestContext } from "@playwright/test";
  * reply containing code to check the code palette against.
  */
 
-export const FAKE_LLM = `http://127.0.0.1:${process.env.GL_FAKE_LLM_PORT ?? 3898}`;
+export const FAKE_LLM = `http://127.0.0.1:${process.env.ILA_FAKE_LLM_PORT ?? 3898}`;
 
 /** Discard anything a previous test scripted, and queue the turns for the next one. */
 export async function scriptLlm(

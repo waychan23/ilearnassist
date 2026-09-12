@@ -10,7 +10,7 @@ import {
   type AnswerToolCallInput,
   type AskUserAnswers,
   type AskUserQuestion,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 
 export { ASK_USER_TOOL_NAME };
 

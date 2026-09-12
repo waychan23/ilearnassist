@@ -51,7 +51,7 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
   const uploadsRoot = join(dataDir, "uploads");
   mkdirSync(uploadsRoot, { recursive: true });
 
-  const db = createDb(join(dataDir, "guided-learning.sqlite"));
+  const db = createDb(join(dataDir, "ilearnassist.sqlite"));
 
   // First boot copies config.yaml's providers/models into the database. From then on the
   // Settings → Providers UI owns them; config.yaml is seed data only.

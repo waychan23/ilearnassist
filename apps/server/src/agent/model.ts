@@ -1,5 +1,5 @@
 import { ChatOpenAI } from "@langchain/openai";
-import type { SessionSettings } from "@guided-learning/shared";
+import type { SessionSettings } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
 
 export interface BuiltModel {

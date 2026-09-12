@@ -1,9 +1,9 @@
 {
-  "name": "@guided-learning/desktop",
+  "name": "@ilearnassist/desktop",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Desktop control panel: starts the guided-learning server and opens the app.",
+  "description": "Desktop control panel: starts the ilearnassist server and opens the app.",
   "main": "dist/main/main.cjs",
   "scripts": {
     "dev": "node scripts/build.mjs --no-web && electron .",

@@ -28,7 +28,7 @@ export interface LaunchSpec {
 }
 
 /** The line the server prints once it is actually accepting connections. */
-const LISTENING_LINE = /^\[guided-learning\] listening on (\S+)$/;
+const LISTENING_LINE = /^\[ilearnassist\] listening on (\S+)$/;
 
 /**
  * Read a bound address out of a server log line.
@@ -80,13 +80,13 @@ export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
       // The server resolves config/, data/ and workspaces/ against this, which is how the
       // packed app ends up writing to the user's Application Support directory instead of
       // into its own read-only bundle.
-      GL_PROJECT_ROOT: input.paths.root,
+      ILA_PROJECT_ROOT: input.paths.root,
       // Points at the overlay the app seeds, not at whatever a checkout might have.
-      GL_CONFIG_PATH: input.paths.overlayFile,
+      ILA_CONFIG_PATH: input.paths.overlayFile,
       // The built frontend, shipped in the bundle. The server serves it from the same
       // origin as the API, so the panel opens one URL and the app just works.
-      GL_WEB_DIR: input.paths.webDir,
-      GL_HOST: input.host,
+      ILA_WEB_DIR: input.paths.webDir,
+      ILA_HOST: input.host,
     },
   };
 }

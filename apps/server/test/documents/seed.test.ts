@@ -142,7 +142,7 @@ describe("config defaults", () => {
   });
 
   it("reads a documentParsers block, including ${ENV} keys", () => {
-    process.env.GL_TEST_PARSER_KEY = "from-env";
+    process.env.ILA_TEST_PARSER_KEY = "from-env";
     try {
       // `resolveEnv` runs before `withDefaults` in the real loader; asserting the shape
       // here keeps this test independent of the config-file plumbing.
@@ -161,7 +161,7 @@ describe("config defaults", () => {
       expect(config.documentParsing.policy).toBe("cloud-first");
       expect(config.documentParsing.fallbackEnabled).toBe(false);
     } finally {
-      delete process.env.GL_TEST_PARSER_KEY;
+      delete process.env.ILA_TEST_PARSER_KEY;
     }
   });
 

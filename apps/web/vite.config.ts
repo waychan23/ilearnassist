@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
 /** Set by the Playwright run so its dev server cannot collide with a `pnpm dev` one. */
-const e2ePort = process.env.GL_WEB_PORT;
+const e2ePort = process.env.ILA_WEB_PORT;
 
 export default defineConfig({
   plugins: [vue()],
@@ -12,10 +12,10 @@ export default defineConfig({
     ...(e2ePort ? { port: Number(e2ePort), strictPort: true } : { port: 5173 }),
     proxy: {
       // Forward API calls to the Fastify server; also mirrors a production reverse proxy.
-      // `GL_SERVER_PORT` lets the e2e run point at its own server instance instead of a
+      // `ILA_SERVER_PORT` lets the e2e run point at its own server instance instead of a
       // stray `pnpm dev` one.
       "/api": {
-        target: `http://127.0.0.1:${process.env.GL_SERVER_PORT ?? 3720}`,
+        target: `http://127.0.0.1:${process.env.ILA_SERVER_PORT ?? 3720}`,
         changeOrigin: true,
       },
     },

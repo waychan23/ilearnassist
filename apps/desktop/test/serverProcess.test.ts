@@ -47,7 +47,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 8_000): Promise<voi
 }
 
 const LISTENING = "http://127.0.0.1:41234";
-const HEARTBEAT_LINE = `[guided-learning] listening on ${LISTENING}`;
+const HEARTBEAT_LINE = `[ilearnassist] listening on ${LISTENING}`;
 
 describe("ServerProcess — coming up", () => {
   it("reports running, with the address the server printed", async () => {
@@ -73,7 +73,7 @@ describe("ServerProcess — coming up", () => {
     // first chunk as a whole line would leave the panel stuck on "starting" forever.
     const server = start(
       fixture(
-        `process.stdout.write("[guided-learning] listen");` +
+        `process.stdout.write("[ilearnassist] listen");` +
           `setTimeout(() => { process.stdout.write("ing on ${LISTENING}\\n"); setInterval(() => {}, 1000); }, 60);`
       )
     );
@@ -206,7 +206,7 @@ describe("ServerProcess — stopping and restarting", () => {
       command: process.execPath,
       args: [
         "-e",
-        `console.log("[guided-learning] listening on " + process.env.TEST_URL); setInterval(() => {}, 1000);`,
+        `console.log("[ilearnassist] listening on " + process.env.TEST_URL); setInterval(() => {}, 1000);`,
       ],
       env: { TEST_URL: url },
     }));

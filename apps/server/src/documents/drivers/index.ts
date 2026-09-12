@@ -1,4 +1,4 @@
-import type { DocumentParserKind, DriverInfo } from "@guided-learning/shared";
+import type { DocumentParserKind, DriverInfo } from "@ilearnassist/shared";
 import { isDocumentMime } from "../formats.js";
 import { llamaparseDriver } from "./llamaparse.js";
 import { mineruDriver } from "./mineru.js";
@@ -7,7 +7,7 @@ import type { ParseDriver } from "./types.js";
 
 export type { DriverConfig, DriverResult, DriverTuning, ParseDriver, ParseRequest } from "./types.js";
 export { sleep } from "./async.js";
-export type { DriverInfo } from "@guided-learning/shared";
+export type { DriverInfo } from "@ilearnassist/shared";
 
 /**
  * The closed set of supported protocols.

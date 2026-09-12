@@ -1,4 +1,4 @@
-# guided-learning
+# ilearnassist
 
 A self-hosted, single-user agent product with a chatbox-style UI. Give the
 agent a **workspace** (a sandboxed directory), pick a **Copilot** (a preset

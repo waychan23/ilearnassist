@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import type { DocumentParsePolicy, DocumentParserKind } from "@guided-learning/shared";
+import type { DocumentParsePolicy, DocumentParserKind } from "@ilearnassist/shared";
 
 export type WebSearchProvider = "bing" | "tavily" | "duckduckgo" | "searxng";
 
@@ -88,11 +88,11 @@ export interface AppConfig {
  * (`<root>/apps/server/src/config.ts`). That is right for a checkout and wrong for a
  * packaged desktop build, where the code sits in a read-only bundle and everything
  * writable belongs under the OS's per-user data directory — so the desktop shell sets
- * `GL_PROJECT_ROOT` and this defers to it. Same contract as `GL_DATA_DIR`: read once,
+ * `ILA_PROJECT_ROOT` and this defers to it. Same contract as `ILA_DATA_DIR`: read once,
  * at import time, so it must be set before this module is first imported.
  */
-const PROJECT_ROOT = process.env.GL_PROJECT_ROOT
-  ? resolve(process.env.GL_PROJECT_ROOT)
+const PROJECT_ROOT = process.env.ILA_PROJECT_ROOT
+  ? resolve(process.env.ILA_PROJECT_ROOT)
   : resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_DIR = resolve(PROJECT_ROOT, "config");
 
@@ -314,8 +314,8 @@ export function loadConfig(): AppConfig {
   loadDotEnv();
 
   const basePath = resolve(CONFIG_DIR, "config.yaml");
-  const localPath = process.env.GL_CONFIG_PATH
-    ? process.env.GL_CONFIG_PATH
+  const localPath = process.env.ILA_CONFIG_PATH
+    ? process.env.ILA_CONFIG_PATH
     : resolve(CONFIG_DIR, "config.local.yaml");
 
   const base = readYaml(basePath);
@@ -324,14 +324,14 @@ export function loadConfig(): AppConfig {
   const merged = resolveEnvDeep(deepMerge(base, local)) as Record<string, unknown>;
   const config = withDefaults(merged);
 
-  // `GL_HOST` overrides the bind address, for the same reason `GL_DATA_DIR` overrides the
+  // `ILA_HOST` overrides the bind address, for the same reason `ILA_DATA_DIR` overrides the
   // data directory: the desktop shell changes it *at runtime*. Letting a phone on the same
   // network open the app means binding beyond loopback, and the two config files are both
   // disqualified — `config.yaml` is the shared bootstrap, and the `config.local.yaml`
   // overlay is seeded once and then belongs to the user, who may have put a port or a key
   // in it. An environment variable is the only channel that can differ per launch without
   // rewriting something the user owns.
-  const host = process.env.GL_HOST?.trim();
+  const host = process.env.ILA_HOST?.trim();
   if (host) config.server.host = host;
 
   validateConfig(config);
@@ -379,12 +379,12 @@ export function getProviderConfig(config: AppConfig, providerId?: string): Provi
 /**
  * Runtime data root — the sqlite database and the uploads tree live here.
  *
- * `GL_DATA_DIR` redirects it, which is what keeps the test suite and the e2e
+ * `ILA_DATA_DIR` redirects it, which is what keeps the test suite and the e2e
  * harness from writing into the repo's real `data/` directory. It must be set
  * before this module is first imported: the value is read once, at import time.
  */
-const DATA_DIR = process.env.GL_DATA_DIR
-  ? resolve(process.env.GL_DATA_DIR)
+const DATA_DIR = process.env.ILA_DATA_DIR
+  ? resolve(process.env.ILA_DATA_DIR)
   : resolve(PROJECT_ROOT, "data");
 
 /**
@@ -393,11 +393,11 @@ const DATA_DIR = process.env.GL_DATA_DIR
  *
  * Two ways it can be absent, and both are normal: a plain checkout has no `dist/` until
  * `pnpm build` has run, and a packed desktop bundle carries its own copy elsewhere and
- * points `GL_WEB_DIR` at it. When there is no `index.html` to serve, the server is
+ * points `ILA_WEB_DIR` at it. When there is no `index.html` to serve, the server is
  * API-only, exactly as it was before.
  */
-const WEB_DIR = process.env.GL_WEB_DIR
-  ? resolve(process.env.GL_WEB_DIR)
+const WEB_DIR = process.env.ILA_WEB_DIR
+  ? resolve(process.env.ILA_WEB_DIR)
   : resolve(PROJECT_ROOT, "apps/web/dist");
 
 export const PROJECT_PATHS = {

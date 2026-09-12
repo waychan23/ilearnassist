@@ -1,4 +1,4 @@
-import type { DocumentParserKind } from "@guided-learning/shared";
+import type { DocumentParserKind } from "@ilearnassist/shared";
 
 /** A configured parser record, as the drivers see it (includes the key). */
 export interface DriverConfig {

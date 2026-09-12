@@ -5,7 +5,7 @@ import type {
   DocumentParserConfig,
   PublicConfig,
   Workspace,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 import { MAX_INLINE_CHARS } from "../src/attachments.js";
 import { buildPdf } from "../src/documents/sample.js";
 import { eventTypes } from "./helpers/sse.js";

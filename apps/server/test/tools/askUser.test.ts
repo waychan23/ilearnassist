@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASK_USER_OTHER_MAX, type AskUserQuestion } from "@guided-learning/shared";
+import { ASK_USER_OTHER_MAX, type AskUserQuestion } from "@ilearnassist/shared";
 import {
   AskUserSuspension,
   buildAskUserTool,

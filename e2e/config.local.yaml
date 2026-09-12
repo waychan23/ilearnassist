@@ -1,6 +1,6 @@
 # Config overlay used only by the Playwright e2e run.
 #
-# The server merges this over `config/config.yaml` (via `GL_CONFIG_PATH`), so the shape
+# The server merges this over `config/config.yaml` (via `ILA_CONFIG_PATH`), so the shape
 # matches — but every value that matters is replaced: the provider points at the local
 # fake LLM, and both the workspaces root and the database are redirected into the
 # git-ignored `.e2e/` directory so a test run never touches real data.
@@ -9,7 +9,7 @@
 # entries in config.yaml are entirely out of the picture here.
 
 server:
-  port: ${GL_SERVER_PORT}
+  port: ${ILA_SERVER_PORT}
 
 workspaces:
   rootDir: ./.e2e/workspaces
@@ -20,7 +20,7 @@ defaultModel: fake-model
 providers:
   - id: fake
     name: Fake Provider
-    baseURL: ${GL_FAKE_LLM_URL}
+    baseURL: ${ILA_FAKE_LLM_URL}
     apiKey: e2e-key
     models:
       - id: fake-model
@@ -35,7 +35,7 @@ documentParsers:
   - id: mock-cloud
     name: Mock Cloud Parser
     kind: sync
-    baseURL: ${GL_FAKE_PARSER_URL}
+    baseURL: ${ILA_FAKE_PARSER_URL}
 
 documentParsing:
   policy: local-first

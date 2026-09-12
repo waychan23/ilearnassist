@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Attachment, Session, Workspace } from "@guided-learning/shared";
+import type { Attachment, Session, Workspace } from "@ilearnassist/shared";
 import type {
   AppConfig,
   DocumentParserDef,
@@ -96,7 +96,7 @@ export function keylessProvider(id = "keyless"): ProviderDef {
 }
 
 export async function startTestServer(options: TestServerOptions = {}): Promise<TestEnv> {
-  const root = mkdtempSync(join(tmpdir(), "guided-learning-test-"));
+  const root = mkdtempSync(join(tmpdir(), "ilearnassist-test-"));
   const dataDir = join(root, "data");
   const workspacesRoot = join(root, "workspaces");
   mkdirSync(dataDir, { recursive: true });

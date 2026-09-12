@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Attachment } from "@guided-learning/shared";
+import type { Attachment } from "@ilearnassist/shared";
 import {
   attachmentPath,
   buildUserContent,

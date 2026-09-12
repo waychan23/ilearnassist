@@ -158,7 +158,7 @@ importers:
       '@fastify/static':
         specifier: ^10.1.3
         version: 10.1.3
-      '@guided-learning/shared':
+      '@ilearnassist/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@langchain/core':
@@ -210,7 +210,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@guided-learning/shared':
+      '@ilearnassist/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@vscode/markdown-it-katex':

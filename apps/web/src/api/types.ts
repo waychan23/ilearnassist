@@ -1,1 +1,1 @@
-export * from "@guided-learning/shared";
+export * from "@ilearnassist/shared";

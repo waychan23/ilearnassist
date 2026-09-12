@@ -25,7 +25,7 @@ import type {
   UpdateSessionInput,
   UploadAttachmentInput,
   Workspace,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 import { ApiError, translateApiError } from "../utils/apiError";
 
 /**

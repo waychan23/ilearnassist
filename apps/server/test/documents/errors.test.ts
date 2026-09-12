@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PARSE_ERROR_CODES } from "@guided-learning/shared";
+import { PARSE_ERROR_CODES } from "@ilearnassist/shared";
 import {
   ParseError,
   describeParseError,

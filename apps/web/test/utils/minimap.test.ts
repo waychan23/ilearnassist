@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../src/i18n.js";
-import type { Message } from "@guided-learning/shared";
+import type { Message } from "@ilearnassist/shared";
 import {
   MINIMAP_ITEM_HEIGHT,
   buildMinimapAnchors,

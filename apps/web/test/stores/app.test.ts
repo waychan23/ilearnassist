@@ -9,8 +9,8 @@ import type {
   PublicConfig,
   Session,
   Workspace,
-} from "@guided-learning/shared";
-import { MAX_ATTACHMENT_BYTES } from "@guided-learning/shared";
+} from "@ilearnassist/shared";
+import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
 import { i18n } from "../../src/i18n.js";
 
 /**

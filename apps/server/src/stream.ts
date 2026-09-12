@@ -1,5 +1,5 @@
 import type { FastifyReply } from "fastify";
-import type { ChatStreamEvent } from "@guided-learning/shared";
+import type { ChatStreamEvent } from "@ilearnassist/shared";
 
 /**
  * Minimal Server-Sent Events writer built directly on the Node response.

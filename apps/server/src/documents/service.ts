@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import type { Attachment } from "@guided-learning/shared";
+import type { Attachment } from "@ilearnassist/shared";
 import { resolveStoredPath } from "../attachments.js";
 import type { AppConfig } from "../config.js";
 import { readDocumentParsing, type AppDb } from "../db.js";

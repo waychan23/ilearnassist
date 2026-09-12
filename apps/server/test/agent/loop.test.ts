@@ -9,7 +9,7 @@ import type {
   Message,
   ModelCapability,
   SessionSettings,
-} from "@guided-learning/shared";
+} from "@ilearnassist/shared";
 import { runAgentStream } from "../../src/agent/loop.js";
 import { buildAskUserTool } from "../../src/tools/askUser.js";
 import { buildFileTools } from "../../src/tools/fileTools.js";

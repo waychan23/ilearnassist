@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-**guided-learning** is a self-hosted, single-user agent product (Browser/Server
+**ilearnassist** is a self-hosted, single-user agent product (Browser/Server
 architecture). It provides a chatbox-like UI over a manual ReAct agent loop with
 tool calling. Three apps share a types package:
 
@@ -93,7 +93,7 @@ llm.setTurns([{ reasoning: "hmm", content: "the answer" }]);
 // …POST to /api/sessions/:id/chat via env.server.app.inject() and parse the SSE frames
 ```
 
-It also runs standalone (`pnpm --filter @guided-learning/server fake-llm`), which is how
+It also runs standalone (`pnpm --filter @ilearnassist/server fake-llm`), which is how
 the Playwright suite scripts it over HTTP.
 
 `apps/server/test/helpers/fakeParser.ts` is the same idea for document parsing: a
@@ -101,7 +101,7 @@ scriptable stand-in that speaks all three cloud-parser protocols (`sync` multipa
 MinerU's presigned-upload-and-poll, LlamaParse's multipart-and-poll), so the *real*
 drivers run — presigned `PUT`, job polling, ZIP extraction, Bearer auth, error mapping —
 with no account at any vendor. It runs standalone too
-(`pnpm --filter @guided-learning/server fake-parser`), and the Playwright harness starts
+(`pnpm --filter @ilearnassist/server fake-parser`), and the Playwright harness starts
 one so the cloud fallback is exercised in a browser.
 
 Reuse these rather than re-inventing them:
@@ -164,7 +164,7 @@ apps/desktop/src/
   main/main.ts            # Electron: windows, menu, IPC handlers
   main/serverProcess.ts   # supervises the server child (start/stop/crash/timeout)
   main/paths.ts           # per-user layout + idempotent first-run seeding
-  main/launch.ts          # child env (ELECTRON_RUN_AS_NODE, GL_*, GL_HOST) + stdout parsing
+  main/launch.ts          # child env (ELECTRON_RUN_AS_NODE, ILA_*, ILA_HOST) + stdout parsing
   main/lan.ts             # which address a phone can reach, ranked
   main/settings.ts        # the panel's own preferences (LAN sharing)
   shared/qr.ts            # URL → module square, and → drawable runs
@@ -215,7 +215,7 @@ packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolC
 This app is modeled on [chatbox](https://github.com/chatboxai/chatbox) (Electron
 + React). A clone kept for reference lives at
 `/Users/waychan23/Documents/work/spaces/trae/chatbox` — treat it as a
-behavioral/UX reference only (chatbox is React/Electron; guided-learning is
+behavioral/UX reference only (chatbox is React/Electron; ilearnassist is
 Vue/Fastify), so port ideas rather than copy code. Quick map:
 
 - `src/renderer/` — chat UI, settings, Copilot/agent config screens
@@ -480,16 +480,16 @@ Fuller map in `docs/reference.md`.
   `ELECTRON_RUN_AS_NODE=1`. That is also what makes `better-sqlite3`'s prebuilt N-API
   binary the right one. Do not "simplify" it to a plain `node` invocation.
 - **The panel enters `running` on exactly one signal**: the server printing
-  `[guided-learning] listening on <url>`. Not a fixed port, not a timer, and not
+  `[ilearnassist] listening on <url>`. Not a fixed port, not a timer, and not
   Fastify's own "Server listening at …" banner, which is logged from inside `listen`
   before the process is necessarily ready. A control panel that claims a server is up
   when it is not is worse than one that says nothing, because the user has no way to tell.
 - **The desktop app never writes into its own bundle.** Writable state lives under
-  `app.getPath("userData")`, reached through `GL_PROJECT_ROOT`; the bundle is read-only
+  `app.getPath("userData")`, reached through `ILA_PROJECT_ROOT`; the bundle is read-only
   and is replaced wholesale on every update. First-run seeding is idempotent and **never
   overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the
   user typed into the Settings UI from vanishing on the next launch.
-- **The panel's LAN switch owns the bind address, and `GL_HOST` is always set.** Including
+- **The panel's LAN switch owns the bind address, and `ILA_HOST` is always set.** Including
   when sharing is off and the address is loopback. Leaving that case to `config.yaml` would
   let a hand-edited `server.host` there put the server on the network while the switch still
   read "off", and a control whose stated state and actual state can disagree is worse than
@@ -544,8 +544,8 @@ Fuller map in `docs/reference.md`.
   change Node versions, reinstall.
 - Config loads `config/config.yaml`, overlaid by a git-ignored
   `config/config.local.yaml`, with `${ENV_VAR}` references resolved from `.env`
-  + real env vars. Real env vars win over `.env`. `GL_CONFIG_PATH` swaps the
-  *overlay* path, and `GL_DATA_DIR` moves the sqlite database + uploads tree —
+  + real env vars. Real env vars win over `.env`. `ILA_CONFIG_PATH` swaps the
+  *overlay* path, and `ILA_DATA_DIR` moves the sqlite database + uploads tree —
   both exist for tests and the e2e run, and both must be set before the config
   module is first imported.
 - `pnpm test:e2e` starts its own fake LLM, backend and Vite on 3898 / 3899 / 5199,
