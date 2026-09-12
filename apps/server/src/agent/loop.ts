@@ -18,6 +18,7 @@ import type {
   Workspace,
 } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
+import type { UserLayout } from "../paths.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
 import { AskUserSuspension } from "../tools/askUser.js";
 import { buildModel } from "./model.js";
@@ -58,8 +59,8 @@ export interface RunAgentInput {
   copilot?: Copilot;
   /** Resolved per-session generation parameters (temperature, maxSteps, …). */
   settings: SessionSettings;
-  /** Root directory holding uploaded attachment bytes. */
-  uploadRoot: string;
+  /** Whose sources tree the attachment bytes live in. Derived per request, never held. */
+  user: UserLayout;
   sessionId: string;
   /** Whether the selected model accepts image input. */
   vision: boolean;
@@ -203,8 +204,7 @@ async function buildHistoryMessages(
   for (const m of history) {
     if (m.role === "user") {
       const content = await buildUserContent(m.content, m.attachments, {
-        uploadRoot: input.uploadRoot,
-        sessionId: input.sessionId,
+        user: input.user,
         vision: input.vision,
         toolUse: input.toolUse,
       });
@@ -310,8 +310,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   // model asked for, and that is the whole request.
   if (input.userMessage !== null) {
     const userContent = await buildUserContent(input.userMessage, input.attachments, {
-      uploadRoot: input.uploadRoot,
-      sessionId: input.sessionId,
+      user: input.user,
       vision: input.vision,
       toolUse: input.toolUse,
     });

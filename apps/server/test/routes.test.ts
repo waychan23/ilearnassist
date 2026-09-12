@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
+import { sourceRawPath } from "../src/attachments.js";
 import type {
   ApiErrorBody,
   Attachment,
@@ -12,7 +13,14 @@ import type {
   Session,
   Workspace,
 } from "@ilearnassist/shared";
-import { keylessProvider, newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
+import {
+  keylessProvider,
+  newSession,
+  newWorkspace,
+  startTestServer,
+  uploadAttachment,
+  type TestEnv,
+} from "./helpers/tempEnv.js";
 
 /**
  * API-level integration tests. The whole stack is real — Fastify, the sqlite database, the
@@ -414,22 +422,28 @@ describe("sessions", () => {
     expect((await inject({ method: "GET", url: "/api/sessions/nope/messages" })).statusCode).toBe(404);
   });
 
-  it("cascades messages and uploads away with the session", async () => {
+  it("cascades messages away with the session, and leaves the uploaded files alone", async () => {
+    // The behaviour this pins is the one that *changed*: a conversation delete used to take
+    // its uploads with it, because the bytes lived inside the session's directory. A source
+    // belongs to the account now, so deleting a conversation removes its references and
+    // nothing else — another conversation may be reading the same file, and a file the user
+    // uploaded is not something to delete as a side effect of tidying up a chat.
     const workspace = await newWorkspace(env);
     const session = await newSession(env, workspace.id);
 
-    const attachment = (
-      await inject({
-        method: "POST",
-        url: `/api/sessions/${session.id}/attachments`,
-        payload: { name: "a.txt", mimeType: "text/plain", data: Buffer.from("hello").toString("base64") },
-      })
-    ).json<Attachment>();
-    expect(existsSync(join(env.uploadsRoot, session.id))).toBe(true);
+    const attachment = await uploadAttachment(env, session.id, {
+      name: "a.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("hello"),
+    });
+    const rawPath = sourceRawPath(env.userLayout, attachment.id, attachment.mimeType);
+    expect(existsSync(rawPath)).toBe(true);
 
     await inject({ method: "DELETE", url: `/api/sessions/${session.id}` });
-    expect(existsSync(join(env.uploadsRoot, session.id))).toBe(false);
-    expect(attachment.id).toBeTruthy();
+
+    expect(existsSync(rawPath)).toBe(true);
+    // And it is gone from the *conversation*, which is the half a delete is for.
+    expect((await inject({ method: "GET", url: `/api/sessions/${session.id}/messages` })).statusCode).toBe(404);
   });
 });
 
@@ -594,21 +608,26 @@ describe("PUT /api/defaults", () => {
   });
 });
 
-describe("attachments", () => {
+describe("sources", () => {
+  let workspace: Workspace;
   let session: Session;
 
   beforeEach(async () => {
-    const workspace = await newWorkspace(env);
+    workspace = await newWorkspace(env);
     session = await newSession(env, workspace.id);
   });
 
   const upload = (payload: object) =>
-    inject({ method: "POST", url: `/api/sessions/${session.id}/attachments`, payload });
+    inject({ method: "POST", url: `/api/sessions/${session.id}/sources`, payload });
+
+  /** The bytes as the server stored them, which is what the assertions care about. */
+  const rawPathOf = (attachment: Attachment) =>
+    sourceRawPath(env.userLayout, attachment.id, attachment.mimeType);
 
   it("404s for an unknown session", async () => {
     const res = await inject({
       method: "POST",
-      url: "/api/sessions/nope/attachments",
+      url: "/api/sessions/nope/sources",
       payload: { name: "a.txt", mimeType: "text/plain", data: "aGk=" },
     });
     expect(res.statusCode).toBe(404);
@@ -644,7 +663,7 @@ describe("attachments", () => {
     ).json<Attachment>();
 
     expect(attachment).toMatchObject({ name: "a.txt", mimeType: "text/plain", size: 5, kind: "file" });
-    expect(readFileSync(join(env.uploadsRoot, session.id, `${attachment.id}.txt`), "utf8")).toBe("hello");
+    expect(readFileSync(rawPathOf(attachment), "utf8")).toBe("hello");
   });
 
   it("classifies an image as an image", async () => {
@@ -668,30 +687,116 @@ describe("attachments", () => {
     expect(res.statusCode).toBe(413);
   });
 
+  it("stores identical bytes once, however many names they arrive under", async () => {
+    // The dedupe this change is about. The *message* keeps the name that upload used — the
+    // source keeps the first one it ever saw — so the two chips can legitimately differ.
+    const before = readdirSync(env.userLayout.rawDir).length;
+    // Bytes nothing else in this file uses, so the dedupe is exercised by *these* two uploads
+    // rather than by an earlier test having happened to store the same content.
+    const bytes = Buffer.from("dedupe-me-please").toString("base64");
+
+    const first = (await upload({ name: "original.txt", mimeType: "text/plain", data: bytes })).json<Attachment>();
+    const second = (await upload({ name: "copy.txt", mimeType: "text/plain", data: bytes })).json<Attachment>();
+
+    expect(second.id).toBe(first.id);
+    expect(second.name).toBe("copy.txt");
+    expect(first.name).toBe("original.txt");
+    // One new file, not two: the second upload wrote nothing. Counted rather than asserted
+    // outright, because the data root is shared with every other test in this file.
+    expect(readdirSync(env.userLayout.rawDir)).toHaveLength(before + 1);
+  });
+
+  it("makes a source readable from another conversation in the same workspace", async () => {
+    // What the workspace link buys, and the whole reason the whitelist is a union: a
+    // document uploaded here is readable from a sibling conversation, while `read_file`
+    // could never reach it at all (it is outside every workspace sandbox).
+    const attachment = await uploadAttachment(env, session.id, {
+      name: "shared.pdf",
+      mimeType: "application/pdf",
+      data: Buffer.from("%PDF-1.4").valueOf(),
+    });
+    const sibling = await newSession(env, workspace.id);
+
+    const readable = env.server.db.listReadableSources(env.user.id, sibling.id, workspace.id);
+    expect(readable.map((s) => s.id)).toContain(attachment.id);
+  });
+
   it("serves the bytes back with the right type and a long cache", async () => {
     const attachment = (
       await upload({ name: "a.txt", mimeType: "text/plain", data: Buffer.from("hello").toString("base64") })
     ).json<Attachment>();
 
-    const res = await inject({
-      method: "GET",
-      url: `/api/sessions/${session.id}/attachments/${attachment.id}`,
-    });
+    const res = await inject({ method: "GET", url: `/api/sources/${attachment.id}/raw` });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("text/plain");
     expect(res.headers["cache-control"]).toContain("immutable");
     expect(res.body).toBe("hello");
   });
 
-  it("404s for an unknown attachment", async () => {
-    expect((await inject({ method: "GET", url: `/api/sessions/${session.id}/attachments/nope` })).statusCode).toBe(404);
+  it("404s for an unknown source", async () => {
+    expect((await inject({ method: "GET", url: "/api/sources/nope/raw" })).statusCode).toBe(404);
   });
 
-  it("refuses a traversal attempt in the attachment id", async () => {
+  it("never tells a client where a file lives, or who owns it", async () => {
+    // `SourceRecord` carries `rawPath` and `userId`, and both are for the server only — a path
+    // is a map of a directory the client is not allowed to browse. Regression: the first
+    // version spread the whole record, so `rawPath` appeared in the upload response.
+    const uploaded = await upload({
+      name: "a.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("hello").toString("base64"),
+    });
+
+    expect(uploaded.body).not.toContain("rawPath");
+    expect(uploaded.body).not.toContain("userId");
+    expect(uploaded.body).not.toContain(env.userLayout.rawDir);
+    expect(uploaded.body).not.toContain(env.user.id);
+
+    const listed = await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` });
+    expect(listed.body).not.toContain("rawPath");
+    expect(listed.body).not.toContain("userId");
+    expect(listed.body).not.toContain(env.userLayout.rawDir);
+  });
+
+  it("refuses a traversal attempt in the source id", async () => {
+    // The id is a path segment, so this is the shape a hostile client would try. It cannot
+    // reach a file either way: the path is a validated column, and the id never becomes one.
     const res = await inject({
       method: "GET",
-      url: `/api/sessions/${session.id}/attachments/${encodeURIComponent("../../../../etc/passwd")}`,
+      url: `/api/sources/${encodeURIComponent("../../../../etc/passwd")}/raw`,
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it("lists what a conversation can read, with the parse state as it is now", async () => {
+    // Parse state is a column on the source rather than a snapshot folded into each message,
+    // so this is where a reparse becomes visible — in every conversation that shares the
+    // file, at once.
+    const attachment = (
+      await upload({ name: "a.txt", mimeType: "text/plain", data: "aGk=" })
+    ).json<Attachment>();
+
+    const listed = (await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })).json<
+      { id: string }[]
+    >();
+    expect(listed.map((s) => s.id)).toEqual([attachment.id]);
+  });
+
+  it("deletes a file for good, everywhere it is used", async () => {
+    const attachment = await uploadAttachment(env, session.id, {
+      name: "doomed.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("bye"),
+    });
+
+    const res = await inject({ method: "DELETE", url: `/api/sources/${attachment.id}` });
+    expect(res.statusCode).toBe(200);
+
+    // The bytes go, the link goes, and the download stops answering.
+    expect(existsSync(rawPathOf(attachment))).toBe(false);
+    expect(
+      (await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })).json<unknown[]>()
+    ).toEqual([]);
+    expect((await inject({ method: "GET", url: `/api/sources/${attachment.id}/raw` })).statusCode).toBe(404);
   });
 });

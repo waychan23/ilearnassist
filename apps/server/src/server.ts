@@ -42,8 +42,6 @@ export interface BuiltServer {
   dataRoot: string;
   /** The tree that root describes. Exported because tests make accounts and check them. */
   layout: DataLayout;
-  /** Where uploads are written — handed to the routes so tests can redirect it. */
-  uploadsRoot: string;
   /** Owns document text extraction; exported so tests can await quiescence. */
   documents: DocumentService;
   /** Whether the built frontend was found and is being served at `/`. */
@@ -63,14 +61,6 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
    * has no accounts rather than one nobody chose. The first name typed on the login screen
    * is the first account.
    */
-
-  /*
-   * Attachments still live here rather than under the user's own `sources/`, which is where
-   * they are headed. The two are the same kind of thing — bytes the user gave us — so this
-   * path is the last piece of the old layout in the server, and it moves as one piece.
-   */
-  const uploadsRoot = join(dataRoot, "uploads");
-  mkdirSync(uploadsRoot, { recursive: true });
 
   // First boot copies config.yaml's providers/models into the database. From then on the
   // Settings → Providers UI owns them; config.yaml is seed data only.
@@ -92,11 +82,11 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
     },
   });
 
-  const documents = new DocumentService({ uploadRoot: uploadsRoot, db, config });
+  const documents = new DocumentService({ db, config });
 
   const app = Fastify({ logger: input.logger ?? true });
   await app.register(cors, { origin: true });
-  await app.register(routes, { config, db, uploadsRoot, documents, layout });
+  await app.register(routes, { config, db, documents, layout });
 
   // After the API, so a concrete route always wins over the static wildcard.
   const servesWebApp = await registerWebApp(app, input.webDir);
@@ -106,13 +96,5 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
     await documents.shutdown();
   });
 
-  return {
-    app,
-    db,
-    dataRoot,
-    layout,
-    uploadsRoot,
-    documents,
-    servesWebApp,
-  };
+  return { app, db, dataRoot, layout, documents, servesWebApp };
 }

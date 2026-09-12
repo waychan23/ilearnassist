@@ -113,7 +113,7 @@ files they upload. **It is required, and the server refuses to start without it.
   db/sqlite/ilearnassist.sqlite
   users/<name>/workspaces/<name>/     workdir/ is the agent's sandbox; sessions/ is reserved
   users/<name>/sources/               reserved for uploaded files
-  uploads/<sessionId>/                where attachments are today
+  users/<name>/sources/raw|parsed/    every file that account uploaded
 ```
 
 Put it somewhere outside the checkout and outside the application bundle, and somewhere you
@@ -238,16 +238,26 @@ a single turn may take (default 15). `temperature`, `topP` and `maxTokens` are
 passed to the provider only when set, so unset values keep ChatOpenAI's own
 defaults.
 
-## Attachments
+## Uploaded files
 
-Files and images can be attached in the composer (paperclip, or paste a
-screenshot). Bytes are stored under `<dataRoot>/uploads/<sessionId>/` — outside
-the workspace, so they never appear in the agent's `list_files`. Each file is capped
-at 10 MB, and only a known set of MIME types is accepted (images, text-like files,
-PDF and the Office/OpenDocument formats). Images are sent to the model as real
-multimodal content when the selected model is marked `vision`; text-like files are
-inlined; documents are parsed (see below). Deleting a conversation deletes its
-uploads and their extracted text.
+Files and images can be attached in the composer (paperclip, or paste a screenshot). Bytes
+are stored under `<dataRoot>/users/<name>/sources/raw/` — outside the workspace, so they
+never appear in the agent's `list_files`. Each file is capped at 10 MB, and only a known set
+of MIME types is accepted (images, text-like files, PDF and the Office/OpenDocument formats).
+Images are sent to the model as real multimodal content when the selected model is marked
+`vision`; text-like files are inlined; documents are parsed (see below).
+
+**A file belongs to your account, not to the conversation you attached it in.** Uploading
+the same bytes twice stores one copy — the second upload is instant and does not re-parse —
+and a file uploaded in one conversation is readable from any other conversation in the same
+workspace (through `read_document`, not the file tools: it is outside every workspace sandbox
+by design).
+
+That has a consequence for deleting, and it is worth knowing before you tidy up: **deleting a
+conversation does not delete its files.** It removes the references and leaves the bytes where
+they are, because another conversation may be reading them. Deleting a file is its own action — `DELETE /api/sources/:id`, which the sources
+UI will call — and it removes the bytes everywhere at once, while the messages that were sent
+with it keep showing what they were sent with.
 
 ## Document parsing
 

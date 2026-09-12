@@ -13,11 +13,11 @@ import type {
   DocumentParsingConfig,
   DriverInfo,
   FileContent,
-  AttachmentParseRecord,
   Message,
   ProviderConfig,
   PublicConfig,
   Session,
+  Source,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
@@ -180,7 +180,7 @@ export const api = {
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
 
   uploadAttachment: (sessionId: string, input: UploadAttachmentInput) =>
-    request<Attachment>(`/sessions/${sessionId}/attachments`, {
+    request<Attachment>(`/sessions/${sessionId}/sources`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
@@ -224,19 +224,30 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  /** Parse state for every attachment in a session, keyed by attachment id. */
-  listAttachmentStatus: (sessionId: string) =>
-    request<Record<string, AttachmentParseRecord>>(`/sessions/${sessionId}/attachments`),
-  reparseAttachment: (sessionId: string, attachmentId: string, name?: string) =>
-    request<{ status: string }>(`/sessions/${sessionId}/attachments/${attachmentId}/reparse`, {
+  /**
+   * The files a conversation can read, with the parse state as it is now.
+   *
+   * Not "this conversation's attachments": a source can be shared with the workspace, and this
+   * is what the composer overlays onto its chips so a reparse shows up without a reload.
+   */
+  listSessionSources: (sessionId: string) => request<Source[]>(`/sessions/${sessionId}/sources`),
+  /** Addressed by the source, not by a conversation: the file is the account's. */
+  reparseSource: (sourceId: string, name?: string) =>
+    request<{ status: string }>(`/sources/${sourceId}/reparse`, {
       method: "POST",
       body: JSON.stringify(name ? { name } : {}),
     }),
 };
 
-/** URL for an attachment's bytes (used as an `<img src>`), not an API call. */
-export function attachmentUrl(sessionId: string, attachmentId: string): string {
-  return `/api/sessions/${sessionId}/attachments/${attachmentId}`;
+/**
+ * URL for a source's bytes (used as an `<img src>`), not an API call.
+ *
+ * Addressed by the source alone, which is also why the response can be cached immutably: two
+ * conversations referencing the same file resolve to the same URL, and that URL's content
+ * never changes.
+ */
+export function attachmentUrl(sourceId: string): string {
+  return `/api/sources/${sourceId}/raw`;
 }
 
 /** Read a File as bare base64 (no `data:` prefix), matching `UploadAttachmentInput`. */

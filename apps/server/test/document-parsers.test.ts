@@ -4,6 +4,7 @@ import type {
   Attachment,
   DocumentParserConfig,
   PublicConfig,
+  Source,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_INLINE_CHARS } from "../src/attachments.js";
@@ -40,16 +41,43 @@ async function config(): Promise<PublicConfig> {
   return res.json<PublicConfig>();
 }
 
-async function statusOf(
-  sessionId: string
-): Promise<
-  Record<string, { status: string; error?: string; parseErrorCode?: string; parsedChars?: number }>
+/**
+ * Parse state for a conversation's sources, keyed by source id.
+ *
+ * Reshaped here rather than returned as the route's array, because every test below asks
+ * "what happened to *this* file" and the id is the only way to say which.
+ */
+async function statusOf(sessionId: string): Promise<
+  Record<
+    string,
+    {
+      status?: string;
+      error?: string;
+      parserId?: string;
+      parseErrorCode?: string;
+      parsedChars?: number;
+      pageCount?: number;
+    }
+  >
 > {
   const res = await env.inject({
     method: "GET",
-    url: `/api/sessions/${sessionId}/attachments`,
+    url: `/api/sessions/${sessionId}/sources`,
   });
-  return res.json();
+  const sources = res.json<Source[]>();
+  return Object.fromEntries(
+    sources.map((s) => [
+      s.id,
+      {
+        status: s.parseStatus,
+        error: s.parseError,
+        parserId: s.parserId,
+        parseErrorCode: s.parseErrorCode,
+        parsedChars: s.parsedChars,
+        pageCount: s.pageCount,
+      },
+    ])
+  );
 }
 
 beforeEach(async () => {
@@ -219,6 +247,10 @@ describe("parsing an uploaded document", () => {
   });
 
   it("leaves non-document attachments alone", async () => {
+    // `none` rather than absent, and the difference is worth stating: a source always carries
+    // a status, because the column is what every reader consults. `none` means no extraction
+    // was needed or attempted — which for a text file is the truth, and is what the chip
+    // reads as "nothing to say about this one" rather than as a parse that has not run yet.
     const session = await newSession(env, workspace.id);
     const attachment = await uploadAttachment(env, session.id, {
       name: "notes.txt",
@@ -226,9 +258,9 @@ describe("parsing an uploaded document", () => {
       data: Buffer.from("plain text is inlined, not parsed"),
     });
 
-    expect(attachment.parseStatus).toBeUndefined();
+    expect(attachment.parseStatus).toBe("none");
     await waitForParsing(env, session.id);
-    expect((await statusOf(session.id))[attachment.id]).toBeUndefined();
+    expect((await statusOf(session.id))[attachment.id]?.status).toBe("none");
   });
 
   it("re-parses on request", async () => {
@@ -244,7 +276,7 @@ describe("parsing an uploaded document", () => {
     // Point the failure at something that works, then retry.
     const res = await env.inject({
       method: "POST",
-      url: `/api/sessions/${session.id}/attachments/${attachment.id}/reparse`,
+      url: `/api/sources/${attachment.id}/reparse`,
       payload: { name: "scanned.pdf" },
     });
     expect(res.statusCode).toBe(202);
@@ -276,7 +308,7 @@ describe("parsing an uploaded document", () => {
     const session = await newSession(env, workspace.id);
     const res = await env.inject({
       method: "POST",
-      url: `/api/sessions/${session.id}/attachments/ghost/reparse`,
+      url: `/api/sources/ghost/reparse`,
     });
     expect(res.statusCode).toBe(404);
   });

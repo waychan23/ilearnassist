@@ -27,15 +27,14 @@ description of that tree:
     workspaces/<wsSlug>/
       workdir/                 the agent's file-tool sandbox and the file browser's root
       sessions/<sessionId>/    created with the conversation; nothing writes here yet
-    sources/{raw,parsed}/      reserved for uploaded files; nothing writes here yet
+    sources/
+      raw/<sourceId>.<ext>     an uploaded file, one per distinct content per account
+      parsed/<sourceId>.txt    its extracted text
   db/sqlite/ilearnassist.sqlite
-  uploads/<sessionId>/         where attachments actually are, for now — see the note below
 ```
 
-`sessions/` and `sources/` are **reserved**: they are created so the layout is a thing you
-can look at rather than a thing that materialises by accident, and nothing writes into them
-yet. Attachments still live under `uploads/` next to `users/`, because moving them onto a
-per-user `sources/` table is a separate change that has to bring the indexing with it.
+`sessions/` is **reserved**: it is created so the layout is a thing you can look at rather
+than a thing that materialises by accident, and nothing writes into it yet.
 
 ## Commands
 
@@ -213,7 +212,7 @@ apps/server/src/
   db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
   files.ts                # the workspace browser's read side: one level, one file
-  attachments.ts          # upload storage + multimodal content building
+  attachments.ts          # source paths + the sandbox guard + multimodal content building
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
@@ -224,7 +223,7 @@ apps/server/src/
   documents/drivers/      # one file per wire protocol (sync / mineru / llamaparse)
   tools/index.ts          # tool assembly + ALL_TOOL_NAMES
   tools/fileTools.ts      # list/read/write/create_dir/delete_file (sandboxed)
-  tools/documentTools.ts  # read_document — pages through an attachment's text
+  tools/documentTools.ts  # read_document — pages through a source's text, by whitelist
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
@@ -316,15 +315,39 @@ Fuller map in `docs/reference.md`.
   not a turn that was about the file browser, and a toast for it would interrupt a
   conversation that worked. Failures the user *did* ask for go to `fileTreeError` (the tree
   pane) or `filePreviewError` (inside the dialog) — not the global toast.
-- **Uploads are sandboxed too.** Attachment paths go through `resolveStoredPath`
-  over `<dataRoot>/uploads/`, and stored files are located by directory listing rather
-  than by anything the client claims. Uploads live outside the workspace on
-  purpose, so chat attachments never show up in the agent's `list_files`.
-  `attachments.ts` has no root of its own any more: the uploads tree is under the
-  *chosen* data directory, so every function takes the root rather than reading a
-  module-scope constant. That is also what keeps `config.ts` importable by the test
-  suite — nothing computes a data path before the process has decided where its data
-  goes.
+- **An uploaded file is a `source`: owned by the account, indexed by the database, and
+  referenced rather than owned by a conversation.** It lives at
+  `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose, so chat
+  uploads never show up in the agent's `list_files`. Three things follow, and each is load
+  bearing:
+  - **`UNIQUE (user_id, sha256)`** makes identical bytes one row, one file and two
+    references. The hash is *scoped* — `findSourceByHash(userId, hash)`, never by hash alone,
+    or the second account to upload the same file would be handed the first one's bytes.
+  - **`raw_path` is stored, and re-validated on every read** through `resolveInSources`. It is
+    stored because that is what removes the directory glob an attachment lookup used to need —
+    and with it a whole class of collision (see the `parsed/` note that this retired). It is
+    re-validated because a database row is not a trust boundary: it travels through backups,
+    and a future bug that wrote one column would otherwise become an arbitrary file read.
+  - **Parse state is columns on the row**, not a `<id>.json` sidecar. A reparse is then
+    visible in every conversation at once, and a source shared by two conversations is parsed
+    once. Only the extracted *text* stays a file. `attachments.ts` has no root constant: the
+    tree belongs to a user under a data directory the process chose at launch, so every
+    function takes the layout — which is also what keeps any data path out of import time.
+- **A source's bytes outlive the message that referenced them, and deleting is two different
+  acts.** `DELETE /api/sessions/:id` removes the conversation's *references* — the links
+  cascade with the row — and leaves the files alone, because another conversation may be
+  reading them. `DELETE /api/sources/:id` is the one that means "delete this file": it removes
+  the bytes, the extracted text and every reference. So the deletion matrix is asymmetric on
+  purpose, and `DocumentService.cancelSource` is per *source* rather than per session for the
+  same reason — cancelling by session would abort a parse another conversation is waiting on.
+- **A message's attachment is a snapshot, and its two halves come from different sides.** The
+  **name** is the client's, because it is the one that message used — a shared source can only
+  remember the first name it ever saw. The **parse state** is the server's, re-read from the
+  source row when the turn is persisted: a tab that has been open for an hour would otherwise
+  write whatever it last saw into the record of a turn, and a document that failed to parse
+  would reach the model as "still parsing". The snapshot is never rewritten, so a later
+  reparse does not alter history; the *live* state is the overlay `stores/app.ts` keeps and
+  `/api/sessions/:id/sources` feeds.
 - **`web_fetch` SSRF guard is a security boundary.** It is the only tool that
   makes the server issue an arbitrary outbound request. Keep the scheme check,
   the check on *every DNS-resolved address*, and the manual per-hop redirect
@@ -510,12 +533,22 @@ Fuller map in `docs/reference.md`.
   would mean something different from one launcher to the next. The throw lives in `main()`
   and not at module scope: `config.ts` is imported by the whole test suite, and a top-level
   throw would take out every test that never starts a server.
-- **A document and a file are reached by different doors.** `read_document` is bound to a
-  whitelist built per turn (`turnContext`) rather than to the uploads root, so a guessed
-  attachment id fails a `Map` lookup before any path is touched; the file tools are sandboxed
-  by `resolveInWorkspace` instead. Both are boundaries, and neither substitutes for the
-  other — the whitelist is what makes another conversation's uploads *unrepresentable* rather
-  than merely forbidden.
+- **Documents cross a sandbox boundary that files cannot, and that asymmetry is deliberate.**
+  `read_document` is bound to a whitelist resolved per turn — a conversation's own sources
+  **unioned with its workspace's** — rather than to any root, so a guessed id fails a `Map`
+  lookup before a path is touched. The file tools are sandboxed by `resolveInWorkspace`
+  instead, and can never reach a source: it is outside every workspace by construction. So a
+  document uploaded in one conversation is readable from another in the same workspace, while
+  no path in that workspace could reach it as a file.
+  That is defensible because a workspace is *already* a shared sandbox — every conversation in
+  it can `read_file` the same tree — so a document there is not more privileged than a file
+  there; and it is the whole point of the tool, since a model shown a 200-page PDF in turn one
+  could not previously page through it in turn three. It rests on a workspace never being
+  shared between accounts, which the `ForUser` scoping is what guarantees. Two corollaries:
+  `/api/sessions/:id/sources` returns **the same union**, because the model and the chips must
+  not disagree about what is available; and `buildTools` gates the tool on "the whitelist is
+  non-empty" rather than "this turn has attachments", so a turn that attaches nothing can still
+  read last week's file.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace and
   provider deletes go through `confirm()` from `composables/confirm.ts`. The
   agent's own `delete_file` tool is deliberately *not* gated.
@@ -648,20 +681,25 @@ Fuller map in `docs/reference.md`.
   `better-sqlite3` v13's prebuilds are N-API and therefore already ABI-correct for
   Electron. Flip `npmRebuild` only if a dependency ships a non-N-API native module.
   Rationale in full in `docs/desktop.md`.
-- **Extracted document text lives in `parsed/`, never beside the bytes.** An
-  attachment's derived data goes to `uploads/<sessionId>/parsed/<attachmentId>.txt`,
-  not `uploads/<sessionId>/<attachmentId>.txt`. `findStoredAttachment()` globs
-  `<id>.*` in the session directory and `txt` is a valid extension in the MIME table,
-  so a flat sibling would let the download endpoint serve extracted text instead of
-  the original PDF. Pinned by a test in `apps/server/test/documents/store.test.ts`.
-- **`read_document` is scoped to the current turn's attachments.** It is bound to a
-  whitelist of attachment ids, not to the uploads root, because ids are guessable and
-  a bare-id tool would let a model read another session's uploads. Adding a document
-  tool that takes an id without checking it against the whitelist reintroduces that.
+- **Extracted text lives in `parsed/`, beside the bytes but never mixed with them.** A
+  source's derived data goes to `<userRoot>/sources/parsed/<sourceId>.txt`, never
+  `sources/raw/<sourceId>.txt`. The split used to be *load-bearing* — `findStoredAttachment()`
+  globbed `<id>.*` and `txt` is a valid extension in the MIME table, so a flat sibling could
+  be served in place of the original PDF. That hazard is gone: nothing globs any more, because
+  the path is a column. The split stays because raw bytes and derived text are different kinds
+  of thing, and a reader should never have to check which it is holding. Both the retired
+  hazard and the current shape are pinned in `apps/server/test/documents/store.test.ts`.
+- **A document tool takes an id *and* a whitelist, or it reintroduces the hole.**
+  `read_document` resolves through a `Map` built from that whitelist, so an id it was not
+  handed fails before any path is touched — the discipline is the lookup, not the narrowness
+  of the list (see the sandbox bullet above for what is on it). Ids are guessable; a tool that
+  took a bare one would let a model read files it was never given.
 - **A document that could not be read must never look like one that was.** An empty
   extraction is reported as `no_text_layer`, not as empty text — a model told it read
-  a file it never saw will answer about it anyway. `parseStatus` on the attachment is
-  what the UI renders, and the composer blocks sending until extraction has settled.
+  a file it never saw will answer about it anyway. `parseStatus` is what the UI renders and
+  what `buildUserContent` puts in the prompt, and the composer blocks sending until extraction
+  has settled. A source no extraction was *needed* for reads `none`, not `ready`: the two are
+  different claims and the chip shows different things.
 - **`pdfjs-dist` is pinned to 4.x.** 5.7+ and 6.x require Node ≥ 22.13 while
   `package.json` advertises Node ≥ 20; bumping that floor is a separate,
   user-visible change and must not ride along with an unrelated dependency update.

@@ -206,7 +206,7 @@ describe("over HTTP, with two signed-in accounts", () => {
       ["GET", `/api/sessions/${theirs.sessionId}/messages`],
       ["PATCH", `/api/sessions/${theirs.sessionId}`],
       ["DELETE", `/api/sessions/${theirs.sessionId}`],
-      ["GET", `/api/sessions/${theirs.sessionId}/attachments`],
+      ["GET", `/api/sessions/${theirs.sessionId}/sources`],
     ] as const;
 
     for (const [method, url] of attempts) {

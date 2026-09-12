@@ -22,8 +22,7 @@
                                           │  <dataRoot>/ (chosen at launch)     │
                                           │    db/sqlite/ilearnassist.sqlite    │
                                           │    users/<slug>/workspaces/<slug>/  │
-                                          │    users/<slug>/sources/ (reserved) │
-                                          │    uploads/<sess>/                  │
+                                          │    users/<slug>/sources/{raw,parsed}│
                                           └────────────────────────────────────┘
 ```
 
@@ -182,7 +181,7 @@ removes `dirPath`.
 | `delete_file`   | delete a file/dir inside the workspace    | workspace |
 | `web_search`    | search the web (bing/duckduckgo/tavily/searxng) | —   |
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
-| `read_document` | page through an attachment's extracted text | turn's attachments |
+| `read_document` | page through an uploaded file's extracted text | per-turn whitelist: the conversation's sources ∪ its workspace's |
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
 
 `buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
@@ -380,18 +379,30 @@ OpenAI-compatible with DeepSeek, OpenAI, Ollama, etc. Streaming is always on.
 Generation parameters (`temperature`, `topP`, `maxTokens`) are passed through
 only when explicitly set, so unset values keep ChatOpenAI's own defaults.
 
-### Attachments (`attachments.ts`)
+### Uploaded files (`attachments.ts`)
 
-Bytes live at `<dataRoot>/uploads/<sessionId>/<attachmentId>.<ext>` — deliberately
-outside the workspace, so chat uploads never pollute the user's project directory
-or appear in the agent's `list_files`. `resolveStoredPath()` mirrors the
-`resolveInWorkspace` guard, refusing anything that escapes the uploads root, and
-`findStoredAttachment()` derives the MIME type from the directory listing rather
-than trusting the client.
+Bytes live at `<userRoot>/sources/raw/<sourceId>.<ext>` — deliberately outside the
+workspace, so chat uploads never pollute the user's project directory or appear in the
+agent's `list_files`. `resolveInSources()` mirrors the `resolveInWorkspace` guard, refusing
+anything that escapes the account's sources tree, and it is applied on **every** read of a
+stored path — including one that came out of the database, because a row is not a trust
+boundary.
 
-The uploads root is **passed in**, not a module constant: it sits under the data root the
-process was launched with, so there is nothing to compute at import time. That is also what
-keeps `config.ts` importable by the test suite — see "Config" above.
+A file is a **source**: owned by the account, indexed by the `sources` table, and
+*referenced* by conversations and workspaces rather than owned by them. Two consequences
+worth knowing before reading the rest of this section:
+
+- **Identical bytes are one source.** `UNIQUE (user_id, sha256)`, with the hash scoped to the
+  account — a lookup by hash alone would hand one account's file to another who uploaded the
+  same content. Re-uploading a PDF reuses the row, the file and whatever parse it already has.
+- **A file can outlive every conversation that referenced it.** Deleting a conversation
+  cascades its links away and touches nothing on disk; `DELETE /api/sources/:id` is the one
+  that deletes bytes.
+
+The sources tree is **passed in** as a `UserLayout`, not a module constant: it belongs to an
+account under a data root the process chose at launch, so there is nothing to compute at
+import time. That is also what keeps `config.ts` importable by the test suite — see "Config"
+above.
 
 `buildUserContent()` turns a turn into model content:
 
@@ -412,41 +423,36 @@ installed) at the cost of a ~33% larger body.
 
 ### Document parsing (`documents/`)
 
-PDF and Office attachments are converted to text before they reach the model. Local
-extraction is always available; cloud parsers are optional and configured like LLM
-providers.
+PDF and Office files are converted to text before they reach the model. Local extraction is
+always available; cloud parsers are optional and configured like LLM providers.
 
 ```
-<dataRoot>/uploads/<sessionId>/
-  <attachmentId>.pdf        the original bytes
-  parsed/
-    <attachmentId>.txt      extracted text
-    <attachmentId>.json     { status, error?, parserId?, parsedChars?, pageCount? }
+<userRoot>/sources/
+  raw/<sourceId>.pdf        the original bytes
+  parsed/<sourceId>.txt     extracted text
 ```
 
-This is the arrangement today. Uploaded files are on their way to a **user-level `sources/`
-tree indexed by the database**, where one file can be referenced by several workspaces
-rather than belonging to the session it was uploaded in; `users/<slug>/sources/` is created
-and reserved for that. The `parsed/` note below is about the current layout and will go with
-it.
+**Parse state is not there.** It lives in columns on the `sources` row — that is the "index
+it in the database" half of the design, and it buys two things a `parsed/<id>.json` sidecar
+could not: a reparse is visible in **every** conversation that references the file at once,
+rather than only in the messages written after it; and a file referenced by two conversations
+is parsed **once**, not once per reference. Only the extracted text stays a file: it is large,
+and `read_document` streams it by offset.
 
-**The `parsed/` subdirectory is load-bearing.** `findStoredAttachment()` locates an
-attachment with `entries.find(name => name.startsWith(id + "."))`, and `txt` is a
-legitimate extension in `EXT_MIME` — a flat sibling `<id>.txt` could be picked ahead of
-the PDF, and the download endpoint would serve extracted text instead of the original
-file. Derived data in its own directory makes that collision unrepresentable.
-
-Parse state lives on disk rather than in sqlite because the uploads tree is already the
-authority for attachment bytes and MIME types, and because `removeSessionUploads()`
-deletes the whole session directory — so a session delete cleans up parse state for
-free, with no migration and no cascade to maintain.
+The two directories are siblings, which used to be *load-bearing*: `findStoredAttachment()`
+located an attachment by globbing `<id>.*` in the session directory, and `txt` is a legitimate
+extension in the MIME table — so a flat `<id>.txt` could be found ahead of the original PDF
+and the download endpoint would serve extracted text instead of the file. Nothing globs any
+more, because the path is a column, so that collision is unreachable rather than merely
+avoided. The split stays because raw bytes and derived text are different kinds of thing.
 
 **Extraction is asynchronous.** A cloud job routinely takes tens of seconds (five
-minutes is the ceiling), so the upload endpoint returns `201` with `parseStatus:
-"pending"` and a background `DocumentService` queue does the work. The client polls
-`GET /api/sessions/:id/attachments` and the composer **blocks sending until every
-attachment has settled** — the text is injected when the message is built, so sending
-early would produce a turn where the model never saw the document the user attached.
+minutes is the ceiling), so the upload endpoint answers immediately with `parseStatus:
+"pending"` and a background `DocumentService` queue does the work — keyed by **source id**,
+because the work belongs to the file rather than to the conversation that happened to upload
+it. The client polls `GET /api/sessions/:id/sources` and the composer **blocks sending until
+every staged attachment has settled** — the text is injected when the message is built, so
+sending early would produce a turn where the model never saw the document the user attached.
 
 #### Local extraction
 
@@ -558,6 +564,11 @@ attachments, providers and app defaults.
 
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /api/sessions/:id/sources` | upload a file and reference it from this conversation (and its workspace) |
+| `GET /api/sessions/:id/sources` | every file this conversation can read, with its parse state — **the model's whitelist too** |
+| `GET /api/sources/:id/raw` | a file's bytes, for a thumbnail or a download |
+| `POST /api/sources/:id/reparse` | re-run extraction |
+| `DELETE /api/sources/:id` | delete the file, its text and every reference to it |
 | `POST /api/auth/login` | sign in, creating the account if the name is new. Sets the session cookie. |
 | `POST /api/auth/logout` | clear it |
 | `GET /api/auth/me` | who the caller is; a 401 is the answer, not a refusal |
@@ -570,8 +581,8 @@ attachments, providers and app defaults.
 | `GET /api/workspaces/:id/files?path=` | one directory level of the workspace, for the sidebar's file tree |
 | `GET /api/workspaces/:id/files/content?path=` | a file's metadata, and its text when it is text |
 | `PATCH /api/sessions/:id` | rename and/or update per-conversation settings (a title also flips `titleSource` to `user`) |
-| `POST /api/sessions/:id/attachments` | upload (base64 JSON); schedules parsing |
-| `GET /api/sessions/:id/attachments` | parse state for every attachment, by id |
+| `POST /api/sessions/:id/sources` | upload (base64 JSON); schedules parsing |
+| `GET /api/sessions/:id/sources` | what this conversation can read, with parse state |
 | `GET /api/sessions/:sessionId/attachments/:attachmentId` | serve the bytes back |
 | `POST /api/sessions/:id/attachments/:attachmentId/reparse` | re-run extraction |
 | `GET/POST /api/document-parsers`, `PUT/DELETE /api/document-parsers/:id` | cloud parser CRUD |

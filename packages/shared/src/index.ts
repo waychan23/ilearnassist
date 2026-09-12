@@ -168,9 +168,11 @@ export const API_ERROR_CODES = [
   "SESSION_NOT_FOUND",
   "TITLE_EMPTY",
   "UNSUPPORTED_FILE_TYPE",
-  "INVALID_ATTACHMENT_PATH",
-  "ATTACHMENT_NOT_FOUND",
-  "ATTACHMENT_STORE_FAILED",
+  // Sources rather than attachments: the entity is the account's file, and a message only
+  // holds a snapshot of one. `INVALID_ATTACHMENT_PATH` went with the old reader — the path is
+  // a validated column now, so there is nothing for a client to get wrong about it.
+  "SOURCE_NOT_FOUND",
+  "SOURCE_STORE_FAILED",
   "DATA_REQUIRED",
   "INVALID_BASE64",
   "EMPTY_FILE",
@@ -219,7 +221,19 @@ export interface ApiErrorBody {
   };
 }
 
-/** A file the user attached to a message. Bytes live on the server, never in this object. */
+/**
+ * A file the user attached to a message, **as it was attached**.
+ *
+ * `id` is a *source* id (`Source` below), and everything else here is a snapshot: the parse
+ * state at the time, and the name the user actually used. That is deliberate rather than
+ * duplicated. A source is shared — the same bytes uploaded twice are one source, and a
+ * source can be referenced by several conversations — so its own `name` is whichever spelling
+ * arrived first, and its parse state is whatever it is *now*. A message that showed "my
+ * draft.pdf, parsed" should keep reading that way even if the source was renamed, reparsed
+ * or unlinked afterwards.
+ *
+ * Bytes live on the server, never in this object.
+ */
 export interface Attachment {
   id: string;
   name: string;
@@ -245,6 +259,27 @@ export interface Attachment {
   parsedChars?: number;
   /** Page count, when the parser could determine one (PDF and most cloud parsers). */
   pageCount?: number;
+}
+
+/**
+ * An uploaded file, as the *server* holds it: one per distinct content per account.
+ *
+ * The entity behind `Attachment.id`. Two things make it different from the snapshot above,
+ * and both are the point of it existing:
+ *
+ * - **It is owned by the account, not by a conversation.** The same PDF uploaded in two
+ *   conversations is one source with two references, so its bytes are stored once and parsed
+ *   once. Deleting a conversation removes a reference and leaves the file alone.
+ * - **Its fields are current.** `parseStatus` is whatever the last parse did, not what it was
+ *   when some message was sent — which is what lets a reparse be reflected everywhere at once
+ *   instead of only in conversations that start afterwards.
+ *
+ * `name` is the first name the file was uploaded under. With dedupe that means a second
+ * upload of the same bytes shows the first name, which is why the message snapshot keeps its
+ * own: the name the user typed belongs to the message, not to the bytes.
+ */
+export interface Source extends Attachment {
+  createdAt: string;
 }
 
 /**
@@ -610,18 +645,6 @@ export interface DriverInfo {
   defaultBaseURL?: string;
   /** Where to send a user who needs a credential. */
   helpURL?: string;
-}
-
-/** Extraction state of one attachment, keyed by attachment id in the session status map. */
-export interface AttachmentParseRecord {
-  status: ParseStatus;
-  error?: string;
-  /** See `Attachment.parseErrorCode` — the streaming path needs it as much as the reload one. */
-  parseErrorCode?: ParseErrorCode;
-  parserId?: string;
-  parsedChars?: number;
-  pageCount?: number;
-  updatedAt: string;
 }
 
 export interface CreateDocumentParserInput {

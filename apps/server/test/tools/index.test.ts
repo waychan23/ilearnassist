@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebFetchConfig, WebSearchConfig } from "../../src/config.js";
+import { dataLayout, userLayout } from "../../src/paths.js";
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
 
 let workspace: string;
@@ -24,27 +25,35 @@ afterEach(() => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
+const user = userLayout(dataLayout("/tmp/ila-tools"), "tester");
+
 const documents = {
-  uploadRoot: "/tmp/uploads",
-  sessionId: "s1",
-  attachments: [{ id: "att-1", name: "lecture.pdf", mimeType: "application/pdf" }],
+  user,
+  sources: [{ id: "att-1", name: "lecture.pdf", mimeType: "application/pdf" }],
 };
 
 describe("buildTools", () => {
   it("exposes every tool by default, minus read_document", () => {
-    // `read_document` is absent because this turn has no document attachments — the tool
-    // is registered per turn, so a model is never offered one with nothing to read.
+    // `read_document` is absent because this conversation has nothing to read — the tool is
+    // registered per turn, so a model is never offered one with nothing to point it at.
     expect(names().sort()).toEqual(
       [...ALL_TOOL_NAMES].filter((n) => n !== "read_document").sort()
     );
   });
 
-  it("adds read_document when the turn has a document attachment", () => {
+  it("adds read_document when the conversation has a readable document", () => {
     expect(names({ documents })).toContain("read_document");
   });
 
-  it("omits read_document when the attachment list is empty", () => {
-    expect(names({ documents: { ...documents, attachments: [] } })).not.toContain("read_document");
+  it("omits read_document when the whitelist is empty", () => {
+    expect(names({ documents: { ...documents, sources: [] } })).not.toContain("read_document");
+  });
+
+  it("adds read_document even when this turn attached nothing", () => {
+    // The gate is the whitelist, not the turn's attachments: a conversation with a PDF from
+    // last week can still page through it on a turn that attaches nothing. Getting this
+    // wrong is how the tool used to be missing exactly when it was wanted.
+    expect(names({ documents })).toContain("read_document");
   });
 
   it("keeps the non-workspace tools but drops the file tools when fileTools is disabled", () => {

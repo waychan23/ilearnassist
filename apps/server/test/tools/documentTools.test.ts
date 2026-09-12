@@ -2,33 +2,41 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { writeParsedText, writeParseRecord } from "../../src/documents/store.js";
+import { writeParsedText } from "../../src/documents/store.js";
+import { dataLayout, userLayout, type UserLayout } from "../../src/paths.js";
 import { buildDocumentTool, type DocumentToolContext } from "../../src/tools/documentTools.js";
 
 /**
  * `read_document`, the tool a model uses to page through a document that was only partly
  * inlined into its prompt.
+ *
+ * What this file tests is the tool's own boundary: **the whitelist it was handed**. Which
+ * sources end up in that list is a question about the database — a conversation's own
+ * sources unioned with its workspace's — and it is answered in `db.test.ts` and
+ * `ownership.test.ts`. Keeping them apart matters, because "the tool refuses what it was not
+ * given" and "the right things were given" are different claims and only one of them is
+ * testable here.
  */
 
 let root: string;
+let user: UserLayout;
 
-const attachments = [
+const sources = [
   { id: "att-1", name: "lecture-01.pdf", mimeType: "application/pdf" },
-  { id: "att-2", name: "notes.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+  {
+    id: "att-2",
+    name: "notes.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  },
 ];
 
 function toolFor(overrides: Partial<DocumentToolContext> = {}) {
-  return buildDocumentTool({
-    uploadRoot: root,
-    sessionId: "s1",
-    attachments,
-    ...overrides,
-  });
+  return buildDocumentTool({ user, sources, ...overrides });
 }
 
 /** The tool returns a string; this keeps the assertions readable. */
 async function read(
-  args: { attachmentId: string; offset?: number; limit?: number },
+  args: { sourceId: string; offset?: number; limit?: number },
   overrides: Partial<DocumentToolContext> = {}
 ): Promise<string> {
   return (await toolFor(overrides).invoke(args)) as string;
@@ -36,6 +44,7 @@ async function read(
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "gl-doctool-"));
+  user = userLayout(dataLayout(root), "tester");
 });
 
 afterAll(() => {
@@ -43,69 +52,66 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await writeParsedText(root, "s1", "att-1", "0123456789".repeat(10));
-  await writeParsedText(root, "s1", "att-2", "word document text");
+  await writeParsedText(user, "att-1", "0123456789".repeat(10));
+  await writeParsedText(user, "att-2", "word document text");
 });
 
 describe("read_document", () => {
   it("reads from the start by default", async () => {
-    const out = await read({ attachmentId: "att-1" });
+    const out = await read({ sourceId: "att-1" });
     expect(out).toContain("0123456789");
     expect(out).toContain("lecture-01.pdf");
     expect(out).toContain("共 100 字符");
   });
 
   it("pages with offset and limit, and reports where to continue", async () => {
-    const first = await read({ attachmentId: "att-1", offset: 0, limit: 30 });
+    const first = await read({ sourceId: "att-1", offset: 0, limit: 30 });
     expect(first).toContain("0–30 / 共 100 字符");
     expect(first).toContain("offset=30");
 
-    const second = await read({ attachmentId: "att-1", offset: 30, limit: 30 });
+    const second = await read({ sourceId: "att-1", offset: 30, limit: 30 });
     expect(second).toContain("30–60 / 共 100 字符");
   });
 
   it("says when the end has been reached instead of inviting another call", async () => {
-    const out = await read({ attachmentId: "att-1", offset: 90, limit: 50 });
+    const out = await read({ sourceId: "att-1", offset: 90, limit: 50 });
     expect(out).toContain("已到末尾");
     expect(out).not.toContain("继续读取");
   });
 
   it("refuses an offset past the end, naming the real length", async () => {
-    const out = await read({ attachmentId: "att-1", offset: 5_000 });
+    const out = await read({ sourceId: "att-1", offset: 5_000 });
     expect(out).toContain("超出范围");
     expect(out).toContain("100");
   });
 
   it("caps a single read at the configured ceiling", async () => {
     // A model asking for everything at once must not be able to blow the context window.
-    const out = await read({ attachmentId: "att-1", offset: 0, limit: 999_999 }, { maxChars: 25 });
+    const out = await read({ sourceId: "att-1", offset: 0, limit: 999_999 }, { maxChars: 25 });
     expect(out).toContain("0–25 / 共 100 字符");
   });
 
-  it("refuses an attachment from another conversation", async () => {
-    // The whitelist is the security boundary: ids are guessable, so the tool must not be
-    // able to read a document that simply is not in this conversation.
-    const out = await read({ attachmentId: "att-from-elsewhere" });
-    expect(out).toContain("No such attachment");
+  it("refuses a source that is not in its whitelist", async () => {
+    // The whitelist is the security boundary: ids are guessable, so a document the caller
+    // was not handed must fail the lookup before any path is touched.
+    const out = await read({ sourceId: "att-from-elsewhere" });
+    expect(out).toContain("No such document");
     expect(out).toContain("lecture-01.pdf"); // and lists what it *can* read
   });
 
-  it("explains an attachment that has no extracted text yet", async () => {
-    await writeParseRecord(root, "s1", "att-2", { status: "failed", error: "boom" });
-    const out = await read({ attachmentId: "att-2" });
-    // att-2 has text in this fixture, so clear it to exercise the missing case.
-    expect(out).toContain("word document text");
-
-    const missing = await read({ attachmentId: "att-3" });
-    expect(missing).toContain("No such attachment");
+  it("lists nothing available when the whitelist is empty", async () => {
+    const out = await read({ sourceId: "anything" }, { sources: [] });
+    expect(out).toContain("(none)");
   });
 
-  it("reports an attachment whose parse produced nothing", async () => {
-    const out = await read({ attachmentId: "att-1" }, {
-      attachments: [{ id: "att-1", name: "empty.pdf", mimeType: "application/pdf" }],
-      // Point at a session with no sidecar at all.
-      sessionId: "s-other",
-    });
+  it("reports a source whose parse produced no text", async () => {
+    // A whitelisted source with no extracted text: extraction is still running, or it
+    // failed. Either way the model must be told it read nothing, not handed an empty string
+    // it will answer about anyway.
+    const out = await read(
+      { sourceId: "att-9" },
+      { sources: [{ id: "att-9", name: "empty.pdf", mimeType: "application/pdf" }] }
+    );
     expect(out).toContain("没有可读文本");
   });
 
@@ -113,5 +119,8 @@ describe("read_document", () => {
     const tool = toolFor();
     expect(tool.name).toBe("read_document");
     expect(tool.description).toContain("offset");
+    // The scope it will accept is stated, so the model does not have to discover it by
+    // having a call refused.
+    expect(tool.description).toContain("workspace");
   });
 });

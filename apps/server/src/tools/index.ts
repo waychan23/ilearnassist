@@ -37,9 +37,14 @@ export interface BuildToolsInput {
   /** When non-empty, only these tools are exposed (from a Copilot's `tools` list). */
   allowedNames?: string[];
   /**
-   * Present only when the turn has document attachments to read. The tool is left out
-   * entirely otherwise, so the common case carries no tool for a capability it has no
-   * use for — and the model cannot call it against a document that does not exist.
+   * Present only when this conversation can read a document at all — that is, when its
+   * whitelist is non-empty. The tool is left out entirely otherwise, so the common case
+   * carries no tool for a capability it has no use for, and the model cannot call it against
+   * a document that does not exist.
+   *
+   * The gate is "the whitelist is non-empty" rather than "this turn has attachments", which
+   * is the same widening the tool itself got: a conversation with a PDF from last week can
+   * still page through it on a turn that attaches nothing.
    */
   documents?: DocumentToolContext;
 }
@@ -68,7 +73,7 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     buildAskUserTool(),
   ];
   if (input.webFetch.enabled) all.push(buildWebFetchTool(input.webFetch));
-  if (input.documents && input.documents.attachments.length > 0) {
+  if (input.documents && input.documents.sources.length > 0) {
     all.push(buildDocumentTool(input.documents));
   }
 

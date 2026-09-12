@@ -11,6 +11,7 @@ import type {
   SessionSettings,
 } from "@ilearnassist/shared";
 import { runAgentStream } from "../../src/agent/loop.js";
+import { dataLayout, userLayout } from "../../src/paths.js";
 import { buildAskUserTool } from "../../src/tools/askUser.js";
 import { buildFileTools } from "../../src/tools/fileTools.js";
 import type { ProviderRecord } from "../../src/db.js";
@@ -93,7 +94,9 @@ async function run(options: RunOptions) {
       lastActivityAt: null,
     },
     settings: options.settings ?? {},
-    uploadRoot: join(scratch, "uploads"),
+    // The whole user tree, not just the sources directory: `buildUserContent` derives a
+    // source's path from the layout, so it needs the root it belongs to.
+    user: userLayout(dataLayout(scratch), "tester"),
     sessionId: "s1",
     vision: options.vision ?? false,
     toolUse: options.toolUse ?? false,

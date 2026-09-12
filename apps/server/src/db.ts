@@ -11,9 +11,12 @@ import type {
   Message,
   MessageUsage,
   ModelCapability,
+  ParseErrorCode,
+  ParseStatus,
   ProviderModel,
   Session,
   SessionSettings,
+  Source,
   ToolCall,
   User,
   Workspace,
@@ -22,6 +25,25 @@ import { workspaceWorkdir } from "./paths.js";
 import { applySchema } from "./schema.js";
 
 /* ---------------------------------- row shapes ---------------------------------- */
+
+interface SourceRow {
+  id: string;
+  user_id: string;
+  sha256: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  kind: string;
+  raw_path: string;
+  parse_status: string;
+  parse_error: string | null;
+  parse_error_code: string | null;
+  parser_id: string | null;
+  parsed_chars: number | null;
+  page_count: number | null;
+  parse_updated_at: string | null;
+  created_at: string;
+}
 
 interface UserRow {
   id: string;
@@ -175,6 +197,39 @@ const mapUser = (r: UserRow): User => ({
   createdAt: r.created_at,
 });
 
+/**
+ * A source as the **server** sees it: the wire shape plus the two fields that never leave.
+ *
+ * Same split as `ProviderRecord` and its `apiKey` — and for a stronger reason, because
+ * `rawPath` is a filesystem path inside the data root. A client has no use for it (it asks
+ * `/api/sources/:id/raw`) and knowing it would tell them the layout of a directory they are
+ * not allowed to browse.
+ */
+export interface SourceRecord extends Source {
+  userId: string;
+  /** Where the bytes are. Validated by `resolveInSources` before every read. */
+  rawPath: string;
+}
+
+const mapSource = (r: SourceRow): SourceRecord => ({
+  id: r.id,
+  userId: r.user_id,
+  name: r.name,
+  mimeType: r.mime_type,
+  size: r.size,
+  kind: r.kind === "image" ? "image" : "file",
+  parseStatus: r.parse_status as ParseStatus,
+  // Each of these is absent rather than null when there is nothing to say, matching the
+  // wire type — a JSON `null` for `parseError` would reach the client as an empty tooltip.
+  parseError: r.parse_error ?? undefined,
+  parseErrorCode: (r.parse_error_code ?? undefined) as ParseErrorCode | undefined,
+  parserId: r.parser_id ?? undefined,
+  parsedChars: r.parsed_chars ?? undefined,
+  pageCount: r.page_count ?? undefined,
+  rawPath: r.raw_path,
+  createdAt: r.created_at,
+});
+
 const mapWorkspace = (r: WorkspaceRow): Workspace => ({
   id: r.id,
   name: r.name,
@@ -289,6 +344,83 @@ export interface AppDb {
   getUser(id: string): User | undefined;
   findUserByUsername(username: string): User | undefined;
   createUser(input: { id: string; username: string; slug: string }): User;
+
+  /*
+   * Sources — uploaded files, owned by the account rather than by the conversation they
+   * arrived in. Same `ForUser` discipline as everything below, and it matters more here than
+   * anywhere: these rows carry a path, so a lookup that forgot the owner would not merely
+   * leak a name, it would hand over a file.
+   */
+
+  /**
+   * The account's copy of these bytes, if it has one.
+   *
+   * Scoped by owner *and* hash, not by hash alone. `WHERE sha256 = ?` would hand one
+   * account's file to another who happened to upload the same content — which is exactly the
+   * case dedupe makes common, since the whole point is that identical bytes are one row.
+   */
+  findSourceByHash(userId: string, sha256: string): SourceRecord | undefined;
+  getSourceForUser(id: string, userId: string): SourceRecord | undefined;
+  listSourcesForUser(userId: string): SourceRecord[];
+  createSource(input: {
+    id: string;
+    userId: string;
+    sha256: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    kind: "image" | "file";
+    rawPath: string;
+  }): SourceRecord;
+  /** Returns false when no such source existed, or it belonged to someone else. */
+  deleteSourceForUser(id: string, userId: string): boolean;
+
+  /**
+   * Record what a parse did, in place.
+   *
+   * In place rather than appended, because the row is what every reader consults: a reparse
+   * is then reflected in every conversation at once, instead of only in the messages sent
+   * after it. The alternative — folding state into each message at the time it was written —
+   * is what made a reparse invisible to history.
+   */
+  updateSourceParse(
+    id: string,
+    userId: string,
+    patch: {
+      status: ParseStatus;
+      error?: string | null;
+      code?: ParseErrorCode | null;
+      parserId?: string | null;
+      parsedChars?: number | null;
+      pageCount?: number | null;
+    }
+  ): void;
+
+  /**
+   * Reference a source from a session or a workspace.
+   *
+   * The statement asserts **both** ends in one `INSERT … SELECT`, so a cross-account link is
+   * unrepresentable rather than merely unwritten — the same defensive move as the scoped
+   * readers, for the case where a future caller forgets to check. Returns whether a row was
+   * inserted, so `false` covers both "not yours" and "already linked"; a route that needs to
+   * tell them apart resolves both ends itself first, which it has to do anyway to answer 404.
+   */
+  linkSourceToSession(userId: string, sessionId: string, sourceId: string): boolean;
+  linkSourceToWorkspace(userId: string, workspaceId: string, sourceId: string): boolean;
+
+  /** A conversation's own sources, for the parse-state the composer polls. */
+  listSessionSources(userId: string, sessionId: string): SourceRecord[];
+  /**
+   * Everything the model may read in one conversation: its own sources plus its workspace's.
+   *
+   * The union is the widening this change is about — a document uploaded in one conversation
+   * is readable from another in the same workspace — and it is deliberately a *query* rather
+   * than a snapshot, so unlinking takes effect on the next turn. A workspace is already a
+   * shared sandbox (every session in it can `read_file` the same tree), so a document there
+   * is not more privileged than a file there; this rests on a workspace never being shared
+   * between accounts, which the scoping here is what enforces.
+   */
+  listReadableSources(userId: string, sessionId: string, workspaceId: string): SourceRecord[];
 
   /**
    * Workspaces — and the pattern every user-owned accessor below follows.
@@ -505,6 +637,73 @@ export function createDb(dbPath: string): AppDb {
     "INSERT INTO users (id, username, slug, created_at) VALUES (@id, @username, @slug, @createdAt)"
   );
 
+  /* -------------------------------- sources -------------------------------- */
+  const stmtFindSourceByHash = db.prepare(
+    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ?"
+  );
+  const stmtGetSourceForUser = db.prepare("SELECT * FROM sources WHERE id = ? AND user_id = ?");
+  const stmtListSourcesForUser = db.prepare(
+    "SELECT * FROM sources WHERE user_id = ? ORDER BY created_at ASC"
+  );
+  const stmtCreateSource = db.prepare(
+    `INSERT INTO sources
+       (id, user_id, sha256, name, mime_type, size, kind, raw_path, parse_status, created_at)
+     VALUES (@id, @userId, @sha256, @name, @mimeType, @size, @kind, @rawPath, 'none', @createdAt)`
+  );
+  const stmtDeleteSourceForUser = db.prepare("DELETE FROM sources WHERE id = ? AND user_id = ?");
+  const stmtUpdateSourceParse = db.prepare(
+    `UPDATE sources
+        SET parse_status = @status, parse_error = @error, parse_error_code = @code,
+            parser_id = @parserId, parsed_chars = @parsedChars, page_count = @pageCount,
+            parse_updated_at = @updatedAt
+      WHERE id = @id AND user_id = @userId`
+  );
+  /*
+   * Both links assert their two owners in one statement. `INSERT OR IGNORE` because
+   * re-uploading the same bytes into the same conversation is normal, and the link it would
+   * duplicate is already exactly right.
+   */
+  const stmtLinkSourceToSession = db.prepare(
+    `INSERT OR IGNORE INTO session_sources (session_id, source_id, created_at)
+     SELECT s.id, src.id, @createdAt
+       FROM sessions s
+       JOIN workspaces w ON w.id = s.workspace_id
+       JOIN sources src ON src.id = @sourceId
+      WHERE s.id = @sessionId AND w.user_id = @userId AND src.user_id = @userId`
+  );
+  const stmtLinkSourceToWorkspace = db.prepare(
+    `INSERT OR IGNORE INTO workspace_sources (workspace_id, source_id, created_at)
+     SELECT w.id, src.id, @createdAt
+       FROM workspaces w
+       JOIN sources src ON src.id = @sourceId
+      WHERE w.id = @workspaceId AND w.user_id = @userId AND src.user_id = @userId`
+  );
+  /*
+   * The read whitelist: the conversation's own sources unioned with its workspace's. Reached
+   * through the session so the owner check happens once, on the join that every arm shares.
+   */
+  const stmtListSessionSources = db.prepare(
+    `SELECT src.* FROM session_sources ss
+       JOIN sources src ON src.id = ss.source_id
+       JOIN sessions s ON s.id = ss.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE ss.session_id = ? AND w.user_id = ?
+      ORDER BY ss.created_at ASC, src.id ASC`
+  );
+  const stmtListReadableSources = db.prepare(
+    `SELECT src.*, ss.created_at AS linked_at FROM session_sources ss
+       JOIN sources src ON src.id = ss.source_id
+       JOIN sessions s ON s.id = ss.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE ss.session_id = @sessionId AND w.user_id = @userId
+     UNION
+     SELECT src.*, ws.created_at AS linked_at FROM workspace_sources ws
+       JOIN sources src ON src.id = ws.source_id
+       JOIN workspaces w2 ON w2.id = ws.workspace_id
+      WHERE ws.workspace_id = @workspaceId AND w2.user_id = @userId
+     ORDER BY linked_at ASC, id ASC`
+  );
+
   /* ------------------------------ workspaces ------------------------------ */
   /*
    * The list carries each workspace's conversation count and most recent activity, so the
@@ -717,6 +916,58 @@ export function createDb(dbPath: string): AppDb {
       stmtCreateUser.run({ ...input, createdAt: now() });
       const r = stmtGetUser.get(input.id) as UserRow;
       return mapUser(r);
+    },
+
+    findSourceByHash(userId, sha256) {
+      const r = stmtFindSourceByHash.get(userId, sha256) as SourceRow | undefined;
+      return r ? mapSource(r) : undefined;
+    },
+    getSourceForUser(id, userId) {
+      const r = stmtGetSourceForUser.get(id, userId) as SourceRow | undefined;
+      return r ? mapSource(r) : undefined;
+    },
+    listSourcesForUser(userId) {
+      return (stmtListSourcesForUser.all(userId) as SourceRow[]).map(mapSource);
+    },
+    createSource(input) {
+      stmtCreateSource.run({ ...input, createdAt: now() });
+      const r = stmtGetSourceForUser.get(input.id, input.userId) as SourceRow;
+      return mapSource(r);
+    },
+    deleteSourceForUser(id, userId) {
+      return stmtDeleteSourceForUser.run(id, userId).changes > 0;
+    },
+    updateSourceParse(id, userId, patch) {
+      stmtUpdateSourceParse.run({
+        id,
+        userId,
+        status: patch.status,
+        error: patch.error ?? null,
+        code: patch.code ?? null,
+        parserId: patch.parserId ?? null,
+        parsedChars: patch.parsedChars ?? null,
+        pageCount: patch.pageCount ?? null,
+        updatedAt: now(),
+      });
+    },
+    linkSourceToSession(userId, sessionId, sourceId) {
+      return (
+        stmtLinkSourceToSession.run({ userId, sessionId, sourceId, createdAt: now() }).changes > 0
+      );
+    },
+    linkSourceToWorkspace(userId, workspaceId, sourceId) {
+      return (
+        stmtLinkSourceToWorkspace.run({ userId, workspaceId, sourceId, createdAt: now() })
+          .changes > 0
+      );
+    },
+    listSessionSources(userId, sessionId) {
+      return (stmtListSessionSources.all(sessionId, userId) as SourceRow[]).map(mapSource);
+    },
+    listReadableSources(userId, sessionId, workspaceId) {
+      return (
+        stmtListReadableSources.all({ userId, sessionId, workspaceId }) as SourceRow[]
+      ).map(mapSource);
     },
 
     listWorkspaces(userId) {

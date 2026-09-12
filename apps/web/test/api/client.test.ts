@@ -194,8 +194,10 @@ describe("workspace files", () => {
 });
 
 describe("attachmentUrl", () => {
-  it("points at the attachment route", () => {
-    expect(attachmentUrl("s1", "a1")).toBe("/api/sessions/s1/attachments/a1");
+  it("points at the source's bytes, by the source alone", () => {
+    // No session in the URL: the file belongs to the account, so the same source referenced
+    // from two conversations has one address — which is what makes the response cacheable.
+    expect(attachmentUrl("a1")).toBe("/api/sources/a1/raw");
   });
 });
 

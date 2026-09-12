@@ -8,6 +8,7 @@ import type {
   Message,
   PublicConfig,
   Session,
+  Source,
   User,
   Workspace,
 } from "@ilearnassist/shared";
@@ -40,8 +41,8 @@ const mocks = vi.hoisted(() => ({
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
     uploadAttachment: vi.fn(),
-    listAttachmentStatus: vi.fn(),
-    reparseAttachment: vi.fn(),
+    listSessionSources: vi.fn(),
+    reparseSource: vi.fn(),
     listParserKinds: vi.fn(),
     listDocumentParsers: vi.fn(),
     createDocumentParser: vi.fn(),
@@ -74,8 +75,7 @@ vi.mock("../../src/api/client", () => ({
   streamAnswers: mocks.streamAnswers,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
-  attachmentUrl: (sessionId: string, attachmentId: string) =>
-    `/api/sessions/${sessionId}/attachments/${attachmentId}`,
+  attachmentUrl: (sourceId: string) => `/api/sources/${sourceId}/raw`,
 }));
 
 const { useAppStore } = await import("../../src/stores/app.js");
@@ -153,6 +153,19 @@ function message(overrides: Partial<Message> & Pick<Message, "role">): Message {
     id: `m-${Math.random().toString(36).slice(2)}`,
     sessionId: "s1",
     content: "",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+/** A source as the parse-status poll reports it — the server's own row for the file. */
+function sourceOf(overrides: Partial<Source> & Pick<Source, "id">): Source {
+  return {
+    name: "lecture.pdf",
+    mimeType: "application/pdf",
+    size: 1000,
+    kind: "file",
+    parseStatus: "pending",
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
@@ -785,9 +798,11 @@ describe("document parsing", () => {
   it("polls for parse state while a document is settling, then stops", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listAttachmentStatus
-      .mockResolvedValueOnce({ d1: { status: "parsing", updatedAt: "" } })
-      .mockResolvedValue({ d1: { status: "ready", parsedChars: 4200, pageCount: 3, updatedAt: "" } });
+    mocks.api.listSessionSources
+      .mockResolvedValueOnce([sourceOf({ id: "d1", parseStatus: "parsing" })])
+      .mockResolvedValue([
+        sourceOf({ id: "d1", parseStatus: "ready", parsedChars: 4200, pageCount: 3 }),
+      ]);
 
     await store.uploadAttachment(new File(["x"], "lecture.pdf"));
     // The first poll fires immediately rather than after a full interval.
@@ -801,9 +816,9 @@ describe("document parsing", () => {
     expect(store.documentsParsing).toBe(false);
 
     // Settled: no further polling, so an idle composer does not keep asking the server.
-    const calls = mocks.api.listAttachmentStatus.mock.calls.length;
+    const calls = mocks.api.listSessionSources.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.api.listAttachmentStatus).toHaveBeenCalledTimes(calls);
+    expect(mocks.api.listSessionSources).toHaveBeenCalledTimes(calls);
   });
 
   it("does not poll for an attachment that needs no parsing", async () => {
@@ -818,16 +833,16 @@ describe("document parsing", () => {
 
     await store.uploadAttachment(new File(["hi"], "a.txt"));
     await vi.advanceTimersByTimeAsync(3000);
-    expect(mocks.api.listAttachmentStatus).not.toHaveBeenCalled();
+    expect(mocks.api.listSessionSources).not.toHaveBeenCalled();
     expect(store.documentsParsing).toBe(false);
   });
 
   it("surfaces a parse failure on the attachment", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listAttachmentStatus.mockResolvedValue({
-      d1: { status: "failed", error: "未检测到文本层", updatedAt: "" },
-    });
+    mocks.api.listSessionSources.mockResolvedValue([
+      sourceOf({ id: "d1", parseStatus: "failed", parseError: "未检测到文本层" }),
+    ]);
 
     await store.uploadAttachment(new File(["x"], "lecture.pdf"));
     await vi.advanceTimersByTimeAsync(2000);
@@ -841,21 +856,23 @@ describe("document parsing", () => {
     const store = await readyStore();
     const failed = { ...PDF, parseStatus: "failed" as const, parseError: "boom" };
     store.pendingAttachments = [failed];
-    mocks.api.reparseAttachment.mockResolvedValue({ status: "pending" });
+    mocks.api.reparseSource.mockResolvedValue({ status: "pending" });
     // First poll still in progress, second one done — that is what makes the loop keep
     // going for a re-parse when nothing is staged in the composer.
-    mocks.api.listAttachmentStatus
-      .mockResolvedValueOnce({ d1: { status: "parsing", updatedAt: "" } })
-      .mockResolvedValue({ d1: { status: "ready", parsedChars: 10, updatedAt: "" } });
+    mocks.api.listSessionSources
+      .mockResolvedValueOnce([sourceOf({ id: "d1", parseStatus: "parsing" })])
+      .mockResolvedValue([sourceOf({ id: "d1", parseStatus: "ready", parsedChars: 10 })]);
 
     await store.reparseAttachment(failed);
-    expect(mocks.api.reparseAttachment).toHaveBeenCalledWith("s1", "d1", "lecture.pdf");
+    // By the source alone: the file belongs to the account, so the conversation it was
+    // uploaded through is not part of its identity.
+    expect(mocks.api.reparseSource).toHaveBeenCalledWith("d1", "lecture.pdf");
     // Nothing is *pending* in the composer, so polling would stop immediately were it not
     // for the re-parse being tracked — this is the case that needs the extra bookkeeping.
     expect(store.pendingAttachments[0]!.parseStatus).not.toBe("failed");
 
     await vi.advanceTimersByTimeAsync(2000);
-    expect(mocks.api.listAttachmentStatus.mock.calls.length).toBeGreaterThan(1);
+    expect(mocks.api.listSessionSources.mock.calls.length).toBeGreaterThan(1);
     expect(store.pendingAttachments[0]!.parseStatus).toBe("ready");
     expect(store.pendingAttachments[0]!.parseError).toBeUndefined();
   });
@@ -863,7 +880,7 @@ describe("document parsing", () => {
   it("stops polling when the staged attachments are cleared", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listAttachmentStatus.mockResolvedValue({
+    mocks.api.listSessionSources.mockResolvedValue({
       d1: { status: "parsing", updatedAt: "" },
     });
 
@@ -871,9 +888,9 @@ describe("document parsing", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     store.clearPendingAttachments();
-    const calls = mocks.api.listAttachmentStatus.mock.calls.length;
+    const calls = mocks.api.listSessionSources.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.api.listAttachmentStatus).toHaveBeenCalledTimes(calls);
+    expect(mocks.api.listSessionSources).toHaveBeenCalledTimes(calls);
   });
 });
 

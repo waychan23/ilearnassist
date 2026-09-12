@@ -14,7 +14,6 @@ import { closeSettings, showLogin, showWorkspaceHome, uiState } from "../composa
 import type {
   AskUserAnswers,
   Attachment,
-  AttachmentParseRecord,
   ChatStreamEvent,
   Copilot,
   CopilotDefaults,
@@ -32,6 +31,7 @@ import type {
   PublicConfig,
   Session,
   SessionSettings,
+  Source,
   ToolCall,
   UpdateProviderInput,
   User,
@@ -143,13 +143,13 @@ export const useAppStore = defineStore("app", () => {
   const pendingAttachments = ref<Attachment[]>([]);
 
   /**
-   * Parse state for attachments already sent in this conversation, keyed by attachment id.
+   * Live parse state per source id, as the server last reported it.
    *
-   * Historical messages carry whatever state the server recorded when they were sent, which
-   * is right for a reload but goes stale the moment the user re-parses from the composer.
-   * This map is the live overlay on top of that.
+   * Overlaid on a message's stored snapshots so a reparse is visible in history without a
+   * reload. Holds whole `Source` rows rather than a trimmed shape, because the live state and
+   * the stored state are the same object read at different moments.
    */
-  const parseStatus = ref<Record<string, AttachmentParseRecord>>({});
+  const parseStatus = ref<Record<string, Source>>({});
 
   /** The protocol kinds the server implements, for the parser settings form. */
   const parserKinds = ref<DriverInfo[]>([]);
@@ -844,19 +844,26 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  /** Fold freshly polled parse state onto the pending attachments and the live map. */
-  function mergeParseStatus(statuses: Record<string, AttachmentParseRecord>): void {
-    parseStatus.value = { ...parseStatus.value, ...statuses };
+  /**
+   * Fold freshly polled parse state onto the staged attachments and the live map.
+   *
+   * The polled object is a **source** — the server's own row for the file — which is why the
+   * map holds sources rather than a smaller ad-hoc shape: the live state and the stored state
+   * are the same thing, read at different moments.
+   */
+  function mergeParseStatus(sources: Source[]): void {
+    const byId = new Map(sources.map((s) => [s.id, s]));
+    parseStatus.value = { ...parseStatus.value, ...Object.fromEntries(byId) };
     pendingAttachments.value = pendingAttachments.value.map((attachment) => {
-      const record = statuses[attachment.id];
-      if (!record) return attachment;
+      const source = byId.get(attachment.id);
+      if (!source) return attachment;
       return {
         ...attachment,
-        parseStatus: record.status,
-        parseError: record.error,
-        parserId: record.parserId,
-        parsedChars: record.parsedChars,
-        pageCount: record.pageCount,
+        parseStatus: source.parseStatus,
+        parseError: source.parseError,
+        parserId: source.parserId,
+        parsedChars: source.parsedChars,
+        pageCount: source.pageCount,
       };
     });
   }
@@ -873,10 +880,10 @@ export const useAppStore = defineStore("app", () => {
 
     const tick = async (): Promise<void> => {
       try {
-        const statuses = await api.listAttachmentStatus(sessionId);
-        mergeParseStatus(statuses);
+        const sources = await api.listSessionSources(sessionId);
+        mergeParseStatus(sources);
         for (const id of [...markingParsing.value]) {
-          const status = statuses[id]?.status;
+          const status = sources.find((s) => s.id === id)?.parseStatus;
           if (status && status !== "pending" && status !== "parsing") markingParsing.value.delete(id);
         }
       } catch {
@@ -934,18 +941,14 @@ export const useAppStore = defineStore("app", () => {
     const sessionId = activeSessionId.value;
     if (!sessionId) return;
     try {
-      await api.reparseAttachment(sessionId, attachment.id, attachment.name);
+      await api.reparseSource(attachment.id, attachment.name);
       markingParsing.value.add(attachment.id);
-      parseStatus.value = {
-        ...parseStatus.value,
-        [attachment.id]: {
-          status: "pending",
-          updatedAt: new Date().toISOString(),
-        },
-      };
       pendingAttachments.value = pendingAttachments.value.map((a) =>
         a.id === attachment.id ? { ...a, parseStatus: "pending", parseError: undefined } : a
       );
+      // No optimistic write to the live map: `startParsePolling` ticks immediately, and the
+      // server has already written `pending` — so the first answer is both sooner and more
+      // truthful than anything assembled here.
       startParsePolling(sessionId, () => markingParsing.value.size > 0);
     } catch (e) {
       markingParsing.value.delete(attachment.id);

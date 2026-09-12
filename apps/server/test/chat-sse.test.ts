@@ -263,7 +263,7 @@ describe("POST /api/sessions/:id/chat", () => {
     const attachment = (
       await env.inject({
         method: "POST",
-        url: `/api/sessions/${session.id}/attachments`,
+        url: `/api/sessions/${session.id}/sources`,
         payload: { name: "shot.png", mimeType: "image/png", data: Buffer.from("fake-png").toString("base64") },
       })
     ).json<Attachment>();
@@ -286,7 +286,7 @@ describe("POST /api/sessions/:id/chat", () => {
     const attachment = (
       await env.inject({
         method: "POST",
-        url: `/api/sessions/${session.id}/attachments`,
+        url: `/api/sessions/${session.id}/sources`,
         payload: { name: "shot.png", mimeType: "image/png", data: Buffer.from("fake-png").toString("base64") },
       })
     ).json<Attachment>();

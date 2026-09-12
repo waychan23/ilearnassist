@@ -85,7 +85,6 @@ export interface TestEnv {
   userLayout: UserLayout;
   /** Shorthand for `userLayout.workspacesRoot`, which is what most tests reach for. */
   workspacesRoot: string;
-  uploadsRoot: string;
   server: BuiltServer;
   /**
    * `app.inject`, with the signed-in account's cookie already attached.
@@ -233,7 +232,6 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     user: signedIn.user,
     userLayout: userLayout_,
     workspacesRoot: userLayout_.workspacesRoot,
-    uploadsRoot: server.uploadsRoot,
     server,
     inject: signedIn.inject,
     async asUser(username) {
@@ -252,37 +250,39 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
  * Wait until a session has no parse still pending or running, or the budget runs out.
  *
  * Extraction is deliberately off the request path, so every test that uploads a document
- * has to wait for a background job rather than for a response. Polling the sidecar keeps
- * the assertion honest: it observes the same state the browser does.
+ * has to wait for a background job rather than for a response. It polls the conversation's
+ * sources — the same rows the browser reads — rather than any file, so the assertion observes
+ * exactly what a user would.
  */
 export async function waitForParsing(
   env: TestEnv,
   sessionId: string,
   timeoutMs = 15_000
 ): Promise<void> {
-  const { listParseRecords } = await import("../../src/documents/store.js");
+  const isBusy = (): boolean =>
+    env.server.db
+      .listSessionSources(env.user.id, sessionId)
+      .some((s) => s.parseStatus === "pending" || s.parseStatus === "parsing");
+
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
-    const records = await listParseRecords(env.uploadsRoot, sessionId);
-    const busy = [...records.values()].some(
-      (r) => r.status === "pending" || r.status === "parsing"
-    );
-    if (!busy) {
-      // One extra tick so a queued job that just left the queue has written its record.
+    if (!isBusy()) {
+      // One extra tick so a queued job that just left the queue has written its state.
       await new Promise((resolve) => setTimeout(resolve, 10));
-      const settled = await listParseRecords(env.uploadsRoot, sessionId);
-      const stillBusy = [...settled.values()].some(
-        (r) => r.status === "pending" || r.status === "parsing"
-      );
-      if (!stillBusy) return;
+      if (!isBusy()) return;
     }
     if (Date.now() > deadline) throw new Error(`parsing did not settle within ${timeoutMs}ms`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 
-/** Upload a file through the real route and return the created attachment. */
+/**
+ * Upload a file through the real route and return the message snapshot it answers with.
+ *
+ * The snapshot rather than the source, because that is what a caller has: this is the same
+ * object the client would put on a message and send back on the next turn.
+ */
 export async function uploadAttachment(
   env: TestEnv,
   sessionId: string,
@@ -290,7 +290,7 @@ export async function uploadAttachment(
 ): Promise<Attachment> {
   const res = await env.inject({
     method: "POST",
-    url: `/api/sessions/${sessionId}/attachments`,
+    url: `/api/sessions/${sessionId}/sources`,
     payload: { name: file.name, mimeType: file.mimeType, data: file.data.toString("base64") },
   });
   if (res.statusCode !== 201) {

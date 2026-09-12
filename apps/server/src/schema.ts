@@ -18,7 +18,14 @@ import type Database from "better-sqlite3";
  * refused version is left exactly as it was.
  */
 
-export const SCHEMA_VERSION = 1;
+/**
+ * 2 — `messages.attachments[].id` stops being an upload id and becomes a **source** id.
+ *
+ * Same field, same JSON column, different referent: nothing about the row says which kind of
+ * id it holds, so an old file cannot be detected by shape and is refused instead. That is the
+ * case this guard exists for.
+ */
+export const SCHEMA_VERSION = 2;
 
 /**
  * Every table, with the columns that earlier releases added by migration folded back in.
@@ -29,6 +36,38 @@ export const SCHEMA_VERSION = 1;
  *
  * `copilots.model` is gone rather than dormant: it was superseded by `settings.modelId` and
  * only existed to be folded forward by a migration that no longer runs.
+ *
+ * ### Uploaded files are `sources`
+ *
+ * Owned by an **account** rather than by the conversation they arrived in, because one file
+ * can be referenced by several. `UNIQUE (user_id, sha256)` is what makes identical bytes one
+ * row, one file and two references — and it is also why the hash is *scoped*: a lookup by
+ * hash alone would hand one account's bytes to another who uploaded the same content, which
+ * is exactly the case dedupe makes common.
+ *
+ * `raw_path` is where the bytes are. Storing it (rather than deriving and globbing for it)
+ * is what retired a whole class of collision — nothing has to list a directory to find a
+ * file any more. It is still validated against the account's sources root before every read:
+ * a database row is not a trust boundary, and a path that travelled through a backup, or
+ * through a future bug, is not the same thing as one this code wrote.
+ *
+ * Parse state lives in **columns** here rather than in a `parsed/<id>.json` sidecar. That is
+ * the "index it in the database" half of the design: a reparse is then visible in every
+ * conversation at once rather than only in the messages written after it, and a source shared
+ * by two conversations is parsed once. Only the extracted *text* stays a file — it is large,
+ * and `read_document` streams it by offset.
+ *
+ * ### The two link tables are not the same thing
+ *
+ * `session_sources` is the authority on what the model may read: a query, answered fresh
+ * every turn, so a source unlinked a moment ago is gone from the next turn's whitelist.
+ * `workspace_sources` is the same one level up, and is how a document uploaded in one
+ * conversation is readable from another in the same workspace.
+ *
+ * Neither is what a *message* shows. `messages.attachments` stays a JSON snapshot of the
+ * source as it was sent, so a chip does not vanish from history because the source was
+ * unlinked or deleted afterwards — and it carries the name that upload used, which the source
+ * itself deliberately does not (it keeps the first name it ever saw).
  */
 const DDL = `
   CREATE TABLE IF NOT EXISTS users (
@@ -49,6 +88,45 @@ const DDL = `
     UNIQUE (user_id, slug)
   );
   CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id, created_at);
+
+  -- Uploaded files. See the note above on ownership, dedupe, raw_path and parse state.
+  CREATE TABLE IF NOT EXISTS sources (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sha256 TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    raw_path TEXT NOT NULL,
+    parse_status TEXT NOT NULL DEFAULT 'none',
+    parse_error TEXT,
+    parse_error_code TEXT,
+    parser_id TEXT,
+    parsed_chars INTEGER,
+    page_count INTEGER,
+    parse_updated_at TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, sha256)
+  );
+  CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id, created_at);
+
+  -- What a source is referenced by. Two tables, and both are needed — see the note above.
+  CREATE TABLE IF NOT EXISTS session_sources (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, source_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_session_sources_source ON session_sources(source_id);
+
+  CREATE TABLE IF NOT EXISTS workspace_sources (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, source_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_workspace_sources_source ON workspace_sources(source_id);
 
   CREATE TABLE IF NOT EXISTS copilots (
     id TEXT PRIMARY KEY,
