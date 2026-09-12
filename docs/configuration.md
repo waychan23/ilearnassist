@@ -187,20 +187,64 @@ since neither touches the workspace.
 
 ## Copilots
 
-Copilots are managed in the UI (the **Copilots** button in the sidebar footer) or
-via `POST /api/copilots`. They carry:
+A Copilot is a reusable persona: a system prompt, a tool allow-list and default
+generation parameters. One is chosen when a conversation is created — the
+new-conversation dialog lists every published Copilot and then the account's own —
+and Copilots themselves are managed in the UI (the **Copilots** tab of the settings
+dialog, opened by the **设置** button in the sidebar footer) or via
+`POST /api/copilots`. They are **owned by the account that created them**
+(`copilots.user_id`) and carry:
 
 - `name`, `description` — shown in the picker and the manager list.
-- `systemPrompt` — prepended to every turn as the system message; empty falls
-  back to the built-in general-assistant prompt.
-- `tools` — an allow-list of tool names; empty = all available tools.
+- `systemPrompt` — becomes the conversation's system message; empty falls back to
+  the built-in general-assistant prompt.
+- `allTools` — whether every tool is available. **Authoritative over `tools`**, and `true`
+  unless the request says otherwise, which is what an untouched Copilot has always meant.
+- `tools` — the tool names allowed, meaningful only when `allTools` is false — and then
+  exhaustive, so an empty list means **no tools at all**. This is the state the flag was added
+  for: an empty list used to mean *every* tool, which made a Copilot with no tools selected
+  silently the most permissive kind, and left "deny everything" unexpressible. `POST` clears
+  `tools` whenever it stores `allTools: true`, so a stored Copilot cannot disagree with itself.
 - `settings` — default generation parameters (`providerId`, `modelId`,
-  `temperature`, `topP`, `maxTokens`, `maxContextMessages`, `maxSteps`). These are
-  **copied into** a new conversation, not referenced: editing a Copilot does not
-  change conversations already underway.
+  `temperature`, `topP`, `maxTokens`, `maxContextMessages`, `maxSteps`).
+- `visibility` — `private` (the default) or `public`. Both `POST /api/copilots` and
+  `PUT /api/copilots/:id` accept it, and anything other than `"public"` means
+  private, because publishing puts a persona in front of every account and is
+  something the owner opts into rather than a default they discover later.
 
-Tool names: `web_search`, `web_fetch`, `list_files`, `read_file`, `write_file`,
-`create_directory`, `delete_file`.
+**There is no separate "platform" tier.** A Copilot the operator wants every account
+to have is simply one they published — no admin role, no separate storage. A public
+Copilot is visible and usable by every account, while editing and deleting stay
+**owner-only**; a public Copilot someone else wrote can be copied into an editable
+private one of your own. The read a route takes is the whole policy: `GET /api/copilots`
+answers with this account's own Copilots plus every public one, a Copilot is *usable*
+if it is either, and another account's private Copilot answers **404 rather than 403**,
+so an id cannot be probed.
+
+All of `name`, `systemPrompt`, `allTools`, `tools` and `settings` are **copied into** a new
+conversation, not referenced: editing or deleting a Copilot does not change the
+conversations already underway. `sessions.copilot_id` stays only as a link for the
+UI — nullable and allowed to dangle (`ON DELETE SET NULL`) — while the badge reads
+the copied `copilot_name`, which is what survives the Copilot being deleted.
+Changing a conversation's behaviour afterwards is an edit of that conversation:
+`PATCH /api/sessions/:id` with `systemPrompt` (and `allTools`/`tools`). There is deliberately
+no mid-conversation Copilot switch, because the persona is a copy — re-pointing the link
+would move the label and leave the behaviour behind.
+
+**Opening a data root written by an earlier build** runs one migration on that boot: the
+Copilot rows written before they had an owner are deleted, because they have no owner and
+no way to infer one — they are dropped rather than guessed at. No conversation is removed
+(`sessions.copilot_id` goes NULL), but two things change. A conversation keeps its copied
+generation `settings` and loses its Copilot's persona, falling back to the built-in system
+prompt. And a conversation that was running under a **tool-restricted** Copilot becomes
+unrestricted, because it has no snapshot and `all_tools` defaults to 1. That widening is real,
+which is why it is stated here.
+
+Tool names — one list, `ALL_TOOL_NAMES` in `packages/shared`, because the client writes the
+allow-list and the server reads it, so a name the two disagree about is either a tool that
+cannot be selected or a selection that matches nothing:
+`web_search`, `web_fetch`, `list_files`, `read_file`, `write_file`, `create_directory`,
+`delete_file`, `read_document`, `ask_user`.
 
 ## Conversation titles
 
@@ -225,12 +269,18 @@ never leave the placeholder, and it can never fail the chat turn.
 
 ## Conversation parameters
 
-Each conversation has its own `settings`, editable from the 🎛 button in the chat
-header. Resolution is most-specific-first, and a blank value means "inherit":
+Each conversation has its own `settings`, editable from the 🎛 button in the
+composer. Resolution is most-specific-first, and a blank value means "inherit":
 
 ```text
-per-request override  ⊳  session settings  ⊳  Copilot defaults  ⊳  app default
+per-request override  ⊳  session settings  ⊳  app default
 ```
+
+The Copilot tier that used to sit between the session and the app default is gone:
+a Copilot's defaults were merged into `session.settings` when the conversation was
+created, so a turn resolves against the session alone and nothing reads a Copilot at
+turn time. The same dialog holds the conversation's own `systemPrompt` (and
+`tools`), which is where a conversation's persona is changed.
 
 `maxContextMessages` caps how many prior messages are replayed into the model
 context (blank = the whole history); `maxSteps` caps how many model → tool rounds

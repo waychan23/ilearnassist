@@ -1,21 +1,14 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+// From `shared`, not a local literal: the server filters by exactly these names, so a copy
+// that drifted would offer a tool the server does not know, or hide one it does. It had
+// already drifted once — the local list was missing `read_document`.
+import { ALL_TOOL_NAMES } from "../../api/types";
 import type { Copilot } from "../../api/types";
 import type { CopilotDraft } from "../../stores/app";
 import Icon from "../Icon.vue";
-
-const ALL_TOOLS = [
-  "web_search",
-  "web_fetch",
-  "list_files",
-  "read_file",
-  "write_file",
-  "create_directory",
-  "delete_file",
-  "ask_user",
-] as const;
 
 const props = defineProps<{ copilot: Copilot | null }>();
 const emit = defineEmits<{ close: []; save: [draft: CopilotDraft] }>();
@@ -58,6 +51,18 @@ const draft = reactive<Draft>({
   maxSteps: "",
 });
 
+/** Publishing is opt-in, so a Copilot is private unless the box is ticked. */
+const isPublic = ref(false);
+
+/**
+ * Whether every tool is available. Authoritative over `tools`: the two controls below are one
+ * setting seen twice, and the server stores whichever the flag names.
+ *
+ * A new Copilot starts with every tool, which is what an untouched Copilot has always meant —
+ * the flag exists to make the *other* state reachable, not to change this one.
+ */
+const allTools = ref(true);
+
 const str = (v: number | null | undefined): string => (v == null ? "" : String(v));
 
 watch(
@@ -74,6 +79,8 @@ watch(
     draft.maxTokens = str(c?.settings.maxTokens);
     draft.maxContextMessages = str(c?.settings.maxContextMessages);
     draft.maxSteps = str(c?.settings.maxSteps);
+    isPublic.value = c?.visibility === "public";
+    allTools.value = c?.allTools ?? true;
   },
   { immediate: true }
 );
@@ -103,10 +110,33 @@ watch(
   }
 );
 
+/** A tool reads as selected while the flag is on, whatever the list happens to hold. */
+function isToolChecked(name: string): boolean {
+  return allTools.value || draft.tools.includes(name);
+}
+
 function toggleTool(name: string) {
+  if (allTools.value) {
+    // Unchecking one box under "all" is how "everything except this" is said, and it is the
+    // only way to narrow from the flag without starting over from nothing. The list becomes
+    // the rest of the names, so what is on screen is what gets saved.
+    allTools.value = false;
+    draft.tools = ALL_TOOL_NAMES.filter((n) => n !== name);
+    return;
+  }
   const i = draft.tools.indexOf(name);
   if (i === -1) draft.tools.push(name);
   else draft.tools.splice(i, 1);
+}
+
+/**
+ * Turn "every tool" off.
+ *
+ * The list is left empty rather than pre-filled: unchecking the flag is a statement that the
+ * selection is about to be made by hand, and the saved state has to be the one on screen.
+ */
+function disableAllTools() {
+  draft.tools = [];
 }
 
 const num = (v: string): number | null => {
@@ -123,6 +153,9 @@ function save() {
     name: draft.name.trim(),
     description: draft.description.trim(),
     systemPrompt: draft.systemPrompt,
+    allTools: allTools.value,
+    // Sent as given even when the flag overrides it; the server is the side that decides the
+    // flag wins, so a client cannot leave a row asserting both.
     tools: [...draft.tools],
     settings: {
       providerId: draft.providerId || null,
@@ -133,6 +166,7 @@ function save() {
       maxContextMessages: num(draft.maxContextMessages),
       maxSteps: num(draft.maxSteps),
     },
+    visibility: isPublic.value ? "public" : "private",
   });
 }
 </script>
@@ -181,12 +215,45 @@ function save() {
 
           <div class="field">
             <label>{{ t("copilot.tools") }}</label>
+            <!-- The flag writes the state the boxes show; leaving them in step by hand is what
+                 keeps "all tools" from meaning "the list happened to hold everything". -->
+            <label class="check-row">
+              <input
+                v-model="allTools"
+                type="checkbox"
+                data-testid="copilot-all-tools"
+                @change="allTools || disableAllTools()"
+              />
+              {{ t("copilot.allTools") }}
+            </label>
             <div class="form-grid tool-checks">
-              <label v-for="t in ALL_TOOLS" :key="t" class="check-row">
-                <input type="checkbox" :checked="draft.tools.includes(t)" @change="toggleTool(t)" />
-                {{ toolLabel(t) }}
+              <label
+                v-for="name in ALL_TOOL_NAMES"
+                :key="name"
+                class="check-row"
+                :data-testid="`tool-check-${name}`"
+              >
+                <input
+                  type="checkbox"
+                  :checked="isToolChecked(name)"
+                  @change="toggleTool(name)"
+                />
+                {{ toolLabel(name) }}
               </label>
             </div>
+            <div class="hint">
+              {{ allTools ? t("copilot.allToolsHint") : t("copilot.toolsHint") }}
+            </div>
+          </div>
+
+          <!-- Unticked by default. Publishing puts this wording in front of every account,
+               so it is a decision rather than something to discover after the fact. -->
+          <div class="field">
+            <label class="check-row">
+              <input v-model="isPublic" type="checkbox" data-testid="copilot-public" />
+              {{ t("copilot.public") }}
+            </label>
+            <div class="hint">{{ t("copilot.publicHint") }}</div>
           </div>
 
           <details class="defaults" :open="showDefaults">
@@ -237,7 +304,14 @@ function save() {
         </div>
         <div class="modal-foot">
           <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
-          <button class="btn primary" :disabled="!draft.name.trim()" @click="save">{{ t("common.save") }}</button>
+          <button
+            class="btn primary"
+            data-testid="save-copilot"
+            :disabled="!draft.name.trim()"
+            @click="save"
+          >
+            {{ t("common.save") }}
+          </button>
         </div>
       </div>
     </div>

@@ -1,25 +1,14 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
+// The canonical list lives in `shared` rather than here, because the *client* writes the
+// allow-list this module filters by: Settings → Copilots checkboxes produce these names. Kept
+// here as a re-export so the server's own callers and tests read it as a tool-assembly fact.
+export { ALL_TOOL_NAMES, type ToolName } from "@ilearnassist/shared";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildFileTools } from "./fileTools.js";
 import { buildWebFetchTool } from "./webFetch.js";
 import { buildWebSearchTool } from "./webSearch.js";
-
-/** Canonical list of tool names. Copilots may restrict a session to a subset of these. */
-export const ALL_TOOL_NAMES = [
-  "web_search",
-  "web_fetch",
-  "list_files",
-  "read_file",
-  "write_file",
-  "create_directory",
-  "delete_file",
-  "read_document",
-  "ask_user",
-] as const;
-
-export type ToolName = (typeof ALL_TOOL_NAMES)[number];
 
 /**
  * Tools that do not touch the workspace, and so survive `fileTools.enabled: false`.
@@ -34,7 +23,12 @@ export interface BuildToolsInput {
   webSearch: WebSearchConfig;
   webFetch: WebFetchConfig;
   fileToolsEnabled: boolean;
-  /** When non-empty, only these tools are exposed (from a Copilot's `tools` list). */
+  /**
+   * The tools to expose. **Absent means every tool; an empty array means none.**
+   *
+   * The distinction is the whole reason `allTools` exists on a Copilot — see `BuildTools`'s
+   * callers — so do not "simplify" this back to a single "empty means unrestricted" case.
+   */
   allowedNames?: string[];
   /**
    * Present only when this conversation can read a document at all — that is, when its
@@ -77,9 +71,10 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     all.push(buildDocumentTool(input.documents));
   }
 
-  const allowed = input.allowedNames && input.allowedNames.length > 0
-    ? new Set(input.allowedNames)
-    : null;
+  // Absent means "no restriction"; an empty array means "no tools". The two used to be the same
+  // thing — `length > 0` was the test — which made a Copilot with no tools checked silently
+  // become a Copilot with every tool, and left "deny everything" unrepresentable.
+  const allowed = input.allowedNames ? new Set(input.allowedNames) : null;
 
   return all.filter((t) => {
     if (!input.fileToolsEnabled && !NON_FILE_TOOLS.has(t.name)) return false;

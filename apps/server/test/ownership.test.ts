@@ -25,7 +25,12 @@ let db: AppDb;
 const ADA = "u-ada";
 const BOB = "u-bob";
 
-/** One workspace, one conversation, one message — per account, keyed by the owner's id. */
+/**
+ * One workspace, one Copilot, one conversation, one message — per account, keyed by owner id.
+ *
+ * The Copilot is private, so it is the thing an account must never see through another's eyes;
+ * the tests that need a *public* one publish it themselves.
+ */
 function seed(userId: string): void {
   db.createWorkspace({
     id: `w-${userId}`,
@@ -34,10 +39,15 @@ function seed(userId: string): void {
     slug: "w",
     dirPath: join(root, userId, "w"),
   });
+  addCopilot(`c-${userId}`, userId, "private");
   db.createSession({
     id: `s-${userId}`,
     workspaceId: `w-${userId}`,
     copilotId: null,
+    copilotName: "",
+    systemPrompt: "",
+    allTools: true,
+    tools: [],
     title: "T",
   });
   db.createMessage({
@@ -45,6 +55,22 @@ function seed(userId: string): void {
     sessionId: `s-${userId}`,
     role: "user",
     content: "hi",
+  });
+}
+
+function addCopilot(id: string, userId: string, visibility: "private" | "public"): void {
+  db.createCopilot({
+    id,
+    userId,
+    name: id,
+    description: "",
+    systemPrompt: `prompt of ${id}`,
+    // A restriction on purpose: it is the field whose loss would go unnoticed, because
+    // "no restriction" is the wider state and the one a default lands on.
+    allTools: false,
+    tools: ["read_file"],
+    settings: { temperature: 0.2 },
+    visibility,
   });
 }
 
@@ -140,6 +166,92 @@ describe("messages", () => {
   });
 });
 
+/**
+ * Copilots are the one table with a *two-sided* rule, which is why it needs its own block.
+ *
+ * "Owned" would be too simple — a published Copilot is deliberately usable by accounts that do
+ * not own it. So the reads take the wider predicate (own, or public) and the writes take the
+ * narrower one (own only), and every case below is one half of that asymmetry.
+ */
+describe("copilots", () => {
+  it("lists the caller's own plus every public one, and not another account's private", () => {
+    addCopilot("c-bob-public", BOB, "public");
+
+    expect(db.listCopilotsForUser(ADA).map((c) => c.id).sort()).toEqual(
+      [`c-${ADA}`, "c-bob-public"].sort()
+    );
+    // Named separately from the equality above because this is the assertion that matters: a
+    // listing that returned everything would fail it while looking perfectly plausible.
+    expect(db.listCopilotsForUser(ADA).map((c) => c.id)).not.toContain(`c-${BOB}`);
+  });
+
+  it("lets an account use a public Copilot it does not own, and not a private one", () => {
+    addCopilot("c-bob-public", BOB, "public");
+
+    expect(db.getCopilotForUser("c-bob-public", ADA)?.id).toBe("c-bob-public");
+    expect(db.getCopilotForUser(`c-${BOB}`, ADA)).toBeUndefined();
+    expect(db.getCopilotForUser(`c-${BOB}`, BOB)?.id).toBe(`c-${BOB}`);
+  });
+
+  it("hands an ownerless Copilot to nobody, even a public one", () => {
+    /*
+     * `user_id` is nullable so the column could be added to older databases without a default
+     * (see `schema.ts`). The price of that is paid here: a row whose owner is gone must match no
+     * read at all rather than being offered to whoever asks.
+     *
+     * `public` on purpose. The disjunction alone would still return it — `visibility = 'public'`
+     * is true however absent the owner is — so a private orphan would pass this test against an
+     * unfixed predicate. Marking it public is what makes the assertion about the guard.
+     */
+    addCopilot("c-orphan", BOB, "public");
+    db.raw.prepare("UPDATE copilots SET user_id = NULL WHERE id = ?").run("c-orphan");
+
+    expect(db.getCopilotForUser("c-orphan", ADA)).toBeUndefined();
+    expect(db.getCopilotForUser("c-orphan", BOB)).toBeUndefined();
+    expect(db.listCopilotsForUser(ADA).map((c) => c.id)).not.toContain("c-orphan");
+  });
+
+  it("does not let an account edit or delete a public Copilot it does not own", () => {
+    addCopilot("c-bob-public", BOB, "public");
+
+    expect(
+      db.updateCopilotForUser("c-bob-public", ADA, {
+        name: "stolen",
+        description: "",
+        systemPrompt: "stolen",
+        allTools: true,
+        tools: [],
+        settings: {},
+        visibility: "private",
+      })
+    ).toBeUndefined();
+    expect(db.deleteCopilotForUser("c-bob-public", ADA)).toBe(false);
+
+    // Unchanged, which is the half that actually matters: a refused write that still wrote
+    // would pass an assertion on the return value alone.
+    expect(db.getOwnedCopilot("c-bob-public", BOB)).toMatchObject({
+      name: "c-bob-public",
+      systemPrompt: "prompt of c-bob-public",
+      tools: ["read_file"],
+      visibility: "public",
+    });
+  });
+
+  it("reports its own not-found and another's alike, so an id cannot be probed", () => {
+    expect(db.getCopilotForUser("c-nope", ADA)).toBeUndefined();
+    expect(db.getCopilotForUser("c-bob", ADA)).toBeUndefined();
+    expect(db.getOwnedCopilot("c-bob", ADA)).toBeUndefined();
+  });
+
+  it("takes an account's Copilots with it when the account goes", () => {
+    addCopilot("c-bob-public", BOB, "public");
+    db.raw.prepare("DELETE FROM users WHERE id = ?").run(BOB);
+
+    expect(db.getOwnedCopilot(`c-${BOB}`, BOB)).toBeUndefined();
+    expect(db.listCopilotsForUser(ADA).map((c) => c.id)).toEqual([`c-${ADA}`]);
+  });
+});
+
 describe("deleting an account", () => {
   it("takes its workspaces, conversations and messages with it", () => {
     // The foreign keys are what make "delete this account" a single statement rather than a
@@ -171,15 +283,29 @@ describe("over HTTP, with two signed-in accounts", () => {
     env = undefined;
   });
 
-  /** A workspace and a conversation in it, owned by `who`. */
-  async function seedFor(who: { inject: TestEnv["inject"] }): Promise<{ workspaceId: string; sessionId: string }> {
+  /** A workspace, a private Copilot and a conversation, all owned by `who`. */
+  async function seedFor(
+    who: { inject: TestEnv["inject"] }
+  ): Promise<{ workspaceId: string; sessionId: string; copilotId: string }> {
     const workspace = await who
       .inject({ method: "POST", url: "/api/workspaces", payload: { name: "Mine" } })
+      .then((r) => r.json<{ id: string }>());
+    const copilot = await who
+      .inject({
+        method: "POST",
+        url: "/api/copilots",
+        payload: {
+          name: "Theirs",
+          systemPrompt: "their private persona",
+          allTools: false,
+          tools: ["read_file"],
+        },
+      })
       .then((r) => r.json<{ id: string }>());
     const session = await who
       .inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })
       .then((r) => r.json<{ id: string }>());
-    return { workspaceId: workspace.id, sessionId: session.id };
+    return { workspaceId: workspace.id, sessionId: session.id, copilotId: copilot.id };
   }
 
   it("does not see another account's workspace in a listing", async () => {
@@ -210,6 +336,10 @@ describe("over HTTP, with two signed-in accounts", () => {
       // Reaches a process-local map of running turns, so if the `ForUser` read in front of
       // it were dropped, an id guess would end someone else's generation.
       ["POST", `/api/sessions/${theirs.sessionId}/stop`],
+      // A Copilot someone else published is usable but not editable; a private one is neither,
+      // and to a caller that does not own it the two are indistinguishable.
+      ["PUT", `/api/copilots/${theirs.copilotId}`],
+      ["DELETE", `/api/copilots/${theirs.copilotId}`],
     ] as const;
 
     for (const [method, url] of attempts) {
@@ -219,6 +349,101 @@ describe("over HTTP, with two signed-in accounts", () => {
       const stillThere = await bob.inject({ method: "GET", url: `/api/workspaces/${theirs.workspaceId}/files` });
       expect(stillThere.statusCode).toBe(200);
     }
+  });
+
+  it("tells the creator a Copilot is theirs, by an id that matches their account", async () => {
+    /*
+     * The client splits the list into "mine" and "published by someone else" by comparing
+     * `copilot.userId` with the id `/auth/me` gave it, so those two have to be the same id — and
+     * an owner must never be shown the read-only view of their own Copilot. Asserted over HTTP
+     * rather than at the db, because it is the *wire* shape the client reads.
+     */
+    env = await startTestServer({ username: "Ada" });
+
+    const created = (
+      await env.inject({
+        method: "POST",
+        url: "/api/copilots",
+        payload: { name: "Mine", systemPrompt: "" },
+      })
+    ).json<{ id: string; userId: string }>();
+    const me = (await env.inject({ method: "GET", url: "/api/auth/me" })).json<{ id: string }>();
+
+    expect(me.id).toBeTruthy();
+    expect(created.userId).toBe(me.id);
+
+    const bob = await env.asUser("Bob");
+    await seedFor(bob); // one of Bob's too, so the listing is not all one account's
+
+    const listed = (await env.inject({ method: "GET", url: "/api/copilots" })).json<
+      { id: string; userId: string }[]
+    >();
+    expect(listed.find((c) => c.id === created.id)?.userId).toBe(me.id);
+
+    /*
+     * And every row that reaches the client carries an owner. The client decides "may I edit
+     * this" by comparing `userId` with its own account id, so a row that arrived without one
+     * would be handed to its owner as somebody else's Copilot — read-only, with a "copy to
+     * mine" button. That is the shape of an ownerless row, which is why the column being
+     * nullable must not mean a row can be *served* without it.
+     */
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed.every((c) => !!c.userId)).toBe(true);
+  });
+
+  it("refuses to start a conversation from another account's private Copilot", async () => {
+    /*
+     * The regression this whole change exists for. A Copilot id arriving on a session-create was
+     * looked up unscoped, and the prompt was then read live on every turn — so this one request
+     * was enough to have another account's persona, and its tool allowlist, drive a conversation
+     * the caller owned. Refused rather than dropped: a silently Copilotless session would look
+     * exactly like success.
+     */
+    env = await startTestServer({ username: "Ada" });
+    const bob = await env.asUser("Bob");
+    const theirs = await seedFor(bob);
+    const mine = await seedFor(env);
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/workspaces/${mine.workspaceId}/sessions`,
+      payload: { copilotId: theirs.copilotId },
+    });
+
+    expect(res.statusCode).toBe(404);
+    // And no session was created as a side effect of the refusal.
+    expect((await env.inject({ method: "GET", url: `/api/workspaces/${mine.workspaceId}/sessions` }))
+      .json<{ id: string }[]>().length).toBe(1);
+  });
+
+  it("starts a conversation from a public Copilot it does not own, copying it in", async () => {
+    env = await startTestServer({ username: "Ada" });
+    const bob = await env.asUser("Bob");
+    const theirs = await seedFor(bob);
+    await bob.inject({
+      method: "PUT",
+      url: `/api/copilots/${theirs.copilotId}`,
+      payload: { visibility: "public" },
+    });
+    const mine = await seedFor(env);
+
+    const created = await env.inject({
+      method: "POST",
+      url: `/api/workspaces/${mine.workspaceId}/sessions`,
+      payload: { copilotId: theirs.copilotId },
+    });
+
+    expect(created.statusCode).toBe(201);
+    // All four parts of the Copilot are copied, not just the ones that happened to be visible —
+    // the allowlist included, since an empty one would read as "all tools".
+    expect(
+      created.json<{ copilotId: string; copilotName: string; systemPrompt: string; tools: string[] }>()
+    ).toMatchObject({
+      copilotId: theirs.copilotId,
+      copilotName: "Theirs",
+      systemPrompt: "their private persona",
+      tools: ["read_file"],
+    });
   });
 
   it("does not read another account's files through the browser", async () => {

@@ -68,6 +68,8 @@ function provider(capabilities: ModelCapability[] = [], baseURL = llm.baseURL): 
 interface RunOptions {
   turns: FakeTurn[];
   tools?: StructuredToolInterface[];
+  /** The conversation's own persona; empty (the default) uses the built-in assistant text. */
+  systemPrompt?: string;
   settings?: SessionSettings;
   history?: Message[];
   /** `null` is a resume: a suspended turn carries on with no new user message. */
@@ -99,6 +101,8 @@ async function run(options: RunOptions) {
       sessionCount: 0,
       lastActivityAt: null,
     },
+    // The session's own prompt, as the routes now pass it — the loop never sees a Copilot.
+    systemPrompt: options.systemPrompt ?? "",
     settings: options.settings ?? {},
     // The whole user tree, not just the sources directory: `buildUserContent` derives a
     // source's path from the layout, so it needs the root it belongs to.
@@ -413,6 +417,20 @@ describe("runAgentStream — history handling", () => {
     expect(system).toContain("ask_user");
   });
 
+  it("replaces the built-in assistant prompt with the session's own", async () => {
+    // A Copilot's persona reaches the model as the *session's* string now, because the session
+    // copied it at creation. The loop takes the prompt and nothing about where it came from,
+    // which is what makes an edit to the Copilot afterwards unable to reach this turn.
+    await run({ turns: [{ content: "ok" }], systemPrompt: "You are a laconic tutor." });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    const system = JSON.stringify(sent.messages[0]!.content);
+    expect(system).toContain("You are a laconic tutor.");
+    expect(system).not.toContain("You are a helpful, precise AI assistant");
+    // The sandbox note is appended to whichever persona was chosen, so it survives.
+    expect(system).toContain(workdir);
+  });
+
   it("puts the ask_user description on the wire", async () => {
     // `askUser.test.ts` asserts the string is on the tool *object*; this closes the gap to
     // "the model is actually sent it", which is the whole claim a wording change rests on.
@@ -694,7 +712,7 @@ describe("runAgentStream — ask_user suspends the turn", () => {
     expect(result.toolCalls[0]!.output).toMatch(/^Tool error: /);
   });
 
-  it("cannot suspend when the tool is not in the copilot's tool set", async () => {
+  it("cannot suspend when the tool is not in the turn's tool set", async () => {
     const { result } = await run({
       tools: [],
       turns: [{ toolCalls: [{ name: "ask_user", args: { questions } }] }, { content: "好的" }],

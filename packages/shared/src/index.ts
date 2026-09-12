@@ -16,6 +16,33 @@ export type Role = "user" | "assistant";
  */
 export const ASK_USER_TOOL_NAME = "ask_user";
 
+/**
+ * Every tool the agent can be given, in the order the settings screens list them.
+ *
+ * Shared for the same reason as `ASK_USER_TOOL_NAME` above, and one more: a Copilot's tool
+ * allow-list is written by the *client* and read by the server, so a name the two disagree
+ * about is either a tool that cannot be selected or a selection that matches nothing. It was
+ * duplicated once, and the copies had already drifted — the client's list was missing
+ * `read_document`, which therefore could not be chosen at all.
+ *
+ * `read_document` is only *assembled* when the turn has sources to read (see
+ * `buildTools`), so it appearing here is a statement about what may be allow-listed, not a
+ * promise that the tool exists on every turn.
+ */
+export const ALL_TOOL_NAMES = [
+  "web_search",
+  "web_fetch",
+  "list_files",
+  "read_file",
+  "write_file",
+  "create_directory",
+  "delete_file",
+  "read_document",
+  "ask_user",
+] as const;
+
+export type ToolName = (typeof ALL_TOOL_NAMES)[number];
+
 /** One choice the model offers, plus the sentence explaining what picking it means. */
 export interface AskUserOption {
   label: string;
@@ -492,15 +519,53 @@ export interface SessionSettings {
 /** A Copilot's default settings, copied onto a session at creation time. */
 export type CopilotDefaults = SessionSettings;
 
+/**
+ * Who a Copilot is visible to.
+ *
+ * `private` means its owner alone; `public` means every account can see and *use* it, while
+ * still only its owner can edit or delete it. That asymmetry is the whole of the "platform"
+ * concept — there is no separate tier and no admin role, so a Copilot the operator wants
+ * everyone to have is simply one they published.
+ */
+export type CopilotVisibility = "private" | "public";
+
+/**
+ * A reusable persona: a system prompt, a tool allowlist and generation defaults.
+ *
+ * Owned by the account that created it. Using one does not reference it — a conversation
+ * **copies** this whole definition at creation, so later edits here leave conversations
+ * already underway untouched, and a session whose Copilot has been deleted still behaves as
+ * it did.
+ */
 export interface Copilot {
   id: string;
+  /** The owning account. Never another account's Copilot, unless `visibility` is `public`. */
+  userId: string;
+  /** The owner's username, so a public Copilot can be attributed to whoever published it. */
+  ownerName?: string;
   name: string;
   description: string;
   systemPrompt: string;
-  /** Tool names this copilot is allowed to use (empty = all available). */
+  /**
+   * Whether every tool is available. **Authoritative over `tools`.**
+   *
+   * This exists because "no tools allowed" was previously unexpressible: an empty `tools` list
+   * meant *every* tool, so a Copilot could not be locked down to none. The two states are now
+   * distinct and both reachable — `allTools: true` means everything the turn assembled, and
+   * `allTools: false` with an empty `tools` means nothing at all.
+   *
+   * `allTools: true` also means `tools` is empty and carries no authority; the write paths
+   * clear it so a stored row cannot disagree with itself, and readers derive from the flag.
+   */
+  allTools: boolean;
+  /**
+   * Tool names this copilot is allowed to use, meaningful **only when `allTools` is false** —
+   * and then exhaustive, so an empty list means no tools rather than all of them.
+   */
   tools: string[];
   /** Defaults handed to new conversations started with this copilot. */
   settings: CopilotDefaults;
+  visibility: CopilotVisibility;
   createdAt: string;
   updatedAt: string;
 }
@@ -511,10 +576,36 @@ export interface Copilot {
  */
 export type TitleSource = "auto" | "user";
 
+/**
+ * A conversation.
+ *
+ * The Copilot fields are a **snapshot, not a reference**. `copilotId` is the only link back,
+ * it is nullable, and it is deliberately allowed to dangle: `ON DELETE SET NULL` means
+ * deleting a Copilot clears the link while `copilotName`, `systemPrompt`, `tools` and
+ * `settings` keep the conversation behaving exactly as it did. `settings` was always copied;
+ * `systemPrompt` and `tools` joined it because a live-read persona meant editing a Copilot
+ * silently rewrote every conversation using it, and a live-read allowlist meant deleting one
+ * silently *widened* them (an empty list reads as "all tools").
+ *
+ * Each of the three is independently editable afterwards — that is what "the conversation
+ * owns its persona" means in practice, and it is why the per-turn Copilot override is gone.
+ */
 export interface Session {
   id: string;
   workspaceId: string;
+  /** The Copilot this was created from, if any. May be null after that Copilot was deleted. */
   copilotId: string | null;
+  /** The Copilot's name as it was at creation, so the UI can label the conversation anyway. */
+  copilotName: string;
+  /** The conversation's own system prompt. Empty means the built-in assistant prompt. */
+  systemPrompt: string;
+  /** Whether every tool is available. Authoritative over `tools`, exactly as on a Copilot. */
+  allTools: boolean;
+  /**
+   * The conversation's own tool allowlist, meaningful only when `allTools` is false and then
+   * exhaustive (empty = no tools).
+   */
+  tools: string[];
   title: string;
   titleSource: TitleSource;
   settings: SessionSettings;
@@ -599,20 +690,32 @@ export interface CreateCopilotInput {
   name: string;
   description?: string;
   systemPrompt: string;
+  /** Defaults to `true`: an untouched Copilot gets every tool, as it always has. */
+  allTools?: boolean;
+  /** Ignored when `allTools` is true. Empty with `allTools: false` means no tools. */
   tools?: string[];
   settings?: CopilotDefaults;
+  /** Defaults to `private` — publishing is something the owner opts into. */
+  visibility?: CopilotVisibility;
 }
 
 export interface UpdateCopilotInput extends CreateCopilotInput {}
 
 export interface CreateSessionInput {
   title?: string;
+  /** The Copilot to copy from. Must be the caller's own, or public. */
   copilotId?: string | null;
 }
 
 export interface UpdateSessionInput {
   title?: string;
   settings?: SessionSettings;
+  /** The conversation's own persona. Independent of the Copilot it came from. */
+  systemPrompt?: string;
+  /** Whether every tool is available. Authoritative over `tools`. */
+  allTools?: boolean;
+  /** Ignored when `allTools` is true. Empty with `allTools: false` means no tools. */
+  tools?: string[];
 }
 
 /** Payload for `POST /api/sessions/:id/attachments` (base64 keeps us dependency-free). */
@@ -685,11 +788,18 @@ export interface UpdateDocumentParsingInput {
   defaultParserId?: string | null;
 }
 
+/**
+ * One turn's request. `provider`/`model` are one-turn overrides; anything absent comes from
+ * the session's own settings.
+ *
+ * There is deliberately no `copilotId`. It used to switch the Copilot mid-conversation, which
+ * the snapshot model makes meaningless — re-pointing the link would move the label and leave
+ * the persona behind. A conversation's behaviour is changed through its own `systemPrompt`.
+ */
 export interface ChatInput {
   message: string;
   provider?: string;
   model?: string;
-  copilotId?: string | null;
   /** Attachments previously uploaded for this session (metadata only, no bytes). */
   attachments?: Attachment[];
 }

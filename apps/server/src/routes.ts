@@ -9,8 +9,6 @@ import type {
   Attachment,
   ChatInput,
   ChatStreamEvent,
-  Copilot,
-  CopilotDefaults,
   CreateCopilotInput,
   CreateDocumentParserInput,
   CreateProviderInput,
@@ -300,9 +298,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* --------------------------------- resolution -------------------------------- */
   /*
    * Effective provider/model resolve in a fixed order, most specific first:
-   *   explicit request override ⊳ session settings ⊳ the Copilot's defaults ⊳ app default.
-   * A candidate only wins if it still exists, so a deleted provider (or a session copied
-   * from a Copilot that referenced one) degrades instead of erroring.
+   *   explicit request override ⊳ session settings ⊳ app default.
+   * A candidate only wins if it still exists, so a deleted provider degrades instead of erroring.
+   *
+   * The Copilot tier that used to sit between the session and the app default is gone: its
+   * defaults were merged into `session.settings` when the conversation was created, so a turn
+   * resolves against the session alone. That is why nothing here takes a Copilot.
    */
 
   const providerExists = (id: string | null | undefined): id is string =>
@@ -317,10 +318,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   function resolveProviderId(
     override: string | null | undefined,
-    settings: SessionSettings,
-    copilot?: CopilotDefaults
+    settings: SessionSettings
   ): string {
-    for (const candidate of [override, settings.providerId, copilot?.providerId]) {
+    for (const candidate of [override, settings.providerId]) {
       if (providerExists(candidate)) return candidate;
     }
     return resolveDefaultProviderId();
@@ -329,14 +329,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   function resolveModelId(
     provider: ProviderRecord | undefined,
     override: string | null | undefined,
-    settings: SessionSettings,
-    copilot?: CopilotDefaults
+    settings: SessionSettings
   ): string {
     const known = new Set((provider?.models ?? []).map((m) => m.modelId));
     const candidates = [
       override,
       settings.modelId,
-      copilot?.modelId,
       db.getSetting(SETTING_DEFAULT_MODEL),
       config.defaultModel,
     ];
@@ -516,19 +514,36 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /* --------------------------------- copilots --------------------------------- */
+  /*
+   * Copilots are owned, and *publishable* rather than tiered: a Copilot the operator wants every
+   * account to have is simply one they published. So "platform Copilot" is not a kind, it is the
+   * admin's public rows, and "ordinary users cannot edit it" needs no privilege check — the
+   * owner-only writes below are the whole of it.
+   *
+   * The read/write split is the policy: `GET` answers with the caller's own Copilots plus every
+   * public one, while `PUT`/`DELETE` take the narrower owned predicate. An id that is someone
+   * else's private Copilot answers 404 rather than 403, so an id cannot be probed.
+   */
 
-  app.get("/api/copilots", async () => db.listCopilots());
+  app.get("/api/copilots", async (request) => db.listCopilotsForUser(actor(request).id));
 
   app.post("/api/copilots", async (request, reply) => {
     const body = request.body as CreateCopilotInput;
     if (!body?.name?.trim()) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
     const copilot = db.createCopilot({
       id: newId(),
+      userId: actor(request).id,
       name: body.name.trim(),
       description: body.description ?? "",
       systemPrompt: body.systemPrompt ?? "",
+      // Every tool unless asked otherwise, which is what an untouched Copilot meant before
+      // the flag existed. `false` is what makes "no tools" reachable.
+      allTools: body.allTools !== false,
       tools: body.tools ?? [],
       settings: body.settings ?? {},
+      // Private unless asked otherwise: publishing puts a persona in front of every account,
+      // so it is something the owner opts into rather than a default they discover later.
+      visibility: body.visibility === "public" ? "public" : "private",
     });
     return reply.code(201).send(copilot);
   });
@@ -536,21 +551,31 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.put("/api/copilots/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateCopilotInput;
-    const existing = db.getCopilot(id);
+    const userId = actor(request).id;
+    // The owned read, not `getCopilotForUser`: a public Copilot someone else published is
+    // usable but not editable, and this is the read that keeps those two apart.
+    const existing = db.getOwnedCopilot(id, userId);
     if (!existing) return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
-    const copilot = db.updateCopilot(id, {
+    const copilot = db.updateCopilotForUser(id, userId, {
       name: body.name?.trim() ?? existing.name,
       description: body.description ?? existing.description,
       systemPrompt: body.systemPrompt ?? existing.systemPrompt,
+      // Absent leaves the stored flag alone, so a client that predates the field cannot
+      // silently widen a Copilot that had been restricted to no tools.
+      allTools: body.allTools ?? existing.allTools,
       tools: body.tools ?? existing.tools,
       settings: body.settings ?? existing.settings,
+      visibility: body.visibility ?? existing.visibility,
     });
+    if (!copilot) return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
     return copilot;
   });
 
   app.delete("/api/copilots/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    db.deleteCopilot(id);
+    if (!db.deleteCopilotForUser(id, actor(request).id)) {
+      return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
+    }
     return { ok: true };
   });
 
@@ -572,15 +597,31 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
 
     const copilotId = body?.copilotId ?? null;
-    const copilot = copilotId ? db.getCopilot(copilotId) : undefined;
+    // The *usable* read, so the caller's own Copilots and any public one, and nothing else. A
+    // named Copilot that is not reachable is refused rather than quietly dropped: silently
+    // starting a Copilotless conversation would turn a rejected id into a session that looks
+    // as though it worked, and this is the path that used to hand over another account's
+    // private persona.
+    const copilot = copilotId ? db.getCopilotForUser(copilotId, userId) : undefined;
+    if (copilotId && !copilot) {
+      return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
+    }
 
     const session = db.createSession({
       id: newId(),
       workspaceId,
       copilotId,
+      // The Copilot is *copied*, not referenced — all four parts of it. `settings` was always
+      // copied; the prompt and the tool allowlist joined it because a live-read persona meant
+      // editing a Copilot rewrote conversations already underway, and a live-read allowlist
+      // meant deleting one silently widened them, an empty list reading as "all tools".
+      copilotName: copilot?.name ?? "",
+      systemPrompt: copilot?.systemPrompt ?? "",
+      // A Copilotless conversation gets every tool, as it always has; the allowlist is only
+      // meaningful alongside `allTools: false`, which is what a restricting Copilot carries.
+      allTools: copilot?.allTools ?? true,
+      tools: copilot ? [...copilot.tools] : [],
       title: body?.title?.trim() || DEFAULT_SESSION_TITLE,
-      // The Copilot's defaults are copied in, not referenced — changing a Copilot later
-      // must not silently rewrite the parameters of conversations already underway.
       settings: copilot ? { ...copilot.settings } : {},
     });
     // The conversation's own directory, made now rather than the first time something wants
@@ -595,7 +636,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return reply.code(201).send(session);
   });
 
-  /** Rename and/or update per-conversation generation parameters. */
+  /**
+   * Rename, retune, or re-persona a conversation.
+   *
+   * `systemPrompt` is where "this conversation should behave differently" now lives. It used to
+   * be a mid-turn Copilot switch, which the snapshot model makes meaningless — moving the link
+   * would move the label and leave the persona behind — so editing the conversation's own prompt
+   * is the affordance that replaced it, and it leaves the Copilot it came from untouched.
+   */
   app.patch("/api/sessions/:id", async (request, reply) => {
     const userId = actor(request).id;
     const { id } = request.params as { id: string };
@@ -606,7 +654,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (body?.title !== undefined && !body.title.trim()) {
       return reply.code(400).send(apiError("TITLE_EMPTY", "title must not be empty"));
     }
-    return db.updateSessionForUser(id, userId, { title: body?.title, settings: body?.settings });
+    return db.updateSessionForUser(id, userId, {
+      title: body?.title,
+      settings: body?.settings,
+      systemPrompt: body?.systemPrompt,
+      allTools: body?.allTools,
+      tools: body?.tools,
+    });
   });
 
   /**
@@ -1154,7 +1208,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** Everything a turn needs, resolved the same way whether it starts or resumes. */
   interface TurnContext {
-    copilot: Copilot | undefined;
     provider: ProviderRecord | undefined;
     modelId: string;
     tools: StructuredToolInterface[];
@@ -1163,18 +1216,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   /**
-   * Resolve the model, the Copilot in force and the tool set for one turn.
+   * Resolve the model, the persona in force and the tool set for one turn.
    *
    * Shared by the two routes that run a turn — `/chat` (a new user message) and
    * `/answers` (resuming a suspended `ask_user`). They have to agree on all of it: a
    * resumed turn that rebuilt its tools differently from the one that asked the question
    * could find `ask_user` missing from the very conversation it is in the middle of.
+   *
+   * **No Copilot is read here.** The session carries its own copy of everything a Copilot
+   * contributes, so a turn consults the session and nothing else: that is what makes the
+   * conversation independent of the Copilot it came from, and it is also what removes this
+   * function from the list of places a Copilot id could be handed to another account.
    */
   function turnContext(
     session: Session,
     workspace: Workspace,
     input: {
-      copilotId: string | null;
       provider?: string;
       model?: string;
       /** Whose sources tree `read_document` reads from. */
@@ -1190,19 +1247,24 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       sources: Source[];
     }
   ): TurnContext {
-    const copilot = input.copilotId ? db.getCopilot(input.copilotId) : undefined;
-
-    // Session settings win over the Copilot's defaults; request fields are one-turn overrides.
-    const providerId = resolveProviderId(input.provider, session.settings, copilot?.settings);
+    // The session's own settings; request fields are one-turn overrides. There is no Copilot
+    // tier left to consult — its defaults were merged in when the conversation was created.
+    const providerId = resolveProviderId(input.provider, session.settings);
     const provider = db.getProvider(providerId);
-    const modelId = resolveModelId(provider, input.model, session.settings, copilot?.settings);
+    const modelId = resolveModelId(provider, input.model, session.settings);
 
     const tools = buildTools({
       workspaceDir: workspace.workdirPath,
       webSearch: config.tools.webSearch,
       webFetch: config.tools.webFetch,
       fileToolsEnabled: config.tools.fileTools.enabled,
-      allowedNames: copilot?.tools,
+      // The session's own snapshot, not a Copilot's live list: an allowlist that narrowed the
+      // tool set must not evaporate because the Copilot it came from was deleted.
+      //
+      // `undefined` when every tool is available and the list otherwise, even when empty —
+      // that empty case is a conversation deliberately denied every tool, and passing it
+      // through as "no restriction" is precisely the bug this shape fixes.
+      allowedNames: session.allTools ? undefined : session.tools,
       documents: {
         user: input.user,
         sources: input.sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
@@ -1211,7 +1273,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     });
 
     return {
-      copilot,
       provider,
       modelId,
       tools,
@@ -1340,12 +1401,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(400).send(apiError("MESSAGE_REQUIRED", "message is required"));
     }
 
-    // A Copilot may be switched per turn; the change sticks to the session.
-    if (body.copilotId !== undefined && body.copilotId !== session.copilotId) {
-      db.setSessionCopilot(id, body.copilotId);
-    }
-    const copilotId = body.copilotId ?? session.copilotId ?? null;
-
     /*
      * The sources this conversation can actually read — its own links plus its workspace's.
      * A whitelist membership test rather than a path check: a stale or hostile client cannot
@@ -1373,7 +1428,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     db.skipAwaitingToolCalls(id);
 
     const ctx = turnContext(session, workspace, {
-      copilotId,
       provider: body.provider,
       model: body.model,
       user: treeFor(actor(request)),
@@ -1403,7 +1457,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         provider: ctx.provider,
         modelId: ctx.modelId,
         workspace,
-        copilot: ctx.copilot,
+        // The conversation's own persona, copied from its Copilot at creation and editable
+        // since. Empty means the built-in assistant prompt.
+        systemPrompt: session.systemPrompt,
         settings: session.settings,
         user: treeFor(actor(request)),
         sessionId: id,
@@ -1493,7 +1549,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     );
 
     const ctx = turnContext(session, workspace, {
-      copilotId: session.copilotId ?? null,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
     });
@@ -1511,7 +1566,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         provider: ctx.provider,
         modelId: ctx.modelId,
         workspace,
-        copilot: ctx.copilot,
+        // Read from the session, exactly as `/chat` does: a resumed turn must not rebuild the
+        // persona differently from the one that asked the question it is resuming.
+        systemPrompt: session.systemPrompt,
         settings: session.settings,
         user: treeFor(actor(request)),
         sessionId: id,

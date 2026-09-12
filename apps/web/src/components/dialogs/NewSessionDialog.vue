@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import Icon from "../Icon.vue";
@@ -11,6 +11,22 @@ const store = useAppStore();
 const title = ref("");
 const copilotId = ref<string | null>(store.activeCopilotId);
 const saving = ref(false);
+
+/**
+ * Public first, then the account's own: someone opening this dialog is usually picking from
+ * what the instance offers, and their own drafts are the shorter list to scroll past. Empty
+ * groups are dropped rather than shown as an empty heading.
+ *
+ * The group is carried as a flag rather than as a translation key, and the label is chosen in
+ * the template — a key held in data is invisible to `i18n/catalog.test.ts`'s dead-key scan,
+ * which would then have to be widened to cover it.
+ */
+const groups = computed(() =>
+  [
+    { key: "public", items: store.publicCopilots },
+    { key: "mine", items: store.myCopilots },
+  ].filter((g) => g.items.length > 0)
+);
 
 async function create() {
   if (saving.value) return;
@@ -72,21 +88,34 @@ async function create() {
                 </div>
               </label>
 
-              <label
-                v-for="c in store.copilots"
-                :key="c.id"
-                class="copilot-option"
-                :class="{ active: copilotId === c.id }"
-              >
-                <input v-model="copilotId" type="radio" :value="c.id" />
-                <div>
-                  <div class="name">{{ c.name }}</div>
-                  <div v-if="c.description" class="desc">{{ c.description }}</div>
-                  <div v-else-if="c.systemPrompt" class="desc preview">
-                    {{ c.systemPrompt.slice(0, 80) }}{{ c.systemPrompt.length > 80 ? "…" : "" }}
-                  </div>
+              <template v-for="group in groups" :key="group.key">
+                <div class="group-label">
+                  {{ group.key === "public" ? t("session.new.groupPublic") : t("session.new.groupMine") }}
                 </div>
-              </label>
+                <label
+                  v-for="c in group.items"
+                  :key="c.id"
+                  class="copilot-option"
+                  data-testid="copilot-option"
+                  :class="{ active: copilotId === c.id }"
+                >
+                  <input v-model="copilotId" type="radio" :value="c.id" />
+                  <div>
+                    <div class="name">
+                      {{ c.name }}
+                      <!-- Whose it is matters here: a published Copilot is someone else's
+                           wording, and this is the moment it gets chosen. -->
+                      <span v-if="c.ownerName && group.key === 'public'" class="by">
+                        {{ t("session.new.byAuthor", { name: c.ownerName }) }}
+                      </span>
+                    </div>
+                    <div v-if="c.description" class="desc">{{ c.description }}</div>
+                    <div v-else-if="c.systemPrompt" class="desc preview">
+                      {{ c.systemPrompt.slice(0, 80) }}{{ c.systemPrompt.length > 80 ? "…" : "" }}
+                    </div>
+                  </div>
+                </label>
+              </template>
             </div>
             <div v-if="store.copilots.length === 0" class="hint">
               {{ t("session.new.noCopilots") }}
@@ -109,6 +138,17 @@ async function create() {
 .copilot-list {
   display: grid;
   gap: var(--space-4);
+}
+.copilot-list .group-label {
+  font-size: var(--fs-2);
+  color: var(--text-3);
+  margin-top: var(--space-2);
+}
+.copilot-option .name .by {
+  font-size: var(--fs-2);
+  color: var(--text-3);
+  font-weight: 400;
+  margin-left: var(--space-2);
 }
 .copilot-option {
   display: flex;

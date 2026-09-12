@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import type { SessionSettings } from "../../api/types";
@@ -9,7 +9,23 @@ const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const store = useAppStore();
 
-/** `""` means "inherit" (from the Copilot's defaults, then the app default). */
+/**
+ * The conversation's own persona.
+ *
+ * Its own control rather than one more generation parameter, because it is a different kind of
+ * thing: this is what the conversation *is*, and it is the affordance that replaced switching
+ * Copilot mid-thread. Editing it leaves the Copilot it was copied from untouched.
+ */
+const prompt = ref("");
+watch(
+  () => store.activeSession?.systemPrompt ?? "",
+  (v) => {
+    prompt.value = v;
+  },
+  { immediate: true }
+);
+
+/** `""` means "inherit" — the app default, now that no Copilot tier sits in between. */
 interface Draft {
   providerId: string;
   modelId: string;
@@ -75,11 +91,15 @@ function save() {
     maxContextMessages: num(draft.maxContextMessages),
     maxSteps: num(draft.maxSteps),
   });
+  if (store.activeSession) void store.updateSessionPrompt(prompt.value);
   emit("close");
 }
 
 function reset() {
   load({});
+  // Empty means the built-in assistant prompt, which is the same "inherit" the fields above
+  // express — there is nothing above the conversation left to inherit a persona from.
+  prompt.value = "";
 }
 
 const scopeNote = computed(() =>
@@ -115,6 +135,19 @@ const scopeNote = computed(() =>
         <div class="modal-body">
           <div class="config-tip">
             {{ scopeNote }}{{ t("sessionSettings.scopeSuffix") }}
+          </div>
+
+          <!-- Only for a conversation that exists: there is nothing to hold a prompt before
+               one does, and the Copilot picked at creation supplies it until then. -->
+          <div v-if="store.activeSession" class="field">
+            <label>{{ t("sessionSettings.systemPrompt") }}</label>
+            <textarea
+              v-model="prompt"
+              class="textarea"
+              data-testid="session-prompt"
+              :placeholder="t('sessionSettings.systemPromptPlaceholder')"
+            ></textarea>
+            <div class="hint">{{ t("sessionSettings.systemPromptHint") }}</div>
           </div>
 
           <div class="form-grid">

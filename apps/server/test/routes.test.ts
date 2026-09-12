@@ -320,19 +320,27 @@ describe("copilots", () => {
       await inject({
         method: "POST",
         url: "/api/copilots",
-        payload: { name: "Tutor", systemPrompt: "Teach.", tools: ["read_file"], settings: { temperature: 0.5 } },
+        payload: {
+          name: "Tutor",
+          systemPrompt: "Teach.",
+          allTools: false,
+          tools: ["read_file"],
+          settings: { temperature: 0.5 },
+        },
       })
     ).json<Copilot>();
-    expect(created).toMatchObject({ name: "Tutor", tools: ["read_file"] });
+    expect(created).toMatchObject({ name: "Tutor", allTools: false, tools: ["read_file"] });
 
     const updated = (
       await inject({
         method: "PUT",
         url: `/api/copilots/${created.id}`,
-        payload: { name: "Coach", systemPrompt: "Coach.", tools: [], settings: {} },
+        payload: { name: "Coach", systemPrompt: "Coach.", allTools: true, tools: [], settings: {} },
       })
     ).json<Copilot>();
     expect(updated.name).toBe("Coach");
+    // The flag came back on, and the list it overrode was dropped rather than stored inert.
+    expect(updated).toMatchObject({ allTools: true, tools: [] });
 
     expect((await inject({ method: "DELETE", url: `/api/copilots/${created.id}` })).statusCode).toBe(200);
     expect((await inject({ method: "GET", url: "/api/copilots" })).json<Copilot[]>().some((c) => c.id === created.id)).toBe(false);
@@ -346,6 +354,26 @@ describe("copilots", () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it("publishes nothing until asked, and attributes it to its owner", async () => {
+    // Publishing is the whole of the "platform Copilot" idea — there is no admin tier — so it
+    // is worth pinning that it is off by default and that the owner comes from the session
+    // rather than from the request body.
+    const created = (
+      await inject({ method: "POST", url: "/api/copilots", payload: { name: "Private", systemPrompt: "" } })
+    ).json<Copilot>();
+    expect(created).toMatchObject({ visibility: "private", ownerName: "tester" });
+    expect(created.userId).toBeTruthy();
+
+    const published = (
+      await inject({
+        method: "PUT",
+        url: `/api/copilots/${created.id}`,
+        payload: { visibility: "public" },
+      })
+    ).json<Copilot>();
+    expect(published.visibility).toBe("public");
+  });
 });
 
 describe("sessions", () => {
@@ -356,29 +384,84 @@ describe("sessions", () => {
     ).toBe(404);
   });
 
-  it("starts untitled and copies the copilot's defaults in", async () => {
+  it("copies the whole copilot in, and stays put when the copilot is edited", async () => {
     const workspace = await newWorkspace(env);
     const copilot = (
       await inject({
         method: "POST",
         url: "/api/copilots",
-        payload: { name: "WithDefaults", systemPrompt: "", settings: { temperature: 0.2, maxSteps: 4 } },
+        payload: {
+          name: "WithDefaults",
+          systemPrompt: "Be terse.",
+          allTools: false,
+          tools: ["read_file"],
+          settings: { temperature: 0.2, maxSteps: 4 },
+        },
       })
     ).json<Copilot>();
 
     const session = await newSession(env, workspace.id, { copilotId: copilot.id });
     expect(session.title).toBe("New conversation");
     expect(session.titleSource).toBe("auto");
-    expect(session.settings).toMatchObject({ temperature: 0.2, maxSteps: 4 });
+    // All four parts of the Copilot, not just the generation settings.
+    expect(session).toMatchObject({
+      copilotId: copilot.id,
+      copilotName: "WithDefaults",
+      systemPrompt: "Be terse.",
+      tools: ["read_file"],
+      settings: { temperature: 0.2, maxSteps: 4 },
+    });
 
-    // Copied, not referenced: editing the Copilot must not move existing conversations.
+    // Copied, not referenced: editing the Copilot must not move a conversation already
+    // underway. That is the promise the UI makes in so many words, and the reason the prompt is
+    // no longer read from the Copilot on every turn.
     await inject({
       method: "PUT",
       url: `/api/copilots/${copilot.id}`,
-      payload: { name: "WithDefaults", systemPrompt: "", settings: { temperature: 1.5 } },
+      payload: { systemPrompt: "Write essays.", tools: [], settings: { temperature: 1.5 } },
     });
+
     const reread = (await inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json<Session[]>();
-    expect(reread.find((s) => s.id === session.id)!.settings).toMatchObject({ temperature: 0.2 });
+    expect(reread.find((s) => s.id === session.id)).toMatchObject({
+      systemPrompt: "Be terse.",
+      tools: ["read_file"],
+      settings: { temperature: 0.2, maxSteps: 4 },
+    });
+  });
+
+  it("refuses a copilot id that is not usable, rather than quietly ignoring it", async () => {
+    const workspace = await newWorkspace(env);
+    const res = await inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/sessions`,
+      payload: { copilotId: "no-such-copilot" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("lets a conversation hold its own prompt, apart from the copilot's", async () => {
+    const workspace = await newWorkspace(env);
+    const copilot = (
+      await inject({
+        method: "POST",
+        url: "/api/copilots",
+        payload: { name: "Tutor", systemPrompt: "You teach." },
+      })
+    ).json<Copilot>();
+    const session = await newSession(env, workspace.id, { copilotId: copilot.id });
+
+    const updated = (
+      await inject({
+        method: "PATCH",
+        url: `/api/sessions/${session.id}`,
+        payload: { systemPrompt: "Be terse." },
+      })
+    ).json<Session>();
+
+    expect(updated.systemPrompt).toBe("Be terse.");
+    // The Copilot is untouched, so the edit is the conversation's alone.
+    const rereadCopilot = (await inject({ method: "GET", url: "/api/copilots" })).json<Copilot[]>();
+    expect(rereadCopilot.find((c) => c.id === copilot.id)!.systemPrompt).toBe("You teach.");
   });
 
   it("accepts a title at creation time", async () => {

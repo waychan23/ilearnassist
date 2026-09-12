@@ -12,7 +12,7 @@ import {
   SETTING_DEFAULT_PROVIDER,
   type AppDb,
 } from "../src/db.js";
-import type { ToolCall } from "@ilearnassist/shared";
+import type { Session, ToolCall } from "@ilearnassist/shared";
 import { SCHEMA_VERSION } from "../src/schema.js";
 
 let root: string;
@@ -47,6 +47,31 @@ function addWorkspace(id = "w1"): string {
   return id;
 }
 
+/**
+ * A Copilotless conversation, with an empty snapshot.
+ *
+ * `createSession` requires all four snapshot fields instead of defaulting them, so that a
+ * conversation started from a Copilot cannot be built with half of it — copying the prompt but
+ * not the tool allowlist is precisely the shape that widens silently. Tests that are not about
+ * the snapshot say so once here; the ones that *are* pass it explicitly.
+ */
+function addSession(
+  id = "s1",
+  overrides: Partial<Parameters<AppDb["createSession"]>[0]> = {}
+): Session {
+  return db.createSession({
+    id,
+    workspaceId: "w1",
+    copilotId: null,
+    copilotName: "",
+    systemPrompt: "",
+    allTools: true,
+    tools: [],
+    title: DEFAULT_SESSION_TITLE,
+    ...overrides,
+  });
+}
+
 describe("workspaces", () => {
   it("creates and reads back a workspace", () => {
     const created = db.createWorkspace({ userId: OWNER, id: "w1", name: "Notes", slug: "notes", dirPath: "/tmp/notes" });
@@ -73,8 +98,8 @@ describe("workspaces", () => {
   it("counts each workspace's sessions and dates its last activity", () => {
     addWorkspace("w1");
     addWorkspace("w2");
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "a" });
-    db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "b" });
+    addSession("s1", { title: "a" });
+    addSession("s2", { title: "b" });
 
     const [first, second] = db.listWorkspaces(OWNER);
 
@@ -91,7 +116,7 @@ describe("workspaces", () => {
 
   it("renames a workspace, keeping its identity and its stats", () => {
     addWorkspace("w1");
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "a" });
+    addSession("s1", { title: "a" });
 
     const renamed = db.renameWorkspaceForUser("w1", OWNER, "Renamed")!;
 
@@ -121,13 +146,18 @@ describe("workspaces", () => {
 });
 
 describe("copilots", () => {
+  // The scoping rules — who may see and who may edit — need a second account and live in
+  // `ownership.test.ts`. What is here is the row shape: the JSON columns, and the CRUD.
   const input = {
     id: "c1",
+    userId: OWNER,
     name: "Tutor",
     description: "helps",
     systemPrompt: "You teach.",
+    allTools: false,
     tools: ["read_file", "web_search"],
     settings: { temperature: 0.3, modelId: "m1" },
+    visibility: "private" as const,
   };
 
   it("round-trips tools and settings through JSON columns", () => {
@@ -136,38 +166,66 @@ describe("copilots", () => {
     expect(created.settings).toEqual({ temperature: 0.3, modelId: "m1" });
   });
 
+  it("refuses to write a Copilot with no owner", () => {
+    /*
+     * `undefined` binds as NULL in silence, and an ownerless row is one every read refuses —
+     * invisible to the person who made it, with nothing to explain it. That is worse than an
+     * error at the call site, and it has already happened once: two Copilots created while a
+     * dev server was mid-reload ended up with no owner and simply never appeared.
+     */
+    expect(() => db.createCopilot({ ...input, userId: undefined as unknown as string })).toThrow(
+      /must have an owner/
+    );
+    expect(() => db.createCopilot({ ...input, userId: "" })).toThrow(/must have an owner/);
+  });
+
+  it("records the owner and defaults nothing about visibility", () => {
+    const created = db.createCopilot(input);
+    expect(created.userId).toBe(OWNER);
+    expect(created.ownerName).toBe("tester");
+    expect(created.visibility).toBe("private");
+  });
+
   it("updates in place and bumps updatedAt", () => {
     const created = db.createCopilot(input);
-    const updated = db.updateCopilot("c1", {
+    const updated = db.updateCopilotForUser("c1", OWNER, {
       name: "Coach",
       description: "",
       systemPrompt: "S",
+      allTools: false,
       tools: [],
       settings: {},
+      visibility: "public",
     });
-    expect(updated).toMatchObject({ name: "Coach", tools: [], settings: {} });
+    expect(updated).toMatchObject({
+      name: "Coach",
+      allTools: false,
+      tools: [],
+      settings: {},
+      visibility: "public",
+    });
     expect(updated!.updatedAt >= created.updatedAt).toBe(true);
   });
 
   it("returns undefined when updating a missing copilot", () => {
-    expect(db.updateCopilot("nope", input)).toBeUndefined();
+    expect(db.updateCopilotForUser("nope", OWNER, input)).toBeUndefined();
   });
 
   it("deletes a copilot", () => {
     db.createCopilot(input);
-    db.deleteCopilot("c1");
-    expect(db.getCopilot("c1")).toBeUndefined();
+    expect(db.deleteCopilotForUser("c1", OWNER)).toBe(true);
+    expect(db.getOwnedCopilot("c1", OWNER)).toBeUndefined();
   });
 
   it("tolerates corrupt JSON in a JSON column", () => {
     // A hand-edited or truncated column must degrade to an empty value, not throw.
     db.createCopilot(input);
     db.raw.prepare("UPDATE copilots SET tools = ? WHERE id = ?").run("{not json", "c1");
-    expect(db.getCopilot("c1")!.tools).toEqual([]);
-    expect(db.getCopilot("c1")!.settings).toEqual({ temperature: 0.3, modelId: "m1" });
+    expect(db.getOwnedCopilot("c1", OWNER)!.tools).toEqual([]);
+    expect(db.getOwnedCopilot("c1", OWNER)!.settings).toEqual({ temperature: 0.3, modelId: "m1" });
 
     db.raw.prepare("UPDATE copilots SET settings = ? WHERE id = ?").run("[1,2]", "c1");
-    expect(db.getCopilot("c1")!.settings).toEqual({});
+    expect(db.getOwnedCopilot("c1", OWNER)!.settings).toEqual({});
   });
 });
 
@@ -175,32 +233,27 @@ describe("sessions", () => {
   beforeEach(() => addWorkspace());
 
   it("starts life auto-titled", () => {
-    const session = db.createSession({
-      id: "s1",
-      workspaceId: "w1",
-      copilotId: null,
-      title: DEFAULT_SESSION_TITLE,
-    });
+    const session = addSession("s1");
     expect(session.titleSource).toBe("auto");
     expect(session.settings).toEqual({});
   });
 
   it("flips to user-titled when a title is supplied", () => {
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: DEFAULT_SESSION_TITLE });
+    addSession("s1");
     const renamed = db.updateSessionForUser("s1", OWNER, { title: "  My Notes  " });
     expect(renamed!.title).toBe("My Notes");
     expect(renamed!.titleSource).toBe("user");
   });
 
   it("ignores a blank title, leaving the existing one in place", () => {
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "Kept" });
+    addSession("s1", { title: "Kept" });
     const updated = db.updateSessionForUser("s1", OWNER, { title: "   " });
     expect(updated!.title).toBe("Kept");
     expect(updated!.titleSource).toBe("auto");
   });
 
   it("keeps the title ownership flag on a settings-only update", () => {
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: DEFAULT_SESSION_TITLE });
+    addSession("s1");
     db.updateSessionForUser("s1", OWNER, { title: "Mine" });
     const updated = db.updateSessionForUser("s1", OWNER, { settings: { temperature: 0.7 } });
     expect(updated!.titleSource).toBe("user");
@@ -208,19 +261,13 @@ describe("sessions", () => {
   });
 
   it("merges settings rather than replacing them", () => {
-    db.createSession({
-      id: "s1",
-      workspaceId: "w1",
-      copilotId: null,
-      title: "t",
-      settings: { temperature: 0.1, maxSteps: 5 },
-    });
+    addSession("s1", { title: "t", settings: { temperature: 0.1, maxSteps: 5 } });
     const updated = db.updateSessionForUser("s1", OWNER, { settings: { maxSteps: 9 } });
     expect(updated!.settings).toEqual({ temperature: 0.1, maxSteps: 9 });
   });
 
   it("lets the auto-titler rename without taking ownership", () => {
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: DEFAULT_SESSION_TITLE });
+    addSession("s1");
     const titled = db.setAutoTitleForUser("s1", OWNER, "Model Chose This");
     expect(titled!.title).toBe("Model Chose This");
     expect(titled!.titleSource).toBe("auto");
@@ -235,8 +282,8 @@ describe("sessions", () => {
   });
 
   it("lists a workspace's sessions, most recently updated first", () => {
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "one" });
-    db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "two" });
+    addSession("s1", { title: "one" });
+    addSession("s2", { title: "two" });
 
     // Timestamps are millisecond-resolution, so rows created in the same tick tie and
     // the order between them is arbitrary. Pin them to make the assertion deterministic.
@@ -249,15 +296,126 @@ describe("sessions", () => {
     expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s1", "s2"]);
   });
 
-  it("repoints the session at another copilot", () => {
-    db.createCopilot({ id: "c1", name: "C", description: "", systemPrompt: "", tools: [], settings: {} });
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
-    db.setSessionCopilot("s1", "c1");
-    expect(db.getSessionForUser("s1", OWNER)!.session.copilotId).toBe("c1");
+  it("holds a Copilot's snapshot independently of the Copilot", () => {
+    // The conversation is not a view onto the Copilot. Editing the Copilot afterwards must
+    // leave this row alone, and so must deleting it — which is the case that used to widen the
+    // tool set, since an empty allowlist reads as "all tools".
+    db.createCopilot({
+      id: "c1",
+      userId: OWNER,
+      name: "Tutor",
+      description: "",
+      systemPrompt: "You teach.",
+      allTools: false,
+      tools: ["read_file"],
+      settings: { temperature: 0.3 },
+      visibility: "private",
+    });
+    addSession("s1", {
+      copilotId: "c1",
+      copilotName: "Tutor",
+      systemPrompt: "You teach.",
+      allTools: false,
+      tools: ["read_file"],
+      settings: { temperature: 0.3 },
+    });
+
+    db.updateCopilotForUser("c1", OWNER, {
+      name: "Renamed",
+      description: "",
+      systemPrompt: "You now lecture.",
+      allTools: true,
+      tools: [],
+      settings: { temperature: 1.8 },
+      visibility: "public",
+    });
+    db.deleteCopilotForUser("c1", OWNER);
+
+    const after = db.getSessionForUser("s1", OWNER)!.session;
+    expect(after).toMatchObject({
+      copilotId: null, // the link dangles rather than refusing the Copilot's deletion
+      copilotName: "Tutor", // and the label survives it, which is what the badge reads
+      systemPrompt: "You teach.",
+      allTools: false, // the *restriction* survives too, which is the half that matters
+      tools: ["read_file"],
+      settings: { temperature: 0.3 },
+    });
+  });
+
+  it("lets a conversation edit its own persona without touching the Copilot", () => {
+    db.createCopilot({
+      id: "c1",
+      userId: OWNER,
+      name: "Tutor",
+      description: "",
+      systemPrompt: "You teach.",
+      allTools: true,
+      tools: [],
+      settings: {},
+      visibility: "private",
+    });
+    addSession("s1", { copilotId: "c1", copilotName: "Tutor", systemPrompt: "You teach." });
+
+    const updated = db.updateSessionForUser("s1", OWNER, { systemPrompt: "Be terse." })!;
+
+    expect(updated.systemPrompt).toBe("Be terse.");
+    expect(db.getOwnedCopilot("c1", OWNER)!.systemPrompt).toBe("You teach.");
+  });
+
+  it("stores the tool flag authoritatively, so no row disagrees with itself", () => {
+    // Both halves of the pair are supplied contradicting each other on purpose. Storing them
+    // as given would leave a row whose `tools` is silently ignored, and the next reader with no
+    // way to tell whether the list or the flag was meant.
+    const copilot = db.createCopilot({
+      id: "c1",
+      userId: OWNER,
+      name: "Every",
+      description: "",
+      systemPrompt: "",
+      allTools: true,
+      tools: ["read_file", "write_file"],
+      settings: {},
+      visibility: "private",
+    });
+
+    expect(copilot.allTools).toBe(true);
+    expect(copilot.tools).toEqual([]);
+    expect(
+      db.raw.prepare("SELECT tools FROM copilots WHERE id = ?").get("c1")
+    ).toMatchObject({ tools: "[]" });
+  });
+
+  it("keeps 'no tools' distinct from 'every tool'", () => {
+    // The state that was unreachable before the flag existed: an empty list used to mean every
+    // tool, so a Copilot could not be locked down to none.
+    const none = db.createCopilot({
+      id: "c-none",
+      userId: OWNER,
+      name: "None",
+      description: "",
+      systemPrompt: "",
+      allTools: false,
+      tools: [],
+      settings: {},
+      visibility: "private",
+    });
+
+    expect(none.allTools).toBe(false);
+    expect(none.tools).toEqual([]);
+  });
+
+  it("carries the flag onto a conversation, and clears the list with it", () => {
+    const session = addSession("s1", {
+      allTools: true,
+      tools: ["read_file"],
+    });
+
+    expect(session.allTools).toBe(true);
+    expect(session.tools).toEqual([]);
   });
 
   it("cascades messages away with the session", () => {
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
+    addSession("s1", { title: "t" });
     db.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "hi" });
     db.deleteSessionForUser("s1", OWNER);
     expect(db.listMessagesForUser("s1", OWNER)).toEqual([]);
@@ -267,7 +425,7 @@ describe("sessions", () => {
 describe("messages", () => {
   beforeEach(() => {
     addWorkspace();
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
+    addSession("s1", { title: "t" });
   });
 
   it("round-trips every optional payload", () => {
@@ -341,7 +499,7 @@ describe("messages", () => {
   });
 
   it("keeps messages of different sessions apart", () => {
-    db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "t" });
+    addSession("s2", { title: "t" });
     db.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "in s1" });
     expect(db.listMessagesForUser("s2", OWNER)).toEqual([]);
   });
@@ -525,6 +683,78 @@ describe("schema versioning", () => {
     }
   });
 
+  it("gives Copilots an owner, and drops the ones written before they had one", () => {
+    /*
+     * The one migration in this change, and the one place rows are deleted on purpose — so all
+     * three halves are pinned here: the columns arrive on a file that predates them, the
+     * ownerless Copilots go, and a conversation that referenced one survives with its link
+     * cleared rather than being carried off by the cascade.
+     *
+     * Written by hand rather than by an older `createDb`, because the point is a file whose
+     * `copilots` table has no `user_id` in its DDL — which is what a real upgrade looks like.
+     */
+    const path = join(root, "pre-owned.sqlite");
+    const pre = new Database(path);
+    pre.exec(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY, username TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE copilots (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        system_prompt TEXT NOT NULL, tools TEXT NOT NULL DEFAULT '[]',
+        settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        copilot_id TEXT REFERENCES copilots(id) ON DELETE SET NULL,
+        title TEXT NOT NULL, title_source TEXT NOT NULL DEFAULT 'auto',
+        settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO copilots (id, name, description, system_prompt, tools, settings, created_at, updated_at)
+        VALUES ('c1', 'Tutor', '', 'You teach.', '["read_file"]', '{}', '2026-01-01', '2026-01-01');
+      INSERT INTO sessions (id, workspace_id, copilot_id, title, title_source, settings, created_at, updated_at)
+        VALUES ('s1', 'w1', 'c1', 'T', 'auto', '{}', '2026-01-01', '2026-01-01');
+    `);
+    pre.pragma("foreign_keys = ON");
+    pre.pragma(`user_version = ${SCHEMA_VERSION}`);
+    pre.close();
+
+    const opened = createDb(path);
+    try {
+      const columns = (
+        opened.raw.prepare("PRAGMA table_info(copilots)").all() as { name: string }[]
+      ).map((c) => c.name);
+      expect(columns).toContain("user_id");
+      expect(columns).toContain("visibility");
+      expect(columns).toContain("all_tools");
+
+      // The default is the load-bearing half: an absent flag has to mean "every tool", because
+      // that is what an empty list meant when these rows were written. `0` — "no tools" — is
+      // the state this change exists to make *reachable*, so it must never be the fallback.
+      const allTools = (
+        opened.raw.prepare("PRAGMA table_info(copilots)").all() as {
+          name: string;
+          dflt_value: string | null;
+        }[]
+      ).find((c) => c.name === "all_tools");
+      expect(allTools?.dflt_value).toBe("1");
+
+      // Gone rather than guessed at an owner — there is no way to infer one.
+      expect(opened.raw.prepare("SELECT COUNT(*) AS n FROM copilots").get()).toMatchObject({ n: 0 });
+
+      // The conversation survives, and its link is cleared by `ON DELETE SET NULL`. This is
+      // the half that would be a data loss if the delete cascaded through the reference.
+      const session = opened.raw
+        .prepare("SELECT copilot_id FROM sessions WHERE id = ?")
+        .get("s1") as { copilot_id: string | null } | undefined;
+      expect(session).toBeDefined();
+      expect(session!.copilot_id).toBeNull();
+    } finally {
+      opened.raw.close();
+    }
+  });
+
   it("refuses a file that predates versioning, rather than adopting it", () => {
     // Version 0 *with tables* is a database written before the guard existed, not a new one.
     // Adopting it is how a file whose columns mean something else gets stamped as current
@@ -568,7 +798,16 @@ describe("schema versioning", () => {
       // one round-trips.
       opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
       opened.createWorkspace({ userId: OWNER, id: "w1", name: "W", slug: "w1", dirPath: join(root, "w1") });
-      opened.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
+      opened.createSession({
+        id: "s1",
+        workspaceId: "w1",
+        copilotId: null,
+        copilotName: "",
+        systemPrompt: "",
+        allTools: true,
+        tools: [],
+        title: "t",
+      });
       expect(
         opened.createMessage({ id: "m1", sessionId: "s1", role: "assistant", content: "cut short", stopped: true })
           .stopped
@@ -604,8 +843,8 @@ describe("schema versioning", () => {
 describe("suspended ask_user calls", () => {
   beforeEach(() => {
     addWorkspace();
-    db.createSession({ id: "s1", workspaceId: "w1", copilotId: null, title: "t" });
-    db.createSession({ id: "s2", workspaceId: "w1", copilotId: null, title: "other" });
+    addSession("s1", { title: "t" });
+    addSession("s2", { title: "other" });
   });
 
   /** An assistant message holding one `ask_user` call in the given state. */
