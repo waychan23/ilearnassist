@@ -34,6 +34,15 @@
 
 set -euo pipefail
 
+# A failing command says so, and says where.
+#
+# This script's worst property is silence: `set -e` plus a failing command substitution exits
+# without printing a word, which is indistinguishable from "there was nothing to do" — and that
+# is precisely how the bug this guard was added for reached a user. Nothing here is expected to
+# fail (the helpers below tolerate their own empty results), so anything that does is a bug and
+# should name itself rather than vanish.
+trap 'echo "dev.sh: unexpected failure at line $LINENO: $BASH_COMMAND" >&2' ERR
+
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 # The web port vite starts on and climbs from when it is taken. The whole range is swept,
@@ -90,15 +99,21 @@ ports_of() {
 # the harmful ones. A command match catches the `tsx watch` that would *spawn* one back on the
 # next file change, which a port scan cannot see while its child is between restarts. Both are
 # then filtered by working directory, which is what makes the broad command match safe.
+# `|| true` and the trailing `return 0` are not decoration. Every stage here fails on its own
+# terms when there is simply nothing to find — `grep` exits 1 on no match, `lsof` exits 1 on no
+# listener — and with `pipefail` and `set -e` that is fatal at the call site: `pids=$(candidates)`
+# becomes a failing command, the script exits *before printing anything*, and "found nothing"
+# looks exactly like "the script is broken". Which is how this was first reported.
 candidates() {
   {
-    lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print $2 }'
+    lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print $2 }' || true
     # The bracketed first letters are so this grep does not match its own command line, which
     # contains the pattern verbatim — an unmatchable-but-present pid is a confusing thing to
     # find in the report on the one run where it happens to survive long enough.
-    ps -eo pid=,command= |
+    ps -eo pid=,command= 2>/dev/null |
       grep -E '[t]sx/dist|[v]ite/bin/vite|[s]rc/index\.ts' |
-      awk '{ print $1 }'
+      awk '{ print $1 }' ||
+      true
   } |
     sort -u |
     while read -r pid; do
@@ -108,6 +123,7 @@ candidates() {
       is_ours "$(cwd_of "$pid")" || continue
       printf '%s\n' "$pid"
     done
+  return 0
 }
 
 # The subset of the given pids that is still alive.
@@ -128,7 +144,7 @@ stop_repo_dev_servers() {
   local quiet=${1:-}
   local pids remaining pid i
 
-  pids=$(candidates)
+  pids=$(candidates || true)
   if [ -z "$pids" ]; then
     [ -n "$quiet" ] || echo "  nothing running"
     return 0
@@ -171,7 +187,9 @@ check_ports() {
   PORTS_TAKEN=0
 
   for port in $(backend_port) $WEB_PORTS; do
-    holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print $2 }' | head -1)
+    # `|| true` for the same reason as in `candidates`: `lsof` exits non-zero when a port is
+    # free, and "this port is free" is the answer we want, not a failure.
+    holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print $2 }' | head -1 || true)
     [ -n "$holder" ] || continue
     holder_cwd=$(cwd_of "$holder")
 
@@ -209,7 +227,7 @@ on_exit() {
 
   # Whatever outlived the group. Quiet unless it actually finds something, so a plain Ctrl-C
   # does not print a cleaning report nobody asked for.
-  leftovers=$(candidates)
+  leftovers=$(candidates || true)
   if [ -n "$leftovers" ]; then
     echo
     echo "→ stopping what outlived this run:"
@@ -255,7 +273,7 @@ case "${1:-}" in
   --status)
     # What this script sees, without touching any of it — the mode to reach for when the sweep
     # reports something unexpected and you want to know why before anything is signalled.
-    pids=$(candidates)
+    pids=$(candidates || true)
     if [ -z "$pids" ]; then
       echo "no dev server of this repo is running"
     else
