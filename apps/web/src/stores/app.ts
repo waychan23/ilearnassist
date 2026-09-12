@@ -17,6 +17,7 @@ import type {
   ChatStreamEvent,
   Copilot,
   CopilotDefaults,
+  CopilotVisibility,
   CreateCopilotInput,
   CreateProviderInput,
   DirectoryListing,
@@ -63,8 +64,11 @@ export interface CopilotDraft {
   name: string;
   description: string;
   systemPrompt: string;
+  /** Authoritative over `tools`, which the server clears when this is true. */
+  allTools: boolean;
   tools: string[];
   settings: CopilotDefaults;
+  visibility: CopilotVisibility;
 }
 
 export interface ProviderDraft {
@@ -270,14 +274,44 @@ export const useAppStore = defineStore("app", () => {
   const activeSession = computed(
     () => sessions.value.find((s) => s.id === activeSessionId.value) ?? null
   );
-  const activeCopilot = computed(
-    () => copilots.value.find((c) => c.id === activeCopilotId.value) ?? null
+  /**
+   * The label for the active conversation's persona, or null when it has none.
+   *
+   * Read from the *session*, not by looking the Copilot up in the list — the conversation
+   * copied the name at creation, so the badge still says "Tutor" after that Copilot was
+   * renamed or deleted, and it works for a Copilot another account published. A lookup in
+   * `copilots` would show nothing in exactly those cases.
+   */
+  const activeCopilotName = computed(() => activeSession.value?.copilotName || null);
+
+  /**
+   * The Copilot list, split into the two groups the UI shows.
+   *
+   * A clean partition on ownership, so nothing appears twice: everything this account owns is
+   * "mine" whatever its visibility, and whatever is left is another account's public Copilot —
+   * the server returns nothing else. One's own published Copilots belonging under "mine" is the
+   * point: that is where the switch to unpublish them lives.
+   */
+  const myCopilots = computed(() =>
+    copilots.value.filter((c) => c.userId === account.value?.id)
   );
+  /** Another account's public Copilots. Usable and copyable; never editable. */
+  const publicCopilots = computed(() =>
+    copilots.value.filter((c) => c.userId !== account.value?.id)
+  );
+
+  /** The active conversation's own prompt, which is what the persona badge explains. */
+  const activeSystemPrompt = computed(() => activeSession.value?.systemPrompt ?? "");
 
   /**
    * The parameters actually in force. Mirrors the server's resolution order exactly:
-   * session → Copilot defaults → app default. A candidate only wins when it still
-   * resolves, so a deleted provider degrades instead of showing a broken selection.
+   * session → app default. A candidate only wins when it still resolves, so a deleted
+   * provider degrades instead of showing a broken selection.
+   *
+   * The Copilot tier that used to sit between those two is gone from here as well as from the
+   * server: its defaults were merged into the session's settings when the conversation was
+   * created, so consulting the Copilot would be reading the same values twice — and reading
+   * them from a record that is now allowed to have been deleted since.
    */
   const sessionSettings = computed<SessionSettings>(
     () => activeSession.value?.settings ?? draftSettings.value
@@ -286,7 +320,6 @@ export const useAppStore = defineStore("app", () => {
   const currentProviderId = computed(() => {
     const candidates = [
       sessionSettings.value.providerId,
-      activeCopilot.value?.settings.providerId,
       config.value?.defaultProvider,
     ];
     for (const c of candidates) {
@@ -307,7 +340,6 @@ export const useAppStore = defineStore("app", () => {
     const known = new Set(provider.models.map((m) => m.modelId));
     const candidates = [
       sessionSettings.value.modelId,
-      activeCopilot.value?.settings.modelId,
       config.value?.defaultModel,
     ];
     for (const c of candidates) {
@@ -726,8 +758,17 @@ export const useAppStore = defineStore("app", () => {
     void updateSettings({ providerId, modelId });
   }
 
-  function setCopilot(id: string | null): void {
-    activeCopilotId.value = id;
+  /**
+   * Change a conversation's own persona.
+   *
+   * This is what replaced the mid-turn Copilot switch. There is deliberately no way to
+   * re-point a conversation at a Copilot: the persona is a copy, so moving the link would
+   * move the label and leave the behaviour behind.
+   */
+  async function updateSessionPrompt(systemPrompt: string): Promise<void> {
+    const session = activeSession.value;
+    if (!session) return;
+    replaceSession(await api.updateSession(session.id, { systemPrompt }));
   }
 
   /* ------------------------------ copilots --------------------------------- */
@@ -736,8 +777,10 @@ export const useAppStore = defineStore("app", () => {
       name: draft.name,
       description: draft.description,
       systemPrompt: draft.systemPrompt,
+      allTools: draft.allTools,
       tools: draft.tools,
       settings: draft.settings,
+      visibility: draft.visibility,
     };
     if (draft.id) {
       const updated = await api.updateCopilot(draft.id, payload);
@@ -753,6 +796,33 @@ export const useAppStore = defineStore("app", () => {
     await api.deleteCopilot(id);
     copilots.value = copilots.value.filter((c) => c.id !== id);
     if (activeCopilotId.value === id) activeCopilotId.value = null;
+    // Conversations started from it keep working and keep its name — that is the point of the
+    // snapshot, so nothing here reaches into `sessions`.
+  }
+
+  /**
+   * Fork a Copilot into an editable copy of one's own — the escape hatch from "you may use it
+   * but not edit it", and the only thing to do with a public Copilot someone else wrote.
+   *
+   * A plain copy with no link back, exactly as a conversation copies a Copilot: later edits to
+   * the original must not propagate. Private on creation, because publishing under your own
+   * name is a decision rather than a side effect of forking.
+   */
+  async function copyCopilotToMine(id: string): Promise<void> {
+    const source = copilots.value.find((c) => c.id === id);
+    if (!source) return;
+    const created = await api.createCopilot({
+      name: source.name,
+      description: source.description,
+      systemPrompt: source.systemPrompt,
+      // The tool *restriction* has to come across with the prompt: a fork that copied the
+      // persona but silently widened the tools would be a different Copilot wearing its name.
+      allTools: source.allTools,
+      tools: [...source.tools],
+      settings: { ...source.settings },
+      visibility: "private",
+    });
+    copilots.value.push(created);
   }
 
   /* ------------------------------ providers -------------------------------- */
@@ -1188,7 +1258,6 @@ export const useAppStore = defineStore("app", () => {
     await consume(
       streamChat(sessionId, {
         message: content,
-        copilotId: activeCopilotId.value ?? undefined,
         attachments,
       })
     );
@@ -1297,7 +1366,10 @@ export const useAppStore = defineStore("app", () => {
     fileTruncatedAt,
     activeWorkspace,
     activeSession,
-    activeCopilot,
+    activeCopilotName,
+    activeSystemPrompt,
+    myCopilots,
+    publicCopilots,
     sessionSettings,
     currentProviderId,
     effectiveModelId,
@@ -1326,9 +1398,10 @@ export const useAppStore = defineStore("app", () => {
     updateSettings,
     deleteSession,
     setProviderAndModel,
-    setCopilot,
+    updateSessionPrompt,
     saveCopilot,
     deleteCopilot,
+    copyCopilotToMine,
     saveProvider,
     deleteProvider,
     deleteModel,

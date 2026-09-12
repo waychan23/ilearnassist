@@ -535,6 +535,44 @@ Fuller map in `docs/reference.md`.
   accessors that *do* take a bare session id (`touchSession`, `createMessage`,
   `skipAwaitingToolCalls`, …) are documented as such in `AppDb`: every caller reaches them
   after a scoped read has already resolved the session.
+- **A Copilot is owned, and "platform" is not a tier — it is a published one.** `copilots` carries
+  `user_id` and a `visibility` of `private` or `public`, not an admin role, so a Copilot the
+  operator wants every account to have is simply one they published, and "ordinary users cannot
+  edit it" falls out of ownership rather than a privilege check. That makes it the one table whose
+  rule has two sides: the *reads* take the wider predicate — `user_id = ? OR visibility =
+  'public'`, through `listCopilotsForUser` and `getCopilotForUser` — while the *writes* take the
+  narrower owned one (`getOwnedCopilot`, `updateCopilotForUser`, `deleteCopilotForUser`). Reaching
+  a Copilot through the wrong one of those is the mistake to watch for on a new route: the wide
+  read is "may use", and only the narrow one is "may change". `user_id` is deliberately nullable,
+  because `ALTER TABLE ADD COLUMN` with `NOT NULL` demands a default and any default is a landmine
+  for a later insert that forgets the owner — so every read *also* requires an owner to be
+  present, and a row whose owner is gone matches nothing rather than being handed to whoever
+  asked.
+- **A Copilot is a template, and a conversation copies it.** `sessions` snapshots all five parts
+  at creation — `system_prompt`, `allTools`, `tools`, `settings` and the `copilot_name` label —
+  and leaves `copilot_id` as a link the UI may show but the turn path never reads. So
+  `turnContext()` consults the session and nothing else, and `buildSystemPrompt` takes a string
+  rather than a Copilot. Two consequences are load-bearing rather than incidental. The prompt
+  used to be re-read live on every turn while only `settings` were copied, so editing a Copilot
+  silently rewrote every conversation already using it — while the UI promised the opposite in so
+  many words. And `tools` *had* to be snapshotted: while the allowlist was live, deleting a
+  Copilot did not merely drop a restriction, it widened one. **`ChatInput` has no `copilotId` on
+  purpose** — re-pointing the link would move the label and leave the persona behind — so
+  changing a conversation's behaviour is `PATCH /api/sessions/:id` with a new `systemPrompt`,
+  which is also what lets a conversation diverge from the Copilot it came from.
+- **A tool allow-list has three states, and two of them used to be one.** `allTools` is
+  authoritative over `tools`: `true` means everything (including tools added later), `false` with
+  a list means those, and `false` with an empty list means **nothing**. `buildTools` mirrors that
+  in its own signature — `allowedNames` **absent** is "no restriction", an **empty array** is "no
+  tools" — and the two are not interchangeable. They were once, because the filter was gated on
+  `length > 0`, which made a Copilot the user had locked down to no tools arrive at the model with
+  *every* tool: the widest possible reading of the narrowest possible selection, and "deny
+  everything" unexpressible. Do not "simplify" either half back to an emptiness test. The write
+  paths store the pair coherently (`allTools: 1` clears `tools`, so a row cannot assert both), and
+  readers derive from the flag rather than trusting the list. `ALL_TOOL_NAMES` lives in
+  `packages/shared` for the same reason `ASK_USER_TOOL_NAME` does — the client writes the
+  allow-list and the server filters by it, and the copies had already drifted: the client's list was
+  missing `read_document`, which therefore could not be chosen at all.
 - **A workspace has two directories, and they are not interchangeable.** `Workspace.dirPath`
   is the workspace's own — the parent of `workdir/` and `sessions/`, what `DELETE` removes,
   and what the home page's card names. `Workspace.workdirPath` is `dirPath/workdir`: the

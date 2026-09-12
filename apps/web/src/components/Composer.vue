@@ -203,6 +203,7 @@ function onKeydown(e: KeyboardEvent) {
             </button>
             <button
               class="icon-btn params-btn"
+              data-testid="open-session-settings"
               :title="t('composer.settings')"
               :aria-label="t('composer.settings')"
               @click="showSessionSettings = true"
@@ -210,11 +211,12 @@ function onKeydown(e: KeyboardEvent) {
               <Icon name="sliders" />
             </button>
             <span
-              v-if="store.activeCopilot"
+              v-if="store.activeCopilotName"
               class="pill copilot-tag truncate"
-              :title="store.activeCopilot.systemPrompt"
+              data-testid="copilot-tag"
+              :title="store.activeSystemPrompt"
             >
-              <Icon name="diamond" /> {{ store.activeCopilot.name }}
+              <Icon name="diamond" /> {{ store.activeCopilotName }}
             </span>
           </div>
 

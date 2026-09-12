@@ -6,6 +6,7 @@ import type {
   Attachment,
   Copilot,
   CopilotDefaults,
+  CopilotVisibility,
   DocumentParsePolicy,
   DocumentParserKind,
   Message,
@@ -71,11 +72,16 @@ interface WorkspaceRow {
 
 interface CopilotRow {
   id: string;
+  user_id: string | null;
+  /** From the `users` join every copilot query carries; null when there is no owner. */
+  owner_name: string | null;
   name: string;
   description: string;
   system_prompt: string;
+  all_tools: number | null;
   tools: string;
   settings: string | null;
+  visibility: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -84,6 +90,10 @@ interface SessionRow {
   id: string;
   workspace_id: string;
   copilot_id: string | null;
+  copilot_name: string | null;
+  system_prompt: string | null;
+  all_tools: number | null;
+  tools: string | null;
   title: string;
   title_source: string | null;
   settings: string | null;
@@ -246,13 +256,43 @@ const mapWorkspace = (r: WorkspaceRow): Workspace => ({
   lastActivityAt: r.last_activity_at ?? null,
 });
 
+/**
+ * A stored `all_tools`.
+ *
+ * `null` is a row written before the column existed, and `v !== 0` is true for it — which is
+ * the correct reading, because an absent flag has to mean "every tool": that is what an empty
+ * tool list meant before the flag existed, and the migration's default says the same thing.
+ */
+const asAllTools = (v: number | null): boolean => v !== 0;
+
+/**
+ * The stored tool pair, with the flag made authoritative.
+ *
+ * `allTools` wins, and the list is dropped when it does, so a row cannot be left holding a
+ * selection nothing consults. Readers derive from the flag as well — this is what keeps the
+ * database free of the contradictory state rather than merely tolerant of it.
+ */
+const storeTools = (input: { allTools: boolean; tools: string[] }): {
+  allTools: number;
+  tools: string;
+} =>
+  input.allTools
+    ? { allTools: 1, tools: "[]" }
+    : { allTools: 0, tools: JSON.stringify(input.tools) };
+
 const mapCopilot = (r: CopilotRow): Copilot => ({
   id: r.id,
+  // Unreachable in practice: every query that can return a row names the owner in its `WHERE`
+  // (`user_id = ?` or `visibility = 'public'`), and an ownerless row matches neither.
+  userId: r.user_id ?? "",
+  ownerName: r.owner_name ?? undefined,
   name: r.name,
   description: r.description,
   systemPrompt: r.system_prompt,
+  allTools: asAllTools(r.all_tools),
   tools: safeParseArray<string>(r.tools),
   settings: safeParseObject<CopilotDefaults>(r.settings),
+  visibility: r.visibility === "public" ? "public" : "private",
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -261,6 +301,10 @@ const mapSession = (r: SessionRow): Session => ({
   id: r.id,
   workspaceId: r.workspace_id,
   copilotId: r.copilot_id,
+  copilotName: r.copilot_name ?? "",
+  systemPrompt: r.system_prompt ?? "",
+  allTools: asAllTools(r.all_tools),
+  tools: safeParseArray<string>(r.tools),
   title: r.title,
   titleSource: r.title_source === "user" ? "user" : "auto",
   settings: safeParseObject<SessionSettings>(r.settings),
@@ -453,27 +497,59 @@ export interface AppDb {
   /** Returns false when no such workspace existed, or it belonged to someone else. */
   deleteWorkspaceForUser(id: string, userId: string): boolean;
 
-  listCopilots(): Copilot[];
-  getCopilot(id: string): Copilot | undefined;
+  /*
+   * Copilots are owned. The two *reads* below take the wider predicate — the account's own
+   * Copilots plus every public one — while the two *writes* take the narrower one and are
+   * owner-only. That asymmetry is the whole policy, and it is why neither write is expressed by
+   * looking a row up and then comparing its owner: that check is one somebody eventually forgets
+   * on a new route, and the failure is another account's data rather than an error.
+   */
+  /** Own or public, and owned by someone — everything this account may see. */
+  listCopilotsForUser(userId: string): Copilot[];
+  /**
+   * Everything this account may *use*: its own, or a public one that has an owner.
+   *
+   * Not an ownership check. `undefined` covers both "no such Copilot" and "someone else's
+   * private one", because a route turns both into a 404 and an id cannot be probed.
+   */
+  getCopilotForUser(id: string, userId: string): Copilot | undefined;
+  /**
+   * `id = ? AND user_id = ?` — the *owned* set, for a caller that needs a Copilot's current
+   * values in order to patch them.
+   *
+   * A separate accessor rather than "read it, then compare its owner": that comparison is the
+   * check that gets forgotten on a new route, and the failure is another account's data rather
+   * than an error. Here the owner is in the `WHERE`, so there is nothing to remember.
+   */
+  getOwnedCopilot(id: string, userId: string): Copilot | undefined;
   createCopilot(input: {
     id: string;
+    userId: string;
     name: string;
     description: string;
     systemPrompt: string;
+    /** Authoritative over `tools`, which is stored empty when this is true. */
+    allTools: boolean;
     tools: string[];
     settings: CopilotDefaults;
+    visibility: CopilotVisibility;
   }): Copilot;
-  updateCopilot(
+  /** Owner-only (`id = ? AND user_id = ?`). `undefined` for a Copilot someone else owns. */
+  updateCopilotForUser(
     id: string,
+    userId: string,
     input: {
       name: string;
       description: string;
       systemPrompt: string;
+      allTools: boolean;
       tools: string[];
       settings: CopilotDefaults;
+      visibility: CopilotVisibility;
     }
   ): Copilot | undefined;
-  deleteCopilot(id: string): void;
+  /** Owner-only. Returns false when no such Copilot existed, or it belonged to someone else. */
+  deleteCopilotForUser(id: string, userId: string): boolean;
 
   listSessionsForUser(workspaceId: string, userId: string): Session[];
   /**
@@ -488,21 +564,42 @@ export interface AppDb {
     id: string,
     userId: string
   ): { session: Session; workspace: Workspace } | undefined;
+  /**
+   * The Copilot fields are a snapshot the caller supplies, not a reference this resolves: the
+   * route has already read the Copilot through `getCopilotForUser`, and copying here is what
+   * makes the conversation independent of it. Pass empty values for a Copilotless session.
+   */
   createSession(input: {
     id: string;
     workspaceId: string;
     copilotId: string | null;
+    copilotName: string;
+    systemPrompt: string;
+    /** Authoritative over `tools`, which is stored empty when this is true. */
+    allTools: boolean;
+    tools: string[];
     title: string;
     settings?: SessionSettings;
   }): Session;
   /**
    * A supplied `title` also marks the session as user-titled, which stops the
    * auto-titler from ever overwriting it. Settings-only updates leave the flag alone.
+   *
+   * `systemPrompt`, `allTools` and `tools` are the conversation's own persona, editable
+   * independently of the Copilot it was copied from — that is the point of snapshotting rather
+   * than referencing. Absent `allTools` leaves the stored flag alone; present, it wins over
+   * `tools` and clears the stored list.
    */
   updateSessionForUser(
     id: string,
     userId: string,
-    input: { title?: string; settings?: SessionSettings }
+    input: {
+      title?: string;
+      settings?: SessionSettings;
+      systemPrompt?: string;
+      allTools?: boolean;
+      tools?: string[];
+    }
   ): Session | undefined;
   /** Replace the title on behalf of the auto-titler, keeping `titleSource: "auto"`. */
   setAutoTitleForUser(id: string, userId: string, title: string): Session | undefined;
@@ -510,7 +607,7 @@ export interface AppDb {
   deleteSessionForUser(id: string, userId: string): boolean;
 
   /*
-   * The session-id-only accessors below — this pair, and `createMessage`,
+   * The session-id-only accessors below — `touchSession`, and `createMessage`,
    * `findAwaitingToolCall`, `updateMessageToolCalls` and `skipAwaitingToolCalls` further
    * down — take an id and nothing else on purpose. Every caller reaches them *after* a
    * `...ForUser` read has
@@ -520,7 +617,6 @@ export interface AppDb {
    * guard is genuinely upstream rather than merely inconvenient here.
    */
   touchSession(id: string): void;
-  setSessionCopilot(id: string, copilotId: string | null): void;
 
   listMessagesForUser(sessionId: string, userId: string): Message[];
   getMessageForUser(id: string, userId: string): Message | undefined;
@@ -634,6 +730,46 @@ export function createDb(dbPath: string): AppDb {
   // which is exactly the gap `ensureColumn` exists to close. Nothing to backfill, so the
   // return value is ignored.
   ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
+
+  /*
+   * Copilots became owned and publishable, and a conversation now snapshots the Copilot it was
+   * started from instead of re-reading it every turn.
+   *
+   * `user_id` carries no default on purpose — see the note in `schema.ts`. Every read names the
+   * owner in its `WHERE`, so an ownerless row is matched by nothing and goes missing rather
+   * than being handed to whoever asked.
+   */
+  const copilotOwnerAdded = ensureColumn(
+    db,
+    "copilots",
+    "user_id",
+    "user_id TEXT REFERENCES users(id) ON DELETE CASCADE"
+  );
+  ensureColumn(db, "copilots", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'");
+  // Defaulting to 1 preserves the meaning those rows already had: an empty tools list used to
+  // mean "every tool", and it still does wherever all_tools is set.
+  ensureColumn(db, "copilots", "all_tools", "all_tools INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "sessions", "copilot_name", "copilot_name TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "sessions", "system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "sessions", "all_tools", "all_tools INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "sessions", "tools", "tools TEXT NOT NULL DEFAULT '[]'");
+
+  /*
+   * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
+   * that gives Copilots an owner.
+   *
+   * Rows written before that column have no owner and no way to infer one, so they are dropped
+   * rather than guessed at. `foreign_keys` is ON, so this fires `sessions.copilot_id`'s
+   * `ON DELETE SET NULL` and no conversation is removed. Two consequences are worth knowing and
+   * are the reason this comment is long:
+   *
+   * - A conversation keeps its copied generation `settings` but loses its Copilot's persona,
+   *   falling back to the built-in system prompt.
+   * - A conversation that was running under a **tool-restricted** Copilot becomes unrestricted,
+   *   because its snapshot is empty and an empty allowlist reads as "all tools". That widening
+   *   is real; it is accepted here because the alternative was refusing the database outright.
+   */
+  if (copilotOwnerAdded) db.exec("DELETE FROM copilots");
 
   const now = () => new Date().toISOString();
 
@@ -773,17 +909,44 @@ export function createDb(dbPath: string): AppDb {
   );
 
   /* ------------------------------- copilots ------------------------------- */
-  const stmtListCopilots = db.prepare("SELECT * FROM copilots ORDER BY created_at ASC");
-  const stmtGetCopilot = db.prepare("SELECT * FROM copilots WHERE id = ?");
+  /*
+   * All three reads share one `SELECT`, so the owner name can never be missing from a row that
+   * needs it. The two predicates are the policy, spelled out in the `WHERE` rather than applied
+   * afterwards: own-or-public is the *usable* set, `user_id = ?` alone is the *owned* set, and
+   * the writes below take only the second.
+   *
+   * `user_id IS NOT NULL` is not decoration. A Copilot with no owner can only come from a bug or
+   * a database predating ownership, and the disjunction alone would still hand one over if it
+   * happened to be marked public — `visibility = 'public'` is true however absent the owner is.
+   * Requiring an owner is what makes "a forgotten owner goes missing rather than leaking" a
+   * statement about this SQL rather than an intention.
+   */
+  const copilotSelect = `SELECT c.*, u.username AS owner_name FROM copilots c
+     LEFT JOIN users u ON u.id = c.user_id`;
+  const stmtListCopilotsForUser = db.prepare(
+    `${copilotSelect} WHERE c.user_id IS NOT NULL AND (c.user_id = ? OR c.visibility = 'public')
+     ORDER BY c.created_at ASC`
+  );
+  const stmtGetCopilotForUser = db.prepare(
+    `${copilotSelect} WHERE c.id = ? AND c.user_id IS NOT NULL
+       AND (c.user_id = ? OR c.visibility = 'public')`
+  );
+  const stmtGetOwnedCopilot = db.prepare(`${copilotSelect} WHERE c.id = ? AND c.user_id = ?`);
   const stmtCreateCopilot = db.prepare(
-    `INSERT INTO copilots (id, name, description, system_prompt, tools, settings, created_at, updated_at)
-     VALUES (@id, @name, @description, @systemPrompt, @tools, @settings, @createdAt, @updatedAt)`
+    `INSERT INTO copilots (id, user_id, name, description, system_prompt, all_tools, tools, settings, visibility, created_at, updated_at)
+     VALUES (@id, @userId, @name, @description, @systemPrompt, @allTools, @tools, @settings, @visibility, @createdAt, @updatedAt)`
   );
-  const stmtUpdateCopilot = db.prepare(
+  /*
+   * `AND user_id = @userId` is redundant with the owned read the accessor does first, and kept
+   * anyway: it is the statement that would still be correct if that read were ever removed.
+   */
+  const stmtUpdateCopilotForUser = db.prepare(
     `UPDATE copilots SET name = @name, description = @description, system_prompt = @systemPrompt,
-     tools = @tools, settings = @settings, updated_at = @updatedAt WHERE id = @id`
+     all_tools = @allTools, tools = @tools, settings = @settings, visibility = @visibility,
+     updated_at = @updatedAt
+     WHERE id = @id AND user_id = @userId`
   );
-  const stmtDeleteCopilot = db.prepare("DELETE FROM copilots WHERE id = ?");
+  const stmtDeleteCopilotForUser = db.prepare("DELETE FROM copilots WHERE id = ? AND user_id = ?");
 
   /* ------------------------------- sessions ------------------------------- */
   /*
@@ -803,12 +966,16 @@ export function createDb(dbPath: string): AppDb {
   /** Unscoped: for the accessors documented as taking an already-resolved session id. */
   const stmtGetSession = db.prepare("SELECT * FROM sessions WHERE id = ?");
   const stmtCreateSession = db.prepare(
-    `INSERT INTO sessions (id, workspace_id, copilot_id, title, title_source, settings, created_at, updated_at)
-     VALUES (@id, @workspaceId, @copilotId, @title, @titleSource, @settings, @createdAt, @updatedAt)`
+    `INSERT INTO sessions (id, workspace_id, copilot_id, copilot_name, system_prompt, all_tools,
+       tools, title, title_source, settings, created_at, updated_at)
+     VALUES (@id, @workspaceId, @copilotId, @copilotName, @systemPrompt, @allTools,
+       @tools, @title, @titleSource, @settings, @createdAt, @updatedAt)`
   );
   const stmtUpdateSessionForUser = db.prepare(
-    `UPDATE sessions SET title = ?, title_source = ?, settings = ?, updated_at = ?
-      WHERE id = ? AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ?)`
+    `UPDATE sessions SET title = @title, title_source = @titleSource, settings = @settings,
+       system_prompt = @systemPrompt, all_tools = @allTools, tools = @tools,
+       updated_at = @updatedAt
+      WHERE id = @id AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = @userId)`
   );
   const stmtSetAutoTitleForUser = db.prepare(
     `UPDATE sessions SET title = ?, updated_at = ?
@@ -819,9 +986,6 @@ export function createDb(dbPath: string): AppDb {
       WHERE id = ? AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ?)`
   );
   const stmtTouchSession = db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?");
-  const stmtSetSessionCopilot = db.prepare(
-    "UPDATE sessions SET copilot_id = ?, updated_at = ? WHERE id = ?"
-  );
 
   /* ------------------------------- messages ------------------------------- */
   /*
@@ -1015,38 +1179,47 @@ export function createDb(dbPath: string): AppDb {
       return stmtDeleteWorkspaceForUser.run(id, userId).changes > 0;
     },
 
-    listCopilots() {
-      return (stmtListCopilots.all() as CopilotRow[]).map(mapCopilot);
+    listCopilotsForUser(userId) {
+      return (stmtListCopilotsForUser.all(userId) as CopilotRow[]).map(mapCopilot);
     },
-    getCopilot(id) {
-      const r = stmtGetCopilot.get(id) as CopilotRow | undefined;
+    getCopilotForUser(id, userId) {
+      const r = stmtGetCopilotForUser.get(id, userId) as CopilotRow | undefined;
+      return r ? mapCopilot(r) : undefined;
+    },
+    getOwnedCopilot(id, userId) {
+      const r = stmtGetOwnedCopilot.get(id, userId) as CopilotRow | undefined;
       return r ? mapCopilot(r) : undefined;
     },
     createCopilot(input) {
       const ts = now();
       stmtCreateCopilot.run({
         ...input,
-        tools: JSON.stringify(input.tools),
+        ...storeTools(input),
         settings: JSON.stringify(input.settings),
         createdAt: ts,
         updatedAt: ts,
       });
-      const r = stmtGetCopilot.get(input.id) as CopilotRow;
+      const r = stmtGetOwnedCopilot.get(input.id, input.userId) as CopilotRow;
       return mapCopilot(r);
     },
-    updateCopilot(id, input) {
-      stmtUpdateCopilot.run({
+    updateCopilotForUser(id, userId, input) {
+      // Two independent owner checks, for two different reasons: the read decides the return
+      // value, and the statement's own `AND user_id` is the one that would still hold if someone
+      // later removed the read.
+      if (!stmtGetOwnedCopilot.get(id, userId)) return undefined;
+      stmtUpdateCopilotForUser.run({
         id,
+        userId,
         ...input,
-        tools: JSON.stringify(input.tools),
+        ...storeTools(input),
         settings: JSON.stringify(input.settings),
         updatedAt: now(),
       });
-      const r = stmtGetCopilot.get(id) as CopilotRow | undefined;
-      return r ? mapCopilot(r) : undefined;
+      const r = stmtGetOwnedCopilot.get(id, userId) as CopilotRow;
+      return mapCopilot(r);
     },
-    deleteCopilot(id) {
-      stmtDeleteCopilot.run(id);
+    deleteCopilotForUser(id, userId) {
+      return stmtDeleteCopilotForUser.run(id, userId).changes > 0;
     },
 
     listSessionsForUser(workspaceId, userId) {
@@ -1066,6 +1239,7 @@ export function createDb(dbPath: string): AppDb {
       const ts = now();
       stmtCreateSession.run({
         ...input,
+        ...storeTools(input),
         titleSource: "auto",
         settings: JSON.stringify(input.settings ?? {}),
         createdAt: ts,
@@ -1079,19 +1253,28 @@ export function createDb(dbPath: string): AppDb {
       if (!existing) return undefined;
 
       const renamed = input.title !== undefined && !!input.title.trim();
-      const title = renamed ? input.title!.trim() : existing.title;
       const settings = input.settings
         ? { ...safeParseObject<SessionSettings>(existing.settings), ...input.settings }
         : safeParseObject<SessionSettings>(existing.settings);
 
-      stmtUpdateSessionForUser.run(
-        title,
-        renamed ? "user" : existing.title_source ?? "auto",
-        JSON.stringify(settings),
-        now(),
+      // A conversation's persona is its own once created, so these are plain assignments with no
+      // fallback to the Copilot — the Copilot is not consulted again after this. `allTools` set
+      // here wins over the supplied list and clears it, exactly as on the write paths above.
+      const stored = storeTools({
+        allTools: input.allTools ?? asAllTools(existing.all_tools),
+        tools: input.tools ?? safeParseArray<string>(existing.tools),
+      });
+
+      stmtUpdateSessionForUser.run({
         id,
-        userId
-      );
+        userId,
+        title: renamed ? input.title!.trim() : existing.title,
+        titleSource: renamed ? "user" : existing.title_source ?? "auto",
+        settings: JSON.stringify(settings),
+        systemPrompt: input.systemPrompt ?? existing.system_prompt ?? "",
+        ...stored,
+        updatedAt: now(),
+      });
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);
     },
@@ -1106,9 +1289,6 @@ export function createDb(dbPath: string): AppDb {
     },
     touchSession(id) {
       stmtTouchSession.run(now(), id);
-    },
-    setSessionCopilot(id, copilotId) {
-      stmtSetSessionCopilot.run(copilotId, now(), id);
     },
 
     listMessagesForUser(sessionId, userId) {

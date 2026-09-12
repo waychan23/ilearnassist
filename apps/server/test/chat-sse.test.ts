@@ -373,23 +373,115 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(persisted[1]!.content).toBe("ok");
   });
 
-  it("switches the session's copilot when the turn asks for one", async () => {
-    const { session } = await freshSession();
+  /** A Copilot, and a conversation started from it. */
+  async function sessionFromCopilot(payload: Record<string, unknown>) {
+    const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
+    currentWorkspaceId = workspace.id;
     const copilot = (
-      await env.inject({
-        method: "POST",
-        url: "/api/copilots",
-        payload: { name: "Coach", systemPrompt: "Be terse.", tools: [] },
-      })
+      await env.inject({ method: "POST", url: "/api/copilots", payload })
     ).json<{ id: string }>();
+    const session = await newSession(env, workspace.id, { copilotId: copilot.id });
+    return { copilot, session };
+  }
+
+  /** The system message and the tool names the model was actually sent. */
+  function sentToModel(index = 0) {
+    const body = llm.requests()[index] as {
+      messages: { role: string; content: unknown }[];
+      tools?: { function?: { name: string } }[];
+    };
+    return {
+      system: JSON.stringify(body.messages[0]!.content),
+      tools: (body.tools ?? []).map((t) => t.function?.name),
+    };
+  }
+
+  it("answers with the Copilot's prompt as it was at creation, not as it is now", async () => {
+    const { copilot, session } = await sessionFromCopilot({
+      name: "Coach",
+      systemPrompt: "Be terse.",
+      tools: [],
+    });
+
+    // Edited after the conversation exists. The session copied the prompt when it was created,
+    // so this must not reach it — that is what the UI promises, and what the live read this
+    // replaced used to break.
+    await env.inject({
+      method: "PUT",
+      url: `/api/copilots/${copilot.id}`,
+      payload: { systemPrompt: "Write essays." },
+    });
 
     llm.setTurns([{ content: "ok" }]);
-    await chat(session.id, { message: "hi", copilotId: copilot.id });
+    await chat(session.id, { message: "hi" });
 
-    expect(await sessionOf(session.id)).toMatchObject({ copilotId: copilot.id });
-    // The Copilot's system prompt reached the model.
-    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
-    expect(JSON.stringify(sent.messages[0]!.content)).toContain("Be terse.");
+    const { system } = sentToModel();
+    expect(system).toContain("Be terse.");
+    expect(system).not.toContain("Write essays.");
+  });
+
+  it("keeps its tool allowlist after the Copilot it came from is deleted", async () => {
+    /*
+     * The widening this exists to prevent. `buildTools` reads an empty allowlist as "all tools",
+     * and `sessions.copilot_id` is `ON DELETE SET NULL` — so while the allowlist was read live
+     * from the Copilot, deleting it did not merely remove a restriction, it silently granted
+     * every tool. The conversation's own copy is what makes the restriction outlive its source.
+     */
+    const { copilot, session } = await sessionFromCopilot({
+      name: "Reader",
+      systemPrompt: "Read only.",
+      allTools: false,
+      tools: ["read_file"],
+    });
+    expect((await env.inject({ method: "DELETE", url: `/api/copilots/${copilot.id}` })).statusCode).toBe(200);
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi" });
+
+    const { tools } = sentToModel();
+    expect(tools).toContain("read_file");
+    expect(tools).not.toContain("write_file");
+    expect(tools).not.toContain("delete_file");
+  });
+
+  it("sends no tools at all when the conversation is allowed none", async () => {
+    /*
+     * The state that used to be unreachable. An empty allow-list meant "no restriction", so a
+     * Copilot locked down to nothing arrived at the model with every tool — the widest possible
+     * reading of the narrowest possible selection.
+     */
+    const { session } = await sessionFromCopilot({
+      name: "Silent",
+      systemPrompt: "只聊天。",
+      allTools: false,
+      tools: [],
+    });
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi" });
+
+    const { tools } = sentToModel();
+    expect(tools).toEqual([]);
+    // The turn still ran, so this is a tool-less conversation rather than a failed request.
+    expect(await messagesOf(session.id)).toHaveLength(2);
+  });
+
+  it("sends every tool when the flag is on, list or no list", async () => {
+    // `allTools: true` is authoritative, so a stale selection left beside it changes nothing —
+    // and the two must not be able to disagree about what the model was offered.
+    const { session } = await sessionFromCopilot({
+      name: "Everything",
+      systemPrompt: "",
+      allTools: true,
+      tools: ["read_file"],
+    });
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi" });
+
+    expect(sentToModel().tools).toContain("write_file");
+    // Which is to say all of them, not merely the one name that happened to be listed.
+    expect(sentToModel().tools.length).toBeGreaterThan(1);
   });
 
   it("honours a per-turn model override that the provider actually serves", async () => {

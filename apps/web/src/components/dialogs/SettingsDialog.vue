@@ -215,6 +215,29 @@ async function onDeleteCopilot(c: Copilot) {
   }
 }
 
+/**
+ * The list, split the way the API splits it: another account's published Copilots, which this
+ * one may use and copy, and its own, which it may also edit and delete. Empty groups drop out
+ * rather than leaving a heading over nothing.
+ *
+ * The group is a flag rather than a translation key, and the label is chosen in the template —
+ * a key held in data is invisible to `i18n/catalog.test.ts`'s dead-key scan.
+ */
+const copilotGroups = computed(() =>
+  [
+    { key: "public", items: store.publicCopilots },
+    { key: "mine", items: store.myCopilots },
+  ].filter((g) => g.items.length > 0)
+);
+
+async function onCopyCopilot(c: Copilot) {
+  try {
+    await store.copyCopilotToMine(c.id);
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** One-line digest of what a Copilot changes, shown under its name. */
 function copilotSummary(c: Copilot) {
   const bits: string[] = [];
@@ -232,10 +255,14 @@ function copilotSummary(c: Copilot) {
       )
     );
   }
+  // Three states, and the empty list is now the narrowest rather than the widest — reporting
+  // it as "all tools" would describe exactly the Copilot it is not.
   bits.push(
-    c.tools.length
-      ? t("settings.copilot.summaryTools", { count: c.tools.length }, c.tools.length)
-      : t("settings.copilot.summaryAllTools")
+    c.allTools
+      ? t("settings.copilot.summaryAllTools")
+      : c.tools.length
+        ? t("settings.copilot.summaryTools", { count: c.tools.length }, c.tools.length)
+        : t("settings.copilot.summaryNoTools")
   );
   return bits.join(" · ");
 }
@@ -267,6 +294,7 @@ function onDefaultModelChange(e: Event) {
           <h3>{{ t("settings.title") }}</h3>
           <button
             class="icon-btn"
+            data-testid="close-settings"
             :title="t('common.close')"
             :aria-label="t('common.close')"
             @click="emit('close')"
@@ -279,9 +307,16 @@ function onDefaultModelChange(e: Event) {
           <button class="tab" :class="{ active: tab === 'providers' }" @click="tab = 'providers'">
             {{ t("settings.tabs.providers") }}
           </button>
-          <button class="tab" :class="{ active: tab === 'copilots' }" @click="tab = 'copilots'">
+          <button
+            class="tab"
+            :class="{ active: tab === 'copilots' }"
+            data-testid="tab-copilots"
+            @click="tab = 'copilots'"
+          >
             Copilots
-            <span v-if="store.copilots.length" class="tab-count">{{ store.copilots.length }}</span>
+            <!-- The account's own, matching the count inside the tab: another account's
+                 published Copilots are not "configured" here and would inflate it. -->
+            <span v-if="store.myCopilots.length" class="tab-count">{{ store.myCopilots.length }}</span>
           </button>
           <button
             class="tab"
@@ -467,30 +502,81 @@ function onDefaultModelChange(e: Event) {
               <span>{{
               t(
                 "settings.copilot.countConfigured",
-                { count: store.copilots.length },
-                store.copilots.length
+                { count: store.myCopilots.length },
+                store.myCopilots.length
               )
             }}</span>
-              <button class="btn small" @click="openNewCopilot">
+              <button class="btn small" data-testid="new-copilot" @click="openNewCopilot">
                 <Icon name="plus" /> {{ t("settings.copilot.add") }}
               </button>
             </div>
 
-            <div v-for="c in store.copilots" :key="c.id" class="list-row copilot-row">
-              <div class="info">
-                <div class="name">
-                  <span class="status-dot"></span>
-                  {{ c.name }}
-                  <span v-if="c.id === store.activeCopilotId" class="badge">{{ t("settings.copilot.inUse") }}</span>
+            <template v-for="group in copilotGroups" :key="group.key">
+              <div class="group-label">
+                {{
+                  group.key === "public"
+                    ? t("settings.copilot.groupPublic")
+                    : t("settings.copilot.groupMine")
+                }}
+              </div>
+
+              <div
+                v-for="c in group.items"
+                :key="c.id"
+                class="list-row copilot-row"
+                :data-testid="`copilot-row-${c.name}`"
+              >
+                <div class="info">
+                  <div class="name">
+                    <span class="status-dot"></span>
+                    {{ c.name }}
+                    <span v-if="c.ownerName && group.key === 'public'" class="badge muted">
+                      {{ t("settings.copilot.byAuthor", { name: c.ownerName }) }}
+                    </span>
+                    <span v-if="c.visibility === 'public'" class="badge">
+                      {{ t("settings.copilot.published") }}
+                    </span>
+                    <span v-if="c.id === store.activeCopilotId" class="badge">
+                      {{ t("settings.copilot.inUse") }}
+                    </span>
+                  </div>
+                  <div v-if="c.description" class="desc">{{ c.description }}</div>
+                  <div class="meta">{{ copilotSummary(c) }}</div>
+
+                  <!-- Someone else's wording has to be readable before it is chosen, so the
+                       prompt is disclosed here rather than only inside an editor that refuses
+                       to open for it. -->
+                  <details v-if="group.key === 'public'" class="prompt-preview">
+                    <summary>{{ t("settings.copilot.viewPrompt") }}</summary>
+                    <pre v-if="c.systemPrompt">{{ c.systemPrompt }}</pre>
+                    <div v-else class="hint">{{ t("settings.copilot.promptNone") }}</div>
+                  </details>
                 </div>
-                <div v-if="c.description" class="desc">{{ c.description }}</div>
-                <div class="meta">{{ copilotSummary(c) }}</div>
+
+                <div class="row-actions">
+                  <template v-if="group.key === 'mine'">
+                    <button class="btn small" data-testid="edit-copilot" @click="openEditCopilot(c)">
+                      {{ t("common.edit") }}
+                    </button>
+                    <button
+                      class="icon-btn danger"
+                      :title="t('common.delete')"
+                      @click="onDeleteCopilot(c)"
+                    >
+                      <Icon name="trash" />
+                    </button>
+                  </template>
+                  <button
+                    v-else
+                    class="btn small"
+                    :data-testid="`copy-copilot-${c.name}`"
+                    @click="onCopyCopilot(c)"
+                  >
+                    <Icon name="copy" /> {{ t("settings.copilot.copyToMine") }}
+                  </button>
+                </div>
               </div>
-              <div class="row-actions">
-                <button class="btn small" @click="openEditCopilot(c)">{{ t("common.edit") }}</button>
-                <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteCopilot(c)"><Icon name="trash" /></button>
-              </div>
-            </div>
+            </template>
 
             <div v-if="store.copilots.length === 0" class="empty">
               {{ t("settings.copilot.empty") }}
@@ -693,6 +779,30 @@ function onDefaultModelChange(e: Event) {
   color: var(--text-3);
   font-size: var(--fs-2);
   margin-top: var(--space-2);
+}
+.group-label {
+  color: var(--text-3);
+  font-size: var(--fs-2);
+  margin: var(--space-6) 0 var(--space-2);
+}
+.prompt-preview {
+  margin-top: var(--space-3);
+  font-size: var(--fs-2);
+  color: var(--text-3);
+}
+.prompt-preview summary {
+  cursor: pointer;
+}
+.prompt-preview pre {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-4) var(--space-5);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
 }
 .empty {
   color: var(--text-3);

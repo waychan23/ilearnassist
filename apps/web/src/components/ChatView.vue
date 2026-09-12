@@ -191,12 +191,14 @@ watch(
               AI
             </span>
           </div>
+          <!-- Read from the conversation's snapshot, not from the Copilot list: it keeps
+               naming the persona after that Copilot is renamed or deleted. -->
           <div
-            v-if="store.activeCopilot"
+            v-if="store.activeCopilotName"
             class="subtitle truncate"
-            :title="store.activeCopilot.systemPrompt"
+            :title="store.activeSystemPrompt"
           >
-            <Icon name="diamond" /> {{ store.activeCopilot.name }}
+            <Icon name="diamond" /> {{ store.activeCopilotName }}
           </div>
         </template>
       </div>
@@ -223,7 +225,7 @@ watch(
         :class="{ 'with-rail': showMinimap }"
       >
         <div v-if="store.messages.length === 0 && !store.streaming.active" class="empty-state">
-          <h2>{{ store.activeCopilot?.name ?? t("chat.start") }}</h2>
+          <h2>{{ store.activeCopilotName ?? t("chat.start") }}</h2>
           <p>{{ t("chat.startHint") }}</p>
           <button class="btn" @click="showNewSession = true">
             <Icon name="plus" /> {{ t("chat.startAction") }}

@@ -2,10 +2,11 @@
 
 A self-hosted agent product for one person, with a chatbox-style UI. Sign in
 under any username, give the agent a **workspace** (a sandboxed directory), pick
-a **Copilot** (a preset system prompt + allowed tools), choose a
-**provider/model**, and chat. The agent runs a ReAct loop and can search the web
-and read/write files inside its workspace. Each account has its own workspaces,
-conversations and uploads, all inside a data directory you choose.
+a **Copilot** (a reusable system prompt + tool allow-list, your own or one another
+account published), choose a **provider/model**, and chat. The agent runs a ReAct
+loop and can search the web and read/write files inside its workspace. Each account
+has its own workspaces, conversations, Copilots and uploads, all inside a data
+directory you choose.
 
 Browser/Server architecture: a Node/TypeScript backend (Fastify + SQLite +
 LangChain.js) and a Vue 3 frontend.
@@ -23,9 +24,15 @@ LangChain.js) and a Vue 3 frontend.
 - **Tools** — `list_files`, `read_file`, `write_file`, `create_directory`,
   `delete_file` (workspace-sandboxed) and `web_search` (Bing / DuckDuckGo /
   Tavily / SearXNG).
-- **Copilots** — GPTs-style presets: a name, description, system prompt, an
-  optional model override, and an allow-list of tools. Select one to shape the
-  conversation.
+- **Copilots** — GPTs-style presets: a name, description, system prompt, generation
+  defaults and a tool allow-list. The tools are explicit — either every tool is
+  available, or exactly the ones ticked, which makes "no tools at all" a state you
+  can actually choose. Owned by the account that made them and
+  private by default; publish one and every account can use it, while only its
+  owner can edit or delete it. A conversation **copies** the whole definition when
+  it starts, so editing or deleting the Copilot later leaves that conversation
+  exactly as it was — its persona is then the conversation's own, editable from the
+  session settings.
 - **Provider/model config** — any OpenAI-compatible endpoint (DeepSeek, OpenAI,
   Moonshot, Ollama, LM Studio, vLLM, …) configured via YAML, no code changes.
 - **Streaming chat UI** — markdown rendering, syntax-highlighted code,

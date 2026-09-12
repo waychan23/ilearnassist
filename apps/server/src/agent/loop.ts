@@ -10,7 +10,6 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import type {
   Attachment,
   ChatStreamEvent,
-  Copilot,
   Message,
   MessageUsage,
   SessionSettings,
@@ -66,7 +65,14 @@ export interface RunAgentInput {
   provider: ProviderRecord | undefined;
   modelId: string;
   workspace: Workspace;
-  copilot?: Copilot;
+  /**
+   * The conversation's own system prompt. Empty falls back to the built-in assistant text.
+   *
+   * A Copilot is deliberately not passed: the session copied everything a Copilot contributes
+   * when it was created, so consulting the Copilot here is what used to make editing one rewrite
+   * every conversation using it.
+   */
+  systemPrompt: string;
   /** Resolved per-session generation parameters (temperature, maxSteps, …). */
   settings: SessionSettings;
   /** Whose sources tree the attachment bytes live in. Derived per request, never held. */
@@ -180,9 +186,9 @@ function safeParseArgs(json: string): Record<string, unknown> {
   }
 }
 
-function buildSystemPrompt(workspace: Workspace, copilot?: Copilot): string {
+function buildSystemPrompt(workspace: Workspace, systemPrompt: string): string {
   const base =
-    copilot?.systemPrompt?.trim() ||
+    systemPrompt.trim() ||
     "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Do the same once you have produced a plan or another substantial artifact: put it to them for confirmation rather than assuming it is accepted. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
 
   // `workdirPath`, not `dirPath`: the sandbox is the workspace's `workdir/`, and naming the
@@ -318,7 +324,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   const maxSteps = input.settings.maxSteps ?? DEFAULT_MAX_STEPS;
 
   const messages: BaseMessage[] = [
-    new SystemMessage(buildSystemPrompt(input.workspace, input.copilot)),
+    new SystemMessage(buildSystemPrompt(input.workspace, input.systemPrompt)),
     ...history,
   ];
 

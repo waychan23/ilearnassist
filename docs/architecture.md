@@ -81,8 +81,11 @@ snake_case, mapped to camelCase objects in code:
 - `users` — id, username (unique, `COLLATE NOCASE`), slug (unique), created_at
 - `workspaces` — id, user_id (FK, CASCADE), name, slug, dir_path, created_at;
   `UNIQUE (user_id, slug)` — the slug is only unique among one account's workspaces
-- `copilots` — …, system_prompt, tools (JSON), settings (JSON), timestamps
-- `sessions` — id, workspace_id, copilot_id, title, title_source, settings (JSON), timestamps
+- `copilots` — id, user_id (FK, CASCADE, **nullable**), name, description,
+  system_prompt, tools (JSON), settings (JSON), visibility (`private` | `public`),
+  timestamps
+- `sessions` — id, workspace_id, copilot_id (FK, `SET NULL`, nullable), copilot_name,
+  system_prompt, tools (JSON), title, title_source, settings (JSON), timestamps
 - `messages` — id, session_id, role, content, reasoning, tool_calls (JSON),
   attachments (JSON), usage (JSON), created_at
 - `providers` — id, name, base_url, api_key, sort_order, timestamps
@@ -100,8 +103,17 @@ because a second copy of the owner is a second thing that has to stay in agreeme
 accessors that do take a bare session id are documented as such in `AppDb` — every caller
 reaches them after a scoped read has already resolved the session.
 
-There is no account yet beyond a username: the server runs as one well-known account
-(`ensureBootstrapUser` in `server.ts`) and the login screen comes next.
+Copilots are owned, with one extra degree of freedom: `visibility` widens the **reads** to the
+caller's own rows plus every public one (`listCopilotsForUser`, `getCopilotForUser`), while the
+**writes** keep `id = ? AND user_id = ?` (`getOwnedCopilot`, `updateCopilotForUser`,
+`deleteCopilotForUser`). That asymmetry is the whole policy — a public Copilot is usable by
+every account and editable by its owner alone — and it is why neither write is written as
+"read the row, then compare its owner". An id that is another account's private Copilot answers
+404 rather than 403, so there is no way to probe for one.
+
+Accounts are real: `auth.ts` finds or creates one by username, and every route is scoped to
+the caller (see [Authentication](#authentication-authts)). A Copilot's owner is that account,
+exactly as a workspace's is.
 
 Schema changes follow one of two rules, and they are for different things:
 
@@ -118,10 +130,36 @@ Schema changes follow one of two rules, and they are for different things:
   meant to refuse. A file with tables but `user_version = 0` predates versioning and is
   refused rather than adopted.
 
+One migration is a **one-off** rather than an `ensureColumn` call with no follow-up, and it is
+why that function returns whether it added anything. On the single boot that gives Copilots an
+owner, the existing rows are deleted (`DELETE FROM copilots`) — they have no owner and no way
+to infer one, so they are dropped rather than guessed at. `foreign_keys` is ON, so this fires
+`sessions.copilot_id`'s `ON DELETE SET NULL` and **no conversation is removed**. Two
+consequences are worth knowing before upgrading an existing data root. A conversation keeps
+its copied generation `settings` but loses its Copilot's persona, falling back to the built-in
+system prompt. And a conversation that was running under a **tool-restricted** Copilot becomes
+unrestricted, because it has no snapshot and `all_tools` defaults to 1. That widening is real;
+it is accepted here because the alternative was refusing the database outright.
+
+`copilots.user_id` is nullable **on purpose**, in the DDL and in the migration that adds it:
+`ALTER TABLE ADD COLUMN` with `NOT NULL` demands a default, and any default is a landmine for a
+later insert that forgets the owner. Every read names the owner in its `WHERE`, so an ownerless
+row is matched by nothing and goes missing rather than being handed to whoever asked. Fail
+closed.
+
 `settings` on both `copilots` and `sessions` is a `SessionSettings`:
 `{ providerId, modelId, temperature, topP, maxTokens, maxContextMessages, maxSteps }`.
-A Copilot's copy is *copied into* a new session, not referenced — editing a
-Copilot later must not rewrite conversations already underway.
+
+**A conversation snapshots its Copilot; it does not reference it.** All four parts of the
+definition — `system_prompt`, `tools`, `settings` and the name — are copied into the session at
+creation, so editing or deleting a Copilot later leaves conversations already underway exactly
+as they were. `copilot_id` stays only as a link for the UI: nullable, `ON DELETE SET NULL`, and
+allowed to dangle, while `copilot_name` is what the badge reads precisely because it survives
+that. `systemPrompt` and `tools` joined the copied `settings` for the same reason, and each is
+independently editable afterwards through `PATCH /api/sessions/:id` — that is what "the
+conversation owns its persona" means in practice. A turn reads the session and nothing else:
+`turnContext()` takes no Copilot, so an allowlist that narrowed the tool set cannot evaporate
+because the Copilot it came from was deleted.
 
 ### The workspace file browser (`files.ts`)
 
@@ -185,8 +223,13 @@ removes `dirPath`.
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
 
 `buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
-returns the active set for a run, honoring config switches and the Copilot's tool
-allow-list. `web_search`, `web_fetch`, `read_document` and `ask_user` survive
+returns the active set for a run, honoring config switches and the conversation's own
+tool allow-list (the snapshot copied from its Copilot at creation). `allowedNames` is
+**absent** when the conversation may use every tool and an array otherwise — `session.allTools`
+decides which, and an empty array is a real answer meaning "no tools", not a synonym for
+"unrestricted". The two readings were the same thing once, which made the narrowest possible
+selection behave as the widest.
+`web_search`, `web_fetch`, `read_document` and `ask_user` survive
 `fileTools.enabled: false` because none of them touches the workspace.
 
 **`read_document` is registered per turn and only when the turn has document
@@ -262,8 +305,10 @@ arbitrary outbound request, so it enforces a real boundary:
 A hand-written ReAct loop (not LangGraph's prebuilt agent), chosen for full
 control over the streaming shape:
 
-1. Compose messages: `SystemMessage` (Copilot system prompt + a note that file
-   tools are scoped to the workspace) → prior history → current `HumanMessage`.
+1. Compose messages: `SystemMessage` (the conversation's own system prompt — copied
+   from its Copilot at creation, or the built-in assistant prompt when empty — plus a
+   note that file tools are scoped to the workspace) → prior history → current
+   `HumanMessage`.
 2. `chatModel.bindTools(tools)`.
 3. Loop up to `settings.maxSteps` (default **15**). Each step:
    - `modelWithTools.stream(messages)` and emit `text` deltas as they arrive,
@@ -577,10 +622,12 @@ attachments, providers and app defaults.
 | `PUT /api/defaults` | set the global default provider/model |
 | `GET/POST /api/providers`, `PUT/DELETE /api/providers/:id` | provider CRUD |
 | `POST /api/providers/:id/models`, `DELETE /api/providers/:providerId/models/:modelId` | model CRUD |
-| `POST /api/workspaces/:workspaceId/sessions` | create a conversation (copies the Copilot's defaults in) |
+| `GET /api/copilots` | this account's Copilots plus every public one |
+| `POST /api/copilots`, `PUT/DELETE /api/copilots/:id` | Copilot CRUD — owner-only; `visibility` on create and update, and 404 for someone else's |
+| `POST /api/workspaces/:workspaceId/sessions` | create a conversation (copies the Copilot's whole definition in) |
 | `GET /api/workspaces/:id/files?path=` | one directory level of the workspace, for the sidebar's file tree |
 | `GET /api/workspaces/:id/files/content?path=` | a file's metadata, and its text when it is text |
-| `PATCH /api/sessions/:id` | rename and/or update per-conversation settings (a title also flips `titleSource` to `user`) |
+| `PATCH /api/sessions/:id` | rename, update per-conversation settings, or re-persona it (`systemPrompt`, `tools`); a title also flips `titleSource` to `user` |
 | `POST /api/sessions/:id/sources` | upload (base64 JSON); schedules parsing |
 | `GET /api/sessions/:id/sources` | what this conversation can read, with parse state |
 | `GET /api/sessions/:sessionId/attachments/:attachmentId` | serve the bytes back |
@@ -598,9 +645,14 @@ treats an absent `apiKey` field as "leave unchanged" (an empty string clears it)
 which is what lets the UI round-trip a provider whose key it cannot read.
 Deleting the last provider or the current default returns 409.
 
-The two endpoints that run a turn share `turnContext()` — provider, model, Copilot and
-tool set, resolved identically — and `finishTurn()` — persist the assistant message, emit
-`message_done`, auto-title a first turn, emit `done`. They must agree: a resumed turn that
+The two endpoints that run a turn share `turnContext()` — provider, model and tool set,
+resolved identically — and `finishTurn()` — persist the assistant message, emit
+`message_done`, auto-title a first turn, emit `done`. It reads the **session and nothing
+else**: `session.settings` for the provider/model, `session.allTools`/`session.tools` for the
+allowlist, and no
+Copilot at all, since the conversation carries its own copy of everything a Copilot
+contributes. That is what makes the conversation independent of the Copilot it came from, and
+it is also what keeps a Copilot id off this path. The two must agree: a resumed turn that
 rebuilt its tools differently from the one that asked the question could find `ask_user`
 missing from the conversation it is in the middle of. They also share `beginTurn()`, which
 registers the turn in `activeTurns` so either can be stopped.
@@ -641,8 +693,11 @@ that ran to completion, which must not abort anything.
 `/chat`:
 
 1. Resolve effective provider/model — explicit request override ⊳ session
-   settings ⊳ the Copilot's defaults ⊳ app default. A candidate only wins if it
-   still exists, so a deleted provider degrades instead of erroring.
+   settings ⊳ app default. The Copilot tier that used to sit between the session
+   and the app default is gone: its defaults were merged into `session.settings`
+   when the conversation was created, so a turn resolves against the session alone.
+   A candidate only wins if it still exists, so a deleted provider degrades instead
+   of erroring.
 2. Retire any `ask_user` call still awaiting an answer, then build the sandboxed tool set.
 3. Persist the user message, capture history *before* it (avoids a duplicate
    user turn), then `reply.hijack()`.
@@ -690,7 +745,7 @@ after that point, and rendering both would show the answer twice for as long as 
   turn), `ToolCallCard` (collapsible args/result), `Composer` (paperclip/paste uploads,
   session-params button, token popover, model picker), `ModelSelector`,
   `AttachmentChips`, `TokenCountPopover`, and the dialogs: `ConfirmDialog`,
-  `SettingsDialog` (Providers / Copilots / defaults tabs), `ProviderDialog`,
+  `SettingsDialog` (Providers / Copilots / documents / defaults tabs), `ProviderDialog`,
   `CopilotDialog`, `NewSessionDialog`, `SessionSettingsDialog`,
   `CreateWorkspaceDialog`.
 - `composables/` — the few pieces of state that are not domain state and not component-local.
@@ -751,8 +806,9 @@ because it is a property of what is on screen rather than a preference.
 ### Where controls live
 
 Everything that scopes a single reply sits in the composer, as in chatbox; the topbar is
-left to the conversation's identity (title, Copilot). The header selectors were removed
-because a control that changes per-turn behaviour belongs next to the input.
+left to the conversation's identity (its title, and a badge naming the Copilot it was started
+from). The header selectors were removed because a control that changes per-turn behaviour
+belongs next to the input.
 
 - **Model picker** (`ModelSelector`) — a menu of *available* models: a provider is listed
   only when it has both an API key and at least one model. The one exception is the
@@ -760,7 +816,8 @@ because a control that changes per-turn behaviour belongs next to the input.
   the button contradict the conversation's actual setting. Selecting a model writes both
   `providerId` and `modelId`, since a model id is only meaningful inside its own provider.
 - **Session settings** (🎛) — temperature, context and tool-round limits for this
-  conversation.
+  conversation, plus the conversation's own system prompt (the persona it copied from
+  its Copilot, editable afterwards).
 - **Global settings** — the sidebar footer. It is opened, not owned, by its callers:
   `composables/ui.ts` holds `settingsOpen` and `App.vue` mounts the dialog once, so both
   the sidebar button and the composer's "管理模型…" can reach it without prop drilling.

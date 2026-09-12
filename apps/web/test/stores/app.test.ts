@@ -142,6 +142,10 @@ function session(overrides: Partial<Session> = {}): Session {
     id: "s1",
     workspaceId: "w1",
     copilotId: null,
+    copilotName: "",
+    systemPrompt: "",
+    allTools: true,
+    tools: [],
     title: "New conversation",
     titleSource: "auto",
     settings: {},
@@ -171,6 +175,24 @@ function sourceOf(overrides: Partial<Source> & Pick<Source, "id">): Source {
     parseStatus: "pending",
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
+  };
+}
+
+function copilotFixture(id: string, userId: string): Copilot {
+  return {
+    id,
+    userId,
+    name: id,
+    description: "",
+    systemPrompt: "",
+    allTools: false,
+    // A restriction, so a copy that dropped the flag would be visible: it would come back as
+    // every tool rather than this one.
+    tools: ["read_file"],
+    settings: {},
+    visibility: "private",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
   };
 }
 
@@ -398,23 +420,67 @@ describe("provider and model resolution", () => {
     expect(store.effectiveModelId).toBe("m3");
   });
 
-  it("lets the copilot's defaults sit between the session and the app default", async () => {
+  it("resolves without consulting the Copilot list at all", async () => {
+    /*
+     * There used to be a Copilot tier between the session's settings and the app default.
+     * There is not any more, because the conversation copied what the Copilot contributed when
+     * it was created — so consulting the Copilot would be reading the same values a second
+     * time, from a record that is allowed to have been deleted since.
+     *
+     * The Copilot here is left in the list on purpose and points at a *different* provider, so
+     * a resolution that still read it would answer "p2"/"m3" and fail this.
+     */
     const copilot: Copilot = {
       id: "c1",
+      userId: "u1",
       name: "Coach",
       description: "",
-      systemPrompt: "",
+      systemPrompt: "Be terse.",
+      allTools: true,
       tools: [],
-      settings: { providerId: "p1", modelId: "m2" },
+      settings: { providerId: "p2", modelId: "m3" },
+      visibility: "private",
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };
     mocks.api.listCopilots.mockResolvedValue([copilot]);
 
     const store = await readyStore({ sessions: [session({ copilotId: "c1" })] });
-    // Provider falls through to the app default; the model comes from the copilot.
-    expect(store.currentProviderId).toBe("p1");
-    expect(store.effectiveModelId).toBe("m2");
+
+    // The session's own settings are empty, so both fall to the app default.
+    expect(store.currentProviderId).toBe(CONFIG.defaultProvider);
+    expect(store.effectiveModelId).toBe(CONFIG.defaultModel);
+  });
+
+  it("splits the Copilot list into published and mine, by owner", async () => {
+    mocks.api.listCopilots.mockResolvedValue([
+      { ...copilotFixture("c-mine", "u1"), visibility: "public" },
+      { ...copilotFixture("c-theirs", "u2"), ownerName: "Bob", visibility: "public" },
+    ]);
+
+    const store = await readyStore();
+
+    // One's own published Copilot stays under "mine": that is where the switch to unpublish it
+    // lives, so it must not move groups the moment it is published.
+    expect(store.myCopilots.map((c) => c.id)).toEqual(["c-mine"]);
+    expect(store.publicCopilots.map((c) => c.id)).toEqual(["c-theirs"]);
+  });
+
+  it("copies a Copilot's tool restriction along with its persona", async () => {
+    // A fork that carried the prompt but not the allowlist would be a different Copilot wearing
+    // the original's name — and, because an unrestricted Copilot is the wider state, a quietly
+    // more powerful one.
+    mocks.api.listCopilots.mockResolvedValue([
+      { ...copilotFixture("c-theirs", "u2"), visibility: "public" },
+    ]);
+    mocks.api.createCopilot.mockResolvedValue(copilotFixture("c-copy", "u1"));
+
+    const store = await readyStore();
+    await store.copyCopilotToMine("c-theirs");
+
+    expect(mocks.api.createCopilot).toHaveBeenCalledWith(
+      expect.objectContaining({ allTools: false, tools: ["read_file"], visibility: "private" })
+    );
   });
 
   it("degrades when the session points at a provider that no longer exists", async () => {

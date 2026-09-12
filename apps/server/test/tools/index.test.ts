@@ -76,9 +76,20 @@ describe("buildTools", () => {
     expect(names({ allowedNames: ["read_file", "web_search"] }).sort()).toEqual(["read_file", "web_search"]);
   });
 
-  it("treats an empty allow-list as 'no restriction'", () => {
-    // A Copilot with no tools selected gets everything, not nothing.
-    expect(names({ allowedNames: [], documents })).toHaveLength(ALL_TOOL_NAMES.length);
+  it("treats an absent allow-list as 'no restriction'", () => {
+    // What a Copilot with `allTools: true` produces — the flag becomes an absent list, not an
+    // empty one, precisely so that this case and the next one stay distinguishable.
+    expect(names({ documents })).toHaveLength(ALL_TOOL_NAMES.length);
+  });
+
+  it("treats an empty allow-list as 'no tools', not as everything", () => {
+    /*
+     * This used to be the other way round, and that was the bug: `length > 0` gated the filter,
+     * so an empty list skipped it entirely. A Copilot the user had deliberately locked down to
+     * no tools therefore got *every* tool — the widest possible reading of the narrowest
+     * possible selection — and "deny everything" could not be expressed at all.
+     */
+    expect(names({ allowedNames: [], documents })).toEqual([]);
   });
 
   it("lets a Copilot allow-list exclude read_document", () => {

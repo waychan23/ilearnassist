@@ -161,6 +161,9 @@ const en: typeof MessageSchema = {
       noCopilot: "No Copilot",
       noCopilotDesc: "Uses the built-in general-purpose assistant and default parameters.",
       noCopilots: "No Copilots yet. Create one under Settings → Copilots.",
+      groupPublic: "Published Copilots",
+      groupMine: "My Copilots",
+      byAuthor: "published by {name}",
     },
     // 「」 is a Chinese quoting convention; English gets curly quotes.
     delete: {
@@ -278,7 +281,14 @@ const en: typeof MessageSchema = {
     systemPrompt: "System prompt",
     systemPromptPlaceholder: "Define this Copilot's role, abilities and behavioural constraints…",
     systemPromptHint: "Leave blank to use the built-in general-purpose assistant.",
-    tools: "Available tools (blank = all of them)",
+    tools: "Available tools",
+    allTools: "All tools available",
+    allToolsHint:
+      "This Copilot may use every tool, including any added later.",
+    toolsHint: "Only the ticked tools are available; none ticked means no tools at all.",
+    public: "Publish this Copilot",
+    publicHint:
+      "Every account can then see and use it, but only you can edit or delete it.",
     defaults: "Defaults (copied into a new conversation; adjustable there afterwards)",
     inherit: "Inherit default",
     model: "Model",
@@ -345,15 +355,23 @@ const en: typeof MessageSchema = {
       add: "New Copilot",
       inUse: "In use by this conversation",
       empty: "No Copilots yet. Click “New Copilot” to create one.",
+      groupPublic: "Published Copilots",
+      groupMine: "My Copilots",
+      byAuthor: "published by {name}",
+      published: "published",
+      viewPrompt: "View its system prompt",
+      promptNone: "No system prompt written.",
+      copyToMine: "Copy to mine",
       introBefore:
-        "A Copilot bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation injects its prompt and",
-      introCopied: "copies",
+        "A Copilot bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation",
+      introCopied: "copies the whole of it",
       introAfter:
-        " its defaults into that conversation — later edits to the Copilot do not affect conversations already under way.",
+        " into that conversation — later edits to the Copilot leave conversations already under way alone, and a conversation can change its own prompt independently.",
       summarySteps: "up to {count} tool steps",
       summaryHistory: "1 message of history | {count} messages of history",
       summaryTools: "1 tool | {count} tools",
       summaryAllTools: "all tools",
+      summaryNoTools: "no tools",
     },
     defaults: {
       provider: "Default provider",
@@ -385,7 +403,8 @@ const en: typeof MessageSchema = {
     deleteCopilot: {
       title: "Delete Copilot",
       message: "Delete the Copilot “{name}”?",
-      detail: "Conversations using it are kept, but lose its settings.",
+      detail:
+        "Conversations already using it are unaffected — they keep the prompt and parameters copied in when they were created.",
     },
     policy: {
       "local-only": { label: "Local only", hint: "Fully offline; no external service is called" },
@@ -459,7 +478,11 @@ const en: typeof MessageSchema = {
     title: "Session parameters",
     scopeExisting: "These parameters apply to this conversation only.",
     scopeNew: "No conversation yet, so these apply to the one about to be created.",
-    scopeSuffix: " Left blank, each falls back to the Copilot's default and then to the global one.",
+    scopeSuffix: " Left blank, each falls back to the global default.",
+    systemPrompt: "System prompt",
+    systemPromptPlaceholder: "What should this conversation be?",
+    systemPromptHint:
+      "This conversation's own. A new conversation copies one in from its Copilot and the two are independent afterwards — editing it here does not change that Copilot.",
     model: "Model",
     inherit: "Inherit default",
     temperatureHint: "Between 0 and 2; higher answers are more random.",

@@ -128,21 +128,48 @@ const DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_workspace_sources_source ON workspace_sources(source_id);
 
+  -- user_id is nullable here *and* in the migration that adds it to older databases. Not slack:
+  -- ALTER TABLE ADD COLUMN with NOT NULL demands a default, and any default is a landmine for a
+  -- later insert that forgets the owner. Every read names the owner in its WHERE and requires
+  -- one rather than trusting the disjunction alone — see the copilot SELECT in db.ts — so a row
+  -- with no owner goes missing rather than being handed to whoever asked. Fail closed.
   CREATE TABLE IF NOT EXISTS copilots (
     id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     system_prompt TEXT NOT NULL,
+    -- all_tools is authoritative over tools, which is why the default is 1: an empty tools list
+    -- used to mean "every tool", so a Copilot nobody touched has to keep meaning that. With the
+    -- flag, "no tools" became expressible — all_tools = 0 and tools = '[]' — which it was not
+    -- before. Where all_tools is 1, tools is stored empty and carries no authority.
+    all_tools INTEGER NOT NULL DEFAULT 1,
     tools TEXT NOT NULL DEFAULT '[]',
     settings TEXT NOT NULL DEFAULT '{}',
+    visibility TEXT NOT NULL DEFAULT 'private',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  -- Deliberately no index on user_id, and it cannot be added here even if one were wanted:
+  -- applySchema runs this DDL *before* the ensureColumn call that gives an older database the
+  -- column, so an index on it would fail with "no such column" on exactly the upgrade it was
+  -- meant to ease. Nothing needs one either — the owned lookup is by primary key, and the
+  -- own-or-public listing cannot use a single index.
 
+  -- The Copilot columns are a snapshot of the Copilot this conversation was started from, so the
+  -- conversation keeps behaving as it did after that Copilot is edited or deleted. copilot_id
+  -- stays only as a link for the UI and may dangle (SET NULL); copilot_name is what the badge
+  -- reads, precisely because it survives that.
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     copilot_id TEXT REFERENCES copilots(id) ON DELETE SET NULL,
+    copilot_name TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    -- Copied from the Copilot alongside tools, and authoritative over it in the same way. A
+    -- conversation with no Copilot defaults to every tool, which is what it had before.
+    all_tools INTEGER NOT NULL DEFAULT 1,
+    tools TEXT NOT NULL DEFAULT '[]',
     title TEXT NOT NULL,
     title_source TEXT NOT NULL DEFAULT 'auto',
     settings TEXT NOT NULL DEFAULT '{}',
