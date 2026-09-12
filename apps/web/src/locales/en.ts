@@ -85,6 +85,7 @@ const en: typeof MessageSchema = {
     startHint: "Type a message below; the agent will call tools as it needs them.",
     backToWorkspaces: "Back to workspaces",
     startAction: "New conversation (choose a Copilot)",
+    jumpToLatest: "Jump to latest",
   },
 
   composer: {

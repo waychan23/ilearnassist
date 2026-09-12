@@ -430,6 +430,28 @@ body {
   padding-left: var(--space-9);
 }
 
+/*
+ * The way back to a live reply, once the follow has been released — see
+ * `composables/scrollFollow.ts`, which owns the flag that renders it.
+ *
+ * Anchored to the wrapper rather than to the scroller, so it holds still while messages move
+ * under it, and it belongs in the wrapper's corner for the same reason the rail does: the
+ * message column stops growing at 860px and centres, so anything tied to the text would have
+ * to be tied to a number that only `MessageItem` knows. The corner is what a floating control
+ * on a scroller conventionally uses.
+ */
+.jump-to-latest {
+  position: absolute;
+  right: var(--space-7);
+  bottom: var(--space-7);
+  z-index: var(--z-rail-card);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-popover);
+}
+
 .composer {
   flex-shrink: 0;
   border-top: 1px solid var(--border);

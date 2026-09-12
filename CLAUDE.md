@@ -319,6 +319,18 @@ Fuller map in `docs/reference.md`.
   not a turn that was about the file browser, and a toast for it would interrupt a
   conversation that worked. Failures the user *did* ask for go to `fileTreeError` (the tree
   pane) or `filePreviewError` (inside the dialog) — not the global toast.
+- **The message list follows its own end only while the reader is at it.** `useScrollFollow`
+  owns that state, and `following` is also what renders the "回到最新" control — so a released
+  follow always has a way back, which is the difference between this and a list that simply
+  stops following. Do not put the obvious version back: assigning `scrollTop = scrollHeight`
+  on every streamed delta returns a reader to the end on every token, which is a list that
+  fights the scrollbar for the length of a turn. The release is derived from the scroll
+  position (`utils/scroll.ts`) rather than from a flag set where movement is expected, because
+  the position also moves for reasons no handler caused — a resize, a late font, an earlier
+  message re-laying out when its highlighting or maths lands. `BOTTOM_SLACK_PX` is a tolerance
+  for the end, not a threshold for near it: a slack wide enough to swallow a wheel notch
+  re-grabs the viewport from someone on their way somewhere else. A turn *starting* pins to the
+  end regardless, because the reader just asked for it.
 - **A turn in flight is tied to the account that started it.** Signing out does not close the
   stream, so `consume()` records an **account epoch** on the way in and stops applying events once
   `forgetAccount()` has bumped it — otherwise a signed-out turn's later deltas land in whatever
