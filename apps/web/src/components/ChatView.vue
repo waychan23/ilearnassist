@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { isCompact } from "../composables/breakpoints";
 import { useScrollFollow } from "../composables/scrollFollow";
+import { subscribeWidgetEvents } from "../composables/widgetEvents";
 import {
   closeWidgetDrawer,
   openDrawer,
@@ -94,10 +95,11 @@ const showMinimap = computed(() => !isCompact.value && minimapAnchors.value.leng
  * Scroll the list so the anchored turn sits at the top. Computed from rects rather than
  * `offsetTop`, which is measured against whichever ancestor happens to be positioned.
  */
-function jumpToAnchor(anchor: MessageMinimapAnchor) {
+/** Scroll one persisted message to the top of the list. Shared by the minimap and widgets. */
+function scrollToMessage(messageId: string): void {
   const container = messagesEl.value;
   if (!container) return;
-  const target = container.querySelector<HTMLElement>(`[data-message-id="${anchor.messageId}"]`);
+  const target = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
   if (!target) return;
 
   const containerRect = container.getBoundingClientRect();
@@ -107,6 +109,24 @@ function jumpToAnchor(anchor: MessageMinimapAnchor) {
     behavior: "smooth",
   });
 }
+
+function jumpToAnchor(anchor: MessageMinimapAnchor) {
+  scrollToMessage(anchor.messageId);
+}
+
+// A completed plan node in the plan widget jumps to the turn that completed it. The widget
+// cannot reach this scroll container, which is the one cross-component event the widget bus
+// carries that is not about a turn.
+onMounted(() => {
+  unsubscribeFromWidgets = subscribeWidgetEvents((event) => {
+    if (event.type === "chat.jump") scrollToMessage(event.messageId);
+  });
+});
+onBeforeUnmount(() => {
+  unsubscribeFromWidgets?.();
+  unsubscribeFromWidgets = null;
+});
+let unsubscribeFromWidgets: (() => void) | null = null;
 
 /**
  * Keeping the viewport at the end is a decision, not a reflex — see `scrollFollow`.

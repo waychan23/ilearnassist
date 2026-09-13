@@ -14,6 +14,8 @@ import type {
   ModelCapability,
   ParseErrorCode,
   ParseStatus,
+  PlanNodeStatus,
+  PlanStatus,
   ProviderModel,
   Session,
   SessionSettings,
@@ -99,6 +101,80 @@ interface CopilotRow {
 interface WidgetRow {
   widget_id: string;
   enabled: number;
+}
+
+interface PlanRow {
+  id: string;
+  session_id: string;
+  version: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PlanNodeRow {
+  id: string;
+  plan_id: string;
+  parent_id: string | null;
+  position: number;
+  title: string;
+  status: string;
+  introduced_version: number;
+  removed_version: number | null;
+  done_tool_call_id: string | null;
+  done_at: string | null;
+}
+
+interface PlanVersionRow {
+  version: number;
+  created_at: string;
+}
+
+/** A plan as the server layer holds it. One per session. */
+export interface PlanRecord {
+  id: string;
+  sessionId: string;
+  version: number;
+  status: PlanStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One plan node. `parentId`/`position` are the node's last place — frozen when the node
+ * becomes a tombstone (`removedVersion` set), which is what lets the current view render it
+ * struck through where it used to be. Progress lives here, never on a version snapshot.
+ */
+export interface PlanNodeRecord {
+  id: string;
+  planId: string;
+  parentId: string | null;
+  position: number;
+  title: string;
+  status: PlanNodeStatus;
+  introducedVersion: number;
+  removedVersion: number | null;
+  doneToolCallId: string | null;
+  doneAt: string | null;
+}
+
+export interface PlanVersionRecord {
+  version: number;
+  createdAt: string;
+}
+
+export interface PlanVersionData extends PlanVersionRecord {
+  treeJson: string;
+}
+
+export interface PlanNodeInsert {
+  id: string;
+  planId: string;
+  parentId: string | null;
+  position: number;
+  title: string;
+  status: PlanNodeStatus;
+  introducedVersion: number;
 }
 
 interface SessionRow {
@@ -345,6 +421,28 @@ const mapMessage = (r: MessageRow): Message => ({
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
   stopped: r.stopped ? true : undefined,
   createdAt: r.created_at,
+});
+
+const mapPlan = (r: PlanRow): PlanRecord => ({
+  id: r.id,
+  sessionId: r.session_id,
+  version: r.version,
+  status: r.status as PlanStatus,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const mapPlanNode = (r: PlanNodeRow): PlanNodeRecord => ({
+  id: r.id,
+  planId: r.plan_id,
+  parentId: r.parent_id,
+  position: r.position,
+  title: r.title,
+  status: r.status as PlanNodeStatus,
+  introducedVersion: r.introduced_version,
+  removedVersion: r.removed_version,
+  doneToolCallId: r.done_tool_call_id,
+  doneAt: r.done_at,
 });
 
 const mapDocumentParser = (r: DocumentParserRow): DocumentParserRecord => ({
@@ -746,6 +844,59 @@ export interface AppDb {
     widgetId: WidgetId,
     enabled: boolean
   ): boolean;
+
+  /*
+   * Plans (the plan widget). One per session; ownership is reached through the session's
+   * workspace like everything else. The `ForUser` pair is what the routes read; the
+   * session-id-only accessors below run inside a turn whose session was already resolved
+   * `ForUser`, with a session id the server bound (the plan tools never accept one from the
+   * model) — the same documented exception `touchSession` and the message-id accessors use.
+   */
+  getPlanForSessionForUser(userId: string, sessionId: string): PlanRecord | undefined;
+  /** Unscoped session lookup — server-bound session id on an already-resolved turn only. */
+  getPlanBySession(sessionId: string): PlanRecord | undefined;
+  insertPlan(input: {
+    id: string;
+    sessionId: string;
+    version: number;
+    status: PlanStatus;
+    createdAt: string;
+    updatedAt: string;
+  }): PlanRecord;
+  /** Write the new status alongside the version bump. Returns the new version number. */
+  bumpPlanVersion(planId: string, status: PlanStatus, updatedAt: string): number;
+  setPlanStatus(planId: string, status: PlanStatus, updatedAt: string): void;
+  insertPlanVersion(input: {
+    id: string;
+    planId: string;
+    version: number;
+    treeJson: string;
+    createdAt: string;
+  }): void;
+  listPlanVersions(planId: string): PlanVersionRecord[];
+  getPlanVersionForUser(
+    userId: string,
+    sessionId: string,
+    version: number
+  ): PlanVersionData | undefined;
+  listPlanNodes(planId: string): PlanNodeRecord[];
+  insertPlanNode(input: PlanNodeInsert): void;
+  updatePlanNodeStructure(input: {
+    id: string;
+    planId: string;
+    parentId: string | null;
+    position: number;
+    title: string;
+  }): void;
+  /** Turn a node into a tombstone: `deleted`, last parent/position frozen. */
+  softDeletePlanNode(planId: string, nodeId: string, removedVersion: number): void;
+  updatePlanNodeProgress(
+    planId: string,
+    nodeId: string,
+    status: PlanNodeStatus,
+    doneToolCallId: string | null,
+    doneAt: string | null
+  ): void;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
@@ -1175,6 +1326,70 @@ export function createDb(dbPath: string): AppDb {
        DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`
   );
 
+  /* --------------------------------- plans -------------------------------- */
+  /*
+   * The plan's owner is reached through plans → sessions → workspaces, so the ForUser reads
+   * carry that join. `stmtGetPlanBySession` deliberately does not: the plan tools run with a
+   * server-bound session id on an already-resolved turn, the same exception the bare
+   * `stmtGetSession` exists for.
+   */
+  const stmtGetPlanForSessionForUser = db.prepare(
+    `SELECT p.* FROM plans p
+       JOIN sessions s ON s.id = p.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE p.session_id = @sessionId AND w.user_id = @userId`
+  );
+  const stmtGetPlanBySession = db.prepare("SELECT * FROM plans WHERE session_id = ?");
+  const stmtInsertPlan = db.prepare(
+    `INSERT INTO plans (id, session_id, version, status, created_at, updated_at)
+     VALUES (@id, @sessionId, @version, @status, @createdAt, @updatedAt)`
+  );
+  const stmtBumpPlanVersion = db.prepare(
+    `UPDATE plans SET version = version + 1, status = @status, updated_at = @updatedAt
+     WHERE id = @id RETURNING version`
+  );
+  const stmtSetPlanStatus = db.prepare(
+    "UPDATE plans SET status = @status, updated_at = @updatedAt WHERE id = @id"
+  );
+  const stmtInsertPlanVersion = db.prepare(
+    `INSERT INTO plan_versions (id, plan_id, version, tree_json, created_at)
+     VALUES (@id, @planId, @version, @treeJson, @createdAt)`
+  );
+  const stmtListPlanVersions = db.prepare(
+    "SELECT version, created_at FROM plan_versions WHERE plan_id = ? ORDER BY version ASC"
+  );
+  const stmtGetPlanVersionForUser = db.prepare(
+    `SELECT pv.version, pv.created_at, pv.tree_json FROM plan_versions pv
+       JOIN plans p ON p.id = pv.plan_id
+       JOIN sessions s ON s.id = p.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE p.session_id = @sessionId AND pv.version = @version AND w.user_id = @userId`
+  );
+  const stmtListPlanNodes = db.prepare(
+    "SELECT * FROM plan_nodes WHERE plan_id = ? ORDER BY introduced_version ASC, rowid ASC"
+  );
+  const stmtInsertPlanNode = db.prepare(
+    `INSERT INTO plan_nodes
+       (id, plan_id, parent_id, position, title, status, introduced_version, removed_version,
+        done_tool_call_id, done_at)
+     VALUES (@id, @planId, @parentId, @position, @title, @status, @introducedVersion,
+             @removedVersion, @doneToolCallId, @doneAt)`
+  );
+  const stmtUpdatePlanNodeStructure = db.prepare(
+    `UPDATE plan_nodes SET parent_id = @parentId, position = @position, title = @title
+     WHERE id = @id AND plan_id = @planId`
+  );
+  // No parent/position write here on purpose: a tombstone keeps its last place so the current
+  // view can strike it through where it used to be.
+  const stmtSoftDeletePlanNode = db.prepare(
+    `UPDATE plan_nodes SET removed_version = @removedVersion, status = 'deleted'
+     WHERE id = @id AND plan_id = @planId`
+  );
+  const stmtUpdatePlanNodeProgress = db.prepare(
+    `UPDATE plan_nodes SET status = @status, done_tool_call_id = @doneToolCallId, done_at = @doneAt
+     WHERE id = @id AND plan_id = @planId`
+  );
+
   /*
    * Two narrow projections for the statistics: the role (so a count can tell the two apart if it
    * ever wants to) and the usage blob. `usage` is read whole and parsed in `widgets.ts` rather
@@ -1580,6 +1795,101 @@ export function createDb(dbPath: string): AppDb {
           now: now(),
         }).changes > 0
       );
+    },
+
+    getPlanForSessionForUser(userId, sessionId) {
+      const r = stmtGetPlanForSessionForUser.get({ userId, sessionId }) as
+        | PlanRow
+        | undefined;
+      return r ? mapPlan(r) : undefined;
+    },
+    getPlanBySession(sessionId) {
+      const r = stmtGetPlanBySession.get(sessionId) as PlanRow | undefined;
+      return r ? mapPlan(r) : undefined;
+    },
+    insertPlan(input) {
+      stmtInsertPlan.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        version: input.version,
+        status: input.status,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt,
+      });
+      const r = stmtGetPlanBySession.get(input.sessionId) as PlanRow;
+      return mapPlan(r);
+    },
+    bumpPlanVersion(planId, status, updatedAt) {
+      const row = stmtBumpPlanVersion.get({ id: planId, status, updatedAt }) as {
+        version: number;
+      };
+      return row.version;
+    },
+    setPlanStatus(planId, status, updatedAt) {
+      stmtSetPlanStatus.run({ id: planId, status, updatedAt });
+    },
+    insertPlanVersion(input) {
+      stmtInsertPlanVersion.run({
+        id: input.id,
+        planId: input.planId,
+        version: input.version,
+        treeJson: input.treeJson,
+        createdAt: input.createdAt,
+      });
+    },
+    listPlanVersions(planId) {
+      return (stmtListPlanVersions.all(planId) as PlanVersionRow[]).map((r) => ({
+        version: r.version,
+        createdAt: r.created_at,
+      }));
+    },
+    getPlanVersionForUser(userId, sessionId, version) {
+      const r = stmtGetPlanVersionForUser.get({ userId, sessionId, version }) as
+        | (PlanVersionRow & { tree_json: string })
+        | undefined;
+      return r
+        ? { version: r.version, createdAt: r.created_at, treeJson: r.tree_json }
+        : undefined;
+    },
+    listPlanNodes(planId) {
+      return (stmtListPlanNodes.all(planId) as PlanNodeRow[]).map(mapPlanNode);
+    },
+    insertPlanNode(input) {
+      stmtInsertPlanNode.run({
+        id: input.id,
+        planId: input.planId,
+        parentId: input.parentId,
+        position: input.position,
+        title: input.title,
+        status: input.status,
+        introducedVersion: input.introducedVersion,
+        // A fresh node is alive with no completion anchor; every version insert says so
+        // explicitly rather than relying on column defaults the reader cannot see here.
+        removedVersion: null,
+        doneToolCallId: null,
+        doneAt: null,
+      });
+    },
+    updatePlanNodeStructure(input) {
+      stmtUpdatePlanNodeStructure.run({
+        id: input.id,
+        planId: input.planId,
+        parentId: input.parentId,
+        position: input.position,
+        title: input.title,
+      });
+    },
+    softDeletePlanNode(planId, nodeId, removedVersion) {
+      stmtSoftDeletePlanNode.run({ id: nodeId, planId, removedVersion });
+    },
+    updatePlanNodeProgress(planId, nodeId, status, doneToolCallId, doneAt) {
+      stmtUpdatePlanNodeProgress.run({
+        id: nodeId,
+        planId,
+        status,
+        doneToolCallId,
+        doneAt,
+      });
     },
 
     statsForWorkspace(userId, workspaceId) {

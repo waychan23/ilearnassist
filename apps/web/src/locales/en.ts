@@ -220,6 +220,9 @@ const en: typeof MessageSchema = {
       read_document: "Read a document",
       ask_user: "Ask the user",
       ila_quiz: "Quiz",
+      ila_make_plan: "Make / edit plan",
+      ila_read_plan: "Read plan",
+      ila_update_plan_progress: "Update plan progress",
     },
     done: "Done",
     running: "Running",
@@ -337,6 +340,8 @@ const en: typeof MessageSchema = {
     allToolsHint:
       "This Copilot may use every tool, including any added later.",
     toolsHint: "Only the ticked tools are available; none ticked means no tools at all.",
+    boundToolsHint:
+      "Some tools come with a widget (the Plan widget's make/read/update plan tools): they switch on automatically when the widget is installed, and are deliberately not listed here.",
     public: "Publish this Copilot",
     publicHint:
       "Every account can then see and use it, but only you can edit or delete it.",
@@ -555,6 +560,51 @@ const en: typeof MessageSchema = {
       noSession: "Open a conversation and its numbers appear here.",
       context: "Context this turn",
     },
+    plan: {
+      name: "Plan",
+      hint: "The assistant-maintained study plan: outline tree, progress and version history.",
+      noSession: "Open a conversation and its plan appears here.",
+    },
+  },
+
+  plan: {
+    empty:
+      "This conversation has no plan yet. Ask the assistant to make a study plan and it appears here.",
+    version: "Plan version",
+    versionLatest: "Latest V{n}",
+    versionN: "V{n}",
+    historyBanner: "Browsing history version V{n} (read-only; the latest plan is unchanged)",
+    historyLoadFailed: "That history version could not be loaded; it may no longer exist.",
+    showLevel: "Show levels through {n}",
+    expandAll: "Expand all",
+    expandCurrentPath: "Show only the current node's path",
+    expand: "Expand",
+    collapse: "Collapse",
+    jumpToCompletion: "Jump to where this node was completed",
+    status: {
+      not_started: "Not started",
+      in_progress: "In progress",
+      completed: "Completed",
+      skipped: "Skipped",
+      deleted: "Deleted",
+    },
+  },
+
+  planConflict: {
+    title: "A plan already exists",
+    preparing: "Waiting for your choice",
+    awaiting: "Waiting for your choice",
+    answered: "Chosen",
+    dismissed: "Dismissed",
+    question:
+      "This conversation already has a plan. Overwrite it with the new content as a new version here, or start a fresh conversation for it?",
+    edit: "Overwrite this plan (new version)",
+    newSession: "New conversation with this plan",
+    cancel: "Cancel",
+    choseEdit: "The new plan overwrote this conversation's plan as a new version.",
+    choseNewSession:
+      "A new conversation was created with this plan as V1, and the view switched to it.",
+    dismissedHint: "You dismissed the choice; the assistant leaves the existing plan alone.",
   },
 
   sessionSettings: {
@@ -606,6 +656,7 @@ const en: typeof MessageSchema = {
     USERNAME_TOO_LONG: "A username cannot be longer than {max} characters.",
     UNKNOWN_WIDGET: "This build has no such widget. Reload the page and try again.",
     WIDGET_SCOPE_UNSUPPORTED: "That widget cannot be installed at this level.",
+    PLAN_VERSION_NOT_FOUND: "That plan version does not exist.",
   },
 
   /**

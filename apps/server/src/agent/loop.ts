@@ -449,7 +449,13 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         const t = toolByName.get(name);
         if (t) {
           try {
-            const result = await t.invoke(call.args ?? {}, { signal: input.signal });
+            // `configurable.toolCallId` is how a tool (ila_update_plan_progress) records the
+            // jump anchor for a node it completes: the provider's call id, the same id the
+            // UI later finds the message by.
+            const result = await t.invoke(call.args ?? {}, {
+              signal: input.signal,
+              configurable: { toolCallId: id },
+            });
             output = typeof result === "string" ? result : JSON.stringify(result);
           } catch (err) {
             // A suspension is not an error and must not be reported as one: the model would

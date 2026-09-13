@@ -2,6 +2,7 @@ import type { Component } from "vue";
 import type { WidgetId, WidgetScope } from "@ilearnassist/shared";
 import WorkspaceStatsWidget from "./WorkspaceStatsWidget.vue";
 import SessionStatsWidget from "./SessionStatsWidget.vue";
+import PlanWidget from "./PlanWidget.vue";
 
 /**
  * What a widget is on the client: its component, its catalog strings, and its lifecycle.
@@ -50,6 +51,8 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
       return t("widgets.workspaceStats.name");
     case "session_stats":
       return t("widgets.sessionStats.name");
+    case "plan":
+      return t("widgets.plan.name");
   }
 }
 
@@ -60,6 +63,8 @@ export function widgetHint(id: WidgetId, t: Translate): string {
       return t("widgets.workspaceStats.hint");
     case "session_stats":
       return t("widgets.sessionStats.hint");
+    case "plan":
+      return t("widgets.plan.hint");
   }
 }
 
@@ -89,4 +94,5 @@ export interface WidgetModule {
 export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
   workspace_stats: { component: WorkspaceStatsWidget },
   session_stats: { component: SessionStatsWidget },
+  plan: { component: PlanWidget },
 };

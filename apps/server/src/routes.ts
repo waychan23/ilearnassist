@@ -37,7 +37,12 @@ import type {
   WidgetState,
   Workspace,
 } from "@ilearnassist/shared";
-import { DEFAULT_WIDGET_IDS, MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
+import {
+  boundToolNamesForWidgetIds,
+  DEFAULT_WIDGET_IDS,
+  MAX_ATTACHMENT_BYTES,
+  PLAN_TOOL_NAMES,
+} from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
 import {
   DEFAULT_SESSION_TITLE,
@@ -61,6 +66,7 @@ import {
   parseErrorDetail,
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
+import { buildPlanView, readPlanVersion } from "./plans.js";
 import type { DocumentService } from "./documents/service.js";
 import { removeParsedText } from "./documents/store.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -923,6 +929,42 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return stats;
   });
 
+  /* ----------------------------------- plans ----------------------------------- */
+
+  /*
+   * Routes about the conversation's plan, not `/widgets/...`: a plan is the object the
+   * widget renders, and a later UI editor would talk to the same endpoints. No plan yet is a
+   * 200 `{ plan: null }` (the widget's empty state), not a 404; a missing conversation is.
+   */
+
+  app.get("/api/sessions/:id/plan", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const row = db.getPlanForSessionForUser(userId, id);
+    return { plan: row ? buildPlanView(db, row) : null };
+  });
+
+  app.get("/api/sessions/:id/plan/versions/:version", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, version: rawVersion } = request.params as { id: string; version: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const version = Number.parseInt(rawVersion, 10);
+    const snapshot = Number.isInteger(version)
+      ? readPlanVersion(db, userId, id, version)
+      : undefined;
+    if (!snapshot) {
+      return reply
+        .code(404)
+        .send(apiError("PLAN_VERSION_NOT_FOUND", "that plan version does not exist"));
+    }
+    return snapshot;
+  });
+
   /* ---------------------------------- sources ---------------------------------- */
 
   /**
@@ -1457,6 +1499,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     input: {
       provider?: string;
       model?: string;
+      /** The signed-in account; widget reads and sources are owner-scoped by it. */
+      userId: string;
       /** Whose sources tree `read_document` reads from. */
       user: UserLayout;
       /**
@@ -1501,6 +1545,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         reserveQuestionNumbers: (count) =>
           db.reserveCounter("session", session.id, QUIZ_QUESTION_COUNTER, count),
       },
+      // Widget-bound tools. Read fresh per turn from the installed session widgets (a widget
+      // can be installed mid-conversation), then derive the bound tool names: if any plan tool
+      // is bound, the plan context is present and `buildTools` assembles all three regardless
+      // of the allow-list. Plan tools are currently the only bound tools.
+      plan: boundToolNamesForWidgetIds(
+        db
+          .listSessionWidgetsForUser(input.userId, session.id)
+          .filter((w) => w.enabled)
+          .map((w) => w.id)
+      ).some((name) => (PLAN_TOOL_NAMES as readonly string[]).includes(name))
+        ? { db, sessionId: session.id }
+        : undefined,
     });
 
     return {
@@ -1661,6 +1717,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const ctx = turnContext(session, workspace, {
       provider: body.provider,
       model: body.model,
+      userId,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
     });
@@ -1751,12 +1808,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     // Which tool this call belongs to decides how its `input` is read and how a submission
     // is judged — looked up by the *stored* call's name, so the client cannot pick the
-    // reading. An unregistered name is the same 409 as a stale question.
-    const resolved = SUSPENDING_TOOLS[pending.call.name]?.resolve(pending.call, {
-      ...body,
-      action,
-      toolCallId,
-    });
+    // reading. An unregistered name is the same 409 as a stale question. A `commit` spec
+    // (ila_make_plan) writes something as part of the answer; a `resolve` spec (ask_user,
+    // quiz) only renders it.
+    const spec = SUSPENDING_TOOLS[pending.call.name];
+    const submission: AnswerToolCallInput = { ...body, action, toolCallId };
+    const resolved = spec?.commit
+      ? spec.commit(pending.call, submission, { db, userId, session, workspace })
+      : spec?.resolve?.(pending.call, submission);
     if (!resolved) {
       return reply.code(409).send(
         apiError("QUESTION_NOT_PENDING", "that tool call does not hold a question set")
@@ -1780,6 +1839,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     );
 
     const ctx = turnContext(session, workspace, {
+      userId,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
     });
@@ -1787,6 +1847,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     await reply.hijack();
     const sse = createSseWriter(reply);
     sse.send({ type: "meta", sessionId: id });
+
+    // The plan fork created another conversation and committed V1 into it; tell the client
+    // to switch before the (short) resumed turn in THIS conversation streams its reply.
+    if (resolved.navigateToSessionId) {
+      sse.send({ type: "plan_session_created", sessionId: resolved.navigateToSessionId });
+    }
 
     const turn = beginTurn(request, id);
 

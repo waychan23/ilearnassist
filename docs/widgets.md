@@ -32,7 +32,7 @@ omissions — the "what fails if you skip it" column is the point of the table.
 
 | # | Do this | Skipping it |
 | --- | --- | --- |
-| 1 | Add the id to `WIDGET_IDS` and its levels to `WIDGETS` in [packages/shared/src/index.ts](../packages/shared/src/index.ts) | `WIDGET_MODULES` is now missing a key, so `vue-tsc` fails — in step 2's file |
+| 1 | Add the id to `WIDGET_IDS` and its levels to `WIDGETS` in [packages/shared/src/index.ts](../packages/shared/src/index.ts). If the widget brings tools, list them in the entry's **`boundTools`** | `WIDGET_MODULES` is now missing a key, so `vue-tsc` fails — in step 2's file |
 | 2 | Add an entry to `WIDGET_MODULES` in [apps/web/src/widgets/registry.ts](../apps/web/src/widgets/registry.ts) | `Record<WidgetId, WidgetModule>` makes a missing entry a compile error |
 | 3 | Add its `case` to `widgetLabel` **and** `widgetHint` in that file | the switch is exhaustive over the id union, so a missing arm is a compile error |
 | 4 | Add `widgets.<id>.name` and `widgets.<id>.hint` to **both** catalogs | `catalog.test.ts` fails on key asymmetry; the key would also resolve to nothing at runtime |
@@ -140,6 +140,31 @@ once-only guard, because re-initialising is what the hook is for.
 - **Every route is owner-scoped in the `WHERE`.** A session reaches its owner through its workspace
   by join. A widget never needs its own ownership check — and must not add one that replaces the
   scoped read.
+- **Bound tools are switched by the install, nothing else.** A widget-bound tool is assembled iff
+  the widget is installed, bypasses the tool allow-list in all three of its states, and never
+  appears in the Copilot tool checklist.
+
+## Widget-bound tools
+
+A widget can bring tools: list them in its `WIDGETS` entry as `boundTools` (names from
+`ALL_TOOL_NAMES`). The mechanics:
+
+- **Assembled iff the widget is installed.** `turnContext()` reads the session's enabled widgets
+  fresh per turn, derives their bound names (`boundToolNamesForWidgetIds`), and hands the tools'
+  per-turn context to `buildTools` (the plan tools get `{ db, sessionId }`; that context doubles
+  as the assembly gate, like `read_document`'s whitelist).
+- **They bypass the tool allow-list in all three of its states** — every tool, a named list, and
+  the empty "no tools" list. The widget install is the one switch, so the Copilot checklist
+  filters them out (`isWidgetBoundTool`); a box can neither enable nor remove them.
+- **Suspending is orthogonal.** The plan's create-vs-existing fork is the third suspending tool,
+  and it needs a side effect, so its `SuspendingTool.commit` (rather than `resolve`) writes the
+  chosen fork before the resumed turn and may navigate the client via the `plan_session_created`
+  SSE event. Read-only suspending tools keep `resolve`.
+- **Mid-turn refresh needs no new SSE event.** The store emits a `plan.changed` widget event from
+  the existing `tool_end` arm, so the panel refetches the moment a bound tool commits.
+
+The plan widget is session-scoped. A future "workspace-level default that auto-installs into new
+sessions" is a separate mechanism and is intentionally not built yet.
 
 ## What is deliberately not supported
 

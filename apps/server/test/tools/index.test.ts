@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebFetchConfig, WebSearchConfig } from "../../src/config.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
+import { PLAN_TOOL_NAMES } from "@ilearnassist/shared";
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
 import type { QuizToolContext } from "../../src/tools/quiz.js";
+import type { PlanToolContext } from "../../src/tools/planTools.js";
 
 let workspace: string;
 
@@ -46,12 +48,23 @@ const documents = {
   sources: [{ id: "att-1", name: "lecture.pdf", mimeType: "application/pdf" }],
 };
 
+/**
+ * Tools assembled only when their per-turn preconditions hold: `read_document` needs a
+ * readable document, the plan tools an installed plan widget. They live in ALL_TOOL_NAMES
+ * (what may be allow-listed) but are absent from a turn with neither.
+ */
+const CONTEXT_ASSEMBLED = ["read_document", ...PLAN_TOOL_NAMES] as const;
+
+// The db/session are only touched when a plan tool is invoked, so a structural stub keeps
+// these assembly tests off a database.
+const plan = { db: {}, sessionId: "s1" } as unknown as PlanToolContext;
+
 describe("buildTools", () => {
-  it("exposes every tool by default, minus read_document", () => {
-    // `read_document` is absent because this conversation has nothing to read — the tool is
-    // registered per turn, so a model is never offered one with nothing to point it at.
+  it("exposes every tool by default, minus the context-assembled ones", () => {
+    // `read_document` is absent because this conversation has nothing to read, and the plan
+    // tools because their widget is not installed — each is assembled per turn.
     expect(names().sort()).toEqual(
-      [...ALL_TOOL_NAMES].filter((n) => n !== "read_document").sort()
+      [...ALL_TOOL_NAMES].filter((n) => !CONTEXT_ASSEMBLED.includes(n as never)).sort()
     );
   });
 
@@ -99,7 +112,9 @@ describe("buildTools", () => {
   it("treats an absent allow-list as 'no restriction'", () => {
     // What a Copilot with `allTools: true` produces — the flag becomes an absent list, not an
     // empty one, precisely so that this case and the next one stay distinguishable.
-    expect(names({ documents })).toHaveLength(ALL_TOOL_NAMES.length);
+    expect(names({ documents })).toHaveLength(
+      ALL_TOOL_NAMES.length - PLAN_TOOL_NAMES.length
+    );
   });
 
   it("treats an empty allow-list as 'no tools', not as everything", () => {
@@ -131,6 +146,34 @@ describe("buildTools", () => {
     expect(names({ allowedNames: ["web_fetch", "write_file"], fileToolsEnabled: false })).toEqual([
       "web_fetch",
     ]);
+  });
+
+  /* ------------------------------ plan (widget-bound) ------------------------------ */
+
+  it("assembles no plan tools without a plan context", () => {
+    const built = names();
+    for (const name of PLAN_TOOL_NAMES) expect(built).not.toContain(name);
+  });
+
+  it("assembles all three plan tools with a plan context", () => {
+    const built = names({ plan });
+    for (const name of PLAN_TOOL_NAMES) expect(built).toContain(name);
+  });
+
+  it("lets widget-bound plan tools bypass the allow-list in every state", () => {
+    // Named list: not in it, still there.
+    expect(names({ plan, allowedNames: ["read_file"] }).sort()).toEqual(
+      [...PLAN_TOOL_NAMES, "read_file"].sort()
+    );
+    // Empty list ("no tools"): the bound tools survive, and nothing else does.
+    expect(names({ plan, allowedNames: [] }).sort()).toEqual([...PLAN_TOOL_NAMES].sort());
+    // Absent list: the default nine plus read_document's gate aside, the bound tools add three.
+    expect(names({ plan })).toHaveLength(9 + PLAN_TOOL_NAMES.length);
+  });
+
+  it("keeps the plan tools when file tools are disabled", () => {
+    const built = names({ plan, fileToolsEnabled: false });
+    for (const name of PLAN_TOOL_NAMES) expect(built).toContain(name);
   });
 
   it("binds the file tools to the workspace they were built for", async () => {
