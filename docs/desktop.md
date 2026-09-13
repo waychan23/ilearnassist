@@ -200,6 +200,32 @@ pnpm --filter @ilearnassist/server cli create-admin --username <you> --generate 
 pnpm --filter @ilearnassist/server cli create-admin --username <you> --password-stdin   # type your own
 ```
 
+### The panel's language
+
+The panel ships in Simplified Chinese and English, like the app, and the choice is a control in
+its header rather than a hidden preference. The stored value is `desktop.json`'s `locale`:
+`""` means **follow the system**, and that is the default — the panel is usually the first
+screen of the product, and a desktop app should agree with the rest of the machine without being
+asked. Unlike the web app, "follow the system" is a real answer it is worth being able to return
+to; there is no way back to a detected default once an explicit choice has been stored.
+
+**The main process owns the language, and the page renders what it is told.** That is not a
+layering preference: the menu bar, the tray menu, the window title and every native dialog —
+including the two that confirm a data folder and a password reset — are strings Electron renders
+outside the page, and they have to change with it. So `panel:set-locale` is a round trip that
+writes the preference, rebuilds the menu and the tray, retitles the window and broadcasts; the
+page adopts the `locale` on the broadcast. A page that switched on its own would leave the menu
+above it in the old language.
+
+Two consequences worth knowing:
+
+- The renderer's `navigator.language` is only a *placeholder* for the few milliseconds before
+  the first state arrives, so the page never paints in the wrong language for longer than that.
+- The three options are labelled in their own language — **简体中文** and **English** do not
+  translate — because a picker that renders the option you cannot read in a language you cannot
+  read is no use to the person who needs it. `apps/desktop/test/messages.test.ts` allows the CJK
+  in the English catalog for that one key.
+
 ## Opening the app on a phone or tablet
 
 Press **Open on your phone** in the panel. If the server is loopback-only it restarts bound
@@ -287,6 +313,12 @@ being reachable from somewhere else.
 The confirmation in front of it is not ceremony either. This replaces the credential of the one
 account that can do everything, and unlike disabling a user there is no second administrator
 behind it to put things right.
+
+**It is also the only way a superadmin can replace their own password.** The web console refuses
+a superadmin's own reset outright (`PANEL_RESET_REQUIRED`), because that console is reached with
+a credential the caller already holds — a self-reset there would be a second and weaker way to
+replace the one credential that can undo the installation. An ordinary administrator is not in
+that position and resets their own from the web like any other password change.
 
 ## Closing the window, and quitting
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PANEL_LOCALES,
   PANEL_MESSAGES,
+  choosePanelLocale,
   describeFault,
   resolvePanelLocale,
   translate,
@@ -31,10 +32,24 @@ describe("resolvePanelLocale", () => {
   });
 
   it("falls back to English for anything it does not ship", () => {
-    // Not "the closest match" — a wrong language is worse than a lingua franca, and the
-    // panel has no language switcher to recover with.
+    // Not "the closest match": a wrong language is worse than a lingua franca, and the panel
+    // now has a switcher, so the fallback only decides what the switcher is set to before
+    // anyone has used it.
     for (const tag of ["fr-FR", "ja", "", undefined]) {
       expect(resolvePanelLocale(tag)).toBe("en");
+    }
+  });
+});
+
+describe("choosePanelLocale", () => {
+  it("uses the stored choice when there is one", () => {
+    expect(choosePanelLocale("zh-CN", "en-US")).toBe("zh-CN");
+    expect(choosePanelLocale("en", "zh-CN")).toBe("en");
+  });
+
+  it("follows the system when nobody has chosen, or the value is nonsense", () => {
+    for (const stored of ["", "system", null, undefined, 42, "fr"]) {
+      expect(choosePanelLocale(stored, "zh-Hans")).toBe("zh-CN");
     }
   });
 });
@@ -49,7 +64,12 @@ describe("catalogs", () => {
   });
 
   it("leaves no untranslated Chinese in the English catalog", () => {
+    // The one legitimate exception, and the same one `apps/web` makes for `locale.zhCN`: a
+    // language picker labels each option in its own language, or it is unusable to exactly the
+    // people it is for.
+    const autonyms = new Set(["language.zh-CN"]);
     for (const [key, value] of Object.entries(PANEL_MESSAGES.en)) {
+      if (autonyms.has(key)) continue;
       expect(CJK.test(value), `en: ${key} = ${value}`).toBe(false);
     }
   });

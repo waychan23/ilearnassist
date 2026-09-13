@@ -193,3 +193,87 @@ test("the sidebar reaches the console from inside a conversation", async ({ page
   await page.getByTestId("admin-back").click();
   await expect(page.getByTestId("workspace-home")).toBeVisible();
 });
+
+/**
+ * The two tiers, from the console's side.
+ *
+ * `apps/server/test/admin-users.test.ts` pins what each route refuses; this pins that the page
+ * *says so* rather than offering a control that fails after the click. The interesting claim is
+ * the asymmetry: the same console is a working screen for an ordinary administrator right up to
+ * the row of the account that appointed it.
+ */
+test("a superadmin cannot reset their own password from here, and is told where to", async ({
+  page,
+}) => {
+  await openConsole(page);
+
+  const reset = page.getByTestId(`admin-reset-${SIGNED_IN_AS}`);
+  await expect(reset).toBeDisabled();
+  // Disabled with the reason on it: this is the one refusal on the page a person cannot work
+  // out from the button, because nothing about their own row looks different from any other.
+  await expect(reset).toHaveAttribute("title", /控制面板/);
+});
+
+test("an ordinary administrator runs the console but cannot touch the superadmin", async ({
+  page,
+  request,
+}) => {
+  // Made through the API: appointing an administrator is a superadmin's act, and this spec is
+  // about what happens *after* one has been appointed. Both accounts up front, because the
+  // console reads its list once on mount and an account made afterwards would need a reload to
+  // appear — which is a different claim from the one this test is making.
+  const password = await ensureUser(request, "steward", ["admin"]);
+  await ensureUser(request, "someone");
+
+  await forgetSession(page);
+  await signIn(page, "steward", password);
+
+  // The console is theirs — both entry points, because the tier is an addition to the rule
+  // rather than a replacement of it.
+  await page.getByTestId("open-admin").click();
+  await expect(page.getByTestId("admin-console")).toBeVisible();
+  await expect(page.getByTestId("admin-nav-users")).toBeVisible();
+
+  // Every action on the superadmin's row is refused before it is clicked...
+  for (const action of ["toggle", "reset", "kick"]) {
+    await expect(page.getByTestId(`admin-${action}-${SIGNED_IN_AS}`)).toBeDisabled();
+  }
+  // ...and the role boxes on it too, which is how the row says *why* it is out of reach: the
+  // tier is visible rather than the row simply being inert.
+  await expect(page.getByTestId("admin-role-superadmin").first()).toBeDisabled();
+
+  // An ordinary account is still theirs to run, so this is a tier rule and not a dead page.
+  const row = page.locator('[data-testid="admin-user"][data-username="someone"]');
+  await expect(row).toBeVisible();
+  await expect(row.getByTestId("admin-toggle-someone")).toBeEnabled();
+});
+
+test("an ordinary administrator cannot appoint one, and the dialog says why", async ({
+  page,
+  request,
+}) => {
+  const password = await ensureUser(request, "warden", ["admin"]);
+  await forgetSession(page);
+  await signIn(page, "warden", password);
+
+  await page.getByTestId("open-admin").click();
+  await page.getByTestId("admin-new-user").click();
+
+  // Drawn but unticked and untickable, rather than hidden: the boxes are how somebody learns
+  // that appointing administrators is not theirs to do.
+  await expect(page.getByTestId("admin-create-role-admin")).toBeDisabled();
+  await expect(page.getByTestId("admin-create-role-superadmin")).toBeDisabled();
+  await expect(page.getByTestId("admin-create-dialog")).toContainText("只有超级管理员");
+
+  // And it does not merely hide the control: a request that asks anyway is refused whole, not
+  // quietly downgraded to an ordinary account.
+  const token = await page.evaluate(() => {
+    const raw = window.localStorage.getItem("ila-auth");
+    return raw ? (JSON.parse(raw) as { accessToken: string }).accessToken : "";
+  });
+  const refused = await request.post("/api/admin/users", {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { username: "usurper", roles: ["admin"] },
+  });
+  expect(refused.status()).toBe(403);
+});

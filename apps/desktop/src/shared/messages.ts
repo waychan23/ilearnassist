@@ -31,6 +31,43 @@ export function resolvePanelLocale(tag: string | undefined): PanelLocale {
 }
 
 /**
+ * What the language control stores.
+ *
+ * `""` is "follow the operating system", and it is the default — a desktop app is the one place
+ * where the system already has an opinion about the language, and the panel is usually the
+ * first screen of the product, so it should agree with the rest of the machine without being
+ * asked. The web app has no such value (see `composables/locale.ts`), and the difference is
+ * deliberate rather than a drift: there, language is chosen once; here the OS is a real answer
+ * worth being able to return to, and without it a stale explicit choice would only be
+ * fixable by hand-editing `desktop.json`.
+ *
+ * Stored as the empty string rather than `"auto"` for the reason `DesktopSettings.dataDir`
+ * uses it: in a preferences file, "nobody has said" and "somebody said system" are the same
+ * answer, and one spelling of it is one fewer branch.
+ */
+export type PanelLocaleChoice = "" | PanelLocale;
+
+/** Whether a value off disk or out of the renderer is a language the panel can actually show. */
+export function isPanelLocaleChoice(value: unknown): value is PanelLocaleChoice {
+  return value === "" || (PANEL_LOCALES as readonly string[]).includes(value as string);
+}
+
+/**
+ * Which language to render in: the stored choice, or the system's when nobody has chosen.
+ *
+ * Takes the raw value rather than trusting the caller to have validated it, because the two
+ * callers are a JSON file and a `<select>` and neither is a type system.
+ */
+export function choosePanelLocale(
+  choice: unknown,
+  systemTag: string | undefined
+): PanelLocale {
+  return isPanelLocaleChoice(choice) && choice !== ""
+    ? choice
+    : resolvePanelLocale(systemTag);
+}
+
+/**
  * Every string the panel can render.
  *
  * Flat, domain-first keys, matching the web catalogs' convention: a key names what it is
@@ -136,6 +173,18 @@ export interface PanelMessages {
   "dataDir.confirmDetail": string;
   "dataDir.confirmProceed": string;
   "hint.chooseDataDir": string;
+  /**
+   * The language control.
+   *
+   * `language.system` is translated; the two autonyms are not, and must not be — a picker that
+   * renders the option for Chinese in a language the reader may not have is unusable to exactly
+   * the people it is for. `apps/desktop/test/messages.test.ts` allows the CJK in the English
+   * catalog for `language.zh-CN` alone, the same exemption `apps/web` makes for `locale.zhCN`.
+   */
+  "label.language": string;
+  "language.system": string;
+  "language.zh-CN": string;
+  "language.en": string;
   "label.dataDir": string;
   "label.lanAccess": string;
   "label.logs": string;
@@ -241,6 +290,10 @@ const zhCN: PanelMessages = {
   "dataDir.confirmDetail": "会在 {dir} 里新建一个空数据库。你现有的数据不会出现在这里。",
   "dataDir.confirmProceed": "仍然使用",
   "hint.chooseDataDir": "先选择数据存放位置，再启动服务。数据库、工作空间和上传的文件都会放在那里，所以建议选一个在应用之外、并且会被备份的位置。",
+  "label.language": "语言",
+  "language.system": "跟随系统",
+  "language.zh-CN": "简体中文",
+  "language.en": "English",
   "label.dataDir": "数据目录",
   "label.lanAccess": "手机 / 平板访问",
   "label.logs": "运行日志",
@@ -345,6 +398,10 @@ const en: PanelMessages = {
   "dataDir.confirmDetail": "A new, empty database will be created in {dir}. Your existing data will not appear here.",
   "dataDir.confirmProceed": "Use it anyway",
   "hint.chooseDataDir": "Choose where to keep your data before starting the server. The database, your workspaces and your uploaded files all live there — so pick somewhere outside the app, somewhere you back up.",
+  "label.language": "Language",
+  "language.system": "System",
+  "language.zh-CN": "简体中文",
+  "language.en": "English",
   "label.dataDir": "Data folder",
   "label.lanAccess": "Phone or tablet",
   "label.logs": "Server output",

@@ -32,8 +32,8 @@ describe("readSettings", () => {
   });
 
   it("round-trips what was written, creating the directory", () => {
-    writeSettings(file, { sharedOnLan: true, dataDir: "/Users/someone/My Notes" });
-    expect(readSettings(file)).toEqual({ sharedOnLan: true, dataDir: "/Users/someone/My Notes" });
+    writeSettings(file, { sharedOnLan: true, dataDir: "/Users/someone/My Notes", locale: "" });
+    expect(readSettings(file)).toEqual({ sharedOnLan: true, dataDir: "/Users/someone/My Notes", locale: "" });
     // The file is the user's too, so it is written to be read.
     expect(readFileSync(file, "utf8")).toContain('"sharedOnLan": true');
   });
@@ -41,7 +41,7 @@ describe("readSettings", () => {
   it("keeps a chosen data folder verbatim, spaces and all", () => {
     // Not trimmed on the way out: a path may legitimately end in a space, and resolving it is
     // the launcher's job rather than this file's.
-    writeSettings(file, { sharedOnLan: false, dataDir: "/Users/someone/My Notes" });
+    writeSettings(file, { sharedOnLan: false, dataDir: "/Users/someone/My Notes", locale: "" });
     expect(readSettings(file).dataDir).toBe("/Users/someone/My Notes");
   });
 

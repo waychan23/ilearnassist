@@ -692,6 +692,21 @@ Fuller map in `docs/reference.md`.
   not the feature. Navigation goes through `showLogin()` / `showWorkspaceHome()` /
   `showChat()`, never a component-local flag. `e2e/workspaces.ts` is the same rule for the
   specs; a spec that skips it fails on a composer that never renders.
+- **The platform console is laid out like a management back end: a menu down the left, one
+  section on the right.** `AdminConsole.vue` replaced its tab strip with that shell when it grew
+  a second section, and the reason is structural rather than cosmetic — a tab strip is a strip
+  of *equals*, and "accounts" and "model providers" are not equal halves of one question.
+  `SECTIONS` is data (an id and an icon) so a section is an entry plus a component; the section's
+  *words* stay at the call site, because `i18n/catalog.test.ts` scans for `t("…")` literals and a
+  key reached through an object property is invisible to it — the dead-key scan would report it
+  as unused. `admin.nav.` is the one dynamic prefix it adds, over the closed section-id union.
+  The narrow viewport turns the menu into a strip across the top rather than hiding it: there are
+  a handful of sections and they are the page's only navigation.
+- **The console's entry points all ask `store.canAdmin`, never `roles.includes("superadmin")`.**
+  Two tiers means the check is a *set* question, and three call sites (the home page's header,
+  the sidebar's menu, the account page) written as a one-role comparison is how an ordinary
+  administrator ends up with a console reachable from two buttons and not the third. It is still
+  not a permission: it decides whether a button is drawn, and the routes answer 403 regardless.
 - **Nothing is painted until `uiState.authReady`.** Whether anyone is signed in is the
   *server's* fact — the token may be expired, revoked or absent — so the right view is
   genuinely unknown until `/api/auth/me` answers. `view` starts on `"login"` as the safe
@@ -783,13 +798,35 @@ Fuller map in `docs/reference.md`.
   array and every check is "does this account hold role R", so a third role is a row that
   changes. `PATCH /api/admin/users/:id` refuses **self**-demotion and self-disable
   (`CANNOT_MODIFY_SELF`) and that refusal is the *whole* of the "somebody has to remain" rule:
-  reaching the route means the caller is an enabled superadmin, so one administrator always
-  survives whoever else is changed. A separate last-superadmin check would be a branch no test
+  reaching the route means the caller is an enabled administrator, so one administrator always
+  survives whoever else is changed. A separate last-administrator check would be a branch no test
   could cover. Users are **disabled, never deleted** — the row owns workspaces, conversations
   and uploaded files. A disabled account's live tokens stop working in the same request, and
   an administrator resetting *their own* password does not set `mustChangePassword` (they chose
   the value a moment ago) while resetting anybody else's does; either way the reset ends the
   target's sessions and hands the caller a replacement pair when the target is themselves.
+- **There are two tiers of administrator, and the split is about who may appoint whom.**
+  `USER_ROLES` is `superadmin`, `admin`, `user`; `isPlatformAdmin` is the *set*
+  (`PLATFORM_ADMIN_ROLES`) rather than a comparison, so the bootstrap account never needs a
+  second role bolted on to keep working. A **superadmin** is the account the installation was
+  created with — the control panel or the CLI makes it, and it is the only role that may appoint
+  another administrator. An **admin** runs the installation's accounts and its shared settings,
+  and may not touch an account that administers it: not a superadmin, and not a peer either,
+  because two administrators disabling each other is a race whose winner is whoever clicked
+  second. The rule lives in one function, `manageRefusal`, because demote/disable/reset/kick are
+  the same answer four times and four copies is four chances to forget one; `grantRefusal` is
+  separate because it is about the *value being written* (an appointment) rather than the row
+  being read. **Your own row is excluded from `manageRefusal`** — every route already has its own
+  careful answer for the self case, and folding self in shadowed them (it made an ordinary
+  administrator unable to reset their own password). Promotion is refused, not stripped down:
+  a request that asked for an administrator and silently got an ordinary account reports success
+  and delivers something else.
+- **A superadmin's own password is reset in the control panel, and nowhere else.**
+  `POST /api/admin/users/:id/password` answers `PANEL_RESET_REQUIRED` when a superadmin names
+  themselves. It is a rule rather than a convenience: the web console is reached with a
+  credential the caller already holds, so a self-reset there would be a second and weaker way to
+  replace the one credential that can undo the installation. An ordinary administrator is not in
+  that position and resets their own from the web normally.
 - **A workspace's conversation count and last activity are derived, never stored.**
   `GET /api/workspaces` computes them in the same query that lists workspaces (a LEFT JOIN,
   so a workspace with no conversations still appears with `0`/`null`), and the client
@@ -842,6 +879,18 @@ Fuller map in `docs/reference.md`.
   is replaced wholesale on every update. First-run seeding is idempotent and **never
   overwrites** an existing `config.yaml` or overlay — that is what keeps an API key the user
   typed into the Settings UI from vanishing on the next launch.
+- **The panel's language belongs to the main process, and the page renders what it is told.**
+  `desktop.json`'s `locale` is the source of truth (`""` means follow the system — the panel is
+  a desktop app, so the OS already has an opinion and "back to the system" has to be expressible);
+  `choosePanelLocale` is the only place that decides what a choice *means*, while `readSettings`
+  only narrows a hand-edited value to something renderable. `panel:set-locale` writes it, rebuilds
+  the menu and the tray, retitles the window and broadcasts, and the page adopts the `locale` off
+  the broadcast — because the menu bar, the tray and every native dialog are strings Electron
+  draws *outside* the page, and a page that switched on its own would leave the chrome above it
+  in the old language. The renderer's `navigator.language` is only the placeholder for the
+  milliseconds before the first state arrives. The three options are labelled in their own
+  language — 简体中文 and English do not translate — and `apps/desktop/test/messages.test.ts`
+  allows that one CJK value in the English catalog for exactly that reason.
 - **The app's directory and the user's are two different directories.** The app's holds
   `config/` and `.env`; the user's holds the database, every account's workspaces and their
   uploads. That split is what makes "back up my work" a copy of one directory and "reinstall

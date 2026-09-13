@@ -41,6 +41,11 @@ const api: PanelApi = {
     ipcRenderer.invoke(PANEL_CHANNELS.adminStatus) as Promise<AdminStatusResult>,
   createAdministrator: (input) =>
     ipcRenderer.invoke(PANEL_CHANNELS.createAdministrator, input) as Promise<CreateAdministratorResult>,
+  // Passed through unvalidated here, like `shareOnLan`'s boolean: main is the boundary that
+  // decides what a value means, and it answers with the state that is true afterwards — so a
+  // value this build does not ship ends up as the fallback rather than as an error.
+  setLocale: (choice) =>
+    ipcRenderer.invoke(PANEL_CHANNELS.setLocale, choice) as Promise<PanelState>,
   quit: () => ipcRenderer.invoke(PANEL_CHANNELS.quit) as Promise<void>,
 
   onStateChange: (listener) => {

@@ -2,8 +2,11 @@ import type { PanelState, ResetResult, ServerState } from "../shared/panelApi.js
 import {
   PANEL_MESSAGES,
   describeFault,
+  isPanelLocaleChoice,
   resolvePanelLocale,
   translate,
+  type PanelLocale,
+  type PanelLocaleChoice,
   type PanelMessages,
 } from "../shared/messages.js";
 import { qrModules, qrRuns } from "../shared/qr.js";
@@ -12,12 +15,22 @@ import { qrModules, qrRuns } from "../shared/qr.js";
  * The control panel page.
  *
  * Deliberately tiny and dependency-free apart from the QR encoder. It renders one state
- * object and forwards eight commands; all the judgement about what a state *means* lives in
+ * object and forwards nine commands; all the judgement about what a state *means* lives in
  * `ServerProcess`, and all the wording lives in `shared/messages.ts`. So this file has no
  * conditionals about the server process and no user-facing strings — just bindings.
+ *
+ * **The language is the main process's to decide, not this page's.** `navigator.language` is
+ * the pre-answer — the same detection rule, used only for the few milliseconds before the first
+ * state arrives — and every state broadcast carries the resolved `locale`, which comes from the
+ * stored choice and `app.getLocale()`. That is what keeps the page and the menu bar above it
+ * from ever showing two languages: only one process can read the preference, so only that one
+ * answers.
  */
 
-const messages = PANEL_MESSAGES[resolvePanelLocale(navigator.language)];
+/** Placeholder until the first state arrives; see the note above. */
+let locale: PanelLocale = resolvePanelLocale(navigator.language);
+let messages: PanelMessages = PANEL_MESSAGES[locale];
+
 const t = (key: keyof PanelMessages, values?: Record<string, string | number>): string =>
   translate(messages, key, values);
 
@@ -85,6 +98,8 @@ const adminConfirm = element<HTMLInputElement>('[data-role="admin-confirm"]');
 const adminError = element<HTMLElement>('[data-role="admin-error"]');
 const adminOk = element<HTMLElement>('[data-role="admin-ok"]');
 
+const localeSelect = element<HTMLSelectElement>('[data-role="locale"]');
+
 const buttons = {
   open: action("open"),
   start: action("start"),
@@ -106,28 +121,70 @@ const buttons = {
 /** macOS draws its traffic lights inside the window because of `titleBarStyle: hiddenInset`. */
 if (navigator.platform.startsWith("Mac")) document.body.classList.add("is-mac");
 
-// Static labels, written once. The dynamic ones are set in `render`.
-for (const node of document.querySelectorAll<HTMLElement>("[data-i18n]")) {
-  node.textContent = t(node.dataset.i18n as keyof PanelMessages);
+/**
+ * Every label that does not depend on the state, written from the catalog.
+ *
+ * A function rather than a block that runs once at module scope, because the panel is now
+ * bilingual at runtime: a change of language has to reach these, and they are the majority of
+ * the page's words. The *dynamic* labels — the status word, the log disclosure, a copy button
+ * mid-acknowledgement — are set in `render`, which runs on the same broadcast.
+ *
+ * `data-i18n` on the element names its own key, which is what keeps this list from having to be
+ * maintained alongside the markup for the labels that have no other reason to be in this file.
+ */
+function applyStaticLabels(): void {
+  for (const node of document.querySelectorAll<HTMLElement>("[data-i18n]")) {
+    node.textContent = t(node.dataset.i18n as keyof PanelMessages);
+  }
+  buttons.open.textContent = t("action.open");
+  buttons.start.textContent = t("action.start");
+  buttons.stop.textContent = t("action.stop");
+  buttons.browser.textContent = t("action.openInBrowser");
+  buttons.copy.textContent = t("action.copyUrl");
+  buttons.qrCopy.textContent = t("action.copyUrl");
+  buttons.reveal.textContent = t("action.reveal");
+  buttons.chooseDataDir.textContent = t("action.chooseDataDir");
+  buttons.share.textContent = t("action.share");
+  buttons.unshare.textContent = t("action.unshare");
+  buttons.resetAdmin.textContent = t("action.resetAdmin");
+  buttons.resetCopy.textContent = t("reset.copy");
+  buttons.resetDismiss.textContent = t("reset.dismiss");
+  buttons.adminCreate.textContent = t("action.createAdmin");
+  buttons.adminSubmit.textContent = t("create.submit");
+  resetUserLabel.textContent = t("reset.username");
+  resetPassLabel.textContent = t("reset.password");
+  localeSelect.title = t("label.language");
+  localeSelect.setAttribute("aria-label", t("label.language"));
+  document.title = t("window.title");
+  document.documentElement.lang = locale;
 }
-buttons.open.textContent = t("action.open");
-buttons.start.textContent = t("action.start");
-buttons.stop.textContent = t("action.stop");
-buttons.browser.textContent = t("action.openInBrowser");
-buttons.copy.textContent = t("action.copyUrl");
-buttons.qrCopy.textContent = t("action.copyUrl");
-buttons.reveal.textContent = t("action.reveal");
-buttons.chooseDataDir.textContent = t("action.chooseDataDir");
-buttons.share.textContent = t("action.share");
-buttons.unshare.textContent = t("action.unshare");
-buttons.resetAdmin.textContent = t("action.resetAdmin");
-buttons.resetCopy.textContent = t("reset.copy");
-buttons.resetDismiss.textContent = t("reset.dismiss");
-buttons.adminCreate.textContent = t("action.createAdmin");
-buttons.adminSubmit.textContent = t("create.submit");
-resetUserLabel.textContent = t("reset.username");
-resetPassLabel.textContent = t("reset.password");
-document.title = t("window.title");
+
+/**
+ * The three options, one per choice, labelled once.
+ *
+ * Built here rather than written into `index.html` because two of the three are autonyms and do
+ * not change with the language — while the third does, and a markup literal is invisible to the
+ * catalog. `""` is the value for "follow the system": a `<select>` whose option values are all
+ * non-empty strings has no other way to express it.
+ */
+function buildLocaleOptions(): void {
+  localeSelect.replaceChildren(
+    ...( [
+      ["", t("language.system")],
+      ["zh-CN", t("language.zh-CN")],
+      ["en", t("language.en")],
+    ] as const
+    ).map(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    })
+  );
+}
+
+buildLocaleOptions();
+applyStaticLabels();
 
 let state: PanelState | null = null;
 let logsOpen = false;
@@ -146,6 +203,24 @@ let logCount = 0;
 /** The address the sheet is currently drawing, so a log line cannot repaint ~150 rects. */
 let paintedUrl: string | null = null;
 
+/**
+ * Adopt the language the main process resolved.
+ *
+ * Returns early when it has not changed, which is the common case — the state is pushed on every
+ * server log line, and rewriting every label in the panel several times a second for a language
+ * that has not moved would be work nobody can see. `render` still runs its own dynamic
+ * assignments afterwards, so the early return costs nothing.
+ */
+function applyLocale(next: PanelLocale): void {
+  if (next === locale) return;
+  locale = next;
+  messages = PANEL_MESSAGES[locale];
+  // The option labels are rebuilt as well as the rest: "follow the system" is a translated
+  // phrase, and the two autonyms beside it are deliberately not.
+  buildLocaleOptions();
+  applyStaticLabels();
+}
+
 // ---- rendering -------------------------------------------------------------
 
 /**
@@ -163,6 +238,13 @@ function refreshLogsHeader(): void {
 
 function render(next: PanelState): void {
   state = next;
+  // Before anything is written: every label below comes from the catalog this picks.
+  applyLocale(next.locale);
+  // And the control shows the *choice*, which is `""` while the panel is following the system —
+  // binding it to the rendered language instead would turn "follow the system" into an explicit
+  // choice the first time a state arrived.
+  localeSelect.value = next.localeChoice;
+
   const { server, sharedOnLan, lanUrl, needsDataDir, needsAdmin } = next;
   const running = server.state === "running";
   const busy = server.state === "starting" || server.state === "stopping";
@@ -491,6 +573,22 @@ buttons.reveal.addEventListener("click", () => void window.panel.revealDataDir()
 buttons.chooseDataDir.addEventListener("click", () =>
   void window.panel.chooseDataDir().then(render)
 );
+
+/**
+ * The language control.
+ *
+ * A round trip rather than a local swap, and the answer is what gets rendered — so the page
+ * never shows a language the menu bar above it has not adopted yet. The value is checked here
+ * only to *narrow the type*: `<select>` cannot produce anything else, and main is the side that
+ * decides what an unknown value means.
+ */
+localeSelect.addEventListener("change", () => {
+  const choice = localeSelect.value;
+  void window.panel
+    .setLocale(isPanelLocaleChoice(choice) ? choice : "")
+    .then(render);
+});
+
 logsToggle.addEventListener("click", () => setLogsOpen(!logsOpen));
 
 buttons.share.addEventListener("click", () => void openQrOverlay());
@@ -525,6 +623,22 @@ document.addEventListener("keydown", (event) => {
  */
 const copyTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>();
 
+/**
+ * What each copy button is called when it is not saying "copied".
+ *
+ * A map rather than a single literal inside `copy`, because the two buttons do not share a
+ * label: the address ones are "copy address" and the credential one is just "copy". Restoring
+ * all three to `action.copyUrl` was a live bug — the reset button came back from its
+ * acknowledgement labelled "Copy address", on a row that has no address on it. Keyed by the
+ * button so a change of language cannot leave a stale string behind either: the restore reads
+ * the catalog at the moment it happens.
+ */
+const COPY_LABEL = new Map<HTMLButtonElement, keyof PanelMessages>([
+  [buttons.copy, "action.copyUrl"],
+  [buttons.qrCopy, "action.copyUrl"],
+  [buttons.resetCopy, "reset.copy"],
+]);
+
 function copy(button: HTMLButtonElement, text: string): void {
   if (!text) return;
   void navigator.clipboard.writeText(text).then(
@@ -535,7 +649,7 @@ function copy(button: HTMLButtonElement, text: string): void {
       copyTimers.set(
         button,
         setTimeout(() => {
-          button.textContent = t("action.copyUrl");
+          button.textContent = t(COPY_LABEL.get(button) ?? "action.copyUrl");
           copyTimers.delete(button);
         }, 1500)
       );

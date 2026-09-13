@@ -7,6 +7,8 @@
  * renderer sees exactly the surface `PanelApi` describes and no `require`.
  */
 
+import type { PanelLocale, PanelLocaleChoice } from "./messages.js";
+
 export const PANEL_CHANNELS = {
   getState: "panel:get-state",
   start: "panel:start",
@@ -48,6 +50,16 @@ export const PANEL_CHANNELS = {
    * list or a log line.
    */
   createAdministrator: "panel:create-administrator",
+  /**
+   * Choose the panel's language.
+   *
+   * A round trip to main rather than a renderer-local choice, because the panel's words are not
+   * all drawn by the page: the menu bar, the tray menu and every native dialog are rendered by
+   * the main process, and a page that switched language on its own would leave the menu above it
+   * in the old one. Main writes the choice down and broadcasts the new state, so the page and the
+   * chrome change together on the same fact.
+   */
+  setLocale: "panel:set-locale",
   quit: "panel:quit",
   /** main → renderer, pushed on every change so the panel never has to poll. */
   stateChanged: "panel:state",
@@ -117,6 +129,23 @@ export interface PanelState {
    * prevent. Undefined while the check has not run.
    */
   needsAdmin: boolean | undefined;
+  /**
+   * What the language control shows: `""` for "follow the operating system", else a locale tag.
+   *
+   * The *choice*, not the language being rendered — the two differ exactly when the choice is
+   * "system", and a select bound to the rendered value would silently turn "follow the system"
+   * into an explicit choice the first time a state broadcast arrived.
+   */
+  localeChoice: PanelLocaleChoice;
+  /**
+   * The language the panel is rendering in right now, on both sides of the IPC boundary.
+   *
+   * Carried in the state rather than computed in the page from `navigator.language`, because
+   * main is the side that resolved it — from the stored choice and `app.getLocale()` — and the
+   * page and the native dialogs have to agree. The page switching on its own would be a second
+   * answer to a question only one process can answer.
+   */
+  locale: PanelLocale;
 }
 
 /**
@@ -218,6 +247,14 @@ export interface PanelApi {
    * stdin, so it never appears in a process argument or a log line.
    */
   createAdministrator(input: { username: string; password: string }): Promise<CreateAdministratorResult>;
+  /**
+   * Switch the panel's language, and resolve when the chrome around it has switched too.
+   *
+   * Returns the state rather than nothing, like every other command here: the renderer's next
+   * paint is then showing a `locale` that is already true, instead of one it guessed while the
+   * menu bar was still catching up.
+   */
+  setLocale(choice: PanelLocaleChoice): Promise<PanelState>;
   quit(): Promise<void>;
   onStateChange(listener: (state: PanelState) => void): () => void;
 }

@@ -3,7 +3,6 @@ import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { showAdmin, showWorkspaceHome } from "../composables/ui";
-import { SUPERADMIN_ROLE } from "../api/types";
 import PasswordChangeForm from "./PasswordChangeForm.vue";
 import TopbarControls from "./TopbarControls.vue";
 import Icon from "./Icon.vue";
@@ -76,7 +75,7 @@ function onChanged(): void {
           <!-- The console is one control away for the accounts that have it, and the server is
                what decides — this hides a button, it does not grant anything. -->
           <button
-            v-if="store.account?.roles.includes(SUPERADMIN_ROLE)"
+            v-if="store.canAdmin"
             class="btn"
             data-testid="account-open-admin"
             @click="showAdmin()"

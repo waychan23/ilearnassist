@@ -45,6 +45,11 @@ const RUNNING: PanelState = {
   lanAddress: LAN_ADDRESS,
   needsDataDir: false,
   needsAdmin: false,
+  // The panel's language, as the main process would report it. Following the system here, so
+  // the spec renders whichever catalog the browser's locale pinned — which is what the rest of
+  // the suite already relies on.
+  localeChoice: "",
+  locale: "zh-CN",
 };
 
 const SHARED: PanelState = { ...RUNNING, sharedOnLan: true, lanUrl: LAN_URL };
@@ -71,6 +76,8 @@ const NEEDS_DATA_DIR: PanelState = {
   lanAddress: LAN_ADDRESS,
   needsDataDir: true,
   needsAdmin: undefined,
+  localeChoice: "",
+  locale: "zh-CN",
 };
 
 const FAILED: PanelState = {
@@ -158,6 +165,19 @@ async function openPanel(
       createAdministrator: async () => {
         await record("createAdministrator");
         return createResult;
+      },
+      // The real handler writes the preference and answers with the state it made true; the
+      // stub does the same thing in one line, because what the page does with the *answer* is
+      // the half this spec can see.
+      setLocale: async (choice: string) => {
+        await record(`setLocale:${choice}`);
+        const next = {
+          ...(w["__status"] as PanelState),
+          localeChoice: choice === "" ? "" : choice,
+          locale: choice === "" ? "zh-CN" : choice,
+        } as PanelState;
+        w["__status"] = next;
+        return next;
       },
       quit: async () => undefined,
       onStateChange: (listener: (state: PanelState) => void) => {
@@ -577,5 +597,63 @@ test.describe("creating the first administrator", () => {
     await open();
     await page.keyboard.press("Escape");
     await expect(page.locator(OVERLAY)).toBeHidden();
+  });
+});
+
+/**
+ * The language control.
+ *
+ * The panel is bilingual at runtime, and the interesting half is that the *page* does not decide
+ * the language: it asks the main process and renders the answer. That is what keeps the page and
+ * the menu bar above it — the application menu, the tray, the window title — from ever showing
+ * two languages, and it is why this spec drives the control through the stub's `setLocale`
+ * rather than expecting a `navigator.language` it cannot change.
+ */
+test.describe("the panel's language", () => {
+  test("offers the three choices, with the system one selected by default", async ({ page }) => {
+    await openPanel(page, RUNNING);
+
+    const select = page.locator('[data-role="locale"]');
+    await expect(select).toBeVisible();
+    await expect(select.locator("option")).toHaveCount(3);
+    // "Follow the system" is the empty value: a select whose options are all non-empty strings
+    // has no other way to spell "nobody has chosen".
+    await expect(select).toHaveValue("");
+    await expect(select).toContainText("跟随系统");
+  });
+
+  test("takes the language from the state rather than from the browser", async ({ page }) => {
+    // The state says English, and the spec's own locale is zh-CN — so the page rendering English
+    // is the page following main rather than its own `navigator.language`.
+    await openPanel(page, { ...RUNNING, locale: "en", localeChoice: "en" });
+
+    await expect(page.locator('[data-role="state"]')).toHaveText("Running");
+    await expect(page.locator('[data-action="start"]')).toHaveText("Start server");
+    await expect(page.locator('[data-role="locale"]')).toHaveValue("en");
+  });
+
+  test("hands the choice to the main process and renders what comes back", async ({ page }) => {
+    const panel = await openPanel(page, RUNNING);
+
+    await page.locator('[data-role="locale"]').selectOption("en");
+
+    // Asked, not assumed: the page does not switch on its own, because the menu bar cannot.
+    expect(panel.calls).toContain("setLocale:en");
+    await expect(page.locator('[data-role="state"]')).toHaveText("Running");
+    await expect(page.locator('[data-action="reset-admin"]')).toHaveText("Reset superadmin password");
+    // The autonyms do not follow the language, which is the point of labelling each option in
+    // its own — the picker stays usable to somebody who has just switched to a language they
+    // cannot read.
+    await expect(page.locator('[data-role="locale"]')).toContainText("简体中文");
+  });
+
+  test("goes back to following the system when that choice is picked", async ({ page }) => {
+    const panel = await openPanel(page, { ...RUNNING, locale: "en", localeChoice: "en" });
+    await expect(page.locator('[data-role="state"]')).toHaveText("Running");
+
+    await page.locator('[data-role="locale"]').selectOption("");
+
+    expect(panel.calls).toContain("setLocale:");
+    await expect(page.locator('[data-role="state"]')).toHaveText("运行中");
   });
 });

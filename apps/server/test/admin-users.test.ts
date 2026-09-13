@@ -48,15 +48,22 @@ function injectWith(env: TestEnv, token: string): TestEnv["inject"] {
   return (opts) => env.server.app.inject({ ...opts, headers: { ...opts.headers, ...bearer(token) } });
 }
 
-/** Create an account through the console. Leaves it owing a password change. */
+/**
+ * Create an account through the console. Leaves it owing a password change.
+ *
+ * `roles` defaults to whatever the server makes an account when nobody says — `["user"]` — so
+ * only the tests about the two tiers pass it, and they pass it explicitly rather than relying
+ * on the default they are here to tell apart from.
+ */
 async function createAccount(
   env: TestEnv,
-  username: string
+  username: string,
+  roles?: UserRole[]
 ): Promise<{ user: AdminUser; password: string }> {
   const created = await env.inject({
     method: "POST",
     url: "/api/admin/users",
-    payload: { username },
+    payload: roles ? { username, roles } : { username },
   });
   expect(created.statusCode).toBe(200);
   return created.json<UserCredentials>();
@@ -87,8 +94,12 @@ async function signIn(
  * it themselves out of the two pieces above — so everything else here is about an account
  * that is already through it.
  */
-async function createAndSignIn(env: TestEnv, username: string): Promise<TestAccount> {
-  const { user, password: issued } = await createAccount(env, username);
+async function createAndSignIn(
+  env: TestEnv,
+  username: string,
+  roles?: UserRole[]
+): Promise<TestAccount> {
+  const { user, password: issued } = await createAccount(env, username, roles);
   const first = await signIn(env, username, issued);
 
   const settled = await first.inject({
@@ -424,14 +435,19 @@ describe("POST /api/admin/users/:id/password", () => {
     expect((await bob.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
   });
 
-  it("does not make the administrator change the password they just set for themselves", async () => {
+  it("does not make an administrator change the password they just set for themselves", async () => {
     // The asymmetry, and it is the whole reason the two paths are different routes: resetting
     // *your own* password is a choice you made a moment ago and are about to keep using, so a
     // screen demanding you replace it would be a step with nothing behind it.
+    //
+    // Checked on an *ordinary* administrator, because the superadmin's own reset is refused
+    // outright — see the next test. The rule this pins is about a self-reset that is allowed.
     env = await startTestServer();
-    const res = await env.inject({
+    const ada = await createAndSignIn(env, "Ada", ["admin"]);
+
+    const res = await ada.inject({
       method: "POST",
-      url: `/api/admin/users/${env.user.id}/password`,
+      url: `/api/admin/users/${ada.user.id}/password`,
       payload: {},
     });
 
@@ -449,8 +465,50 @@ describe("POST /api/admin/users/:id/password", () => {
     });
     expect(me.statusCode).toBe(200);
     expect(
-      (await post(env.server, "/api/auth/login", { username: "tester", password })).statusCode
+      (await post(env.server, "/api/auth/login", { username: "Ada", password })).statusCode
     ).toBe(200);
+  });
+
+  it("refuses a superadmin's own reset and names the control panel", async () => {
+    // A rule rather than a convenience. The web console is reached with a credential the caller
+    // already holds, so a self-reset here would be a second and weaker way to replace the one
+    // credential that can undo the installation. The panel proves identity by being the machine,
+    // which is why it is the way back in.
+    env = await startTestServer();
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/admin/users/${env.user.id}/password`,
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json<Body>().error.code).toBe("PANEL_RESET_REQUIRED");
+
+    // And the refusal is not a half-applied change: the existing credential still works.
+    expect(
+      (await post(env.server, "/api/auth/login", { username: "tester", password: TEST_PASSWORD }))
+        .statusCode
+    ).toBe(200);
+  });
+
+  it("lets a superadmin reset an ordinary administrator's password", async () => {
+    // The common case the tier exists for: a superadmin hands an administrator a way back in.
+    // Nothing about the target being an administrator changes the shape of the reply.
+    env = await startTestServer();
+    const ada = await createAndSignIn(env, "Ada", ["admin"]);
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/admin/users/${ada.user.id}/password`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    const { user, password, tokens } = res.json<UserCredentials>();
+    expect(user.mustChangePassword).toBe(true);
+    expect(password).not.toBe(ada.password);
+    expect(tokens).toBeUndefined();
+    // Signed out everywhere, which is half of what a reset is.
+    expect((await ada.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
   });
 
   it("takes a password the administrator chose, if one is given", async () => {
@@ -516,6 +574,118 @@ describe("POST /api/admin/users/:id/revoke", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json<Body>().error.code).toBe("CANNOT_MODIFY_SELF");
+  });
+});
+
+/**
+ * The two tiers, and this is where the difference between them is pinned.
+ *
+ * A superadmin is the account the installation was bootstrapped with: created by the control
+ * panel or the CLI, and the only role that may appoint anybody. An ordinary `admin` runs the
+ * installation's *accounts* — and an account that administers it is not one of them. Every
+ * refusal here is about the target rather than the action, which is why the same caller is
+ * allowed one line and refused the next.
+ */
+describe("the two tiers of administrator", () => {
+  /** One ordinary administrator, plus one ordinary account, under a superadmin. */
+  async function tiers() {
+    const started = await startTestServer();
+    return {
+      env: started,
+      ada: await createAndSignIn(started, "Ada", ["admin"]),
+      bob: await createAndSignIn(started, "Bob"),
+    };
+  }
+
+  it("lets an ordinary administrator run the ordinary accounts", async () => {
+    const { env: e, ada, bob } = await tiers();
+
+    // Sees the list (which is how the console knows what to offer), and acts on a plain account.
+    const listed = await ada.inject({ method: "GET", url: "/api/admin/users" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json<{ users: AdminUser[] }>().users).toHaveLength(3);
+
+    const disabled = await ada.inject({
+      method: "PATCH",
+      url: `/api/admin/users/${bob.user.id}`,
+      payload: { disabled: true },
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect((await bob.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
+  });
+
+  it("refuses an ordinary administrator every action on an administrator's row", async () => {
+    const { env: e, ada } = await tiers();
+
+    // The superadmin who bootstrapped the installation.
+    for (const [method, url, payload] of [
+      ["PATCH", `/api/admin/users/${e.user.id}`, { disabled: true }],
+      ["PATCH", `/api/admin/users/${e.user.id}`, { roles: ["user"] }],
+      ["POST", `/api/admin/users/${e.user.id}/password`, {}],
+      ["POST", `/api/admin/users/${e.user.id}/revoke`, {}],
+    ] as const) {
+      const res = await ada.inject({ method, url, payload });
+      expect(res.statusCode, `${method} ${url}`).toBe(403);
+      expect(res.json<Body>().error.code, `${method} ${url}`).toBe("CANNOT_MODIFY_ADMIN");
+    }
+
+    // And the row is untouched: still an enabled superadmin who can sign in.
+    expect((await e.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(200);
+  });
+
+  it("refuses to let an ordinary administrator appoint one — including a peer", async () => {
+    const { env: e, ada } = await tiers();
+
+    // Not silently stripped down to `user`: a request that asked for an administrator and got
+    // an ordinary account would report success and deliver something else.
+    const created = await ada.inject({
+      method: "POST",
+      url: "/api/admin/users",
+      payload: { username: "Eve", roles: ["admin"] },
+    });
+    expect(created.statusCode).toBe(403);
+    expect(created.json<Body>().error.code).toBe("ROLES_NOT_GRANTABLE");
+
+    // Promotion, too, and not only creation.
+    const promoted = await ada.inject({
+      method: "PATCH",
+      url: `/api/admin/users/${(await createAndSignIn(e, "Cara")).user.id}`,
+      payload: { roles: ["admin"] },
+    });
+    expect(promoted.statusCode).toBe(403);
+    expect(promoted.json<Body>().error.code).toBe("ROLES_NOT_GRANTABLE");
+
+    // Nothing was written by either attempt.
+    const users = (await e.inject({ method: "GET", url: "/api/admin/users" })).json<{
+      users: AdminUser[];
+    }>().users;
+    expect(users.find((u) => u.username === "Eve")).toBeUndefined();
+    expect(users.find((u) => u.username === "Cara")!.roles).toEqual(["user"]);
+  });
+
+  it("lets a superadmin administer another administrator, and another superadmin", async () => {
+    const { env: e, ada } = await tiers();
+    const root = await createAndSignIn(e, "Root", ["superadmin"]);
+
+    // Disable and kick an ordinary administrator.
+    expect(
+      (await e.inject({ method: "PATCH", url: `/api/admin/users/${ada.user.id}`, payload: { disabled: true } }))
+        .statusCode
+    ).toBe(200);
+    expect((await ada.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
+
+    // And the second superadmin is reachable too — the refusal above is one tier's, not a rule
+    // about who may be edited at all. The caller keeps their own authority, so somebody always
+    // remains (see the self-guard).
+    const demoted = await e.inject({
+      method: "PATCH",
+      url: `/api/admin/users/${root.user.id}`,
+      payload: { roles: ["user"] },
+    });
+    expect(demoted.statusCode).toBe(200);
+    expect(demoted.json<AdminUser>().roles).toEqual(["user"]);
+    // Still one enabled superadmin: the account that made the request.
+    expect((await e.inject({ method: "GET", url: "/api/admin/users" })).statusCode).toBe(200);
   });
 });
 

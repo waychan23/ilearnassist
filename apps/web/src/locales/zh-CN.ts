@@ -110,13 +110,18 @@ export default {
    */
   roles: {
     superadmin: "超级管理员",
+    admin: "管理员",
     user: "普通用户",
   },
 
-  /** The platform console: the accounts on this installation. */
+  /** The platform console: the installation's own management screens. */
   admin: {
     title: "平台管理",
     subtitle: "管理这个实例上的账号。",
+    /** The left menu. One entry per section; the key is the section id. */
+    nav: {
+      users: "用户管理",
+    },
     create: "新建用户",
     roles: "角色",
     you: "你",
@@ -127,6 +132,12 @@ export default {
     createPasswordHint:
       "初始密码由系统随机生成，创建后只显示一次，请复制并发送给用户。对方首次登录必须修改密码。",
     selfLocked: "不能禁用或降级自己的账号。",
+    /* Three refusals the account doing the looking can see. Each names the rule rather than
+       the click, because in all three cases the control is refused for a reason the person
+       cannot work out from the button. */
+    rowLocked: "只有超级管理员才能管理管理员账号。",
+    resetPanel: "超级管理员不能在网页端重置自己的密码，请在桌面端控制面板中重置。",
+    grantHint: "只有超级管理员才能授予管理员角色。",
     disable: {
       action: "禁用",
       title: "禁用账号",
@@ -914,6 +925,9 @@ export default {
     INVALID_FIELD: "请求里的「{field}」不是合法取值。",
     FORBIDDEN: "当前账号没有执行这个操作的权限。",
     CANNOT_MODIFY_SELF: "不能禁用或降级自己的账号。",
+    CANNOT_MODIFY_ADMIN: "只有超级管理员才能管理管理员账号。",
+    ROLES_NOT_GRANTABLE: "只有超级管理员才能授予管理员角色。",
+    PANEL_RESET_REQUIRED: "超级管理员不能在网页端重置自己的密码，请在桌面端控制面板中重置。",
   },
 
   /**

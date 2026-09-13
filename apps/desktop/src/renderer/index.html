@@ -17,7 +17,17 @@
   <body>
     <main class="panel">
       <header class="header">
-        <h1 class="wordmark">ilearnassist</h1>
+        <div class="header__row">
+          <h1 class="wordmark">ilearnassist</h1>
+          <!--
+            The language control, in the header rather than at the bottom of the panel: it is
+            the one setting somebody reaches for *because* they cannot read anything else, so it
+            has to be the first thing on the page. The options are built by the renderer —
+            two of the three labels are autonyms and never change with the language, and the
+            third is a translated phrase.
+          -->
+          <select class="locale" data-role="locale" data-testid="panel-locale"></select>
+        </div>
         <p class="subtitle" data-i18n="app.tagline"></p>
       </header>
 
