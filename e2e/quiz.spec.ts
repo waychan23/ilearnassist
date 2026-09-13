@@ -335,3 +335,41 @@ test("a rejected second quiz in one step renders as a failed call, not a stuck c
   await failed.click();
   await expect(failed).toContainText("only one question tool call is allowed per step");
 });
+
+test("option explanations stay hidden while answering and appear in the settled record", async ({
+  page,
+  request,
+}) => {
+  const SECRET = "因为水位线基于事件时间";
+  const question = {
+    header: "水位线",
+    question: "水位线是基于什么时间的？",
+    options: [
+      { label: "事件时间", description: SECRET },
+      { label: "处理时间" },
+    ],
+  };
+  await scriptLlm(request, {
+    title: "时间语义",
+    turns: [
+      { toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: [question] } }] },
+      { content: "没错。" },
+    ],
+  });
+
+  await page.goto("/");
+  await createAndEnter(page, `小测 ${Date.now()}`);
+  await page.getByTestId("composer-input").fill("考我");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+
+  // The explanation must not leak while the question is live.
+  await expect(page.getByTestId("quiz-card")).not.toContainText(SECRET);
+
+  // Answer; the settled record's offered-options list now reveals it.
+  await choice(page, 0, 0).click();
+  await page.getByTestId("quiz-submit").click();
+  await expect(page.getByTestId("quiz-status")).toHaveText("已提交");
+  await page.getByTestId("quiz-disclosure").click();
+  await expect(page.getByTestId("quiz-details")).toContainText(SECRET);
+});

@@ -669,6 +669,19 @@ export default {
     expand: "展开",
     collapse: "折叠",
     jumpToCompletion: "跳转到完成这个节点的位置",
+    jumpToStart: "跳转到开始学习这个节点的位置",
+    jumpToChapter: "跳到本章节",
+    jumpConfirm: "是否跳到章节 {number} {title} 学习？",
+    jumpConfirmDetail: "尚未完成的前置章节会标记为「已跳过」（包括当前进行中的章节），以后可以回来补学。",
+    jumpConfirmOk: "跳到本章节",
+    /** The user message assembled after a jump; {number} and {title} name the target. */
+    jumpMessage: "调整进度，跳到章节{number} {title}",
+    adjust: "调整计划",
+    adjustPlaceholder: "边浏览计划边写下调整意见，例如：把第三章拆成两章、增加一节练习…",
+    adjustSend: "发送调整意见",
+    adjustCancel: "取消",
+    /** The user message prefix assembled from the footer composer. */
+    adjustMessage: "调整计划：{text}",
     status: {
       not_started: "未开始",
       in_progress: "进行中",
@@ -744,6 +757,7 @@ export default {
     UNKNOWN_WIDGET: "当前版本没有这个控件，请刷新页面后再试。",
     WIDGET_SCOPE_UNSUPPORTED: "这个控件不能在当前层级安装。",
     PLAN_VERSION_NOT_FOUND: "这个计划版本不存在。",
+    PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
   },
 
   /**

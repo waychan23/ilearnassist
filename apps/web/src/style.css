@@ -1192,10 +1192,54 @@ body {
 
 /* --------------------------------- plan widget --------------------------------- */
 
+/*
+ * The widget fills the whole panel body (whose own scroll is neutralised by the negative
+ * margins) so the tree scrolls inside `.plan-scroll` while the adjust-plan footer stays
+ * pinned at the panel's bottom edge.
+ */
 .plan-widget {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  height: 100%;
+  margin: calc(-1 * var(--space-5));
+}
+.plan-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+.plan-footer {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: var(--space-4) var(--space-5);
+  background: var(--panel);
+}
+.plan-adjust-open {
+  width: 100%;
+}
+.plan-adjust {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.plan-adjust-input {
+  resize: vertical;
+  min-height: calc(var(--fs-4) * 3);
+}
+.plan-adjust-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+/* The non-full-bleed states keep the panel body's own padding that the margins remove. */
+.plan-widget > .widget-empty,
+.plan-widget > .widget-error {
+  padding: var(--space-5);
 }
 
 .plan-toolbar {
@@ -1294,12 +1338,30 @@ body {
 .plan-caret .icon {
   font-size: var(--fs-2);
 }
+.plan-play {
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+}
+.plan-play .icon {
+  font-size: var(--fs-2);
+}
 .plan-status-icon {
   flex: none;
   width: var(--space-8);
   display: inline-flex;
   justify-content: center;
   color: var(--text-3);
+}
+.plan-no {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  margin-right: var(--space-2);
 }
 .plan-status-icon .icon {
   font-size: var(--fs-3);

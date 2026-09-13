@@ -9,6 +9,7 @@ import type {
   PlanView,
   ToolCall,
 } from "@ilearnassist/shared";
+import { planNodeNumbers } from "@ilearnassist/shared";
 import { newId, type AppDb, type PlanNodeInsert, type PlanNodeRecord, type PlanRecord } from "./db.js";
 
 /**
@@ -365,17 +366,28 @@ export function applyProgress(
           "ila_update_plan_progress: nodes are deleted by editing the plan with ila_make_plan, not here"
         );
       }
-      if (change.status === "completed") {
-        // First completion records the jump anchor; a repeat must not move it to a later turn.
+      if (change.status === "in_progress") {
+        // The start anchor: the call placed *before* the node is taught, which is the jump
+        // target a reader wants. First start wins; a repeat must not move it to a later turn.
+        db.updatePlanNodeProgress(
+          plan.id,
+          row.id,
+          "in_progress",
+          row.anchorToolCallId ?? (anchorToolCallId || null),
+          row.anchorAt ?? (anchorToolCallId ? ts : null)
+        );
+      } else if (change.status === "completed") {
+        // Keep the start anchor when one exists (the in_progress call came first). Without
+        // one — a node finished in a single call — the completion call is the only marker.
         db.updatePlanNodeProgress(
           plan.id,
           row.id,
           "completed",
-          row.status === "completed" ? row.doneToolCallId : anchorToolCallId,
-          row.status === "completed" ? row.doneAt : ts
+          row.anchorToolCallId ?? (anchorToolCallId || null),
+          row.anchorAt ?? (anchorToolCallId ? ts : null)
         );
       } else {
-        // Leaving completed clears the anchor — the message it pointed at is no longer the answer.
+        // Back to not-started/skipped clears the anchor: nothing to jump to any more.
         db.updatePlanNodeProgress(plan.id, row.id, change.status, null, null);
       }
     }
@@ -433,7 +445,9 @@ function buildCurrentTree(rows: PlanNodeRecord[]): PlanTreeNode[] {
         title: r.title,
         status: r.status,
       };
-      if (r.status === "completed" && r.doneToolCallId) node.doneToolCallId = r.doneToolCallId;
+      // A click jumps to the node's start marker (in_progress call before the content), or to
+      // the completion call when no separate start was recorded.
+      if (r.anchorToolCallId) node.anchorToolCallId = r.anchorToolCallId;
       const children = build(r.id);
       if (children.length > 0) node.children = children;
       return node;
@@ -453,6 +467,108 @@ export function buildPlanView(db: AppDb, plan: PlanRecord): PlanView {
     versions,
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt,
+  };
+}
+
+export interface PlanJumpResult {
+  view: PlanView;
+  /** The target's hierarchical ordinal in the live tree, e.g. "1.2". */
+  number: string;
+  title: string;
+  /** How many not-yet-done nodes were marked skipped to get there. */
+  skippedCount: number;
+}
+
+/**
+ * Move study to one chapter, as the widget's play button asks.
+ *
+ * Everything undone that the learner is jumping *past* is marked `skipped` (including the
+ * chapter currently in progress, which is the case the requirement names): all live nodes
+ * before the target in document order that are not its ancestors. The target and its
+ * containing chapters are opened (`in_progress`) rather than skipped — you cannot be in
+ * 2.1 while chapter 2 is skipped. Completed nodes are never touched. This is a user action,
+ * not a model one, which is why it lives behind its own route rather than in the progress
+ * tool.
+ */
+export function jumpToNode(db: AppDb, sessionId: string, nodeId: string): PlanJumpResult {
+  const plan = db.getPlanBySession(sessionId);
+  if (!plan) throw new Error("this conversation has no plan yet");
+  const view = buildPlanView(db, plan);
+
+  /** Live nodes only, in document order. */
+  const live: PlanTreeNode[] = [];
+  const strip = (nodes: PlanTreeNode[]): PlanTreeNode[] =>
+    nodes
+      .filter((n) => n.status !== "deleted")
+      .map((n) => ({ ...n, children: n.children ? strip(n.children) : undefined }));
+  const liveTree = strip(view.tree);
+  const dfs = (nodes: PlanTreeNode[]): void => {
+    for (const n of nodes) {
+      live.push(n);
+      if (n.children) dfs(n.children);
+    }
+  };
+  dfs(liveTree);
+
+  const target = live.find((n) => n.id === nodeId);
+  if (!target) {
+    throw new Error(`node ${nodeId} is not a live node in this plan`);
+  }
+  if (target.status === "completed") {
+    throw new Error("that node is already completed");
+  }
+
+  const targetIndex = live.indexOf(target);
+  const ancestors = new Set<string>();
+  const collectAncestors = (
+    nodes: PlanTreeNode[],
+    chain: PlanTreeNode[]
+  ): boolean => {
+    for (const n of nodes) {
+      if (n.id === nodeId) {
+        chain.forEach((a) => ancestors.add(a.id));
+        return true;
+      }
+      if (n.children && collectAncestors(n.children, [...chain, n])) return true;
+    }
+    return false;
+  };
+  collectAncestors(liveTree, []);
+
+  const skippedIds = live
+    .slice(0, targetIndex)
+    .filter((n) => !ancestors.has(n.id) && (n.status === "not_started" || n.status === "in_progress"))
+    .map((n) => n.id);
+  // The target is always opened (a skipped node can be revisited); containing chapters are
+  // opened unless they already carry progress or completion.
+  const toOpen = (id: string): boolean => {
+    const n = live.find((x) => x.id === id);
+    return !!n && (n.status === "not_started" || n.status === "skipped");
+  };
+  const openedIds = [target.id, ...ancestors].filter(toOpen);
+
+  const ts = new Date().toISOString();
+  const writes = (): void => {
+    // Jumped-past chapters keep no start anchor; they are not what the reader would open.
+    for (const id of skippedIds) {
+      db.updatePlanNodeProgress(plan.id, id, "skipped", null, null);
+    }
+    // The target's own teaching starts in the turn that follows. It is opened here without a
+    // jump anchor — the model marks it in_progress at the node start per its prompt contract.
+    for (const id of openedIds) {
+      db.updatePlanNodeProgress(plan.id, id, "in_progress", null, null);
+    }
+    const rows = db.listPlanNodes(plan.id).filter((r) => r.removedVersion === null);
+    db.setPlanStatus(plan.id, derivePlanStatus(rows.map((r) => ({ status: r.status }))), ts);
+  };
+  db.raw.transaction(writes)();
+
+  const numbers = planNodeNumbers(liveTree);
+  return {
+    view: buildPlanView(db, db.getPlanBySession(sessionId)!),
+    number: numbers.get(nodeId) ?? "",
+    title: target.title,
+    skippedCount: skippedIds.length,
   };
 }
 

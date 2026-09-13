@@ -75,6 +75,11 @@ export interface RunAgentInput {
   systemPrompt: string;
   /** Resolved per-session generation parameters (temperature, maxSteps, …). */
   settings: SessionSettings;
+  /**
+   * Extra system-prompt guidance for turns in a conversation with the plan widget
+   * installed; absent in every other conversation.
+   */
+  planGuidance?: string;
   /** Whose sources tree the attachment bytes live in. Derived per request, never held. */
   user: UserLayout;
   sessionId: string;
@@ -186,7 +191,11 @@ function safeParseArgs(json: string): Record<string, unknown> {
   }
 }
 
-function buildSystemPrompt(workspace: Workspace, systemPrompt: string): string {
+function buildSystemPrompt(
+  workspace: Workspace,
+  systemPrompt: string,
+  planGuidance?: string
+): string {
   const base =
     systemPrompt.trim() ||
     "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Do the same once you have produced a plan or another substantial artifact: put it to them for confirmation rather than assuming it is accepted. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
@@ -199,7 +208,11 @@ function buildSystemPrompt(workspace: Workspace, systemPrompt: string): string {
     `All file tools are sandboxed to this directory. Use paths relative to it ` +
     `(or absolute paths under it). Never attempt to access files outside this directory.`;
 
-  return base + workspaceNote;
+  // Present while the plan widget is installed, whether or not a plan exists yet — the
+  // rhythm starts the moment one is made.
+  const planNote = planGuidance ? `\n\n${planGuidance}` : "";
+
+  return base + workspaceNote + planNote;
 }
 
 /**
@@ -324,7 +337,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   const maxSteps = input.settings.maxSteps ?? DEFAULT_MAX_STEPS;
 
   const messages: BaseMessage[] = [
-    new SystemMessage(buildSystemPrompt(input.workspace, input.systemPrompt)),
+    new SystemMessage(buildSystemPrompt(input.workspace, input.systemPrompt, input.planGuidance)),
     ...history,
   ];
 

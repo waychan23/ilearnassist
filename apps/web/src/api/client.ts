@@ -16,6 +16,7 @@ import type {
   GetPlanResponse,
   Message,
   PlanSnapshot,
+  PlanView,
   ProviderConfig,
   PublicConfig,
   Session,
@@ -223,6 +224,12 @@ export const api = {
   getPlan: (sessionId: string) => request<GetPlanResponse>(`/sessions/${sessionId}/plan`),
   getPlanVersion: (sessionId: string, version: number) =>
     request<PlanSnapshot>(`/sessions/${sessionId}/plan/versions/${version}`),
+  // Move study to one chapter: prior undone nodes are marked skipped server-side.
+  jumpPlanNode: (
+    sessionId: string,
+    nodeId: string
+  ): Promise<{ plan: PlanView; number: string; title: string; skippedCount: number }> =>
+    request(`/sessions/${sessionId}/plan/nodes/${nodeId}/jump`, { method: "POST" }),
 
   /**
    * Stop the turn currently streaming for a session.

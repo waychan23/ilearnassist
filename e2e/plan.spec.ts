@@ -40,13 +40,17 @@ async function send(page: Page, text: string): Promise<void> {
   await page.getByTestId("composer-send").click();
 }
 
-/** Current plan rows: stable id plus title, as the panel renders them. */
+/** Current plan rows: stable id plus the title with the ordinal span removed. */
 async function rows(page: Page): Promise<{ id: string; title: string }[]> {
   return page.locator('[data-testid^="plan-node-"]').evaluateAll((els) =>
-    els.map((el) => ({
-      id: el.getAttribute("data-testid")!.replace("plan-node-", ""),
-      title: el.querySelector(".plan-title")?.textContent?.trim() ?? "",
-    }))
+    els.map((el) => {
+      const titleEl = el.querySelector(".plan-title");
+      titleEl?.querySelector(".plan-no")?.remove();
+      return {
+        id: el.getAttribute("data-testid")!.replace("plan-node-", ""),
+        title: (titleEl?.textContent ?? "").trim(),
+      };
+    })
   );
 }
 
@@ -80,6 +84,10 @@ test.describe("the plan widget", () => {
     await expect(page.getByTestId("plan-status-badge")).toHaveText("未开始");
     expect(await page.getByTestId("plan-version-select").inputValue()).toBe("latest");
 
+    // Hierarchical numbering, from sibling position: root 1/2, children 1.1/1.2.
+    const numbers = await page.locator(".plan-no").allInnerTexts();
+    expect(numbers).toEqual(["1", "1.1", "1.2", "2"]);
+
     // Progress: complete the intro leaf, start its chapter.
     const chapter1 = await idOf(page, "Chapter 1");
     const intro = await idOf(page, "1.1 Intro");
@@ -108,6 +116,8 @@ test.describe("the plan widget", () => {
     await expect(introRow).toHaveAttribute("data-node-status", "completed");
     await expect(page.getByTestId(`plan-jump-${intro}`)).toBeVisible();
     await expect(page.getByTestId("plan-status-badge")).toHaveText("进行中");
+    // The jump scrolls to the exact tool-call card, which carries its id.
+    await expect(page.locator('[data-tool-call-id="call_progress"]')).toBeVisible();
 
     // Edit: drop "1.2 Setup", add "1.3 New". Ids come from the panel's own rows.
     const chapter2 = await idOf(page, "Chapter 2");
@@ -239,5 +249,80 @@ test.describe("the plan widget", () => {
     await expect(page.getByTestId("session-item")).toHaveCount(2);
     const active = page.locator(".session-item.active");
     await expect(active).toContainText("Brand new plan");
+  });
+
+  test("play on an undone node confirms, skips earlier chapters, opens the target, and messages", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("Plan chapter jump");
+    await planSession(page, name);
+
+    await scriptLlm(request as APIRequestContext, { turns: makeTurn("call_make", TREE) });
+    await send(page, "制定学习计划");
+    await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(4);
+
+    const setup = await idOf(page, "1.2 Setup");
+
+    await scriptLlm(request as APIRequestContext, { turns: [{ content: "好，我们开始学 1.2。" }] });
+    await page.getByTestId(`plan-play-${setup}`).click();
+
+    // The confirmation rewrites progress, so it names what gets skipped.
+    await expect(page.getByTestId("confirm-accept")).toBeVisible();
+    await expect(page.locator(".modal, [role='dialog']").first()).toContainText("1.2");
+    await page.getByTestId("confirm-accept").click();
+
+    // The composed user message drives the ordinary chat flow.
+    await expect(page.getByTestId("message-user").last()).toContainText(
+      "调整进度，跳到章节1.2 1.2 Setup"
+    );
+    await expect(page.getByTestId("message-assistant").last()).toContainText("我们开始学 1.2");
+
+    // 1.1 Intro is skipped, the target in progress, Chapter 2 untouched.
+    const intro = await idOf(page, "1.1 Intro");
+    await expect(page.getByTestId(`plan-node-${intro}`)).toHaveAttribute(
+      "data-node-status",
+      "skipped"
+    );
+    await expect(page.getByTestId(`plan-node-${setup}`)).toHaveAttribute(
+      "data-node-status",
+      "in_progress"
+    );
+    const chapter2 = await idOf(page, "Chapter 2");
+    await expect(page.getByTestId(`plan-node-${chapter2}`)).toHaveAttribute(
+      "data-node-status",
+      "not_started"
+    );
+    // Skipped nodes stay playable so a learner can come back to them.
+    await expect(page.getByTestId(`plan-play-${intro}`)).toBeVisible();
+  });
+
+  test("the footer composer sends an adjustment as a normal user message", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("Plan adjust");
+    await planSession(page, name);
+
+    await scriptLlm(request as APIRequestContext, { turns: makeTurn("call_make", TREE) });
+    await send(page, "制定学习计划");
+
+    await page.getByTestId("plan-adjust-open").click();
+    const input = page.getByTestId("plan-adjust-input");
+    await expect(input).toBeVisible();
+    await input.fill("把第三章拆成两章");
+    // Empty-disabled until there is text.
+    await expect(page.getByTestId("plan-adjust-send")).toBeEnabled();
+    await scriptLlm(request as APIRequestContext, {
+      turns: [{ toolCalls: [{ id: "call_read", name: "ila_read_plan", args: {} }] }, { content: "已调整。" }],
+    });
+    await page.getByTestId("plan-adjust-send").click();
+
+    await expect(page.getByTestId("message-user").last()).toContainText(
+      "调整计划：把第三章拆成两章"
+    );
+    await expect(page.getByTestId("message-assistant").last()).toContainText("已调整。");
+    // The composer collapses after sending.
+    await expect(page.getByTestId("plan-adjust-open")).toBeVisible();
   });
 });

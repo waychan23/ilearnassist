@@ -581,6 +581,19 @@ const en: typeof MessageSchema = {
     expand: "Expand",
     collapse: "Collapse",
     jumpToCompletion: "Jump to where this node was completed",
+    jumpToStart: "Jump to where work on this node began",
+    jumpToChapter: "Jump to this chapter",
+    jumpConfirm: "Jump to chapter {number} {title} now?",
+    jumpConfirmDetail:
+      "Earlier unfinished chapters (including the one currently in progress) are marked skipped and can be caught up later.",
+    jumpConfirmOk: "Jump to chapter",
+    jumpMessage: "Update progress: jump to chapter {number} {title}",
+    adjust: "Adjust plan",
+    adjustPlaceholder:
+      "Write how the plan should change while reading it — split chapter 3 into two, add a practice section…",
+    adjustSend: "Send adjustment",
+    adjustCancel: "Cancel",
+    adjustMessage: "Adjust the plan: {text}",
     status: {
       not_started: "Not started",
       in_progress: "In progress",
@@ -657,6 +670,7 @@ const en: typeof MessageSchema = {
     UNKNOWN_WIDGET: "This build has no such widget. Reload the page and try again.",
     WIDGET_SCOPE_UNSUPPORTED: "That widget cannot be installed at this level.",
     PLAN_VERSION_NOT_FOUND: "That plan version does not exist.",
+    PLAN_NODE_NOT_FOUND: "That plan node cannot be found — it may have been deleted or completed.",
   },
 
   /**

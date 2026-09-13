@@ -141,7 +141,7 @@ describe("widget-bound plan tools", () => {
     expect(plan?.versions).toHaveLength(1);
   });
 
-  it("drives progress with the completing call id as the jump anchor", async () => {
+  it("anchors a node to its in_progress call and keeps that start through completion", async () => {
     const session = await planSession();
     llm.setTurns([
       { toolCalls: [{ id: "call_plan", name: "ila_make_plan", args: { tree: TREE } }] },
@@ -155,7 +155,7 @@ describe("widget-bound plan tools", () => {
       {
         toolCalls: [
           {
-            id: "call_progress",
+            id: "call_start",
             name: "ila_update_plan_progress",
             args: { nodes: [{ id: intro.id, status: "in_progress" }] },
           },
@@ -184,8 +184,49 @@ describe("widget-bound plan tools", () => {
     plan = await getPlan(session.id);
     const completed = plan!.tree[0]!.children![0]!;
     expect(completed.status).toBe("completed");
-    // The anchor is the first tool call that marked it completed.
-    expect(completed.doneToolCallId).toBe("call_done");
+    // The anchor stays the start call (placed before the content), so the jump opens the
+    // node from its beginning rather than landing on its completion.
+    expect(completed.anchorToolCallId).toBe("call_start");
+  });
+
+  it("jumps to a chapter: skips prior undone nodes, opens the target, and reports its number", async () => {
+    const session = await planSession();
+    llm.setTurns([
+      { toolCalls: [{ id: "call_plan", name: "ila_make_plan", args: { tree: TREE } }] },
+      { content: "计划已建好。" },
+    ]);
+    await chat(session.id);
+    const plan = (await getPlan(session.id))!;
+    const setup = plan.tree[0]!.children![1]!;
+    const chapter2 = plan.tree[1]!;
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/plan/nodes/${setup.id}/jump`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ number: string; title: string; skippedCount: number }>();
+    expect(body.number).toBe("1.2");
+    expect(body.title).toBe("1.2 Setup");
+    // 1.1 Intro was jumped past; Chapter 1 is an ancestor and opens rather than skips.
+    expect(body.skippedCount).toBe(1);
+
+    const after = (await getPlan(session.id))!;
+    const flatten = (nodes: PlanView["tree"]): PlanView["tree"] =>
+      nodes.flatMap((n) => [n, ...flatten(n.children ?? [])]);
+    const byId = new Map(flatten(after.tree).map((n) => [n.id, n] as const));
+    expect(byId.get(setup.id)?.status).toBe("in_progress");
+    expect(byId.get(chapter2.id)?.status).toBe("not_started");
+  });
+
+  it("404s a jump on a session with no plan", async () => {
+    const session = await planSession();
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/plan/nodes/nope/jump`,
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: { code: "PLAN_NODE_NOT_FOUND" } });
   });
 });
 

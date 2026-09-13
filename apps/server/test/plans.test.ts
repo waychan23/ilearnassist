@@ -245,27 +245,34 @@ describe("applyProgress", () => {
     expect(byTitle(updated, "A1").status).toBe("in_progress");
   });
 
-  it("records the completing tool call as the jump anchor, first one wins", () => {
+  it("anchors the node's start: the in_progress call placed before the teaching content", () => {
     const view = seeded();
     const a1 = byTitle(view, "A1");
-    const first = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "completed" }] }, "call_1");
-    expect(byTitle(first, "A1").doneToolCallId).toBe("call_1");
+    const started = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "in_progress" }] }, "call_start");
+    expect(byTitle(started, "A1").anchorToolCallId).toBe("call_start");
 
-    const second = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "completed" }] }, "call_2");
-    expect(byTitle(second, "A1").doneToolCallId).toBe("call_1");
+    // Completing keeps the start anchor, so a click lands at where the node began — not its end.
+    const done = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "completed" }] }, "call_done");
+    expect(byTitle(done, "A1").anchorToolCallId).toBe("call_start");
+
+    // A repeat start cannot move it to a later turn.
+    const again = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "in_progress" }] }, "call_later");
+    expect(byTitle(again, "A1").anchorToolCallId).toBe("call_start");
   });
 
-  it("clears the anchor when the node leaves completed", () => {
+  it("falls back to the completing call when a node was finished without a start call", () => {
     const view = seeded();
     const a1 = byTitle(view, "A1");
-    applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "completed" }] }, "call_1");
-    const updated = applyProgress(
-      db,
-      SESSION,
-      { nodes: [{ id: a1.id, status: "in_progress" }] },
-      "call_2"
-    );
-    expect(byTitle(updated, "A1").doneToolCallId).toBeUndefined();
+    const done = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "completed" }] }, "call_done");
+    expect(byTitle(done, "A1").anchorToolCallId).toBe("call_done");
+  });
+
+  it("clears the anchor when the node goes back to not-started or skipped", () => {
+    const view = seeded();
+    const a1 = byTitle(view, "A1");
+    applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "in_progress" }] }, "call_start");
+    const skipped = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "skipped" }] }, "call_2");
+    expect(byTitle(skipped, "A1").anchorToolCallId).toBeUndefined();
   });
 
   it("completes the plan when every live node is completed", () => {

@@ -219,10 +219,22 @@ session-scoped plan widget. The split is:
   submission against an existing plan is the third suspending tool — the turn ends on a choice
   card, and `POST /answers` commits either fork ("edit this plan" or "new conversation", which
   snapshots the session, installs the widget, writes V1, and streams `plan_session_created`).
-- `ila_update_plan_progress` batches node status changes; first completion records the
-  `ila_*` tool-call id as a jump anchor (`done_tool_call_id`), which is what makes a completed
-  node click back to the turn that completed it. The plan auto-completes when every live node
-  is completed; `deleted` is unreachable from this tool.
+- `ila_update_plan_progress` batches node status changes. The node's **start anchor** is the
+  `in_progress` call placed before its content (tool call id, in the `done_tool_call_id`
+  column — widened without a rename): kept through completion, cleared when the node returns
+  to not-started/skipped, and what the panel's click scrolls to (the tool-call card, not the
+  message top). The plan auto-completes when every live node is completed; `deleted` is
+  unreachable from this tool. The tool description carries the *mark-before-teaching* timing
+  rule, which is what makes the anchor meaningful rather than a completion marker.
+- The panel's two user actions reduce to a user message on the ordinary `/chat` path. The
+  footer "adjust plan" composer sends `调整计划：<text>`; "jump to chapter" first POSTs
+  `/plan/nodes/:id/jump`, which in one transaction marks every prior undone node `skipped`
+  (including the chapter currently in progress) and opens the target plus its containing
+  chapters, then sends `调整进度，跳到章节<number> <title>`. `planNodeNumbers` derives the
+  `1` / `1.1` ordinals from sibling position, for both the tree view and that message.
+- While the widget is installed the turn's system prompt also gets `PLAN_GUIDANCE`: mark a
+  node before teaching it, stay on the plan at node boundaries, and after an off-plan detour
+  ask the user whether to return to the track.
 
 ### The workspace file browser (`files.ts`)
 

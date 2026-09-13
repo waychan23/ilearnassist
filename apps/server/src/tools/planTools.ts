@@ -82,11 +82,33 @@ const PROGRESS_DESCRIPTION = [
   "Update study progress on the current plan, in one batched call. Two levels:",
   "- `planStatus`: one of not_started | in_progress | completed. Usually you can omit it — when every non-deleted node is completed the plan completes itself, and any started node makes it in_progress.",
   "- `nodes`: each {id, status}. Node status is one of not_started | in_progress | completed | skipped.",
-  "  - `skipped` means the learner moved on without finishing it yet and may come back; it is still unfinished.",
-  "  - Mark `completed` only when the topic was actually learned/practised in the conversation. Completed nodes become clickable jumps back to the moment they were finished.",
-  "  - Nodes are deleted only by editing the plan with ila_make_plan, never here.",
+  "",
+  "Timing matters:",
+  "- Call this tool to mark a node `in_progress` BEFORE you start teaching it — make the tool call first, then produce the content for that node. This is what puts the panel's marker at the start of the node.",
+  "- Mark `completed` only after the topic was actually learned/practised in the conversation.",
+  "- `skipped` means the learner moved on without finishing it yet and may come back; it is still unfinished.",
+  "- Nodes are deleted only by editing the plan with ila_make_plan, never here.",
   "",
   "Batch every change a turn produced into one call (several nodes, or the plan plus nodes). Only send statuses that actually changed.",
+].join("\n");
+
+/**
+ * Appended to the system prompt while the conversation has the plan widget installed.
+ *
+ * Model input, so deliberately English and untranslated (the quiz/ask_user tool-result
+ * discipline). It carries the protocol the tool descriptions cannot enforce: mark the node
+ * before teaching, stay on the plan at node boundaries, and hand control back when a side
+ * topic pulled the conversation off it.
+ */
+export const PLAN_GUIDANCE = [
+  "This conversation has a study plan, tracked through the plan tools and shown in the user's plan panel.",
+  "",
+  "Follow this rhythm while working through it:",
+  "- Before teaching a node, call ila_update_plan_progress to mark it in_progress FIRST, then produce the content. Do not teach a node's content before the call.",
+  "- Teach roughly the current node's scope; if you need the exact state, call ila_read_plan.",
+  "- When a node is done, mark it completed with one progress call (the same call can batch related nodes), then continue with the next node.",
+  "- At node boundaries, check the conversation is still following the plan. If a side question or side topic took over, finish that detour and then ask the user whether to return to the planned track — do not silently drift, and do not force the plan back mid-answer.",
+  "- If the user explicitly wants to change the plan, edit it with ila_make_plan (existing nodes carry their ids).",
 ].join("\n");
 
 export function buildPlanTools(ctx: PlanToolContext) {

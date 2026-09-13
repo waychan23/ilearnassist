@@ -46,6 +46,9 @@ const mocks = vi.hoisted(() => ({
     setSessionWidget: vi.fn(),
     getWorkspaceStats: vi.fn(),
     getSessionStats: vi.fn(),
+    getPlan: vi.fn(),
+    getPlanVersion: vi.fn(),
+    jumpPlanNode: vi.fn(),
     stopSession: vi.fn(),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
@@ -1272,17 +1275,27 @@ describe("plan widgets", () => {
     expect(store.activeSessionId).toBe("s2");
   });
 
-  it("finds the persisted message holding a tool-call anchor", async () => {
-    const anchored = message({
-      role: "assistant",
-      id: "m-anchor",
-      toolCalls: [
-        { id: "call_done", name: "ila_update_plan_progress", input: "{}", output: "{}" },
-      ],
+  it("adjust-plan sends the panel composer's message through the normal flow", async () => {
+    streamOf({ type: "text", delta: "好的" }, { type: "done" });
+    const store = await readyStore();
+    await store.sendPanelMessage("调整计划：把第三章删掉");
+    expect(mocks.streamChat).toHaveBeenCalled();
+  });
+
+  it("jump-to-chapter rewrites progress on the server, then sends the jump message", async () => {
+    mocks.api.jumpPlanNode.mockResolvedValue({
+      plan: null,
+      number: "1.2",
+      title: "1.2 Setup",
+      skippedCount: 1,
     });
-    const store = await readyStore({ messages: [anchored] });
-    expect(store.messageIdForToolCall("call_done")).toBe("m-anchor");
-    expect(store.messageIdForToolCall("nope")).toBeUndefined();
+    streamOf({ type: "text", delta: "好的" }, { type: "done" });
+    const store = await readyStore();
+
+    const ok = await store.planJumpToNode("node-12", "调整进度，跳到章节1.2 1.2 Setup");
+    expect(ok).toBe(true);
+    expect(mocks.api.jumpPlanNode).toHaveBeenCalledWith("s1", "node-12");
+    expect(mocks.streamChat).toHaveBeenCalled();
   });
 });
 

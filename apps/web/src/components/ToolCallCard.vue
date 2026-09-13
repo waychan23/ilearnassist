@@ -69,7 +69,12 @@ const prettyInput = computed(() => {
   <AskUserCard v-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
   <PlanConflictCard v-else-if="card === 'plan'" :tool-call="toolCall" />
-  <div v-else class="tool-card" data-testid="tool-call">
+  <div
+    v-else
+    class="tool-card"
+    data-testid="tool-call"
+    :data-tool-call-id="toolCall.id"
+  >
     <div class="tool-head" @click="open = !open">
       <Icon :name="done ? 'check' : 'retry'" :class="done ? 'ok' : 'run'" />
       <span class="name">{{ label }}</span>

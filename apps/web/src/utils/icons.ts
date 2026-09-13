@@ -194,6 +194,8 @@ export const ICON_PATHS = {
     "M2.5 4V6.5A1.5 1.5 0 0 0 4 8h4",
     "M2.5 8v2.5A1.5 1.5 0 0 0 4 12h4",
   ],
+  /* The plan tree's "jump to this chapter" action on not-started/skipped nodes. */
+  play: ["M5.5 3.5L12.5 8L5.5 12.5Z"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICON_PATHS;

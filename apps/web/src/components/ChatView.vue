@@ -95,13 +95,7 @@ const showMinimap = computed(() => !isCompact.value && minimapAnchors.value.leng
  * Scroll the list so the anchored turn sits at the top. Computed from rects rather than
  * `offsetTop`, which is measured against whichever ancestor happens to be positioned.
  */
-/** Scroll one persisted message to the top of the list. Shared by the minimap and widgets. */
-function scrollToMessage(messageId: string): void {
-  const container = messagesEl.value;
-  if (!container) return;
-  const target = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
-  if (!target) return;
-
+function scrollRectIntoView(container: HTMLElement, target: HTMLElement): void {
   const containerRect = container.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
   container.scrollTo({
@@ -110,16 +104,33 @@ function scrollToMessage(messageId: string): void {
   });
 }
 
+/** Scroll one persisted message to the top of the list. Shared by the minimap and widgets. */
+function scrollToMessage(messageId: string): void {
+  const container = messagesEl.value;
+  if (!container) return;
+  const target = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+  if (!target) return;
+  scrollRectIntoView(container, target);
+}
+
 function jumpToAnchor(anchor: MessageMinimapAnchor) {
   scrollToMessage(anchor.messageId);
 }
 
-// A completed plan node in the plan widget jumps to the turn that completed it. The widget
-// cannot reach this scroll container, which is the one cross-component event the widget bus
-// carries that is not about a turn.
+// A plan node's start anchor jumps to the exact tool-call card (placed before the node's
+// teaching content), which is more precise than scrolling the whole message to the top.
+// The widget cannot reach this scroll container, which is the one cross-component event the
+// widget bus carries that is not about a turn.
 onMounted(() => {
   unsubscribeFromWidgets = subscribeWidgetEvents((event) => {
-    if (event.type === "chat.jump") scrollToMessage(event.messageId);
+    if (event.type !== "chat.jump") return;
+    const container = messagesEl.value;
+    if (!container) return;
+    // The attribute is on every tool-call card, persisted or currently streaming.
+    const target = container.querySelector<HTMLElement>(
+      `[data-tool-call-id="${event.toolCallId}"]`
+    );
+    if (target) scrollRectIntoView(container, target);
   });
 });
 onBeforeUnmount(() => {

@@ -121,6 +121,9 @@ interface PlanNodeRow {
   status: string;
   introduced_version: number;
   removed_version: number | null;
+  // The node's start anchor: the progress call that first marked it in_progress (before the
+  // teaching content), falling back to the completion call when no separate start was made.
+  // Column name predates that widening; see `plans.ts`.
   done_tool_call_id: string | null;
   done_at: string | null;
 }
@@ -154,8 +157,8 @@ export interface PlanNodeRecord {
   status: PlanNodeStatus;
   introducedVersion: number;
   removedVersion: number | null;
-  doneToolCallId: string | null;
-  doneAt: string | null;
+  anchorToolCallId: string | null;
+  anchorAt: string | null;
 }
 
 export interface PlanVersionRecord {
@@ -441,8 +444,8 @@ const mapPlanNode = (r: PlanNodeRow): PlanNodeRecord => ({
   status: r.status as PlanNodeStatus,
   introducedVersion: r.introduced_version,
   removedVersion: r.removed_version,
-  doneToolCallId: r.done_tool_call_id,
-  doneAt: r.done_at,
+  anchorToolCallId: r.done_tool_call_id,
+  anchorAt: r.done_at,
 });
 
 const mapDocumentParser = (r: DocumentParserRow): DocumentParserRecord => ({
@@ -894,8 +897,8 @@ export interface AppDb {
     planId: string,
     nodeId: string,
     status: PlanNodeStatus,
-    doneToolCallId: string | null,
-    doneAt: string | null
+    anchorToolCallId: string | null,
+    anchorAt: string | null
   ): void;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
@@ -1882,13 +1885,13 @@ export function createDb(dbPath: string): AppDb {
     softDeletePlanNode(planId, nodeId, removedVersion) {
       stmtSoftDeletePlanNode.run({ id: nodeId, planId, removedVersion });
     },
-    updatePlanNodeProgress(planId, nodeId, status, doneToolCallId, doneAt) {
+    updatePlanNodeProgress(planId, nodeId, status, anchorToolCallId, anchorAt) {
       stmtUpdatePlanNodeProgress.run({
         id: nodeId,
         planId,
         status,
-        doneToolCallId,
-        doneAt,
+        doneToolCallId: anchorToolCallId,
+        doneAt: anchorAt,
       });
     },
 

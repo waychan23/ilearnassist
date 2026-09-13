@@ -1532,14 +1532,26 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * The persisted message holding a tool call — the completed-plan-node jump target. Only
-   * persisted messages have a DOM anchor (`data-message-id`), so a turn still streaming is
-   * not jumpable; the click only exists on a finished turn's node anyway.
+   * Send a plan-panel message through the ordinary chat flow — the "adjust plan" composer
+   * and the "jump to chapter" action both reduce to a user message after a server write.
    */
-  function messageIdForToolCall(toolCallId: string): string | undefined {
-    return messages.value.find((m) =>
-      (m.toolCalls ?? []).some((tc) => tc.id === toolCallId)
-    )?.id;
+  async function sendPanelMessage(text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (!trimmed || streaming.value.active) return;
+    await sendMessage(trimmed);
+  }
+
+  /**
+   * The plan widget's "jump to chapter": the server marks prior undone nodes skipped and
+   * opens the target in one transaction, then a normal user message drives the turn.
+   * Returns false when the target is gone (the panel refetches elsewhere).
+   */
+  async function planJumpToNode(nodeId: string, message: string): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || streaming.value.active) return false;
+    await api.jumpPlanNode(sessionId, nodeId);
+    await sendPanelMessage(message);
+    return true;
   }
 
   async function sendMessage(text: string, attachments: Attachment[] = []): Promise<void> {
@@ -1750,7 +1762,8 @@ export const useAppStore = defineStore("app", () => {
     clearPendingAttachments,
     sendMessage,
     answerQuestion,
-    messageIdForToolCall,
+    sendPanelMessage,
+    planJumpToNode,
     stopMessage,
     setError,
     loadDirectory,

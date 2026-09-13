@@ -441,9 +441,39 @@ export interface PlanSnapshotNode {
 /** A node of the current plan: structure plus the live progress the widget renders. */
 export interface PlanTreeNode extends PlanSnapshotNode {
   status: PlanNodeStatus;
-  /** Present on `completed` nodes: the tool-call whose message a click jumps to. */
-  doneToolCallId?: string;
+  /**
+   * The tool-call whose card marks where work on this node began — the
+   * `ila_update_plan_progress` call that first put it `in_progress` (placed before the
+   * teaching content, so a click jumps to the node's start), falling back to the call that
+   * completed it when a model finished a node without a separate start call. Cleared when
+   * the node returns to not-started/skipped.
+   */
+  anchorToolCallId?: string;
   children?: PlanTreeNode[];
+}
+
+/** Anything carrying an id/children tree, which is both snapshot and current nodes. */
+interface PlanNumberedNode {
+  id: string;
+  children?: PlanNumberedNode[];
+}
+
+/**
+ * Hierarchical ordinal for every node, from sibling positions: the second root is "2", its
+ * third child "2.3". Pure and structural (status-free), so history snapshots and the live
+ * tree number the same way and the server can use it for the jump message.
+ */
+export function planNodeNumbers(nodes: readonly PlanNumberedNode[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (list: readonly PlanNumberedNode[], prefix: number[]): void => {
+    list.forEach((node, index) => {
+      const number = [...prefix, index + 1].join(".");
+      out.set(node.id, number);
+      if (node.children) walk(node.children, [...prefix, index + 1]);
+    });
+  };
+  walk(nodes, []);
+  return out;
 }
 
 export interface PlanVersionSummary {
@@ -642,6 +672,8 @@ export const API_ERROR_CODES = [
   // A history version was asked for (…/plan/versions/:version) that never existed. No plan
   // at all is a 200 `{ plan: null }`, not this — that is the ordinary empty state.
   "PLAN_VERSION_NOT_FOUND",
+  // The plan-jump target does not exist: no plan, unknown/deleted node, or a completed node.
+  "PLAN_NODE_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

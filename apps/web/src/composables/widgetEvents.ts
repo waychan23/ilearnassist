@@ -38,10 +38,11 @@ export type WidgetEvent =
    */
   | { type: "plan.changed"; sessionId: string }
   /**
-   * A widget asked to scroll the conversation to a message — a completed plan node's anchor.
-   * The widget cannot reach ChatView's scroll container, which is what makes this an event.
+   * A widget asked to scroll the conversation to a tool-call card — a plan node's start
+   * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
+   * event. Scrolling to the card (rather than the message top) lands on the node's start.
    */
-  | { type: "chat.jump"; messageId: string };
+  | { type: "chat.jump"; toolCallId: string };
 
 type WidgetEventHandler = (event: WidgetEvent) => void;
 
