@@ -274,6 +274,7 @@ export default {
       read_document: "读取文档",
       ask_user: "询问用户",
       ila_quiz: "小测",
+      ila_review_quiz: "批改小测",
       ila_make_plan: "制定/编辑计划",
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
@@ -350,6 +351,54 @@ export default {
     details: "查看详情",
     /** Heads the options list in the detail view, the chosen ones ticked. */
     options: "选项",
+
+    /* ------------------------------ quiz widget panel ------------------------------ */
+    empty: "还没有测验题",
+    viewList: "列表",
+    viewTree: "按章节",
+    filterAll: "全部",
+    filterAnswered: "已作答",
+    filterSkipped: "已跳过",
+    filterWrong: "错题",
+    /** The two tree roots: questions under the plan, and session-level ones. */
+    groupInPlan: "学习测验",
+    groupOther: "其他问题",
+    /** The panel's status for a question whose card is still answerable. */
+    pending: "待作答",
+    verdictCorrect: "正确",
+    verdictIncorrect: "错误",
+    verdictUnsure: "不确定",
+    verdictUngraded: "未判分",
+    /** Suffix on a chapter folder whose node a plan edit removed. */
+    nodeMissing: "章节已删除",
+    detail: {
+      title: "题目详情",
+      yourAnswer: "你的回答",
+      feedback: "解析",
+      waitingGrade: "等待助手判分…",
+      /** Only skipped questions can be made up. */
+      makeupHint: "这道题当时没有作答（跳过或取消了小测），可以在这里补答，提交后助手会判分。",
+      makeupSubmit: "提交补答",
+      followup: "追问",
+      followupPlaceholder: "针对这道题继续追问…",
+      followupSend: "发送追问",
+      close: "关闭",
+    },
+    /**
+     * The user message a make-up submission drives, after the answer is persisted.
+     * Model input: quotes the GLOBAL id so grading lands on the same question and the
+     * model must not issue a new quiz. Params: id, qid, question, options, answer.
+     */
+    makeupMessage:
+      "【补答】这是我对一道之前未作答题目的补答（当时跳过或取消了小测），不是新题目，请不要重新调用 ila_quiz 出题。\n" +
+      "题目 ID：{id}（编号 {qid}）\n" +
+      "题目：{question}\n" +
+      "可选选项：{options}\n" +
+      "我的补答：{answer}\n" +
+      "请针对我的补答判分：用完全一致的题目 ID 调用 ila_review_quiz，给出 verdict 和讲解。",
+    /** The follow-up user message; quotes the same global id. Params: id, qid, question, text. */
+    followupMessage:
+      "关于题目 {id}（编号 {qid}）的追问。\n题目：{question}\n我的追问：{text}\n请直接解答，不需要重新出题。",
   },
 
   message: {
@@ -650,6 +699,11 @@ export default {
       hint: "由助手维护的学习计划：树状目录、进度跟踪与历史版本。",
       noSession: "打开一个会话后，这里会显示它的计划。",
     },
+    quiz: {
+      name: "测验",
+      hint: "本会话的小测题目：按章节归类、错题筛选、补答与追问。",
+      noSession: "打开一个会话后，这里会显示它的测验题目。",
+    },
   },
 
   /**
@@ -758,6 +812,8 @@ export default {
     WIDGET_SCOPE_UNSUPPORTED: "这个控件不能在当前层级安装。",
     PLAN_VERSION_NOT_FOUND: "这个计划版本不存在。",
     PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
+    QUIZ_QUESTION_NOT_FOUND: "找不到这道测验题。",
+    QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
   },
 
   /**

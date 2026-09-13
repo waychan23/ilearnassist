@@ -12,6 +12,7 @@ import { buildPlanTools, type PlanToolContext } from "./planTools.js";
 import { buildWebFetchTool } from "./webFetch.js";
 import { buildWebSearchTool } from "./webSearch.js";
 import { buildQuizTool, type QuizToolContext } from "./quiz.js";
+import { buildQuizReviewTool, type QuizReviewToolContext } from "./quizReview.js";
 
 /**
  * Tools that do not touch the workspace, and so survive `fileTools.enabled: false`.
@@ -29,6 +30,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "read_document",
   "ask_user",
   "ila_quiz",
+  "ila_review_quiz",
   "ila_make_plan",
   "ila_read_plan",
   "ila_update_plan_progress",
@@ -58,13 +60,14 @@ export interface BuildToolsInput {
    */
   documents?: DocumentToolContext;
   /**
-   * How `quiz` numbers its questions.
+   * How `ila_quiz` numbers and registers its questions, and the grading tool's context.
    *
-   * Required rather than optional on purpose: a turn that forgot to wire it is a compile
-   * error, where an optional one would be a tool that throws the first time a model reaches
-   * for it. It is a callback because the tool must not know where a number comes from.
+   * Present only when the conversation has the quiz widget installed: both quiz tools are
+   * widget-bound, so — like `plan` — the absence assembles neither tool (regardless of the
+   * allow-list). Both pieces are co-present: the one widget switches both tools.
    */
-  quiz: QuizToolContext;
+  quiz?: QuizToolContext;
+  quizReview?: QuizReviewToolContext;
   /**
    * Present only when the conversation has the plan widget installed: its bound tools are
    * then assembled regardless of the session's tool allow-list — the widget install is the
@@ -89,14 +92,12 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     files.deleteFile,
   ];
 
-  // The suspending tools depend on no config and read nothing, so they are assembled like
-  // file tools rather than behind a feature switch — the only thing that ever removes one is
-  // a Copilot whose tool list does not name it.
+  // `ask_user` depends on no config and reads nothing, so it is assembled like a file tool
+  // rather than behind a feature switch. The quiz tools are widget-bound: see `input.quiz`.
   const all: StructuredToolInterface[] = [
     ...fileTools,
     buildWebSearchTool(input.webSearch),
     buildAskUserTool(),
-    buildQuizTool(input.quiz),
   ];
   if (input.webFetch.enabled) all.push(buildWebFetchTool(input.webFetch));
   if (input.documents && input.documents.sources.length > 0) {
@@ -104,6 +105,10 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   }
   // Widget-bound tools: assembled only when their widget is installed, which is exactly when
   // this context is present — nothing else gates them.
+  if (input.quiz) {
+    all.push(buildQuizTool(input.quiz));
+    if (input.quizReview) all.push(buildQuizReviewTool(input.quizReview));
+  }
   if (input.plan) all.push(...buildPlanTools(input.plan));
 
   // Absent means "no restriction"; an empty array means "no tools". The two used to be the same

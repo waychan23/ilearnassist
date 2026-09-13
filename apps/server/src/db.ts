@@ -17,6 +17,10 @@ import type {
   PlanNodeStatus,
   PlanStatus,
   ProviderModel,
+  QuizAnswer,
+  QuizOption,
+  QuizQuestionStatus,
+  QuizVerdict,
   Session,
   SessionSettings,
   SessionStats,
@@ -178,6 +182,69 @@ export interface PlanNodeInsert {
   title: string;
   status: PlanNodeStatus;
   introducedVersion: number;
+}
+
+interface QuizQuestionRow {
+  id: string;
+  session_id: string;
+  node_id: string | null;
+  node_title: string | null;
+  tool_call_id: string;
+  qid: string;
+  position: number;
+  header: string;
+  question: string;
+  multi_select: number;
+  options_json: string;
+  status: string;
+  user_answer_json: string | null;
+  verdict: string | null;
+  feedback: string | null;
+  grade_tool_call_id: string | null;
+  created_at: string;
+  answered_at: string | null;
+  graded_at: string | null;
+}
+
+/**
+ * One persisted quiz question. Created in `pending` when `ila_quiz` suspends, answered by
+ * the card or a later make-up, and graded by `ila_review_quiz`.
+ */
+export interface QuizQuestionRecord {
+  id: string;
+  sessionId: string;
+  nodeId: string | null;
+  nodeTitle: string | null;
+  toolCallId: string;
+  qid: string;
+  position: number;
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: QuizOption[];
+  status: QuizQuestionStatus;
+  answer: QuizAnswer | null;
+  verdict: QuizVerdict | null;
+  feedback: string | null;
+  gradeToolCallId: string | null;
+  createdAt: string;
+  answeredAt: string | null;
+  gradedAt: string | null;
+}
+
+export interface QuizQuestionInsert {
+  id: string;
+  sessionId: string;
+  nodeId: string | null;
+  nodeTitle: string | null;
+  toolCallId: string;
+  qid: string;
+  position: number;
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: QuizOption[];
+  createdAt: string;
 }
 
 interface SessionRow {
@@ -446,6 +513,28 @@ const mapPlanNode = (r: PlanNodeRow): PlanNodeRecord => ({
   removedVersion: r.removed_version,
   anchorToolCallId: r.done_tool_call_id,
   anchorAt: r.done_at,
+});
+
+const mapQuizQuestion = (r: QuizQuestionRow): QuizQuestionRecord => ({
+  id: r.id,
+  sessionId: r.session_id,
+  nodeId: r.node_id,
+  nodeTitle: r.node_title,
+  toolCallId: r.tool_call_id,
+  qid: r.qid,
+  position: r.position,
+  header: r.header,
+  question: r.question,
+  multiSelect: r.multi_select !== 0,
+  options: safeParseArray<QuizOption>(r.options_json),
+  status: r.status as QuizQuestionStatus,
+  answer: r.user_answer_json ? safeParseObject<QuizAnswer>(r.user_answer_json) : null,
+  verdict: (r.verdict as QuizVerdict | null) ?? null,
+  feedback: r.feedback,
+  gradeToolCallId: r.grade_tool_call_id,
+  createdAt: r.created_at,
+  answeredAt: r.answered_at,
+  gradedAt: r.graded_at,
 });
 
 const mapDocumentParser = (r: DocumentParserRow): DocumentParserRecord => ({
@@ -799,13 +888,20 @@ export interface AppDb {
   updateMessageToolCalls(messageId: string, toolCalls: ToolCall[]): void;
 
   /**
-   * Retire every still-awaiting call in a session, returning how many.
+   * Every call still `awaiting` in a session, as `{id, name}`. The name lets callers act
+   * on one tool's calls (the quiz rows are retired by the `ila_quiz` ones) without a second
+   * message scan.
+   */
+  listAwaitingToolCalls(sessionId: string): { id: string; name: string }[];
+
+  /**
+   * Retire every still-awaiting call in a session, returning the retired calls.
    *
    * Called when the user sends a new message instead of answering: the turn those
    * questions belonged to is over, and a card that stayed answerable would resume a
    * conversation the user has already moved on from.
    */
-  skipAwaitingToolCalls(sessionId: string): number;
+  skipAwaitingToolCalls(sessionId: string): { id: string; name: string }[];
 
   /**
    * Reserve `count` consecutive numbers from one sequence, returned in ascending order.
@@ -900,6 +996,44 @@ export interface AppDb {
     anchorToolCallId: string | null,
     anchorAt: string | null
   ): void;
+
+  /*
+   * Quiz questions (quiz widget). Ownership is reached through the session like plans: the
+   * ForUser pair is what routes read; the session-id-only accessors run on an
+   * already-resolved turn, over rows the turn itself created.
+   */
+  insertQuizQuestions(rows: QuizQuestionInsert[]): void;
+  listQuizQuestionsForUser(userId: string, sessionId: string): QuizQuestionRecord[];
+  listQuizQuestionsBySession(sessionId: string): QuizQuestionRecord[];
+  getQuizQuestionForUser(
+    userId: string,
+    sessionId: string,
+    id: string
+  ): QuizQuestionRecord | undefined;
+  /** Retire pending quiz rows posed by the named suspending calls. Empty list is a no-op. */
+  skipQuizQuestions(sessionId: string, toolCallIds: string[]): void;
+  /**
+   * Conditional status transition, only from `expectedStatus`. Clears grading on an
+   * answered transition, so a make-up never displays the previous answer's verdict.
+   * Returns whether a row changed; false is the lost-race signal.
+   */
+  transitionQuizQuestion(input: {
+    sessionId: string;
+    id: string;
+    expectedStatus: QuizQuestionStatus;
+    status: QuizQuestionStatus;
+    answerJson?: string | null;
+    answeredAt?: string | null;
+  }): boolean;
+  /** Record the model's verdict; answered questions only. Returns whether it landed. */
+  gradeQuizQuestion(input: {
+    sessionId: string;
+    id: string;
+    verdict: QuizVerdict;
+    feedback: string;
+    gradeToolCallId: string;
+    gradedAt: string;
+  }): boolean;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
@@ -1393,6 +1527,60 @@ export function createDb(dbPath: string): AppDb {
      WHERE id = @id AND plan_id = @planId`
   );
 
+  /* --------------------------------- quizzes -------------------------------- */
+  /*
+   * Same scoping shape as plans: the ForUser reads join through to the workspace owner,
+   * the session-id reads do not and run only on an already-resolved turn.
+   */
+  const stmtListQuizQuestionsForUser = db.prepare(
+    `SELECT q.* FROM quiz_questions q
+       JOIN sessions s ON s.id = q.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE q.session_id = @sessionId AND w.user_id = @userId
+      ORDER BY q.position ASC, q.rowid ASC`
+  );
+  const stmtListQuizQuestionsBySession = db.prepare(
+    "SELECT * FROM quiz_questions WHERE session_id = ? ORDER BY position ASC, rowid ASC"
+  );
+  const stmtGetQuizQuestionForUser = db.prepare(
+    `SELECT q.* FROM quiz_questions q
+       JOIN sessions s ON s.id = q.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE q.id = @id AND q.session_id = @sessionId AND w.user_id = @userId`
+  );
+  const stmtInsertQuizQuestion = db.prepare(
+    `INSERT INTO quiz_questions
+       (id, session_id, node_id, node_title, tool_call_id, qid, position, header, question,
+        multi_select, options_json, status, created_at)
+     VALUES (@id, @sessionId, @nodeId, @nodeTitle, @toolCallId, @qid, @position, @header,
+             @question, @multiSelect, @optionsJson, 'pending', @createdAt)`
+  );
+  // The named calls are always server-bound UUIDs, so the placeholder list is built from
+  // length rather than interpolated values.
+  const stmtSkipQuizQuestions = (toolCallIds: string[]) =>
+    db.prepare(
+      `UPDATE quiz_questions SET status = 'skipped'
+        WHERE session_id = ? AND status = 'pending' AND tool_call_id IN (${toolCallIds
+          .map(() => "?")
+          .join(",")})`
+    );
+  // The expected-status guard is what makes two submissions racing one another honest: the
+  // loser changes nothing and reports false. An answered transition clears the old grade.
+  const stmtTransitionQuizQuestion = db.prepare(
+    `UPDATE quiz_questions
+        SET status = @status,
+            user_answer_json = @answerJson,
+            answered_at = @answeredAt,
+            verdict = NULL, feedback = NULL, grade_tool_call_id = NULL, graded_at = NULL
+      WHERE id = @id AND session_id = @sessionId AND status = @expectedStatus`
+  );
+  const stmtGradeQuizQuestion = db.prepare(
+    `UPDATE quiz_questions
+        SET verdict = @verdict, feedback = @feedback,
+            grade_tool_call_id = @gradeToolCallId, graded_at = @gradedAt
+      WHERE id = @id AND session_id = @sessionId AND status = 'answered'`
+  );
+
   /*
    * Two narrow projections for the statistics: the role (so a count can tell the two apart if it
    * ever wants to) and the usage blob. `usage` is read whole and parsed in `widgets.ts` rather
@@ -1734,14 +1922,24 @@ export function createDb(dbPath: string): AppDb {
       stmtUpdateToolCalls.run(JSON.stringify(toolCalls), messageId);
     },
 
+    listAwaitingToolCalls(sessionId) {
+      const out: { id: string; name: string }[] = [];
+      for (const message of listMessagesOf(sessionId)) {
+        for (const tc of message.toolCalls ?? []) {
+          if (tc.status === "awaiting") out.push({ id: tc.id, name: tc.name });
+        }
+      }
+      return out;
+    },
+
     skipAwaitingToolCalls(sessionId) {
-      let skipped = 0;
+      // Computed before the write, so the returned list names the calls actually retired.
+      const skipped = this.listAwaitingToolCalls(sessionId);
       for (const message of listMessagesOf(sessionId)) {
         const calls = message.toolCalls ?? [];
         if (!calls.some((tc) => tc.status === "awaiting")) continue;
         const next = calls.map((tc) => {
           if (tc.status !== "awaiting") return tc;
-          skipped++;
           // No `output`: the model must not be told about a question it asked in a turn
           // the user moved on from. See `ToolCall.status`.
           return { ...tc, status: "skipped" as const };
@@ -1893,6 +2091,77 @@ export function createDb(dbPath: string): AppDb {
         doneToolCallId: anchorToolCallId,
         doneAt: anchorAt,
       });
+    },
+
+    insertQuizQuestions(rows) {
+      const stmt = stmtInsertQuizQuestion;
+      for (const row of rows) {
+        stmt.run({
+          id: row.id,
+          sessionId: row.sessionId,
+          nodeId: row.nodeId,
+          nodeTitle: row.nodeTitle,
+          toolCallId: row.toolCallId,
+          qid: row.qid,
+          position: row.position,
+          header: row.header,
+          question: row.question,
+          multiSelect: row.multiSelect ? 1 : 0,
+          optionsJson: JSON.stringify(row.options),
+          createdAt: row.createdAt,
+        });
+      }
+    },
+
+    listQuizQuestionsForUser(userId, sessionId) {
+      return (stmtListQuizQuestionsForUser.all({ userId, sessionId }) as QuizQuestionRow[]).map(
+        mapQuizQuestion
+      );
+    },
+
+    listQuizQuestionsBySession(sessionId) {
+      return (stmtListQuizQuestionsBySession.all(sessionId) as QuizQuestionRow[]).map(
+        mapQuizQuestion
+      );
+    },
+
+    getQuizQuestionForUser(userId, sessionId, id) {
+      const r = stmtGetQuizQuestionForUser.get({ id, userId, sessionId }) as
+        | QuizQuestionRow
+        | undefined;
+      return r ? mapQuizQuestion(r) : undefined;
+    },
+
+    skipQuizQuestions(sessionId, toolCallIds) {
+      // An empty IN-list is a syntax error and would match nothing anyway.
+      if (toolCallIds.length === 0) return;
+      stmtSkipQuizQuestions(toolCallIds).run(sessionId, ...toolCallIds);
+    },
+
+    transitionQuizQuestion(input) {
+      return (
+        stmtTransitionQuizQuestion.run({
+          id: input.id,
+          sessionId: input.sessionId,
+          expectedStatus: input.expectedStatus,
+          status: input.status,
+          answerJson: input.answerJson ?? null,
+          answeredAt: input.answeredAt ?? null,
+        }).changes > 0
+      );
+    },
+
+    gradeQuizQuestion(input) {
+      return (
+        stmtGradeQuizQuestion.run({
+          id: input.id,
+          sessionId: input.sessionId,
+          verdict: input.verdict,
+          feedback: input.feedback,
+          gradeToolCallId: input.gradeToolCallId,
+          gradedAt: input.gradedAt,
+        }).changes > 0
+      );
     },
 
     statsForWorkspace(userId, workspaceId) {

@@ -220,6 +220,7 @@ const en: typeof MessageSchema = {
       read_document: "Read a document",
       ask_user: "Ask the user",
       ila_quiz: "Quiz",
+      ila_review_quiz: "Grade quiz",
       ila_make_plan: "Make / edit plan",
       ila_read_plan: "Read plan",
       ila_update_plan_progress: "Update plan progress",
@@ -277,6 +278,45 @@ const en: typeof MessageSchema = {
     unanswered: "No answer",
     details: "Show details",
     options: "Options",
+
+    /* ------------------------------ quiz widget panel ------------------------------ */
+    empty: "No quiz questions yet",
+    viewList: "List",
+    viewTree: "By chapter",
+    filterAll: "All",
+    filterAnswered: "Answered",
+    filterSkipped: "Skipped",
+    filterWrong: "Wrong",
+    groupInPlan: "Study quizzes",
+    groupOther: "Other questions",
+    pending: "To answer",
+    verdictCorrect: "Correct",
+    verdictIncorrect: "Incorrect",
+    verdictUnsure: "Not sure",
+    verdictUngraded: "Not graded",
+    nodeMissing: "Chapter deleted",
+    detail: {
+      title: "Question details",
+      yourAnswer: "Your answer",
+      feedback: "Explanation",
+      waitingGrade: "Waiting for the assistant to grade it…",
+      makeupHint:
+        "You did not answer this question earlier (skipped or cancelled the quiz). Answer it here and the assistant will grade it.",
+      makeupSubmit: "Submit make-up answer",
+      followup: "Follow up",
+      followupPlaceholder: "Ask a follow-up about this question…",
+      followupSend: "Send follow-up",
+      close: "Close",
+    },
+    makeupMessage:
+      "[MAKE-UP ANSWER] This is a late answer to a question I did not answer before (I skipped or cancelled the quiz). It is the SAME question — do not call ila_quiz to create a new one.\n" +
+      "Question ID: {id} ({qid})\n" +
+      "Question: {question}\n" +
+      "Options: {options}\n" +
+      "My make-up answer: {answer}\n" +
+      "Please grade this make-up answer: call ila_review_quiz with the exact question ID, a verdict, and an explanation.",
+    followupMessage:
+      "A follow-up about question {id} ({qid}).\nQuestion: {question}\nMy follow-up: {text}\nPlease answer directly; no new quiz is needed.",
   },
 
   message: {
@@ -565,6 +605,11 @@ const en: typeof MessageSchema = {
       hint: "The assistant-maintained study plan: outline tree, progress and version history.",
       noSession: "Open a conversation and its plan appears here.",
     },
+    quiz: {
+      name: "Quiz",
+      hint: "This conversation's quiz questions: chapter grouping, wrong-answer filter, make-up and follow-up.",
+      noSession: "Open a conversation and its quiz questions appear here.",
+    },
   },
 
   plan: {
@@ -671,6 +716,9 @@ const en: typeof MessageSchema = {
     WIDGET_SCOPE_UNSUPPORTED: "That widget cannot be installed at this level.",
     PLAN_VERSION_NOT_FOUND: "That plan version does not exist.",
     PLAN_NODE_NOT_FOUND: "That plan node cannot be found — it may have been deleted or completed.",
+    QUIZ_QUESTION_NOT_FOUND: "That quiz question cannot be found.",
+    QUIZ_NOT_ANSWERABLE:
+      "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
   },
 
   /**

@@ -49,6 +49,8 @@ const mocks = vi.hoisted(() => ({
     getPlan: vi.fn(),
     getPlanVersion: vi.fn(),
     jumpPlanNode: vi.fn(),
+    listQuizQuestions: vi.fn().mockResolvedValue({ questions: [] }),
+    answerQuizQuestion: vi.fn(),
     stopSession: vi.fn(),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
@@ -1296,6 +1298,80 @@ describe("plan widgets", () => {
     expect(ok).toBe(true);
     expect(mocks.api.jumpPlanNode).toHaveBeenCalledWith("s1", "node-12");
     expect(mocks.streamChat).toHaveBeenCalled();
+  });
+});
+
+describe("quiz widgets", () => {
+  it("emits quiz.changed when the grading tool finishes, and not for ila_quiz or other tools", async () => {
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      streamOf(
+        {
+          type: "tool_end",
+          toolCall: { id: "g1", name: "ila_review_quiz", input: "{}", output: "{}" },
+        },
+        // ila_quiz suspends and never emits tool_end; even a stray one must not double-fire.
+        {
+          type: "tool_end",
+          toolCall: { id: "q1", name: "ila_quiz", input: "{}", output: "x" },
+        },
+        {
+          type: "tool_end",
+          toolCall: { id: "c2", name: "read_file", input: "{}", output: "x" },
+        },
+        { type: "done" }
+      );
+      const store = await readyStore();
+      await store.sendMessage("grade it");
+
+      expect(seen.filter((t) => t === "quiz.changed")).toHaveLength(1);
+    } finally {
+      off();
+    }
+  });
+
+  it("persists a make-up answer, then sends the quoting message through the normal flow", async () => {
+    mocks.api.answerQuizQuestion.mockResolvedValue({ question: { id: "quiz-1" } });
+    streamOf({ type: "text", delta: "答对了" }, { type: "done" });
+    const store = await readyStore();
+
+    const question = { id: "quiz-1", qid: "Q1" } as never;
+    const answer = { selected: ["滚动"] } as never;
+    const ok = await store.makeupQuizAnswer(question, answer, "【补答】…");
+
+    expect(ok).toBe(true);
+    expect(mocks.api.answerQuizQuestion).toHaveBeenCalledWith("s1", "quiz-1", {
+      selected: ["滚动"],
+    });
+    expect(mocks.streamChat).toHaveBeenCalled();
+  });
+
+  it("reports a rejected make-up POST without starting a turn, leaving the dialog to stay open", async () => {
+    mocks.api.answerQuizQuestion.mockRejectedValueOnce(new Error("不能补答"));
+    const store = await readyStore();
+
+    const ok = await store.makeupQuizAnswer(
+      { id: "quiz-1" } as never,
+      { selected: ["x"] } as never,
+      "msg"
+    );
+    expect(ok).toBe(false);
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(store.error).toContain("不能补答");
+  });
+
+  it("does not POST a make-up answer while a turn is streaming", async () => {
+    const store = await readyStore();
+    store.streaming.active = true;
+    const ok = await store.makeupQuizAnswer(
+      { id: "quiz-1" } as never,
+      { selected: ["x"] } as never,
+      "msg"
+    );
+    expect(ok).toBe(false);
+    expect(mocks.api.answerQuizQuestion).not.toHaveBeenCalled();
   });
 });
 

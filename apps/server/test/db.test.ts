@@ -1032,12 +1032,15 @@ describe("suspended ask_user calls", () => {
     expect(db.getMessageForUser("m1", OWNER)!.toolCalls![1]).toMatchObject({ id: "call_1-read", output: "ok" });
   });
 
-  it("skips every awaiting call in a session and reports how many", () => {
+  it("skips every awaiting call in a session and reports which calls retired", () => {
     askMessage("m1", "s1", "call_1", "awaiting");
     askMessage("m2", "s1", "call_2", "awaiting");
     askMessage("m3", "s2", "call_3", "awaiting");
 
-    expect(db.skipAwaitingToolCalls("s1")).toBe(2);
+    expect(db.skipAwaitingToolCalls("s1")).toEqual([
+      { id: "call_1", name: "ask_user" },
+      { id: "call_2", name: "ask_user" },
+    ]);
 
     expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]!.status).toBe("skipped");
     expect(db.getMessageForUser("m2", OWNER)!.toolCalls![0]!.status).toBe("skipped");
@@ -1045,10 +1048,16 @@ describe("suspended ask_user calls", () => {
     expect(db.getMessageForUser("m3", OWNER)!.toolCalls![0]!.status).toBe("awaiting");
   });
 
+  it("lists awaiting calls without retiring them", () => {
+    askMessage("m1", "s1", "call_1", "awaiting");
+    expect(db.listAwaitingToolCalls("s1")).toEqual([{ id: "call_1", name: "ask_user" }]);
+    expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]!.status).toBe("awaiting");
+  });
+
   it("leaves a settled call alone", () => {
     askMessage("m1", "s1", "call_1", "answered");
 
-    expect(db.skipAwaitingToolCalls("s1")).toBe(0);
+    expect(db.skipAwaitingToolCalls("s1")).toEqual([]);
     expect(db.getMessageForUser("m1", OWNER)!.toolCalls![0]!.status).toBe("answered");
   });
 

@@ -38,6 +38,11 @@ export type WidgetEvent =
    */
   | { type: "plan.changed"; sessionId: string }
   /**
+   * An `ila_review_quiz` grading call committed during a turn, so the quiz widget refetches
+   * mid-turn without waiting for the turn to end. Carries the session id like `plan.changed`.
+   */
+  | { type: "quiz.changed"; sessionId: string }
+  /**
    * A widget asked to scroll the conversation to a tool-call card — a plan node's start
    * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
    * event. Scrolling to the card (rather than the message top) lands on the node's start.

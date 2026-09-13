@@ -27,16 +27,48 @@ export { QUIZ_TOOL_NAME };
  */
 export const QUIZ_QUESTION_COUNTER = "quiz_question";
 
+/** One question as handed to the registration callback, numbered but not yet persisted. */
+export interface QuizRegistrationItem {
+  qid: string;
+  /** The Qn number; also the quiz panel's stable ordering across a session. */
+  position: number;
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  options: { label: string; description?: string }[];
+}
+
+export interface QuizRegisterInput {
+  /** The provider's tool-call id, the anchor the panel scrolls to. */
+  toolCallId: string;
+  /** The plan node the model named; undefined means "bind the current chapter". */
+  modelNodeId?: string;
+  items: QuizRegistrationItem[];
+}
+
+export interface QuizRegisteredQuestion {
+  /** The question's GLOBAL id (database UUID), distinct from its session-scoped Qn. */
+  uid: string;
+  qid: string;
+}
+
 /**
  * What the tool needs from the turn it is running in.
  *
- * A callback rather than an id, because the tool must not know where a number comes from —
- * the agent loop holds no database by design, and which store is authoritative belongs to
- * whoever can read one. `count` is reserved as a single block so a quiz's ids are
- * consecutive rather than merely distinct.
+ * Callbacks rather than ids, because the tool must not know where a number or a database
+ * comes from — the agent loop holds no database by design, and which store is authoritative
+ * belongs to whoever can read one. `count` is reserved as a single block so a quiz's ids
+ * are consecutive rather than merely distinct. `registerQuestions` persists the questions
+ * (with their global uids) the moment the quiz suspends, before the user answers.
  */
 export interface QuizToolContext {
   reserveQuestionNumbers(count: number): number[];
+  registerQuestions(input: QuizRegisterInput): QuizRegisteredQuestion[];
+}
+
+/** The invoke config the loop stamps the provider's tool-call id into (see plan tools). */
+interface QuizInvokeConfig {
+  configurable?: { toolCallId?: unknown };
 }
 
 /**
@@ -96,6 +128,16 @@ const questionSchema = z.object({
 });
 
 const inputSchema = z.object({
+  nodeId: z
+    .string()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      "The plan node these questions check, by the opaque id ila_read_plan returned. Omit it to " +
+        "bind the quiz to the chapter currently in progress. Only use it when the quiz is " +
+        "about a specific node."
+    ),
   questions: z
     .array(questionSchema)
     .min(1)
@@ -114,11 +156,13 @@ const DESCRIPTION = [
   "- Never reveal the answer: not in the question, not in an option's label, and not in an option's description. A question with its answer in it measures nothing.",
   '- Write plain option labels with no letter in front of them — the client renders A, B, C… from the order you list them.',
   '- Do not offer your own "I don\'t know", "unsure" or "Other" choice: the client appends one to every question automatically, along with a box for the user to explain it or add their own take.',
-  "- Do not invent or pass ids: the tool assigns each question a session-scoped id (Q1, Q2, …) and returns it in the result, so you can refer to a question by id later.",
+  "- Do not invent or pass ids: the tool assigns each question a session-scoped id (Q1, Q2, …) AND a global quiz_id, both returned in the result, so you can refer to a question by id later.",
   "- Make every option one a person who half-understood would plausibly pick. A filler choice makes a quiz easier without making it informative.",
   "- Do not call it more than once per step. It ends the step; any other tool calls in that step still run first.",
   "",
-  "The answers come back as the tool result, each with its question's id. A question the user marked unsure — with their reason — and anything they wrote in the notes come back too: treat those as the most informative part, and respond to them rather than only to what was right or wrong.",
+  "The answers come back as the tool result, each with its question id and quiz_id. A question the user marked unsure — with their reason — and anything they wrote in the notes come back too: treat those as the most informative part, and respond to them rather than only to what was right or wrong.",
+  "After judging the answers, call ila_review_quiz ONCE with each question's exact quiz_id, a verdict (correct / incorrect / unsure) and a short explanation in the user's language; then give the rundown in your reply. The quiz panel reads those verdicts.",
+  "The user may also answer, in a later message that quotes the quiz_id, a question they originally did not answer (they skipped it or cancelled the quiz): grade that one question by its exact id through ila_review_quiz, and do NOT call ila_quiz again for it.",
   "If they dismiss the quiz instead, the result says so. Do not present the same questions again; continue with your best judgement or ask them in chat.",
 ].join("\n");
 
@@ -133,21 +177,51 @@ const DESCRIPTION = [
  */
 export function buildQuizTool(ctx: QuizToolContext) {
   return tool(
-    async (input: z.infer<typeof inputSchema>): Promise<string> => {
+    async (input: z.infer<typeof inputSchema>, config?: QuizInvokeConfig): Promise<string> => {
       // The reservation happens before the suspension is thrown, so a crash between here and
       // the message being persisted burns the block. That is a gap in the numbering and never
       // a collision, and a gap is invisible because an id is only ever shown as it was issued.
       const numbers = ctx.reserveQuestionNumbers(input.questions.length);
 
-      const questions: QuizQuestion[] = input.questions.map((question, index) => {
-        const number = numbers[index];
-        // A context that reserved a short block would otherwise hand two questions the same
-        // id — a card with one answer slot for two questions. Louder as a tool error.
-        if (number === undefined) {
-          // Named as the tool the model called: this one reaches it as a `Tool error:`.
-          throw new Error(`ila_quiz: no question number was reserved for question ${index}`);
+      const numbered: { question: QuizQuestion; position: number }[] = input.questions.map(
+        (question, index) => {
+          const number = numbers[index];
+          // A context that reserved a short block would otherwise hand two questions the same
+          // id — a card with one answer slot for two questions. Louder as a tool error.
+          if (number === undefined) {
+            // Named as the tool the model called: this one reaches it as a `Tool error:`.
+            throw new Error(`ila_quiz: no question number was reserved for question ${index}`);
+          }
+          return { question: { ...question, id: `Q${number}` }, position: number };
         }
-        return { ...question, id: `Q${number}` };
+      );
+
+      // Persist the questions (with their global uids) BEFORE suspending, so the panel can
+      // list even the ones the learner walks away from. The loop stamps the provider's
+      // tool-call id into the invoke config, exactly as the plan progress tool reads it.
+      const toolCallId =
+        typeof config?.configurable?.toolCallId === "string"
+          ? config.configurable.toolCallId
+          : "";
+      const registered = ctx.registerQuestions({
+        toolCallId,
+        modelNodeId: input.nodeId,
+        items: numbered.map(({ question, position }) => ({
+          qid: question.id,
+          position,
+          header: question.header,
+          question: question.question,
+          multiSelect: question.multiSelect,
+          options: question.options,
+        })),
+      });
+
+      const questions: QuizQuestion[] = numbered.map(({ question }, index) => {
+        const record = registered[index];
+        if (!record || record.qid !== question.id) {
+          throw new Error("ila_quiz: question registration did not return the question set");
+        }
+        return { ...question, uid: record.uid };
       });
 
       throw new QuizSuspension(questions);
@@ -264,6 +338,9 @@ export function renderQuizResult(
     const answer = answers[question.id];
     return {
       id: question.id,
+      // The GLOBAL id `ila_review_quiz` names; falls back to the Qn on a legacy call that
+      // predates the quiz widget (grading it fails the lookup, since no row exists).
+      quiz_id: question.uid ?? question.id,
       question: question.question,
       selected: answer?.selected ?? [],
       ...(answer?.unsure ? { unsure: true } : {}),

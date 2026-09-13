@@ -129,6 +129,7 @@ describe("resolveWidgetStates", () => {
     expect(resolveWidgetStates("session", [])).toEqual([
       { id: "session_stats", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("session_stats") },
       { id: "plan", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("plan") },
+      { id: "quiz", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("quiz") },
     ]);
   });
 
@@ -360,6 +361,7 @@ describe("over HTTP", () => {
       session: [
         { id: "session_stats", scope: "session", enabled: true },
         { id: "plan", scope: "session", enabled: false },
+        { id: "quiz", scope: "session", enabled: false },
       ],
     });
   });
@@ -372,6 +374,7 @@ describe("over HTTP", () => {
     expect(await sessionWidgetsOf(session.id)).toEqual([
       { id: "session_stats", scope: "session", enabled: true },
       { id: "plan", scope: "session", enabled: false },
+      { id: "quiz", scope: "session", enabled: false },
     ]);
   });
 
@@ -402,6 +405,7 @@ describe("over HTTP", () => {
     expect(await sessionWidgetsOf(session.id)).toEqual([
       { id: "session_stats", scope: "session", enabled: true },
       { id: "plan", scope: "session", enabled: false },
+      { id: "quiz", scope: "session", enabled: false },
     ]);
   });
 

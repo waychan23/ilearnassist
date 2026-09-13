@@ -80,6 +80,8 @@ export interface RunAgentInput {
    * installed; absent in every other conversation.
    */
   planGuidance?: string;
+  /** The same mechanism for the quiz widget: judge/record answers and recognise make-ups. */
+  quizGuidance?: string;
   /** Whose sources tree the attachment bytes live in. Derived per request, never held. */
   user: UserLayout;
   sessionId: string;
@@ -194,7 +196,8 @@ function safeParseArgs(json: string): Record<string, unknown> {
 function buildSystemPrompt(
   workspace: Workspace,
   systemPrompt: string,
-  planGuidance?: string
+  planGuidance?: string,
+  quizGuidance?: string
 ): string {
   const base =
     systemPrompt.trim() ||
@@ -211,8 +214,10 @@ function buildSystemPrompt(
   // Present while the plan widget is installed, whether or not a plan exists yet — the
   // rhythm starts the moment one is made.
   const planNote = planGuidance ? `\n\n${planGuidance}` : "";
+  // Likewise for the quiz widget: installed or not is the whole switch.
+  const quizNote = quizGuidance ? `\n\n${quizGuidance}` : "";
 
-  return base + workspaceNote + planNote;
+  return base + workspaceNote + planNote + quizNote;
 }
 
 /**
@@ -337,7 +342,14 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   const maxSteps = input.settings.maxSteps ?? DEFAULT_MAX_STEPS;
 
   const messages: BaseMessage[] = [
-    new SystemMessage(buildSystemPrompt(input.workspace, input.systemPrompt, input.planGuidance)),
+    new SystemMessage(
+      buildSystemPrompt(
+        input.workspace,
+        input.systemPrompt,
+        input.planGuidance,
+        input.quizGuidance
+      )
+    ),
     ...history,
   ];
 

@@ -51,6 +51,11 @@ async function createAndEnter(page: Page, name: string): Promise<void> {
   await page.getByTestId("workspace-name-input").fill(name);
   await page.getByTestId("workspace-create-submit").click();
   await enterWorkspace(page, name);
+
+  // ila_quiz is widget-bound now: open the conversation with the quiz widget installed.
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("new-session-widget-check-quiz").check();
+  await page.getByTestId("create-session").click();
 }
 
 /** Enter a fresh workspace and ask for the quiz. */
