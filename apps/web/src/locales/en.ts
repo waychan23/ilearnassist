@@ -625,7 +625,8 @@ const en: typeof MessageSchema = {
     chooseTitle: "Choose a model (applies to this conversation)",
     noModelsTitle: "No model is available yet",
     keyMissing: "No key",
-    empty: "No models available yet. Add a provider and its models under Settings → Providers.",
+    empty: "No models available yet. Ask an administrator to configure one.",
+    emptyAdmin: "No models available yet. Add a provider under Platform console → Model services.",
     manage: "Manage models…",
   },
 

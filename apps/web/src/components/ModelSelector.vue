@@ -108,7 +108,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       </template>
 
       <div v-if="groups.length === 0" class="empty">
-        {{ t("modelSelector.empty") }}
+        {{ store.canAdmin ? t("modelSelector.emptyAdmin") : t("modelSelector.empty") }}
       </div>
 
       <!--

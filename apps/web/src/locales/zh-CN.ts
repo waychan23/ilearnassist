@@ -728,7 +728,11 @@ export default {
     chooseTitle: "选择模型（作用于当前会话）",
     noModelsTitle: "尚未配置可用的模型",
     keyMissing: "未配置 Key",
-    empty: "还没有可用的模型。请在「设置 → Providers」中添加 Provider 与模型。",
+    /* Two empty states, because the two readers have different next moves: an ordinary account
+       cannot add a provider and the administrator reading it can. One message naming the
+       console would send the first to a screen they cannot open. */
+    empty: "还没有可用的模型。请联系管理员配置。",
+    emptyAdmin: "还没有可用的模型。请在「平台管理 → 模型服务」中添加 Provider 与模型。",
     manage: "管理模型…",
   },
 
