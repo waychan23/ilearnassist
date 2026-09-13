@@ -27,13 +27,20 @@ import type {
   Source,
   ToolCall,
   User,
+  UserRole,
   WidgetId,
   WidgetScope,
   WidgetState,
   Workspace,
   WorkspaceStats,
 } from "@ilearnassist/shared";
-import { DEFAULT_WIDGET_IDS, isWidgetId } from "@ilearnassist/shared";
+import {
+  DEFAULT_USER_ROLES,
+  DEFAULT_WIDGET_IDS,
+  isEnabledSuperadmin,
+  isUserRole,
+  isWidgetId,
+} from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
 import { applySchema } from "./schema.js";
 import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
@@ -63,7 +70,21 @@ interface UserRow {
   id: string;
   username: string;
   slug: string;
+  password_hash: string | null;
+  roles: string;
+  must_change_password: number;
+  disabled: number;
   created_at: string;
+}
+
+interface AuthTokenRow {
+  id: string;
+  user_id: string;
+  kind: string;
+  expires_at: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
 }
 
 interface WorkspaceRow {
@@ -344,15 +365,14 @@ export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId"
  * the user deliberately deleted.
  */
 export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
-/**
- * The secret session cookies are signed with, created on first use.
- *
- * In the database rather than in a file or an environment variable, so that it travels with
- * the data root it protects: a cookie issued against one installation's accounts means
- * nothing to another's. Deleting the row rotates it and signs everyone out, which is the
- * lever to reach for if one ever leaks.
+/*
+ * `SETTING_AUTH_SECRET` ("auth.secret") is gone, and the *row* it wrote is deliberately left
+ * alone rather than cleaned up. It signed the session cookie, which a bearer token replaced —
+ * and the lever it was, "rotate this and everybody is signed out", is now
+ * `revokeAllTokens()`/the console's sign-out button, which acts on rows that mean something.
+ * Deleting a leftover `app_settings` row would be a migration with no reader at the far end
+ * of it, so a database that has one simply keeps an unused string in a settings table.
  */
-export const SETTING_AUTH_SECRET = "auth.secret";
 
 /**
  * The title a conversation gets at creation, before the auto-titler replaces it.
@@ -363,11 +383,89 @@ export const SETTING_AUTH_SECRET = "auth.secret";
  */
 export const DEFAULT_SESSION_TITLE = "New conversation";
 
-const mapUser = (r: UserRow): User => ({
+/**
+ * Which lifetime a row in `auth_tokens` was issued for.
+ *
+ * The gate accepts `access` and the refresh route accepts `refresh`, and neither accepts the
+ * other. Without the distinction a refresh token would be a full bearer credential for the
+ * whole API, which is exactly what a short-lived access token exists to avoid.
+ */
+export type AuthTokenKind = "access" | "refresh";
+
+export interface AuthTokenRecord {
+  /** The token's SHA-256 — what the row is keyed by. The token itself is never stored. */
+  id: string;
+  userId: string;
+  kind: AuthTokenKind;
+  expiresAt: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+/**
+ * An account as the **server** sees it: the wire shape plus the two fields that never leave.
+ *
+ * The same split as `ProviderRecord` and its `apiKey`, and for a stronger reason: a password
+ * hash is a credential. `mapUser` is the only place one is read, and a route returns `User`
+ * by stripping these with a destructuring rest — the pattern the source routes already use
+ * for `rawPath`. That is what makes "the hash is never serialised" a property of the shapes
+ * rather than of every route remembering to leave a field out.
+ */
+export interface UserRecord extends User {
+  /** `null` means this account has never been given a password, so it cannot sign in. */
+  passwordHash: string | null;
+  disabled: boolean;
+}
+
+/**
+ * The stored roles, tolerating anything a hand-edited row might hold.
+ *
+ * Exported because the administrator CLI's `status` reads this column on a handle it must not
+ * migrate, so it cannot go through `mapUser` — but it must not grow a second reading of the
+ * same JSON either, or the two would disagree about what a malformed row means.
+ *
+ * Unknown names are dropped rather than kept: a role this build does not know is one whose
+ * checks do not exist, so carrying it forward would be carrying forward nothing. An empty
+ * result falls back to the column's own default — the least privilege — because a row whose
+ * roles were somehow unreadable should be an ordinary account rather than a privileged one.
+ */
+export function parseStoredRoles(raw: string): UserRole[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [...DEFAULT_USER_ROLES];
+  }
+  if (!Array.isArray(parsed)) return ["user"];
+  const roles = parsed.filter(isUserRole);
+  return roles.length ? roles : [...DEFAULT_USER_ROLES];
+}
+
+export function toAuthTokenRecord(r: AuthTokenRow): AuthTokenRecord {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    // Anything that is not the refresh kind is an access token, so a row whose kind was
+    // written by some other build is treated as the *shorter* lifetime rather than the
+    // longer one.
+    kind: r.kind === "refresh" ? "refresh" : "access",
+    expiresAt: r.expires_at,
+    createdAt: r.created_at,
+    lastUsedAt: r.last_used_at,
+    revokedAt: r.revoked_at,
+  };
+}
+
+const mapUser = (r: UserRow): UserRecord => ({
   id: r.id,
   username: r.username,
   slug: r.slug,
+  roles: parseStoredRoles(r.roles),
+  mustChangePassword: r.must_change_password !== 0,
   createdAt: r.created_at,
+  passwordHash: r.password_hash,
+  disabled: r.disabled !== 0,
 });
 
 /**
@@ -609,15 +707,88 @@ export interface AppDb {
   raw: Database.Database;
 
   /**
-   * Accounts. There is no password yet, so `findUserByUsername` + `createUser` *is* signing
-   * in — the login route looks the name up and makes the account if it is new. The lookup
-   * is case-insensitive (`idx_users_username` is `COLLATE NOCASE`), so "Ada" and "ada" are
-   * one account rather than two that look identical on the login screen.
+   * Accounts.
+   *
+   * These return `UserRecord`, which carries the password hash and the disabled flag — see
+   * its note. The lookup is case-insensitive (`idx_users_username` is `COLLATE NOCASE`), so
+   * "Ada" and "ada" are one account rather than two that look identical on the login screen.
+   *
+   * Accounts are **created by an administrator** now and never by a login. The old route
+   * made the row when a name was new, which was the whole of signing in at the time; with a
+   * password there is nothing to sign in to until somebody with the console has made one.
    */
-  listUsers(): User[];
-  getUser(id: string): User | undefined;
-  findUserByUsername(username: string): User | undefined;
-  createUser(input: { id: string; username: string; slug: string }): User;
+  listUsers(): UserRecord[];
+  getUser(id: string): UserRecord | undefined;
+  findUserByUsername(username: string): UserRecord | undefined;
+  createUser(input: {
+    id: string;
+    username: string;
+    slug: string;
+    roles?: UserRole[];
+    passwordHash?: string | null;
+    mustChangePassword?: boolean;
+  }): UserRecord;
+  /**
+   * Set an account's password, and say whether it has to be changed on the way in.
+   *
+   * One statement rather than two, because the two are never written apart: a password set
+   * by an administrator is one the account was told to replace, and a password an account
+   * chose for itself is not. Splitting them would allow the combination that means nothing.
+   */
+  setUserPassword(
+    id: string,
+    passwordHash: string,
+    mustChangePassword: boolean
+  ): UserRecord | undefined;
+  setUserRoles(id: string, roles: UserRole[]): UserRecord | undefined;
+  /** Disable or re-enable an account. Never a delete: the row owns workspaces and history. */
+  setUserDisabled(id: string, disabled: boolean): UserRecord | undefined;
+  /**
+   * Whether anybody on this installation can sign in at all.
+   *
+   * The predicate behind the **sign-in** guard, and it asks about the *password* rather than
+   * about the row count on purpose: a data root carried over from the build where a username
+   * was the credential has accounts and no credentials, and such an installation has nobody
+   * who could sign in. See `hasSuperadmin` for the question the bootstrap actually asks — the
+   * two coincide today only because the bootstrap always grants the role.
+   */
+  hasPasswordAccounts(): boolean;
+  /**
+   * Whether anybody on this installation can *administer* it.
+   *
+   * Deliberately not `hasPasswordAccounts`, which is a sign-in predicate. On a database where
+   * an account holds a credential but no superadmin role — a partial restore, a hand-edit, a
+   * future bug — that one answers yes, so the server would boot, the control panel would hide
+   * the create-administrator control, and the installation would be one nobody could manage.
+   * Roles and the disabled flag are two columns, so this reads both.
+   */
+  hasSuperadmin(): boolean;
+
+  /* ------------------------------- auth tokens ------------------------------ */
+
+  /**
+   * Issued tokens, keyed by the token's SHA-256.
+   *
+   * Every read here is by that hash or by owner, and the owner one is what makes "sign this
+   * account out everywhere" a single statement. Nothing ever selects a token *value*: only a
+   * hash is stored, so there is no plaintext to select.
+   */
+  createAuthToken(input: {
+    id: string;
+    userId: string;
+    kind: AuthTokenKind;
+    expiresAt: string;
+  }): AuthTokenRecord;
+  getAuthToken(id: string): AuthTokenRecord | undefined;
+  /** Record that a token was used, for the diagnostics the console shows. Best effort. */
+  touchAuthToken(id: string, at: string): void;
+  revokeAuthToken(id: string, at: string): boolean;
+  /** Revoke every live token an account holds, and report how many that was. */
+  revokeUserTokens(userId: string, at: string): number;
+  /** Revoke every live token an account holds of one kind. Used by the refresh rotation. */
+  revokeUserTokensOfKind(userId: string, kind: AuthTokenKind, at: string): number;
+  /** Delete rows that expired or were revoked before `before`, so the table stays small. */
+  pruneAuthTokens(before: string): number;
 
   /*
    * Sources — uploaded files, owned by the account rather than by the conversation they
@@ -1101,64 +1272,119 @@ export function createDb(dbPath: string): AppDb {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
 
-  db.pragma("journal_mode = WAL");
+  /*
+   * WAL, so a reader does not block the writer.
+   *
+   * **Tolerant on purpose**, and the reason is a race this codebase now creates itself: the
+   * administrator CLI is designed to be run twice, and the control panel and a terminal can
+   * both be open on the same data root. Two processes opening the same *new* file both find it
+   * in the default rollback mode and both try to convert — and converting takes an exclusive
+   * lock that SQLite will **not** queue for, so the loser gets "database is locked"
+   * immediately rather than after the busy timeout.
+   *
+   * Swallowing that is correct rather than merely convenient: the journal mode is a property of
+   * the **file**, not of the connection, so the winner's conversion is the loser's too, and the
+   * loser simply carries on in the mode that was just set for it. The alternative — failing —
+   * would make one of two identical commands report that the data directory is unreadable.
+   */
+  try {
+    db.pragma("journal_mode = WAL");
+  } catch {
+    // See above: the other process has already put the file in the mode we wanted.
+  }
   db.pragma("foreign_keys = ON");
 
-  // Creates the tables, or refuses a file this build cannot read. See `schema.ts`.
-  applySchema(db);
-
-  // Columns added since `messages` was first written. `applySchema` is `CREATE TABLE IF NOT
-  // EXISTS`, so a database that already has the table never gains them from the DDL alone —
-  // which is exactly the gap `ensureColumn` exists to close. Nothing to backfill, so the
-  // return value is ignored.
-  ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
-
   /*
-   * Copilots became owned and publishable, and a conversation now snapshots the Copilot it was
-   * started from instead of re-reading it every turn.
+   * Everything that changes the file's *shape* is one write, with the lock taken up front.
    *
-   * `user_id` carries no default on purpose — see the note in `schema.ts`. Every read names the
-   * owner in its `WHERE`, so an ownerless row is matched by nothing and goes missing rather
-   * than being handed to whoever asked.
+   * Two processes can now do this at once — the administrator CLI is designed to be run
+   * twice, and the control panel and a terminal can both be open — and as separate
+   * statements the sequence is not safe. `ensureColumn` reads `PRAGMA table_info` and then
+   * runs `ALTER TABLE`, so two of them racing both decide the column is missing and one
+   * fails; and a write that has to wait for another connection's lock can surface as
+   * "database is locked" rather than waiting, when it is an *upgrade* SQLite refuses to
+   * retry. `BEGIN IMMEDIATE` is what makes the wait happen at the start, where the busy
+   * timeout applies.
+   *
+   * `journal_mode` above stays outside, deliberately: SQLite will not change it from inside
+   * a transaction.
    */
-  const copilotOwnerAdded = ensureColumn(
-    db,
-    "copilots",
-    "user_id",
-    "user_id TEXT REFERENCES users(id) ON DELETE CASCADE"
-  );
-  ensureColumn(db, "copilots", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'");
-  // Defaulting to 1 preserves the meaning those rows already had: an empty tools list used to
-  // mean "every tool", and it still does wherever all_tools is set.
-  ensureColumn(db, "copilots", "all_tools", "all_tools INTEGER NOT NULL DEFAULT 1");
-  ensureColumn(db, "sessions", "copilot_name", "copilot_name TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "sessions", "system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "sessions", "all_tools", "all_tools INTEGER NOT NULL DEFAULT 1");
-  ensureColumn(db, "sessions", "tools", "tools TEXT NOT NULL DEFAULT '[]'");
-  // No `NOT NULL` and no default, unlike its neighbours above, and the difference is deliberate:
-  // those columns were given a default that *preserved* the meaning their rows already had, and
-  // there is no such value here. `'[]'` would read as "this Copilot installs nothing" for every
-  // Copilot written before the column existed — a decision nobody made, silently narrowing
-  // conversations that were never re-edited. NULL means "never set", which resolves to the
-  // defaults in `mapCopilot`, so an untouched Copilot behaves exactly as it did before.
-  ensureColumn(db, "copilots", "widgets", "widgets TEXT");
+  db.transaction(() => {
+    // Creates the tables, or refuses a file this build cannot read. See `schema.ts`.
+    applySchema(db);
 
-  /*
-   * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
-   * that gives Copilots an owner.
-   *
-   * Rows written before that column have no owner and no way to infer one, so they are dropped
-   * rather than guessed at. `foreign_keys` is ON, so this fires `sessions.copilot_id`'s
-   * `ON DELETE SET NULL` and no conversation is removed. Two consequences are worth knowing and
-   * are the reason this comment is long:
-   *
-   * - A conversation keeps its copied generation `settings` but loses its Copilot's persona,
-   *   falling back to the built-in system prompt.
-   * - A conversation that was running under a **tool-restricted** Copilot becomes unrestricted,
-   *   because its snapshot is empty and an empty allowlist reads as "all tools". That widening
-   *   is real; it is accepted here because the alternative was refusing the database outright.
-   */
-  if (copilotOwnerAdded) db.exec("DELETE FROM copilots");
+    // Columns added since `messages` was first written. `applySchema` is `CREATE TABLE IF NOT
+    // EXISTS`, so a database that already has the table never gains them from the DDL alone —
+    // which is exactly the gap `ensureColumn` exists to close. Nothing to backfill, so the
+    // return value is ignored.
+    ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
+
+    /*
+     * Accounts grew a credential, and the four columns are added rather than version-bumped
+     * because none of them changes what an existing column means — `username` still names the
+     * same person, and `slug` still names the same directory. See the note at the top of
+     * `schema.ts` for where the line is.
+     *
+     * `password_hash` is the one addition with no default, and that is the point: NULL means
+     * "this account has never been given a password", which is every row carried over from the
+     * build where a username was the credential. `hasPasswordAccounts` reads exactly that, so
+     * such an installation reopens the first-run screen instead of becoming one nobody can
+     * enter. The other three take defaults that *preserve* what those rows already meant:
+     * an account with no roles declared is an ordinary user, and no existing account is
+     * disabled or owes a password change.
+     */
+    ensureColumn(db, "users", "password_hash", "password_hash TEXT");
+    ensureColumn(db, "users", "roles", `roles TEXT NOT NULL DEFAULT '["user"]'`);
+    ensureColumn(db, "users", "must_change_password", "must_change_password INTEGER NOT NULL DEFAULT 0");
+    ensureColumn(db, "users", "disabled", "disabled INTEGER NOT NULL DEFAULT 0");
+
+    /*
+     * Copilots became owned and publishable, and a conversation now snapshots the Copilot it was
+     * started from instead of re-reading it every turn.
+     *
+     * `user_id` carries no default on purpose — see the note in `schema.ts`. Every read names the
+     * owner in its `WHERE`, so an ownerless row is matched by nothing and goes missing rather
+     * than being handed to whoever asked.
+     */
+    const copilotOwnerAdded = ensureColumn(
+      db,
+      "copilots",
+      "user_id",
+      "user_id TEXT REFERENCES users(id) ON DELETE CASCADE"
+    );
+    ensureColumn(db, "copilots", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'");
+    // Defaulting to 1 preserves the meaning those rows already had: an empty tools list used to
+    // mean "every tool", and it still does wherever all_tools is set.
+    ensureColumn(db, "copilots", "all_tools", "all_tools INTEGER NOT NULL DEFAULT 1");
+    ensureColumn(db, "sessions", "copilot_name", "copilot_name TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "sessions", "system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "sessions", "all_tools", "all_tools INTEGER NOT NULL DEFAULT 1");
+    ensureColumn(db, "sessions", "tools", "tools TEXT NOT NULL DEFAULT '[]'");
+    // No `NOT NULL` and no default, unlike its neighbours above, and the difference is deliberate:
+    // those columns were given a default that *preserved* the meaning their rows already had, and
+    // there is no such value here. `'[]'` would read as "this Copilot installs nothing" for every
+    // Copilot written before the column existed — a decision nobody made, silently narrowing
+    // conversations that were never re-edited. NULL means "never set", which resolves to the
+    // defaults in `mapCopilot`, so an untouched Copilot behaves exactly as it did before.
+    ensureColumn(db, "copilots", "widgets", "widgets TEXT");
+
+    /*
+     * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
+     * that gives Copilots an owner.
+     *
+     * Rows written before that column have no owner and no way to infer one, so they are dropped
+     * rather than guessed at. `foreign_keys` is ON, so this fires `sessions.copilot_id`'s
+     * `ON DELETE SET NULL` and no conversation is removed. Two consequences are worth knowing and
+     * are the reason this comment is long:
+     *
+     * - A conversation keeps its copied generation `settings` but loses its Copilot's persona,
+     *   falling back to the built-in system prompt.
+     * - A conversation that was running under a **tool-restricted** Copilot becomes unrestricted,
+     *   because its snapshot is empty and an empty allowlist reads as "all tools". That widening
+     *   is real; it is accepted here because the alternative was refusing the database outright.
+     */
+    if (copilotOwnerAdded) db.exec("DELETE FROM copilots");
+  }).immediate();
 
   const now = () => new Date().toISOString();
 
@@ -1170,7 +1396,41 @@ export function createDb(dbPath: string): AppDb {
   // other than this statement.
   const stmtFindUserByUsername = db.prepare("SELECT * FROM users WHERE username = ? COLLATE NOCASE");
   const stmtCreateUser = db.prepare(
-    "INSERT INTO users (id, username, slug, created_at) VALUES (@id, @username, @slug, @createdAt)"
+    `INSERT INTO users (id, username, slug, password_hash, roles, must_change_password, created_at)
+     VALUES (@id, @username, @slug, @passwordHash, @roles, @mustChangePassword, @createdAt)`
+  );
+  const stmtSetUserPassword = db.prepare(
+    "UPDATE users SET password_hash = @passwordHash, must_change_password = @mustChangePassword WHERE id = @id"
+  );
+  const stmtSetUserRoles = db.prepare("UPDATE users SET roles = @roles WHERE id = @id");
+  const stmtSetUserDisabled = db.prepare("UPDATE users SET disabled = @disabled WHERE id = @id");
+  // `EXISTS` rather than a count: the question is yes or no, and the plan stops at the first
+  // row instead of walking an index over every account.
+  const stmtHasPasswordAccounts = db.prepare(
+    "SELECT EXISTS (SELECT 1 FROM users WHERE password_hash IS NOT NULL) AS found"
+  );
+
+  /* ------------------------------- auth tokens ------------------------------ */
+  const stmtCreateAuthToken = db.prepare(
+    `INSERT INTO auth_tokens (id, user_id, kind, expires_at, created_at)
+     VALUES (@id, @userId, @kind, @expiresAt, @createdAt)`
+  );
+  const stmtGetAuthToken = db.prepare("SELECT * FROM auth_tokens WHERE id = ?");
+  const stmtTouchAuthToken = db.prepare("UPDATE auth_tokens SET last_used_at = ? WHERE id = ?");
+  const stmtRevokeAuthToken = db.prepare(
+    "UPDATE auth_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL"
+  );
+  // Scoped to rows that are still live, so the count means "sessions ended" rather than
+  // "rows touched", and re-running it is honestly zero.
+  const stmtRevokeUserTokens = db.prepare(
+    "UPDATE auth_tokens SET revoked_at = @at WHERE user_id = @userId AND revoked_at IS NULL"
+  );
+  const stmtRevokeUserTokensOfKind = db.prepare(
+    `UPDATE auth_tokens SET revoked_at = @at
+      WHERE user_id = @userId AND kind = @kind AND revoked_at IS NULL`
+  );
+  const stmtPruneAuthTokens = db.prepare(
+    "DELETE FROM auth_tokens WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)"
   );
 
   /* -------------------------------- sources -------------------------------- */
@@ -1668,11 +1928,13 @@ export function createDb(dbPath: string): AppDb {
   const listMessagesOf = (sessionId: string): Message[] =>
     (stmtListMessages.all(sessionId) as MessageRow[]).map(mapMessage);
 
+  const listUsersOf = (): UserRecord[] => (stmtListUsers.all() as UserRow[]).map(mapUser);
+
   return {
     raw: db,
 
     listUsers() {
-      return (stmtListUsers.all() as UserRow[]).map(mapUser);
+      return listUsersOf();
     },
     getUser(id) {
       const r = stmtGetUser.get(id) as UserRow | undefined;
@@ -1683,9 +1945,70 @@ export function createDb(dbPath: string): AppDb {
       return r ? mapUser(r) : undefined;
     },
     createUser(input) {
-      stmtCreateUser.run({ ...input, createdAt: now() });
+      stmtCreateUser.run({
+        id: input.id,
+        username: input.username,
+        slug: input.slug,
+        passwordHash: input.passwordHash ?? null,
+        // The least privilege when the caller does not say, matching the column's own default:
+        // an account inserted by something that forgot to name the roles is an ordinary one.
+        roles: JSON.stringify(input.roles ?? DEFAULT_USER_ROLES),
+        mustChangePassword: input.mustChangePassword ? 1 : 0,
+        createdAt: now(),
+      });
       const r = stmtGetUser.get(input.id) as UserRow;
       return mapUser(r);
+    },
+    setUserPassword(id, passwordHash, mustChangePassword) {
+      stmtSetUserPassword.run({ id, passwordHash, mustChangePassword: mustChangePassword ? 1 : 0 });
+      const r = stmtGetUser.get(id) as UserRow | undefined;
+      return r ? mapUser(r) : undefined;
+    },
+    setUserRoles(id, roles) {
+      stmtSetUserRoles.run({ id, roles: JSON.stringify(roles) });
+      const r = stmtGetUser.get(id) as UserRow | undefined;
+      return r ? mapUser(r) : undefined;
+    },
+    setUserDisabled(id, disabled) {
+      stmtSetUserDisabled.run({ id, disabled: disabled ? 1 : 0 });
+      const r = stmtGetUser.get(id) as UserRow | undefined;
+      return r ? mapUser(r) : undefined;
+    },
+    hasPasswordAccounts() {
+      return (stmtHasPasswordAccounts.get() as { found: number }).found === 1;
+    },
+    hasSuperadmin() {
+      // A scan of `users` in JS rather than a SQL `LIKE` over the roles JSON, and the table is
+      // the reason it is affordable: this is one person's installations, so it holds a handful
+      // of rows. `roles` is a JSON array, and matching it with `LIKE '%"superadmin"%'` would
+      // be a second, looser reading of the same column — the kind of thing that agrees with
+      // `isEnabledSuperadmin` right up until it does not.
+      return listUsersOf().some(isEnabledSuperadmin);
+    },
+
+    createAuthToken(input) {
+      stmtCreateAuthToken.run({ ...input, createdAt: now() });
+      const r = stmtGetAuthToken.get(input.id) as AuthTokenRow;
+      return toAuthTokenRecord(r);
+    },
+    getAuthToken(id) {
+      const r = stmtGetAuthToken.get(id) as AuthTokenRow | undefined;
+      return r ? toAuthTokenRecord(r) : undefined;
+    },
+    touchAuthToken(id, at) {
+      stmtTouchAuthToken.run(at, id);
+    },
+    revokeAuthToken(id, at) {
+      return stmtRevokeAuthToken.run(at, id).changes > 0;
+    },
+    revokeUserTokens(userId, at) {
+      return stmtRevokeUserTokens.run({ userId, at }).changes;
+    },
+    revokeUserTokensOfKind(userId, kind, at) {
+      return stmtRevokeUserTokensOfKind.run({ userId, kind, at }).changes;
+    },
+    pruneAuthTokens(before) {
+      return stmtPruneAuthTokens.run(before, before).changes;
     },
 
     findSourceByHash(userId, sha256) {

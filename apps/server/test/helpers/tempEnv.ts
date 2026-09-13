@@ -4,7 +4,14 @@ import { join } from "node:path";
 // From `fastify`, which re-exports both, rather than from `light-my-request` directly: that
 // package is a transitive dependency and is not something this one may name.
 import type { InjectOptions, LightMyRequestResponse } from "fastify";
-import type { Attachment, Session, User, Workspace } from "@ilearnassist/shared";
+import type {
+  Attachment,
+  AuthResult,
+  Session,
+  User,
+  UserCredentials,
+  Workspace,
+} from "@ilearnassist/shared";
 import type {
   AppConfig,
   DocumentParserDef,
@@ -15,6 +22,7 @@ import type {
   WebSearchConfig,
 } from "../../src/config.js";
 import { userLayout, type UserLayout } from "../../src/paths.js";
+import { createAdmin } from "../../src/adminCli.js";
 import { buildServer, type BuiltServer } from "../../src/server.js";
 import type { FakeLlm } from "./fakeLlm.js";
 import type { FakeParser } from "./fakeParser.js";
@@ -79,63 +87,114 @@ export interface TestEnv {
   config: AppConfig;
   /** The chosen data root. `users/` and `db/` live here, and nothing writes above it. */
   dataRoot: string;
-  /** The account tests act as. Created by signing in; see `asUser` for a second one. */
+  /** The account tests act as. A superadmin, created by the harness; see `asUser` for a second. */
   user: User;
+  /**
+   * That account's access token.
+   *
+   * For the handful of tests that are about the credential rather than about a request —
+   * expiry, revocation, the wrong kind of token. Anything that is about a *route* should use
+   * `inject`, which already carries it.
+   */
+  token: string;
   /** That account's tree — where its workspaces and (later) its sources live. */
   userLayout: UserLayout;
   /** Shorthand for `userLayout.workspacesRoot`, which is what most tests reach for. */
   workspacesRoot: string;
   server: BuiltServer;
   /**
-   * `app.inject`, with the signed-in account's cookie already attached.
+   * `app.inject`, with the signed-in account's bearer token already attached.
    *
    * The point is that almost every test wants a request *as somebody* and none of them wants
-   * to think about cookies — the session is the harness's business, not the assertion's. The
+   * to think about tokens — the session is the harness's business, not the assertion's. The
    * raw `server.app.inject` is still there for the tests that are about the gate itself,
-   * where the missing cookie is the subject.
+   * where the missing header is the subject.
    */
   inject(opts: InjectOptions): Promise<LightMyRequestResponse>;
-  /** Sign in as another account, creating it if it is new. */
+  /**
+   * Create a second account and sign in as it.
+   *
+   * Goes the whole way round — the console's create route, the first sign-in with the
+   * password it was handed, then the password change that state demands. That is longer than
+   * writing a row directly, and it is the point: an account made any other way would sit in a
+   * state no real account is ever in, and every test using it would be testing that state.
+   */
   asUser(username: string): Promise<{ user: User; inject: TestEnv["inject"] }>;
   cleanup(): Promise<void>;
 }
 
-/** The header name the cookie travels in — lowercase, as Node's HTTP layer reports it. */
-const COOKIE = "cookie";
+/** The header name a token travels in — lowercase, as Node's HTTP layer reports it. */
+const AUTHORIZATION = "authorization";
 
 /**
- * Sign in over the real route and keep the cookie.
+ * The password every harness account ends up with.
  *
- * Deliberately the real route rather than a hand-built cookie: the signing, the response
- * header and the parsing are exactly the parts a test would get subtly wrong if it made its
- * own, and the login route is one of the things worth exercising.
+ * Fixed rather than random so a failure names something a person can type, and comfortably
+ * past `PASSWORD_MIN_LENGTH` so nothing here trips the policy it is meant to exercise.
  */
-async function signIn(
+export const TEST_PASSWORD = "test-password-1234";
+
+const bearer = (token: string): Record<string, string> => ({
+  [AUTHORIZATION]: `Bearer ${token}`,
+});
+
+/** An `inject` that carries one account's token. */
+function injectAs(server: BuiltServer, token: string): TestEnv["inject"] {
+  return (opts) => server.app.inject({ ...opts, headers: { ...opts.headers, ...bearer(token) } });
+}
+
+/**
+ * Sign in over the real route and keep the access token.
+ *
+ * Deliberately the real route rather than a hand-built header: the hashing, the reply shape
+ * and the token's own lookup are exactly the parts a test would get subtly wrong if it made
+ * its own, and the login route is one of the things worth exercising.
+ */
+async function authenticate(
   server: BuiltServer,
-  username: string
-): Promise<{ user: User; cookie: string; inject: TestEnv["inject"] }> {
+  username: string,
+  password: string
+): Promise<{ user: User; token: string; inject: TestEnv["inject"] }> {
   const res = await server.app.inject({
     method: "POST",
     url: "/api/auth/login",
-    payload: { username },
+    payload: { username, password },
   });
   if (res.statusCode !== 200) {
     throw new Error(`sign-in failed for "${username}": ${res.statusCode} ${res.body}`);
   }
-
-  const header = res.headers["set-cookie"];
-  const raw = Array.isArray(header) ? header[0] : header;
-  if (!raw) throw new Error(`sign-in for "${username}" returned no cookie`);
-  // Only the `name=value` pair: the attributes (`Path`, `Max-Age`, …) are instructions to a
-  // browser, and sending them back is not what a cookie header looks like.
-  const cookie = String(raw).split(";")[0] ?? "";
-
+  const body = res.json<AuthResult>();
   return {
-    user: res.json<User>(),
-    cookie,
-    inject: (opts) =>
-      server.app.inject({ ...opts, headers: { ...opts.headers, [COOKIE]: cookie } }),
+    user: body.user,
+    token: body.tokens.accessToken,
+    inject: injectAs(server, body.tokens.accessToken),
   };
+}
+
+/**
+ * Make this root's first administrator, the way the control panel does.
+ *
+ * Through `createAdmin`, which is the *only* implementation of the bootstrap in the product —
+ * the same function the CLI wraps. Nothing here writes a user row behind its back, so a test
+ * root is in a state a real one can be in, and a change to the rules is a change these tests
+ * see.
+ *
+ * The sign-in that follows is a real one, so the token `inject` carries is a token the server
+ * issued rather than one built for the harness.
+ */
+async function bootstrapAdmin(
+  server: BuiltServer,
+  username: string
+): Promise<{ user: User; token: string; inject: TestEnv["inject"] }> {
+  const outcome = await createAdmin({
+    dataRoot: server.dataRoot,
+    username,
+    password: TEST_PASSWORD,
+  });
+  if (!outcome.ok) {
+    throw new Error(`creating the administrator failed: ${JSON.stringify(outcome.body)}`);
+  }
+  return authenticate(server, username, TEST_PASSWORD);
 }
 
 /** A provider record pointing at a fake LLM. `apiKey` is required by `buildModel`. */
@@ -163,7 +222,23 @@ export function keylessProvider(id = "keyless"): ProviderDef {
   };
 }
 
-export async function startTestServer(options: TestServerOptions = {}): Promise<TestEnv> {
+/** The server on its own, with no account in it. What `startTestServer` builds on. */
+export interface BareServer {
+  config: AppConfig;
+  dataRoot: string;
+  server: BuiltServer;
+  cleanup(): Promise<void>;
+}
+
+/**
+ * Boot the server against a throwaway root and stop there.
+ *
+ * For the tests that are about the state a root *starts* in: the first-run screen is only
+ * reachable while no account has a password, so a harness that had already created one would
+ * be the thing standing in the way of the assertion. Everything else wants
+ * `startTestServer`, which calls this and then signs somebody in.
+ */
+export async function startBareServer(options: TestServerOptions = {}): Promise<BareServer> {
   // Only a root this helper created is removed on cleanup. One the caller named is theirs,
   // which is what lets a test boot the same tree twice and watch the second boot find what
   // the first one left behind.
@@ -220,28 +295,59 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   const server = await buildServer({ config, dataRoot, logger: false, webDir: options.webDir });
   await server.app.ready();
 
-  // Signing in is what creates the account, so the harness has somebody to be before any
-  // test runs — and it goes through the real route, which means the cookie in `inject` is a
-  // cookie the server actually issued.
-  const signedIn = await signIn(server, options.username ?? "tester");
-  const userLayout_ = userLayout(server.layout, signedIn.user.slug);
-
   return {
     config,
     dataRoot,
-    user: signedIn.user,
-    userLayout: userLayout_,
-    workspacesRoot: userLayout_.workspacesRoot,
     server,
-    inject: signedIn.inject,
-    async asUser(username) {
-      const other = await signIn(server, username);
-      return { user: other.user, inject: other.inject };
-    },
     async cleanup() {
       await server.app.close();
       server.db.raw.close();
       if (ownsRoot) rmSync(dataRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+export async function startTestServer(options: TestServerOptions = {}): Promise<TestEnv> {
+  const bare = await startBareServer(options);
+
+  // A fresh data root has nobody in it, so the harness creates the first administrator before
+  // any test runs — through the real first-run route, which means the token in `inject` is one
+  // the server actually issued.
+  const signedIn = await bootstrapAdmin(bare.server, options.username ?? "tester");
+  const userLayout_ = userLayout(bare.server.layout, signedIn.user.slug);
+
+  return {
+    ...bare,
+    user: signedIn.user,
+    token: signedIn.token,
+    userLayout: userLayout_,
+    workspacesRoot: userLayout_.workspacesRoot,
+    inject: signedIn.inject,
+    async asUser(username) {
+      const created = await signedIn.inject({
+        method: "POST",
+        url: "/api/admin/users",
+        payload: { username },
+      });
+      if (created.statusCode !== 200) {
+        throw new Error(`creating "${username}" failed: ${created.statusCode} ${created.body}`);
+      }
+      const { password } = created.json<UserCredentials>();
+
+      // Signing in leaves the account owing a password change, which is a state every other
+      // route refuses. Spending it here is what makes the returned `inject` usable, and it
+      // exercises the forced-change path on every second account the suite makes.
+      const first = await authenticate(bare.server, username, password);
+      const settled = await first.inject({
+        method: "POST",
+        url: "/api/auth/password",
+        payload: { oldPassword: password, newPassword: TEST_PASSWORD },
+      });
+      if (settled.statusCode !== 200) {
+        throw new Error(`changing "${username}"'s password failed: ${settled.statusCode} ${settled.body}`);
+      }
+      const { tokens } = settled.json<AuthResult>();
+      return { user: first.user, inject: injectAs(bare.server, tokens.accessToken) };
     },
   };
 }

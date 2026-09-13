@@ -5,7 +5,10 @@ import { useAppStore } from "./stores/app";
 import Sidebar from "./components/Sidebar.vue";
 import ChatView from "./components/ChatView.vue";
 import WorkspaceHome from "./components/WorkspaceHome.vue";
+import AccountView from "./components/AccountView.vue";
+import AdminConsole from "./components/AdminConsole.vue";
 import LoginView from "./components/LoginView.vue";
+import ChangePasswordView from "./components/ChangePasswordView.vue";
 import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
@@ -138,8 +141,12 @@ watch(
   <div
     class="app"
     :class="{
-      home: uiState.view === 'home',
-      auth: uiState.view === 'login',
+      /* The three single-column pages, and the sign-in pair among them. `auth` is what the
+         password-change screen shares with the sign-in screen: both are one centred card with
+         no sidebar, which is a layout rather than a session state. The `home` class is the
+         same rule for the pages that do have a header — see `style.css`. */
+      home: uiState.view === 'home' || uiState.view === 'account' || uiState.view === 'admin',
+      auth: uiState.view === 'login' || uiState.view === 'password',
       /* The rail is a grid *track*, not a width on the sidebar. See `sidebarRail` for the
          two conditions inside it, and `style.css` for why the track is the element that
          has to move. */
@@ -152,8 +159,18 @@ watch(
   >
     <LoginView v-if="uiState.authReady && uiState.view === 'login'" />
 
+    <!-- Signed in, and held here until a password is chosen. Its own branch rather than a
+         dialog over the app: the server refuses every other route in this state, so there is
+         no app behind it to draw. -->
+    <ChangePasswordView v-else-if="uiState.authReady && uiState.view === 'password'" />
+
     <template v-else-if="uiState.authReady">
       <WorkspaceHome v-if="uiState.view === 'home'" />
+
+      <AccountView v-else-if="uiState.view === 'account'" />
+      <!-- Superadmin-only, and the server is what enforces it — this branch is the shape of
+           the feature. Reached from the account page and the workspace home. -->
+      <AdminConsole v-else-if="uiState.view === 'admin'" />
 
       <template v-else>
         <Sidebar :inert="!uiState.drawerOpen && isCompact" />

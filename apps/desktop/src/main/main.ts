@@ -9,9 +9,10 @@ import {
   nativeTheme,
   shell,
 } from "electron";
+import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
-import { PANEL_CHANNELS, type PanelState } from "../shared/panelApi.js";
+import { PANEL_CHANNELS, type PanelState, type ResetResult } from "../shared/panelApi.js";
 import {
   PANEL_MESSAGES,
   resolvePanelLocale,
@@ -24,6 +25,7 @@ import {
   buildLaunchSpec,
   serverEntryFor,
 } from "./launch.js";
+import { createFirstAdministrator, queryAdministrator } from "./admin.js";
 import { findLanAddress, lanUrlFor } from "./lan.js";
 import { hasExistingData, resolveAppPaths, seedFirstRun, type AppPaths } from "./paths.js";
 import { readSettings, writeSettings, type DesktopSettings } from "./settings.js";
@@ -106,6 +108,48 @@ function resolveDataDir(): string {
 }
 
 /**
+ * Whether this data root still needs its first administrator.
+ *
+ * Cached and broadcast as a *hint*; `currentState` stays synchronous and the authoritative
+ * answer is asked fresh before a Start and after a create. Undefined until the first check,
+ * so the panel neither claims "ready" nor "create one" before it has looked.
+ */
+let needsAdmin: boolean | undefined;
+let checkingAdmin = false;
+
+function adminContext() {
+  return {
+    electronExecPath: process.execPath,
+    appRoot,
+    paths,
+    dataDir: resolveDataDir(),
+  };
+}
+
+async function refreshAdminState(): Promise<boolean | undefined> {
+  if (checkingAdmin) return needsAdmin;
+  const dataDir = resolveDataDir();
+  if (!dataDir) {
+    needsAdmin = undefined;
+    broadcast();
+    return needsAdmin;
+  }
+  checkingAdmin = true;
+  try {
+    const result = await queryAdministrator(adminContext());
+    if (result.ok) needsAdmin = !result.status.hasAdmin;
+  } catch {
+    // A check failing leaves the hint unset rather than wrong: the server's own refusal is
+    // the backstop, and an unreadable database is reported when the user tries to create one.
+    needsAdmin = undefined;
+  } finally {
+    checkingAdmin = false;
+  }
+  broadcast();
+  return needsAdmin;
+}
+
+/**
  * Everything the panel renders.
  *
  * `sharedOnLan` is read from the setting rather than from the process, because it is what
@@ -125,6 +169,7 @@ function currentState(): PanelState {
     lanUrl: settings.sharedOnLan ? lanUrlFor(status.url, lanAddress) : null,
     lanAddress,
     needsDataDir: !resolveDataDir(),
+    needsAdmin,
   };
 }
 
@@ -213,10 +258,12 @@ async function chooseDataDir(): Promise<PanelState> {
     console.error("Could not save the desktop settings:", err);
   }
 
-  // Restarted unconditionally rather than only when it was up: the point of choosing is to
-  // end up with a running server in the chosen place.
+  // Stopped unconditionally rather than only when it was up, since the data root changed.
+  // The server is **not** auto-started on the way through: a freshly chosen folder usually
+  // has no administrator yet, and the server refuses to listen without one. Checking first
+  // lets the panel show the create control instead of reporting a start failure.
   await server.stop();
-  await server.start();
+  await refreshAdminState();
 
   broadcast();
   return currentState();
@@ -388,6 +435,16 @@ function refreshTrayMenu(): void {
 
 // ---- wiring ----------------------------------------------------------------
 
+/**
+ * The secret this launch shares with the server it spawns.
+ *
+ * Generated once per launch of the panel and never written anywhere — not to `desktop.json`,
+ * not to the config overlay, not to a log line. It exists so the server can tell a request
+ * that came from this process from one that came from the network, and a fresh panel is a
+ * fresh secret with nothing to revoke. See `ILA_PANEL_TOKEN` in `apps/server/src/auth.ts`.
+ */
+let panelToken = "";
+
 function registerIpc(): void {
   ipcMain.handle(PANEL_CHANNELS.getState, () => currentState());
   ipcMain.handle(PANEL_CHANNELS.start, async () => {
@@ -396,7 +453,14 @@ function registerIpc(): void {
     // server's own sentence about an unset environment variable, which names the cause and
     // offers the user nothing.
     if (!resolveDataDir()) return chooseDataDir();
-    await server.start();
+    // Asked fresh rather than trusted from the cache. The server itself refuses to listen
+    // without an administrator, so a stale "ready" hint here would turn this button into the
+    // exact failure ("exited 1", no cause) the create flow exists to prevent. Two layers:
+    // the panel refuses before spawning, the server refuses after, and they agree.
+    const has = await refreshAdminState();
+    if (has) {
+      await server.start();
+    }
     return currentState();
   });
   ipcMain.handle(PANEL_CHANNELS.stop, async () => {
@@ -419,10 +483,78 @@ function registerIpc(): void {
     const failure = await shell.openPath(resolveDataDir() || paths.root);
     if (failure) console.error("Could not open the data folder:", failure);
   });
+  ipcMain.handle(PANEL_CHANNELS.resetAdminPassword, () => resetAdminPassword());
+  ipcMain.handle(PANEL_CHANNELS.adminStatus, () => refreshAdminState());
+  ipcMain.handle(PANEL_CHANNELS.createAdministrator, async (_event, input: unknown) => {
+    const username =
+      typeof input === "object" && input !== null && "username" in input
+        ? String((input as { username: unknown }).username ?? "")
+        : "";
+    const password =
+      typeof input === "object" && input !== null && "password" in input
+        ? String((input as { password: unknown }).password ?? "")
+        : "";
+    const result = await createFirstAdministrator(adminContext(), { username, password });
+    if (result.ok) await refreshAdminState();
+    return result;
+  });
   ipcMain.handle(PANEL_CHANNELS.quit, () => {
     quitting = true;
     app.quit();
   });
+}
+
+/**
+ * Ask the server to replace the administrator's password, and report what came back.
+ *
+ * A conversation with the *child process* rather than a write to the database, and that is
+ * deliberate: the server owns the schema, the hashing and the token table, and a second
+ * implementation of any of them in the panel is a second thing to keep in step. The secret
+ * makes the route reachable only from here; everything else about it is the server's business.
+ *
+ * Every failure is described rather than thrown: this is a button on a page, and a rejection
+ * crossing the IPC boundary would reach the renderer as an unhandled promise with nothing to
+ * render.
+ */
+async function resetAdminPassword(): Promise<ResetResult | null> {
+  const url = server.status().url;
+  if (!url) return { ok: false, fault: { code: "not_running" } };
+
+  // Confirmed first, and for the same reason choosing a data folder is: this is destructive in
+  // a way the button's four words cannot convey — it replaces the credential of the one
+  // account that can do everything, and signs it out wherever it is.
+  const { response } = await dialog.showMessageBox({
+    type: "warning",
+    message: t("reset.confirmTitle"),
+    detail: t("reset.confirmDetail"),
+    buttons: [t("reset.confirm"), t("action.cancel")],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return null;
+
+  try {
+    const res = await fetch(new URL("/api/auth/panel-reset", url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-ila-panel-token": panelToken },
+      body: "{}",
+    });
+
+    if (res.ok) {
+      const body = (await res.json()) as { user: { username: string }; password: string };
+      return { ok: true, username: body.user.username, password: body.password };
+    }
+    // 404 is the server's "there is no account to reset" — either nobody has been created on
+    // this data root yet, or the build predates the route. The first is the ordinary case and
+    // the one the panel has wording for, so it gets its own answer.
+    if (res.status === 404) return { ok: false, fault: { code: "no_admin" } };
+    return { ok: false, fault: { code: "unreachable", message: `HTTP ${res.status}` } };
+  } catch (error) {
+    return {
+      ok: false,
+      fault: { code: "unreachable", message: error instanceof Error ? error.message : String(error) },
+    };
+  }
 }
 
 function buildMenu(): void {
@@ -508,6 +640,8 @@ if (!app.requestSingleInstanceLock()) {
     seedFirstRun(paths);
     settings = readSettings(settingsFile);
 
+    panelToken = randomUUID();
+
     server = new ServerProcess(
       // Read at every start, so flipping the switch — or choosing a different data folder —
       // takes effect on the restart that follows it without replacing this object, which
@@ -519,6 +653,7 @@ if (!app.requestSingleInstanceLock()) {
           paths,
           dataDir: resolveDataDir(),
           host: settings.sharedOnLan ? ANY_INTERFACE_HOST : LOOPBACK_HOST,
+          panelToken,
         }),
       { dataDir: resolveDataDir() }
     );
@@ -534,11 +669,15 @@ if (!app.requestSingleInstanceLock()) {
     // running. A user who wants it stopped has a button; a user who has to remember to press
     // "start" before anything works has a puzzle.
     //
-    // Except when nobody has said where the data goes: then there is nothing to start, and
-    // the panel's job is to ask. Starting anyway would fail with the server's own message
-    // about an unset environment variable, which is a sentence about our implementation
-    // rather than a question the user can answer.
-    if (resolveDataDir()) await server.start();
+    // Two exceptions, both states with nothing the server can serve:
+    // - nobody has said where the data goes, so the panel asks for a folder;
+    // - the folder has no administrator, so the server would refuse to listen and the panel's
+    //   job is the create control. The check broadcasts `needsAdmin` either way, so the panel
+    //   shows the right thing; starting is what the user does once they have made one.
+    if (resolveDataDir()) {
+      const has = await refreshAdminState();
+      if (has) await server.start();
+    }
 
     app.on("activate", () => showPanel());
   });

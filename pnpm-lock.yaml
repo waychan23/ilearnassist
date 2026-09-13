@@ -127,6 +127,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@ilearnassist/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3

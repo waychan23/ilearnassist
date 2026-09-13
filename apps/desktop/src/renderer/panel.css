@@ -589,3 +589,158 @@ body.is-mac {
     transition-duration: 0ms !important;
   }
 }
+
+/*
+ * The administrator's new password, once it has been generated.
+ *
+ * A card of its own rather than a line in the status area, because it is the one thing on this
+ * panel that has to survive being read *after* the click that produced it — and because the
+ * password is shown once and never again, so a reader who looks away needs the block to still
+ * be where they left it.
+ *
+ * The colours are picked by state rather than by hand: a fault reads in the warning tone, so
+ * "the reset did not work" cannot be mistaken for "here is your password" at a glance.
+ */
+.reset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.reset[data-state="fault"] {
+  border-color: var(--warning);
+}
+
+.reset__lead {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-2);
+}
+
+.reset__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.reset__row--actions {
+  margin-top: var(--space-2);
+}
+
+.reset__label {
+  flex-shrink: 0;
+  min-width: 72px;
+  color: var(--text-3);
+  font-size: var(--fs-2);
+}
+
+.reset__value {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-3) var(--space-5);
+  overflow-x: auto;
+  background: var(--code-bg);
+  border-radius: var(--radius-xs);
+  color: var(--code-fg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-2);
+  white-space: nowrap;
+  /* Selectable, for the same reason the URL is: it is a string worth copying, and the copy
+     button is a convenience rather than the only way. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* An empty value is a fault, and a gap reads better than an empty box that looks like a
+   credential nobody managed to read. */
+.reset__value:empty {
+  display: none;
+}
+
+/*
+ * The create-administrator card.
+ *
+ * The only account action available with the server stopped, so it sits in the main column
+ * rather than in a menu. It is drawn only for a data folder that has no administrator; on an
+ * installation already set up it never appears, which is the point of the flag.
+ */
+.admin {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-7);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.admin__hint {
+  margin: 0;
+  font-size: var(--fs-2);
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+.admin .button {
+  align-self: flex-start;
+}
+
+/* The create sheet's text fields — the panel has no other inputs, so these live here rather
+   than in a shared stylesheet that would imply there are. */
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.form-field__label {
+  font-size: var(--fs-2);
+  color: var(--text-2);
+}
+
+.form-field__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: var(--fs-3);
+  font-family: inherit;
+}
+
+.form-field__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-field__input:disabled {
+  opacity: 0.6;
+}
+
+.sheet__message--detail {
+  line-height: 1.6;
+}
+
+/* The success line. */
+.sheet__message--ok {
+  color: var(--success, #4caf8a);
+}
+
+.sheet__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-5);
+}
+
+.sheet form,
+.sheet .form-field + .form-field,
+.sheet .form-field + .sheet__message {
+  margin-top: var(--space-5);
+}

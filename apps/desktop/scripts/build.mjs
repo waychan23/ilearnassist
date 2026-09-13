@@ -7,11 +7,15 @@ import * as esbuild from "esbuild";
 /**
  * Assemble everything the Electron app ships.
  *
- * Four bundles come out of this, and each has a different correct answer for `format`:
+ * Five bundles come out of this, and each has a different correct answer for `format`:
  *
  *   dist/server/index.mjs    ESM — Node's own loader, so `import.meta.url` works (the
  *                            server derives its project root from it) and the two external
  *                            packages resolve through normal upward `node_modules` lookup.
+ *   dist/server/cli.mjs      ESM — the administrator bootstrap, the same runtime as the server.
+ *                            It is the *only* way to make the first administrator, and it has
+ *                            to work with the server stopped, which is why it is a separate
+ *                            entry rather than an HTTP route.
  *   dist/main/main.cjs       CJS — Electron's main process, where `.cjs` is what makes the
  *                            file CommonJS despite the package's `"type": "module"`.
  *   dist/main/preload.cjs    CJS — a preload script is loaded by Electron, not by the page.
@@ -65,10 +69,19 @@ const REQUIRE_BANNER = [
   "const require = __glCreateRequire(import.meta.url);",
 ].join("\n");
 
-function bundleServer() {
-  return esbuild.build({
-    entryPoints: [join(repoRoot, "apps/server/src/index.ts")],
-    outfile: join(dist, "server/index.mjs"),
+/**
+ * The options every server-side entry shares.
+ *
+ * The CLI and the long-lived server are built from the same runtime: the same `external`
+ * list (so `better-sqlite3`'s prebuild is found by path rather than inlined), the same banner
+ * (so the CJS dependencies have a real `require`), and the same target. Splitting this out is
+ * what keeps the two from drifting — the CLI reads the same database the server writes, so a
+ * second copy of the bundling rules would fail only when they disagreed.
+ */
+const serverBundle = (entry, outfile) =>
+  esbuild.build({
+    entryPoints: [entry],
+    outfile,
     bundle: true,
     platform: "node",
     format: "esm",
@@ -82,6 +95,15 @@ function bundleServer() {
     sourcemap: false,
     logLevel: "info",
   });
+
+function bundleServer() {
+  return Promise.all([
+    serverBundle(
+      join(repoRoot, "apps/server/src/index.ts"),
+      join(dist, "server/index.mjs")
+    ),
+    serverBundle(join(repoRoot, "apps/server/src/cli.ts"), join(dist, "server/cli.mjs")),
+  ]);
 }
 
 function bundleElectron() {

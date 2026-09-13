@@ -77,6 +77,15 @@ export interface BuildLaunchSpecInput {
    * message naming the variable. The panel does not let it get that far — it asks first.
    */
   dataDir: string;
+  /**
+   * The secret the control panel shares with the server it spawned.
+   *
+   * Passed on every launch and never written anywhere, which is what makes the recovery route
+   * it guards a path *this* process can take and nothing else can. See `ILA_PANEL_TOKEN` in
+   * `apps/server/src/auth.ts` for why the panel is the only thing that may reset an
+   * administrator's password.
+   */
+  panelToken: string;
   /** Defaults to `process.env`; injectable so tests can spawn a plain `node`. */
   baseEnv?: Record<string, string | undefined>;
 }
@@ -86,25 +95,79 @@ export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
     command: input.electronExecPath,
     args: [input.serverEntry],
     env: {
-      ...(input.baseEnv ?? process.env),
-      ELECTRON_RUN_AS_NODE: "1",
-      // The server resolves `config/` against this, which is how the packed app ends up
-      // reading the user's Application Support directory instead of its own read-only bundle.
-      ILA_PROJECT_ROOT: input.paths.root,
-      // ...and the user's data against this, which is a different directory on purpose. One
-      // is the app's to replace, the other is the user's to keep.
-      ILA_DATA_DIR: input.dataDir,
-      // Points at the overlay the app seeds, not at whatever a checkout might have.
-      ILA_CONFIG_PATH: input.paths.overlayFile,
+      ...serverChildEnv(input.paths, input.dataDir, input.baseEnv),
       // The built frontend, shipped in the bundle. The server serves it from the same
-      // origin as the API, so the panel opens one URL and the app just works.
+      // origin as the API, so the panel opens one URL and the app just works. The CLI does
+      // not get it — it never serves a page.
       ILA_WEB_DIR: input.paths.webDir,
       ILA_HOST: input.host,
+      ILA_PANEL_TOKEN: input.panelToken,
     },
+  };
+}
+
+/**
+ * The environment every child that runs as this panel's server runtime shares.
+ *
+ * Split out so the **administrator CLI** gets the same three things — Node mode, the project
+ * root, the data root — without getting the two it does not need: `ILA_HOST`, which is a
+ * listen decision the CLI never makes, and `ILA_PANEL_TOKEN`, whose whole argument is that it
+ * is handed to *one* child, the long-lived server. Widening it to a second process would buy
+ * nothing and widen the secret for no benefit.
+ *
+ * It deliberately carries `ILA_CONFIG_PATH`: the CLI resolves the data root through the same
+ * `resolveDataRoot()` the server uses, and the overlay is where the packed app's config lives.
+ */
+export function serverChildEnv(
+  paths: AppPaths,
+  dataDir: string,
+  baseEnv: Record<string, string | undefined> = process.env
+): Record<string, string | undefined> {
+  return {
+    ...baseEnv,
+    ELECTRON_RUN_AS_NODE: "1",
+    // The server resolves `config/` against this, which is how the packed app ends up
+    // reading the user's Application Support directory instead of its own read-only bundle.
+    ILA_PROJECT_ROOT: paths.root,
+    // ...and the user's data against this, which is a different directory on purpose. One
+    // is the app's to replace, the other is the user's to keep.
+    ILA_DATA_DIR: dataDir,
+    // Points at the overlay the app seeds, not at whatever a checkout might have.
+    ILA_CONFIG_PATH: paths.overlayFile,
+  };
+}
+
+export interface BuildAdminSpecInput {
+  electronExecPath: string;
+  adminEntry: string;
+  paths: AppPaths;
+  dataDir: string;
+  /** The CLI's own arguments, after the entry — `["status", "--json"]` and the like. */
+  args?: string[];
+  baseEnv?: Record<string, string | undefined>;
+}
+
+/**
+ * A one-shot child that creates the first administrator or reports whether one exists.
+ *
+ * Same binary, same Node mode, same data root as the server; different lifetime and a smaller
+ * environment (see `serverChildEnv`). It runs and exits, so the caller gets a result rather
+ * than a process to supervise.
+ */
+export function buildAdminSpec(input: BuildAdminSpecInput): LaunchSpec {
+  return {
+    command: input.electronExecPath,
+    args: [input.adminEntry, ...(input.args ?? [])],
+    env: serverChildEnv(input.paths, input.dataDir, input.baseEnv),
   };
 }
 
 /** Where the bundled server entry lives, relative to a packed app's root. */
 export function serverEntryFor(appRoot: string): string {
   return join(appRoot, "dist", "server", "index.mjs");
+}
+
+/** Where the bundled administrator CLI lives, beside the server entry. */
+export function adminEntryFor(appRoot: string): string {
+  return join(appRoot, "dist", "server", "cli.mjs");
 }

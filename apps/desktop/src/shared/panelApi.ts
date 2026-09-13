@@ -29,6 +29,25 @@ export const PANEL_CHANNELS = {
    */
   chooseDataDir: "panel:choose-data-dir",
   revealDataDir: "panel:reveal-data-dir",
+  /**
+   * Give the installation's administrator a new password.
+   *
+   * The one command here that is not about the server *process*: it is the way back in for an
+   * administrator who cannot sign in, which is the one state the app itself can never resolve.
+   * See `PanelApi.resetAdminPassword`.
+   */
+  resetAdminPassword: "panel:reset-admin-password",
+  /**
+   * Ask the bundled CLI whether this data root has an administrator. The panel needs this
+   * with the server deliberately stopped, so it is a one-shot child rather than a request.
+   */
+  adminStatus: "panel:admin-status",
+  /**
+   * Create the first administrator through that same child. The password is the operator's
+   * own, typed into the panel and handed over stdin, so it never appears in the process
+   * list or a log line.
+   */
+  createAdministrator: "panel:create-administrator",
   quit: "panel:quit",
   /** main → renderer, pushed on every change so the panel never has to poll. */
   stateChanged: "panel:state",
@@ -89,7 +108,74 @@ export interface PanelState {
    * state is to ask — every control that needs a running server is inert until it does.
    */
   needsDataDir: boolean;
+  /**
+   * Whether this data root still needs its first administrator.
+   *
+   * A cached hint, not a fact the panel acts on without asking: `start` re-checks through
+   * the CLI before spawning the server, because the server itself refuses to listen without
+   * one, and a Start that produced "failed: exited 1" is the failure this state exists to
+   * prevent. Undefined while the check has not run.
+   */
+  needsAdmin: boolean | undefined;
 }
+
+/**
+ * Why the administrator command failed.
+ *
+ * Two kinds, on one field. A code from the CLI's own closed set (`PASSWORD_TOO_SHORT`,
+ * `ADMIN_EXISTS`, `SCHEMA_UNREADABLE`, …) means the child ran and its rules refused; the
+ * four boundary codes below mean the child itself could not be run or did not answer. The
+ * renderer maps both with one catalog, keyed on the string, so a new CLI code is a missing
+ * translation rather than a silent untyped string.
+ */
+export interface AdminFault {
+  code: import("@ilearnassist/shared").AdminCliErrorCode | "no_data_dir" | "spawn_failed" | "timed_out" | "bad_response";
+  /** The CLI's own sentence, for the cases where it ran and refused. */
+  message?: string;
+  params?: Record<string, string | number>;
+}
+
+/** The parsed answer to "does this data root have an administrator". */
+export interface AdminStatus {
+  hasAdmin: boolean;
+  /** Who, when known — so the panel can say which account it found. */
+  adminUsername: string | null;
+}
+
+export type AdminStatusResult =
+  | { ok: true; status: AdminStatus }
+  | { ok: false; fault: AdminFault };
+
+/** The new administrator, or why there is not one. */
+export type CreateAdministratorResult =
+  | { ok: true; username: string }
+  | { ok: false; fault: AdminFault };
+
+/**
+ * Why the administrator's password could not be reset.
+ *
+ * A union rather than a sentence, for the reason `ServerFault` is: the panel is bilingual and
+ * this is the side that knows *what* happened. `message` is the fallback for the case with no
+ * code to key on — the server's own wording, or the network's.
+ */
+export type ResetFault =
+  /** Nothing is listening: the server is not up, so there is nobody to ask. */
+  | { code: "not_running" }
+  /** Reachable, and it has no administrator to reset — a data root nobody has set up yet. */
+  | { code: "no_admin" }
+  /** The request itself failed: refused, timed out, or the server said something unexpected. */
+  | { code: "unreachable"; message: string };
+
+/**
+ * The password the reset produced, or why there is not one.
+ *
+ * The password is in the successful arm only, and it is **not** stored anywhere on the way
+ * through — the panel holds it long enough to render it once, exactly as the console does.
+ * Only a hash reaches the database, so a panel that forgot to show it could not fetch it back.
+ */
+export type ResetResult =
+  | { ok: true; username: string; password: string }
+  | { ok: false; fault: ResetFault };
 
 export interface PanelApi {
   getState(): Promise<PanelState>;
@@ -109,6 +195,29 @@ export interface PanelApi {
   /** Opens the same URL in the user's own browser, for bookmarks and devtools. */
   openInBrowser(): Promise<void>;
   revealDataDir(): Promise<void>;
+  /**
+   * Replace the administrator's password with a generated one, and hand it back.
+   *
+   * The way back in when the password is forgotten: every other route needs somebody already
+   * signed in, which is exactly what a forgotten password prevents. Local access to the
+   * machine is the proof of identity here, and turning this panel on is what "local access"
+   * means — the secret it sends was generated for this launch and never leaves the process
+   * tree, so reaching the server over the network does not get anyone one.
+   *
+   * It also ends the administrator's sessions, so a password replaced while the old one is
+   * still live has really been replaced.
+   *
+   * Resolves `null` when the confirmation was dismissed — an outcome rather than a failure,
+   * and a different one from any of `ResetFault`'s.
+   */
+  resetAdminPassword(): Promise<ResetResult | null>;
+  /** Ask the bundled CLI whether this data root has an administrator. */
+  adminStatus(): Promise<AdminStatusResult>;
+  /**
+   * Create the first administrator. The password is typed into the panel and handed over on
+   * stdin, so it never appears in a process argument or a log line.
+   */
+  createAdministrator(input: { username: string; password: string }): Promise<CreateAdministratorResult>;
   quit(): Promise<void>;
   onStateChange(listener: (state: PanelState) => void): () => void;
 }

@@ -70,13 +70,59 @@ export const SCHEMA_VERSION = 2;
  * itself deliberately does not (it keeps the first name it ever saw).
  */
 const DDL = `
+  -- An account carries a password now, which is what changed this table's meaning: a
+  -- username used to *be* the credential, so the login route created the row if the name was
+  -- new. It identifies nobody now — the row has to exist first, and only an administrator
+  -- makes one.
+  --
+  -- password_hash is nullable, and the null is load-bearing rather than transitional: it is
+  -- what "this account has never been given a password" looks like, which is both every row
+  -- carried over from the build without passwords and the state that reopens the first-run
+  -- screen. See hasPasswordAccounts in db.ts, which is the predicate that decides.
+  --
+  -- roles is a JSON array, not a single value, so "which roles does this account hold" is one
+  -- shape whether somebody holds one or three. The DEFAULT is the least privilege, because a
+  -- row inserted by something that forgot to name the roles should not be an administrator.
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
+    password_hash TEXT,
+    roles TEXT NOT NULL DEFAULT '["user"]',
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    disabled INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username COLLATE NOCASE);
+
+  -- One row per issued token. The primary key is the token's **SHA-256**, never the token:
+  -- a database that is read — a backup, a stray copy, this file opened in a sqlite browser —
+  -- would otherwise be a list of working credentials. Nothing needs the plaintext back, so
+  -- there is nothing the hash costs.
+  --
+  -- 'kind' separates the two lifetimes: an access token is accepted by the gate, a refresh
+  -- token only by the refresh route. Without it a refresh token would be a bearer credential
+  -- for the whole API, which is the opposite of the point of having a short-lived one.
+  --
+  -- Revocation is a timestamp rather than a DELETE, so "this token was spent" and "this
+  -- account was signed out everywhere" are both auditable after the fact and neither depends
+  -- on a row surviving elsewhere. expires_at is an ISO string compared lexically, which is
+  -- exact for fixed-width UTC timestamps and is the same thing every other time comparison
+  -- in this codebase does.
+  --
+  -- New table, so no SCHEMA_VERSION bump: the DDL above runs on every open, and the columns
+  -- added to users alongside it go through ensureColumn. Neither changes what an existing
+  -- column means, which is the rule the bump is for — see the note at the top of this file.
+  CREATE TABLE IF NOT EXISTS auth_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    revoked_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id, kind);
 
   CREATE TABLE IF NOT EXISTS workspaces (
     id TEXT PRIMARY KEY,
@@ -396,6 +442,62 @@ const DDL = `
  * means having already opened the file you meant to refuse.
  */
 export function applySchema(db: Database.Database): void {
+  const problem = schemaProblem(db);
+  if (problem) throw new SchemaUnreadableError(problem.found, problem.needed);
+
+  /*
+   * The DDL and the version stamp are **one write**, and that is not tidiness.
+   *
+   * Two of these can now run at once — the administrator CLI is designed to be run twice, and
+   * the control panel and a terminal can both be open — and the pair as separate statements has
+   * a window in which the tables exist and the version has not been written. From outside, that
+   * is *indistinguishable from a pre-versioning database*: tables present, `user_version` still
+   * 0. So the second process would read it as an old file and refuse it, with a message about a
+   * schema version that never existed.
+   *
+   * Inside a transaction a reader sees the file either before the DDL or after the stamp, and
+   * both of those are states this build reads correctly.
+   */
+  db.transaction(() => {
+    db.exec(DDL);
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  })();
+}
+
+/**
+ * A database this build will not open, as a value rather than a thrown sentence.
+ *
+ * The thrown form carries the same two numbers, and both exist because the *refusal* has two
+ * callers with different needs: `applySchema` has to stop, and the administrator CLI's read-only
+ * `status` has to *report* — it must answer "this file is a schema I cannot read" rather than
+ * either throwing a stack at a control panel or, far worse, opening the file and creating a
+ * second empty database beside the real one. Splitting the decision from the throwing is what
+ * keeps those two from being two implementations of the same rule.
+ */
+export class SchemaUnreadableError extends Error {
+  constructor(
+    readonly found: number,
+    readonly needed: number
+  ) {
+    super(
+      `The data directory holds an ilearnassist database created by schema v${found} ` +
+        `(this build needs v${needed}). This build changes where things are stored ` +
+        `and cannot read the old layout. Move it aside, or point ILA_DATA_DIR at a new directory.`
+    );
+    this.name = "SchemaUnreadableError";
+  }
+}
+
+/**
+ * Whether this file's schema is one this build can read, without touching it.
+ *
+ * Read-only by construction — one `pragma` and one `sqlite_master` count — so it is safe on a
+ * handle opened `{ readonly: true }`, and safe to call on a file you have no intention of
+ * writing to. `applySchema` is the only thing that writes, and it calls this first.
+ */
+export function schemaProblem(
+  db: Database.Database
+): { found: number; needed: number } | undefined {
   const found = db.pragma("user_version", { simple: true }) as number;
 
   // A file that has tables but still reports version 0 predates versioning — it is not a
@@ -411,13 +513,7 @@ export function applySchema(db: Database.Database): void {
     ).n > 0;
 
   if (found !== SCHEMA_VERSION && (found !== 0 || hasTables)) {
-    throw new Error(
-      `The data directory holds an ilearnassist database created by schema v${found} ` +
-        `(this build needs v${SCHEMA_VERSION}). This build changes where things are stored ` +
-        `and cannot read the old layout. Move it aside, or point ILA_DATA_DIR at a new directory.`
-    );
+    return { found, needed: SCHEMA_VERSION };
   }
-
-  db.exec(DDL);
-  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  return undefined;
 }

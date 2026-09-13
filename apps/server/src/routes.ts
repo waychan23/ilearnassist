@@ -1,17 +1,20 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { mkdirSync, rmSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type {
+  AdminUser,
   AnswerToolCallInput,
   ApiErrorBody,
   ApiErrorCode,
   Attachment,
+  AuthResult,
   ChatInput,
   ChatStreamEvent,
   CreateCopilotInput,
   CreateDocumentParserInput,
   CreateProviderInput,
   CreateSessionInput,
+  CreateUserInput,
   CreateWorkspaceInput,
   DocumentParsePolicy,
   DocumentParserConfig,
@@ -30,9 +33,12 @@ import type {
   UpdateDocumentParsingInput,
   UpdateProviderInput,
   UpdateSessionInput,
+  UpdateUserInput,
   UpdateWorkspaceInput,
   UploadAttachmentInput,
   User,
+  UserCredentials,
+  UserRole,
   WidgetId,
   WidgetScope,
   WidgetState,
@@ -40,11 +46,18 @@ import type {
 } from "@ilearnassist/shared";
 import {
   boundToolNamesForWidgetIds,
+  DEFAULT_USER_ROLES,
+  isEnabledSuperadmin,
   DEFAULT_WIDGET_IDS,
+  isUserRole,
   MAX_ATTACHMENT_BYTES,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
   PLAN_TOOL_NAMES,
   QUIZ_TOOL_NAME,
   QUIZ_TOOL_NAMES,
+  SUPERADMIN_ROLE,
+  USERNAME_MAX_LENGTH,
 } from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
 import {
@@ -98,14 +111,29 @@ import {
   sha256Of,
   sourceRawPath,
 } from "./attachments.js";
+import { apiError } from "./apiError.js";
 import {
-  MAX_USERNAME_LENGTH,
-  authSecret,
-  clearedSessionCookie,
+  bearerToken,
+  createAccount,
   currentUser,
-  ensureUser,
-  sessionCookie,
+  generatePassword,
+  hashPassword,
+  hashToken,
+  isSuperadmin,
+  issueTokens,
+  passwordProblem,
+  readPassword,
+  readUsername,
+  usernameProblem,
+  panelToken,
+  panelTokenMatches,
+  PANEL_TOKEN_HEADER,
+  revokeAllTokens,
+  toWireUser,
+  userForRefreshToken,
+  verifyPassword,
 } from "./auth.js";
+import type { UserRecord } from "./db.js";
 import { sessionDir, userLayout, type DataLayout, type UserLayout } from "./paths.js";
 import { createWorkspaceDir, removeWorkspaceDir, uniqueSlug } from "./workspace.js";
 import { FileAccessError, listDirectory, readFileContent } from "./files.js";
@@ -118,7 +146,14 @@ import { FileAccessError, listDirectory, readFileContent } from "./files.js";
  */
 declare module "fastify" {
   interface FastifyRequest {
-    user?: User;
+    /**
+     * The signed-in account, as the **server** sees it — the record, not the wire shape.
+     *
+     * The record, because role checks and the pending-password gate are decided in here and
+     * both read fields the client is never sent. Every response that carries a user goes
+     * through `toWireUser`, which is what keeps the password hash from being serialised.
+     */
+    user?: UserRecord;
   }
   interface FastifyContextConfig {
     /**
@@ -129,6 +164,19 @@ declare module "fastify" {
      * silently requires a session.
      */
     public?: boolean;
+    /**
+     * Reachable while the account still owes a password change.
+     *
+     * The gate refuses everything else with a 403 in that state, and this is the short list of
+     * routes that have to stay open for the state to be escapable at all: asking who you are,
+     * setting the new password, and signing out.
+     *
+     * A second flag rather than a widening of `public`, because the two answer different
+     * questions — `public` means "no credential needed", this means "the credential is fine,
+     * the account just has one more thing to do" — and collapsing them would let a route
+     * meant for a signed-in-but-pending caller be reached by nobody at all.
+     */
+    allowPendingPassword?: boolean;
   }
 }
 
@@ -149,22 +197,6 @@ interface RoutesOptions {
 
 /** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
 const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 64 * 1024;
-
-/**
- * The error envelope for a curated reply.
- *
- * `code` is what the client renders — it owns the wording, in the user's language. The
- * English `message` rides along as the fallback for a client that does not know the code
- * yet, and `params` carries anything the client needs to interpolate so it never has to
- * receive a pre-built sentence. See `ApiErrorBody` in `packages/shared`.
- */
-function apiError(
-  code: ApiErrorCode | ParseErrorCode,
-  message: string,
-  params?: Record<string, string | number>
-): ApiErrorBody {
-  return { error: params ? { code, message, params } : { code, message } };
-}
 
 /** The parse-failure envelope: the code is the taxonomy value, the sentence a fallback. */
 function parseApiError(err: unknown): ApiErrorBody {
@@ -229,16 +261,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* ---------------------------------- identity ---------------------------------- */
 
   /**
-   * The signing secret, read per request rather than captured once.
-   *
-   * One indexed read of a local `app_settings` row, against a property worth having: deleting
-   * that row — or replacing its value — invalidates every cookie *immediately* rather than
-   * from the next restart. "Sign everyone out" is the lever you reach for when something has
-   * gone wrong, and a lever that needs a restart is the wrong shape for that moment.
-   */
-  const requireSecret = (): string => authSecret(db);
-
-  /**
    * The signed-in account, for a route the gate has already let through.
    *
    * Throws instead of returning undefined. The gate sets this on every route that is not
@@ -246,10 +268,72 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * failing here says so, where `undefined.id` a few lines later would say something much
    * less useful.
    */
-  function actor(request: FastifyRequest): User {
+  function actor(request: FastifyRequest): UserRecord {
     if (!request.user) throw new Error("No signed-in user on this route; is it marked public?");
     return request.user;
   }
+
+  /**
+   * The signed-in account *and* a superadmin, or a reply that says why not.
+   *
+   * Returns the reply as well as sending it, so a handler reads as
+   * `const admin = requireSuperadmin(...); if (!admin) return reply;` — one shape rather than
+   * a throw that a route would then have to translate. 403 rather than 404: the credential is
+   * perfectly good, the account simply may not do this, and answering "not found" would send
+   * an administrator looking for a bug in their own URL.
+   */
+  function requireSuperadmin(
+    request: FastifyRequest,
+    reply: FastifyReply
+  ): UserRecord | undefined {
+    const user = actor(request);
+    if (isSuperadmin(user)) return user;
+    void reply.code(403).send(apiError("FORBIDDEN", "only a superadmin can manage accounts"));
+    return undefined;
+  }
+
+  /**
+   * A hash to check a login against when there is no account to check it against.
+   *
+   * Without it, a name that exists returns after ~80ms of `scrypt` and a name that does not
+   * returns immediately, which turns the login route into a way to enumerate accounts. Built
+   * once on first use rather than at module load, because it is a real `scrypt` call and a
+   * server that never sees a bad username should not pay for it at boot.
+   */
+  let decoyHash: string | undefined;
+  async function decoy(): Promise<string> {
+    decoyHash ??= await hashPassword("decoy-password-for-timing-only");
+    return decoyHash;
+  }
+
+  /**
+   * A `roles` array from a request body, or undefined when it is not one this build knows.
+   *
+   * Unknown names are **refused rather than dropped**, for the reason an unknown widget id is:
+   * a dropped one is a selection that looks like it worked — the box was ticked, the request
+   * succeeded, and the account does not have it. An empty list is refused too, because an
+   * account holding no roles can reach nothing and there is no screen that would say why.
+   *
+   * Returns undefined for "not supplied" as well as "bad", so the caller has to distinguish
+   * them: `PATCH` reads a missing field as "leave it alone", which is not what a malformed one
+   * means. That is why the two checks at the call sites are separate rather than one `if`.
+   */
+  function normalizeRoles(value: unknown): UserRole[] | undefined {
+    if (!Array.isArray(value) || value.length === 0) return undefined;
+    if (!value.every(isUserRole)) return undefined;
+    return [...new Set(value as UserRole[])];
+  }
+
+  /** The console's view of an account. Built here rather than in the DB layer: it is a shape. */
+  const toAdminUser = (u: UserRecord): AdminUser => ({
+    id: u.id,
+    username: u.username,
+    slug: u.slug,
+    roles: u.roles,
+    disabled: u.disabled,
+    mustChangePassword: u.mustChangePassword,
+    createdAt: u.createdAt,
+  });
 
   /** The acting user's tree: where its workspaces are created, and deleted from. */
   const treeFor = (user: User): UserLayout => userLayout(layout, user.slug);
@@ -259,77 +343,469 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    *
    * Deny by default rather than a list of protected routes, so a route added tomorrow
    * without a thought about auth is *refused* — the same move as the `read_document`
-   * whitelist, where the safe state is the one you get by doing nothing. Exactly four routes
-   * opt out, each with a reason.
+   * whitelist, where the safe state is the one you get by doing nothing. Eight routes opt out
+   * with `public` — the four that obtain a session or say whether one is possible, the three
+   * that make a pending password change escapable, and the control panel's recovery route,
+   * which carries a secret instead. Each says why where it is declared.
+   *
+   * The second refusal is the pending password change, and it is here rather than in the
+   * client for the reason any rule enforced only by a client is not enforced: the account
+   * holds a working token, so the screen it shows is a suggestion to anything that can make
+   * a request. Three routes stay reachable in that state — ask who you are, set the new
+   * password, sign out — which is what makes it a state you can leave.
    *
    * This hook belongs to the `routes` plugin, so it covers the API and nothing else: the
    * built frontend served by `webApp.ts` is a sibling plugin and stays public, which is what
    * lets a browser load the login screen in the first place.
    */
   app.addHook("onRequest", async (request, reply) => {
-    if (request.routeOptions.config?.public === true) return;
-    const user = currentUser(request, db, requireSecret());
+    const routeConfig = request.routeOptions.config;
+    if (routeConfig?.public === true) return;
+    const user = currentUser(request, db);
     if (!user) return reply.code(401).send(apiError("UNAUTHENTICATED", "sign in to continue"));
+    if (user.mustChangePassword && routeConfig?.allowPendingPassword !== true) {
+      return reply
+        .code(403)
+        .send(apiError("PASSWORD_CHANGE_REQUIRED", "choose a new password before continuing"));
+    }
     request.user = user;
   });
 
   /* ----------------------------------- auth ----------------------------------- */
 
   /**
-   * Sign in, creating the account if the name is new.
+   * Sign in.
    *
-   * There is no password, so this is the whole of authentication — whoever can reach the
-   * address can be anyone. That is a real property of this build and not an oversight: the
-   * login screen states it, and the panel's LAN switch is the control that decides who can
-   * reach the address at all.
+   * Two answers, and the split between them is deliberate. A name that does not exist and a
+   * password that is wrong get the **same** 401, so the reply cannot be read to find out which
+   * accounts exist — and the `scrypt` check runs either way, against a decoy hash when there
+   * is no account, because the timing would otherwise say what the sentence does not.
+   *
+   * A disabled account gets a 403 instead, and that is not a leak: it is only reachable after
+   * a *correct* password, so the caller has already proved they know which account it is.
    */
   app.post("/api/auth/login", { config: { public: true } }, async (request, reply) => {
-    const body = request.body as { username?: unknown } | undefined;
-    const username = typeof body?.username === "string" ? body.username.trim() : "";
-    if (!username) {
-      return reply.code(400).send(apiError("USERNAME_REQUIRED", "username is required"));
-    }
-    if (username.length > MAX_USERNAME_LENGTH) {
+    /*
+     * The API's half of the boot rule.
+     *
+     * `main()` refuses to *listen* without an administrator, so a server started the ordinary way
+     * never reaches this line with nobody able to sign in. It stays because `buildServer` is
+     * usable on its own — the test harness does exactly that, and so would any embedder — and a
+     * caller in that state deserves a sentence it can act on rather than a 401 that reads as a
+     * wrong password. The administrator is created by the control panel, or by the CLI on a
+     * machine that has no panel.
+     */
+    if (!db.hasPasswordAccounts()) {
       return reply
-        .code(400)
-        .send(apiError("USERNAME_TOO_LONG", "username is too long", { max: MAX_USERNAME_LENGTH }));
+        .code(409)
+        .send(apiError("SETUP_REQUIRED", "this installation has no administrator yet"));
     }
 
-    const { user } = ensureUser(db, layout, username);
-    reply.header("set-cookie", sessionCookie(user.id, requireSecret()));
-    return user;
+    const body = request.body as { username?: unknown; password?: unknown } | undefined;
+    const username = readUsername(body?.username);
+    const password = readPassword(body?.password);
+    if (!username) return reply.code(400).send(apiError("USERNAME_REQUIRED", "username is required"));
+    if (!password) return reply.code(400).send(apiError("PASSWORD_REQUIRED", "a password is required"));
+
+    const user = db.findUserByUsername(username);
+    /*
+     * `stored` is what the password is checked against, and it is checked **in the condition**
+     * rather than only fed to `verifyPassword`.
+     *
+     * The decoy is there to keep the *timing* honest when there is nothing to compare against
+     * — but its verdict is a verdict, and a hash of a known string would otherwise be a working
+     * password for every account that has none. That state is not hypothetical: it is exactly
+     * the data root carried over from the build where a username was the credential, which is
+     * what `ensureColumn(users.password_hash)` and `hasPasswordAccounts` exist to support. So
+     * an account with no password cannot sign in, whatever it presents.
+     */
+    const stored = user?.passwordHash ?? null;
+    const ok = await verifyPassword(password, stored ?? (await decoy()));
+    if (!user || !stored || !ok) {
+      return reply.code(401).send(apiError("INVALID_CREDENTIALS", "username or password is wrong"));
+    }
+    if (user.disabled) {
+      return reply.code(403).send(apiError("ACCOUNT_DISABLED", "this account is disabled"));
+    }
+
+    const result: AuthResult = { user: toWireUser(user), tokens: issueTokens(db, user.id) };
+    return result;
   });
 
-  app.post("/api/auth/logout", { config: { public: true } }, async (_request, reply) => {
-    reply.header("set-cookie", clearedSessionCookie());
+  /**
+   * Exchange a refresh token for a fresh pair.
+   *
+   * The presented token is **spent** — revoked before the new one is issued — so a refresh
+   * token is good exactly once. That is what bounds a stolen one to a single exchange and
+   * makes the theft visible: the real client's next refresh fails, and it signs in again
+   * while the copy stops working.
+   *
+   * Only the token presented is revoked. Another device's refresh token is a session in its
+   * own right, and ending it here would mean every device but the busiest one kept getting
+   * signed out.
+   *
+   * Because each exchange resets the week, a client that keeps working never signs in again —
+   * which is the "stay signed in as long as possible" behaviour, without a token that never
+   * expires. A client that stops is signed out a week later.
+   */
+  app.post("/api/auth/refresh", { config: { public: true } }, async (request, reply) => {
+    const body = request.body as { refreshToken?: unknown } | undefined;
+    const presented = typeof body?.refreshToken === "string" ? body.refreshToken : "";
+    const user = presented ? userForRefreshToken(db, presented) : undefined;
+    if (!user) {
+      return reply
+        .code(401)
+        .send(apiError("INVALID_REFRESH_TOKEN", "sign in again to continue"));
+    }
+
+    db.revokeAuthToken(hashToken(presented), new Date().toISOString());
+    const result: AuthResult = { user: toWireUser(user), tokens: issueTokens(db, user.id) };
+    return result;
+  });
+
+  /**
+   * End this client's session.
+   *
+   * Public, and it revokes whatever it is handed: the access token from the header and the
+   * refresh token from the body. Neither is required, so a client that has already lost one
+   * can still spend the other, and answering `ok` either way means signing out cannot fail in
+   * a way the user would have to do something about.
+   *
+   * Deliberately *not* "revoke everything this account holds": signing out of one device is
+   * not a request to sign out of the others, and the console's kick is the control for that.
+   */
+  app.post("/api/auth/logout", { config: { public: true } }, async (request) => {
+    const at = new Date().toISOString();
+    const access = bearerToken(request);
+    if (access) db.revokeAuthToken(hashToken(access), at);
+    const body = request.body as { refreshToken?: unknown } | undefined;
+    const refresh = typeof body?.refreshToken === "string" ? body.refreshToken : "";
+    if (refresh) db.revokeAuthToken(hashToken(refresh), at);
     return { ok: true };
   });
 
   /**
    * Who the caller is, or a 401.
    *
-   * Public, because a 401 here is the *answer* rather than a refusal: the cookie is HttpOnly,
-   * so a cold load has no other way to ask whether anyone is signed in. The client knows that
-   * and keeps this route's 401 out of the "your session expired" path — otherwise every first
-   * visit would open with an error about a session that never existed.
+   * Public, because a 401 here is the *answer* rather than a refusal: no page script can read
+   * the token of a load that has not happened yet, so a cold start has no other way to ask
+   * whether anyone is signed in. The client knows that and keeps this route's 401 out of the
+   * "your session expired" path — otherwise every first visit would open with an error about
+   * a session that never existed.
    */
   app.get("/api/auth/me", { config: { public: true } }, async (request, reply) => {
-    const user = currentUser(request, db, requireSecret());
+    const user = currentUser(request, db);
     if (!user) return reply.code(401).send(apiError("UNAUTHENTICATED", "sign in to continue"));
-    return user;
+    return toWireUser(user);
   });
 
   /**
-   * The accounts that already exist, so a returning user can pick one instead of remembering
-   * exactly what they typed.
+   * Change your own password.
    *
-   * Public, and it does leak usernames — which the no-password design already leaks to anyone
-   * who types a name and is let in. Naming them is the honest version: a bare text field with
-   * nothing behind it reads as a password prompt whose field is missing.
+   * Reachable while a password change is still owed — that is the point of the flag on this
+   * route, since the account is holding a token and would otherwise be refused everything
+   * including the way out. The old password is required here and nowhere else: this is the
+   * one path where somebody is asserting a password they *chose*, and asking for it is what
+   * stops a stolen token from being turned into a permanent account takeover.
+   *
+   * Every session the account holds is ended, including this one, and a fresh pair is
+   * returned for this client. A password is changed because something may have gone wrong,
+   * and a token obtained under the old one outliving the change is exactly what would make
+   * the change not matter.
    */
-  app.get("/api/auth/users", { config: { public: true } }, async () => ({
-    usernames: db.listUsers().map((u) => u.username),
-  }));
+  app.post(
+    "/api/auth/password",
+    { config: { allowPendingPassword: true } },
+    async (request, reply) => {
+      const user = actor(request);
+      const body = request.body as { oldPassword?: unknown; newPassword?: unknown } | undefined;
+      const oldPassword = readPassword(body?.oldPassword);
+      const newPassword = readPassword(body?.newPassword);
+
+      const ok = await verifyPassword(oldPassword, user.passwordHash);
+      if (!ok) {
+        return reply
+          .code(400)
+          .send(apiError("INVALID_CREDENTIALS", "the current password is wrong"));
+      }
+      const weak = passwordProblem(newPassword);
+      if (weak) return reply.code(400).send(weak);
+      // Refused rather than accepted, because the account was told to *choose* a password: the
+      // same value would clear the flag with the decision still unmade, and the screen the
+      // user just left would have changed nothing.
+      if (newPassword === oldPassword) {
+        return reply
+          .code(400)
+          .send(apiError("PASSWORD_UNCHANGED", "the new password is the current one"));
+      }
+
+      const updated = db.setUserPassword(user.id, await hashPassword(newPassword), false)!;
+      revokeAllTokens(db, user.id);
+      const result: AuthResult = { user: toWireUser(updated), tokens: issueTokens(db, user.id) };
+      return result;
+    }
+  );
+
+  /* --------------------------------- accounts ---------------------------------- */
+  /*
+   * The platform console's side of accounts. Every route here is a superadmin's, and the
+   * guard is the first line of each rather than a hook of its own: this is a handful of
+   * routes on one path prefix, and a `preHandler` would be a second place to look to find
+   * out who may call what.
+   *
+   * There is no DELETE. "Remove a user" is `PATCH { disabled: true }`, because the row is not
+   * only a credential — it owns workspaces, conversations and uploaded files, and there is no
+   * version of deleting it that does not either destroy that or strand it. Disabling ends the
+   * account's sessions and refuses the next sign-in, which is what "remove this user" means
+   * in practice.
+   */
+
+  app.get("/api/admin/users", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+    const users = db.listUsers().map(toAdminUser);
+    return { users };
+  });
+
+  /**
+   * Create an account, and hand back the password it was given.
+   *
+   * The password is generated rather than chosen by the administrator, and it is returned
+   * **once**. Only a hash is stored, so there is nothing to re-read afterwards — not for the
+   * user, not for the administrator — which is why the console pairs this reply with a copy
+   * button and a note to send it on.
+   *
+   * `mustChangePassword` is set, so what the administrator hands over is a way in rather than
+   * a password the account keeps.
+   */
+  app.post("/api/admin/users", async (request, reply) => {
+    const admin = requireSuperadmin(request, reply);
+    if (!admin) return reply;
+
+    const body = request.body as CreateUserInput | undefined;
+    const username = readUsername(body?.username);
+    const named = usernameProblem(username);
+    if (named) return reply.code(400).send(named);
+
+    // An omitted `roles` is the ordinary case and means "an account", not "no roles" — so the
+    // absent value never reaches `normalizeRoles`, which reads absent and malformed alike.
+    const roles = body?.roles === undefined ? [...DEFAULT_USER_ROLES] : normalizeRoles(body.roles);
+    if (!roles) {
+      return reply.code(400).send(apiError("INVALID_FIELD", "unknown role", { field: "roles" }));
+    }
+    // Checked before `createAccount`, because that is the side with the filesystem half of
+    // slug uniqueness — and a name already taken should be a 409, not a second directory.
+    if (db.findUserByUsername(username)) {
+      return reply.code(409).send(apiError("USERNAME_TAKEN", "that username is taken"));
+    }
+
+    const password = generatePassword();
+    const { user } = createAccount(db, layout, {
+      username,
+      roles,
+      passwordHash: await hashPassword(password),
+      mustChangePassword: true,
+    });
+
+    const result: UserCredentials = { user: toAdminUser(user), password };
+    return result;
+  });
+
+  /**
+   * Change what an account may do, or whether it can sign in at all.
+   *
+   * A username is not among the fields: it is half of how somebody signs in and the other
+   * half is a password they were told, so a rename is a new account as far as anyone can
+   * tell. `slug` is never in play either — the directory keeps the name it was created with,
+   * which is what keeps every path already written under it valid.
+   *
+   * Disabling ends the account's sessions in the same request. A disabled account whose token
+   * still worked for up to a day would be a control that reports a state it does not have.
+   */
+  app.patch("/api/admin/users/:id", async (request, reply) => {
+    const admin = requireSuperadmin(request, reply);
+    if (!admin) return reply;
+
+    const { id } = request.params as { id: string };
+    const target = db.getUser(id);
+    if (!target) return reply.code(404).send(apiError("USER_NOT_FOUND", "no such account"));
+
+    const body = request.body as UpdateUserInput | undefined;
+    const roles = body?.roles === undefined ? undefined : normalizeRoles(body.roles);
+    if (body?.roles !== undefined && !roles) {
+      return reply
+        .code(400)
+        .send(apiError("INVALID_FIELD", "unknown role", { field: "roles" }));
+    }
+
+    /*
+     * Refused rather than coerced, and this is the one place in the product where coercion
+     * would be a security bug rather than a tidy-up: `disabled: "false"` is truthy, so
+     * `disable === true` misses the self-guard below while `setUserDisabled` stores 1 — an
+     * administrator could disable their own account past the check that exists to stop them,
+     * and then nobody could reach the console. The console sends real booleans, so anything
+     * else is a hand-written request, and the right answer to one is to say what was wrong.
+     */
+    const disabled = body?.disabled;
+    if (disabled !== undefined && typeof disabled !== "boolean") {
+      return reply
+        .code(400)
+        .send(apiError("INVALID_FIELD", "disabled must be true or false", { field: "disabled" }));
+    }
+    const losesSuperadmin =
+      isSuperadmin(target) &&
+      (disabled === true || (roles !== undefined && !roles.includes(SUPERADMIN_ROLE)));
+
+    /*
+     * The self-guard is the whole of the "somebody has to remain" rule, and it is enough.
+     *
+     * A separate "you may not remove the last administrator" check looks like the obvious
+     * second half, and it is unreachable: reaching this route at all means the caller holds
+     * the superadmin role on an account the gate already refused to see disabled, so there is
+     * always one administrator besides the target. By induction the count can never reach
+     * zero — which is why the check that *is* here is about who is asking rather than about
+     * how many are left. Written the other way it would be a branch no test could cover.
+     */
+    if (losesSuperadmin && target.id === admin.id) {
+      return reply
+        .code(400)
+        .send(apiError("CANNOT_MODIFY_SELF", "you cannot disable or demote your own account"));
+    }
+
+    if (roles) db.setUserRoles(target.id, roles);
+    if (disabled !== undefined) db.setUserDisabled(target.id, disabled);
+    if (disabled === true) revokeAllTokens(db, target.id);
+
+    return toAdminUser(db.getUser(target.id)!);
+  });
+
+  /**
+   * Give an account a new password without knowing the old one.
+   *
+   * The old password is not required, and the asymmetry with `/auth/password` is the point:
+   * that route is somebody asserting a password they chose, and this is an administrator who
+   * by definition may not know it. The recovery path for a forgotten password is here.
+   *
+   * **The one case that does not set `mustChangePassword` is resetting your own.** The
+   * administrator doing it is signed in, chose the value a moment ago, and is about to keep
+   * using it — so a screen demanding they replace what they just typed would be a step with
+   * nothing behind it. Resetting somebody else's always sets it, because that password was
+   * read off a screen and sent through a chat window.
+   *
+   * Every session the target holds is ended either way. When the target is the caller, fresh
+   * tokens come back in the reply — otherwise the administrator would be signed out by their
+   * own action, which is the one way this route could look like a bug.
+   */
+  app.post("/api/admin/users/:id/password", async (request, reply) => {
+    const admin = requireSuperadmin(request, reply);
+    if (!admin) return reply;
+
+    const { id } = request.params as { id: string };
+    const target = db.getUser(id);
+    if (!target) return reply.code(404).send(apiError("USER_NOT_FOUND", "no such account"));
+
+    const body = request.body as { password?: unknown } | undefined;
+    const chosen = readPassword(body?.password);
+    let password: string;
+    if (chosen) {
+      const weak = passwordProblem(chosen);
+      if (weak) return reply.code(400).send(weak);
+      password = chosen;
+    } else {
+      password = generatePassword();
+    }
+
+    const self = target.id === admin.id;
+    const updated = db.setUserPassword(target.id, await hashPassword(password), !self)!;
+    revokeAllTokens(db, target.id);
+
+    const result: UserCredentials = {
+      user: toAdminUser(updated),
+      password,
+      // Present exactly when the reset ended the caller's own session, so the client has
+      // something to swap in rather than a 401 on its next request.
+      tokens: self ? issueTokens(db, admin.id) : undefined,
+    };
+    return result;
+  });
+
+  /**
+   * End every session an account holds.
+   *
+   * A request rather than a request to change anything else, because "sign that account out
+   * now" is a thing an administrator needs on its own: a laptop left open, a token that may
+   * have leaked, somebody who should stop being able to act while the rest stays as it is.
+   * The password is untouched — this is not a reset and the account keeps the credential it
+   * has.
+   *
+   * Refused against your own account, because the control is for ending somebody else's
+   * session and signing yourself out already has a button.
+   */
+  app.post("/api/admin/users/:id/revoke", async (request, reply) => {
+    const admin = requireSuperadmin(request, reply);
+    if (!admin) return reply;
+
+    const { id } = request.params as { id: string };
+    const target = db.getUser(id);
+    if (!target) return reply.code(404).send(apiError("USER_NOT_FOUND", "no such account"));
+    if (target.id === admin.id) {
+      return reply
+        .code(400)
+        .send(apiError("CANNOT_MODIFY_SELF", "sign out from the account menu instead"));
+    }
+
+    return { ok: true, revoked: revokeAllTokens(db, target.id) };
+  });
+
+  /**
+   * Reset an administrator's password from the control panel. The way back in.
+   *
+   * Every other route here is reached by somebody who is already signed in, which is exactly
+   * the thing a forgotten administrator password prevents — so without this there is no
+   * recovery at all, and an installation whose only administrator forgot their password is a
+   * directory full of files nobody can open.
+   *
+   * What makes it not a back door is `ILA_PANEL_TOKEN`: a secret the control panel generates
+   * per launch and passes only to the child process it spawned itself. It is never written
+   * anywhere, so it does not exist between launches, and reaching this server over the
+   * network does not get you one. When the variable is absent — a checkout, a `pnpm dev`, any
+   * launch that was not the panel — the route answers 404 and is simply not there.
+   *
+   * Answered as not-found rather than forbidden when the token is missing, so an
+   * installation without a panel does not advertise a recovery endpoint it will never accept.
+   *
+   * The account it resets is named in the body, or defaults to the first enabled superadmin —
+   * which is what the panel can ask for without knowing any usernames. `mustChangePassword`
+   * is left clear: this is the administrator's own account, and the panel is the one place
+   * the physical machine is the proof of identity.
+   */
+  app.post("/api/auth/panel-reset", { config: { public: true } }, async (request, reply) => {
+    if (!panelToken()) return reply.code(404).send(apiError("FORBIDDEN", "no control panel"));
+    const provided = request.headers[PANEL_TOKEN_HEADER];
+    if (!panelTokenMatches(typeof provided === "string" ? provided : undefined)) {
+      return reply.code(403).send(apiError("FORBIDDEN", "not from the control panel"));
+    }
+
+    const body = request.body as { username?: unknown } | undefined;
+    const named = readUsername(body?.username);
+    const target = named
+      ? db.findUserByUsername(named)
+      : db.listUsers().find(isEnabledSuperadmin);
+    if (!target) return reply.code(404).send(apiError("USER_NOT_FOUND", "no such account"));
+    if (!isSuperadmin(target)) {
+      return reply
+        .code(400)
+        .send(apiError("FORBIDDEN", "the control panel only resets administrators"));
+    }
+
+    const password = generatePassword();
+    const updated = db.setUserPassword(target.id, await hashPassword(password), false)!;
+    // The reset is also the kick: a forgotten password that is replaced while the old session
+    // is still live has not really been replaced.
+    revokeAllTokens(db, target.id);
+
+    const result: UserCredentials = { user: toAdminUser(updated), password };
+    return result;
+  });
 
   /* --------------------------------- resolution -------------------------------- */
   /*
@@ -1300,10 +1776,28 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /* -------------------------------- providers --------------------------------- */
+  /*
+   * Providers, parsers, the parsing policy and the app defaults are **installation-wide**, and
+   * their writes are a superadmin's. Reads are everybody's: the composer needs the model list
+   * and the parse state, and a screen that cannot say which models exist is not one anybody can
+   * use.
+   *
+   * This matters more than it looks, now that an installation can hold more than one account.
+   * A provider's `baseURL` is where every conversation's prompts and completions go, so an
+   * account that can add one and point the defaults at it reads everybody's traffic. And
+   * `POST /api/document-parsers/:id/test` makes the **server** issue a request to a `baseURL`
+   * the caller chose, which is the same capability `web_fetch` needs an SSRF guard for — so a
+   * route that reaches it must not be the one place in the product with no gate at all.
+   *
+   * The rule for a new route here is the one the console's routes already follow: if it changes
+   * something every account shares, it is an administrator's to change.
+   */
 
   app.get("/api/providers", async () => providerConfigs());
 
   app.post("/api/providers", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const body = request.body as CreateProviderInput;
     const name = body?.name?.trim();
     const baseURL = body?.baseURL?.trim();
@@ -1325,6 +1819,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.put("/api/providers/:id", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const { id } = request.params as { id: string };
     const body = request.body as UpdateProviderInput;
     if (!db.getProvider(id)) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
@@ -1355,6 +1851,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/providers/:id", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const { id } = request.params as { id: string };
     if (!db.getProvider(id)) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
     if (db.listProviders().length <= 1) {
@@ -1375,6 +1873,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/providers/:providerId/models/:modelId", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const { providerId, modelId } = request.params as { providerId: string; modelId: string };
     const provider = db.getProvider(providerId);
     if (!provider) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
@@ -1390,6 +1890,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.get("/api/document-parsers", async () => documentParserConfigs());
 
   app.post("/api/document-parsers", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const body = request.body as CreateDocumentParserInput;
     const name = body?.name?.trim();
     const baseURL = body?.baseURL?.trim();
@@ -1411,6 +1913,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.put("/api/document-parsers/:id", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const { id } = request.params as { id: string };
     const body = request.body as UpdateDocumentParserInput;
     if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
@@ -1430,6 +1934,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/document-parsers/:id", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const { id } = request.params as { id: string };
     if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
 
@@ -1444,6 +1950,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** Round-trip a throwaway document through a parser to prove the endpoint and key work. */
   app.post("/api/document-parsers/:id/test", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const { id } = request.params as { id: string };
     if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
     try {
@@ -1456,6 +1964,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** The parsing policy (tier order, fallback, pinned parser). */
   app.put("/api/document-parsing", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const body = request.body as UpdateDocumentParsingInput;
 
     if (body?.policy !== undefined) {
@@ -1483,6 +1993,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* --------------------------------- app defaults ------------------------------ */
 
   app.put("/api/defaults", async (request, reply) => {
+    if (!requireSuperadmin(request, reply)) return reply;
+
     const body = request.body as { providerId?: string; modelId?: string };
     if (body?.providerId !== undefined) {
       if (!db.getProvider(body.providerId)) {

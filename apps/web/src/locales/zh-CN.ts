@@ -45,6 +45,10 @@ export default {
     rename: "重命名",
     settings: "设置",
     signOut: "退出登录",
+    back: "返回",
+    loading: "加载中…",
+    retry: "重试",
+    copyFailed: "复制失败，请手动选中复制",
   },
 
   app: {
@@ -61,19 +65,100 @@ export default {
   },
 
   /**
-   * The login screen.
+   * The sign-in form.
    *
-   * `noPassword` is not decoration: this build has no passwords, and a user who believes the
-   * field in front of them is a password field will assume a privacy the app does not have.
-   * Stating it is the honest half of not implementing it yet.
+   * `note` says what the session actually is rather than only what it does: how long it lasts
+   * without being touched, and where to go when the password is gone. The second half matters
+   * because there is deliberately no self-service reset — an account that has forgotten its
+   * password has exactly one route, and it runs through an administrator.
    */
   login: {
-    lead: "输入一个用户名即可开始。",
+    lead: "使用用户名和密码登录。",
     username: "用户名",
     usernamePlaceholder: "例如：你的名字",
-    existing: "已有账号：",
-    submit: "进入",
-    noPassword: "这个实例没有设置密码：任何能访问这个地址的人，都可以用任意用户名进入。",
+    password: "密码",
+    passwordPlaceholder: "请输入密码",
+    submit: "登录",
+    note: "登录状态会保持 7 天，无需反复登录。忘记密码时，请联系管理员重置。",
+  },
+
+  password: {
+    title: "修改密码",
+    lead: "{name}，请先设置一个新密码再继续。",
+    current: "当前密码",
+    new: "新密码",
+    confirm: "确认新密码",
+    hint: "至少 {min} 个字符。",
+    submit: "保存新密码",
+    mismatch: "两次输入的密码不一致。",
+    tooShort: "新密码至少需要 {min} 个字符。",
+    unchanged: "新密码不能和当前密码相同。",
+    signOut: "退出登录",
+  },
+
+  /** The account's own page: who it is, and its own password. */
+  account: {
+    title: "个人信息",
+    identity: "账号",
+    passwordLead: "修改密码后，这个账号在其他设备上的登录会全部失效。",
+    passwordChanged: "密码已修改。",
+  },
+
+  /**
+   * What an account may do. Keyed by the role id the server stores, so the two sides name the
+   * same thing — the label is the only translated part.
+   */
+  roles: {
+    superadmin: "超级管理员",
+    user: "普通用户",
+  },
+
+  /** The platform console: the accounts on this installation. */
+  admin: {
+    title: "平台管理",
+    subtitle: "管理这个实例上的账号。",
+    create: "新建用户",
+    roles: "角色",
+    you: "你",
+    disabled: "已禁用",
+    mustChange: "待改密码",
+    enable: "启用",
+    count: "共 {count} 个账号",
+    createPasswordHint:
+      "初始密码由系统随机生成，创建后只显示一次，请复制并发送给用户。对方首次登录必须修改密码。",
+    selfLocked: "不能禁用或降级自己的账号。",
+    disable: {
+      action: "禁用",
+      title: "禁用账号",
+      message: "确定要禁用「{name}」吗？",
+      detail: "该账号会立即退出登录，并且无法再次登录。它的工作区、文件和对话都会保留，随时可以重新启用。",
+      confirm: "禁用",
+    },
+    reset: {
+      action: "重置密码",
+      title: "重置密码",
+      message: "确定要重置「{name}」的密码吗？",
+      /* The two cases differ in the one way nobody would predict: resetting your own password
+         does not force a change, resetting somebody else's does. */
+      detailSelf: "系统会生成一个新密码。你当前的登录会失效，随后自动换成新密码继续。",
+      detailOther: "系统会生成一个新密码，并让该账号立即退出登录。对方首次登录时必须修改密码。",
+      confirm: "重置",
+    },
+    kick: {
+      action: "踢下线",
+      title: "强制下线",
+      message: "确定要让「{name}」退出登录吗？",
+      detail: "该账号在所有设备上的登录都会立即失效。密码不变，之后可以重新登录。",
+      confirm: "强制下线",
+      self: "要退出自己的登录，请用「退出登录」。",
+    },
+    credential: {
+      created: "账号已创建。请把下面的信息发送给用户：",
+      reset: "密码已重置。请把下面的新密码发送给用户：",
+      username: "用户名",
+      password: "密码",
+      note: "这个密码只会显示这一次，系统只保存哈希值，之后任何人都无法再查看它。对方首次登录时必须修改密码。",
+    },
   },
 
   /**
@@ -814,6 +899,21 @@ export default {
     PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
     QUIZ_QUESTION_NOT_FOUND: "找不到这道测验题。",
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
+
+    INVALID_CREDENTIALS: "用户名或密码不正确。",
+    ACCOUNT_DISABLED: "这个账号已被禁用，请联系管理员。",
+    INVALID_REFRESH_TOKEN: "登录状态已过期，请重新登录。",
+    PASSWORD_REQUIRED: "密码不能为空。",
+    PASSWORD_TOO_SHORT: "密码至少需要 {min} 个字符。",
+    PASSWORD_TOO_LONG: "密码不能超过 {max} 个字符。",
+    PASSWORD_UNCHANGED: "新密码不能和当前密码相同。",
+    SETUP_REQUIRED: "这个实例还没有管理员。请联系管理员在控制面板中创建账号。",
+    PASSWORD_CHANGE_REQUIRED: "请先修改密码，然后才能继续使用。",
+    USER_NOT_FOUND: "账号不存在，可能已被删除。",
+    USERNAME_TAKEN: "这个用户名已被占用。",
+    INVALID_FIELD: "请求里的「{field}」不是合法取值。",
+    FORBIDDEN: "当前账号没有执行这个操作的权限。",
+    CANNOT_MODIFY_SELF: "不能禁用或降级自己的账号。",
   },
 
   /**

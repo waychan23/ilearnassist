@@ -1,7 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { PanelState } from "../apps/desktop/src/shared/panelApi.js";
+import type { PanelState, ResetResult } from "../apps/desktop/src/shared/panelApi.js";
 
 /**
  * The desktop control panel's page, in a real browser.
@@ -44,9 +44,20 @@ const RUNNING: PanelState = {
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
   needsDataDir: false,
+  needsAdmin: false,
 };
 
 const SHARED: PanelState = { ...RUNNING, sharedOnLan: true, lanUrl: LAN_URL };
+
+/**
+ * A data folder with no administrator yet. The server cannot be started in this state — it
+ * refuses to listen — so the panel offers the create control and keeps Start inert.
+ */
+const NEEDS_ADMIN: PanelState = {
+  ...RUNNING,
+  server: { state: "stopped", url: null, fault: null, dataDir: DATA_DIR, logs: [] },
+  needsAdmin: true,
+};
 
 /**
  * Before anyone has said where the data goes. The server cannot be started in this state —
@@ -59,6 +70,7 @@ const NEEDS_DATA_DIR: PanelState = {
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
   needsDataDir: true,
+  needsAdmin: undefined,
 };
 
 const FAILED: PanelState = {
@@ -75,13 +87,40 @@ interface PanelHandle {
  * Load the panel with a stubbed `window.panel`, and return a handle for pushing status
  * changes the way the main process would.
  */
-async function openPanel(page: Page, initial: PanelState): Promise<PanelHandle> {
+async function openPanel(
+  page: Page,
+  initial: PanelState,
+  /**
+   * What the main process answers the reset with — the password it generated, a fault, or
+   * `null` for a dismissed confirmation. Configurable because the panel renders all three
+   * differently, and only the first is the happy path.
+   */
+  reset: ResetResult | null = null,
+  /** What the create-administrator call answers. The happy path by default. */
+  adminCreate:
+    | { ok: true; username?: string }
+    | { ok: false; fault: { code: string; message?: string; params?: Record<string, number | string> } } = {
+    ok: true,
+    username: "tester",
+  }
+): Promise<PanelHandle> {
   const calls: string[] = [];
   await page.exposeFunction("__record", (name: string) => {
     calls.push(name);
   });
 
-  await page.addInitScript((status: PanelState) => {
+  await page.addInitScript(
+    ({
+      status,
+      resetResult,
+      createResult,
+    }: {
+      status: PanelState;
+      resetResult: ResetResult | null;
+      createResult:
+        | { ok: true; username?: string }
+        | { ok: false; fault: { code: string; message?: string; params?: Record<string, number | string> } };
+    }) => {
     const w = window as unknown as Record<string, unknown>;
     w["__status"] = status;
     const record = w["__record"] as (name: string) => Promise<void>;
@@ -108,13 +147,31 @@ async function openPanel(page: Page, initial: PanelState): Promise<PanelHandle> 
       },
       openInBrowser: async () => undefined,
       revealDataDir: async () => undefined,
+      resetAdminPassword: async () => {
+        await record("resetAdminPassword");
+        return resetResult;
+      },
+      adminStatus: async () => {
+        await record("adminStatus");
+        return { ok: true, status: { hasAdmin: (w.__status as PanelState).needsAdmin === false, adminUsername: "tester" } };
+      },
+      createAdministrator: async () => {
+        await record("createAdministrator");
+        return createResult;
+      },
       quit: async () => undefined,
       onStateChange: (listener: (state: PanelState) => void) => {
         w["__push"] = listener;
         return () => undefined;
       },
     };
-  }, initial);
+    },
+    {
+      status: initial,
+      resetResult: reset,
+      createResult: adminCreate,
+    }
+  );
 
   await page.goto(PANEL_URL);
 
@@ -348,5 +405,177 @@ test.describe("opening the app on a phone", () => {
 
     await expect.poll(() => panel.calls).toContain("shareOnLan:false");
     await expect(qrSheet(page)).toBeHidden();
+  });
+});
+
+/**
+ * Resetting the administrator's password — the panel's one account control.
+ *
+ * It is here, in the panel, because it is the only thing that can fix a forgotten password:
+ * every route in the app needs somebody already signed in, and that is exactly what a
+ * forgotten password prevents. So the three claims worth making are that the control is not
+ * offered when it cannot work, that it hands back a password the user can read and copy, and
+ * that a failure says which failure it was.
+ */
+test.describe("resetting the administrator's password", () => {
+  test.use({ viewport: { width: 480, height: 660 } });
+
+  const RESET = '[data-action="reset-admin"]';
+  const BOX = '[data-role="reset"]';
+
+  test("is refused while there is no server to ask", async ({ page }) => {
+    // The reset is a request to the *running* server, so a stopped one makes the button
+    // useless — and a control that can only fail is one the user has to guess the reason for.
+    // This is also the empty-data-folder state, which is the same answer for a different
+    // reason: there is nothing listening either way.
+    await openPanel(page, NEEDS_DATA_DIR);
+    await expect(page.locator(RESET)).toBeDisabled();
+  });
+
+  test("is offered once the server is up", async ({ page }) => {
+    await openPanel(page, RUNNING);
+    await expect(page.locator(RESET)).toBeEnabled();
+  });
+
+  test("shows the new password once, with both halves of it", async ({ page }) => {
+    const panel = await openPanel(page, RUNNING, {
+      ok: true,
+      username: "tester",
+      password: "abcd-efgh-ijkl-mnop",
+    });
+
+    await page.locator(RESET).click();
+
+    await expect.poll(() => panel.calls).toContain("resetAdminPassword");
+    await expect(page.locator(BOX)).toBeVisible();
+    await expect(page.locator('[data-role="reset-username"]')).toHaveText("tester");
+    await expect(page.locator('[data-role="reset-password"]')).toHaveText("abcd-efgh-ijkl-mnop");
+    // Selectable, because the copy button is a convenience and not the only way to get the
+    // password out — it is shown once and there is no second chance to read it.
+    await expect(page.locator('[data-role="reset-password"]')).toHaveCSS("user-select", "text");
+  });
+
+  test("says which failure it was rather than reporting a generic one", async ({ page }) => {
+    // Three faults, three next moves: start the server, set the installation up, or look at
+    // what the server said. One sentence covering all of them would be advice for one.
+    await openPanel(page, RUNNING, { ok: false, fault: { code: "no_admin" } });
+    await page.locator(RESET).click();
+    await expect(page.locator(BOX)).toContainText("还没有超级管理员");
+    // No stale value left behind. The box is still in the document — the empty `<code>` is
+    // hidden by the stylesheet, which is the point — but a credential from an earlier run
+    // read as a new one is the worst thing this block could show, so it is not on screen.
+    await expect(page.locator('[data-role="reset-password"]')).toBeHidden();
+  });
+
+  test("shows nothing at all when the confirmation was dismissed", async ({ page }) => {
+    // `null` is an outcome, not a failure: the user changed their mind, and a box saying so
+    // would be the panel arguing with them.
+    const panel = await openPanel(page, RUNNING, null);
+
+    await page.locator(RESET).click();
+
+    await expect.poll(() => panel.calls).toContain("resetAdminPassword");
+    await expect(page.locator(BOX)).toBeHidden();
+  });
+
+  test("closes the password box on demand", async ({ page }) => {
+    await openPanel(page, RUNNING, {
+      ok: true,
+      username: "tester",
+      password: "abcd-efgh-ijkl-mnop",
+    });
+    await page.locator(RESET).click();
+    await expect(page.locator(BOX)).toBeVisible();
+
+    await page.locator('[data-action="reset-dismiss"]').click();
+
+    await expect(page.locator(BOX)).toBeHidden();
+  });
+});
+
+test.describe("creating the first administrator", () => {
+  const CARD = '[data-role="admin"]';
+  const OVERLAY = '[data-role="admin-overlay"]';
+
+  test("offers the create control and refuses Start when there is no administrator", async ({ page }) => {
+    const handle = await openPanel(page, NEEDS_ADMIN);
+
+    await expect(page.locator(CARD)).toBeVisible();
+    expect(await page.locator('[data-action="start"]').isEnabled()).toBe(false);
+    // No reset either: it is a conversation with the running server, which is deliberately
+    // stopped in this state.
+    expect(await page.locator('[data-action="reset-admin"]').isEnabled()).toBe(false);
+
+    // Pressing Start does not even ask main to start, because the button is disabled — but
+    // the card's button is live and opens the sheet.
+    await page.locator('[data-action="admin-create"]').click();
+    await expect(page.locator(OVERLAY)).toBeVisible();
+    expect(handle.calls).not.toContain("start");
+  });
+
+  test("hides the card once an administrator exists", async ({ page }) => {
+    await openPanel(page, RUNNING);
+    await expect(page.locator(CARD)).toBeHidden();
+  });
+
+  test("refuses a mismatched confirmation without leaving the sheet", async ({ page }) => {
+    const handle = await openPanel(page, NEEDS_ADMIN);
+    await page.locator('[data-action="admin-create"]').click();
+
+    await page.locator('[data-role="admin-username"]').fill("ada");
+    await page.locator('[data-role="admin-password"]').fill("a-good-password");
+    await page.locator('[data-role="admin-confirm"]').fill("a-good-password-typo");
+    await page.locator('[data-action="admin-submit"]').click();
+
+    await expect(page.locator('[data-role="admin-error"]')).toBeVisible();
+    expect(handle.calls).not.toContain("createAdministrator");
+  });
+
+  test("creates and reports success", async ({ page }) => {
+    // The stub hands back the typed username, the way the real IPC result does.
+    await openPanel(page, NEEDS_ADMIN, null, { ok: true, username: "ada" });
+    await page.locator('[data-action="admin-create"]').click();
+
+    await page.locator('[data-role="admin-username"]').fill("ada");
+    await page.locator('[data-role="admin-password"]').fill("a-good-password");
+    await page.locator('[data-role="admin-confirm"]').fill("a-good-password");
+    await page.locator('[data-action="admin-submit"]').click();
+
+    await expect(page.locator('[data-role="admin-ok"]')).toContainText("ada");
+  });
+
+  test("shows the CLI's refusal with its own wording", async ({ page }) => {
+    await openPanel(page, NEEDS_ADMIN, null, {
+      ok: false,
+      fault: { code: "PASSWORD_TOO_SHORT", message: "too short", params: { min: 8 } },
+    });
+    await page.locator('[data-action="admin-create"]').click();
+
+    await page.locator('[data-role="admin-username"]').fill("ada");
+    await page.locator('[data-role="admin-password"]').fill("short");
+    await page.locator('[data-role="admin-confirm"]').fill("short");
+    await page.locator('[data-action="admin-submit"]').click();
+
+    // The catalog string for the CLI code, not the English sentence the child sent.
+    await expect(page.locator('[data-role="admin-error"]')).toContainText("8");
+  });
+
+  test("closes on the scrim, the cancel link and Escape", async ({ page }) => {
+    await openPanel(page, NEEDS_ADMIN);
+    const open = async () => page.locator('[data-action="admin-create"]').click();
+
+    // The scrim sits behind the sheet, so it is clicked by its position rather than by the
+    // same selector as the in-sheet button (which the sheet covers).
+    await open();
+    await page.locator(`${OVERLAY} .overlay__scrim`).click({ position: { x: 5, y: 5 } });
+    await expect(page.locator(OVERLAY)).toBeHidden();
+
+    await open();
+    await page.locator(`${OVERLAY} .sheet [data-action="admin-cancel"]`).first().click();
+    await expect(page.locator(OVERLAY)).toBeHidden();
+
+    await open();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(OVERLAY)).toBeHidden();
   });
 });

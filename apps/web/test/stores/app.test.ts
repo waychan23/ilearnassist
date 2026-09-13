@@ -71,7 +71,12 @@ const mocks = vi.hoisted(() => ({
     login: vi.fn(),
     logout: vi.fn(),
     me: vi.fn(),
-    listUsers: vi.fn(),
+    changePassword: vi.fn(),
+    listAccounts: vi.fn(),
+    createAccount: vi.fn(),
+    updateAccount: vi.fn(),
+    resetAccountPassword: vi.fn(),
+    revokeAccountSessions: vi.fn(),
   },
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
@@ -91,7 +96,7 @@ vi.mock("../../src/api/client", () => ({
   streamAnswers: mocks.streamAnswers,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
-  attachmentUrl: (sourceId: string) => `/api/sources/${sourceId}/raw`,
+  sourceImageUrl: (sourceId: string) => Promise.resolve(`blob:sources/${sourceId}`),
 }));
 
 const { useAppStore } = await import("../../src/stores/app.js");
@@ -103,8 +108,13 @@ const ACCOUNT: User = {
   id: "u1",
   username: "Ada",
   slug: "ada",
+  roles: ["superadmin"],
+  mustChangePassword: false,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
+
+/** What a token pair looks like on the wire. The store never reads it — `api` stores it. */
+const TOKENS = { accessToken: "at", refreshToken: "rt", expiresIn: 86_400 };
 
 const WORKSPACE: Workspace = {
   id: "w1",
@@ -265,7 +275,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   // Signed in by default, because that is the state almost every test is about; the
-  // signed-out and expired cases say so themselves.
+  // signed-out, first-run and pending-password cases say so themselves.
   mocks.api.me.mockResolvedValue(structuredClone(ACCOUNT));
   mocks.api.getConfig.mockResolvedValue(structuredClone(CONFIG));
   mocks.api.listWorkspaces.mockResolvedValue([structuredClone(WORKSPACE)]);
@@ -402,15 +412,49 @@ describe("uploaded files", () => {
 
 describe("signing in and out", () => {
   it("loads the app for whoever just signed in", async () => {
-    mocks.api.login.mockResolvedValue(structuredClone(ACCOUNT));
+    mocks.api.login.mockResolvedValue({ user: structuredClone(ACCOUNT), tokens: TOKENS });
 
     const store = useAppStore();
-    await store.signIn("  Ada  ");
+    await store.signIn("  Ada  ", "hunter2");
 
     // Trimmed here rather than at the field: the screen accepts a name with a stray space and
-    // the account it creates must be the one the user meant.
-    expect(mocks.api.login).toHaveBeenCalledWith("Ada");
+    // the account the user means to sign in as is the one without it.
+    expect(mocks.api.login).toHaveBeenCalledWith("Ada", "hunter2");
     expect(store.account).toEqual(ACCOUNT);
+    expect(uiState.view).toBe("home");
+    expect(mocks.api.listWorkspaces).toHaveBeenCalled();
+  });
+
+  it("holds an account that still owes a password on the change screen", async () => {
+    // The server refuses every other route in this state, so loading the app behind the screen
+    // would produce a workspace list of failing requests. The screen comes first instead.
+    mocks.api.me.mockResolvedValue(
+      structuredClone({ ...ACCOUNT, mustChangePassword: true } as User)
+    );
+
+    const store = useAppStore();
+    await store.init();
+
+    expect(uiState.view).toBe("password");
+    expect(mocks.api.getConfig).not.toHaveBeenCalled();
+    expect(mocks.api.listWorkspaces).not.toHaveBeenCalled();
+  });
+
+  it("enters the app once that password has been chosen", async () => {
+    mocks.api.me.mockResolvedValue(
+      structuredClone({ ...ACCOUNT, mustChangePassword: true } as User)
+    );
+    mocks.api.changePassword.mockResolvedValue({
+      user: structuredClone(ACCOUNT),
+      tokens: TOKENS,
+    });
+
+    const store = useAppStore();
+    await store.init();
+    await store.changePassword("issued-password", "chosen-password");
+    await store.enterApp();
+
+    expect(store.account?.mustChangePassword).toBe(false);
     expect(uiState.view).toBe("home");
     expect(mocks.api.listWorkspaces).toHaveBeenCalled();
   });
@@ -434,10 +478,10 @@ describe("signing in and out", () => {
   });
 
   it("lands on the login screen even when the logout request fails", async () => {
-    // The cookie is HttpOnly, so clearing it is the server's job and a failed logout cannot be
-    // retried locally — but leaving someone looking signed in because a request failed is the
-    // worse outcome of the two. The failure is reported rather than swallowed, because the
-    // cookie is still there and a reload will sign them back in.
+    // Clearing the token is the server's job and a failed logout cannot be retried locally —
+    // but leaving someone looking signed in because a request failed is the worse outcome of
+    // the two. The failure is reported rather than swallowed, because the stored token is
+    // still there and a reload will sign them back in.
     mocks.api.logout.mockRejectedValue(new ApiError("INTERNAL", "boom", 500));
     const store = await readyStore();
 

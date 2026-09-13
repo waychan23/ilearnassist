@@ -1,4 +1,4 @@
-import type { PanelState, ServerState } from "../shared/panelApi.js";
+import type { PanelState, ResetResult, ServerState } from "../shared/panelApi.js";
 import {
   PANEL_MESSAGES,
   describeFault,
@@ -66,6 +66,25 @@ const qrUrlCode = element<HTMLElement>('[data-role="qr-url"]');
 const action = (name: string): HTMLButtonElement =>
   element<HTMLButtonElement>(`[data-action="${name}"]`);
 
+/* ---- the administrator's password ---------------------------------------- */
+
+const resetBox = element<HTMLElement>('[data-role="reset"]');
+const resetLead = element<HTMLElement>('[data-role="reset-lead"]');
+const resetUserLabel = element<HTMLElement>('[data-role="reset-user-label"]');
+const resetUsername = element<HTMLElement>('[data-role="reset-username"]');
+const resetPassLabel = element<HTMLElement>('[data-role="reset-pass-label"]');
+const resetPassword = element<HTMLElement>('[data-role="reset-password"]');
+
+/* ---- the first administrator -------------------------------------------- */
+
+const adminCard = element<HTMLElement>('[data-role="admin"]');
+const adminOverlay = element<HTMLElement>('[data-role="admin-overlay"]');
+const adminUsername = element<HTMLInputElement>('[data-role="admin-username"]');
+const adminPassword = element<HTMLInputElement>('[data-role="admin-password"]');
+const adminConfirm = element<HTMLInputElement>('[data-role="admin-confirm"]');
+const adminError = element<HTMLElement>('[data-role="admin-error"]');
+const adminOk = element<HTMLElement>('[data-role="admin-ok"]');
+
 const buttons = {
   open: action("open"),
   start: action("start"),
@@ -77,6 +96,11 @@ const buttons = {
   share: action("share"),
   unshare: action("unshare"),
   qrCopy: action("qr-copy"),
+  resetAdmin: action("reset-admin"),
+  resetCopy: action("reset-copy"),
+  resetDismiss: action("reset-dismiss"),
+  adminCreate: action("admin-create"),
+  adminSubmit: action("admin-submit"),
 };
 
 /** macOS draws its traffic lights inside the window because of `titleBarStyle: hiddenInset`. */
@@ -96,10 +120,28 @@ buttons.reveal.textContent = t("action.reveal");
 buttons.chooseDataDir.textContent = t("action.chooseDataDir");
 buttons.share.textContent = t("action.share");
 buttons.unshare.textContent = t("action.unshare");
+buttons.resetAdmin.textContent = t("action.resetAdmin");
+buttons.resetCopy.textContent = t("reset.copy");
+buttons.resetDismiss.textContent = t("reset.dismiss");
+buttons.adminCreate.textContent = t("action.createAdmin");
+buttons.adminSubmit.textContent = t("create.submit");
+resetUserLabel.textContent = t("reset.username");
+resetPassLabel.textContent = t("reset.password");
 document.title = t("window.title");
 
 let state: PanelState | null = null;
 let logsOpen = false;
+/**
+ * What the last reset produced, or null.
+ *
+ * Component-local rather than part of `PanelState`, and deliberately: the state object is the
+ * *server's*, broadcast on every change, and a password is not something to put in it — every
+ * re-render would carry it back over the IPC boundary. It lives here until the user closes it,
+ * which is the whole of its lifetime; nothing persists it.
+ */
+let reset: ResetResult | null = null;
+/** In flight, so the button cannot fire twice and the wait is visible. */
+let resetting = false;
 let logCount = 0;
 /** The address the sheet is currently drawing, so a log line cannot repaint ~150 rects. */
 let paintedUrl: string | null = null;
@@ -121,7 +163,7 @@ function refreshLogsHeader(): void {
 
 function render(next: PanelState): void {
   state = next;
-  const { server, sharedOnLan, lanUrl, needsDataDir } = next;
+  const { server, sharedOnLan, lanUrl, needsDataDir, needsAdmin } = next;
   const running = server.state === "running";
   const busy = server.state === "starting" || server.state === "stopping";
 
@@ -147,10 +189,22 @@ function render(next: PanelState): void {
   dataDirHint.textContent = needsDataDir ? t("hint.chooseDataDir") : "";
   dataDirHint.hidden = !needsDataDir;
 
+  // Only while the server is up: the reset is a conversation with it, and a button that could
+  // only fail is one the user has to guess the reason for.
+  buttons.resetAdmin.disabled = !running || resetting;
+  buttons.resetAdmin.textContent = resetting ? t("reset.working") : t("action.resetAdmin");
+
   buttons.open.disabled = !running;
   buttons.browser.disabled = !running;
   buttons.copy.disabled = !running;
-  buttons.start.disabled = busy || running;
+  // Start is also refused while an administrator is missing: the server exits on it, so a
+  // button that produced "failed: exited 1" would be the exact failure the card prevents.
+  // The card's own create control needs a folder to write into, and is inert until one is
+  // chosen.
+  const waitingForAdmin = needsAdmin === true;
+  adminCard.hidden = !waitingForAdmin;
+  buttons.adminCreate.disabled = needsDataDir || creating;
+  buttons.start.disabled = busy || running || waitingForAdmin;
   buttons.stop.disabled = !(busy || running);
   buttons.reveal.disabled = needsDataDir;
   buttons.chooseDataDir.disabled = busy;
@@ -174,6 +228,138 @@ function render(next: PanelState): void {
   }
 
   renderQrSheet();
+  renderReset();
+  renderCreateAdmin();
+}
+
+/* ---- creating the first administrator ------------------------------------ */
+
+/**
+ * Whether the create sheet is open, and whether a child is running.
+ *
+ * Like the reset result, this is component-local rather than part of `PanelState`: it is a
+ * transient interaction, not a fact about the server, and the state object is pushed on every
+ * server log line. The password fields' values never leave this renderer except in the one
+ * IPC call that submits them.
+ */
+let createOpen = false;
+let creating = false;
+
+function openCreateAdmin(): void {
+  if (!state || state.needsDataDir) return;
+  createOpen = true;
+  adminError.hidden = true;
+  adminOk.hidden = true;
+  adminOverlay.hidden = false;
+  adminUsername.value = "";
+  adminPassword.value = "";
+  adminConfirm.value = "";
+  adminUsername.focus();
+}
+
+function closeCreateAdmin(): void {
+  createOpen = false;
+  adminOverlay.hidden = true;
+}
+
+/**
+ * Submit the form. The mismatch check is a courtesy done in the renderer — like the web
+ * sign-in form's — and the CLI's own length policy is what is actually enforced, so the
+ * error from either is rendered with the same catalog and the same element.
+ */
+async function submitCreateAdmin(): Promise<void> {
+  if (creating) return;
+  const username = adminUsername.value.trim();
+  const password = adminPassword.value;
+  adminError.hidden = true;
+  adminOk.hidden = true;
+
+  if (!username || !password) {
+    showCreateError(password ? t("create.fault.USERNAME_REQUIRED") : t("create.fault.PASSWORD_REQUIRED"));
+    return;
+  }
+  if (password !== adminConfirm.value) {
+    showCreateError(t("create.mismatch"));
+    return;
+  }
+
+  creating = true;
+  buttons.adminSubmit.textContent = t("create.working");
+  try {
+    const result = await window.panel.createAdministrator({ username, password });
+    if (result.ok) {
+      // The main process re-checks and broadcasts `needsAdmin: false`, so the card and the
+      // Start button follow on their own. Here the sheet only reports success.
+      adminOk.textContent = t("create.done", { name: result.username });
+      adminOk.hidden = false;
+      adminUsername.disabled = true;
+      adminPassword.disabled = true;
+      adminConfirm.disabled = true;
+      buttons.adminSubmit.hidden = true;
+      buttons.adminCreate.disabled = true;
+      creating = false;
+      return;
+    }
+    showCreateError(describeAdminFault(messages, result.fault));
+  } catch (error) {
+    showCreateError(error instanceof Error ? error.message : String(error));
+  } finally {
+    creating = false;
+    buttons.adminSubmit.textContent = t("create.submit");
+  }
+}
+
+function showCreateError(message: string): void {
+  adminError.textContent = message;
+  adminError.hidden = false;
+}
+
+/** A fault sentence: the CLI code if the catalog has it, else the sentence the child sent. */
+function describeAdminFault(
+  catalog: PanelMessages,
+  fault: { code: string; message?: string; params?: Record<string, string | number> }
+): string {
+  const key = `create.fault.${fault.code}` as keyof PanelMessages;
+  // An unknown code renders the child's own sentence: `translate` falls back to the key, but
+  // a raw code in the UI is less useful than the message the CLI already wrote.
+  if (key in catalog) return translate(catalog, key, fault.params);
+  return fault.message ?? fault.code;
+}
+
+function renderCreateAdmin(): void {
+  // The create button's disabled state is set in `render`; this only keeps the sheet honest
+  // if a state broadcast arrives while it is open (e.g. the folder changed).
+  if (createOpen && state?.needsDataDir) closeCreateAdmin();
+}
+
+/**
+ * Draw whatever the last reset produced.
+ *
+ * One function for all four outcomes, because they are one region of the page: the success
+ * panel, the two lines of a fault, and nothing at all when there is nothing to say.
+ */
+function renderReset(): void {
+  if (!reset) {
+    resetBox.hidden = true;
+    return;
+  }
+  resetBox.hidden = false;
+
+  if (reset.ok) {
+    resetBox.dataset.state = "done";
+    resetLead.textContent = t("reset.done");
+    resetUsername.textContent = reset.username;
+    resetPassword.textContent = reset.password;
+    return;
+  }
+
+  // A fault is a sentence with no code to copy, so the label lines are cleared rather than
+  // left showing the previous run's password — which is exactly the sort of stale credential
+  // a reader would take for a new one.
+  resetBox.dataset.state = "fault";
+  resetLead.textContent = t(`reset.fault.${reset.fault.code}` as keyof PanelMessages);
+  resetUsername.textContent = "";
+  resetPassword.textContent = "";
 }
 
 function setLogsOpen(open: boolean): void {
@@ -316,7 +502,15 @@ for (const control of document.querySelectorAll<HTMLElement>('[data-action="qr-d
 
 // Escape is what a keyboard user reaches for, and a modal that ignores it traps them.
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !qrOverlay.hidden) {
+  if (event.key !== "Escape") return;
+  // The create sheet first if it is open: the fields have focus, and typing in them is not a
+  // request to dismiss the QR sheet underneath.
+  if (!adminOverlay.hidden) {
+    event.preventDefault();
+    closeCreateAdmin();
+    return;
+  }
+  if (!qrOverlay.hidden) {
     event.preventDefault();
     closeQrOverlay();
   }
@@ -354,6 +548,44 @@ function copy(button: HTMLButtonElement, text: string): void {
 
 buttons.copy.addEventListener("click", () => copy(buttons.copy, urlCode.textContent ?? ""));
 buttons.qrCopy.addEventListener("click", () => copy(buttons.qrCopy, qrUrlCode.textContent ?? ""));
+
+buttons.resetAdmin.addEventListener("click", () => {
+  resetting = true;
+  reset = null;
+  if (state) render(state);
+  void window.panel.resetAdminPassword().then((result) => {
+    resetting = false;
+    // `null` is a dismissed confirmation, which is an outcome and not something to report.
+    if (result !== null) reset = result;
+    if (state) render(state);
+  });
+});
+buttons.resetCopy.addEventListener("click", () => {
+  // Both lines in one press: they are only useful together, and the username is the half a
+  // reader would otherwise retype by hand.
+  const username = resetUsername.textContent ?? "";
+  const password = resetPassword.textContent ?? "";
+  copy(buttons.resetCopy, username && password ? `${t("reset.username")}: ${username}\n${t("reset.password")}: ${password}` : "");
+});
+buttons.resetDismiss.addEventListener("click", () => {
+  reset = null;
+  if (state) render(state);
+});
+
+buttons.adminCreate.addEventListener("click", openCreateAdmin);
+buttons.adminSubmit.addEventListener("click", () => void submitCreateAdmin());
+document
+  .querySelectorAll<HTMLElement>('[data-action="admin-cancel"]')
+  .forEach((node) => node.addEventListener("click", closeCreateAdmin));
+// Submit on Enter, matching how the web sign-in form behaves.
+for (const field of [adminUsername, adminPassword, adminConfirm]) {
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void submitCreateAdmin();
+    }
+  });
+}
 
 setLogsOpen(false);
 window.panel.onStateChange(render);

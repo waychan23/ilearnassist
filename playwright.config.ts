@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AUTH_STATE } from "./e2e/auth.js";
+import { AUTH_STATE, SIGNED_IN_AS, SIGNED_IN_PASSWORD } from "./e2e/auth.js";
 
 /**
  * Browser end-to-end run.
@@ -128,7 +128,16 @@ export default defineConfig({
       stderr: "pipe",
     },
     {
-      command: "pnpm --filter @ilearnassist/server start",
+      // The server refuses to listen without an administrator, so one has to exist before it
+      // starts. That cannot be a `globalSetup` (Playwright starts every `webServer` first) and
+      // cannot be a separate entry with no `port` (those return immediately and race). The
+      // answer is chaining in the server entry's own command: `ensure-admin` is idempotent,
+      // so a killed run that left `.e2e/data` behind is a no-op rather than a refusal, and
+      // `&&` hands straight to `start`.
+      command:
+        `printf '%s\\n' '${SIGNED_IN_PASSWORD}' | ` +
+        `pnpm --filter @ilearnassist/server cli ensure-admin --username ${SIGNED_IN_AS} --password-stdin && ` +
+        `pnpm --filter @ilearnassist/server start`,
       port: SERVER_PORT,
       env: {
         ILA_DATA_DIR: join(E2E_DIR, "data"),

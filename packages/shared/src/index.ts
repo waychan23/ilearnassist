@@ -762,6 +762,51 @@ export const API_ERROR_CODES = [
   "QUIZ_QUESTION_NOT_FOUND",
   // The question exists but is not make-up-eligible: only skipped questions can be re-answered.
   "QUIZ_NOT_ANSWERABLE",
+
+  /*
+   * Accounts and signing in.
+   *
+   * Each of these is a different sentence to a person, which is the only reason a code
+   * exists. `INVALID_CREDENTIALS` deliberately covers both "no such account" and "wrong
+   * password": the two are one reply so that a name cannot be probed by reading which
+   * failure came back. `ACCOUNT_DISABLED` is a third answer, and it *is* distinguishable —
+   * it can only follow a correct password, so it tells an attacker nothing they had not
+   * already proved.
+   */
+  "INVALID_CREDENTIALS",
+  "ACCOUNT_DISABLED",
+  // The refresh token is unknown, expired or already spent. One code for all three, for the
+  // same reason as INVALID_CREDENTIALS: the client's move is identical — sign in again.
+  "INVALID_REFRESH_TOKEN",
+  "PASSWORD_REQUIRED",
+  "PASSWORD_TOO_SHORT",
+  "PASSWORD_TOO_LONG",
+  // The new password is the old one. Refused because the account was told to change it, and
+  // accepting the same value would leave `mustChangePassword` cleared and the choice unmade.
+  "PASSWORD_UNCHANGED",
+  // Nobody has a password yet, so no account can sign in. The server refuses to *listen* in
+  // that state, so this is only reachable through `buildServer` — a test harness, an embedder —
+  // and it is what makes a bypassed boot rule legible rather than a 401 that reads as a wrong
+  // password.
+  "SETUP_REQUIRED",
+  // The account is signed in and still owes a password change. Every route but the three that
+  // make that state escapable answers 403 with this, which is what makes "you must change your
+  // password before you can enter" a rule rather than a screen.
+  "PASSWORD_CHANGE_REQUIRED",
+  "USER_NOT_FOUND",
+  "USERNAME_TAKEN",
+  // A body field of the wrong shape — a string where a boolean belongs, say. Refused rather
+  // than coerced, because coercion is what turns `"false"` into "yes": the console sends real
+  // booleans, so this is only ever a hand-written request, and guessing at what it meant is how
+  // a self-disable slipped past the guard that exists to prevent it.
+  "INVALID_FIELD",
+  // The caller is signed in but is not a superadmin. Distinct from "not signed in" (401):
+  // the credential is fine, the account simply may not do this.
+  "FORBIDDEN",
+  // The change would lock the console out of itself — disabling or demoting the account making
+  // the request. There is deliberately no separate "last administrator" code: this refusal is
+  // what makes that unreachable, since only a signed-in administrator can reach the route.
+  "CANNOT_MODIFY_SELF",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -891,8 +936,51 @@ export interface Message {
 }
 
 /**
- * One account. There is no password yet — a username is the whole credential, and the
- * login screen says so — so this carries no secret and nothing about it is private.
+ * What an account is allowed to do.
+ *
+ * A **list** on every account rather than a single role column, even though only one
+ * combination exists today. The permission checks are already written as "does this account
+ * hold role R", so adding a third role — or letting somebody hold two — is a row that
+ * changes and nothing else. A single-valued column would make every check a comparison
+ * against a name, and the first account needing two of them would be a migration.
+ */
+export const USER_ROLES = ["superadmin", "user"] as const;
+
+export type UserRole = (typeof USER_ROLES)[number];
+
+export const isUserRole = (value: unknown): value is UserRole =>
+  typeof value === "string" && (USER_ROLES as readonly string[]).includes(value);
+
+/** The role that reaches the platform console. Named once so the check reads the same way. */
+export const SUPERADMIN_ROLE: UserRole = "superadmin";
+
+/**
+ * An administrator who can actually sign in.
+ *
+ * Roles and the disabled flag are two separate columns, and every rule about "is there somebody
+ * who can administer this installation" needs both — a disabled superadmin holds the role and
+ * can do nothing with it. Composed once, in shared, because the server's boot rule, the
+ * administrator CLI and the web console all ask it: two spellings of this is how the panel
+ * comes to say "there is no administrator" while the CLI refuses to make one.
+ */
+export const isEnabledSuperadmin = (user: Pick<User, "roles"> & { disabled: boolean }): boolean =>
+  !user.disabled && user.roles.includes(SUPERADMIN_ROLE);
+
+/**
+ * What an account holds when nobody says otherwise.
+ *
+ * Shared rather than a literal at each site because it is also the `users.roles` column
+ * default: the database and the create route have to agree, and two spellings of the same
+ * policy is how they would stop.
+ */
+export const DEFAULT_USER_ROLES: readonly UserRole[] = ["user"];
+
+/**
+ * One account, as the signed-in holder of it sees themselves.
+ *
+ * No `disabled` here, and its absence is not an oversight: a disabled account cannot sign
+ * in, so the only client that could render the flag is one that was refused. It lives on
+ * `AdminUser`, which is the view that has a reason to show it.
  */
 export interface User {
   id: string;
@@ -904,17 +992,242 @@ export interface User {
    * conversation, is built on top of it.
    */
   slug: string;
+  roles: UserRole[];
+  /**
+   * The account still has to choose its own password before it can use anything.
+   *
+   * True after an administrator creates it or resets its password. The client turns this
+   * into a screen the user cannot navigate away from, and the **server enforces it as well**
+   * — every route except the ones that change the password answers 403 while it is set.
+   * Client-side enforcement alone would be a suggestion: the token works, so anything that
+   * can make a request could skip the screen.
+   */
+  mustChangePassword: boolean;
   createdAt: string;
 }
 
 /**
- * A user as the login screen needs them: a name to offer, and nothing to identify.
+ * An account as the platform console lists it.
  *
- * Deliberately without an `id`. The screen does not need one, and not sending it keeps
- * user ids out of a response that anyone who can reach the address may read.
+ * A separate shape from `User` rather than a superset of it, because the two are read by
+ * different people for different reasons: `User` is what a browser needs to render its own
+ * session, this is what an administrator needs to manage somebody else's.
  */
-export interface UserSummary {
+export interface AdminUser {
+  id: string;
   username: string;
+  slug: string;
+  roles: UserRole[];
+  disabled: boolean;
+  mustChangePassword: boolean;
+  createdAt: string;
+}
+
+/**
+ * The `localStorage` key the browser keeps its token pair under.
+ *
+ * Here rather than private to the web app for the reason `ALL_TOOL_NAMES` is: two sides have
+ * to agree on the literal, and a shared constant is what stops them drifting. The browser
+ * writes it; the e2e harness reads it to *remove* it, which is the only way a browser spec can
+ * present itself as signed out — the session is a token now, so clearing cookies does nothing.
+ */
+export const AUTH_STORAGE_KEY = "ila-auth";
+
+/** The shortest password the server will accept from a person choosing one. */
+export const PASSWORD_MIN_LENGTH = 8;
+/** Long enough for a passphrase, short enough that hashing stays a rounding error. */
+export const PASSWORD_MAX_LENGTH = 200;
+export const USERNAME_MAX_LENGTH = 64;
+
+/* ------------------------------- authentication ------------------------------ */
+
+/**
+ * The pair a signed-in client holds.
+ *
+ * Both are opaque random strings, not JWTs, and the difference is the point: the server
+ * keeps a row per token, so "sign this account out everywhere" is one `UPDATE` rather than
+ * a key rotation that invalidates everybody. A JWT would be self-describing and would
+ * therefore be *unrevocable* without exactly the table it was meant to avoid.
+ *
+ * The two lifetimes are split so that a leaked access token is worth a day and a leaked
+ * refresh token is only useful once — see `AuthResult` on rotation.
+ */
+export interface AuthTokens {
+  accessToken: string;
+  /** Seconds until `accessToken` expires, so the client can refresh before it does. */
+  expiresIn: number;
+  refreshToken: string;
+}
+
+export interface AuthResult {
+  user: User;
+  tokens: AuthTokens;
+}
+
+/* ------------------------- the administrator bootstrap ------------------------ */
+/*
+ * The first administrator is created by the **control panel**, not by the web app, and not
+ * through the HTTP API: the panel spawns `apps/server/src/cli.ts` as a one-shot child so it
+ * works with the server deliberately stopped. `main()` refuses to listen until an
+ * administrator exists, which is what makes `POST /api/auth/setup` unnecessary — there is no
+ * running server for which "nobody can sign in yet" is true.
+ *
+ * What crosses that process boundary is a small JSON envelope, and these are its vocabulary.
+ * They live here, next to the HTTP codes they share a policy with, for the `ALL_TOOL_NAMES`
+ * reason: the panel writes the catalog that renders a code, and two spellings of one refusal
+ * is a sentence that stops appearing.
+ */
+
+/**
+ * The refusals a username or a password can earn.
+ *
+ * A subset of `ApiErrorCode`, named separately because these five are the ones the *policy*
+ * produces — `passwordProblem` and `usernameProblem` can return nothing else, on either
+ * channel. Naming them is what lets the CLI's envelope be exhaustive and the panel's catalog
+ * be checked against it, rather than both being open-ended over every code the API can send.
+ */
+export const CREDENTIAL_ERROR_CODES = [
+  "USERNAME_REQUIRED",
+  "USERNAME_TOO_LONG",
+  "PASSWORD_REQUIRED",
+  "PASSWORD_TOO_SHORT",
+  "PASSWORD_TOO_LONG",
+] as const;
+
+export type CredentialErrorCode = (typeof CREDENTIAL_ERROR_CODES)[number];
+
+/**
+ * The error envelope with its code narrowed.
+ *
+ * `ApiErrorBody` is this over every code either channel can send; a rule that can only
+ * produce five of them says so instead, which is what lets the CLI's envelope be exhaustive
+ * and the panel's catalog be checked against it rather than left open-ended.
+ */
+export interface CodedErrorBody<C extends string> {
+  error: { code: C; message: string; params?: Record<string, string | number> };
+}
+
+/**
+ * Every way the administrator CLI can refuse.
+ *
+ * The credential five first, because those come straight out of the shared policy, then the
+ * ones only a command line can produce. `SCHEMA_UNREADABLE` and `NOT_A_DATABASE` exist so
+ * `status` can say *which* of the ways a database is unusable it found: a caller told "no
+ * administrator" for a file it merely could not read would offer to create one, which is
+ * either a lie or a second, empty database beside the real one.
+ */
+export const ADMIN_CLI_ERROR_CODES = [
+  ...CREDENTIAL_ERROR_CODES,
+  /** An enabled superadmin already exists, and there is deliberately only ever one bootstrap. */
+  "ADMIN_EXISTS",
+  /** No data root has been chosen — `ILA_DATA_DIR` is unset. */
+  "DATA_DIR_MISSING",
+  /** The path exists but is a file, or cannot be read as a directory. */
+  "DATA_DIR_INVALID",
+  /** The database is real but was written by a schema this build cannot read. */
+  "SCHEMA_UNREADABLE",
+  /** The file is not a SQLite database at all. */
+  "NOT_A_DATABASE",
+  /** It opened, and a read failed — busy, permissions, an unrecovered write-ahead log. */
+  "UNREADABLE",
+  /** The command line itself was wrong. */
+  "USAGE",
+  /** A bug. The message is what the caller has. */
+  "INTERNAL",
+] as const;
+
+export type AdminCliErrorCode = (typeof ADMIN_CLI_ERROR_CODES)[number];
+
+/**
+ * Every curated code in the product, whichever channel sends it.
+ *
+ * The three unions overlap — `USERNAME_REQUIRED` is an HTTP code *and* a CLI one — but none
+ * contains another, so a constructor for the envelope has to accept all three. Constraining it
+ * to this rather than to bare `string` is what keeps an invented code a compile error.
+ */
+export type AnyErrorCode = ApiErrorCode | ParseErrorCode | AdminCliErrorCode;
+
+/**
+ * The CLI's failure arm — literally the HTTP error body, one channel over.
+ *
+ * The same shape rather than a parallel one, so a code means one thing in the product: the
+ * panel maps these to its own catalog exactly as it maps `ServerFault`, and a refusal written
+ * for the command line reads identically if the same rule is ever enforced over HTTP again.
+ */
+export type AdminCliErrorBody = CodedErrorBody<AdminCliErrorCode>;
+
+/**
+ * Whether a data root has an administrator, and whether it has a database at all.
+ *
+ * `database` is separate from `hasAdmin` on purpose. A folder with no database is the
+ * ordinary first-run state and the answer to "may I create one" is yes; a folder whose
+ * database could not be *read* is not that, and must never be reported as it.
+ */
+export interface AdminStatusResult {
+  ok: true;
+  command: "status";
+  dataRoot: string;
+  database: "absent" | "present";
+  hasAdmin: boolean;
+  /** Who the administrator is, so the panel can say which account it found. */
+  adminUsername: string | null;
+}
+
+/**
+ * The first administrator, created or adopted.
+ *
+ * `adopted` is the upgrade path: a data root carried over from the build where a username was
+ * the credential has accounts and no passwords, and the one that shares this name is the one
+ * whose workspaces are on disk. Creating a second account beside it would strand them.
+ *
+ * `password` is present only when the CLI invented one (`--generate`), and it is shown once —
+ * only a hash is stored, so there is no second reading.
+ */
+export interface AdminCreateResult {
+  ok: true;
+  command: "create-admin" | "ensure-admin";
+  dataRoot: string;
+  /** False only from `ensure-admin`, which is a no-op when an administrator already exists. */
+  created: boolean;
+  username: string;
+  slug: string;
+  adopted: boolean;
+  generated: boolean;
+  password?: string;
+}
+
+export type AdminCliResult = AdminStatusResult | AdminCreateResult;
+
+/** Creating an account from the console. The password is the server's to invent. */
+export interface CreateUserInput {
+  username: string;
+  roles?: UserRole[];
+}
+
+/** What the console may change about an account. A username is not among them. */
+export interface UpdateUserInput {
+  roles?: UserRole[];
+  disabled?: boolean;
+}
+
+/**
+ * A newly created account, or one whose password was just reset.
+ *
+ * `password` is present **exactly once** — in the reply that set it — and is never readable
+ * again: only a hash is stored, so there is nothing to re-read even for an administrator.
+ * That is why the console offers a copy button rather than a "show password" one.
+ */
+export interface UserCredentials {
+  user: AdminUser;
+  password: string;
+  /**
+   * A fresh pair, present **only** when an administrator reset their own password.
+   *
+   * Resetting a password ends every session of the account — that is half of what a reset is
+   * — which would otherwise sign the administrator out of the console they are standing in.
+   * Handing back a replacement is what keeps the action from looking like a bug.
+   */
+  tokens?: AuthTokens;
 }
 
 export interface Workspace {

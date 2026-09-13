@@ -4,11 +4,13 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import { isCompact } from "../composables/breakpoints";
-import type { Session } from "../api/types";
+import { SUPERADMIN_ROLE, type Session } from "../api/types";
 import {
   closeDrawer,
   openSettings,
   openWorkspaceSettings,
+  showAccount,
+  showAdmin,
   showWorkspaceHome,
   sidebarRail,
   toggleSidebar,
@@ -332,9 +334,42 @@ async function onDeleteSession(session: Session) {
       <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
     </button>
 
-    <!-- Sign out sits beside Settings rather than on a menu of its own: with no password to
-         forget, it is one action and one click costs nothing. No confirmation either — the
-         only thing a misclick loses is typing your name again. -->
+    <!--
+      The account's own page, and the platform console for the accounts that have it.
+
+      Here as well as on the workspace home because an administrator reaches for these from
+      inside a conversation, not only from the front door — and the two are the same page
+      either way, so there is nothing to keep in step.
+
+      The console is drawn from the role the server reported. A hidden button is not a
+      permission: the routes refuse everybody else regardless of what this rendered.
+    -->
+    <button
+      class="menu-item"
+      :title="t('account.title')"
+      data-testid="open-account-sidebar"
+      @click="showAccount()"
+    >
+      <span class="gear"><Icon name="user" /></span>
+      <span class="label">{{ t("account.title") }}</span>
+      <span class="sub truncate">{{ store.account?.username ?? "" }}</span>
+    </button>
+
+    <button
+      v-if="store.account?.roles.includes(SUPERADMIN_ROLE)"
+      class="menu-item"
+      :title="t('admin.title')"
+      data-testid="open-admin-sidebar"
+      @click="showAdmin()"
+    >
+      <span class="gear"><Icon name="shield" /></span>
+      <span class="label">{{ t("admin.title") }}</span>
+      <span class="sub truncate">{{ store.account?.username ?? "" }}</span>
+    </button>
+
+    <!-- Sign out sits beside Settings rather than on a menu of its own: it is one action and
+         one click costs nothing. No confirmation either — the session is restored by signing
+         in again, which is the only thing a misclick loses. -->
     <button
       class="menu-item side-signout"
       :title="t('common.signOut')"

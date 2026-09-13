@@ -21,6 +21,8 @@ export default defineConfig({
         "**/vite-env.d.ts",
         "**/*.vue",
         "apps/server/src/index.ts",
+        // argv/stdin/exit plumbing; its rules live in adminCli.ts and are covered there.
+        "apps/server/src/cli.ts",
         "apps/web/src/main.ts",
         // The desktop package's process entry points, for the same reason: `main.ts` is
         // Electron window and menu wiring, and `panel.ts` is DOM bindings. Neither has a

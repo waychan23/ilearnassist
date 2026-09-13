@@ -29,6 +29,9 @@ const CJK_ALLOWED_IN_EN = new Set(["locale.zhCN"]);
  */
 const DYNAMIC_PREFIXES = [
   "theme.",
+  /* `t(`roles.${role}`)` in the console and the account page, over the closed `UserRole`
+     union. Narrow on purpose: a broad prefix is where a typo hides. */
+  "roles.",
   "errors.",
   "parseErrors.",
   "tools.name.",

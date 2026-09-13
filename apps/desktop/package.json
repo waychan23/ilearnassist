@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "pdfjs-dist": "^4.10.38"
+    "pdfjs-dist": "^4.10.38",
+    "@ilearnassist/shared": "workspace:*"
   },
   "devDependencies": {
     "electron": "^44.3.0",

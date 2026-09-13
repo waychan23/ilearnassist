@@ -1967,6 +1967,12 @@ body {
   color: var(--text-3);
   border-color: var(--border);
 }
+/* A state rather than a category: this account cannot sign in. Reads with the same tokens the
+   danger buttons do, so "disabled" and "delete" are one colour across the app. */
+.badge.danger {
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
 
 /*
  * The tab strip on a tabbed dialog. Promoted because the narrow screen has to do something

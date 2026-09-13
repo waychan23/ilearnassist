@@ -196,6 +196,14 @@ export const ICON_PATHS = {
   ],
   /* The plan tree's "jump to this chapter" action on not-started/skipped nodes. */
   play: ["M5.5 3.5L12.5 8L5.5 12.5Z"],
+
+  /* The signed-in account, and the door to its own page. */
+  user: [
+    "M10.5 5.75a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0",
+    "M3.25 13.5c0-2.35 2.13-4.25 4.75-4.25s4.75 1.9 4.75 4.25",
+  ],
+  /* The platform console: other people's accounts rather than one's own. */
+  shield: ["M8 2.25L13.25 4.1V8.5C13.25 11.25 11.1 13.1 8 13.9C4.9 13.1 2.75 11.25 2.75 8.5V4.1Z"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICON_PATHS;

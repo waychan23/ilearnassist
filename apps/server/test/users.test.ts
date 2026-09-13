@@ -2,14 +2,17 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createAdmin } from "../src/adminCli.js";
 import { createDb, type AppDb } from "../src/db.js";
-import { startTestServer, type TestEnv } from "./helpers/tempEnv.js";
+import type { AuthResult } from "@ilearnassist/shared";
+import { startBareServer, startTestServer, TEST_PASSWORD, type TestEnv } from "./helpers/tempEnv.js";
 
 /**
  * Accounts, and the two rules that make them safe to build a directory tree on: a username
  * is matched case-insensitively, and the slug that names the directory is chosen once.
  *
- * There is no password yet, so nothing here is about credentials — see `auth` when it lands.
+ * Nothing here is about credentials — `auth.test.ts` owns signing in. This is about the row
+ * underneath, and the directory tree built on top of it.
  */
 
 let root: string;
@@ -127,22 +130,46 @@ describe("signing in", () => {
     expect(existsSync(env.userLayout.parsedDir)).toBe(true);
   });
 
-  it("reuses an existing account rather than making a second one", async () => {
-    // The rule that keeps a restart — or a second device — from orphaning a tree: the name
-    // is the identity. The root is made here rather than by the helper, because a
-    // caller-named root is the caller's to remove, which is what makes booting it twice
-    // possible at all.
+  it("signs the same account back in after a restart, and never offers setup again", async () => {
+    // The rule that keeps a restart — or a second device — from orphaning a tree: the name is
+    // the identity, and the account is found rather than made. The root is made here rather
+    // than by the helper, because a caller-named root is the caller's to remove, which is what
+    // makes booting it twice possible at all.
     const shared = mkdtempSync(join(tmpdir(), "ila-restart-"));
     try {
       const first = await startTestServer({ dataRoot: shared, username: "Ada" });
       const firstId = first.user.id;
       await first.cleanup();
 
-      // A different case, deliberately: the lookup is case-insensitive, so this is the same
-      // person and the stored spelling is the one they first used.
-      env = await startTestServer({ dataRoot: shared, username: "ada" });
-      expect(env.user.id).toBe(firstId);
-      expect(env.user.username).toBe("Ada");
+      // The harness bootstraps by *creating* an administrator, which a root that already has
+      // one refuses — so the second boot signs in instead, which is what a person does.
+      const second = await startBareServer({ dataRoot: shared });
+      try {
+        const res = await second.server.app.inject({
+          method: "POST",
+          url: "/api/auth/login",
+          // A different case, deliberately: the lookup is case-insensitive, so this is the same
+          // person and the stored spelling is the one they first used.
+          payload: { username: "ada", password: TEST_PASSWORD },
+        });
+        expect(res.statusCode).toBe(200);
+        const { user } = res.json<AuthResult>();
+        expect(user.id).toBe(firstId);
+        expect(user.username).toBe("Ada");
+
+        // And the bootstrap stays shut, which is what "once, and then never again" means for
+        // a root that already has an administrator. Asked through the CLI, because that is
+        // what the control panel asks — it has to work with the server stopped.
+        const again = await createAdmin({
+          dataRoot: shared,
+          username: "Mallory",
+          password: TEST_PASSWORD,
+        });
+        expect(again.ok).toBe(false);
+        expect(again.ok || again.body.error.code).toBe("ADMIN_EXISTS");
+      } finally {
+        await second.cleanup();
+      }
     } finally {
       rmSync(shared, { recursive: true, force: true });
     }

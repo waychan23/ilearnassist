@@ -27,8 +27,9 @@ pnpm desktop:package          # → apps/desktop/release/ilearnassist-0.1.0-arm6
 ```
 
 Open the `.dmg`, drag **ilearnassist** onto the Applications shortcut, and launch it. The
-control panel appears, starts the server, and the **Open app** button loads the chat UI in a
-second window.
+control panel appears and, after you choose a data folder and create the first
+administrator, starts the server; the **Open app** button then loads the chat UI in a second
+window. (On later launches the server starts straight away.)
 
 The build is **ad-hoc signed, not notarised** (see [Signing](#signing) below), so the first
 launch shows *"cannot be opened because Apple cannot check it for malicious software"*. That
@@ -170,6 +171,35 @@ on every launch. A fixed port is the wrong default for a desktop app: it turns "
 is already running" or "something else likes 3720" into a failed launch whose error a
 non-technical user cannot act on. Edit that file to pin one.
 
+### Creating the first administrator
+
+A fresh data folder has no administrator, and the server **refuses to listen until one
+exists**. The web app cannot create accounts, so the panel shows a **Create superadmin** card
+in place of a Start button that would only fail. That control works with the server stopped:
+
+- the panel spawns the bundled `dist/server/cli.mjs` as a one-shot child (the same
+  `ELECTRON_RUN_AS_NODE` trick as the long-lived server, but a process that runs and exits);
+- the operator types a username and a password with a confirmation field — their own
+  credential, which is why it is typed rather than generated; the password is handed over
+  stdin, so it never appears in the process table or a log line;
+- the CLI writes the account and its directory tree directly to the chosen data folder, then
+  exits, and the panel starts the server.
+
+Doing it here rather than in the web app is the security boundary: the panel only runs on the
+operator's machine, while the login screen is reachable over the network the moment LAN
+sharing is on. An in-app "create administrator" screen would be a `public` route anyone on
+that network could claim during the one window in which the installation has no owner. A data
+root carried over from the build where a username *was* the credential adopts the matching
+account rather than making a second one beside it.
+
+The same CLI is the headless path on a machine with no panel:
+
+```bash
+pnpm --filter @ilearnassist/server cli status                                        # is there an administrator?
+pnpm --filter @ilearnassist/server cli create-admin --username <you> --generate     # invent a password, shown once
+pnpm --filter @ilearnassist/server cli create-admin --username <you> --password-stdin   # type your own
+```
+
 ## Opening the app on a phone or tablet
 
 Press **Open on your phone** in the panel. If the server is loopback-only it restarts bound
@@ -183,11 +213,11 @@ on a home network; not reasonable to have happen on a café's. So it is off unti
 stays on until turned off, and the panel carries a **Stop sharing** control for as long as it
 is on.
 
-**It also decides who can sign in.** There are no passwords — a username is the whole
-credential — so anything that can reach the address can become any name on it, and the
-login screen says as much. That makes this switch the real access control: with sharing off,
-only this machine can reach the app at all. It is a second reason to leave it off unless
-someone actually wants to read their notes from the sofa.
+**It also decides who can reach the sign-in screen.** Every account has a password and every
+request carries a token, so an address on the network is no longer an address anyone can walk
+into — but it is still the switch that decides whether there is anything to walk into. With
+sharing off, only this machine can reach the app at all, which is a second reason to leave it
+off unless someone actually wants to read their notes from the sofa.
 
 The bind address follows the switch rather than the config, always — including when the
 switch is off and the address is loopback. Leaving the loopback case to `config.yaml` would
@@ -232,6 +262,31 @@ back to SVG's default black fill — including the quiet zone, which then paints
 code. That is not hypothetical: it is what the first version did, and decoding the rendered
 SVG is how it was found. Every colour in `paintQr` is written where it travels with the
 markup.
+
+## Resetting a forgotten administrator password
+
+Every route in the app needs somebody already signed in, which is exactly what a forgotten
+password prevents — so without a way in that needs nobody signed in, an installation whose only
+administrator forgot their password is a directory full of files nobody can open. The panel
+carries that way in: **Reset superadmin password** generates a new one, shows it once, and signs
+the account out everywhere so the old one really is gone.
+
+**What makes it safe is `ILA_PANEL_TOKEN`.** The panel generates a secret when it launches,
+passes it to the server child it spawns, and sends it with the reset request; the server accepts
+`POST /api/auth/panel-reset` from nothing else. The secret is never written anywhere — not to
+`desktop.json`, not to the config overlay, not to a log line — so it does not exist between
+launches, and reaching the server over the network does not get you one. A launch that was not
+the panel (a checkout, a `pnpm dev`) has no token, and the route answers 404: it is simply not
+there.
+
+What it rests on is that sitting at the machine is the proof of identity. That is a real claim
+and not a figure of speech — anyone who can run this panel can also read the database file
+directly — so the token is not what makes the feature safe; it is what keeps the feature from
+being reachable from somewhere else.
+
+The confirmation in front of it is not ceremony either. This replaces the credential of the one
+account that can do everything, and unlike disabling a user there is no second administrator
+behind it to put things right.
 
 ## Closing the window, and quitting
 

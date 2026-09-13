@@ -49,15 +49,21 @@ pnpm install
 cp .env.example .env
 # edit .env and set DEEPSEEK_API_KEY=… (or OPENAI_API_KEY=…)
 
+# A fresh data folder has no administrator — create one before starting the server.
+# --generate prints a password once; use --password-stdin to type your own.
+pnpm --filter @ilearnassist/server cli create-admin --username <you> --generate
+
 pnpm dev
 ```
 
 Open <http://localhost:5173>. The backend listens on `127.0.0.1:3720`.
 
-It opens on a login screen: type any username and you are in, and that name becomes your
-account with its own workspaces. **There are no passwords yet** — the screen says so, because
-anyone who can reach the address can sign in as any name. Leave LAN sharing off unless you
-mean it.
+It opens on a login screen: sign in with the administrator you just created. The
+administrator creates every other account from the platform console in the app. Leave LAN
+sharing off unless you mean it — with it on, the login screen is reachable from anything on
+the network. (With it off, as in the desktop app, the only way to create the first
+administrator is the control panel or the command above, both of which work with the server
+stopped.)
 
 > **`ILA_DATA_DIR` is required and `.env.example` already sets it** to `./data`, relative to
 > the project root. There is no default in the code on purpose: that directory holds the

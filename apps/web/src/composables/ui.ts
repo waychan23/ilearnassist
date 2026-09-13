@@ -13,9 +13,11 @@ import { isCompact } from "./breakpoints";
  * Three components, one boolean — which is what this module is for.
  *
  * `view` is the third, and the one that decides the *page* rather than an overlay. There is
- * still no router: three views and a three-valued flag do not need a dependency and a route
- * table, and none of the three has a URL anyone would type — the app opens on the login
- * screen or the workspace list according to who is asking, not according to a link.
+ * still no router: six views and a six-valued flag do not need a dependency and a route table,
+ * and none of them has a URL anyone would type — the app opens on the sign-in screen, the
+ * first-run screen or the workspace list according to who is asking, not according to a link.
+ * The two account pages are reached from controls that are already on screen, which is what
+ * the "no URL" test really asks.
  *
  * Not persisted, unlike the theme and the locale. A drawer left open across a reload is a
  * bug rather than a preference, and a storage key would drag in the pre-paint lock-step
@@ -31,7 +33,7 @@ import { isCompact } from "./breakpoints";
  * the drawer says where the sidebar *is*, this says how wide it is, and the sidebar's own
  * toggle is a different control on each viewport because of it. The field carries the rest.
  */
-export type View = "login" | "home" | "chat";
+export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
 
 export const uiState = reactive({
   settingsOpen: false,
@@ -194,6 +196,21 @@ export function showLogin(): void {
 }
 
 /**
+ * The screen a signed-in account owes a password change is stuck on.
+ *
+ * A view rather than a dialog, and the difference is not cosmetic: this is a state the account
+ * cannot leave, and a dialog can be dismissed, escaped or navigated out from under. The server
+ * refuses every other route until it is settled, so a screen that could be dismissed would
+ * simply be dismissed onto a page of failing requests.
+ */
+export function showPasswordChange(): void {
+  uiState.view = "password";
+  closeDrawer();
+  closeWidgetDrawer();
+  closeWorkspaceSettings();
+}
+
+/**
  * Leave the workspace for the list. Closes the drawer on the way out: the drawer belongs to
  * the pane that is being torn down, and leaving it open would carry the flag into the next
  * workspace the user enters, which greets them with a drawer they did not ask for.
@@ -207,4 +224,30 @@ export function showWorkspaceHome(): void {
 /** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */
 export function showChat(): void {
   uiState.view = "chat";
+}
+
+/**
+ * The account's own page: who it is signed in as, and how to change its password.
+ *
+ * Its own view rather than a tab of Settings, because Settings is how *this installation* is
+ * configured — providers, parsers, Copilots, all shared by everybody — and this is one
+ * account's business about itself. A superadmin who is also a user of the app is the same
+ * person on both pages, which is exactly why they are two.
+ */
+export function showAccount(): void {
+  uiState.view = "account";
+  closeDrawer();
+  closeWidgetDrawer();
+}
+
+/**
+ * The platform console: the accounts on this installation.
+ *
+ * Reachable only by a superadmin, and the server is what enforces that — the control is hidden
+ * for everybody else, but a hidden button is not a permission.
+ */
+export function showAdmin(): void {
+  uiState.view = "admin";
+  closeDrawer();
+  closeWidgetDrawer();
 }

@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamEvent } from "@ilearnassist/shared";
-import { api, attachmentUrl, fileToBase64, streamAnswers, streamChat } from "../../src/api/client.js";
+import {
+  api,
+  fileToBase64,
+  setUnauthenticatedHandler,
+  setStoredTokens,
+  sourceImageUrl,
+  streamAnswers,
+  streamChat,
+} from "../../src/api/client.js";
 import { ApiError } from "../../src/utils/apiError.js";
 import { i18n } from "../../src/i18n.js";
 
@@ -36,8 +44,16 @@ async function collect(sessionId = "s1"): Promise<ChatStreamEvent[]> {
   return events;
 }
 
+/** The headers of one `fetch` call, as the client built them. */
+function headerOf(mock: ReturnType<typeof stubFetch>, call: number): Headers {
+  return (mock.mock.calls[call]![1]?.headers ?? new Headers()) as Headers;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  // The token lives in `localStorage`, which jsdom keeps for the whole file — so one test's
+  // session would otherwise ride along on the next test's requests.
+  setStoredTokens(null);
 });
 
 describe("request", () => {
@@ -122,12 +138,13 @@ describe("request", () => {
     const fetchMock = stubFetch(() => jsonResponse({ ok: true }));
 
     await api.createWorkspace("Notes");
-    expect((fetchMock.mock.calls[0]![1]!.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    expect(headerOf(fetchMock, 0).get("Content-Type")).toBe("application/json");
 
     // A body-less DELETE claiming application/json is rejected by Fastify with
     // FST_ERR_CTP_EMPTY_JSON_BODY, so it must not set the header.
     await api.deleteWorkspace("w1");
-    expect(fetchMock.mock.calls[1]![1]!.headers).toBeUndefined();
+    expect(headerOf(fetchMock, 1).get("Content-Type")).toBeNull();
+    expect(fetchMock.mock.calls[1]![1]!.body).toBeUndefined();
   });
 
   it("serializes the payload", async () => {
@@ -253,11 +270,193 @@ describe("widgets and statistics", () => {
   });
 });
 
-describe("attachmentUrl", () => {
-  it("points at the source's bytes, by the source alone", () => {
-    // No session in the URL: the file belongs to the account, so the same source referenced
-    // from two conversations has one address — which is what makes the response cacheable.
-    expect(attachmentUrl("a1")).toBe("/api/sources/a1/raw");
+describe("sourceImageUrl", () => {
+  it("fetches the bytes with the token and hands back an object URL", async () => {
+    // Fetched rather than linked, because an `<img src>` cannot carry an `Authorization`
+    // header — see the note on the function. The address is the source alone: the file belongs
+    // to the account, so two conversations referencing it fetch the same bytes.
+    setStoredTokens({ accessToken: "at", refreshToken: "rt" });
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:sources/a1" }));
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(["bytes"]),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const url = await sourceImageUrl("a1");
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sources/a1/raw");
+    expect(headerOf(fetchMock as never, 0).get("Authorization")).toBe("Bearer at");
+    expect(url).toBe("blob:sources/a1");
+  });
+});
+
+describe("the bearer token", () => {
+  it("rides on every request once there is one", async () => {
+    setStoredTokens({ accessToken: "at", refreshToken: "rt" });
+    const fetchMock = stubFetch(() => jsonResponse([]));
+
+    await api.listWorkspaces();
+
+    expect(headerOf(fetchMock, 0).get("Authorization")).toBe("Bearer at");
+  });
+
+  it("is refreshed and the request retried when it comes back 401", async () => {
+    // The ordinary case: the access token lasts a day, so a tab left open past it 401s once
+    // and carries on. The retry is safe because a 401 is the gate refusing *before* any
+    // handler ran — nothing was persisted, so nothing can be done twice.
+    setStoredTokens({ accessToken: "stale", refreshToken: "rt" });
+    const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url) === "/api/auth/refresh") {
+        return jsonResponse({
+          user: {},
+          tokens: { accessToken: "fresh", refreshToken: "rt2", expiresIn: 60 },
+        });
+      }
+      const header = init?.headers as Headers;
+      return header.get("Authorization") === "Bearer fresh"
+        ? jsonResponse([{ id: "w1" }])
+        : jsonResponse({ error: { code: "UNAUTHENTICATED", message: "no" } }, { status: 401 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.listWorkspaces()).resolves.toEqual([{ id: "w1" }]);
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("/api/workspaces");
+    expect(String(fetchMock.mock.calls[1]![0])).toBe("/api/auth/refresh");
+    expect(String(fetchMock.mock.calls[2]![0])).toBe("/api/workspaces");
+  });
+
+  it("gives up and reports an expired session when the refresh fails too", async () => {
+    setStoredTokens({ accessToken: "stale", refreshToken: "rt" });
+    const fetchMock = vi.fn(async (url: unknown) =>
+      String(url) === "/api/auth/refresh"
+        ? jsonResponse({ error: { code: "INVALID_REFRESH_TOKEN", message: "spent" } }, { status: 401 })
+        : jsonResponse({ error: { code: "UNAUTHENTICATED", message: "no" } }, { status: 401 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.listWorkspaces()).rejects.toThrow();
+
+    // The dead pair is dropped rather than left to be presented again by the next request.
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([
+      "/api/workspaces",
+      "/api/auth/refresh",
+    ]);
+    expect(localStorage.getItem("ila-auth")).toBeNull();
+  });
+
+  it("stores the replacement pair a self-reset hands back", async () => {
+    // Resetting your *own* password ends every session the account holds — including the one
+    // making the request — so the server answers with a fresh pair. Dropping it would sign the
+    // administrator out of the console they are standing in, which is the one way this action
+    // could look like a bug.
+    setStoredTokens({ accessToken: "about-to-die", refreshToken: "about-to-die" });
+    stubFetch(() =>
+      jsonResponse({
+        user: { id: "u1", username: "Ada", roles: ["superadmin"] },
+        password: "abcd-efgh-ijkl-mnop",
+        tokens: { accessToken: "fresh", refreshToken: "fresh-rt", expiresIn: 60 },
+      })
+    );
+
+    await api.resetAccountPassword("u1");
+
+    const stored = JSON.parse(localStorage.getItem("ila-auth") ?? "{}") as {
+      accessToken?: string;
+    };
+    expect(stored.accessToken).toBe("fresh");
+  });
+
+  it("leaves the stored pair alone when it reset somebody else's", async () => {
+    // Resetting another account ends *their* sessions, not the caller's. Replacing the
+    // caller's pair with nothing would sign them out for an action that was not about them.
+    setStoredTokens({ accessToken: "mine", refreshToken: "mine-rt" });
+    stubFetch(() =>
+      jsonResponse({
+        user: { id: "u2", username: "Bob", roles: ["user"] },
+        password: "abcd-efgh-ijkl-mnop",
+      })
+    );
+
+    await api.resetAccountPassword("u2");
+
+    const stored = JSON.parse(localStorage.getItem("ila-auth") ?? "{}") as {
+      accessToken?: string;
+    };
+    expect(stored.accessToken).toBe("mine");
+  });
+
+  it("refreshes even where 401 is normally the answer, so a week-long session survives", async () => {
+    /*
+     * The case this exists for: the access token lasts a day, the refresh token a week, and
+     * `/auth/me` cannot tell "nobody is signed in" from "the access token aged out overnight".
+     * Treating its 401 as final would send somebody who was signed in yesterday back to the
+     * sign-in form with a perfectly good refresh token in hand.
+     */
+    setStoredTokens({ accessToken: "stale", refreshToken: "rt" });
+    const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url) === "/api/auth/refresh") {
+        return jsonResponse({
+          user: {},
+          tokens: { accessToken: "fresh", refreshToken: "rt2", expiresIn: 60 },
+        });
+      }
+      const header = init?.headers as Headers;
+      return header.get("Authorization") === "Bearer fresh"
+        ? jsonResponse({ id: "u1", username: "Ada" })
+        : jsonResponse({ error: { code: "UNAUTHENTICATED", message: "no" } }, { status: 401 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.me()).resolves.toMatchObject({ username: "Ada" });
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([
+      "/api/auth/me",
+      "/api/auth/refresh",
+      "/api/auth/me",
+    ]);
+  });
+
+  it("does not report an expiry when the refresh never arrived", async () => {
+    /*
+     * A dropped connection is not a refused credential, and the two call for opposite things:
+     * one means sign in again, the other means try later. `refreshTokens` deliberately keeps
+     * the pair when the request itself fails, and treating that as an expiry would land the
+     * user on the sign-in screen holding a valid session — where a reload signs them straight
+     * back in, which is the UI and the stored credential disagreeing.
+     */
+    const onUnauthenticated = vi.fn();
+    setUnauthenticatedHandler(onUnauthenticated);
+    setStoredTokens({ accessToken: "stale", refreshToken: "rt" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network down");
+      })
+    );
+
+    await expect(api.listWorkspaces()).rejects.toThrow();
+
+    expect(onUnauthenticated).not.toHaveBeenCalled();
+    // Still there, because it may well still be good.
+    expect(localStorage.getItem("ila-auth")).not.toBeNull();
+  });
+
+  it("does not refresh, and does not report an expiry, when there is nothing to present", async () => {
+    // A genuine first visit: no stored pair, so `refreshTokens` answers without a request and
+    // `/auth/me`'s 401 stays what it is — the answer, not an expired session. Reporting it
+    // would open every first visit with an error about a session that never existed.
+    const handlers = vi.fn();
+    setUnauthenticatedHandler(handlers);
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ error: { code: "UNAUTHENTICATED", message: "no" } }, { status: 401 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.me()).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(handlers).not.toHaveBeenCalled();
   });
 });
 

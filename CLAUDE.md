@@ -96,8 +96,9 @@ pnpm test:e2e          # playwright (needs: pnpm exec playwright install chromiu
 | `apps/desktop/test/` | the control panel's paths, launch spec, process supervision and catalogs |
 | `e2e/*.spec.ts` | browser flows against the real stack |
 | `e2e/workspaces.ts` | `enterWorkspace()` / `leaveWorkspace()` — the front door, for specs |
-| `e2e/auth.ts` | `signIn()` + the account and state-file the browser suite shares |
-| `e2e/auth.setup.ts` | the `setup` project: signs in once, saves `storageState` for the rest |
+| `e2e/auth.ts` | the account the suite acts as, `signIn()` / `forgetSession()`, and `ensureUser()` for a second one |
+| `e2e/fixtures.ts` | the suite's `test` — the saved token on its `request` fixture |
+| `e2e/auth.setup.ts` | the `setup` project: signs in as the CLI-created administrator, saves `storageState` |
 
 Each app's `tsconfig` includes its `test/` directory, so **`pnpm typecheck` checks the
 tests too**. For `apps/web` that also means `pnpm build` (which runs `vue-tsc`) fails on a
@@ -168,14 +169,20 @@ every spec renders Chinese and inherits the pin. `e2e/i18n.spec.ts` is the only 
 other locales are exercised, and it scopes its `test.use({ locale })` overrides to its own
 `describe` blocks.
 
-**Every browser spec starts signed in, and does not have to say so.** The API refuses
-everything without a session, so the `setup` project signs in once and saves the cookie as
-`storageState`, which both real projects load. That is why ~70 specs that are not about
+**Every browser spec starts signed in, and does not have to say so.** The server refuses to
+listen without an administrator, so the Playwright config chains the idempotent
+`cli ensure-admin` ahead of the server's own command (`globalSetup` runs *after* the webServers
+and so cannot do this); the `setup` project then signs in through the form and saves the token
+as `storageState`, which both real projects load. That is why ~70 specs that are not about
 authentication needed no edit when sign-in arrived. A new spec inherits it and should not
-think about it; the one file that must *not* — `e2e/login.spec.ts` — clears the cookie with a
-file-scoped `test.use({ storageState: { cookies: [], origins: [] } })`, which is why it is a
-file of its own rather than a `describe` block: a `describe`-scoped override can be inherited
-by a sibling that did not mean to. It is also a project **dependency** rather than a
+think about it; the one file that must *not* — `e2e/login.spec.ts` — clears the browser state
+with a file-scoped `test.use({ storageState: { cookies: [], origins: [] } })`, which is why it
+is a file of its own rather than a `describe` block: a `describe`-scoped override can be
+inherited by a sibling that did not mean to. Two consequences of the session being a token
+rather than a cookie: specs get their `request` fixture from `e2e/fixtures.ts`, which puts the
+saved token on it (Playwright can only carry cookies into an `APIRequestContext`), and a spec
+that needs to *sign out* calls `forgetSession()` first and signs in for a session of its own —
+signing out revokes the shared one server-side, which would sign out every spec after it. It is also a project **dependency** rather than a
 `globalSetup`, because a `globalSetup` may run before the `webServer` entries are up and this
 has to reach one.
 
@@ -197,22 +204,27 @@ scripts/dev.sh            # restart `pnpm dev` from a clean slate — see Gotcha
 apps/desktop/src/
   shared/panelApi.ts      # the IPC contract (channels, ServerStatus, PanelApi)
   shared/messages.ts      # the panel's two catalogs + fault → sentence
-  main/main.ts            # Electron: windows, menu, IPC handlers
-  main/serverProcess.ts   # supervises the server child (start/stop/crash/timeout)
+  main/main.ts            # Electron: windows, menu, IPC handlers, the needsAdmin gate on Start
+  main/serverProcess.ts   # supervises the long-lived server child (start/stop/crash/timeout)
+  main/oneShot.ts         # runs the one-shot CLI child, feeds stdin, collects stdout/stderr
+  main/admin.ts           # wraps the CLI: parse its envelope into typed create/status results
   main/paths.ts           # per-user layout + idempotent first-run seeding
-  main/launch.ts          # child env (ELECTRON_RUN_AS_NODE, ILA_*, ILA_HOST) + stdout parsing
+  main/launch.ts          # child env (ELECTRON_RUN_AS_NODE, ILA_*) + stdout parsing + adminEntryFor
   main/lan.ts             # which address a phone can reach, ranked
   main/settings.ts        # the panel's own preferences (LAN sharing)
   shared/qr.ts            # URL → module square, and → drawable runs
-  preload/preload.ts      # contextBridge surface — seven commands, nothing else
+  preload/preload.ts      # contextBridge surface — every command, nothing else
   renderer/               # the panel page (plain HTML/CSS + one bundled IIFE)
 apps/server/src/
-  index.ts                # bootstrap + the listening line + SIGTERM (resolves the data root first)
+  index.ts                # bootstrap + assertHasAdministrator + the listening line + SIGTERM
+  cli.ts                  # the administrator CLI entry (argv/stdin/exit codes; rules in adminCli.ts)
+  adminCli.ts             # status/create-admin rules, no process access; the boot gate too
   webApp.ts               # serves the built frontend beside the API, when there is one
   config.ts               # YAML + ${ENV} resolution + .env loader + resolveDataRoot
   paths.ts                # the on-disk layout: data root → users/<slug> → workspaces, sources, db
-  schema.ts               # the DDL + the `user_version` guard that refuses a foreign database
-  auth.ts                 # accounts: the signed session cookie, and find-or-create by name
+  schema.ts               # the DDL, schemaProblem, and the user_version guard (one transaction)
+  apiError.ts             # the { error: { code, message, params } } envelope, shared with the CLI
+  auth.ts                 # accounts: scrypt passwords, credential policy, bearer tokens, the gate
   db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
   files.ts                # the workspace browser's read side: one level, one file
@@ -348,9 +360,9 @@ Fuller map in `docs/reference.md`.
   that was signed in. Sign out is a click in the sidebar and on the workspace home, so this is a
   reachable path and not a theoretical one. It deliberately **does not** confirm first — with no
   password to forget, a misclick costs typing a name again — and it lands on the login screen even
-  when the logout request fails, because the cookie is HttpOnly, a failed logout cannot be retried
-  locally, and leaving someone looking signed in is the worse of the two outcomes (the failure is
-  surfaced, since a reload will sign them back in).
+  when the logout request fails, because the stored token is cleared either way and leaving someone
+  looking signed in is the worse of the two outcomes (the failure is surfaced, since a reload will
+  sign them back in).
 - **An uploaded file is a `source`: owned by the account, indexed by the database, and
   referenced rather than owned by a conversation.** It lives at
   `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose, so chat
@@ -671,7 +683,7 @@ Fuller map in `docs/reference.md`.
 - **The app opens on the workspace home, and a card there is the only way into a
   conversation.** There is still no router: `App.vue` renders `LoginView`,
   `WorkspaceHome` *or* the `Sidebar + ChatView` pair, chosen by `uiState.view` in
-  `composables/ui.ts` — a three-valued flag, where three views do not need a dependency
+  `composables/ui.ts` — a six-valued flag, where six views do not need a dependency
   and a route table nobody types. The sidebar's old workspace `<select>` went in the same
   change as the home page: with the home page as the switcher it was a second, duplicate
   way to change workspace, and it could name the workspaces without saying anything about
@@ -680,33 +692,104 @@ Fuller map in `docs/reference.md`.
   not the feature. Navigation goes through `showLogin()` / `showWorkspaceHome()` /
   `showChat()`, never a component-local flag. `e2e/workspaces.ts` is the same rule for the
   specs; a spec that skips it fails on a composer that never renders.
-- **Nothing is painted until `uiState.authReady`.** The session cookie is HttpOnly, so the
-  page cannot tell whether anyone is signed in until `/api/auth/me` answers — which means
-  the right view is genuinely unknown for the first moments after a reload. `view` starts on
-  `"login"` as the safe guess, and `App.vue` withholds *both* branches until the flag flips,
-  because rendering the login screen as the initial guess would flash it at a signed-in user
-  on every single refresh.
-- **Every API route requires a signed-in account unless it says `config: { public: true }`.**
-  One `onRequest` hook in `routes.ts`, deny-by-default: a route added tomorrow without a
-  thought about auth is refused, which is the same "the safe state is the one you get by
-  doing nothing" move as the `read_document` whitelist. Exactly four routes opt out —
-  `health`, `auth/login`, `auth/me`, `auth/users` — and `auth/me` answering 401 is its
-  *answer* rather than a refusal, which is why `client.ts` exempts `/auth/*` from the
-  session-expiry handler: routing that 401 into "your session expired" would open every first
-  visit with an error about a session that never existed. The hook belongs to the `routes`
-  plugin, so it covers the API and stops there — `webApp.ts` serves the built frontend from a
-  sibling plugin, and a guarded `index.html` is an app nobody can open.
-- **There is no password yet, and the login screen says so.** A username is the whole
-  credential, so the server's job is to *identify* the caller rather than to authenticate
-  anyone. Two things are nonetheless built the way they would be with a password, because
-  they are the parts that would be painful to retrofit: the cookie is an HMAC-signed
-  `<userId>.<signature>` rather than a bare id, and the secret lives in `app_settings` — so it
-  travels with the data root, and rotating it (delete the row) logs everyone out *immediately*,
-  since it is read per request rather than captured at boot. When passwords arrive the cookie
-  carries an opaque token id and only `currentUser` learns to look it up. Until then, **the
-  panel's LAN switch is the control that decides who can reach the address**, and the login
-  screen states the no-password property rather than leaving a user to assume a privacy it
-  does not have.
+- **Nothing is painted until `uiState.authReady`.** Whether anyone is signed in is the
+  *server's* fact — the token may be expired, revoked or absent — so the right view is
+  genuinely unknown until `/api/auth/me` answers. `view` starts on `"login"` as the safe
+  guess, and `App.vue` withholds *every* branch until the flag flips, because rendering a
+  signed-out screen as the initial guess would flash it at a signed-in user on every single
+  refresh. The web app asks only `me()`: a running server always has an administrator (see
+  the boot gate below), so there is no `auth/status` round-trip and no create-account screen.
+- **Every API route requires a signed-in account unless it says `config: { public: true }`**,
+  **and the same hook enforces the pending password change.** One `onRequest` hook in
+  `routes.ts`, deny-by-default: a route added tomorrow without a thought about auth is refused,
+  which is the same "the safe state is the one you get by doing nothing" move as the
+  `read_document` whitelist. Six routes opt out with `public` — `health`, `auth/login`,
+  `auth/refresh`, `auth/logout`, `auth/me`, and `auth/panel-reset` (which carries the panel's
+  secret instead of a session) — and `auth/me`
+  answering 401 is its *answer* rather than a refusal, which is why `client.ts` keeps a
+  hand-written `ANSWERS_WITH_401` set rather than an `/auth/` prefix: reporting that 401 would
+  open every first visit with an error about a session that never existed. The set is consulted
+  **after** the refresh, not instead of it — `/auth/me` cannot tell "nobody is signed in" from
+  "the access token aged out overnight", so treating its 401 as final would send somebody who
+  was signed in yesterday back to the sign-in form with a good refresh token in hand. Losing
+  that ordering is the quietest way to break the week-long session. `/auth/password` is
+  deliberately *not* in the set: a 401 there is always an expiry, never an answer. The second refusal is `allowPendingPassword`: while an
+  account owes a password change, everything but `auth/me`, `auth/password` and `auth/logout`
+  answers 403 — **on the server, not on the screen**, because the account holds a working token
+  and a rule the client is the only thing applying is not a rule. The hook belongs to the
+  `routes` plugin, so it covers the API and stops there — `webApp.ts` serves the built frontend
+  from a sibling plugin, and a guarded `index.html` is an app nobody can open.
+- **The session is a bearer token in `localStorage`, and revocation is a row.** `auth_tokens`
+  holds one row per issued token, keyed by its **SHA-256** — never the token — so a copy of the
+  database is a list of spent digests rather than a list of working credentials. That is the
+  whole reason it is not a JWT: a self-describing token cannot be refused by the server that
+  signed it, so "sign this account out everywhere" would become a key rotation that signs out
+  everybody. Two lifetimes, and the split is the point — access a day, refresh a week **and
+  rotated on every use**, so a stolen refresh token is worth one exchange and the theft shows
+  as the real client being refused. Each exchange resets the week, which is "stay signed in"
+  without a token that never expires. The client stores both under one key (`AUTH_STORAGE_KEY`,
+  in `packages/shared` because the e2e suite removes it to look signed out — an `<img src>`
+  cannot carry a header, which is why `sourceImageUrl` fetches bytes and hands back an object
+  URL), and `refreshTokens()` is a **single shared promise**: on a cold load several requests
+  401 together, and letting each refresh would spend the same single-use token from several
+  directions and fail all but the first.
+- **A password is `scrypt`, with its parameters inside the hash.** `hashPassword` writes
+  `scrypt$N$r$p$salt$digest` and `verifyPassword` reads the cost out of the string it is
+  checking rather than out of the constants, so raising them does not orphan what was already
+  written. A login that finds no account still runs the check, against a decoy hash: without
+  it, "no such name" returns immediately and "wrong password" takes 80ms, which turns the route
+  into a way to enumerate accounts. A wrong password and an unknown name share one 401 for the
+  same reason; `ACCOUNT_DISABLED` is a separate 403 **because it is only reachable after a
+  correct password**, so it tells the caller nothing they had not already proved.
+- **The first administrator is made by the control panel, with the server stopped — and the
+  server will not listen without one.** The web app has no create-account screen and no
+  bootstrap route: a login form is reachable over the network the moment LAN sharing is on, so
+  a `public` create-administrator route would be claimable by the whole network during the one
+  window with no owner. Instead the panel spawns the server package's administrator CLI
+  (`apps/server/src/cli.ts`, bundled to `dist/server/cli.mjs`) as a **one-shot child**
+  (`apps/desktop/src/main/oneShot.ts` + `admin.ts`) that writes the account directly with no
+  server running, and `main()` calls `assertHasAdministrator(db)` after `buildServer` and
+  before `listen`, naming the fix on stderr. The predicate is **an enabled superadmin**, not
+  "some account has a password" (`hasSuperadmin`/`isEnabledSuperadmin`): a credential with no
+  role can sign in and can administer nothing. The CLI *adopts* a passwordless account of the
+  same name (the upgrade path from the build where a username was the credential), and its
+  check-and-write is one `BEGIN IMMEDIATE` transaction — two processes racing to bootstrap make
+  exactly one administrator (the HTTP route's "no `await` between the check and the write"
+  argument does not survive a process boundary). The same command is the headless path:
+  `pnpm --filter @ilearnassist/server cli create-admin …`; `ensure-admin` is its idempotent form,
+  which the Playwright config chains ahead of the server. Recovery for a forgotten password is
+  `POST /api/auth/panel-reset`, guarded by `ILA_PANEL_TOKEN` — a secret the Electron panel
+  generates per launch and passes only to the child it spawns, never written anywhere, so
+  reaching the server over the network does not get you one. Do not add an unauthenticated
+  bootstrap route back: its guard was the panel's own process boundary, deliberately.
+- **A setting every account shares is a superadmin's to change.** Providers, document parsers,
+  the parsing policy and the app defaults are **installation-wide**, and their *writes* carry
+  `requireSuperadmin` while their reads stay open — the composer needs the model list and the
+  parse state, and a screen that cannot say which models exist is not one anybody can use. This
+  is not tidiness: a provider's `baseURL` is where every conversation's prompts go, so an
+  account that can add one and point `/api/defaults` at it reads everybody's traffic; and
+  `POST /api/document-parsers/:id/test` makes the **server** fetch a `baseURL` the caller chose,
+  the capability `web_fetch` needs its SSRF guard for. Before there were roles these routes were
+  everyone's because everyone was one person — that stopped being true when a second account
+  existed. The rule for a new route is the console's: if it changes something every account
+  shares, it is an administrator's.
+- **Never coerce a request field into a role or a flag.** `disabled` must be a real boolean:
+  `"false"` is truthy, so a coerced `PATCH { disabled: "false" }` would store `1` while
+  `disabled === true` missed the self-guard — an administrator locking themselves out past the
+  check that exists to stop exactly that, with the panel's recovery then finding no enabled
+  superadmin to reset. Same discipline as an unknown role in `normalizeRoles`: refuse with
+  `INVALID_FIELD` rather than guess what was meant.
+- **Roles are a list, and the last administrator cannot be removed.** `users.roles` is a JSON
+  array and every check is "does this account hold role R", so a third role is a row that
+  changes. `PATCH /api/admin/users/:id` refuses **self**-demotion and self-disable
+  (`CANNOT_MODIFY_SELF`) and that refusal is the *whole* of the "somebody has to remain" rule:
+  reaching the route means the caller is an enabled superadmin, so one administrator always
+  survives whoever else is changed. A separate last-superadmin check would be a branch no test
+  could cover. Users are **disabled, never deleted** — the row owns workspaces, conversations
+  and uploaded files. A disabled account's live tokens stop working in the same request, and
+  an administrator resetting *their own* password does not set `mustChangePassword` (they chose
+  the value a moment ago) while resetting anybody else's does; either way the reset ends the
+  target's sessions and hands the caller a replacement pair when the target is themselves.
 - **A workspace's conversation count and last activity are derived, never stored.**
   `GET /api/workspaces` computes them in the same query that lists workspaces (a LEFT JOIN,
   so a workspace with no conversations still appears with `0`/`null`), and the client

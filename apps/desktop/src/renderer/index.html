@@ -40,6 +40,29 @@
           <button type="button" class="button" data-action="stop" disabled></button>
         </div>
         <button type="button" class="button button--link" data-action="browser" disabled></button>
+        <!--
+          The way back in for a forgotten administrator password, and the only control in this
+          panel that reaches into the *accounts* rather than the server process. It lives here
+          rather than in the app because the app is exactly what a forgotten password locks
+          you out of.
+        -->
+        <button type="button" class="button button--link" data-action="reset-admin" disabled></button>
+
+        <div class="reset" data-role="reset" hidden>
+          <p class="reset__lead" data-role="reset-lead"></p>
+          <div class="reset__row">
+            <span class="reset__label" data-role="reset-user-label"></span>
+            <code class="reset__value" data-role="reset-username"></code>
+          </div>
+          <div class="reset__row">
+            <span class="reset__label" data-role="reset-pass-label"></span>
+            <code class="reset__value" data-role="reset-password"></code>
+          </div>
+          <div class="reset__row reset__row--actions">
+            <button type="button" class="button button--small" data-action="reset-copy"></button>
+            <button type="button" class="button button--link" data-action="reset-dismiss"></button>
+          </div>
+        </div>
       </section>
 
       <section class="field">
@@ -72,6 +95,19 @@
         <!-- The address stays on screen while sharing is on, so it can be read out to someone
              whose camera will not cooperate. -->
         <code class="field__value" data-role="lan-url" hidden></code>
+      </section>
+
+      <!--
+        The one account-level action that has to be available with the server stopped: a
+        fresh data folder has no administrator, and the server refuses to listen until one
+        exists. Shown only in that state, so on an installation already set up this is never
+        drawn. The sheet it opens, not an inline expansion: the form is taller than the panel
+        can give it, and an overlay keeps it from shoving the rest of the controls off the
+        bottom of a window that does not scroll.
+      -->
+      <section class="admin" data-role="admin" hidden>
+        <p class="admin__hint" data-i18n="hint.needAdmin"></p>
+        <button type="button" class="button button--primary" data-action="admin-create"></button>
       </section>
 
       <p class="note" data-i18n="hint.closeToTray"></p>
@@ -123,6 +159,60 @@
               <code class="field__value" data-role="qr-url"></code>
               <button type="button" class="button button--small" data-action="qr-copy"></button>
             </div>
+          </div>
+        </section>
+      </div>
+      <!--
+        The create-administrator sheet, the same overlay pattern as the QR one: a scrim,
+        a dialog, and one way to dismiss. Its content is a form with a confirmation field —
+        the only time a password is chosen without an old one to prove it against, so a
+        typo is unrecoverable. The password is handed to main over IPC and never logged.
+      -->
+      <div class="overlay" data-role="admin-overlay" hidden>
+        <div class="overlay__scrim" data-action="admin-cancel"></div>
+        <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="admin-title">
+          <header class="sheet__head">
+            <h2 class="sheet__title" id="admin-title" data-i18n="create.title"></h2>
+            <button type="button" class="button button--link" data-action="admin-cancel" data-i18n="action.cancel"></button>
+          </header>
+
+          <p class="sheet__message sheet__message--detail" data-i18n="create.detail"></p>
+
+          <label class="form-field">
+            <span class="form-field__label" data-i18n="create.username"></span>
+            <input
+              class="form-field__input"
+              data-role="admin-username"
+              type="text"
+              autocomplete="username"
+              maxlength="64"
+            />
+          </label>
+          <label class="form-field">
+            <span class="form-field__label" data-i18n="create.password"></span>
+            <input
+              class="form-field__input"
+              data-role="admin-password"
+              type="password"
+              autocomplete="new-password"
+            />
+          </label>
+          <label class="form-field">
+            <span class="form-field__label" data-i18n="create.confirm"></span>
+            <input
+              class="form-field__input"
+              data-role="admin-confirm"
+              type="password"
+              autocomplete="new-password"
+            />
+          </label>
+
+          <p class="sheet__message" data-role="admin-error" role="alert" hidden></p>
+          <p class="sheet__message sheet__message--ok" data-role="admin-ok" role="status" hidden></p>
+
+          <div class="sheet__actions">
+            <button type="button" class="button button--link" data-action="admin-cancel" data-i18n="action.cancel"></button>
+            <button type="button" class="button button--primary" data-action="admin-submit" data-i18n="create.submit"></button>
           </div>
         </section>
       </div>

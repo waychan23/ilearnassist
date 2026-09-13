@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
-import { attachmentUrl } from "../api/client";
+import { sourceImageUrl } from "../api/client";
 import { translateParseError } from "../utils/apiError";
 import { formatBytes } from "../utils/format";
 import type { Attachment } from "../api/types";
@@ -12,8 +12,8 @@ import Icon from "./Icon.vue";
  *
  * There is no `sessionId` here, unlike the name this used to carry: a chip's thumbnail is
  * addressed by the **source**, which is what owns the bytes. The same file referenced from two
- * conversations therefore resolves to one URL — which is also why its response can be cached
- * immutably.
+ * conversations therefore resolves to the same object URL — which is why the fetch is keyed by
+ * source id rather than by chip.
  */
 const props = defineProps<{
   attachments: Attachment[];
@@ -21,13 +21,45 @@ const props = defineProps<{
   removable?: boolean;
 }>();
 
+/**
+ * Thumbnails, fetched rather than linked.
+ *
+ * An `<img src>` cannot carry an `Authorization` header, so a source's bytes are pulled with
+ * `fetch` and handed to the element as an object URL. Every URL made here is revoked on
+ * unmount: a blob URL pins its bytes for the life of the document, and a long conversation
+ * with images in it would otherwise hold all of them.
+ */
+const thumbs = ref<Record<string, string>>({});
+const requested = new Set<string>();
+
+async function loadThumb(sourceId: string): Promise<void> {
+  if (requested.has(sourceId)) return;
+  requested.add(sourceId);
+  try {
+    thumbs.value = { ...thumbs.value, [sourceId]: await sourceImageUrl(sourceId) };
+  } catch {
+    // Not reported. The chip still names the file and still reports its parse state, which is
+    // what the user actually has to act on; a toast about a thumbnail would be noise, and the
+    // failure with something to say about it is the one the preview dialog shows.
+  }
+}
+
+// `watchEffect` rather than `onMounted`: a chip's attachment list grows as files are staged,
+// and a message's list is replaced when the turn is reloaded.
+watchEffect(() => {
+  for (const a of props.attachments) if (a.kind === "image") void loadThumb(a.id);
+});
+
+onBeforeUnmount(() => {
+  for (const url of Object.values(thumbs.value)) URL.revokeObjectURL(url);
+});
+
 const emit = defineEmits<{ remove: [id: string]; reparse: [attachment: Attachment] }>();
 
 const { t } = useI18n();
 
 interface Chip {
   attachment: Attachment;
-  url: string;
   /** Short line under the filename: size, or what extraction is doing. */
   detail: string;
   /** Tooltip for a failure — the chip itself only has room for a marker. */
@@ -83,10 +115,7 @@ function describe(a: Attachment): { detail: string; title: string } {
 }
 
 const chips = computed<Chip[]>(() =>
-  props.attachments.map((a) => {
-    const { detail, title } = describe(a);
-    return { attachment: a, url: attachmentUrl(a.id), detail, title };
-  })
+  props.attachments.map((a) => ({ attachment: a, ...describe(a) }))
 );
 
 /** CSS modifier for the chip's state, so failures read as failures at a glance. */
@@ -107,10 +136,11 @@ function stateOf(a: Attachment): string {
       data-testid="attachment-chip"
       :title="c.title"
     >
+      <!-- The icon stands in until the bytes arrive, so a chip is never a blank gap. -->
       <img
-        v-if="c.attachment.kind === 'image'"
+        v-if="thumbs[c.attachment.id]"
         class="thumb"
-        :src="c.url"
+        :src="thumbs[c.attachment.id]"
         :alt="c.attachment.name"
         :title="c.attachment.name"
       />

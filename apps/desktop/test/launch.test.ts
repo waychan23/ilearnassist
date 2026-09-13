@@ -56,6 +56,9 @@ describe("parseListeningLine", () => {
 });
 
 describe("buildLaunchSpec", () => {
+  /** The secret the panel shares with the child. A literal: this file is about the spec. */
+  const PANEL_TOKEN = "a-launch-scoped-secret";
+
   const build = (host: string) =>
     buildLaunchSpec({
       electronExecPath: "/Applications/ilearnassist.app/Contents/MacOS/ilearnassist",
@@ -63,6 +66,7 @@ describe("buildLaunchSpec", () => {
       paths,
       dataDir: DATA_DIR,
       host,
+      panelToken: PANEL_TOKEN,
       baseEnv: { PATH: "/usr/bin" },
     });
 
@@ -82,6 +86,14 @@ describe("buildLaunchSpec", () => {
     expect(spec.env["ILA_PROJECT_ROOT"]).toBe(paths.root);
     expect(spec.env["ILA_CONFIG_PATH"]).toBe(paths.overlayFile);
     expect(spec.env["ILA_WEB_DIR"]).toBe(paths.webDir);
+  });
+
+  it("carries the launch's secret, which is the panel's way back into a locked account", () => {
+    // The server accepts `/api/auth/panel-reset` only from a process that can present this,
+    // and a fresh panel generates a fresh one within `main.ts`. Losing it makes a forgotten
+    // administrator password unrecoverable — there is no other route that needs nobody
+    // signed in.
+    expect(spec.env["ILA_PANEL_TOKEN"]).toBe(PANEL_TOKEN);
   });
 
   it("points the server at the chosen data root, which is the user's and not the app's", () => {

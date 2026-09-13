@@ -645,37 +645,76 @@ present, the read failure is what the user is shown — otherwise a scanned PDF 
 
 ### Authentication (`auth.ts`)
 
-**There is no password.** A username is the whole credential, so the server's job is to
-*identify* the caller rather than to authenticate anyone: `POST /api/auth/login` finds the
-account by name and creates it if it is new, and answers with a signed cookie. The login
-screen states the property rather than leaving a user to assume a privacy it does not have,
-and the panel's LAN switch is what decides who can reach the address at all.
+**A password, and a bearer token.** `POST /api/auth/login` takes a name and a password and
+answers with a pair of opaque tokens; every other request carries the access one in an
+`Authorization: Bearer` header. The token is not a JWT, and that is the load-bearing choice:
+a JWT is self-describing, so a server that has signed one can no longer refuse it, and "sign
+this account out everywhere" becomes a key rotation that signs out everybody. Here the token's
+**SHA-256 is a row in `auth_tokens`**, so revocation is one `UPDATE` — which is what the
+console's kick button is, and why it takes effect on the next request rather than at the next
+restart.
 
-Two things are built the way they would be with a password, because they are the parts that
-would be painful to retrofit:
+What that costs is a database read per request: one indexed lookup against a local SQLite
+file, the same order of work as the session-secret lookup it replaced.
 
-- **The cookie is signed** — `<userId>.<HMAC>` rather than a bare id, `HttpOnly`,
-  `SameSite=Lax`, 30 days. A bare id would be *almost* as good (ids are UUIDs and never leave
-  the server), but a signature costs one HMAC and means the growth path is a change of
-  *value* rather than of shape: when passwords arrive the cookie carries an opaque token id,
-  and only `currentUser` learns to look it up.
-- **The secret lives in `app_settings`**, so it travels with the data root it protects and a
-  cookie issued against one installation's accounts means nothing to another's. It is read
-  **per request** rather than captured at boot, which is one indexed read against a property
-  worth having: deleting or replacing that row logs everyone out immediately, which is the
-  lever you want when something has gone wrong.
+Two lifetimes, and the split is the whole point of having two:
+
+- **Access — a day.** Sent on every request, so the one most likely to be observed.
+- **Refresh — a week, rotated on every use.** Redeeming one revokes it and issues a fresh
+  pair, so a stolen refresh token is worth exactly one exchange and the theft shows up as the
+  real client being refused. Because each exchange resets the week, a client that keeps
+  working never signs in again — "stay signed in" without a token that lives forever.
+
+Both are stored **hashed**, and only hashed: a copy of the database is a list of spent digests
+rather than a list of working credentials. The hash is a plain SHA-256 rather than a KDF, and
+deliberately — the input is 256 bits of CSPRNG output, so there is no guessable space for a
+slow hash to protect, and the lookup is on the request path.
+
+Passwords are `scrypt` from Node's own `crypto` with the parameters stored *inside* the hash,
+so raising them later still verifies what was written before.
+
+**Roles are a JSON array on the account**, even though only two exist, because the checks are
+written as "does this account hold role R" — so a third role, or an account holding two, is a
+row that changes and nothing else. `superadmin` reaches the platform console, and it is also
+what the **installation-wide writes** require: providers, document parsers, the parsing policy
+and the app defaults are shared by every account, so their writes are an administrator's while
+their reads stay open for the composer. That is a security boundary rather than a preference —
+a provider's `baseURL` is where every conversation's prompts go, and testing a parser makes the
+*server* fetch a URL the caller chose.
 
 **Every route requires a session unless it says `config: { public: true }`.** One `onRequest`
 hook, deny by default, so a route added without a thought about auth is refused rather than
-open — the same move as the `read_document` whitelist. Four routes opt out: `health`,
-`auth/login`, `auth/me` and `auth/users`. `auth/me` answering 401 without a cookie is its
-*answer* rather than a refusal, which is why the browser client exempts `/auth/*` from its
-session-expiry handler — routing that 401 into "your session expired" would open every first
-visit with an error about a session that never existed.
+open — the same move as the `read_document` whitelist. Six routes opt out: `health`,
+`auth/login`, `auth/refresh`, `auth/logout`, `auth/me` (obtaining a token, spending one, and
+asking whether you already hold a session) and `auth/panel-reset` (which carries the panel's
+secret instead of a session). The same hook enforces the **pending password change**: while
+an account owes one, every route but `auth/me`, `auth/password` and `auth/logout` answers
+403, which is what makes "change it first" a rule rather than a screen.
 
 The hook belongs to the `routes` plugin, so it covers the API and stops there. The built
 frontend is served by a sibling plugin and stays public, which it has to be: a browser cannot
-present a cookie in order to fetch the page that would give it one.
+present a token in order to fetch the page that would give it one.
+
+**The first administrator is created by the control panel, not the web app — and not through
+the API.** A login screen is reachable over the network the moment LAN sharing is on, so an
+in-app create-administrator route would be a `public` route anyone on that network could
+claim during the one window in which the installation has no owner. Instead the panel spawns
+the server package's administrator CLI (`apps/server/src/cli.ts`, bundled to
+`dist/server/cli.mjs`) as a one-shot child that writes the account with the server
+deliberately stopped, and `main()` refuses to listen until an *enabled superadmin* exists.
+The same CLI is the headless path on a machine with no panel (`pnpm --filter @ilearnassist/server
+cli create-admin …`). It adopts a passwordless account of the same name rather than making a
+second one, because on an installation carried over from the build where a username was the
+credential that row owns the workspaces. The check and write run in one `BEGIN IMMEDIATE`
+transaction, so two processes racing to bootstrap make exactly one administrator.
+
+**The control panel is the way back in.** `POST /api/auth/panel-reset` is guarded by a secret
+the Electron panel generates per launch and passes only to the child process it spawned
+(`ILA_PANEL_TOKEN`). It is never written anywhere, so it does not exist between launches, and
+reaching the server over the network does not get anyone one. Without this there is no
+recovery at all: every other route needs somebody already signed in, which is exactly what a
+forgotten administrator password prevents. When the variable is absent — a checkout, a
+`pnpm dev` — the route answers 404 and is simply not there.
 
 ### Routes (`routes.ts`)
 
@@ -689,10 +728,18 @@ attachments, providers and app defaults.
 | `GET /api/sources/:id/raw` | a file's bytes, for a thumbnail or a download |
 | `POST /api/sources/:id/reparse` | re-run extraction |
 | `DELETE /api/sources/:id` | delete the file, its text and every reference to it |
-| `POST /api/auth/login` | sign in, creating the account if the name is new. Sets the session cookie. |
-| `POST /api/auth/logout` | clear it — reached from **Sign out** in the sidebar footer and on the workspace home |
+| `POST /api/auth/login` | sign in with a name and a password. Answers 409 `SETUP_REQUIRED` when the installation has no administrator, which the server itself will not serve |
+| `pnpm … server cli create-admin` | create the first administrator, outside the server — the only way, and it works with the server stopped |
+| `POST /api/auth/refresh` | exchange a refresh token for a fresh pair, spending the one presented |
+| `POST /api/auth/logout` | end this client's session — reached from **Sign out** in the sidebar footer, the workspace home and the account page |
 | `GET /api/auth/me` | who the caller is; a 401 is the answer, not a refusal |
-| `GET /api/auth/users` | the names that exist, so a returning visitor can pick one |
+| `POST /api/auth/password` | change your own password, with the current one. Ends every session and returns a replacement pair |
+| `POST /api/auth/panel-reset` | the control panel's way back into a locked account, guarded by a launch-scoped secret |
+| `GET /api/admin/users` | every account, with its roles and whether it is disabled |
+| `POST /api/admin/users` | create one, with a generated password shown exactly once |
+| `PATCH /api/admin/users/:id` | change its roles, or disable it (never delete — the row owns workspaces) |
+| `POST /api/admin/users/:id/password` | replace its password without knowing the old one |
+| `POST /api/admin/users/:id/revoke` | end every session it holds |
 | `GET /api/config` | public config: providers (keyless), defaults, this account's workspaces root |
 | `PUT /api/defaults` | set the global default provider/model |
 | `GET/POST /api/providers`, `PUT/DELETE /api/providers/:id` | provider CRUD |
@@ -825,7 +872,8 @@ after that point, and rendering both would show the answer twice for as long as 
   `CreateWorkspaceDialog`.
 - `composables/` — the few pieces of state that are not domain state and not component-local.
   `theme.ts` and `locale.ts` own the two persisted preferences; `ui.ts` holds the booleans
-  more than one component needs to read or set (`settingsOpen`, `drawerOpen`); `breakpoints.ts`
+  more than one component needs to read or set (`settingsOpen`, `drawerOpen`) *and* the six-way
+  `view` flag that picks the page — there is still no router; `breakpoints.ts`
   holds the media-query flags (`isCompact`, `isNarrow`, `isCoarsePointer`) as module-level
   singletons, because a viewport query is a fact about the window rather than about any one
   component. `confirm.ts` is the promise-returning confirm prompt.
@@ -840,13 +888,14 @@ belonging to whichever is open (`+`, or refresh). The strip is the settings dial
 `.tabs`, not a second kind of tab; the panel below it is one `.side-scroll` either way, because
 the sidebar's pinned header and footer depend on there being exactly one.
 
-Below the panel sit the two account-level rows, **Settings** and **Sign out**, and they share
-every style except the divider, which is above the pair rather than between them — two rows of
-one footer group, not two entries of a list. Sign out takes no confirmation, because with no
-password to forget a misclick costs only typing a name again. It lands on the login screen even
-when the request fails: the cookie is HttpOnly, so a failure cannot be retried locally, and
-leaving someone looking signed in is the worse of the two outcomes. The same control is on the
-workspace home, beside its settings gear, since that page is reachable with no sidebar.
+Below the panel sit the account-level rows — **Settings**, **Your account**, **Platform
+console** (superadmins only) and **Sign out** — and they share every style except the divider,
+which is above the group rather than between the rows: one footer group, not four entries of a
+list. Sign out takes no confirmation, because the session is restored by signing in again and a
+misclick costs only that. It lands on the sign-in screen even when the request fails, and the
+stored token is cleared either way — leaving someone looking signed in is the worse of the two
+outcomes. The same controls are on the workspace home, beside its settings gear, since that
+page is reachable with no sidebar.
 
 `FileTree.vue` renders `store.fileRows`, which is `flattenTree` from
 [`utils/fileTree.ts`](../apps/web/src/utils/fileTree.ts) computed over a flat map of

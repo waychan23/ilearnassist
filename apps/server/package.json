@@ -8,7 +8,8 @@
     "start": "tsx src/index.ts",
     "fake-llm": "tsx test/helpers/fakeLlm.ts",
     "fake-parser": "tsx test/helpers/fakeParser.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cli": "tsx src/cli.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

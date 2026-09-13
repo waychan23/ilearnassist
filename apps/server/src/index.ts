@@ -1,3 +1,4 @@
+import { assertHasAdministrator, NoAdministratorError } from "./adminCli.js";
 import { loadConfig, PROJECT_PATHS, resolveDataRoot } from "./config.js";
 import { buildServer } from "./server.js";
 
@@ -18,6 +19,11 @@ async function main(): Promise<void> {
     dataRoot,
     webDir: PROJECT_PATHS.webDir,
   });
+
+  // After `buildServer` and before `listen`, which is the only order that works: the predicate
+  // needs a database, and binding the port is the thing being refused. See the note on
+  // `assertHasAdministrator` for what has already happened to the data root by this point.
+  assertHasAdministrator(db);
 
   const { host, port } = config.server;
   const address = await app.listen({ host, port });
@@ -46,7 +52,16 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
+  // The one refusal that is a *sentence* rather than a fault. "Failed to start …" followed by a
+  // stack says nothing to somebody whose data folder has no administrator, and the sentence
+  // `assertHasAdministrator` throws already names the fix — so it is printed alone, on stderr,
+  // the way `resolveDataRoot`'s is.
+  if (err instanceof NoAdministratorError) {
+    console.error(err.message);
+    process.exit(1);
+    return;
+  }
   console.error("Failed to start ilearnassist server:", err);
   process.exit(1);
 });

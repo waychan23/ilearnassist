@@ -28,6 +28,10 @@ const en: typeof MessageSchema = {
     rename: "Rename",
     settings: "Settings",
     signOut: "Sign out",
+    back: "Back",
+    loading: "Loading…",
+    retry: "Try again",
+    copyFailed: "Copy failed — select the text and copy it yourself",
   },
 
   app: {
@@ -43,21 +47,90 @@ const en: typeof MessageSchema = {
     },
   },
 
-  /**
-   * The login screen.
-   *
-   * `noPassword` is not decoration: this build has no passwords, and a user who believes the
-   * field in front of them is a password field will assume a privacy the app does not have.
-   * Stating it is the honest half of not implementing it yet.
-   */
+  // See the note on `login` in the zh-CN catalog for what `note` is doing.
   login: {
-    lead: "Enter a username to begin.",
+    lead: "Sign in with your username and password.",
     username: "Username",
     usernamePlaceholder: "For example: your name",
-    existing: "Existing accounts:",
-    submit: "Continue",
-    noPassword:
-      "This instance has no passwords: anyone who can reach this address can sign in as any name.",
+    password: "Password",
+    passwordPlaceholder: "Your password",
+    submit: "Sign in",
+    note: "You stay signed in for 7 days at a time. If you forget your password, ask an administrator to reset it.",
+  },
+
+  password: {
+    title: "Change password",
+    lead: "{name}, choose a new password before you carry on.",
+    current: "Current password",
+    new: "New password",
+    confirm: "Confirm new password",
+    hint: "At least {min} characters.",
+    submit: "Save new password",
+    mismatch: "The two passwords do not match.",
+    tooShort: "A new password needs at least {min} characters.",
+    unchanged: "The new password cannot be the one you already have.",
+    signOut: "Sign out",
+  },
+
+  account: {
+    title: "Your account",
+    identity: "Account",
+    passwordLead: "Changing your password signs this account out everywhere else.",
+    passwordChanged: "Your password has been changed.",
+  },
+
+  roles: {
+    superadmin: "Superadmin",
+    user: "User",
+  },
+
+  admin: {
+    title: "Platform console",
+    subtitle: "Manage the accounts on this installation.",
+    create: "New user",
+    roles: "Roles",
+    you: "You",
+    disabled: "Disabled",
+    mustChange: "Must change password",
+    enable: "Enable",
+    count: "No accounts | 1 account | {count} accounts",
+    createPasswordHint:
+      "The initial password is generated for you and shown once. Copy it and send it to the user — they have to change it the first time they sign in.",
+    selfLocked: "You cannot disable or demote your own account.",
+    disable: {
+      action: "Disable",
+      title: "Disable account",
+      message: "Disable “{name}”?",
+      detail:
+        "The account is signed out immediately and cannot sign in again. Its workspaces, files and conversations are kept, and you can re-enable it at any time.",
+      confirm: "Disable",
+    },
+    reset: {
+      action: "Reset password",
+      title: "Reset password",
+      message: "Reset the password for “{name}”?",
+      detailSelf:
+        "A new password is generated. Your current session ends and this one carries on with the new password.",
+      detailOther:
+        "A new password is generated and the account is signed out immediately. Its owner has to change it the first time they sign in.",
+      confirm: "Reset",
+    },
+    kick: {
+      action: "Sign out",
+      title: "Sign out everywhere",
+      message: "Sign “{name}” out everywhere?",
+      detail:
+        "Every session the account holds ends immediately. Its password is untouched and it can sign back in.",
+      confirm: "Sign out",
+      self: "To end your own session, use Sign out.",
+    },
+    credential: {
+      created: "The account is ready. Send these details to its owner:",
+      reset: "The password has been reset. Send the new one to its owner:",
+      username: "Username",
+      password: "Password",
+      note: "This password is shown once and never again — only a hash is stored, so nobody, not even you, can read it back later. Its owner has to change it the first time they sign in.",
+    },
   },
 
   // Autonyms: intentionally identical to the zh-CN catalog. See the note there.
@@ -719,6 +792,22 @@ const en: typeof MessageSchema = {
     QUIZ_QUESTION_NOT_FOUND: "That quiz question cannot be found.",
     QUIZ_NOT_ANSWERABLE:
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
+
+    INVALID_CREDENTIALS: "That username or password is not right.",
+    ACCOUNT_DISABLED: "This account is disabled. Ask an administrator to re-enable it.",
+    INVALID_REFRESH_TOKEN: "Your session has ended. Sign in again.",
+    PASSWORD_REQUIRED: "A password is required.",
+    PASSWORD_TOO_SHORT: "A password needs at least {min} characters.",
+    PASSWORD_TOO_LONG: "A password cannot be longer than {max} characters.",
+    PASSWORD_UNCHANGED: "The new password cannot be the one you already have.",
+    SETUP_REQUIRED:
+      "This installation has no administrator yet. Ask the operator to create one in the control panel.",
+    PASSWORD_CHANGE_REQUIRED: "Choose a new password before you can carry on.",
+    USER_NOT_FOUND: "That account no longer exists.",
+    USERNAME_TAKEN: "That username is already taken.",
+    INVALID_FIELD: "\u201c{field}\u201d is not a valid value for that field.",
+    FORBIDDEN: "This account is not allowed to do that.",
+    CANNOT_MODIFY_SELF: "You cannot disable or demote your own account.",
   },
 
   /**

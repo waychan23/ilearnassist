@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./fixtures";
 import { scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
 
@@ -52,7 +52,10 @@ function contrast(a: string, b: string): number {
 
 test("theme cycles light → dark → auto and persists across a reload", async ({ page }) => {
   await page.goto("/");
-  await page.evaluate(() => localStorage.clear());
+  // Only the preference, not `localStorage.clear()`. The session lives there too now, and
+  // wiping it would leave this spec staring at a sign-in form with no theme toggle on it —
+  // which is a failure that looks nothing like the thing being tested.
+  await page.evaluate(() => localStorage.removeItem("gl-theme"));
   await page.reload();
 
   // Default when nothing is stored is auto.
@@ -187,7 +190,9 @@ test("the dialog scrim dims less in the light theme than in the dark one", async
   };
 
   await page.goto("/");
-  await page.evaluate(() => localStorage.clear());
+  // The preference only — see the note in the first test. This one needs `open-settings` on
+  // screen afterwards, so wiping the session would fail it on a missing button.
+  await page.evaluate(() => localStorage.removeItem("gl-theme"));
   await page.reload();
 
   await show("dark");

@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "./fixtures";
 import { buildPdf } from "../apps/server/src/documents/sample.js";
 import { FAKE_LLM, scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";

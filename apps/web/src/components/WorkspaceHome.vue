@@ -3,9 +3,16 @@ import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
-import { openSettings, openSources, openWorkspaceSettings, showChat } from "../composables/ui";
+import {
+  openSettings,
+  openSources,
+  openWorkspaceSettings,
+  showAccount,
+  showAdmin,
+  showChat,
+} from "../composables/ui";
 import { formatRelativeTime } from "../utils/format";
-import type { Workspace } from "../api/types";
+import { SUPERADMIN_ROLE, type Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
 import TopbarControls from "./TopbarControls.vue";
 import Icon from "./Icon.vue";
@@ -160,6 +167,30 @@ function activityLabel(workspace: Workspace): string {
         @click="openSettings"
       >
         <Icon name="gear" />
+      </button>
+      <!--
+        The platform console, for the accounts the server would let in. Drawn from the role the
+        server reported rather than from anything the page decided — and a hidden button is not
+        a permission, so the routes answer 403 for everybody else regardless.
+      -->
+      <button
+        v-if="store.account?.roles.includes(SUPERADMIN_ROLE)"
+        class="icon-btn"
+        data-testid="open-admin"
+        :title="t('admin.title')"
+        :aria-label="t('admin.title')"
+        @click="showAdmin()"
+      >
+        <Icon name="shield" />
+      </button>
+      <button
+        class="icon-btn"
+        data-testid="open-account"
+        :title="t('account.title')"
+        :aria-label="t('account.title')"
+        @click="showAccount()"
+      >
+        <Icon name="user" />
       </button>
       <button
         class="icon-btn"

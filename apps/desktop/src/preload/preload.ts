@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { PANEL_CHANNELS, type PanelApi, type PanelState } from "../shared/panelApi.js";
+import {
+  PANEL_CHANNELS,
+  type AdminStatusResult,
+  type CreateAdministratorResult,
+  type PanelApi,
+  type PanelState,
+  type ResetResult,
+} from "../shared/panelApi.js";
 
 /**
  * The whole surface the panel page is allowed to touch.
@@ -26,6 +33,14 @@ const api: PanelApi = {
   openApp: () => ipcRenderer.invoke(PANEL_CHANNELS.openApp) as Promise<void>,
   openInBrowser: () => ipcRenderer.invoke(PANEL_CHANNELS.openInBrowser) as Promise<void>,
   revealDataDir: () => ipcRenderer.invoke(PANEL_CHANNELS.revealDataDir) as Promise<void>,
+  // No argument, deliberately: which account is reset is the main process's to decide from the
+  // server's own answer, so page script cannot name one.
+  resetAdminPassword: () =>
+    ipcRenderer.invoke(PANEL_CHANNELS.resetAdminPassword) as Promise<ResetResult | null>,
+  adminStatus: () =>
+    ipcRenderer.invoke(PANEL_CHANNELS.adminStatus) as Promise<AdminStatusResult>,
+  createAdministrator: (input) =>
+    ipcRenderer.invoke(PANEL_CHANNELS.createAdministrator, input) as Promise<CreateAdministratorResult>,
   quit: () => ipcRenderer.invoke(PANEL_CHANNELS.quit) as Promise<void>,
 
   onStateChange: (listener) => {

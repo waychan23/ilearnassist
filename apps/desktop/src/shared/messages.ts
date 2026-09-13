@@ -60,6 +60,69 @@ export interface PanelMessages {
   "action.cancel": string;
   "action.chooseDataDir": string;
   /**
+   * Resetting the administrator's password, and what comes back.
+   *
+   * `action.resetAdmin` opens it and `reset.confirm` guards it, because it is destructive in
+   * the way that matters: the account it replaces a password for is the one that can do
+   * everything, and the reset ends its sessions too.
+   *
+   * The three fault strings are separate because they are three different situations with
+   * three different next moves — start the server, set the installation up, or look at the
+   * message — and one string covering all of them would be advice for one of them.
+   */
+  "action.resetAdmin": string;
+  "reset.confirmTitle": string;
+  "reset.confirmDetail": string;
+  "reset.confirm": string;
+  "reset.working": string;
+  "reset.done": string;
+  "reset.username": string;
+  "reset.password": string;
+  "reset.copy": string;
+  "reset.copied": string;
+  "reset.dismiss": string;
+  "reset.fault.not_running": string;
+  "reset.fault.no_admin": string;
+  "reset.fault.unreachable": string;
+  /**
+   * Creating the first administrator.
+   *
+   * The card is what a fresh data folder gets instead of a Start that would fail, and
+   * `create.fault.<code>` is one entry per way the child CLI can refuse — the CLI's own
+   * codes (`PASSWORD_TOO_SHORT`, `SCHEMA_UNREADABLE`, …) plus the four boundary faults of
+   * running it. They are keyed the same way `ServerFault` is, so a new code is a missing
+   * string rather than a raw code on screen.
+   */
+  "action.createAdmin": string;
+  "create.title": string;
+  "create.detail": string;
+  "create.username": string;
+  "create.password": string;
+  "create.confirm": string;
+  "create.submit": string;
+  "create.working": string;
+  "create.done": string;
+  "create.dismiss": string;
+  "create.mismatch": string;
+  "create.needFolder": string;
+  "create.fault.no_data_dir": string;
+  "create.fault.spawn_failed": string;
+  "create.fault.timed_out": string;
+  "create.fault.bad_response": string;
+  "create.fault.USERNAME_REQUIRED": string;
+  "create.fault.USERNAME_TOO_LONG": string;
+  "create.fault.PASSWORD_REQUIRED": string;
+  "create.fault.PASSWORD_TOO_SHORT": string;
+  "create.fault.PASSWORD_TOO_LONG": string;
+  "create.fault.ADMIN_EXISTS": string;
+  "create.fault.DATA_DIR_INVALID": string;
+  "create.fault.SCHEMA_UNREADABLE": string;
+  "create.fault.NOT_A_DATABASE": string;
+  "create.fault.UNREADABLE": string;
+  "create.fault.USAGE": string;
+  "create.fault.INTERNAL": string;
+  "hint.needAdmin": string;
+  /**
    * The folder picker's own strings, plus the confirm that follows it.
    *
    * The confirm exists because an empty folder and a *wrong* folder look identical from
@@ -118,6 +181,51 @@ const zhCN: PanelMessages = {
   "action.copyUrl": "复制地址",
   "action.copied": "已复制",
   "action.reveal": "在访达中显示",
+  "action.resetAdmin": "重置超级管理员密码",
+  "reset.confirmTitle": "重置超级管理员密码",
+  "reset.confirmDetail":
+    "系统会生成一个新的随机密码，并让超级管理员在所有设备上退出登录。忘记密码时，这是唯一的找回方式。",
+  "reset.confirm": "重置",
+  "reset.working": "正在重置…",
+  "reset.done": "密码已重置。请把下面的新密码交给超级管理员：",
+  "reset.username": "用户名",
+  "reset.password": "新密码",
+  "reset.copy": "复制",
+  "reset.copied": "已复制",
+  "reset.dismiss": "关闭",
+  "reset.fault.not_running": "服务还没有启动，先启动服务再重置密码。",
+  "reset.fault.no_admin": "这个数据目录里还没有超级管理员，请先在控制面板里创建。",
+  "reset.fault.unreachable": "重置失败，服务没有正常响应。",
+  "action.createAdmin": "创建超级管理员",
+  "create.title": "创建超级管理员",
+  "create.detail":
+    "这是这个数据目录里的第一位管理员，负责创建和管理其他账号。请输入你自己的登录信息：密码只显示这一次，创建后请用它登录。",
+  "create.username": "用户名",
+  "create.password": "密码",
+  "create.confirm": "确认密码",
+  "create.submit": "创建",
+  "create.working": "正在创建…",
+  "create.done": "已创建超级管理员「{name}」。现在可以启动服务并登录了。",
+  "create.dismiss": "知道了",
+  "create.mismatch": "两次输入的密码不一致。",
+  "create.needFolder": "先选择数据文件夹，再创建管理员。",
+  "create.fault.no_data_dir": "还没有选择数据文件夹。",
+  "create.fault.spawn_failed": "无法启动管理员创建程序。这个版本可能不完整，请重新安装。",
+  "create.fault.timed_out": "创建超时，程序没有在规定时间内结束。",
+  "create.fault.bad_response": "创建程序没有正常返回。",
+  "create.fault.USERNAME_REQUIRED": "请输入用户名。",
+  "create.fault.USERNAME_TOO_LONG": "用户名太长（最多 {max} 个字符）。",
+  "create.fault.PASSWORD_REQUIRED": "请输入密码。",
+  "create.fault.PASSWORD_TOO_SHORT": "密码至少需要 {min} 个字符。",
+  "create.fault.PASSWORD_TOO_LONG": "密码不能超过 {max} 个字符。",
+  "create.fault.ADMIN_EXISTS": "这个数据目录已经有超级管理员了。",
+  "create.fault.DATA_DIR_INVALID": "选择的路径不是一个文件夹。",
+  "create.fault.SCHEMA_UNREADABLE": "这个数据库是旧版本（v{found}），当前版本无法读取（需要 v{needed}）。",
+  "create.fault.NOT_A_DATABASE": "那个文件不是一个 ilearnassist 数据库。",
+  "create.fault.UNREADABLE": "数据库无法读取。",
+  "create.fault.USAGE": "创建程序的参数不正确。",
+  "create.fault.INTERNAL": "创建时发生了内部错误。",
+  "hint.needAdmin": "这个数据文件夹还没有超级管理员，先创建管理员，服务才能启动。",
   "action.quit": "停止服务器并退出",
   "action.showLogs": "查看日志",
   "action.hideLogs": "收起日志",
@@ -178,6 +286,52 @@ const en: PanelMessages = {
   "action.copyUrl": "Copy address",
   "action.copied": "Copied",
   "action.reveal": "Show in Finder",
+  "action.resetAdmin": "Reset superadmin password",
+  "reset.confirmTitle": "Reset the superadmin password",
+  "reset.confirmDetail":
+    "A new random password will be generated and the superadmin will be signed out everywhere. For a forgotten password, this is the only way back in.",
+  "reset.confirm": "Reset",
+  "reset.working": "Resetting…",
+  "reset.done": "The password has been reset. Give the superadmin the new one:",
+  "reset.username": "Username",
+  "reset.password": "New password",
+  "reset.copy": "Copy",
+  "reset.copied": "Copied",
+  "reset.dismiss": "Close",
+  "reset.fault.not_running": "The server is not running. Start it, then reset the password.",
+  "reset.fault.no_admin": "This data folder has no superadmin yet — create one in the app first.",
+  "reset.fault.unreachable": "The reset failed: the server did not answer properly.",
+  "action.createAdmin": "Create superadmin",
+  "create.title": "Create the superadmin",
+  "create.detail":
+    "This is the first administrator of this data folder — it creates and manages every other account. Enter your own sign-in: the password is shown once, and you sign in with it afterwards.",
+  "create.username": "Username",
+  "create.password": "Password",
+  "create.confirm": "Confirm password",
+  "create.submit": "Create",
+  "create.working": "Creating…",
+  "create.done": "Superadmin “{name}” created. Start the server and sign in.",
+  "create.dismiss": "Done",
+  "create.mismatch": "The two passwords do not match.",
+  "create.needFolder": "Choose a data folder before creating an administrator.",
+  "create.fault.no_data_dir": "No data folder has been chosen.",
+  "create.fault.spawn_failed": "Could not start the administrator tool. This build may be incomplete — reinstall it.",
+  "create.fault.timed_out": "The tool did not finish in time.",
+  "create.fault.bad_response": "The tool did not return a valid response.",
+  "create.fault.USERNAME_REQUIRED": "Enter a username.",
+  "create.fault.USERNAME_TOO_LONG": "That username is too long (at most {max} characters).",
+  "create.fault.PASSWORD_REQUIRED": "Enter a password.",
+  "create.fault.PASSWORD_TOO_SHORT": "The password needs at least {min} characters.",
+  "create.fault.PASSWORD_TOO_LONG": "The password cannot be longer than {max} characters.",
+  "create.fault.ADMIN_EXISTS": "This data folder already has a superadmin.",
+  "create.fault.DATA_DIR_INVALID": "That path is not a folder.",
+  "create.fault.SCHEMA_UNREADABLE":
+    "That database is from an older schema (v{found}); this build needs v{needed}.",
+  "create.fault.NOT_A_DATABASE": "That file is not an ilearnassist database.",
+  "create.fault.UNREADABLE": "The database could not be read.",
+  "create.fault.USAGE": "The administrator tool was called incorrectly.",
+  "create.fault.INTERNAL": "An internal error occurred while creating the account.",
+  "hint.needAdmin": "This data folder has no superadmin yet — create one before the server can start.",
   "action.quit": "Stop server and quit",
   "action.showLogs": "Show logs",
   "action.hideLogs": "Hide logs",

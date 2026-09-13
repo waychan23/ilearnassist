@@ -1,5 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./auth";
+import { expect, test, type Page } from "./fixtures";
+import { ensureUser, forgetSession, signIn } from "./auth";
 import { enterWorkspace } from "./workspaces";
 
 /**
@@ -38,6 +38,7 @@ async function createCopilot(
 
 test("a published Copilot is usable by another account, and not editable by it", async ({
   page,
+  request,
 }) => {
   const NAME = "共享助教";
   const PROMPT = "只讲重点，一次不超过三句话。";
@@ -47,14 +48,19 @@ test("a published Copilot is usable by another account, and not editable by it",
   await page.getByTestId("close-settings").click();
 
   /*
-   * A second account, starting from no cookie at all.
+   * A second account, starting from no session at all.
    *
-   * Cookies are cleared rather than a second browser context being opened, because a context
-   * built by hand does not inherit the project's `locale: "zh-CN"` — and every selector below
-   * (and the plain fact that the app renders Chinese) depends on it.
+   * The inherited one is released locally and a session of the second account's own takes its
+   * place — a second browser context is not an option, because one built by hand does not
+   * inherit the project's `locale: "zh-CN"`, and every selector below (and the plain fact that
+   * the app renders Chinese) depends on it.
+   *
+   * `ensureUser` rather than a dialog: an account can only be made from the console now, and a
+   * spec that needs a second one should not have to drive a form to get it.
    */
-  await page.context().clearCookies();
-  await signIn(page, "learner");
+  const password = await ensureUser(request, "learner");
+  await forgetSession(page);
+  await signIn(page, "learner", password);
 
   await page.getByTestId("open-settings").click();
   await page.getByTestId("tab-copilots").click();

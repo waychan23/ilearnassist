@@ -10,7 +10,14 @@ import {
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
-import { closeSettings, closeSources, showLogin, showWorkspaceHome, uiState } from "../composables/ui";
+import {
+  closeSettings,
+  closeSources,
+  showLogin,
+  showPasswordChange,
+  showWorkspaceHome,
+  uiState,
+} from "../composables/ui";
 import { emitWidgetEvent } from "../composables/widgetEvents";
 import { WIDGET_MODULES, type WidgetContext } from "../widgets/registry";
 import type {
@@ -142,9 +149,10 @@ export const useAppStore = defineStore("app", () => {
   /**
    * The signed-in account, or null before the first answer and after signing out.
    *
-   * Held because the UI needs a name to show and because "who am I" is the first question the
-   * app asks, but it is not the *authority* on anything: every request is authenticated by the
-   * cookie, and the server is what decides. Clearing this does not sign anyone out.
+   * Held because the UI needs a name to show, because the console's entry point is drawn from
+   * `roles`, and because "who am I" is the first question the app asks. It is not the
+   * *authority* on anything: every request carries a token the server checks, and a role the
+   * server does not grant is a hidden button and nothing more. Clearing this signs nobody out.
    */
   const account = ref<User | null>(null);
 
@@ -485,16 +493,19 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * Work out who is asking, then load the app for them — or show the login screen.
+   * Work out who is asking, then load the app for them — or show the sign-in screen.
    *
-   * Runs on every page load, because the cookie is HttpOnly and there is nothing on the page
-   * that can tell whether it is there. `me()` answering 401 is the ordinary "nobody is signed
-   * in" case rather than a failure, which is why it is caught here instead of being allowed
-   * to reach the toast — the first visit to a fresh installation is not an error.
+   * One question, because there is only one left to ask: the installation always has an
+   * administrator by the time anything can reach this page — the server refuses to listen
+   * without one — so there is no "nobody can sign in yet" state for a cold load to discover.
+   * What the administrator is created by is the control panel, not this app.
+   *
+   * `me()` answering 401 is the ordinary "nobody is signed in" case rather than a failure,
+   * which is why it is caught here instead of reaching the toast.
    *
    * `authReady` is set before either branch, and that ordering is the whole reason the flag
-   * exists: rendering the login screen first would flash it at a signed-in user on every
-   * refresh.
+   * exists: rendering the sign-in screen first would flash it at someone already signed in, on
+   * every single refresh.
    */
   async function init(): Promise<void> {
     try {
@@ -506,6 +517,22 @@ export const useAppStore = defineStore("app", () => {
     uiState.authReady = true;
     if (!account.value) {
       showLogin();
+      return;
+    }
+    await enterApp();
+  }
+
+  /**
+   * Everything a signed-in account gets, or the one screen it still owes first.
+   *
+   * The password check is not a courtesy to the server. A password an administrator generated
+   * is one the account was told to replace, and the server refuses every other route until it
+   * is — so loading the app behind the screen would be a workspace list of failing requests.
+   * The screen comes first and the app follows it.
+   */
+  async function enterApp(): Promise<void> {
+    if (account.value?.mustChangePassword) {
+      showPasswordChange();
       return;
     }
     showWorkspaceHome();
@@ -525,17 +552,29 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * Sign in, creating the account if the name is new.
+   * Sign in with a name and a password.
    *
-   * One argument and no password: see `api.login`. The screen states the same thing, because
-   * a user who believes they typed a password is a user who will be surprised later.
+   * The stored token pair is `api.login`'s business, not this function's — see `requestAuth`.
+   * What is left here is the account and where to go next.
    */
-  async function signIn(username: string): Promise<void> {
-    account.value = await api.login(username.trim());
+  async function signIn(username: string, password: string): Promise<void> {
+    const result = await api.login(username.trim(), password);
+    account.value = result.user;
     uiState.authReady = true;
     error.value = null;
-    showWorkspaceHome();
-    await loadApp();
+    await enterApp();
+  }
+
+  /**
+   * Change the signed-in account's own password.
+   *
+   * Answers with a fresh pair, which `api.changePassword` stores — it has to, because the
+   * change ends every session the account held including this one. The caller says where to go
+   * afterwards: the forced screen enters the app, the account page stays where it is.
+   */
+  async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+    const result = await api.changePassword(oldPassword, newPassword);
+    account.value = result.user;
   }
 
   /**
@@ -1764,6 +1803,8 @@ export const useAppStore = defineStore("app", () => {
     // actions
     init,
     signIn,
+    changePassword,
+    enterApp,
     signOut,
     loadSources,
     deleteSource,

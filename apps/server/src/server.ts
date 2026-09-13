@@ -55,12 +55,25 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
   const db = createDb(layout.sqliteFile);
 
   /*
-   * No account is created here. There used to be one — a well-known "default" the server ran
-   * as while ownership was real but signing in was not — and removing it is exactly what
-   * this change is: the server now serves whoever the cookie names, so a fresh installation
-   * has no accounts rather than one nobody chose. The first name typed on the login screen
-   * is the first account.
+   * No account is created here, and none can be. There used to be one — a well-known
+   * "default" the server ran as while ownership was real but signing in was not — and now an
+   * account needs a password, which only a person choosing one can supply. So a fresh data
+   * root has nobody in it, and the first-run screen is what makes the first administrator:
+   * see `POST /api/auth/setup`, which works exactly once.
    */
+
+  /*
+   * Tokens that are dead are dropped at every boot.
+   *
+   * `auth_tokens` is the one table that grows with *use* rather than with what somebody made:
+   * one row per sign-in, per device, forever. Nothing reads a dead row — the gate refuses it
+   * on `revoked_at` or `expires_at` before it looks at anything else — so this is housekeeping
+   * rather than a rule, which is why it runs once at boot and not on a timer.
+   *
+   * Ten minutes of grace on the revocation side, so a session the console just killed is
+   * still in the table for anybody looking at what it did.
+   */
+  db.pruneAuthTokens(new Date(Date.now() - 10 * 60 * 1000).toISOString());
 
   // First boot copies config.yaml's providers/models into the database. From then on the
   // Settings → Providers UI owns them; config.yaml is seed data only.

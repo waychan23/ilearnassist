@@ -1,6 +1,9 @@
 import type {
+  AdminUser,
   AnswerToolCallInput,
   Attachment,
+  AuthResult,
+  AuthTokens,
   ChatInput,
   ChatStreamEvent,
   Copilot,
@@ -8,6 +11,7 @@ import type {
   CreateDocumentParserInput,
   CreateProviderInput,
   CreateSessionInput,
+  CreateUserInput,
   DirectoryListing,
   DocumentParserConfig,
   DocumentParsingConfig,
@@ -31,13 +35,16 @@ import type {
   UpdateDocumentParsingInput,
   UpdateProviderInput,
   UpdateSessionInput,
+  UpdateUserInput,
   UploadAttachmentInput,
   User,
+  UserCredentials,
   WidgetId,
   WidgetState,
   Workspace,
   WorkspaceStats,
 } from "@ilearnassist/shared";
+import { AUTH_STORAGE_KEY } from "@ilearnassist/shared";
 import { ApiError, translateApiError } from "../utils/apiError";
 
 /**
@@ -77,7 +84,8 @@ function toApiError(body: RawErrorBody, status: number): ApiError {
 }
 
 /**
- * Called when a request comes back 401, so the app can put the login screen back up.
+ * Called when a request comes back 401 and could not be refreshed, so the app can put the
+ * login screen back up.
  *
  * A callback rather than importing `showLogin` here, because the store imports this module
  * and the two would circle. `stores/app.ts` is what sets it, once.
@@ -88,22 +96,150 @@ export function setUnauthenticatedHandler(handler: () => void): void {
   onUnauthenticated = handler;
 }
 
-/**
- * Whether a path is part of signing in rather than something that needs a session.
+/* --------------------------------- the token --------------------------------- */
+/*
+ * Where the bearer token lives between requests.
  *
- * These are exempt from the 401 handler, and the exemption is load-bearing: `GET /auth/me`
- * answering 401 is the *expected* reply on a cold load — it is how the app asks whether
- * anyone is signed in — so treating it as an expiry would open every first visit with an
- * error about a session that never existed.
+ * In `localStorage`, which is the trade the token model makes and worth stating plainly: an
+ * HttpOnly cookie cannot be read by page script and this can, so a script injection anywhere
+ * on the origin is a stolen session. What buys that back is everything else about the design —
+ * the access token is a day old at most, a refresh token is spent on use, and either can be
+ * revoked server-side without touching the other clients. The alternative, a cookie, is a
+ * design this product had and moved away from deliberately.
+ *
+ * One key holding both halves, rather than two: they are written and cleared together, and
+ * two keys are two chances to leave half a session behind.
+ *
+ * The key itself lives in `packages/shared`, because the browser suite has to name it too —
+ * see its note there.
  */
-const isAuthPath = (path: string): boolean => path.startsWith("/auth/");
 
-/** A 401 from anywhere else means the session is gone; report it and rethrow. */
-function reportExpiry(status: number, path: string): void {
-  if (status === 401 && !isAuthPath(path)) onUnauthenticated?.();
+export interface StoredTokens {
+  accessToken: string;
+  refreshToken: string;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function readStored(): StoredTokens | null {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredTokens>;
+    if (typeof parsed?.accessToken !== "string" || typeof parsed?.refreshToken !== "string") {
+      return null;
+    }
+    return { accessToken: parsed.accessToken, refreshToken: parsed.refreshToken };
+  } catch {
+    // Unreadable or malformed storage is the same as no storage: the app signs in again. It is
+    // a cache of a credential, not a place anything else is kept.
+    return null;
+  }
+}
+
+let tokens: StoredTokens | null = readStored();
+
+export function setStoredTokens(next: AuthTokens | StoredTokens | null): void {
+  tokens = next ? { accessToken: next.accessToken, refreshToken: next.refreshToken } : null;
+  try {
+    if (tokens) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(tokens));
+    else localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {
+    // Private browsing with storage disabled. The session then lives only in this tab, which
+    // is a downgrade rather than a failure — nothing here needs the write to have landed.
+  }
+}
+
+/**
+ * What came of trying to refresh.
+ *
+ * Three answers rather than a boolean, and the distinction is the point: "the server refused
+ * it" and "the request never arrived" look identical to a caller that only gets a boolean, and
+ * they call for opposite things. A refusal means sign in again; a dropped connection means try
+ * again later, with the token still in hand.
+ */
+type RefreshOutcome =
+  /** A fresh pair is stored. Retry the request. */
+  | "refreshed"
+  /** The server refused it, or there was nothing to present. The session is over. */
+  | "refused"
+  /** The request itself failed. The pair is untouched and may well still be good. */
+  | "unreachable";
+
+/**
+ * The refresh in flight, if any.
+ *
+ * Shared rather than per request, and that is load-bearing on a cold load: the app fires
+ * several requests at once, and with the access token a day old they all 401 together. Letting
+ * each one refresh would spend the same single-use refresh token from several directions and
+ * all but the first would fail.
+ */
+let refreshing: Promise<RefreshOutcome> | null = null;
+
+async function refreshTokens(): Promise<RefreshOutcome> {
+  const presented = tokens?.refreshToken;
+  // Nothing to present is not a network problem: there is no session here, and the 401 that
+  // prompted this is the honest answer.
+  if (!presented) return "refused";
+
+  refreshing ??= (async (): Promise<RefreshOutcome> => {
+    try {
+      const res = await fetch("/api/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: presented }),
+      });
+      if (!res.ok) {
+        // Spent, expired or revoked — all the same move: sign in again. Cleared here rather
+        // than left for the caller, so a second request does not try the same dead token.
+        setStoredTokens(null);
+        return "refused";
+      }
+      setStoredTokens(((await res.json()) as AuthResult).tokens);
+      return "refreshed";
+    } catch {
+      // Offline, or the server went away mid-restart. The token may well still be good, so it
+      // is *not* cleared — and the caller must not report an expiry off the back of this, or a
+      // dropped connection would land the user on the sign-in screen with a valid session in
+      // storage and a reload signing them straight back in.
+      return "unreachable";
+    } finally {
+      refreshing = null;
+    }
+  })();
+
+  return refreshing;
+}
+
+/**
+ * Paths where a 401 that survives a refresh is the *answer* rather than an expired session.
+ *
+ * Reporting one of these would open the app with an error about a session that never existed:
+ * `GET /auth/me` answering 401 is how a cold load asks whether anyone is signed in, and on a
+ * first visit the honest answer is "no" rather than "yours expired".
+ *
+ * Listed one by one rather than by an `/auth/` prefix, because `/auth/password` is *not* one
+ * of them: a 401 there means the token died under a signed-in user, which is exactly the case
+ * the refresh exists for.
+ */
+const ANSWERS_WITH_401 = new Set([
+  "/auth/login",
+  "/auth/refresh",
+  "/auth/logout",
+  "/auth/me",
+]);
+
+/**
+ * The headers a request goes out with, with the bearer token on them if there is one.
+ *
+ * One function for both the JSON calls and the image fetch, because the two must not disagree
+ * about how a token is spelled — and a second `Bearer ` literal is how they would.
+ */
+function authHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers(extra);
+  if (tokens) headers.set("Authorization", `Bearer ${tokens.accessToken}`);
+  return headers;
+}
+
+async function send<T>(path: string, init: RequestInit | undefined, mayRefresh: boolean): Promise<T> {
   // Only send a JSON content-type when there is actually a body. Fastify (5.x)
   // rejects body-less requests that claim `application/json` with a 400
   // (FST_ERR_CTP_EMPTY_JSON_BODY), which broke DELETE calls.
@@ -111,35 +247,133 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (options.body !== undefined && options.headers === undefined) {
     options.headers = { "Content-Type": "application/json" };
   }
+  options.headers = authHeaders(options.headers);
 
-  // No `credentials` option, and none is needed: `fetch` defaults to `same-origin`, the app
-  // is served from one origin, and the Vite dev proxy puts `/api` on that same origin too.
-  // The session cookie rides along. Serving the API from somewhere else would break this.
   const res = await fetch(`/api${path}`, options);
-  if (!res.ok) {
-    const body = await errorBody(res);
-    reportExpiry(res.status, path);
-    throw toApiError(body, res.status);
+
+  if (res.status === 401) {
+    // The refresh is tried **before** the answer-paths are consulted, and that ordering is
+    // what makes the week-long session real. `/auth/me` cannot tell "nobody is signed in" from
+    // "the access token aged out overnight", so treating its 401 as final would send a user
+    // who was signed in yesterday back to the sign-in form even though their refresh token was
+    // still good — which is the one thing the second lifetime exists to prevent.
+    //
+    // `refreshTokens` answers false without a request when there is nothing to present, so a
+    // genuinely first visit costs no round trip and reaches the same place.
+    //
+    // One refresh, one retry. The retry is safe because a 401 comes from the gate, which
+    // refuses *before* any handler runs — so nothing was persisted and nothing can be done
+    // twice.
+    const outcome = mayRefresh ? await refreshTokens() : "refused";
+    if (outcome === "refreshed") return send<T>(path, init, false);
+    // Only a *refused* refresh is an expired session. An unreachable one falls through to the
+    // error below with the pair still stored, so the user is told the request failed rather
+    // than that they were signed out.
+    if (outcome === "refused" && !ANSWERS_WITH_401.has(path)) onUnauthenticated?.();
   }
+  if (!res.ok) throw toApiError(await errorBody(res), res.status);
   return res.json() as Promise<T>;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return send<T>(path, init, true);
+}
+
+/**
+ * A request whose reply carries a new token pair, which is stored before the caller sees it.
+ *
+ * Every route that returns `AuthResult` goes through here rather than through `request`, so
+ * there is no call site where storing the pair is something to remember. A failure to store it
+ * would be a session that works until the next navigation and then silently does not.
+ */
+async function requestAuth(path: string, init: RequestInit): Promise<AuthResult> {
+  const result = await request<AuthResult>(path, init);
+  setStoredTokens(result.tokens);
+  return result;
 }
 
 export const api = {
   /* ----------------------------------- auth ----------------------------------- */
 
   /**
-   * Sign in, creating the account if the name is new.
+   * Sign in.
    *
-   * One field, because there is one credential: a username, and no password at all. The
-   * screen says so rather than leaving a user to guess what they are meant to type.
+   * The app has no create-an-account screen and asks for no status first: the first
+   * administrator is made by the **control panel**, which spawns the server package's CLI as a
+   * one-shot child so it works with the server deliberately stopped. A running server always
+   * has an administrator, so there is no "nobody can sign in yet" state for a page to see.
    */
-  login: (username: string) =>
-    request<User>("/auth/login", { method: "POST", body: JSON.stringify({ username }) }),
-  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
-  /** Who the caller is. A 401 here is the answer, not an expiry — see `isAuthPath`. */
+  login: (username: string, password: string) =>
+    requestAuth("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  /**
+   * Sign out of this client.
+   *
+   * The refresh token rides along so the server can spend it; the stored pair is cleared here
+   * either way, because the local state is going regardless and a failed logout that left the
+   * user looking signed in would be the worse of the two outcomes.
+   */
+  logout: async () => {
+    const refreshToken = tokens?.refreshToken;
+    try {
+      return await request<{ ok: boolean }>("/auth/logout", {
+        method: "POST",
+        body: JSON.stringify(refreshToken ? { refreshToken } : {}),
+      });
+    } finally {
+      setStoredTokens(null);
+    }
+  },
+
+  /** Who the caller is. A 401 here is the answer, not an expiry — see `ANSWERS_WITH_401`. */
   me: () => request<User>("/auth/me"),
-  /** The names that exist, so a returning visitor can pick one rather than recall it. */
-  listUsers: () => request<{ usernames: string[] }>("/auth/users"),
+
+  /**
+   * Change your own password.
+   *
+   * Requires the current one, and answers with a fresh pair: the change ends every session the
+   * account holds, this one included. Also the way out of a forced change.
+   */
+  changePassword: (oldPassword: string, newPassword: string) =>
+    requestAuth("/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ oldPassword, newPassword }),
+    }),
+
+  /* ------------------------------ platform console ----------------------------- */
+  /*
+   * Accounts, for a superadmin. Every one of these answers 403 for anybody else, which is the
+   * server's rule and not a screen's: a hidden button is not a permission.
+   */
+
+  listAccounts: () => request<{ users: AdminUser[] }>("/admin/users"),
+  createAccount: (input: CreateUserInput) =>
+    request<UserCredentials>("/admin/users", { method: "POST", body: JSON.stringify(input) }),
+  updateAccount: (id: string, input: UpdateUserInput) =>
+    request<AdminUser>(`/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  /**
+   * Give an account a new password without knowing the old one. Omit `password` to have one
+   * generated. The password comes back once and is never readable again.
+   *
+   * Storing the returned pair is not optional when the account reset is the caller's own: the
+   * server ends every session it holds, including the one making the request, and hands back a
+   * replacement for exactly that reason. Dropping it would sign the administrator out of the
+   * console they are standing in — the action would look like a bug.
+   */
+  resetAccountPassword: async (id: string, password?: string) => {
+    const result = await request<UserCredentials>(`/admin/users/${id}/password`, {
+      method: "POST",
+      body: JSON.stringify(password ? { password } : {}),
+    });
+    if (result.tokens) setStoredTokens(result.tokens);
+    return result;
+  },
+  /** End every session an account holds, without touching its password. */
+  revokeAccountSessions: (id: string) =>
+    request<{ ok: boolean; revoked: number }>(`/admin/users/${id}/revoke`, { method: "POST" }),
 
   /* ---------------------------------- the app ---------------------------------- */
 
@@ -327,14 +561,21 @@ export const api = {
 };
 
 /**
- * URL for a source's bytes (used as an `<img src>`), not an API call.
+ * A source's bytes, as an object URL the page can point an `<img>` at.
  *
- * Addressed by the source alone, which is also why the response can be cached immutably: two
- * conversations referencing the same file resolve to the same URL, and that URL's content
- * never changes.
+ * **Fetched rather than linked, and that is what a bearer token costs.** An `<img src>` cannot
+ * carry an `Authorization` header, so `/api/sources/:id/raw` is not something a browser will
+ * load on the page's behalf any more. The alternatives were worse: a token in the query string
+ * lands in server logs, browser history and every `Referer` the page emits, and a separate
+ * signed-URL endpoint is a second kind of credential to get right.
+ *
+ * The caller owns the returned URL and must `revokeObjectURL` it. Addressed by the source
+ * alone, so two conversations referencing the same file fetch the same bytes.
  */
-export function attachmentUrl(sourceId: string): string {
-  return `/api/sources/${sourceId}/raw`;
+export async function sourceImageUrl(sourceId: string): Promise<string> {
+  const res = await fetch(`/api/sources/${sourceId}/raw`, { headers: authHeaders() });
+  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  return URL.createObjectURL(await res.blob());
 }
 
 /** Read a File as bare base64 (no `data:` prefix), matching `UploadAttachmentInput`. */
@@ -382,21 +623,39 @@ async function* sseEvents(response: Response): AsyncGenerator<ChatStreamEvent> {
   }
 }
 
-/** POST a body and stream the SSE frames it answers with. */
-async function* streamPost(path: string, body: unknown): AsyncGenerator<ChatStreamEvent> {
+/**
+ * POST a body and stream the SSE frames it answers with.
+ *
+ * One refresh-and-retry, the same as `send`. Retrying a turn is safe for a reason worth
+ * stating: a 401 comes from the gate, which refuses *before* any handler runs — so nothing was
+ * persisted and no second message can appear. Past that point the reply is a stream and there
+ * is nothing to retry, which is why the refresh happens before the body is read.
+ */
+async function* streamPost(
+  path: string,
+  body: unknown,
+  mayRefresh = true
+): AsyncGenerator<ChatStreamEvent> {
   const res = await fetch(`/api${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
+  if (res.status === 401) {
+    const outcome = mayRefresh ? await refreshTokens() : "refused";
+    if (outcome === "refreshed") {
+      yield* streamPost(path, body, false);
+      return;
+    }
     const body_ = await errorBody(res);
-    // Same rule as `request`: a turn that 401s means the session went away mid-conversation,
-    // and the user has to be sent back to the login screen rather than left with an error
-    // about a message they cannot send.
-    reportExpiry(res.status, path);
+    // Same rule as `send`, including the distinction: a turn that 401s and cannot be refreshed
+    // means the session went away mid-conversation, and the user has to be sent back to the
+    // login screen rather than left with an error about a message they cannot send. An
+    // unreachable refresh is not that, and ends as a failed turn with the token still held.
+    if (outcome === "refused") onUnauthenticated?.();
     throw toApiError(body_, res.status);
   }
+  if (!res.ok) throw toApiError(await errorBody(res), res.status);
   // A 200 with no body breaks the SSE contract below rather than being a server-reported
   // error, so it stays a plain Error — there is no code to translate.
   if (!res.body) throw new Error("No response body.");
