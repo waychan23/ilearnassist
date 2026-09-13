@@ -8,6 +8,7 @@ import type { Session } from "../api/types";
 import {
   closeDrawer,
   openSettings,
+  openWorkspaceSettings,
   showWorkspaceHome,
   sidebarRail,
   toggleSidebar,
@@ -34,6 +35,16 @@ const showNewSession = ref(false);
 function onSidebarToggle() {
   if (isCompact.value) closeDrawer();
   else toggleSidebar();
+}
+
+/**
+ * Open the *workspace's* settings — not `openSettings`, which is the installation-wide dialog
+ * the footer's gear opens. Named at length on purpose: the two are one word apart and do
+ * entirely different things.
+ */
+function openWorkspaceSettingsPanel(): void {
+  const id = store.activeWorkspaceId;
+  if (id) openWorkspaceSettings(id);
 }
 
 /* ---------------------------------- panels ---------------------------------- */
@@ -178,13 +189,30 @@ async function onDeleteSession(session: Session) {
         <Icon name="arrow-left" />
       </button>
 
-      <span
-        class="workspace-name truncate"
-        data-testid="workspace-name"
-        :title="store.activeWorkspace?.name ?? ''"
+      <!--
+        The name is a button, opening this workspace's settings — the second of its two entry
+        points, the other being the gear on the card it was opened from.
+
+        A button rather than a third flanking icon because the row's symmetry is what centres the
+        name: two icon buttons either side of a flexible middle. Adding a gear would make it three
+        against one, and the name would sit off-centre for no reason a reader could see. The name
+        keeps `flex: 1` and the span inside keeps `workspace-name`, so every existing selector and
+        spec still finds it.
+      -->
+      <button
+        class="workspace-name truncate workspace-name-btn"
+        data-testid="workspace-settings-open"
+        :title="t('widgets.workspaceSettings.title')"
+        @click="openWorkspaceSettingsPanel"
       >
-        {{ store.activeWorkspace?.name ?? "" }}
-      </span>
+        <span
+          class="truncate"
+          data-testid="workspace-name"
+          :title="store.activeWorkspace?.name ?? ''"
+        >
+          {{ store.activeWorkspace?.name ?? "" }}
+        </span>
+      </button>
 
       <!--
         One control, two jobs, and which one is decided by the viewport rather than by the

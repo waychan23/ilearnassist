@@ -5,10 +5,12 @@ import { useAppStore } from "../../stores/app";
 // From `shared`, not a local literal: the server filters by exactly these names, so a copy
 // that drifted would offer a tool the server does not know, or hide one it does. It had
 // already drifted once — the local list was missing `read_document`.
-import { ALL_TOOL_NAMES } from "../../api/types";
-import type { Copilot } from "../../api/types";
+import { ALL_TOOL_NAMES, WIDGET_IDS, widgetsForScope } from "../../api/types";
+import type { Copilot, SessionSettings, WidgetId } from "../../api/types";
 import type { CopilotDraft } from "../../stores/app";
+import { widgetLabel } from "../../widgets/registry";
 import Icon from "../Icon.vue";
+import GenerationParams from "../GenerationParams.vue";
 
 const props = defineProps<{ copilot: Copilot | null }>();
 const emit = defineEmits<{ close: []; save: [draft: CopilotDraft] }>();
@@ -22,19 +24,40 @@ const toolLabel = (name: string): string => {
   return te(key) ? t(key) : name;
 };
 
+/**
+ * The generation parameters are a child component's business now — it was the third copy of that
+ * form, and this dialog keeps only what is genuinely its own.
+ */
+const params = ref<InstanceType<typeof GenerationParams> | null>(null);
+
+/**
+ * A Copilot installs into a **session**, so only session-scope widgets are offered here. That is
+ * the whole meaning of "copilot level works through session level": this is a place to tick
+ * boxes, and the ticking lands in the conversation the Copilot starts.
+ */
+const sessionWidgets = widgetsForScope("session");
+
+/*
+ * The widget selection is a plain checkbox list, unlike the toggles in the two settings dialogs,
+ * and the difference is not styling: nothing exists to toggle here. A Copilot's selection reaches
+ * a conversation only when one is created from it, so this is a *note* of what to install later
+ * — the "deferred" half of the rule that a checkbox is for a choice made in advance.
+ */
+const widgets = ref<WidgetId[]>([]);
+
+/** Anything other than the default set — which is what forces the section open, see below. */
+const widgetsDiffer = computed(() => {
+  const chosen = [...widgets.value].sort().join(",");
+  const fallback = [...WIDGET_IDS].filter((id) => sessionWidgets.some((w) => w.id === id)).sort().join(",");
+  return chosen !== fallback;
+});
+
 /** `""` means "inherit"; every numeric field uses the same convention. */
 interface Draft {
   name: string;
   description: string;
   systemPrompt: string;
   tools: string[];
-  providerId: string;
-  modelId: string;
-  temperature: string;
-  topP: string;
-  maxTokens: string;
-  maxContextMessages: string;
-  maxSteps: string;
 }
 
 const draft = reactive<Draft>({
@@ -42,13 +65,6 @@ const draft = reactive<Draft>({
   description: "",
   systemPrompt: "",
   tools: [],
-  providerId: "",
-  modelId: "",
-  temperature: "",
-  topP: "",
-  maxTokens: "",
-  maxContextMessages: "",
-  maxSteps: "",
 });
 
 /** Publishing is opt-in, so a Copilot is private unless the box is ticked. */
@@ -63,7 +79,15 @@ const isPublic = ref(false);
  */
 const allTools = ref(true);
 
-const str = (v: number | null | undefined): string => (v == null ? "" : String(v));
+/**
+ * Whether the collapsed defaults section is open.
+ *
+ * `paramsDirty` is a ref the child cannot set for us, so the section is opened on mount when the
+ * Copilot's stored settings already say something: a section that collapsed itself over a
+ * selection someone had made would hide it on the next edit. A **widgets** selection that differs
+ * from the default counts for the same reason.
+ */
+const showDefaults = ref(false);
 
 watch(
   () => props.copilot,
@@ -72,43 +96,25 @@ watch(
     draft.description = c?.description ?? "";
     draft.systemPrompt = c?.systemPrompt ?? "";
     draft.tools = [...(c?.tools ?? [])];
-    draft.providerId = c?.settings.providerId ?? "";
-    draft.modelId = c?.settings.modelId ?? "";
-    draft.temperature = str(c?.settings.temperature);
-    draft.topP = str(c?.settings.topP);
-    draft.maxTokens = str(c?.settings.maxTokens);
-    draft.maxContextMessages = str(c?.settings.maxContextMessages);
-    draft.maxSteps = str(c?.settings.maxSteps);
+    widgets.value = [...(c?.widgets ?? [])];
     isPublic.value = c?.visibility === "public";
     allTools.value = c?.allTools ?? true;
+    params.value?.load(c?.settings ?? {});
+    showDefaults.value = c ? hasAnySetting(c.settings) || widgetsDiffer.value : false;
   },
-  { immediate: true }
+  { immediate: true, flush: "post" }
 );
 
-const providers = computed(() => store.config?.providers ?? []);
-/** Models are scoped to a provider, so the picker follows the chosen provider. */
-const models = computed(
-  () => providers.value.find((p) => p.id === draft.providerId)?.models ?? []
-);
+/** Whether a stored settings object says anything at all. */
+function hasAnySetting(s: SessionSettings): boolean {
+  return Object.values(s).some((v) => v != null);
+}
 
-const showDefaults = computed(
-  () =>
-    !!draft.providerId ||
-    !!draft.modelId ||
-    !!draft.temperature ||
-    !!draft.topP ||
-    !!draft.maxTokens ||
-    !!draft.maxContextMessages ||
-    !!draft.maxSteps
-);
-
-watch(
-  () => draft.providerId,
-  (id, prev) => {
-    // A model id only means something within its provider; clear it on a switch.
-    if (prev !== undefined && id !== prev) draft.modelId = "";
-  }
-);
+function toggleWidget(id: WidgetId) {
+  const i = widgets.value.indexOf(id);
+  if (i === -1) widgets.value.push(id);
+  else widgets.value.splice(i, 1);
+}
 
 /** A tool reads as selected while the flag is on, whatever the list happens to hold. */
 function isToolChecked(name: string): boolean {
@@ -139,13 +145,6 @@ function disableAllTools() {
   draft.tools = [];
 }
 
-const num = (v: string): number | null => {
-  const t = v.trim();
-  if (!t) return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
-};
-
 function save() {
   if (!draft.name.trim()) return;
   emit("save", {
@@ -157,15 +156,8 @@ function save() {
     // Sent as given even when the flag overrides it; the server is the side that decides the
     // flag wins, so a client cannot leave a row asserting both.
     tools: [...draft.tools],
-    settings: {
-      providerId: draft.providerId || null,
-      modelId: draft.modelId || null,
-      temperature: num(draft.temperature),
-      topP: num(draft.topP),
-      maxTokens: num(draft.maxTokens),
-      maxContextMessages: num(draft.maxContextMessages),
-      maxSteps: num(draft.maxSteps),
-    },
+    settings: params.value?.commit() ?? {},
+    widgets: [...widgets.value],
     visibility: isPublic.value ? "public" : "private",
   });
 }
@@ -259,46 +251,32 @@ function save() {
           <details class="defaults" :open="showDefaults">
             <summary>{{ t("copilot.defaults") }}</summary>
 
-            <div class="form-grid">
-              <div class="field">
-                <label>Provider</label>
-                <select v-model="draft.providerId" class="select">
-                  <option value="">{{ t("copilot.inherit") }}</option>
-                  <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
-                </select>
+            <GenerationParams ref="params" />
+
+            <!--
+              Widgets, at the end of the same section, and as checkboxes rather than the toggles
+              the two settings dialogs use. Nothing exists to toggle: a Copilot's selection
+              reaches a conversation only when one is started from it, so this is a note of what
+              to install later — the "deferred" half of that rule.
+            -->
+            <div class="field widget-checks">
+              <label>{{ t("copilot.widgets") }}</label>
+              <div class="form-grid tool-checks">
+                <label
+                  v-for="w in sessionWidgets"
+                  :key="w.id"
+                  class="check-row"
+                  :data-testid="`copilot-widget-check-${w.id}`"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="widgets.includes(w.id)"
+                    @change="toggleWidget(w.id)"
+                  />
+                  {{ widgetLabel(w.id, t) }}
+                </label>
               </div>
-              <div class="field">
-                <label>{{ t("copilot.model") }}</label>
-                <select v-model="draft.modelId" class="select" :disabled="!draft.providerId">
-                  <option value="">{{ t("copilot.inherit") }}</option>
-                  <option v-for="m in models" :key="m.id" :value="m.modelId">{{ m.name }}</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Temperature</label>
-                <input v-model="draft.temperature" class="input" :placeholder="t('copilot.inherit')" />
-                <div class="hint">0 ~ 2</div>
-              </div>
-              <div class="field">
-                <label>Top P</label>
-                <input v-model="draft.topP" class="input" :placeholder="t('copilot.inherit')" />
-                <div class="hint">0 ~ 1</div>
-              </div>
-              <div class="field">
-                <label>{{ t("copilot.maxOutput") }}</label>
-                <input v-model="draft.maxTokens" class="input" :placeholder="t('copilot.inherit')" />
-                <div class="hint">{{ t("copilot.unitToken") }}</div>
-              </div>
-              <div class="field">
-                <label>{{ t("copilot.maxHistory") }}</label>
-                <input v-model="draft.maxContextMessages" class="input" :placeholder="t('copilot.all')" />
-                <div class="hint">{{ t("copilot.unitMessages") }}</div>
-              </div>
-              <div class="field">
-                <label>{{ t("copilot.maxSteps") }}</label>
-                <input v-model="draft.maxSteps" class="input" placeholder="15" />
-                <div class="hint">{{ t("copilot.unitSteps") }}</div>
-              </div>
+              <div class="hint">{{ t("copilot.widgetsHint") }}</div>
             </div>
           </details>
         </div>
@@ -319,19 +297,9 @@ function save() {
   </Teleport>
 </template>
 
-<style scoped>
-.defaults {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-5) var(--space-6);
-  background: var(--panel-2);
-}
-.defaults summary {
-  cursor: pointer;
-  font-size: var(--fs-3);
-  color: var(--text-2);
-}
-.defaults[open] summary {
-  margin-bottom: var(--space-6);
-}
-</style>
+<!--
+  No scoped block: `.defaults` moved to `style.css` when the new-session dialog needed the same
+  disclosure. Two files defining one class name with the same rules is the duplication the design
+  system's naming rules exist to prevent, and the promotion threshold is the second copy.
+-->
+

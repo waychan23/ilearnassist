@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { widgetsForScope, type WidgetId } from "../../api/types";
 import { useAppStore } from "../../stores/app";
+import { widgetLabel } from "../../widgets/registry";
+import GenerationParams from "../GenerationParams.vue";
 import Icon from "../Icon.vue";
 
 const emit = defineEmits<{ close: [] }>();
@@ -28,12 +31,58 @@ const groups = computed(() =>
   ].filter((g) => g.items.length > 0)
 );
 
+/** The generation parameters, which the shared form owns; committed when the session is made. */
+const params = ref<InstanceType<typeof GenerationParams> | null>(null);
+
+const sessionWidgets = widgetsForScope("session");
+
+/*
+ * Widgets, as checkboxes — and here the control follows the same rule as the Copilot editor's
+ * for the same reason: the session does not exist yet, so a toggle would have nothing to toggle.
+ * The set is *seeded* from the chosen Copilot and sent as an explicit list when the conversation
+ * is created, which is what makes the Copilot's selection a starting point rather than a
+ * constraint.
+ */
+const widgets = ref<WidgetId[]>([]);
+
+function toggleWidget(id: WidgetId) {
+  const i = widgets.value.indexOf(id);
+  if (i === -1) widgets.value.push(id);
+  else widgets.value.splice(i, 1);
+}
+
+/**
+ * Re-seed everything from the chosen Copilot.
+ *
+ * Wholesale rather than field-by-field, and that is a decision: the Copilot's defaults *are* the
+ * seed, and "merge only the fields the user has not touched" would be a state machine for an edge
+ * case — switch Copilot, edit, switch back — that nobody hits. What it costs is an edit made
+ * before the switch, which the switch is a statement about anyway.
+ */
+watch(
+  copilotId,
+  (id) => {
+    const copilot = id ? store.copilots.find((c) => c.id === id) : undefined;
+    params.value?.load(copilot?.settings ?? {});
+    widgets.value = [...(copilot?.widgets ?? [])];
+  },
+  { immediate: true, flush: "post" }
+);
+
 async function create() {
   if (saving.value) return;
   saving.value = true;
   try {
-    const session = await store.createSession(copilotId.value);
+    const session = await store.createSession({
+      copilotId: copilotId.value,
+      settings: params.value?.commit() ?? {},
+      // Sent even when empty, because empty is a decision here: the Copilot's set was seeded in,
+      // and unchecking all of it has to mean none rather than "ask the Copilot again".
+      widgets: [...widgets.value],
+    });
     if (session && title.value.trim()) {
+      // Still a second call, and not an oversight: a title given at create writes
+      // `titleSource: "auto"`, and the auto-titler would then overwrite what the user typed.
       await store.renameSession(session.id, title.value);
     }
     emit("close");
@@ -121,6 +170,37 @@ async function create() {
               {{ t("session.new.noCopilots") }}
             </div>
           </div>
+
+          <div class="field widget-checks">
+            <label>{{ t("widgets.heading") }}</label>
+            <div class="form-grid tool-checks">
+              <label
+                v-for="w in sessionWidgets"
+                :key="w.id"
+                class="check-row"
+                :data-testid="`new-session-widget-check-${w.id}`"
+              >
+                <input
+                  type="checkbox"
+                  :checked="widgets.includes(w.id)"
+                  @change="toggleWidget(w.id)"
+                />
+                {{ widgetLabel(w.id, t) }}
+              </label>
+            </div>
+            <div class="hint">{{ t("widgets.sessionLead") }}</div>
+          </div>
+
+          <!--
+            Everything else about the conversation, behind the same disclosure the Copilot editor
+            uses for its defaults. Collapsed on purpose: a dialog that opens with seven number
+            fields between the user and the Create button reads as a form to fill in, and the
+            common case is to pick a Copilot and go.
+          -->
+          <details class="defaults" data-testid="new-session-advanced">
+            <summary>{{ t("session.new.advanced") }}</summary>
+            <GenerationParams ref="params" />
+          </details>
         </div>
         <div class="modal-foot">
           <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>

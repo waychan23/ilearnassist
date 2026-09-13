@@ -70,6 +70,7 @@ function addCopilot(id: string, userId: string, visibility: "private" | "public"
     allTools: false,
     tools: ["read_file"],
     settings: { temperature: 0.2 },
+    widgets: ["session_stats"],
     visibility,
   });
 }
@@ -222,6 +223,7 @@ describe("copilots", () => {
         allTools: true,
         tools: [],
         settings: {},
+        widgets: [],
         visibility: "private",
       })
     ).toBeUndefined();
@@ -249,6 +251,50 @@ describe("copilots", () => {
 
     expect(db.getOwnedCopilot(`c-${BOB}`, BOB)).toBeUndefined();
     expect(db.listCopilotsForUser(ADA).map((c) => c.id)).toEqual([`c-${ADA}`]);
+  });
+});
+
+describe("widgets", () => {
+  it("does not see another account's installs", () => {
+    /*
+     * The read resolves every widget the registry knows, so a foreign id does not come back
+     * empty — it comes back as the **defaults**, which is the same answer an unwidgetted
+     * workspace gives. That is the right shape for this layer (the route refuses the id with a
+     * 404 before asking), and the thing worth pinning is that nothing Bob *decided* leaks:
+     * `enabled` stays false everywhere for Ada.
+     */
+    db.setWorkspaceWidgetForUser(BOB, `w-${BOB}`, "workspace_stats", true);
+    db.setSessionWidgetForUser(BOB, `s-${BOB}`, "session_stats", true);
+
+    expect(db.listWorkspaceWidgetsForUser(ADA, `w-${BOB}`).every((w) => !w.enabled)).toBe(true);
+    expect(db.listSessionWidgetsForUser(ADA, `s-${BOB}`).every((w) => !w.enabled)).toBe(true);
+
+    // And the owner still has them, so the assertions above are about scoping rather than
+    // about the writes having failed.
+    expect(db.listWorkspaceWidgetsForUser(BOB, `w-${BOB}`)).toEqual([
+      { id: "workspace_stats", scope: "workspace", enabled: true },
+    ]);
+  });
+
+  it("does not install or uninstall on another account's object", () => {
+    expect(db.setWorkspaceWidgetForUser(ADA, `w-${BOB}`, "workspace_stats", true)).toBe(false);
+    expect(db.setSessionWidgetForUser(ADA, `s-${BOB}`, "session_stats", true)).toBe(false);
+
+    // Unchanged, which is the half that matters: a refused write that still wrote would pass an
+    // assertion on the return value alone.
+    expect(db.listWorkspaceWidgetsForUser(BOB, `w-${BOB}`).every((w) => !w.enabled)).toBe(true);
+    expect(db.listSessionWidgetsForUser(BOB, `s-${BOB}`).every((w) => !w.enabled)).toBe(true);
+  });
+
+  it("does not read another account's statistics", () => {
+    expect(db.statsForWorkspace(ADA, `w-${BOB}`)).toBeUndefined();
+    expect(db.statsForSessionForUser(ADA, `s-${BOB}`)).toBeUndefined();
+
+    // The owner's own, on the same rows, still resolves — so this is scoping and not a query
+    // that happens to return nothing.
+    expect(db.statsForWorkspace(BOB, `w-${BOB}`)?.sessions.map((s) => s.sessionId)).toEqual([
+      `s-${BOB}`,
+    ]);
   });
 });
 

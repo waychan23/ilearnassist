@@ -228,6 +228,11 @@ Tier 2, in `style.css`, for structures several components need:
 | `.overlay-popover` | | The surface for anything anchored above a control: background, border, radius, shadow, `--z-popover` and the upward anchor. Callers set their own size |
 | `.modal.sm` / `.modal.lg` | | Dialog widths, from `--modal-sm` / `--modal-lg`. `.modal` alone is `--modal-md` |
 | `.tool-checks` | with `.form-grid` | The Copilot tool checkbox grid — the shared grid at a tighter gap |
+| `.defaults` | | A collapsed section of a form: the box, plus the summary's spacing when it is open. A `<details>`, so open and closed is the browser's state rather than a flag |
+| `.widget-panel` / `.widget-column` / `.widget-body` | `.vertical`, `.collapsed`, `.open` | The right sidebar: the column, the scroller under the strip, and the two states. `open` is the drawer form below 900px |
+| `.widget-tabs` / `.widget-tab` | `[aria-selected]`, `.vertical` | The widget strip. A **variant** of `.tabs`/`.tab` rather than the same class, and the reason is the vertical rail: `.tab`'s only state signal is a `border-bottom` underline, which does not survive a column |
+| `.widget-resize` | | The panel's drag handle. A `role="separator"` on the panel's left edge |
+| `.widget-checks` | | A widget checkbox group inside a `.field`, in the two create dialogs |
 | `.list-row` | | A row in a settings list: the box, and the flex row inside it. Variants keep their own gap, padding and alignment |
 | `.row-actions` | | The icon-button cluster at the end of a row |
 | `.tabs` / `.tab` / `.tab-count` | `.active` | The tab strip on a tabbed dialog |
@@ -317,7 +322,7 @@ Two breakpoints, and both are minimums rather than preferences:
 
 | Name | Query | What changes |
 | --- | --- | --- |
-| compact | `(max-width: 900px)` | The sidebar becomes a drawer; the minimap rail is hidden |
+| compact | `(max-width: 900px)` | The sidebar becomes a drawer; the widget panel becomes a drawer at the right; the minimap rail is hidden |
 | narrow | `(max-width: 560px)` | The composer toolbar reflows; forms go single-column; dialogs become bottom sheets |
 
 The minimap's rule predates the drawer and set the value: below 900px its preview card has
@@ -335,11 +340,33 @@ out of the tab order, and `inert` takes the pane behind it out of the tab order 
 accessibility tree while it is open. That pair is the whole focus story — `inert` is a focus
 trap with no state machine, and a hand-rolled one is not needed.
 
+**There are two drawers, one at each edge, and they are separate flags.** The widget panel is a
+third grid *track* on a wide screen and a fixed overlay here, which is why `App.vue` withholds
+`.app.with-widgets` at this width — the class would add a track the drawer does not occupy, and
+the panel would be laid out in it while also being `position: fixed`. Its width is capped against
+the viewport (`min(320px, 88vw)`) rather than fixed, since 320px on a 412px screen is most of the
+screen, and its drag handle is not rendered at all: a fixed overlay has no width to drag.
+
+**Each drawer's toggle sits at the edge its panel appears at.** The sidebar's is on the left beside
+the way out; the widget panel's is the topbar's **last** control, past `TopbarControls`, so it is
+against the right edge. That is not decoration — a toggle at the wrong end points away from what it
+opens — so a reordering of the topbar has to keep it last. It also joins
+`@media (pointer: coarse)`'s 44px list with the other topbar buttons: being compact-only, it is a
+touch target on essentially every screen it appears on.
+
 **Overlays are teleported to `body`, and this is not optional.** A `position: fixed` element
 whose ancestor is transformed is positioned against *that ancestor*. The drawer is a
 transformed ancestor, so a dialog left inside the sidebar would be laid out in the off-canvas
 panel and render off-screen. Adding a dialog means adding the `Teleport`, and giving `.app`
 a `transform`, `filter` or `contain` would break every overlay at once.
+
+**A popover anchored inside an `overflow: hidden` ancestor must anchor to something that keeps it
+inside.** The widget strip's overflow menu is the cautionary tale: anchored to its *button*, a
+`min-width` menu grew leftward from a button sitting mid-strip, crossed the panel's left edge and
+was clipped away — while remaining in the DOM, focusable, and reported as visible by every check
+Playwright makes. Only the click revealed it, landing on the chat pane underneath. Anchoring the
+same menu to the *strip* (whose right edge is at most ~66px inside the panel) puts it back in
+bounds. When a popover is clipped rather than misplaced, the fix is the anchor, not the position.
 
 **Breakpoints are literals in two languages.** A media query cannot read a custom property
 and JavaScript cannot evaluate CSS, so `900` and `560` are written in both. Nothing can make
@@ -417,6 +444,21 @@ background and unreadable for a foreground. Add it to a family already in the
 that merely restates a token value, expect the spacing guard to fail once it is in scope —
 that guard exists to stop the token layer eroding, and its `MIGRATION_PENDING` list is the
 only sanctioned exemption.
+
+**A third copy of a scoped class is the promotion trigger, and it has now fired twice.**
+`.tool-checks` came from the tool checkbox grid, and `.defaults` from the Copilot editor's
+collapsed "other parameters" section when the new-session dialog needed the same disclosure —
+so the disclosure moved to `style.css` and `CopilotDialog` lost its scoped block. The second
+condition in [When to promote](#when-to-promote) is the one to watch: a rule that has to change
+at a breakpoint can only be overridden once if it exists once.
+
+**The widget panel added no colour and no tier-1 control.** It is built from `--sidebar`,
+`--panel`, `--panel-2`, `--border`, `--text-*` and `--accent`, so nothing had to be restated in
+the two light blocks; the install/uninstall control is `.btn.small` with the label naming the
+*action* and `aria-pressed` carrying the state, which is the same split `.segment` makes with
+`aria-pressed` and `sidebar.collapse`/`expand` makes with its two labels. Its three widths — the
+36px rail, the 8px handle and the panel's own default — are px literals, which is the documented
+exception below: width is not a spacing relationship.
 
 **A breakpoint.** Breakpoints are literals in CSS *and* strings in JavaScript, because a
 media query cannot read a custom property. Nothing can make that one value shared, so it is

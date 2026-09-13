@@ -155,6 +155,19 @@ export const ICON_PATHS = {
   moon: ["M12.75 9.75A5.25 5.25 0 1 1 6.25 3.25a4.2 4.2 0 1 0 6.5 6.5Z"],
 
   monitor: ["M2.5 3.5H13.5V10.5H2.5Z", "M8 10.5V12.75", "M5.75 13H10.25"],
+
+  /** The widget panel, mirroring `panel-left`: the divider is the panel's own left edge. */
+  "panel-right": ["M2.5 3.5H13.5V12.5H2.5Z", "M9.5 3.5V12.5"],
+
+  /*
+   * The layout toggle, which is the one place a *pair* is right where `panel-left` argued for a
+   * single glyph. That argument was that the direction is not a fact about the sidebar — a rail is
+   * not "leftwards". Here the direction is not just a fact but the whole of what the control
+   * changes, and the two positions are 90° apart rather than a pixel apart, so they read as two
+   * states at a glance rather than as a glyph that moved.
+   */
+  "tabs-top": ["M2.5 2.5H13.5V13.5H2.5Z", "M2.5 6.5H13.5"],
+  "tabs-left": ["M2.5 2.5H13.5V13.5H2.5Z", "M6.5 2.5V13.5"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICON_PATHS;

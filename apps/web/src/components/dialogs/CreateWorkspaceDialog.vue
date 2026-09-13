@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { DEFAULT_WIDGET_IDS, widgetsForScope, type WidgetId } from "../../api/types";
 import { useAppStore } from "../../stores/app";
+import { widgetLabel } from "../../widgets/registry";
 import Icon from "../Icon.vue";
 
 const { t } = useI18n();
@@ -11,12 +13,30 @@ const emit = defineEmits<{ close: []; created: [] }>();
 const name = ref("");
 const saving = ref(false);
 
+/**
+ * The workspace's widgets, as checkboxes, seeded from the platform default.
+ *
+ * Checkboxes rather than the toggles the settings dialogs use, and the reason is that nothing
+ * exists to toggle: the workspace does not exist until this form is submitted, so every box here
+ * is a choice made in advance and the whole set lands in one write. That is the same distinction
+ * as the Copilot editor's — and why the *editing* dialog, where each click takes effect
+ * immediately, is a list of switches instead.
+ */
+const widgets = ref<WidgetId[]>([...DEFAULT_WIDGET_IDS]);
+const available = widgetsForScope("workspace");
+
+function toggleWidget(id: WidgetId) {
+  const i = widgets.value.indexOf(id);
+  if (i === -1) widgets.value.push(id);
+  else widgets.value.splice(i, 1);
+}
+
 async function submit() {
   const n = name.value.trim();
   if (!n || saving.value) return;
   saving.value = true;
   try {
-    await store.createWorkspace(n);
+    await store.createWorkspace(n, [...widgets.value]);
     emit("created");
   } catch (e) {
     store.setError(e instanceof Error ? e.message : String(e));
@@ -60,6 +80,31 @@ async function submit() {
               @keydown.enter="submit"
             />
             <div class="hint">{{ t("workspace.new.hint") }}</div>
+          </div>
+
+          <!--
+            Visible rather than behind a disclosure, unlike the new-session dialog's advanced
+            section: for a fresh installation this is the only place the choice is offered, so
+            tucking it away would be how the feature goes unnoticed.
+          -->
+          <div class="field widget-checks">
+            <label>{{ t("widgets.heading") }}</label>
+            <div class="form-grid tool-checks">
+              <label
+                v-for="w in available"
+                :key="w.id"
+                class="check-row"
+                :data-testid="`workspace-widget-check-${w.id}`"
+              >
+                <input
+                  type="checkbox"
+                  :checked="widgets.includes(w.id)"
+                  @change="toggleWidget(w.id)"
+                />
+                {{ widgetLabel(w.id, t) }}
+              </label>
+            </div>
+            <div class="hint">{{ t("widgets.workspaceLead") }}</div>
           </div>
         </div>
         <div class="modal-foot">

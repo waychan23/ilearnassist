@@ -12,7 +12,7 @@ import {
   SETTING_DEFAULT_PROVIDER,
   type AppDb,
 } from "../src/db.js";
-import type { Session, ToolCall } from "@ilearnassist/shared";
+import { DEFAULT_WIDGET_IDS, type Session, type ToolCall } from "@ilearnassist/shared";
 import { SCHEMA_VERSION } from "../src/schema.js";
 
 let root: string;
@@ -157,13 +157,31 @@ describe("copilots", () => {
     allTools: false,
     tools: ["read_file", "web_search"],
     settings: { temperature: 0.3, modelId: "m1" },
+    widgets: [],
     visibility: "private" as const,
   };
 
-  it("round-trips tools and settings through JSON columns", () => {
-    const created = db.createCopilot(input);
+  it("round-trips tools, settings and widgets through JSON columns", () => {
+    const created = db.createCopilot({ ...input, widgets: ["session_stats"] });
     expect(created.tools).toEqual(["read_file", "web_search"]);
     expect(created.settings).toEqual({ temperature: 0.3, modelId: "m1" });
+    expect(created.widgets).toEqual(["session_stats"]);
+  });
+
+  it("reads a Copilot whose widgets were never set as the defaults", () => {
+    /*
+     * The column is nullable precisely so "never set" survives as a distinct answer from "set to
+     * none": a `NOT NULL DEFAULT '[]'` would have told every Copilot written before the column
+     * existed that it installs nothing, a decision their owners never made. NULL resolves here
+     * instead, and the assertion is against a hand-written row because no write path can produce
+     * one any more.
+     */
+    db.createCopilot(input);
+    db.raw.prepare("UPDATE copilots SET widgets = NULL WHERE id = ?").run("c1");
+    expect(db.getOwnedCopilot("c1", OWNER)!.widgets).toEqual([...DEFAULT_WIDGET_IDS]);
+
+    db.raw.prepare("UPDATE copilots SET widgets = ? WHERE id = ?").run("[]", "c1");
+    expect(db.getOwnedCopilot("c1", OWNER)!.widgets).toEqual([]);
   });
 
   it("refuses to write a Copilot with no owner", () => {
@@ -195,6 +213,7 @@ describe("copilots", () => {
       allTools: false,
       tools: [],
       settings: {},
+      widgets: [],
       visibility: "public",
     });
     expect(updated).toMatchObject({
@@ -309,6 +328,7 @@ describe("sessions", () => {
       allTools: false,
       tools: ["read_file"],
       settings: { temperature: 0.3 },
+      widgets: [],
       visibility: "private",
     });
     addSession("s1", {
@@ -327,6 +347,7 @@ describe("sessions", () => {
       allTools: true,
       tools: [],
       settings: { temperature: 1.8 },
+      widgets: [],
       visibility: "public",
     });
     db.deleteCopilotForUser("c1", OWNER);
@@ -352,6 +373,7 @@ describe("sessions", () => {
       allTools: true,
       tools: [],
       settings: {},
+      widgets: [],
       visibility: "private",
     });
     addSession("s1", { copilotId: "c1", copilotName: "Tutor", systemPrompt: "You teach." });
@@ -375,6 +397,7 @@ describe("sessions", () => {
       allTools: true,
       tools: ["read_file", "write_file"],
       settings: {},
+      widgets: [],
       visibility: "private",
     });
 
@@ -397,6 +420,7 @@ describe("sessions", () => {
       allTools: false,
       tools: [],
       settings: {},
+      widgets: [],
       visibility: "private",
     });
 
@@ -695,6 +719,73 @@ describe("schema versioning", () => {
     try {
       expect(tablesIn(path)).toContain("counters");
       expect(opened.reserveCounter("session", "s1", "quiz_question", 2)).toEqual([1, 2]);
+    } finally {
+      opened.raw.close();
+    }
+  });
+
+  it("gains the widget_instances table on an existing file of the current version", () => {
+    // The counters test's twin, for the same claim: a new *table* needs no `SCHEMA_VERSION`
+    // bump, because the DDL runs on every open. The round-trip is asserted rather than the
+    // table's mere presence, since a table created with the wrong columns would satisfy that.
+    const path = join(root, "pre-widgets.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    expect(tablesIn(path)).not.toContain("widget_instances");
+
+    const opened = createDb(path);
+    try {
+      expect(tablesIn(path)).toContain("widget_instances");
+      opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
+      opened.createWorkspace({
+        id: "w1",
+        userId: OWNER,
+        name: "W",
+        slug: "w",
+        dirPath: join(root, "w"),
+      });
+      expect(opened.setWorkspaceWidgetForUser(OWNER, "w1", "workspace_stats", true)).toBe(true);
+      expect(opened.listWorkspaceWidgetsForUser(OWNER, "w1")).toEqual([
+        { id: "workspace_stats", scope: "workspace", enabled: true },
+      ]);
+    } finally {
+      opened.raw.close();
+    }
+  });
+
+  it("adds a nullable widgets column Copilots had no way to have", () => {
+    /*
+     * `ensureColumn` rather than a version bump, because this *adds* a column instead of changing
+     * what one means. The nullable shape is the point of the test: a `NOT NULL DEFAULT '[]'`
+     * would have told every Copilot written before this column existed that it installs nothing,
+     * so the assertion is that an old row reads as the *defaults* and not as an empty selection.
+     */
+    const path = join(root, "pre-copilot-widgets.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+
+    const opened = createDb(path);
+    try {
+      opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
+      // Written by hand, naming every column *except* `widgets`, which is what a row created
+      // before this change looks like once the column arrives: present, and NULL.
+      const seeded = opened.raw
+        .prepare(
+          `INSERT INTO copilots (id, user_id, name, description, system_prompt, all_tools, tools, settings, visibility, created_at, updated_at)
+           VALUES (@id, @userId, 'T', '', '', 1, '[]', '{}', 'private', '2024-01-01', '2024-01-01')`
+        )
+        .run({ id: "c1", userId: OWNER });
+      expect(seeded.changes).toBe(1);
+
+      const columns = opened.raw.prepare("PRAGMA table_info(copilots)").all() as {
+        name: string;
+        notnull: number;
+        dflt_value: string | null;
+      }[];
+      expect(columns.find((c) => c.name === "widgets")).toMatchObject({
+        notnull: 0,
+        dflt_value: null,
+      });
+
+      expect(opened.getOwnedCopilot("c1", OWNER)!.widgets).toEqual([...DEFAULT_WIDGET_IDS]);
     } finally {
       opened.raw.close();
     }

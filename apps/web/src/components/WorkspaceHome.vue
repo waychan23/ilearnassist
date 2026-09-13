@@ -3,7 +3,7 @@ import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
-import { openSettings, openSources, showChat } from "../composables/ui";
+import { openSettings, openSources, openWorkspaceSettings, showChat } from "../composables/ui";
 import { formatRelativeTime } from "../utils/format";
 import type { Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
@@ -220,6 +220,20 @@ function activityLabel(workspace: Workspace): string {
               {{ sessionLabel(w) }} · {{ activityLabel(w) }}
             </span>
             <span v-if="renamingId !== w.id" class="ws-card-actions">
+              <!--
+                The settings entry point that does not require entering the workspace first, so
+                the widgets can be chosen before there is anything to look at. The other one is
+                the workspace name in the sidebar.
+              -->
+              <button
+                class="icon-btn"
+                data-testid="workspace-settings-open"
+                :title="t('widgets.workspaceSettings.title')"
+                :aria-label="t('widgets.workspaceSettings.title')"
+                @click="openWorkspaceSettings(w.id)"
+              >
+                <Icon name="gear" />
+              </button>
               <button
                 class="icon-btn"
                 data-testid="workspace-rename"

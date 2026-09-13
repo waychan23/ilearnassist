@@ -2,8 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   closeDrawer,
   closeSettings,
+  closeWidgetDrawer,
+  closeWorkspaceSettings,
   openDrawer,
   openSettings,
+  openWidgetDrawer,
+  openWorkspaceSettings,
   showChat,
   showLogin,
   showWorkspaceHome,
@@ -19,6 +23,8 @@ import {
 beforeEach(() => {
   uiState.settingsOpen = false;
   uiState.drawerOpen = false;
+  uiState.widgetDrawerOpen = false;
+  uiState.workspaceSettingsId = null;
   uiState.sidebarCollapsed = false;
   uiState.view = "login";
   uiState.authReady = false;
@@ -163,5 +169,67 @@ describe("the view switch", () => {
     openDrawer();
     showChat();
     expect(uiState.drawerOpen).toBe(true);
+  });
+});
+
+describe("the widget drawer", () => {
+  it("opens and closes on its own flag", () => {
+    // A second drawer rather than a value shared with `drawerOpen`: they hold different panes and
+    // can be true at once, so one flag would make "which one is open" unanswerable.
+    openWidgetDrawer();
+    expect(uiState.widgetDrawerOpen).toBe(true);
+    expect(uiState.drawerOpen).toBe(false);
+
+    closeWidgetDrawer();
+    expect(uiState.widgetDrawerOpen).toBe(false);
+  });
+
+  it("closes on the way to the login screen and the workspace home", () => {
+    // The same rule the left drawer follows: it belongs to the pane being torn down.
+    openWidgetDrawer();
+    showWorkspaceHome();
+    expect(uiState.widgetDrawerOpen).toBe(false);
+
+    openWidgetDrawer();
+    showLogin();
+    expect(uiState.widgetDrawerOpen).toBe(false);
+  });
+
+  it("leaves the left drawer alone, and is left alone by it", () => {
+    openDrawer();
+    openWidgetDrawer();
+    expect(uiState).toMatchObject({ drawerOpen: true, widgetDrawerOpen: true });
+
+    closeDrawer();
+    expect(uiState.widgetDrawerOpen).toBe(true);
+  });
+});
+
+describe("the workspace settings dialog", () => {
+  it("carries the workspace it is about, rather than being a flag", () => {
+    /*
+     * A value rather than a boolean, and the reason is the entry point: the gear sits on a
+     * workspace *card*, which need not be the workspace anyone is in. An id is what lets the
+     * dialog be opened for one nobody has entered.
+     */
+    openWorkspaceSettings("w2");
+    expect(uiState.workspaceSettingsId).toBe("w2");
+
+    closeWorkspaceSettings();
+    expect(uiState.workspaceSettingsId).toBeNull();
+  });
+
+  it("opens for a workspace that is not the active one", () => {
+    // The whole point of carrying the id: no side effect on which workspace is selected.
+    openWorkspaceSettings("w-other");
+    expect(uiState.workspaceSettingsId).toBe("w-other");
+  });
+
+  it("closes when the account leaves", () => {
+    // It is a dialog about an account's own workspace, so signing out has to take it with it —
+    // the next account's ids mean nothing here.
+    openWorkspaceSettings("w1");
+    showLogin();
+    expect(uiState.workspaceSettingsId).toBeNull();
   });
 });

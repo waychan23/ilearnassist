@@ -46,6 +46,26 @@ export const uiState = reactive({
   sourcesOpen: false,
   drawerOpen: false,
   /**
+   * The widget panel off-canvas at the *right*, on a compact viewport.
+   *
+   * A second drawer rather than a value shared with `drawerOpen`, because they hold different
+   * panes and can be true at once — and because the left one is *where the sidebar is* on a
+   * narrow screen, while this is a supplementary panel that happens to need the same treatment.
+   * Both close on Escape and both get a backdrop; sharing one flag would tie two unrelated
+   * controls together and make "which one is open" unanswerable.
+   */
+  widgetDrawerOpen: false,
+  /**
+   * The workspace whose settings dialog is open, or `null`.
+   *
+   * A **value** rather than a flag, unlike every other overlay here, and the reason is the entry
+   * point: the gear sits on a workspace *card* on the home page, which need not be the active
+   * workspace. Carrying the id means the dialog can be opened for a workspace nobody has entered,
+   * and the alternative — a prop threaded from `App.vue` back down to the card that opened it —
+   * is the chain this module exists to avoid.
+   */
+  workspaceSettingsId: null as string | null,
+  /**
    * The chat sidebar collapsed to its rail.
    *
    * A second flag rather than a third value on `drawerOpen`, because the two answer
@@ -99,6 +119,29 @@ export function closeDrawer(): void {
   uiState.drawerOpen = false;
 }
 
+/** The widget panel's off-canvas form. Compact viewports only, like the drawer above. */
+export function openWidgetDrawer(): void {
+  uiState.widgetDrawerOpen = true;
+}
+
+export function closeWidgetDrawer(): void {
+  uiState.widgetDrawerOpen = false;
+}
+
+/**
+ * Open the workspace settings dialog for a particular workspace.
+ *
+ * Takes the id rather than reading the active one, because the gear on a workspace card is for
+ * *that* workspace and the user may not have entered it.
+ */
+export function openWorkspaceSettings(id: string): void {
+  uiState.workspaceSettingsId = id;
+}
+
+export function closeWorkspaceSettings(): void {
+  uiState.workspaceSettingsId = null;
+}
+
 /**
  * Narrow the sidebar to its rail, or widen it back.
  *
@@ -144,6 +187,10 @@ export const sidebarRail = computed(
 export function showLogin(): void {
   uiState.view = "login";
   closeDrawer();
+  // Both drawers belong to the pane being torn down, and both dialogs to an account that is
+  // leaving, so all four go with them.
+  closeWidgetDrawer();
+  closeWorkspaceSettings();
 }
 
 /**
@@ -154,6 +201,7 @@ export function showLogin(): void {
 export function showWorkspaceHome(): void {
   uiState.view = "home";
   closeDrawer();
+  closeWidgetDrawer();
 }
 
 /** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */
