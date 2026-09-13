@@ -3,6 +3,9 @@ import { join } from "node:path";
 import {
   ANY_INTERFACE_HOST,
   LOOPBACK_HOST,
+  PANEL_LAUNCH_ENV,
+  adminEntryFor,
+  buildAdminSpec,
   buildLaunchSpec,
   parseListeningLine,
   serverEntryFor,
@@ -56,9 +59,6 @@ describe("parseListeningLine", () => {
 });
 
 describe("buildLaunchSpec", () => {
-  /** The secret the panel shares with the child. A literal: this file is about the spec. */
-  const PANEL_TOKEN = "a-launch-scoped-secret";
-
   const build = (host: string) =>
     buildLaunchSpec({
       electronExecPath: "/Applications/ilearnassist.app/Contents/MacOS/ilearnassist",
@@ -66,11 +66,20 @@ describe("buildLaunchSpec", () => {
       paths,
       dataDir: DATA_DIR,
       host,
-      panelToken: PANEL_TOKEN,
       baseEnv: { PATH: "/usr/bin" },
     });
 
   const spec = build(LOOPBACK_HOST);
+
+  /** The other child the panel spawns: one-shot, and the one `reset-admin` runs in. */
+  const adminSpec = buildAdminSpec({
+    electronExecPath: "/Applications/ilearnassist.app/Contents/MacOS/ilearnassist",
+    adminEntry: adminEntryFor("/Applications/ilearnassist.app/Contents/Resources/app"),
+    paths,
+    dataDir: DATA_DIR,
+    args: ["reset-admin", "--json"],
+    baseEnv: { PATH: "/usr/bin" },
+  });
 
   it("runs the Electron binary as a plain Node process", () => {
     // There is no Node on a user's machine, so the child has to be the runtime we are
@@ -88,12 +97,15 @@ describe("buildLaunchSpec", () => {
     expect(spec.env["ILA_WEB_DIR"]).toBe(paths.webDir);
   });
 
-  it("carries the launch's secret, which is the panel's way back into a locked account", () => {
-    // The server accepts `/api/auth/panel-reset` only from a process that can present this,
-    // and a fresh panel generates a fresh one within `main.ts`. Losing it makes a forgotten
-    // administrator password unrecoverable — there is no other route that needs nobody
-    // signed in.
-    expect(spec.env["ILA_PANEL_TOKEN"]).toBe(PANEL_TOKEN);
+  it("tells both children which launcher they have, so their wording names the right fix", () => {
+    // Not a secret, and it grants nothing: it decides whether a refusal to start without an
+    // administrator says "the button is in the control panel" or "run this command". A packed
+    // launch and a checkout need different sentences, and this is how the server knows which
+    // one it is looking at.
+    expect(spec.env[PANEL_LAUNCH_ENV]).toBe("1");
+    // The CLI gets it too — `reset-admin` runs as that child, and it is the one that reports
+    // "there is nothing here to recover" to a panel rather than to a terminal.
+    expect(adminSpec.env[PANEL_LAUNCH_ENV]).toBe("1");
   });
 
   it("points the server at the chosen data root, which is the user's and not the app's", () => {

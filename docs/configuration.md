@@ -107,7 +107,7 @@ files they upload. **It is required, and the server refuses to start without it.
 | --- | --- |
 | `ILA_DATA_DIR` | The data root. **Required.** No default, deliberately: that path decides how much of your work survives an uninstall, so the code will not guess one. |
 | `ILA_CONFIG_PATH` | Replace the path of the *overlay* normally read from `config/config.local.yaml`. `config/config.yaml` is still the base. Exists for tests and the e2e run. |
-| `ILA_PANEL_TOKEN` | **Set by the control panel, never by hand.** A secret the panel generates per launch and passes only to the server it spawned, which is what lets it reset a forgotten administrator password and nothing else reach that route. A launch without one — a checkout, a `pnpm dev` — answers 404 there. See `docs/desktop.md`. |
+| `ILA_LAUNCHED_BY_PANEL` | **Set by the control panel, never by hand.** Not a secret and it grants nothing: it only decides whether a refusal to start without an administrator names the panel's button or the CLI command. Anyone who can set it can already read the database. See `docs/desktop.md`. |
 
 ```
 <dataRoot>/

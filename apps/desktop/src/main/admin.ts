@@ -5,6 +5,7 @@ import type {
   AdminStatus,
   AdminStatusResult,
   CreateAdministratorResult,
+  ResetResult,
 } from "../shared/panelApi.js";
 
 /**
@@ -34,6 +35,12 @@ interface CliCreateEnvelope {
   created: boolean;
   username: string;
 }
+interface CliResetEnvelope {
+  ok: true;
+  command: "reset-admin";
+  username: string;
+  password: string;
+}
 interface CliErrorEnvelope {
   ok: false;
   error: {
@@ -42,7 +49,7 @@ interface CliErrorEnvelope {
     params?: Record<string, string | number>;
   };
 }
-type CliEnvelope = CliStatusEnvelope | CliCreateEnvelope | CliErrorEnvelope;
+type CliEnvelope = CliStatusEnvelope | CliCreateEnvelope | CliResetEnvelope | CliErrorEnvelope;
 
 /** Parse one JSON object off a stream, or null if there is not exactly that to read. */
 function parseEnvelope(text: string): CliEnvelope | null {
@@ -99,6 +106,30 @@ export interface AdminContext {
   dataDir: string;
 }
 
+/**
+ * Whether a Start should spawn the server, given what the CLI said about the data root.
+ *
+ * A named rule rather than an `if (hasAdmin)` at the two call sites, and the reason is a bug
+ * that made **Start do nothing at all** once an administrator existed: the panel stored the
+ * question's negation and both callers read it as the question, so the button only ever worked
+ * on a data root where the server would then refuse to listen. A predicate cannot be inverted
+ * by accident the way a boolean variable's meaning can.
+ *
+ * Three inputs, two answers, and the asymmetry is deliberate:
+ *
+ * - `true` — there is an administrator, so start the server.
+ * - `false` — there is definitely none, and the server refuses to listen without one. Do not
+ *   spawn a process whose only outcome is "failed: exited 1". The panel is already drawing the
+ *   create card in this state, so the press is answered by the card rather than by nothing.
+ * - `undefined` — the question could not be answered: no data root, an unreadable database, a
+ *   CLI that would not run. **Start anyway.** The server's own boot gate is the backstop and
+ *   says so in one sentence on stderr, which is a better outcome than a button that silently
+ *   does nothing when the check it depends on is the thing that is broken.
+ */
+export function mayStartServer(hasAdmin: boolean | undefined): boolean {
+  return hasAdmin !== false;
+}
+
 function runCli(
   ctx: AdminContext,
   args: string[],
@@ -111,7 +142,12 @@ function runCli(
     dataDir: ctx.dataDir,
     args,
   });
-  return runOneShot(spec, { stdin, timeoutMs: args[0] === "status" ? STATUS_TIMEOUT_MS : CREATE_TIMEOUT_MS });
+  return runOneShot(spec, {
+    stdin,
+    // A reset hashes a password too, so it is on the same budget as a create; `status` does no
+    // `scrypt` at all and is given a tighter one.
+    timeoutMs: args[0] === "status" ? STATUS_TIMEOUT_MS : CREATE_TIMEOUT_MS,
+  });
 }
 
 export async function queryAdministrator(ctx: AdminContext): Promise<AdminStatusResult> {
@@ -152,12 +188,44 @@ export async function createFirstAdministrator(
   const envelope = parseEnvelope(result.stdout) ?? parseEnvelope(result.stderr);
   if (!envelope) return { ok: false, fault: spawnFault(result) };
   if (!envelope.ok) return { ok: false, fault: envelopeFault(envelope) };
-  if (envelope.command === "status" || !envelope.created) {
+  if (envelope.command !== "create-admin" && envelope.command !== "ensure-admin") {
+    return { ok: false, fault: { code: "bad_response", message: "unexpected CLI reply" } };
+  }
+  if (!envelope.created) {
     // `create-admin` never answers "nothing to do"; that is `ensure-admin`. So an uncreated
     // reply here is a mismatch worth refusing rather than reporting success.
     return { ok: false, fault: { code: "bad_response", message: "the administrator was not created" } };
   }
   return { ok: true, username: envelope.username };
+}
+
+/**
+ * Replace a superadmin's password, and hand the generated one back.
+ *
+ * A one-shot child rather than a request to the server, and that is what makes the button work
+ * in **every** state rather than only while the server happens to be up. It used to be an HTTP
+ * route guarded by a per-launch secret, which meant the one control that exists for "I cannot
+ * sign in" also required a healthy running server — and a forgotten password is often found in
+ * the same moment as something else being wrong. The CLI writes the row itself, exactly as
+ * `create-admin` does, so there is one implementation of the reset and no secret to hold.
+ *
+ * The password is in the *result* and nowhere else. It is never logged, never broadcast, and
+ * never written to `desktop.json`: the panel holds it long enough to render it once.
+ */
+export async function resetAdministratorPassword(ctx: AdminContext): Promise<ResetResult> {
+  if (!ctx.dataDir) return { ok: false, fault: { code: "no_data_dir" } };
+
+  const result = await runCli(ctx, ["reset-admin", "--json"]);
+
+  // Both streams, like the two commands above: a refusal is written to stderr even though the
+  // envelope goes to stdout on success.
+  const envelope = parseEnvelope(result.stdout) ?? parseEnvelope(result.stderr);
+  if (!envelope) return { ok: false, fault: spawnFault(result) };
+  if (!envelope.ok) return { ok: false, fault: envelopeFault(envelope) };
+  if (envelope.command !== "reset-admin") {
+    return { ok: false, fault: { code: "bad_response", message: "unexpected CLI reply" } };
+  }
+  return { ok: true, username: envelope.username, password: envelope.password };
 }
 
 const STATUS_TIMEOUT_MS = 10_000;

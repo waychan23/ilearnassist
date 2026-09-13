@@ -293,3 +293,34 @@ describe("ServerProcess — reporting", () => {
     expect(server.status().logs).not.toContain("not real");
   });
 });
+
+/**
+ * The data root as it appears in the status.
+ *
+ * The option is a *function* because the user can choose a different folder while this object
+ * is alive, and the panel shows the status's copy of it. Passed by value it was captured at
+ * construction, so choosing a folder moved the server to it and left the row above showing the
+ * previous one — an empty box, on a first choice — until the app was restarted.
+ */
+describe("ServerProcess — the data root it reports", () => {
+  it("reads the option each time rather than capturing it", async () => {
+    let chosen = "/tmp/first";
+    const server = new ServerProcess(fixture(`setInterval(() => {}, 1000)`), {
+      dataDir: () => chosen,
+      logFlushMs: 10,
+    });
+    live.push(server);
+
+    expect(server.status().dataDir).toBe("/tmp/first");
+
+    // The user picks another folder. Nothing about the supervision changes — `chooseDataDir`
+    // stops the server itself — so the only thing that has to follow is what the panel renders.
+    chosen = "/tmp/second";
+    expect(server.status().dataDir).toBe("/tmp/second");
+  });
+
+  it("still accepts a plain string, for callers with nothing to change", async () => {
+    const server = start(fixture(`setInterval(() => {}, 1000)`), { dataDir: "/tmp/fixed" });
+    expect(server.status().dataDir).toBe("/tmp/fixed");
+  });
+});

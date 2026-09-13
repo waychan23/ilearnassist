@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import type { AdminCliErrorBody } from "@ilearnassist/shared";
-import { adminStatus, createAdmin, type AdminCliOutcome } from "./adminCli.js";
+import { adminStatus, createAdmin, resetAdmin, type AdminCliOutcome } from "./adminCli.js";
 import { resolveDataRoot } from "./config.js";
 import { apiError } from "./apiError.js";
 
@@ -25,6 +25,7 @@ import { apiError } from "./apiError.js";
  *   cli status [--json]
  *   cli create-admin --username <name> (--password-stdin | --generate) [--json]
  *   cli ensure-admin --username <name> (--password-stdin | --generate) [--json]
+ *   cli reset-admin [--username <name>] [--json]
  */
 
 /** ok / coded refusal / usage. `1` alone proves nothing — an uncaught throw exits 1 too. */
@@ -121,6 +122,18 @@ async function run(args: Args): Promise<AdminCliOutcome | { usage: AdminCliError
       });
     }
 
+    /*
+     * The way back in for a forgotten password, and the only command here that acts on an
+     * installation somebody already administers. `--username` is optional: the panel does not
+     * know any names, and "the first enabled superadmin" is the account it means.
+     *
+     * It refuses when the named account is not a superadmin rather than resetting it anyway —
+     * see `resetAdmin`. The recovery path is for the credential that can undo the installation;
+     * an ordinary account's password is the web console's business.
+     */
+    case "reset-admin":
+      return resetAdmin({ dataRoot, username: args.username?.trim() || undefined });
+
     default:
       return {
         usage: apiError("USAGE", `unknown command: ${args.command || "(none)"}`, {
@@ -151,6 +164,15 @@ function report(outcome: AdminCliOutcome): void {
     return;
   }
 
+  if (value.command === "reset-admin") {
+    process.stdout.write(
+      `Reset the password for "${value.username}" and signed it out everywhere.\n` +
+        `\nPassword (shown once — only a hash is stored): ${value.password}\n\n` +
+        `Sign in with it and change it from your account page.\n`
+    );
+    return;
+  }
+
   if (!value.created) {
     process.stdout.write(`Already administered by "${value.username}" — nothing to do.\n`);
     return;
@@ -170,6 +192,7 @@ const USAGE = `Usage:
   cli status [--json]
   cli create-admin --username <name> (--password-stdin | --generate) [--json]
   cli ensure-admin --username <name> (--password-stdin | --generate) [--json]
+  cli reset-admin [--username <name>] [--json]
 `;
 
 async function main(): Promise<number> {

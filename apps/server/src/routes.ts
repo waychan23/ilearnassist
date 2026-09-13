@@ -127,9 +127,6 @@ import {
   readPassword,
   readUsername,
   usernameProblem,
-  panelToken,
-  panelTokenMatches,
-  PANEL_TOKEN_HEADER,
   revokeAllTokens,
   toWireUser,
   userForRefreshToken,
@@ -871,56 +868,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { ok: true, revoked: revokeAllTokens(db, target.id) };
   });
 
-  /**
-   * Reset an administrator's password from the control panel. The way back in.
+  /*
+   * There is deliberately **no HTTP route that resets a forgotten password**, and its absence
+   * is a design decision rather than an omission.
    *
-   * Every other route here is reached by somebody who is already signed in, which is exactly
-   * the thing a forgotten administrator password prevents — so without this there is no
-   * recovery at all, and an installation whose only administrator forgot their password is a
-   * directory full of files nobody can open.
-   *
-   * What makes it not a back door is `ILA_PANEL_TOKEN`: a secret the control panel generates
-   * per launch and passes only to the child process it spawned itself. It is never written
-   * anywhere, so it does not exist between launches, and reaching this server over the
-   * network does not get you one. When the variable is absent — a checkout, a `pnpm dev`, any
-   * launch that was not the panel — the route answers 404 and is simply not there.
-   *
-   * Answered as not-found rather than forbidden when the token is missing, so an
-   * installation without a panel does not advertise a recovery endpoint it will never accept.
-   *
-   * The account it resets is named in the body, or defaults to the first enabled superadmin —
-   * which is what the panel can ask for without knowing any usernames. `mustChangePassword`
-   * is left clear: this is the administrator's own account, and the panel is the one place
-   * the physical machine is the proof of identity.
+   * Every route above is reached by somebody already signed in, which is exactly what a
+   * forgotten administrator password prevents — so recovery cannot live here at all. It lives
+   * in the administrator CLI (`reset-admin`), which the control panel spawns as a one-shot
+   * child on the operator's own machine. There used to be a route, guarded by a per-launch
+   * secret the panel shared with the server it spawned; the CLI replaced it because the secret
+   * bought nothing the process boundary did not already buy (see `docs/desktop.md`) and because
+   * a recovery path that needs the server to be *up* is not much of a recovery path.
    */
-  app.post("/api/auth/panel-reset", { config: { public: true } }, async (request, reply) => {
-    if (!panelToken()) return reply.code(404).send(apiError("FORBIDDEN", "no control panel"));
-    const provided = request.headers[PANEL_TOKEN_HEADER];
-    if (!panelTokenMatches(typeof provided === "string" ? provided : undefined)) {
-      return reply.code(403).send(apiError("FORBIDDEN", "not from the control panel"));
-    }
-
-    const body = request.body as { username?: unknown } | undefined;
-    const named = readUsername(body?.username);
-    const target = named
-      ? db.findUserByUsername(named)
-      : db.listUsers().find(isEnabledSuperadmin);
-    if (!target) return reply.code(404).send(apiError("USER_NOT_FOUND", "no such account"));
-    if (!isSuperadmin(target)) {
-      return reply
-        .code(400)
-        .send(apiError("FORBIDDEN", "the control panel only resets administrators"));
-    }
-
-    const password = generatePassword();
-    const updated = db.setUserPassword(target.id, await hashPassword(password), false)!;
-    // The reset is also the kick: a forgotten password that is replaced while the old session
-    // is still live has not really been replaced.
-    revokeAllTokens(db, target.id);
-
-    const result: UserCredentials = { user: toAdminUser(updated), password };
-    return result;
-  });
 
   /* --------------------------------- resolution -------------------------------- */
   /*

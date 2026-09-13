@@ -6,15 +6,18 @@ import type {
   UserCredentials,
   UserRole,
 } from "@ilearnassist/shared";
-import { PANEL_TOKEN_ENV, PANEL_TOKEN_HEADER } from "../src/auth.js";
 import { startTestServer, TEST_PASSWORD, type TestEnv } from "./helpers/tempEnv.js";
 
 /**
- * The platform console: making accounts, taking them away, and the two ways back in.
+ * The platform console: making accounts, taking them away, and the rules that decide who may
+ * touch whom.
  *
- * Every route here is a superadmin's, so most of these tests are as much about who is *refused*
- * as about what the route does. The forced password change has its own describe, because it is
- * the one rule that reaches into every other route in the product.
+ * Every route here is an administrator's, so most of these tests are as much about who is
+ * *refused* as about what the route does. The forced password change has its own describe,
+ * because it is the one rule that reaches into every other route in the product.
+ *
+ * Recovery for a *forgotten* password is deliberately not here — it is not a route at all. See
+ * the note at the end of this file.
  */
 
 let env: TestEnv | undefined;
@@ -22,7 +25,6 @@ let env: TestEnv | undefined;
 afterEach(async () => {
   await env?.cleanup();
   env = undefined;
-  delete process.env[PANEL_TOKEN_ENV];
 });
 
 type Body = { error: { code: string } };
@@ -816,78 +818,13 @@ describe("the forced password change", () => {
   });
 });
 
-describe("POST /api/auth/panel-reset", () => {
-  it("is not there at all when no control panel launched the server", async () => {
-    // A checkout, a `pnpm dev`, a test run. Answering 404 rather than 403 means an installation
-    // with no panel does not advertise a recovery endpoint it will never accept.
-    env = await startTestServer();
-    const res = await post(env.server, "/api/auth/panel-reset", {});
-    expect(res.statusCode).toBe(404);
-  });
-
-  it("refuses a request that does not carry the panel's secret", async () => {
-    env = await startTestServer();
-    process.env[PANEL_TOKEN_ENV] = "the-panel-secret";
-
-    const res = await post(env.server, "/api/auth/panel-reset", {});
-    expect(res.statusCode).toBe(403);
-
-    const wrong = await env.server.app.inject({
-      method: "POST",
-      url: "/api/auth/panel-reset",
-      headers: { [PANEL_TOKEN_HEADER]: "not-the-panel-secret" },
-      payload: {},
-    });
-    expect(wrong.statusCode).toBe(403);
-  });
-
-  it("replaces an administrator's password and ends their sessions", async () => {
-    // The way back in for a forgotten password. Without it an installation whose only
-    // administrator forgot theirs is a directory of files nobody can open.
-    env = await startTestServer({ username: "Ada" });
-    process.env[PANEL_TOKEN_ENV] = "the-panel-secret";
-
-    const res = await env.server.app.inject({
-      method: "POST",
-      url: "/api/auth/panel-reset",
-      headers: { [PANEL_TOKEN_HEADER]: "the-panel-secret" },
-      payload: {},
-    });
-    expect(res.statusCode).toBe(200);
-    const { user, password } = res.json<UserCredentials>();
-    expect(user.username).toBe("Ada");
-    // No forced change: the panel is the one place where sitting at the machine is the proof of
-    // identity, and the person doing this is the administrator themselves.
-    expect(user.mustChangePassword).toBe(false);
-
-    // The old session is gone, and the new password works.
-    expect((await env.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
-    expect(
-      (await post(env.server, "/api/auth/login", { username: "Ada", password })).statusCode
-    ).toBe(200);
-  });
-
-  it("resets the administrator named, and refuses an ordinary account", async () => {
-    env = await startTestServer({ username: "Ada" });
-    process.env[PANEL_TOKEN_ENV] = "the-panel-secret";
-    const header = { [PANEL_TOKEN_HEADER]: "the-panel-secret" };
-
-    const bob = await createAndSignIn(env, "Bob");
-    const refused = await env.server.app.inject({
-      method: "POST",
-      url: "/api/auth/panel-reset",
-      headers: header,
-      payload: { username: "Bob" },
-    });
-    expect(refused.statusCode).toBe(400);
-
-    const named = await env.server.app.inject({
-      method: "POST",
-      url: "/api/auth/panel-reset",
-      headers: header,
-      payload: { username: "Ada" },
-    });
-    expect(named.json<UserCredentials>().user.id).toBe(env.user.id);
-    expect(bob.user.id).not.toBe(env.user.id);
-  });
-});
+/*
+ * There is deliberately **no HTTP route that resets a forgotten password**, so there is nothing
+ * here to test. Every route in this file is reached by somebody already signed in, which is
+ * exactly what a forgotten password prevents — recovery cannot live on this side at all.
+ *
+ * It lives in the administrator CLI, which the control panel spawns as a one-shot child on the
+ * operator's own machine: `reset-admin`. See `adminCli.test.ts` for the rule and
+ * `docs/desktop.md` for why a route guarded by a per-launch secret was replaced by one that
+ * works whether or not the server is up.
+ */
