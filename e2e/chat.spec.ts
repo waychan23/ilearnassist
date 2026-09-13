@@ -183,11 +183,15 @@ test("a scanned PDF falls back to the cloud parser", async ({ page, request }) =
   expect(chatRequest).toContain("CLOUD-EXTRACTED-CONTENT from the scanned page.");
 });
 
-test("the document-parsing settings screen manages a cloud parser", async ({ page, request }) => {
+test("the console's documents section manages a cloud parser", async ({ page, request }) => {
   await page.goto("/");
 
-  await page.getByTestId("open-settings").click();
-  await page.getByTestId("tab-documents").click();
+  // In the platform console rather than in Settings: a parser's `baseURL` is a URL the
+  // *server* fetches for every account, so it is an administrator's to configure and nobody
+  // else's to see. The spec runs as the administrator the suite signs in as.
+  await page.getByTestId("open-admin").click();
+  await page.getByTestId("admin-nav-documents").click();
+  await expect(page.getByTestId("admin-documents")).toBeVisible();
 
   // The e2e config seeds one, so the list is not empty to begin with.
   await expect(page.getByTestId("parser-row")).toHaveCount(1);

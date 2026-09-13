@@ -277,3 +277,80 @@ test("an ordinary administrator cannot appoint one, and the dialog says why", as
   });
   expect(refused.status()).toBe(403);
 });
+
+/**
+ * The installation's model services, which are the other half of "an administrator configures
+ * and an ordinary account chooses".
+ *
+ * The server suite pins who each route refuses; this pins that the screens exist, that a
+ * provider can be added from the console, and — the claim only a browser makes — that an
+ * ordinary account is not offered a screen whose every save would be refused.
+ */
+test("an administrator configures a model provider from the console", async ({ page }) => {
+  await openConsole(page);
+
+  await page.getByTestId("admin-nav-providers").click();
+  await expect(page.getByTestId("admin-providers")).toBeVisible();
+  // The e2e config seeds one, so the list is not empty to begin with — and it is the default,
+  // which is what the composer resolves a new conversation through.
+  await expect(page.getByTestId("admin-provider-row")).toHaveCount(1);
+  await expect(page.getByTestId("admin-default-provider")).toHaveValue("fake");
+
+  await page.getByTestId("admin-add-provider").click();
+  await page.getByTestId("provider-name").fill("Second");
+  await page.getByTestId("provider-base-url").fill("http://127.0.0.1:9/v1");
+  // A provider with no model is not saveable, which is the guard that stops a half-configured
+  // service from being added: it would appear in the picker and answer nothing.
+  await expect(page.getByTestId("provider-save")).toBeDisabled();
+  await page.getByTestId("model-id").first().fill("second-model");
+  await page.getByTestId("provider-save").click();
+
+  await expect(page.getByTestId("admin-provider-row")).toHaveCount(2);
+  const second = page.locator('[data-testid="admin-provider-row"]').filter({ hasText: "Second" });
+  await expect(second).toContainText("second-model");
+  // Not offered by the composer's picker yet, and that is the rule rather than an omission: a
+  // provider with no key answers nothing, so the picker hides it. It becomes choosable the
+  // moment an administrator gives it one.
+  await expect(page.getByTestId("admin-default-provider").locator("option")).toContainText([
+    "Fake Provider",
+    "Second",
+  ]);
+});
+
+test("the documents section is the console's, not Settings'", async ({ page }) => {
+  await openConsole(page);
+  await page.getByTestId("admin-nav-documents").click();
+
+  await expect(page.getByTestId("admin-documents")).toBeVisible();
+  // The parser the e2e config seeds, with its policy. This screen used to be a tab of the
+  // user-facing Settings dialog, where every control on it answered 403 for an ordinary
+  // account and where a parser's `baseURL` — a URL the *server* fetches — was shown to
+  // everybody.
+  await expect(page.getByTestId("parser-row")).toHaveCount(1);
+  await expect(page.getByTestId("parse-policy")).toHaveValue("local-first");
+});
+
+test("an ordinary account is offered no way to configure models", async ({ page, request }) => {
+  const password = await ensureUser(request, "chooser");
+
+  await forgetSession(page);
+  await signIn(page, "chooser", password);
+
+  // No console, at either of the two entry points, and therefore no model-services screen.
+  await expect(page.getByTestId("open-admin")).toHaveCount(0);
+  await expect(page.getByTestId("open-admin-sidebar")).toHaveCount(0);
+
+  // Settings still opens — Copilots are the account's own — but it points nowhere useful and
+  // the console pointer is for administrators only.
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("new-copilot")).toBeVisible();
+  await expect(page.getByTestId("settings-console-pointer")).toHaveCount(0);
+
+  // And the composer offers the choice without offering the editing. This is the permission
+  // model in one assertion: a user *selects from* what an administrator configured.
+  await page.getByTestId("close-settings").click();
+  await enterWorkspace(page);
+  await page.getByTestId("model-picker").click();
+  await expect(page.getByTestId("model-picker-menu")).toContainText("fake-model");
+  await expect(page.getByTestId("model-manage")).toHaveCount(0);
+});

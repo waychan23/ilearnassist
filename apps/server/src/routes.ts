@@ -273,36 +273,26 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   /**
-   * The signed-in account *and* a superadmin, or a reply that says why not.
+   * The signed-in account *and* a platform administrator of either tier, or a reply that says
+   * why not.
    *
    * Returns the reply as well as sending it, so a handler reads as
-   * `const admin = requireSuperadmin(...); if (!admin) return reply;` — one shape rather than
+   * `const admin = requirePlatformAdmin(...); if (!admin) return reply;` — one shape rather than
    * a throw that a route would then have to translate. 403 rather than 404: the credential is
-   * perfectly good, the account simply may not do this, and answering "not found" would send
-   * an administrator looking for a bug in their own URL.
-   */
-  function requireSuperadmin(
-    request: FastifyRequest,
-    reply: FastifyReply
-  ): UserRecord | undefined {
-    const user = actor(request);
-    if (isSuperadmin(user)) return user;
-    void reply.code(403).send(apiError("FORBIDDEN", "only a superadmin can manage accounts"));
-    return undefined;
-  }
-
-  /**
-   * The signed-in account *and* a platform administrator of either tier.
+   * perfectly good, the account simply may not do this, and answering "not found" would send an
+   * administrator looking for a bug in their own URL.
    *
-   * The wider of the two gates, and the one that reaches the console itself. A superadmin
-   * passes it because `isPlatformAdmin` reads the closed set rather than comparing one role —
-   * which is what keeps the bootstrap account from needing a second role bolted on to keep
-   * working.
+   * It is the gate for **everything an administrator of either tier may do**, which is two
+   * things: the installation's accounts, and its shared settings — providers and models,
+   * document parsers, the parsing policy, the app defaults. A superadmin passes it because
+   * `isPlatformAdmin` reads the closed set rather than comparing one role, which is what keeps
+   * the bootstrap account from needing a second role bolted on to keep working.
    *
-   * This is an *entry* gate and never the whole rule. Every route below narrows it further,
-   * because the two tiers differ in what they may do rather than in what they may reach: an
-   * ordinary administrator runs the installation's accounts, and an account that administers
-   * it is not one of them.
+   * It is an *entry* gate and never the whole rule. The account routes narrow it further,
+   * because the two tiers differ in what they may do there rather than in what they may reach:
+   * an ordinary administrator runs the installation's accounts, and an account that administers
+   * it is not one of them. The settings routes do not narrow it at all — configuring the models
+   * every conversation runs on is the job the `admin` role exists for.
    */
   function requirePlatformAdmin(
     request: FastifyRequest,
@@ -1852,9 +1842,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* -------------------------------- providers --------------------------------- */
   /*
    * Providers, parsers, the parsing policy and the app defaults are **installation-wide**, and
-   * their writes are a superadmin's. Reads are everybody's: the composer needs the model list
-   * and the parse state, and a screen that cannot say which models exist is not one anybody can
-   * use.
+   * their writes are a platform administrator's — either tier. Reads are everybody's: the
+   * composer needs the model list and the parse state, and a screen that cannot say which models
+   * exist is not one anybody can use.
+   *
+   * The split the whole feature is built on: an administrator *configures* the models, and an
+   * ordinary account *chooses among* them. That is why the reads stay open and the writes do not
+   * — a user who could add a provider would be choosing from a list they wrote, and the
+   * "configured by an administrator" promise would be a sentence rather than a rule.
    *
    * This matters more than it looks, now that an installation can hold more than one account.
    * A provider's `baseURL` is where every conversation's prompts and completions go, so an
@@ -1863,14 +1858,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * the caller chose, which is the same capability `web_fetch` needs an SSRF guard for — so a
    * route that reaches it must not be the one place in the product with no gate at all.
    *
-   * The rule for a new route here is the one the console's routes already follow: if it changes
+   * The gate here is the *wider* one, unlike the account routes above: appointing an
+   * administrator is a superadmin's act, and configuring the installation is the job the
+   * `admin` role is appointed to do. The rule for a new route is the console's: if it changes
    * something every account shares, it is an administrator's to change.
    */
 
   app.get("/api/providers", async () => providerConfigs());
 
   app.post("/api/providers", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const body = request.body as CreateProviderInput;
     const name = body?.name?.trim();
@@ -1893,7 +1890,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.put("/api/providers/:id", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const { id } = request.params as { id: string };
     const body = request.body as UpdateProviderInput;
@@ -1925,7 +1922,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/providers/:id", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const { id } = request.params as { id: string };
     if (!db.getProvider(id)) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
@@ -1947,7 +1944,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/providers/:providerId/models/:modelId", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const { providerId, modelId } = request.params as { providerId: string; modelId: string };
     const provider = db.getProvider(providerId);
@@ -1964,7 +1961,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.get("/api/document-parsers", async () => documentParserConfigs());
 
   app.post("/api/document-parsers", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const body = request.body as CreateDocumentParserInput;
     const name = body?.name?.trim();
@@ -1987,7 +1984,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.put("/api/document-parsers/:id", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const { id } = request.params as { id: string };
     const body = request.body as UpdateDocumentParserInput;
@@ -2008,7 +2005,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   app.delete("/api/document-parsers/:id", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const { id } = request.params as { id: string };
     if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
@@ -2024,7 +2021,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** Round-trip a throwaway document through a parser to prove the endpoint and key work. */
   app.post("/api/document-parsers/:id/test", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const { id } = request.params as { id: string };
     if (!db.getDocumentParser(id)) return reply.code(404).send(apiError("PARSER_NOT_FOUND", "parser not found"));
@@ -2038,7 +2035,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /** The parsing policy (tier order, fallback, pinned parser). */
   app.put("/api/document-parsing", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const body = request.body as UpdateDocumentParsingInput;
 
@@ -2067,7 +2064,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* --------------------------------- app defaults ------------------------------ */
 
   app.put("/api/defaults", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    if (!requirePlatformAdmin(request, reply)) return reply;
 
     const body = request.body as { providerId?: string; modelId?: string };
     if (body?.providerId !== undefined) {

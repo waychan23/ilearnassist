@@ -3,13 +3,15 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
-import { showWorkspaceHome } from "../composables/ui";
+import { showWorkspaceHome, uiState, type AdminSection } from "../composables/ui";
 import { api } from "../api/client";
 import type { AdminUser, UserRole } from "../api/types";
 import { isPlatformAdmin, isSuperadmin, PLATFORM_ADMIN_ROLES, SUPERADMIN_ROLE, USER_ROLES } from "../api/types";
 import TopbarControls from "./TopbarControls.vue";
 import CopyButton from "./CopyButton.vue";
 import Icon from "./Icon.vue";
+import ProvidersSection from "./admin/ProvidersSection.vue";
+import DocumentsSection from "./admin/DocumentsSection.vue";
 import type { IconName } from "../utils/icons";
 
 /**
@@ -52,17 +54,56 @@ const { t } = useI18n();
  * data, because `i18n/catalog.test.ts` statically scans the source for `t("…")` calls and a key
  * reached through an object property is invisible to it — a dead-key scan that cannot see a key
  * reports it as unused. The id stays data; the words stay at the call site.
+ *
+ * Every one of these is *installation-wide*, which is the whole test for whether a screen
+ * belongs here: it changes something every account shares, or it is an account itself. Anything
+ * one account does for itself — a Copilot, a workspace, a preference — belongs in the app, not
+ * behind an administrator's login.
  */
-type SectionId = "users";
-
 interface Section {
-  id: SectionId;
+  id: AdminSection;
   icon: IconName;
 }
 
-const SECTIONS: Section[] = [{ id: "users", icon: "user" }];
+const SECTIONS: Section[] = [
+  { id: "users", icon: "user" },
+  { id: "providers", icon: "sliders" },
+  { id: "documents", icon: "file" },
+];
 
-const section = ref<SectionId>("users");
+/**
+ * Read from `uiState` rather than held here, because one entry point outside the console opens
+ * it on a particular section — the composer's "manage models…" means providers, and landing on
+ * the accounts list would answer a different question.
+ */
+const section = computed({
+  get: () => uiState.adminSection,
+  set: (next) => {
+    uiState.adminSection = next;
+  },
+});
+
+/**
+ * The one line under the title, per section.
+ *
+ * A `switch` with a literal key per case rather than `t(\`admin.subtitle.${section}\`)`, for the
+ * reason `widgets/registry.ts` resolves names the same way: the second spelling needs
+ * `admin.subtitle.` in `catalog.test.ts`'s allowlist, and a prefix is exactly where a typo
+ * hides. Written out, a new section is a missing return rather than a blank line.
+ *
+ * (The *menu* labels do use the dynamic form, because `admin.nav.` is already allowed over the
+ * same closed union and the values are one word each.)
+ */
+const sectionSubtitle = computed(() => {
+  switch (section.value) {
+    case "users":
+      return t("admin.subtitle.users");
+    case "providers":
+      return t("admin.subtitle.providers");
+    case "documents":
+      return t("admin.subtitle.documents");
+  }
+});
 
 const users = ref<AdminUser[]>([]);
 const loading = ref(true);
@@ -337,17 +378,36 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
     </aside>
 
     <main class="console-main">
+      <!--
+        One header for the shell, with the section's own action on the right. The accounts
+        section is the only one with a primary action, so the button is conditional rather than
+        the header being per-section: a title that has to be repeated three times is a title
+        that drifts.
+      -->
       <header class="console-head">
         <div>
-          <h2 class="console-title">{{ t("admin.nav.users") }}</h2>
-          <p class="console-sub">{{ t("admin.subtitle") }}</p>
+          <h2 class="console-title">{{ t(`admin.nav.${section}`) }}</h2>
+          <p class="console-sub">{{ sectionSubtitle }}</p>
         </div>
-        <button class="btn primary" data-testid="admin-new-user" @click="openCreate">
+        <button
+          v-if="section === 'users'"
+          class="btn primary"
+          data-testid="admin-new-user"
+          @click="openCreate"
+        >
           <Icon name="plus" /> {{ t("admin.create") }}
         </button>
       </header>
 
-      <div class="console-body">
+      <div v-if="section === 'providers'" class="console-body" data-testid="admin-providers">
+        <ProvidersSection />
+      </div>
+
+      <div v-else-if="section === 'documents'" class="console-body" data-testid="admin-documents">
+        <DocumentsSection />
+      </div>
+
+      <div v-else class="console-body">
         <!--
           The one-time password. It is shown here, above the list, rather than inside the dialog
           that produced it: the dialog closes and this has to survive it, because the copy button

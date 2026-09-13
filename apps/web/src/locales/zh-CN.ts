@@ -117,10 +117,21 @@ export default {
   /** The platform console: the installation's own management screens. */
   admin: {
     title: "平台管理",
-    subtitle: "管理这个实例上的账号。",
+    /**
+     * The line under each section's title. Keyed by section rather than one sentence for the
+     * console, because the three sections answer three different questions and a shared line
+     * would have to be vague enough to fit all of them.
+     */
+    subtitle: {
+      users: "管理这个实例上的账号。",
+      providers: "配置所有账号共用的模型服务；普通用户只能在已配置的模型中选择使用。",
+      documents: "配置所有账号共用的文档解析方式。",
+    },
     /** The left menu. One entry per section; the key is the section id. */
     nav: {
       users: "用户管理",
+      providers: "模型服务",
+      documents: "文档解析",
     },
     create: "新建用户",
     roles: "角色",
@@ -576,11 +587,13 @@ export default {
 
   settings: {
     title: "设置",
-    tabs: {
-      providers: "Providers / 模型",
-      documents: "文档解析",
-      copilot: "默认与工具",
-    },
+    /**
+     * Where the installation's own settings went, shown only to an account that can reach them.
+     * Nothing was removed — providers and models, parsers and the app defaults are the platform
+     * console's screens now, because they are shared by every account and only an administrator
+     * may write them.
+     */
+    installationMoved: "模型服务与文档解析由平台管理统一配置。",
     providers: {
       countConfigured: "已配置 {count} 个 Provider",
       add: "新建 Provider",
@@ -644,6 +657,7 @@ export default {
       summaryNoTools: "不使用工具",
     },
     defaults: {
+      appSection: "默认模型",
       provider: "默认 Provider",
       providerHint: "新建会话未指定 Provider 时使用。当前：{name}",
       model: "默认模型",

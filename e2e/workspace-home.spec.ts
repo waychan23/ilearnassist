@@ -53,15 +53,15 @@ test("the app opens on the workspace list, not in a conversation", async ({ page
 });
 
 test("global settings is reachable before any workspace is entered", async ({ page }) => {
-  // The front door would otherwise be a dead end for someone who has not configured a
-  // provider yet — and the banner telling them so lives in the chat pane, which is exactly
-  // where they cannot get to without a working model.
+  // The front door would otherwise be a dead end for someone who wants to manage the Copilots
+  // they made — and the controls for that live in Settings, which is otherwise reached from the
+  // sidebar inside a workspace they may not have entered yet.
   await page.goto("/");
 
   await page.getByTestId("open-settings").click();
 
   await expect(page.locator("body > .modal-overlay")).toBeVisible();
-  await expect(page.getByTestId("tab-documents")).toBeVisible();
+  await expect(page.getByTestId("new-copilot")).toBeVisible();
 });
 
 test("clicking a card enters that workspace, on its welcome screen", async ({ page }) => {

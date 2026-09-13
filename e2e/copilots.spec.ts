@@ -25,7 +25,6 @@ async function createCopilot(
   { publish = false } = {}
 ): Promise<void> {
   await page.getByTestId("open-settings").click();
-  await page.getByTestId("tab-copilots").click();
   await page.getByTestId("new-copilot").click();
 
   await page.getByPlaceholder("例如：代码助手").fill(name);
@@ -63,7 +62,6 @@ test("a published Copilot is usable by another account, and not editable by it",
   await signIn(page, "learner", password);
 
   await page.getByTestId("open-settings").click();
-  await page.getByTestId("tab-copilots").click();
 
   const published = page.getByTestId(`copilot-row-${NAME}`);
   await expect(published).toBeVisible();
@@ -95,7 +93,6 @@ test("a Copilot can be locked down to no tools, and it survives the round trip",
 
   await page.goto("/");
   await page.getByTestId("open-settings").click();
-  await page.getByTestId("tab-copilots").click();
   await page.getByTestId("new-copilot").click();
   await page.getByPlaceholder("例如：代码助手").fill(NAME);
 
@@ -157,7 +154,6 @@ test("a conversation keeps the prompt it was started with when the Copilot chang
   // Now change the Copilot it came from. Scoped to its own row, because the specs in this file
   // share one server and the earlier one left Copilots behind.
   await page.getByTestId("open-settings").click();
-  await page.getByTestId("tab-copilots").click();
   await page.getByTestId(`copilot-row-${NAME}`).getByTestId("edit-copilot").click();
   await page.getByPlaceholder("定义这个 Copilot 的角色、能力与行为约束…").fill(AFTER);
   await page.getByTestId("save-copilot").click();

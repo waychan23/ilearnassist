@@ -35,6 +35,17 @@ import { isCompact } from "./breakpoints";
  */
 export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
 
+/**
+ * Which screen the platform console is showing.
+ *
+ * Held here rather than in `AdminConsole.vue` because a control *outside* the console opens it
+ * on a particular section: the composer's model picker offers "manage models…" to an
+ * administrator, and landing them on the accounts list would make them find it themselves.
+ * A section id is also what the console's left menu is built from, so the flag and the menu
+ * cannot disagree about what exists.
+ */
+export type AdminSection = "users" | "providers" | "documents";
+
 export const uiState = reactive({
   settingsOpen: false,
   /**
@@ -83,6 +94,11 @@ export const uiState = reactive({
    * defaults to open because the sidebar is how you reach a conversation at all.
    */
   sidebarCollapsed: false,
+  /**
+   * The console's current section. Reset on every entry, so the menu cannot open on a screen
+   * somebody chose last week and has no memory of.
+   */
+  adminSection: "users" as AdminSection,
   view: "login" as View,
   /**
    * Whether `/api/auth/me` has answered yet.
@@ -241,12 +257,17 @@ export function showAccount(): void {
 }
 
 /**
- * The platform console: the accounts on this installation.
+ * The platform console: everything that belongs to the installation rather than to one account.
  *
- * Reachable only by a superadmin, and the server is what enforces that — the control is hidden
- * for everybody else, but a hidden button is not a permission.
+ * Reachable only by an administrator of either tier, and the server is what enforces that — the
+ * control is hidden for everybody else, but a hidden button is not a permission.
+ *
+ * Takes the section because one caller knows which one it means: "manage models…" in the
+ * composer is a request about providers, and opening on the accounts list would answer a
+ * different question. Every other caller omits it and gets the first section.
  */
-export function showAdmin(): void {
+export function showAdmin(section: AdminSection = "users"): void {
+  uiState.adminSection = section;
   uiState.view = "admin";
   closeDrawer();
   closeWidgetDrawer();

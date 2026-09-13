@@ -146,11 +146,21 @@ function save() {
           <div class="form-grid">
             <div class="field">
               <label>{{ t("common.name") }}</label>
-              <input v-model="draft.name" class="input" :placeholder="t('providers.namePlaceholder')" />
+              <input
+                v-model="draft.name"
+                class="input"
+                data-testid="provider-name"
+                :placeholder="t('providers.namePlaceholder')"
+              />
             </div>
             <div class="field">
               <label>Base URL</label>
-              <input v-model="draft.baseURL" class="input" placeholder="https://api.deepseek.com/v1" />
+              <input
+                v-model="draft.baseURL"
+                class="input"
+                data-testid="provider-base-url"
+                placeholder="https://api.deepseek.com/v1"
+              />
             </div>
           </div>
 
@@ -183,7 +193,7 @@ function save() {
             <div class="model-main">
               <div class="field">
                 <label>{{ t("providers.modelId") }}</label>
-                <input v-model="m.modelId" class="input" placeholder="gpt-4o-mini" />
+                <input v-model="m.modelId" class="input" data-testid="model-id" placeholder="gpt-4o-mini" />
               </div>
               <div class="field">
                 <label>{{ t("providers.displayName") }}</label>
@@ -224,7 +234,14 @@ function save() {
         </div>
         <div class="modal-foot">
           <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
-          <button class="btn primary" :disabled="!canSave" @click="save">{{ t("common.save") }}</button>
+          <button
+            class="btn primary"
+            data-testid="provider-save"
+            :disabled="!canSave"
+            @click="save"
+          >
+            {{ t("common.save") }}
+          </button>
         </div>
       </div>
     </div>

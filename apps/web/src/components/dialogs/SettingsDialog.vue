@@ -3,194 +3,45 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import { confirm } from "../../composables/confirm";
-import type {
-  Copilot,
-  DocumentParserConfig,
-  DocumentParsePolicy,
-  ProviderConfig,
-} from "../../api/types";
-import type { CopilotDraft, DocumentParserDraft, ProviderDraft } from "../../stores/app";
-import ProviderDialog from "./ProviderDialog.vue";
+import { showAdmin } from "../../composables/ui";
+import type { Copilot } from "../../api/types";
+import type { CopilotDraft } from "../../stores/app";
 import CopilotDialog from "./CopilotDialog.vue";
-import DocumentParserDialog from "./DocumentParserDialog.vue";
 import Icon from "../Icon.vue";
+
+/**
+ * The account's own settings: the Copilots it has made.
+ *
+ * **Deliberately not the installation's settings**, and this is the permission model showing
+ * through rather than a tidying-up. Providers and models, document parsers and the app defaults
+ * used to be tabs here, and they were wrong twice over: an ordinary account cannot write any of
+ * them, so the tabs were a screen of controls that answered 403 — and a provider's `baseURL` is
+ * where every conversation's prompts go, so the account that *could* write them was deciding for
+ * everybody. They live in the platform console now, which is reached only by an administrator.
+ *
+ * What is left is what genuinely belongs to one account: the Copilots it owns, which it may
+ * also publish for others to copy. Theme and language are not here either — they are in the
+ * topbar, because a preference about the app should not be behind an icon labelled "settings".
+ */
 
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const store = useAppStore();
 
-const tab = ref<"providers" | "copilots" | "documents" | "defaults">("providers");
-const showEditor = ref(false);
-const editing = ref<ProviderConfig | null>(null);
-
-const providers = computed(() => store.config?.providers ?? []);
-const defaultProvider = computed(() => store.config?.defaultProvider ?? "");
-const defaultModel = computed(() => store.config?.defaultModel ?? "");
-
-/** Models available under the currently-chosen default provider. */
-const defaultModelOptions = computed(
-  () => providers.value.find((p) => p.id === defaultProvider.value)?.models ?? []
-);
-
-const defaultProviderName = computed(
-  () => providers.value.find((p) => p.id === defaultProvider.value)?.name ?? defaultProvider.value
-);
-
-function openNew() {
-  editing.value = null;
-  showEditor.value = true;
-}
-
-function openEdit(p: ProviderConfig) {
-  editing.value = p;
-  showEditor.value = true;
-}
-
-async function onSave(draft: ProviderDraft) {
-  try {
-    await store.saveProvider(draft);
-    showEditor.value = false;
-  } catch (e) {
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
-}
-
-async function onDelete(p: ProviderConfig) {
-  const ok = await confirm({
-    title: t("settings.deleteProvider.title"),
-    message: t("settings.deleteProvider.message", { name: p.name }),
-    detail: t("settings.deleteProvider.detail", { count: p.models.length }, p.models.length),
-    confirmText: t("common.delete"),
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    await store.deleteProvider(p.id);
-  } catch (e) {
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
-}
-
-async function onDeleteModel(provider: ProviderConfig, modelId: string, name: string) {
-  const ok = await confirm({
-    title: t("settings.deleteModel.title"),
-    message: t("settings.deleteModel.message", { provider: provider.name, model: name }),
-    detail: t("settings.deleteModel.detail"),
-    confirmText: t("common.delete"),
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    await store.deleteModel(provider.id, modelId);
-  } catch (e) {
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
-}
-
-/* ----------------------------- document parsers ----------------------------- */
-
-/** The order the policy picker offers; labels and hints come from the catalog by id. */
-const POLICY_IDS: DocumentParsePolicy[] = ["local-only", "local-first", "cloud-first", "cloud-only"];
-const policyLabel = (id: DocumentParsePolicy): string => t("settings.policy." + id + ".label");
-
-const showParserEditor = ref(false);
-const editingParser = ref<DocumentParserConfig | null>(null);
-const testingId = ref<string | null>(null);
-const testResult = ref<Record<string, { ok: boolean; message: string }>>({});
-
-const documentParsers = computed(() => store.config?.documentParsers ?? []);
-const documentParsing = computed(() => store.config?.documentParsing);
-
-// The form is built from the kinds the server implements, so a new driver needs no UI change.
-void store.loadParserKinds().catch(() => undefined);
-
-const policyHint = computed(() => {
-  const policy = documentParsing.value?.policy;
-  return policy ? t("settings.policy." + policy + ".hint") : "";
-});
-
-function openNewParser() {
-  editingParser.value = null;
-  showParserEditor.value = true;
-}
-
-function openEditParser(p: DocumentParserConfig) {
-  editingParser.value = p;
-  showParserEditor.value = true;
-}
-
-async function onSaveParser(draft: DocumentParserDraft) {
-  try {
-    await store.saveDocumentParser(draft);
-    showParserEditor.value = false;
-  } catch (e) {
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
-}
-
-async function onDeleteParser(p: DocumentParserConfig) {
-  const ok = await confirm({
-    title: t("settings.deleteParser.title"),
-    message: t("settings.deleteParser.message", { name: p.name }),
-    detail: t("settings.deleteParser.detail"),
-    confirmText: t("common.delete"),
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    await store.deleteDocumentParser(p.id);
-  } catch (e) {
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
-}
-
-/** Round-trip a throwaway document through the service and report what came back. */
-async function onTestParser(p: DocumentParserConfig) {
-  testingId.value = p.id;
-  testResult.value = { ...testResult.value, [p.id]: { ok: true, message: t("settings.documents.testing") } };
-  try {
-    await store.testDocumentParser(p.id);
-    testResult.value = { ...testResult.value, [p.id]: { ok: true, message: t("settings.documents.testOk") } };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    testResult.value = { ...testResult.value, [p.id]: { ok: false, message } };
-  } finally {
-    testingId.value = null;
-  }
-}
-
-async function onPolicyChange(policy: DocumentParsePolicy) {
-  try {
-    await store.setDocumentParsing({ policy });
-  } catch (e) {
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
-}
-
-async function onToggle(key: "localEnabled" | "fallbackEnabled", value: boolean) {
-  try {
-    await store.setDocumentParsing({ [key]: value });
-  } catch (e) {
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
-}
-
-/* --------------------------------- Copilots --------------------------------- */
-
 const showCopilotEditor = ref(false);
 const editingCopilot = ref<Copilot | null>(null);
 
-function openNewCopilot() {
+function openNewCopilot(): void {
   editingCopilot.value = null;
   showCopilotEditor.value = true;
 }
 
-function openEditCopilot(c: Copilot) {
+function openEditCopilot(c: Copilot): void {
   editingCopilot.value = c;
   showCopilotEditor.value = true;
 }
 
-async function onSaveCopilot(draft: CopilotDraft) {
+async function onSaveCopilot(draft: CopilotDraft): Promise<void> {
   try {
     await store.saveCopilot(draft);
     showCopilotEditor.value = false;
@@ -199,7 +50,7 @@ async function onSaveCopilot(draft: CopilotDraft) {
   }
 }
 
-async function onDeleteCopilot(c: Copilot) {
+async function onDeleteCopilot(c: Copilot): Promise<void> {
   const ok = await confirm({
     title: t("settings.deleteCopilot.title"),
     message: t("settings.deleteCopilot.message", { name: c.name }),
@@ -230,7 +81,7 @@ const copilotGroups = computed(() =>
   ].filter((g) => g.items.length > 0)
 );
 
-async function onCopyCopilot(c: Copilot) {
+async function onCopyCopilot(c: Copilot): Promise<void> {
   try {
     await store.copyCopilotToMine(c.id);
   } catch (e) {
@@ -239,7 +90,7 @@ async function onCopyCopilot(c: Copilot) {
 }
 
 /** One-line digest of what a Copilot changes, shown under its name. */
-function copilotSummary(c: Copilot) {
+function copilotSummary(c: Copilot): string {
   const bits: string[] = [];
   if (c.settings.modelId) bits.push(c.settings.modelId);
   if (c.settings.temperature != null) bits.push(`temperature ${c.settings.temperature}`);
@@ -255,8 +106,8 @@ function copilotSummary(c: Copilot) {
       )
     );
   }
-  // Three states, and the empty list is now the narrowest rather than the widest — reporting
-  // it as "all tools" would describe exactly the Copilot it is not.
+  // Three states, and the empty list is now the narrowest rather than the widest — reporting it
+  // as "all tools" would describe exactly the Copilot it is not.
   bits.push(
     c.allTools
       ? t("settings.copilot.summaryAllTools")
@@ -266,26 +117,15 @@ function copilotSummary(c: Copilot) {
   );
   return bits.join(" · ");
 }
-
-function onDefaultProviderChange(e: Event) {
-  const providerId = (e.target as HTMLSelectElement).value;
-  const first = providers.value.find((p) => p.id === providerId)?.models[0]?.modelId;
-  void store.setDefaults({ providerId, ...(first ? { modelId: first } : {}) });
-}
-
-function onDefaultModelChange(e: Event) {
-  void store.setDefaults({ modelId: (e.target as HTMLSelectElement).value });
-}
 </script>
 
 <template>
   <!--
-    Teleported to `body`, and this is load-bearing rather than tidiness. On a compact
-    viewport the sidebar is `position: fixed` inside a `transform`, and a fixed-position
-    element whose ancestor is transformed is positioned against *that ancestor* — so a
-    `.modal-overlay` left in place here would be laid out inside the off-canvas drawer and
-    render off-screen. The palette still applies: the theme lives on `<html>` and custom
-    properties cascade from there.
+    Teleported to `body`, and this is load-bearing rather than tidiness. On a compact viewport
+    the sidebar is `position: fixed` inside a `transform`, and a fixed-position element whose
+    ancestor is transformed is positioned against *that ancestor* — so a `.modal-overlay` left in
+    place here would be laid out inside the off-canvas drawer and render off-screen. The palette
+    still applies: the theme lives on `<html>` and custom properties cascade from there.
   -->
   <Teleport to="body">
     <div class="modal-overlay" @click.self="emit('close')">
@@ -303,322 +143,103 @@ function onDefaultModelChange(e: Event) {
           </button>
         </div>
 
-        <div class="tabs">
-          <button class="tab" :class="{ active: tab === 'providers' }" @click="tab = 'providers'">
-            {{ t("settings.tabs.providers") }}
-          </button>
-          <button
-            class="tab"
-            :class="{ active: tab === 'copilots' }"
-            data-testid="tab-copilots"
-            @click="tab = 'copilots'"
-          >
-            Copilots
-            <!-- The account's own, matching the count inside the tab: another account's
-                 published Copilots are not "configured" here and would inflate it. -->
-            <span v-if="store.myCopilots.length" class="tab-count">{{ store.myCopilots.length }}</span>
-          </button>
-          <button
-            class="tab"
-            :class="{ active: tab === 'documents' }"
-            data-testid="tab-documents"
-            @click="tab = 'documents'"
-          >
-            {{ t("settings.tabs.documents") }}
-            <span v-if="documentParsers.length" class="tab-count">{{ documentParsers.length }}</span>
-          </button>
-          <button class="tab" :class="{ active: tab === 'defaults' }" @click="tab = 'defaults'">
-            {{ t("settings.tabs.copilot") }}
-          </button>
-        </div>
-
         <div class="modal-body">
-          <template v-if="tab === 'providers'">
-            <div class="config-tip">
-              {{ t("settings.providers.noteBefore") }}<strong>{{ t("settings.providers.noteLive") }}</strong
-              >{{ t("settings.providers.noteBetween") }}<code>{{
-                t("settings.providers.noteConfigFile")
-              }}</code
-              >{{ t("settings.providers.noteAfter") }}
-            </div>
+          <div class="config-tip">
+            {{ t("settings.copilot.introBefore") }}<strong>{{ t("settings.copilot.introCopied") }}</strong
+            >{{ t("settings.copilot.introAfter") }}
+          </div>
 
-            <div class="list-head">
-              <span>{{
-              t(
-                "settings.providers.countConfigured",
-                { count: providers.length },
-                providers.length
-              )
+          <div class="list-head">
+            <span>{{
+              t("settings.copilot.countConfigured", { count: store.myCopilots.length }, store.myCopilots.length)
             }}</span>
-              <button class="btn small" @click="openNew">
-                <Icon name="plus" /> {{ t("settings.providers.add") }}
-              </button>
-            </div>
+            <button class="btn small" data-testid="new-copilot" @click="openNewCopilot">
+              <Icon name="plus" /> {{ t("settings.copilot.add") }}
+            </button>
+          </div>
 
-            <div v-for="p in providers" :key="p.id" class="list-row provider-row">
-              <div class="info">
-                <div class="name">
-                  {{ p.name }}
-                  <span v-if="p.id === defaultProvider" class="badge">{{ t("settings.providers.default") }}</span>
-                  <span class="key-state" :class="p.hasApiKey ? 'ok' : 'missing'">
-                    <Icon :name="p.hasApiKey ? 'check' : 'cross'" />
-                    {{ p.hasApiKey ? t("settings.providers.keySet") : t("settings.providers.keyMissing") }}
-                  </span>
-                </div>
-                <div class="mono url">{{ p.baseURL }}</div>
-                <div class="models">
-                  <span v-for="m in p.models" :key="m.id" class="model-chip">
-                    {{ m.name }}
-                    <span v-if="m.capabilities.includes('vision')" :title="t('settings.providers.visionHint')"><Icon name="image" /></span>
-                    <span v-if="m.capabilities.includes('reasoning')" :title="t('settings.providers.reasoningHint')"><Icon name="bulb" /></span>
-                    <button
-                      class="chip-x"
-                      :title="t('settings.providers.deleteModel')"
-                      :aria-label="t('settings.providers.deleteModel')"
-                      @click.stop="onDeleteModel(p, m.id, m.name)"
-                    >
-                      <Icon name="close" />
-                    </button>
-                  </span>
-                  <span v-if="p.models.length === 0" class="no-models">{{ t("settings.providers.noModels") }}</span>
-                </div>
-              </div>
-              <div class="row-actions">
-                <button class="btn small" @click="openEdit(p)">{{ t("common.edit") }}</button>
-                <button class="icon-btn danger" :title="t('common.delete')" @click="onDelete(p)"><Icon name="trash" /></button>
-              </div>
-            </div>
-
-            <div v-if="providers.length === 0" class="empty">
-              {{ t("settings.providers.empty") }}
-            </div>
-          </template>
-
-          <template v-else-if="tab === 'documents'">
-            <div class="config-tip">
-              {{ t("settings.documents.introBefore") }}<strong>{{
-                t("settings.documents.introBuiltin")
-              }}</strong>{{ t("settings.documents.introAfter") }}
-            </div>
-
-            <div class="field">
-              <label>{{ t("settings.documents.policy") }}</label>
-              <select
-                class="select"
-                :value="documentParsing?.policy"
-                data-testid="parse-policy"
-                @change="onPolicyChange(($event.target as HTMLSelectElement).value as DocumentParsePolicy)"
-              >
-                <option v-for="id in POLICY_IDS" :key="id" :value="id">{{ policyLabel(id) }}</option>
-              </select>
-              <div class="hint">{{ policyHint }}</div>
-            </div>
-
-            <div class="field">
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  :checked="documentParsing?.localEnabled"
-                  data-testid="parse-local-enabled"
-                  @change="onToggle('localEnabled', ($event.target as HTMLInputElement).checked)"
-                />
-                {{ t("settings.documents.localEnabled") }}
-              </label>
-              <div class="hint">
-                {{ t("settings.documents.localHint") }}
-              </div>
-            </div>
-
-            <div class="field">
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  :checked="documentParsing?.fallbackEnabled"
-                  data-testid="parse-fallback"
-                  @change="onToggle('fallbackEnabled', ($event.target as HTMLInputElement).checked)"
-                />
-                {{ t("settings.documents.fallback") }}
-              </label>
-              <div class="hint">
-                {{ t("settings.documents.fallbackHint") }}
-              </div>
-            </div>
-
-            <div class="models-head">
-              <label>{{ t("settings.documents.cloudParsers") }}</label>
-              <button class="btn small" @click="openNewParser" data-testid="add-parser">
-                <Icon name="plus" /> {{ t("settings.documents.addParser") }}
-              </button>
-            </div>
-
-            <div v-if="documentParsers.length === 0" class="empty-note">
-              {{ t("settings.documents.noParsers") }}
+          <template v-for="group in copilotGroups" :key="group.key">
+            <div class="group-label">
+              {{
+                group.key === "public"
+                  ? t("settings.copilot.groupPublic")
+                  : t("settings.copilot.groupMine")
+              }}
             </div>
 
             <div
-              v-for="p in documentParsers"
-              :key="p.id"
-              class="list-row parser-row"
-              data-testid="parser-row"
+              v-for="c in group.items"
+              :key="c.id"
+              class="list-row copilot-row"
+              :data-testid="`copilot-row-${c.name}`"
             >
-              <div class="parser-main">
-                <div class="parser-name">
-                  {{ p.name }}
-                  <span class="badge" :class="{ muted: !p.enabled }">
-                    {{ p.enabled ? t("settings.documents.enabled") : t("settings.documents.disabled") }}
+              <div class="info">
+                <div class="name">
+                  <span class="status-dot"></span>
+                  {{ c.name }}
+                  <span v-if="c.ownerName && group.key === 'public'" class="badge muted">
+                    {{ t("settings.copilot.byAuthor", { name: c.ownerName }) }}
                   </span>
-                  <span class="badge muted">{{ p.kind }}</span>
-                  <span v-if="p.hasApiKey" class="badge">{{ t("settings.documents.keySet") }}</span>
+                  <span v-if="c.visibility === 'public'" class="badge">
+                    {{ t("settings.copilot.published") }}
+                  </span>
+                  <span v-if="c.id === store.activeCopilotId" class="badge">
+                    {{ t("settings.copilot.inUse") }}
+                  </span>
                 </div>
-                <div class="parser-url mono">{{ p.baseURL }}</div>
-                <div
-                  v-if="testResult[p.id]"
-                  class="hint"
-                  :class="{ warn: !testResult[p.id]!.ok }"
-                  data-testid="parser-test-result"
-                >
-                  {{ testResult[p.id]!.message }}
-                </div>
-              </div>
-              <button
-                class="btn small"
-                :disabled="testingId === p.id"
-                @click="onTestParser(p)"
-              >
-                {{ testingId === p.id ? t("settings.documents.testing") : t("settings.documents.test") }}
-              </button>
-              <button class="btn small" @click="openEditParser(p)">{{ t("common.edit") }}</button>
-              <button class="icon-btn danger" :title="t('common.delete')" @click="onDeleteParser(p)"><Icon name="trash" /></button>
-            </div>
-          </template>
+                <div v-if="c.description" class="desc">{{ c.description }}</div>
+                <div class="meta">{{ copilotSummary(c) }}</div>
 
-          <template v-else-if="tab === 'copilots'">
-            <div class="config-tip">
-              {{ t("settings.copilot.introBefore") }}<strong>{{ t("settings.copilot.introCopied") }}</strong
-              >{{ t("settings.copilot.introAfter") }}
-            </div>
-
-            <div class="list-head">
-              <span>{{
-              t(
-                "settings.copilot.countConfigured",
-                { count: store.myCopilots.length },
-                store.myCopilots.length
-              )
-            }}</span>
-              <button class="btn small" data-testid="new-copilot" @click="openNewCopilot">
-                <Icon name="plus" /> {{ t("settings.copilot.add") }}
-              </button>
-            </div>
-
-            <template v-for="group in copilotGroups" :key="group.key">
-              <div class="group-label">
-                {{
-                  group.key === "public"
-                    ? t("settings.copilot.groupPublic")
-                    : t("settings.copilot.groupMine")
-                }}
+                <!-- Someone else's wording has to be readable before it is chosen, so the
+                     prompt is disclosed here rather than only inside an editor that refuses
+                     to open for it. -->
+                <details v-if="group.key === 'public'" class="prompt-preview">
+                  <summary>{{ t("settings.copilot.viewPrompt") }}</summary>
+                  <pre v-if="c.systemPrompt">{{ c.systemPrompt }}</pre>
+                  <div v-else class="hint">{{ t("settings.copilot.promptNone") }}</div>
+                </details>
               </div>
 
-              <div
-                v-for="c in group.items"
-                :key="c.id"
-                class="list-row copilot-row"
-                :data-testid="`copilot-row-${c.name}`"
-              >
-                <div class="info">
-                  <div class="name">
-                    <span class="status-dot"></span>
-                    {{ c.name }}
-                    <span v-if="c.ownerName && group.key === 'public'" class="badge muted">
-                      {{ t("settings.copilot.byAuthor", { name: c.ownerName }) }}
-                    </span>
-                    <span v-if="c.visibility === 'public'" class="badge">
-                      {{ t("settings.copilot.published") }}
-                    </span>
-                    <span v-if="c.id === store.activeCopilotId" class="badge">
-                      {{ t("settings.copilot.inUse") }}
-                    </span>
-                  </div>
-                  <div v-if="c.description" class="desc">{{ c.description }}</div>
-                  <div class="meta">{{ copilotSummary(c) }}</div>
-
-                  <!-- Someone else's wording has to be readable before it is chosen, so the
-                       prompt is disclosed here rather than only inside an editor that refuses
-                       to open for it. -->
-                  <details v-if="group.key === 'public'" class="prompt-preview">
-                    <summary>{{ t("settings.copilot.viewPrompt") }}</summary>
-                    <pre v-if="c.systemPrompt">{{ c.systemPrompt }}</pre>
-                    <div v-else class="hint">{{ t("settings.copilot.promptNone") }}</div>
-                  </details>
-                </div>
-
-                <div class="row-actions">
-                  <template v-if="group.key === 'mine'">
-                    <button class="btn small" data-testid="edit-copilot" @click="openEditCopilot(c)">
-                      {{ t("common.edit") }}
-                    </button>
-                    <button
-                      class="icon-btn danger"
-                      :title="t('common.delete')"
-                      @click="onDeleteCopilot(c)"
-                    >
-                      <Icon name="trash" />
-                    </button>
-                  </template>
-                  <button
-                    v-else
-                    class="btn small"
-                    :data-testid="`copy-copilot-${c.name}`"
-                    @click="onCopyCopilot(c)"
-                  >
-                    <Icon name="copy" /> {{ t("settings.copilot.copyToMine") }}
+              <div class="row-actions">
+                <template v-if="group.key === 'mine'">
+                  <button class="btn small" data-testid="edit-copilot" @click="openEditCopilot(c)">
+                    {{ t("common.edit") }}
                   </button>
-                </div>
-              </div>
-            </template>
-
-            <div v-if="store.copilots.length === 0" class="empty">
-              {{ t("settings.copilot.empty") }}
-            </div>
-          </template>
-
-          <template v-else>
-            <div class="field">
-              <label>{{ t("settings.defaults.provider") }}</label>
-              <select class="select" :value="defaultProvider" @change="onDefaultProviderChange">
-                <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
-              </select>
-              <div class="hint">{{ t("settings.defaults.providerHint", { name: defaultProviderName }) }}</div>
-            </div>
-
-            <div class="field">
-              <label>{{ t("settings.defaults.model") }}</label>
-              <select class="select" :value="defaultModel" @change="onDefaultModelChange">
-                <option v-for="m in defaultModelOptions" :key="m.id" :value="m.modelId">
-                  {{ m.name }}
-                </option>
-              </select>
-              <div class="hint">{{
-                t("settings.defaults.modelHint", {
-                  name: defaultModel || t("settings.defaults.modelUnset"),
-                })
-              }}</div>
-            </div>
-
-            <div class="field">
-              <label>{{ t("settings.defaults.workspaceRoot") }}</label>
-              <div class="value mono">{{ store.config?.workspacesRootDir }}</div>
-            </div>
-
-            <div class="field">
-              <label>{{ t("settings.defaults.webSearch") }}</label>
-              <div class="value">
-                {{ store.config?.webSearchProvider }}
-                <span class="hint inline">{{ t("settings.defaults.webSearchHint") }}</span>
+                  <button
+                    class="icon-btn danger"
+                    :title="t('common.delete')"
+                    @click="onDeleteCopilot(c)"
+                  >
+                    <Icon name="trash" />
+                  </button>
+                </template>
+                <button
+                  v-else
+                  class="btn small"
+                  :data-testid="`copy-copilot-${c.name}`"
+                  @click="onCopyCopilot(c)"
+                >
+                  <Icon name="copy" /> {{ t("settings.copilot.copyToMine") }}
+                </button>
               </div>
             </div>
           </template>
+
+          <div v-if="store.copilots.length === 0" class="empty">
+            {{ t("settings.copilot.empty") }}
+          </div>
+
+          <!--
+            Where the installation's settings went, said out loud — and only to an account that
+            can reach them. An ordinary user does not need to be told about a screen they cannot
+            open; an administrator who came here looking for the provider list does.
+          -->
+          <p v-if="store.canAdmin" class="console-pointer" data-testid="settings-console-pointer">
+            {{ t("settings.installationMoved") }}
+            <button class="btn small" data-testid="settings-open-console" @click="showAdmin('providers')">
+              {{ t("admin.title") }}
+            </button>
+          </p>
         </div>
 
         <div class="modal-foot">
@@ -626,35 +247,17 @@ function onDefaultModelChange(e: Event) {
         </div>
       </div>
 
-      <ProviderDialog
-        v-if="showEditor"
-        :provider="editing"
-        @close="showEditor = false"
-        @save="onSave"
-      />
       <CopilotDialog
         v-if="showCopilotEditor"
         :copilot="editingCopilot"
         @close="showCopilotEditor = false"
         @save="onSaveCopilot"
       />
-      <DocumentParserDialog
-        v-if="showParserEditor"
-        :parser="editingParser"
-        :kinds="store.parserKinds"
-        @close="showParserEditor = false"
-        @save="onSaveParser"
-      />
     </div>
-
   </Teleport>
 </template>
 
 <style scoped>
-.mono {
-  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: var(--fs-2);
-}
 .list-head {
   display: flex;
   align-items: center;
@@ -662,98 +265,6 @@ function onDefaultModelChange(e: Event) {
   color: var(--text-2);
   font-size: var(--fs-3);
   margin-bottom: var(--space-5);
-}
-.empty-note {
-  color: var(--text-3);
-  font-size: var(--fs-2);
-  padding: var(--space-5) var(--space-6);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  margin-bottom: var(--space-5);
-}
-/* `.list-row` carries the box; this row's contents sit closer together than a provider's. */
-.parser-row {
-  gap: var(--space-4);
-}
-.parser-main {
-  flex: 1;
-  min-width: 0;
-}
-.parser-name {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-weight: 500;
-  flex-wrap: wrap;
-}
-.parser-url {
-  color: var(--text-3);
-  margin-top: var(--space-2);
-  font-size: var(--fs-2);
-  word-break: break-all;
-}
-.parser-row .hint.warn {
-  color: var(--warning);
-}
-.provider-row .info {
-  flex: 1;
-  min-width: 0;
-}
-.provider-row .name {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-weight: 500;
-}
-.key-state {
-  font-size: var(--fs-2);
-  font-weight: 400;
-}
-.key-state.ok {
-  color: var(--success);
-}
-.key-state.missing {
-  /* `--danger-text`, not `--danger`: this is text, and the palette keeps a separate tone
-     for it in each theme. */
-  color: var(--danger-text);
-}
-.provider-row .url {
-  color: var(--text-3);
-  margin-top: var(--space-2);
-}
-.provider-row .models {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-}
-.model-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-1) var(--space-3) var(--space-1) 9px;
-  font-size: var(--fs-2);
-  color: var(--text-2);
-}
-.chip-x {
-  background: transparent;
-  border: none;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: var(--fs-3);
-  line-height: 1;
-  padding: 0 var(--space-1);
-  font-family: inherit;
-}
-.chip-x:hover {
-  color: var(--danger);
-}
-.no-models {
-  color: var(--text-3);
-  font-size: var(--fs-2);
 }
 /* A single-line row, so its contents centre rather than aligning to the top. */
 .copilot-row {
@@ -809,13 +320,18 @@ function onDefaultModelChange(e: Event) {
   font-size: var(--fs-3);
   padding: var(--space-6) 0;
 }
-.value {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-4) var(--space-5);
+.console-pointer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin: var(--space-8) 0 0;
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--fs-2);
 }
-.hint.inline {
-  margin-left: var(--space-3);
+.console-pointer button {
+  flex-shrink: 0;
 }
 </style>

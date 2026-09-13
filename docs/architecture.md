@@ -673,14 +673,21 @@ slow hash to protect, and the lookup is on the request path.
 Passwords are `scrypt` from Node's own `crypto` with the parameters stored *inside* the hash,
 so raising them later still verifies what was written before.
 
-**Roles are a JSON array on the account**, even though only two exist, because the checks are
-written as "does this account hold role R" — so a third role, or an account holding two, is a
-row that changes and nothing else. `superadmin` reaches the platform console, and it is also
-what the **installation-wide writes** require: providers, document parsers, the parsing policy
-and the app defaults are shared by every account, so their writes are an administrator's while
-their reads stay open for the composer. That is a security boundary rather than a preference —
-a provider's `baseURL` is where every conversation's prompts go, and testing a parser makes the
-*server* fetch a URL the caller chose.
+**Roles are a JSON array on the account**, because the checks are written as "does this account
+hold role R" — so a third role, or an account holding two, is a row that changes and nothing
+else. Three exist: `superadmin` (the account the installation was bootstrapped with, and the
+only one that may appoint another administrator), `admin` (granted by a superadmin, and the
+role that runs the installation), and `user`.
+
+**Either administrator role reaches the platform console, and either may write the
+installation-wide settings.** Providers, document parsers, the parsing policy and the app
+defaults are shared by every account, so their writes are an administrator's while their reads
+stay open for the composer. The split the feature is built on is *configure versus choose*: an
+administrator configures the models, and an ordinary account chooses among them. That is a
+security boundary rather than a preference — a provider's `baseURL` is where every
+conversation's prompts go, and testing a parser makes the *server* fetch a URL the caller chose.
+What the two tiers differ in is *accounts*: an ordinary administrator runs them, and may not
+touch one that holds an administrative role.
 
 **Every route requires a session unless it says `config: { public: true }`.** One `onRequest`
 hook, deny by default, so a route added without a thought about auth is refused rather than
@@ -868,12 +875,14 @@ after that point, and rendering both would show the answer twice for as long as 
   turn), `ToolCallCard` (collapsible args/result), `Composer` (paperclip/paste uploads,
   session-params button, token popover, model picker), `ModelSelector`,
   `AttachmentChips`, `TokenCountPopover`, and the dialogs: `ConfirmDialog`,
-  `SettingsDialog` (Providers / Copilots / documents / defaults tabs), `ProviderDialog`,
-  `CopilotDialog`, `NewSessionDialog`, `SessionSettingsDialog`,
-  `CreateWorkspaceDialog`.
+  `SettingsDialog` (the account's own Copilots), `ProviderDialog`, `CopilotDialog`,
+  `NewSessionDialog`, `SessionSettingsDialog`, `CreateWorkspaceDialog`. `AdminConsole` and
+  its `admin/ProvidersSection` and `admin/DocumentsSection` hold the installation-wide
+  screens — the ones that are nobody's alone.
 - `composables/` — the few pieces of state that are not domain state and not component-local.
   `theme.ts` and `locale.ts` own the two persisted preferences; `ui.ts` holds the booleans
-  more than one component needs to read or set (`settingsOpen`, `drawerOpen`) *and* the six-way
+  more than one component needs to read or set (`settingsOpen`, `drawerOpen`, `adminSection` —
+  the console's current screen, which a control *outside* the console picks) *and* the six-way
   `view` flag that picks the page — there is still no router; `breakpoints.ts`
   holds the media-query flags (`isCompact`, `isNarrow`, `isCoarsePointer`) as module-level
   singletons, because a viewport query is a fact about the window rather than about any one
@@ -890,7 +899,7 @@ belonging to whichever is open (`+`, or refresh). The strip is the settings dial
 the sidebar's pinned header and footer depend on there being exactly one.
 
 Below the panel sit the account-level rows — **Settings**, **Your account**, **Platform
-console** (superadmins only) and **Sign out** — and they share every style except the divider,
+console** (administrators only) and **Sign out** — and they share every style except the divider,
 which is above the group rather than between the rows: one footer group, not four entries of a
 list. Sign out takes no confirmation, because the session is restored by signing in again and a
 misclick costs only that. It lands on the sign-in screen even when the request fails, and the

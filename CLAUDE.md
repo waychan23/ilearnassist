@@ -788,17 +788,25 @@ Fuller map in `docs/reference.md`.
   and it deliberately does **not** run `createDb`: DDL from a second process while the server is
   up would race the schema the server already applied, so it opens the file, refuses an
   unreadable one, and runs plain `UPDATE`s in one `IMMEDIATE` transaction.
-- **A setting every account shares is a superadmin's to change.** Providers, document parsers,
-  the parsing policy and the app defaults are **installation-wide**, and their *writes* carry
-  `requireSuperadmin` while their reads stay open — the composer needs the model list and the
-  parse state, and a screen that cannot say which models exist is not one anybody can use. This
-  is not tidiness: a provider's `baseURL` is where every conversation's prompts go, so an
-  account that can add one and point `/api/defaults` at it reads everybody's traffic; and
+- **A setting every account shares is an administrator's to change, and the split is
+  "configure vs choose".** Providers and models, document parsers, the parsing policy and the app
+  defaults are **installation-wide**; their *writes* carry `requirePlatformAdmin` (either tier)
+  while their reads stay open — the composer needs the model list and the parse state, and a
+  screen that cannot say which models exist is not one anybody can use. So an administrator
+  *configures* the models and an ordinary account *chooses among* them, which is why the picker
+  hides a provider with no key rather than offering one that answers nothing. This is not
+  tidiness: a provider's `baseURL` is where every conversation's prompts go, so an account that
+  could add one and point `/api/defaults` at it would read everybody's traffic; and
   `POST /api/document-parsers/:id/test` makes the **server** fetch a `baseURL` the caller chose,
   the capability `web_fetch` needs its SSRF guard for. Before there were roles these routes were
   everyone's because everyone was one person — that stopped being true when a second account
   existed. The rule for a new route is the console's: if it changes something every account
   shares, it is an administrator's.
+  **The console is where those screens live**, and `SettingsDialog` is not: it holds the
+  account's own Copilots and nothing else, because everything installation-wide it used to hold
+  answered 403 for an ordinary account and showed a URL the server fetches to everybody. The
+  test for whether a screen belongs in the console is whether it changes something every account
+  shares, or is an account itself; anything one account does for itself belongs in the app.
 - **Never coerce a request field into a role or a flag.** `disabled` must be a real boolean:
   `"false"` is truthy, so a coerced `PATCH { disabled: "false" }` would store `1` while
   `disabled === true` missed the self-guard — an administrator locking themselves out past the
