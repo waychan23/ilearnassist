@@ -132,6 +132,82 @@ test("layout: the closed drawer is not reachable by keyboard", async ({ page, re
   }
 });
 
+test("layout: the widget panel is a drawer at the right", async ({ page, request }) => {
+  /*
+   * The panel is a third *column* on a wide screen and a fixed overlay here — the same element,
+   * laid out by a media query, which is why `App.vue` withholds `with-widgets` at this width: the
+   * class would add a grid track the drawer does not occupy.
+   *
+   * Its install is seeded over HTTP rather than through the dialog, because what is being tested
+   * here is the *layout*, and going through four dialogs to arrange it would make this a test of
+   * something else.
+   */
+  await converse(page, request, "你好");
+
+  const workspaces = await (await request.get("/api/workspaces")).json();
+  const workspaceId = workspaces[0].id;
+  const installed = await request.put(
+    `/api/workspaces/${workspaceId}/widgets/workspace_stats`,
+    { data: { enabled: true } },
+  );
+  expect(installed.ok()).toBe(true);
+
+  await page.reload();
+  await enterWorkspace(page);
+
+  // Off-canvas until asked for, and the control that asks is the topbar's **last** control —
+  // where the panel it opens appears, rather than beside the nav toggle at the other edge.
+  await expect(page.getByTestId("widget-toggle")).toBeVisible();
+  await expect(page.getByTestId("widget-panel")).toBeHidden();
+
+  const toggleBox = (await page.getByTestId("widget-toggle").boundingBox())!;
+  const navBox = (await page.getByTestId("nav-toggle").boundingBox())!;
+  expect(toggleBox.x).toBeGreaterThan(navBox.x);
+  // And it grows with its neighbours under a finger, rather than being the one topbar control
+  // that stayed small.
+  expect(toggleBox.width).toBeGreaterThanOrEqual(44);
+  expect(toggleBox.height).toBeGreaterThanOrEqual(44);
+  // Nothing to its right but the topbar's own padding, and the theme/locale controls are to its
+  // left — which is the whole of "far right" and what a reordering would break.
+  const topbarBox = (await page.locator(".topbar").boundingBox())!;
+  expect(topbarBox.x + topbarBox.width - (toggleBox.x + toggleBox.width)).toBeLessThan(20);
+
+  await page.getByTestId("widget-toggle").tap();
+  await expect(page.getByTestId("widget-panel")).toBeVisible();
+  await expect(page.getByTestId("widget-drawer-backdrop")).toBeVisible();
+
+  // It fits the screen: a fixed overlay wider than the viewport would be a panel nobody can
+  // dismiss, and the whole point of the width being capped against `vw` rather than fixed.
+  expect((await page.getByTestId("widget-panel").boundingBox())!.width).toBeLessThanOrEqual(412);
+
+  /*
+   * Polled rather than measured once, because the panel *slides*: `visibility` flips on the tap
+   * while the transform animates over `--dur-slow`, so a single reading catches it part-way in
+   * and reports a right edge it will never have at rest. This is the assertion that would catch a
+   * panel genuinely hanging off the edge.
+   */
+  await expect
+    .poll(async () => {
+      const box = (await page.getByTestId("widget-panel").boundingBox())!;
+      return Math.round(box.x + box.width);
+    })
+    .toBeLessThanOrEqual(412);
+
+  // Nor does it add to the page's own scroll width while closed, which is what the other
+  // overflow assertions on this file would catch.
+  const overflow = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(overflow).toEqual({ scroll: 412, client: 412 });
+
+  // The backdrop dismisses it, and the drag handle is not offered — a fixed overlay has no width
+  // to drag.
+  await expect(page.getByTestId("widget-resize")).toHaveCount(0);
+  await page.getByTestId("widget-drawer-backdrop").tap({ position: { x: 20, y: 400 } });
+  await expect(page.getByTestId("widget-panel")).toBeHidden();
+});
+
 test("layout: nothing overflows the phone, even with the widest controls open", async ({
   page,
   request,

@@ -210,6 +210,7 @@ export default {
       groupPublic: "公开的 Copilot",
       groupMine: "我的 Copilot",
       byAuthor: "由 {name} 公开",
+      advanced: "其他参数（新建时可一并设定，之后也能在会话参数里改）",
     },
     delete: {
       title: "删除会话",
@@ -377,6 +378,32 @@ export default {
     note: "「已用上下文」来自上一轮的 token 统计；「待发送输入」按字符数估算，仅供预览。",
   },
 
+  /**
+   * The generation parameters, named once.
+   *
+   * One namespace rather than a copy per surface, because three places now show this same set of
+   * seven fields — the Copilot editor's defaults, a conversation's parameters, and the advanced
+   * section of the new-session dialog — and three copies of "all session parameters" drift the
+   * first time one of them gains a field. The *labels* were once the Copilot editor's and the
+   * session dialog's separately, which is exactly the drift this replaces.
+   */
+  params: {
+    provider: "服务商",
+    model: "模型",
+    inherit: "继承默认",
+    temperature: "Temperature",
+    temperatureHint: "取值范围 0 ~ 2，数值越大回答越随机。",
+    topP: "Top P",
+    topPHint: "取值范围 0 ~ 1，通常与 Temperature 二选一调节。",
+    maxOutput: "最大输出",
+    maxOutputHint: "单位 token，限制单次回复的最大长度。",
+    maxHistory: "最多携带历史消息",
+    maxHistoryAll: "全部（不截断）",
+    maxHistoryHint: "单位「条」，超出时从最早的消息开始丢弃。",
+    maxSteps: "最大工具轮数",
+    maxStepsHint: "单位「轮」，单轮回复中最多执行多少次「模型 → 工具」循环。",
+  },
+
   copilot: {
     edit: "编辑 Copilot",
     create: "新建 Copilot",
@@ -393,15 +420,8 @@ export default {
     public: "公开这个 Copilot",
     publicHint: "公开后所有账号都能看到并使用它，但只有你能修改或删除。",
     defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",
-    inherit: "继承默认",
-    model: "模型",
-    maxOutput: "最大输出",
-    unitToken: "单位 token",
-    maxHistory: "最多携带历史消息",
-    all: "全部",
-    unitMessages: "单位「条」",
-    maxSteps: "最大工具轮数",
-    unitSteps: "单位「轮」",
+    widgets: "安装控件",
+    widgetsHint: "用这个 Copilot 新建会话时，会把勾选的控件安装到那个会话里，之后可以在会话参数中单独调整。",
   },
 
 
@@ -566,6 +586,63 @@ export default {
     enabled: "启用（关闭后解析时会跳过这一条）",
   },
 
+  /**
+   * Widgets — the right sidebar's extension panels.
+   *
+   * Two fixed parts and no label of its own: the panel's own strings live here, and each
+   * widget's name and hint are reached through a *literal* key held in the client registry
+   * (`widgets.<id>.name`), which is what keeps the i18n guard's dynamic-prefix allowlist from
+   * needing a `widgets.` entry — see `apps/web/src/widgets/registry.ts`.
+   */
+  widgets: {
+    /** The toggle button's label names the *action*, and `aria-pressed` carries the state. */
+    install: "安装",
+    uninstall: "卸载",
+    heading: "控件",
+    workspaceLead: "在这里安装的控件，会出现在这个工作区每个会话的右侧栏里。",
+    sessionLead: "在这里安装的控件只影响这个会话。",
+    panel: {
+      /** Action-named, like `sidebar.collapse`/`expand` — the state is on the button already. */
+      layoutTop: "标签栏放到顶部",
+      layoutLeft: "标签栏放到左侧",
+      collapse: "收起控件栏",
+      expand: "展开控件栏",
+      resize: "调整控件栏宽度（左右方向键微调）",
+      more: "更多控件",
+    },
+    open: "打开控件栏",
+    /**
+     * The session parameters dialog with no conversation open. Distinct from
+     * `widgets.sessionStats.noSession`, which is the panel saying it has nothing to show: this
+     * one says a widget has nowhere to be installed *yet*.
+     */
+    noSession: "还没有会话，控件要装到某个会话里。",
+    loadFailed: "读取数据失败",
+    retry: "重试",
+    messages: "消息",
+    tokens: "Tokens",
+    workspaceStats: {
+      /**
+       * "（Demo）" is part of the name, not a note about it: these two are shipped as
+       * demonstrations of the framework rather than as features, and a tab that reads as a
+       * finished product would invite someone to rely on it.
+       */
+      name: "工作区统计（Demo）",
+      hint: "当前工作区的会话列表，以及每个会话的消息数与 token 消耗。",
+      empty: "这个工作区还没有会话。",
+    },
+    workspaceSettings: {
+      title: "工作区设置",
+      liveHint: "改动会立刻反映在右侧栏上。",
+    },
+    sessionStats: {
+      name: "会话统计（Demo）",
+      hint: "当前会话的消息数与 token 消耗。",
+      noSession: "打开一个会话后，这里会显示它的统计。",
+      context: "本轮上下文",
+    },
+  },
+
   sessionSettings: {
     title: "会话参数",
     scopeExisting: "这些参数只作用于当前会话。",
@@ -575,17 +652,6 @@ export default {
     systemPromptPlaceholder: "这个对话要扮演什么角色…",
     systemPromptHint:
       "只属于这个对话。新建会话时从 Copilot 复制一份过来，之后各自独立 —— 在这里修改不会影响那个 Copilot。",
-    model: "模型",
-    inherit: "继承默认",
-    temperatureHint: "取值范围 0 ~ 2，数值越大回答越随机。",
-    topPHint: "取值范围 0 ~ 1，通常与 Temperature 二选一调节。",
-    maxOutput: "最大输出",
-    maxOutputHint: "单位 token，限制单次回复的最大长度。",
-    maxHistory: "最多携带历史消息",
-    maxHistoryAll: "全部（不截断）",
-    maxHistoryHint: "单位「条」，超出时从最早的消息开始丢弃。",
-    maxSteps: "最大工具轮数",
-    maxStepsHint: "单位「轮」，单轮回复中最多执行多少次「模型 → 工具」循环。",
     reset: "重置",
   },
 
@@ -624,6 +690,8 @@ export default {
     UNAUTHENTICATED: "登录已失效，请重新登录。",
     USERNAME_REQUIRED: "用户名不能为空。",
     USERNAME_TOO_LONG: "用户名不能超过 {max} 个字符。",
+    UNKNOWN_WIDGET: "当前版本没有这个控件，请刷新页面后再试。",
+    WIDGET_SCOPE_UNSUPPORTED: "这个控件不能在当前层级安装。",
   },
 
   /**

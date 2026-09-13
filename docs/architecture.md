@@ -161,6 +161,35 @@ conversation owns its persona" means in practice. A turn reads the session and n
 `turnContext()` takes no Copilot, so an allowlist that narrowed the tool set cannot evaporate
 because the Copilot it came from was deleted.
 
+### Widgets (`widget_instances`)
+
+One row per `(scope, scope_id, widget_id)`, with `enabled`. **The row's existence is the record
+that somebody decided something, and `enabled` is what they decided** — which is why uninstalling
+writes `0` and never deletes. A deleted row would fall back to the level's default and silently
+reinstall a widget the user had turned off, and an object that has already said no is exactly the
+case that cannot be told apart from one that never chose. The primary key's leading columns are
+the whole lookup, so there is no secondary index; the write is an `INSERT … ON CONFLICT DO UPDATE`
+so install / uninstall / install on the same pair is one row rather than a duplicate-key error.
+
+There is deliberately **no copilot scope**: a Copilot's selection lives in `copilots.widgets` and
+is *copied* into the session it starts, exactly as `settings` and `tools` are. That column is
+**nullable**, and for the `all_tools` reason — `NULL` means "never set, use the defaults" while a
+JSON array (including `[]`) is an explicit selection. A `NOT NULL DEFAULT '[]'` would have told
+every Copilot written before the column existed that it installs nothing, a decision its owner
+never made; `mapCopilot` resolves `NULL` to `DEFAULT_WIDGET_IDS` instead.
+
+Reads iterate the **registry** rather than the rows, so one entry comes back per widget this build
+knows at that level and a stored row is indistinguishable from a defaulted one. A row naming an id
+a downgrade removed is dropped rather than handed to a client that cannot render it — the same
+move `all_tools` makes against a stale `tools` list. Writes assert the owner in the statement
+(`SELECT … FROM workspaces WHERE id = @scopeId AND user_id = @userId`), so a caller that forgot
+its scoped read still cannot touch another account's row; a session reaches its owner through its
+workspace by join, as `sessions` itself does.
+
+The new table needed **no `SCHEMA_VERSION` bump** — the DDL runs on every open, so a database
+created before it simply gains it (the `counters` precedent, pinned by a test). `copilots.widgets`
+came in through `ensureColumn` for the same reason.
+
 ### The workspace file browser (`files.ts`)
 
 The sidebar's second panel: a read-only tree of the active workspace, expanded one level at a
@@ -825,7 +854,12 @@ belongs next to the input.
   `providerId` and `modelId`, since a model id is only meaningful inside its own provider.
 - **Session settings** (🎛) — temperature, context and tool-round limits for this
   conversation, plus the conversation's own system prompt (the persona it copied from
-  its Copilot, editable afterwards).
+  its Copilot, editable afterwards), and the widgets installed in it.
+- **Workspace settings** — a dialog of its own, not a tab of the global one, because it
+  configures *a workspace* rather than the installation. Two ways in: the gear on a workspace
+  card, and the workspace name in the sidebar header (which is a button for that reason). The
+  card's is the one that matters — it does not require entering the workspace first, so widgets
+  can be installed before there is anything to look at.
 - **Global settings** — the sidebar footer. It is opened, not owned, by its callers:
   `composables/ui.ts` holds `settingsOpen` and `App.vue` mounts the dialog once, so both
   the sidebar button and the composer's "管理模型…" can reach it without prop drilling.
@@ -904,6 +938,12 @@ Only the message list scrolls. `html/body/#app` and `.app` are `overflow: hidden
 `.main` is a flex column where `.topbar` and `.composer` are `flex-shrink: 0`. The
 sidebar keeps exactly one `.side-scroll`, so nav and footer stay pinned.
 
+`.app` is a grid with **two or three** tracks: the sidebar, the conversation, and — when widgets
+are installed and the viewport is wide enough — the widget panel. The third is added by a class
+`App.vue` puts on the element, from the same component that sets `--widget-w`, so the track and
+the custom property it reads always arrive together. See
+[Widgets (right sidebar)](#widgets-right-sidebar).
+
 `.messages-wrap` (`position: relative`) holds the scroller and is what the minimap rail
 positions against. The rail is deliberately a **sibling** of `.messages`, not a child —
 inside the scroller it would scroll away with the content. When the rail is shown,
@@ -912,6 +952,82 @@ inside the scroller it would scroll away with the content. When the rail is show
 `.messages` is the scroller: `flex: 1; min-height: 0; overflow-y: auto`. The `min-height`
 is load-bearing; without it the flex item refuses to shrink below its content and the list
 silently stops scrolling.
+
+### Widgets (right sidebar)
+
+The conversation page has a third column of **widgets**: built-in panels, each a tab, installed
+per workspace or per conversation. See [`widget_instances`](#widgets-widget_instances) for the
+storage, and [widgets.md](widgets.md) for the authoring contract and the steps to add one.
+
+A widget declares which levels it accepts — `workspace`, `session` — and only those two exist. A
+**Copilot is a third place to tick a box, not a third scope**: its selection is copied into the
+conversation it starts, so "copilot level" is session level reached through a template. Three
+install surfaces follow from that, and the control each uses follows from whether anything exists
+to change yet:
+
+| Surface | Control | Why |
+| --- | --- | --- |
+| `CreateWorkspaceDialog` | checkboxes | the workspace does not exist, so the whole selection lands in one write |
+| `CopilotDialog` | checkboxes | a Copilot's selection reaches a conversation only when one is started from it |
+| `WorkspaceSettingsDialog`, `SessionSettingsDialog` | install/uninstall toggles | the object exists, so each click takes effect immediately |
+
+**The panel is a third grid track on `.app`, not a floating overlay.** It is a column beside the
+conversation, so `App.vue` sets `--widget-w` on the element from `composables/widgetPanel.ts` and
+adds `with-widgets`. The `var(--widget-w)` in `style.css` has **no fallback** on purpose: an
+unresolvable custom property makes the whole `grid-template-columns` declaration invalid at
+computed-value time, and the grid silently collapses to one implicit column. Below 900px the
+class is withheld and the panel is a fixed drawer at the right instead — the same element, laid
+out by a media query.
+
+The tab strip (`WidgetTabStrip.vue`) measures its tabs and moves the ones that do not fit into a
+"more" menu; the arithmetic is `utils/widgetTabs.ts`, kept pure and unit-tested because it is the
+part that can be wrong in a way no screenshot shows — an off-by-one in the divider's cost only
+shows up at one width. Measured sizes are **cached**, since a `v-show`n tab reports zero and
+trusting that would make the strip oscillate.
+
+The strip draws one group per level, workspace first, with a rule between them that is rendered
+only when both sides have a visible tab: a rule whose right-hand side sits inside the "more" menu
+would be separating a tab from a button. The divider is a real cost in the fit.
+
+**Preferences are in `localStorage`** (`composables/widgetPanel.ts`): width, orientation and the
+open tab. A panel width is a property of *this window* — a 1440px laptop wants a wide one and a
+1024px one wants a narrow one — so a server-side value would impose the wrong sharing model on a
+CSS length; and a synchronous read at first paint is what stops the panel jumping on every reload.
+The width is clamped on **read** as well as on write, because a value that was fine when it was
+set is not necessarily fine now. Collapse is deliberately not persisted, matching
+`uiState.sidebarCollapsed`.
+
+**Events exist for what the store cannot see.** `composables/widgetEvents.ts` is a small typed bus
+so a widget learns about a change the *server* made — a turn ending moved the message counts and
+the token totals, and nothing the client did knows by how much — plus lifecycle changes like a
+conversation being created or deleted. Anything the client itself decided and holds is a `watch`
+away and is deliberately **not** an event: two ways to learn one fact drift. `turn.finished` is
+emitted from `consume()`'s `finally`, the one point every turn ends at, and unconditionally within
+the account-epoch guard, since a failed turn still persisted a message.
+
+**Lifecycle hooks run on the client, after the write.** There is no server-side widget runtime — a
+widget is a Vue component in the web bundle — so `onInstall`/`onUninstall` are declared by the
+widget's registry entry and invoked by the store once the record is committed. That ordering is
+what makes "a hook can never fail a config write" a property rather than a promise; a hook that
+throws is logged, and a widget whose *data* fails reports it inside its own panel, the same split
+`fileTreeError`/`filePreviewError` make.
+
+`onInstall` therefore fires at **two** moments, because a level's widgets can arrive two ways: one
+at a time through `setWidgetEnabled`, or all at once in a create request — the create dialogs
+choose a selection before the object exists. The creation case runs the hooks from the *resolved*
+read where there is one (a conversation copies its Copilot's selection, so the request may name no
+widgets at all), and from the requested list for a workspace, where what was asked for and what the
+route wrote are the same list. Neither demo widget has a hook; the mechanism is covered by store
+tests with a stubbed registry entry.
+
+The two demo widgets read `GET /api/workspaces/:id/stats` and `GET /api/sessions/:id/stats`. Those
+are about the object rather than about a widget — two widgets read the same route and a third will
+— and the arithmetic is in `apps/server/src/widgets.ts` rather than in SQL, because `MessageUsage`'s
+fields are all optional and `contextTokens` means the opposite of a sum.
+
+Not built, deliberately: external/dynamic widget installation (there is nothing to load at
+runtime — `widgetsForScope()` is the seam), any server-side event bus, and a resizable panel on a
+phone.
 
 ### Responsive
 
@@ -923,7 +1039,7 @@ popover stayed absolutely positioned and ran off the edge of the screen.
 
 | Query | What changes |
 | --- | --- |
-| `(max-width: 900px)` | The sidebar becomes a drawer; the minimap rail is hidden |
+| `(max-width: 900px)` | The sidebar becomes a drawer; the widget panel becomes a drawer at the right; the minimap rail is hidden |
 | `(max-width: 560px)` | Dialogs and popovers become bottom sheets; the composer toolbar reflows; forms go single-column |
 
 The drawer takes the sidebar **out of the grid** — `position: fixed`, translated off-canvas —

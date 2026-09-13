@@ -146,6 +146,13 @@ const DDL = `
     all_tools INTEGER NOT NULL DEFAULT 1,
     tools TEXT NOT NULL DEFAULT '[]',
     settings TEXT NOT NULL DEFAULT '{}',
+    -- A Copilot's widget selection for the conversations it starts. **Nullable, and that is the
+    -- all_tools lesson in a new dress**: NULL means "never set — use the defaults", while a JSON
+    -- array (including '[]') is an explicit selection. A NOT NULL DEFAULT '[]' would say "install
+    -- nothing" for every Copilot written before this column existed, silently narrowing
+    -- conversations nobody ever re-edited. The DB layer always writes an array, so NULL can only
+    -- come from a row that predates the column.
+    widgets TEXT,
     visibility TEXT NOT NULL DEFAULT 'private',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -249,6 +256,34 @@ const DDL = `
     name TEXT NOT NULL,
     value INTEGER NOT NULL,
     PRIMARY KEY (scope, scope_id, name)
+  );
+
+  -- One row per (object, widget): which widgets an object has, and whether each one is on.
+  --
+  -- The row's *existence* is the record that somebody decided something; "enabled" is what they
+  -- decided. Uninstalling writes 0 and never deletes, which is what makes the fallback in
+  -- defaultWidgetEnabled unreachable for an object that has already said no — a deleted row
+  -- would fall back to the default and silently reinstall a widget the user turned off. It is
+  -- also why the write is an upsert: install / uninstall / install on the same pair is one row,
+  -- not a duplicate-key error.
+  --
+  -- "scope" is the level and "scope_id" names the object at it. There is deliberately no copilot
+  -- scope: a Copilot's selection lives in copilots.widgets and is copied into the session it
+  -- starts, so it is session state reached through a template.
+  --
+  -- Deliberately no foreign key, for the counters reason above: scope_id names any entity at
+  -- all, so there is no table to point at. Nothing cleans up after a deleted session, and
+  -- nothing needs to — ids are never reused, so an orphaned row is a few bytes nothing can reach.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS widget_instances (
+    scope TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    widget_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope, scope_id, widget_id)
   );
 `;
 

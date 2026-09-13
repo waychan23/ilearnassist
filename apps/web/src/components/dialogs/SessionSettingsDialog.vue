@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
-import type { SessionSettings } from "../../api/types";
 import Icon from "../Icon.vue";
+import GenerationParams from "../GenerationParams.vue";
+import WidgetToggleList from "./WidgetToggleList.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
@@ -25,78 +26,25 @@ watch(
   { immediate: true }
 );
 
-/** `""` means "inherit" — the app default, now that no Copilot tier sits in between. */
-interface Draft {
-  providerId: string;
-  modelId: string;
-  temperature: string;
-  topP: string;
-  maxTokens: string;
-  maxContextMessages: string;
-  maxSteps: string;
-}
+/** The seven generation parameters, which are the shared form's business now. */
+const params = ref<InstanceType<typeof GenerationParams> | null>(null);
 
-const draft = reactive<Draft>({
-  providerId: "",
-  modelId: "",
-  temperature: "",
-  topP: "",
-  maxTokens: "",
-  maxContextMessages: "",
-  maxSteps: "",
-});
-
-const str = (v: number | null | undefined): string => (v == null ? "" : String(v));
-
-function load(s: SessionSettings) {
-  draft.providerId = s.providerId ?? "";
-  draft.modelId = s.modelId ?? "";
-  draft.temperature = str(s.temperature);
-  draft.topP = str(s.topP);
-  draft.maxTokens = str(s.maxTokens);
-  draft.maxContextMessages = str(s.maxContextMessages);
-  draft.maxSteps = str(s.maxSteps);
-}
-
-// `sessionSettings` already falls back to the staged draft settings, so this works
-// both for a live session and for the welcome screen.
-watch(() => store.sessionSettings, load, { immediate: true, deep: true });
-
-const providers = computed(() => store.config?.providers ?? []);
-const models = computed(
-  () => providers.value.find((p) => p.id === draft.providerId)?.models ?? []
-);
-
+// `sessionSettings` already falls back to the staged draft settings, so this works both for a
+// live session and for the welcome screen.
 watch(
-  () => draft.providerId,
-  (id, prev) => {
-    if (prev !== undefined && id !== prev) draft.modelId = "";
-  }
+  () => store.sessionSettings,
+  (s) => params.value?.load(s),
+  { immediate: true, deep: true, flush: "post" }
 );
-
-const num = (v: string): number | null => {
-  const t = v.trim();
-  if (!t) return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
-};
 
 function save() {
-  void store.updateSettings({
-    providerId: draft.providerId || null,
-    modelId: draft.modelId || null,
-    temperature: num(draft.temperature),
-    topP: num(draft.topP),
-    maxTokens: num(draft.maxTokens),
-    maxContextMessages: num(draft.maxContextMessages),
-    maxSteps: num(draft.maxSteps),
-  });
+  void store.updateSettings(params.value?.commit() ?? {});
   if (store.activeSession) void store.updateSessionPrompt(prompt.value);
   emit("close");
 }
 
 function reset() {
-  load({});
+  params.value?.load({});
   // Empty means the built-in assistant prompt, which is the same "inherit" the fields above
   // express — there is nothing above the conversation left to inherit a persona from.
   prompt.value = "";
@@ -150,52 +98,36 @@ const scopeNote = computed(() =>
             <div class="hint">{{ t("sessionSettings.systemPromptHint") }}</div>
           </div>
 
-          <div class="form-grid">
-            <div class="field">
-              <label>Provider</label>
-              <select v-model="draft.providerId" class="select">
-                <option value="">{{ t("sessionSettings.inherit") }}</option>
-                <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>{{ t("sessionSettings.model") }}</label>
-              <select v-model="draft.modelId" class="select" :disabled="!draft.providerId">
-                <option value="">{{ t("sessionSettings.inherit") }}</option>
-                <option v-for="m in models" :key="m.id" :value="m.modelId">{{ m.name }}</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Temperature</label>
-              <input v-model="draft.temperature" class="input" :placeholder="t('sessionSettings.inherit')" />
-              <div class="hint">{{ t("sessionSettings.temperatureHint") }}</div>
-            </div>
-            <div class="field">
-              <label>Top P</label>
-              <input v-model="draft.topP" class="input" :placeholder="t('sessionSettings.inherit')" />
-              <div class="hint">{{ t("sessionSettings.topPHint") }}</div>
-            </div>
-            <div class="field">
-              <label>{{ t("sessionSettings.maxOutput") }}</label>
-              <input v-model="draft.maxTokens" class="input" :placeholder="t('sessionSettings.inherit')" />
-              <div class="hint">{{ t("sessionSettings.maxOutputHint") }}</div>
-            </div>
-            <div class="field">
-              <label>{{ t("sessionSettings.maxHistory") }}</label>
-              <input v-model="draft.maxContextMessages" class="input" :placeholder="t('sessionSettings.maxHistoryAll')" />
-              <div class="hint">{{ t("sessionSettings.maxHistoryHint") }}</div>
-            </div>
-            <div class="field">
-              <label>{{ t("sessionSettings.maxSteps") }}</label>
-              <input v-model="draft.maxSteps" class="input" placeholder="15" />
-              <div class="hint">{{ t("sessionSettings.maxStepsHint") }}</div>
-            </div>
+          <GenerationParams ref="params" />
+
+          <!--
+            The session's widgets, with a toggle per widget rather than the checkbox list the
+            Copilot editor uses — and the difference is the whole reason the two controls exist.
+            A conversation is a real object, so each switch takes effect immediately and says so;
+            a Copilot is a template, where the same box is a note about a future conversation.
+          -->
+          <div class="field widget-checks">
+            <label>{{ t("widgets.heading") }}</label>
+            <WidgetToggleList
+              v-if="store.activeSession"
+              scope="session"
+              :rows="store.sessionWidgets"
+              testid-prefix="session-widget"
+              @toggle="
+                (id, enabled) =>
+                  store.setWidgetEnabled('session', store.activeSession!.id, id, enabled)
+              "
+            />
+            <div v-else class="hint">{{ t("widgets.noSession") }}</div>
+            <div class="hint">{{ t("widgets.sessionLead") }}</div>
           </div>
         </div>
         <div class="modal-foot">
           <button class="btn" @click="reset">{{ t("sessionSettings.reset") }}</button>
           <button class="btn" @click="emit('close')">{{ t("common.cancel") }}</button>
-          <button class="btn primary" @click="save">{{ t("common.save") }}</button>
+          <button class="btn primary" data-testid="session-settings-save" @click="save">
+            {{ t("common.save") }}
+          </button>
         </div>
       </div>
     </div>

@@ -231,6 +231,7 @@ apps/server/src/
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
+  widgets.ts              # sumUsage + the widget-selection validator (pure)
 apps/web/src/
   stores/app.ts           # Pinia store (all state + actions)
   api/client.ts           # fetch helpers + SSE parser (normalizes errors → ApiError)
@@ -239,12 +240,19 @@ apps/web/src/
   composables/confirm.ts  # promise-returning confirm() for destructive UI actions
   composables/locale.ts   # language selection (sibling of theme.ts, not a store)
   composables/theme.ts    # light/dark/auto
+  composables/widgetEvents.ts  # the widget event bus (no store import, so no cycle)
+  composables/widgetPanel.ts   # the panel's persisted preferences + width clamping
   utils/apiError.ts       # server code → user-facing message
   utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
   utils/locale.ts         # browser-language detection + the alias table
+  utils/widgetTabs.ts     # the tab strip's fit arithmetic (pure)
+  widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
+  widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, AskUserCard, Composer, TopbarControls, FileTree,
-                          #   dialogs (Settings, Sources, FilePreview, Confirm)
+                          #   WidgetPanel, WidgetTabStrip, GenerationParams,
+                          #   dialogs (Settings, WorkspaceSettings, Sources, FilePreview,
+                          #   Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -811,6 +819,53 @@ Fuller map in `docs/reference.md`.
 - **`pdfjs-dist` is pinned to 4.x.** 5.7+ and 6.x require Node ≥ 22.13 while
   `package.json` advertises Node ≥ 20; bumping that floor is a separate,
   user-visible change and must not ride along with an unrelated dependency update.
+- **A widget instance is a row, and an uninstall is `enabled = 0`.** The row's *existence*
+  records that somebody decided something; `enabled` is what they decided. Deleting on uninstall
+  would fall back to the level's default and silently reinstall the widget, and a decision cannot
+  then be told apart from the absence of one. `(scope, scope_id, widget_id)` is the primary key
+  and the write is an upsert, which is what makes repeated install/uninstall ordinary rather than
+  a duplicate-key error. There is deliberately **no copilot scope** — a Copilot's selection lives
+  in `copilots.widgets` and is *copied* into the session it starts, like `settings` and `tools`.
+  That column is nullable for the `all_tools` reason: `NULL` is "never set", an array (including
+  `[]`) is a selection, and a `NOT NULL DEFAULT '[]'` would have told every Copilot written before
+  the column existed that it installs nothing.
+- **Which level a widget accepts is declared by the widget, and an unknown id is refused, never
+  dropped.** `WIDGET_IDS` / `WIDGETS` / `widgetsForScope()` live in `packages/shared` for the
+  `ALL_TOOL_NAMES` reason — the client writes the id and the server filters by it — and a *dropped*
+  id is a selection that looks like it worked: the user ticked a box, the request succeeded, and
+  nothing was installed. A widget this build does not know is `UNKNOWN_WIDGET`; one at the wrong
+  level is `WIDGET_SCOPE_UNSUPPORTED`. Reads resolve through the registry rather than the rows, so
+  one entry comes back per widget at that level and a stored row is indistinguishable from a
+  defaulted one.
+- **The widget panel is a third grid track, and `--widget-w` is always set when the class is.**
+  `App.vue` withholds `with-widgets` on a compact viewport, where the panel is a fixed drawer, and
+  below 900px it must be withheld — the class would add a track the drawer does not occupy. The
+  `var(--widget-w)` in `style.css` has **no fallback** on purpose: an unresolvable custom property
+  makes the whole `grid-template-columns` declaration invalid at computed-value time and the grid
+  collapses to one implicit column, which is a silent failure no test would see. Do not "fix" it
+  with a default.
+- **A widget's lifecycle hook runs on the client, after the write, and cannot fail it.** There is
+  no server-side widget runtime — a widget is a Vue component in the web bundle — so a server hook
+  would have no code to call. Running after the record is committed is what makes "cannot fail a
+  config write" a property of the ordering rather than a promise, and a hook that throws is logged
+  rather than toasted because the user's action *did* what they asked.
+- **Widget events exist for what the store cannot see.** `composables/widgetEvents.ts` carries a
+  change the *server* made — a turn ending moved the counts and the totals, and nothing local knows
+  by how much. Anything the client itself decided and holds is a `watch` away and is deliberately
+  not an event, because two ways to learn one fact drift. `turn.finished` comes from `consume()`'s
+  `finally`, the one point every turn ends at, unconditionally within the account-epoch guard since
+  a failed turn still persisted a message.
+- **A widget's catalog key is a literal at a call site, which is why the dynamic-prefix allowlist
+  stays narrow.** `widgets/registry.ts` resolves names through a `switch` over the closed id union
+  with a literal key per case, not through `t(\`widgets.${id}.name\`)` — that would have forced a
+  bare `widgets.` entry into `catalog.test.ts`'s `DYNAMIC_PREFIXES`, and a prefix that broad is
+  where a typo hides. A new widget is then a missing-return compile error rather than a blank tab.
+  **Adding one is a recipe rather than a thing to infer: `docs/widgets.md`.**
+- **A checkbox installs what does not exist yet; a toggle changes what does.** The create dialogs
+  (workspace, Copilot) tick boxes for an object that is not there, so the whole selection lands in
+  one write; the two settings dialogs toggle a real object, so each click takes effect immediately.
+  The control follows the *deferred/immediate* distinction rather than the surface, which is why
+  the Copilot editor's checkboxes and the session dialog's toggles are both correct.
 
 ## Gotchas
 
@@ -861,4 +916,6 @@ Fuller map in `docs/reference.md`.
   staged in `dist/resources/web` and leaves it alone. Run `pnpm desktop:build` (or
   `pnpm build`) once if the panel's server has nothing to serve.
 
-For the full architecture and configuration reference, see `docs/`.
+For the full architecture and configuration reference, see `docs/`. Two of those files are working
+references rather than background: `docs/design-system.md` for anything visual, and
+`docs/widgets.md` before adding a widget to the right sidebar.

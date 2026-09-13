@@ -234,6 +234,138 @@ export function isInteractiveTool(name: string): boolean {
 /** One answer shape per suspending tool; the tool call's `name` is the discriminant. */
 export type InteractiveAnswer = AskUserAnswers | QuizAnswers;
 
+/* ------------------------------------ widgets ------------------------------------ */
+
+/**
+ * Which level an install lives at.
+ *
+ * **Two**, and a Copilot does not add a third: a Copilot's selection is copied into the
+ * session it starts, so "copilot level" is session level reached through a template. The
+ * install *UIs* are still three (a Copilot editor is a third place to tick a box), which is
+ * why the dialog and the record do not share a list.
+ */
+export const WIDGET_SCOPES = ["workspace", "session"] as const;
+
+export type WidgetScope = (typeof WIDGET_SCOPES)[number];
+
+/**
+ * The built-in widgets, in the order the tab strip shows them.
+ *
+ * Lives here for the `ALL_TOOL_NAMES` reason: the client writes the id and the server filters
+ * by it, so two copies would drift — and the drift here is a widget that cannot be installed
+ * or a stored selection that matches nothing.
+ *
+ * Add a widget by adding it here, to `WIDGETS`, and to `WIDGET_MODULES` in
+ * `apps/web/src/widgets/registry.ts`. The last of those is typed by this list, so forgetting
+ * it is a `vue-tsc` error rather than a blank tab.
+ */
+export const WIDGET_IDS = ["workspace_stats", "session_stats"] as const;
+
+export type WidgetId = (typeof WIDGET_IDS)[number];
+
+/** A built-in widget. What it is *called* is the client's business — see the web registry. */
+export interface WidgetDefinition {
+  id: WidgetId;
+  /**
+   * Where it may be installed. `["session"]` also means "installable from a Copilot", since a
+   * Copilot installs into a session.
+   */
+  scopes: readonly WidgetScope[];
+}
+
+export const WIDGETS: readonly WidgetDefinition[] = [
+  { id: "workspace_stats", scopes: ["workspace"] },
+  { id: "session_stats", scopes: ["session"] },
+];
+
+/**
+ * What a brand-new object starts with — deliberately **empty**, so the panel is opt-in and the
+ * create dialogs are where the choice is presented.
+ *
+ * This is a product decision about what every *future* object starts with, and it never
+ * retroactively changes an existing one: a row exists for anything that has been decided (see
+ * `WidgetState`), so changing this list cannot reach an object that has already answered.
+ */
+export const DEFAULT_WIDGET_IDS: readonly WidgetId[] = [];
+
+export function isWidgetId(value: unknown): value is WidgetId {
+  return typeof value === "string" && (WIDGET_IDS as readonly string[]).includes(value);
+}
+
+/** The widgets that accept `scope`, in registry order. The one ordering every site uses. */
+export function widgetsForScope(scope: WidgetScope): readonly WidgetDefinition[] {
+  return WIDGETS.filter((w) => w.scopes.includes(scope));
+}
+
+/**
+ * Whether an object that has never recorded a choice gets this widget.
+ *
+ * Absence is not a stored value: a row exists for everything that has been *decided*
+ * (installed or uninstalled), and this is the answer for everything else. That is what makes
+ * "an uninstall writes `enabled = 0` rather than deleting the row" load-bearing — a deleted
+ * row would fall back here and the widget would come back.
+ */
+export function defaultWidgetEnabled(id: WidgetId): boolean {
+  return DEFAULT_WIDGET_IDS.includes(id);
+}
+
+/**
+ * One widget's state on one object — what the install lists show and the tab strip renders.
+ *
+ * This is the **resolved** record, not the stored one: an object nothing has ever decided
+ * about answers `enabled: false` here, which is why a call site cannot tell a stored row from
+ * a defaulted one. Storing the difference would be a second source of truth for the same fact.
+ */
+export interface WidgetState {
+  id: WidgetId;
+  scope: WidgetScope;
+  enabled: boolean;
+}
+
+/**
+ * What `GET /api/sessions/:id/widgets` answers: the two groups the tab strip draws.
+ *
+ * One request rather than two, because the strip is one control — split across two reads it
+ * could render half-drawn, and the divider's position depends on both lists.
+ */
+export interface SessionWidgets {
+  workspace: WidgetState[];
+  session: WidgetState[];
+}
+
+/* ------------------------------------ stats ------------------------------------ */
+
+/**
+ * One conversation's numbers, for the statistics widgets.
+ *
+ * Sums cover the assistant messages that recorded usage; a turn the user stopped reports none,
+ * so it contributes to the counts and nothing else. `contextTokens` is deliberately **not** a
+ * sum: it is the last turn's input+output, i.e. what the conversation had grown to.
+ */
+export interface SessionStats {
+  sessionId: string;
+  title: string;
+  /** Every message in the conversation, both roles. */
+  messageCount: number;
+  /** Summed over the assistant messages that recorded usage. */
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** The last turn's size — a level, not a running total. `0` when nothing reported one. */
+  contextTokens: number;
+}
+
+export interface WorkspaceStats {
+  workspaceId: string;
+  /** Newest first, matching the sidebar's conversation list. */
+  sessions: SessionStats[];
+  /** The workspace's own totals — the sum of the rows above. */
+  messageCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 /** What the client POSTs back to `/api/sessions/:id/answers`. */
 export interface AnswerToolCallInput {
   toolCallId: string;
@@ -361,6 +493,11 @@ export const API_ERROR_CODES = [
   "UNAUTHENTICATED",
   "USERNAME_REQUIRED",
   "USERNAME_TOO_LONG",
+  // Two rather than one, because only the first is a client bug worth naming: an id this
+  // build does not know is a version skew, while a widget installed at the wrong level is a
+  // request the caller assembled wrongly. The sentences differ, so the codes do.
+  "UNKNOWN_WIDGET",
+  "WIDGET_SCOPE_UNSUPPORTED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -696,6 +833,14 @@ export interface Copilot {
   tools: string[];
   /** Defaults handed to new conversations started with this copilot. */
   settings: CopilotDefaults;
+  /**
+   * Widgets a conversation started from this copilot installs.
+   *
+   * Always resolved on the wire: a copilot whose selection has never been set reads as the
+   * defaults rather than as `[]`, because the two are different claims — "nobody decided" and
+   * "decided: none". The stored column is nullable to keep them apart; this is not.
+   */
+  widgets: WidgetId[];
   visibility: CopilotVisibility;
   createdAt: string;
   updatedAt: string;
@@ -811,6 +956,14 @@ export interface PublicConfig {
 
 export interface CreateWorkspaceInput {
   name: string;
+  /**
+   * Which widgets to install, at workspace scope.
+   *
+   * A workspace does not exist when the boxes are ticked, so the whole selection arrives here
+   * and is written in one go — which is what makes `installed` a moment rather than a sequence
+   * of flips. **Absent** means `DEFAULT_WIDGET_IDS`; an explicit empty list means none.
+   */
+  widgets?: WidgetId[];
 }
 
 export interface UpdateWorkspaceInput {
@@ -826,6 +979,14 @@ export interface CreateCopilotInput {
   /** Ignored when `allTools` is true. Empty with `allTools: false` means no tools. */
   tools?: string[];
   settings?: CopilotDefaults;
+  /**
+   * Widgets conversations started from this Copilot install.
+   *
+   * Validated at **session** scope, because that is the level a Copilot installs at. On
+   * `PUT` an absent field leaves the stored selection alone — the same contract `apiKey` and
+   * the tool pair carry, so a form that does not mention widgets cannot clear them.
+   */
+  widgets?: WidgetId[];
   /** Defaults to `private` — publishing is something the owner opts into. */
   visibility?: CopilotVisibility;
 }
@@ -836,6 +997,21 @@ export interface CreateSessionInput {
   title?: string;
   /** The Copilot to copy from. Must be the caller's own, or public. */
   copilotId?: string | null;
+  /**
+   * Widgets to install, at session scope. Seeded by the client from the chosen Copilot.
+   *
+   * **Absent** falls through to the Copilot's selection, and then to `DEFAULT_WIDGET_IDS`; an
+   * explicit empty list is "none" and stops the fall-through — the absent/empty distinction
+   * `allTools` documents, for the same reason.
+   */
+  widgets?: WidgetId[];
+  /**
+   * Generation parameters chosen before the conversation existed.
+   *
+   * **Merged over** the Copilot's copied settings, with the Copilot's own values as the base,
+   * so this is one write rather than the create-then-edit the client used to do.
+   */
+  settings?: SessionSettings;
 }
 
 export interface UpdateSessionInput {

@@ -168,6 +168,7 @@ const en: typeof MessageSchema = {
       groupPublic: "Published Copilots",
       groupMine: "My Copilots",
       byAuthor: "published by {name}",
+      advanced: "Other parameters (set here at creation, adjustable afterwards in session parameters)",
     },
     // 「」 is a Chinese quoting convention; English gets curly quotes.
     delete: {
@@ -304,6 +305,24 @@ const en: typeof MessageSchema = {
     note: "“Context used” comes from last turn's token counts; “pending input” is estimated from character count and is a preview only.",
   },
 
+  /** The generation parameters, named once — see the note in `zh-CN.ts`. */
+  params: {
+    provider: "Provider",
+    model: "Model",
+    inherit: "Inherit default",
+    temperature: "Temperature",
+    temperatureHint: "Between 0 and 2; higher answers are more random.",
+    topP: "Top P",
+    topPHint: "Between 0 and 1; usually adjusted instead of temperature, not alongside it.",
+    maxOutput: "Max output",
+    maxOutputHint: "In tokens; caps how long a single reply can be.",
+    maxHistory: "History messages to carry",
+    maxHistoryAll: "All (no truncation)",
+    maxHistoryHint: "In messages; the oldest are dropped first once the limit is passed.",
+    maxSteps: "Max tool steps",
+    maxStepsHint: "How many times the model → tool loop may run within a single reply.",
+  },
+
   copilot: {
     edit: "Edit Copilot",
     create: "New Copilot",
@@ -322,15 +341,9 @@ const en: typeof MessageSchema = {
     publicHint:
       "Every account can then see and use it, but only you can edit or delete it.",
     defaults: "Defaults (copied into a new conversation; adjustable there afterwards)",
-    inherit: "Inherit default",
-    model: "Model",
-    maxOutput: "Max output",
-    unitToken: "in tokens",
-    maxHistory: "History messages to carry",
-    all: "All",
-    unitMessages: "messages",
-    maxSteps: "Max tool steps",
-    unitSteps: "steps",
+    widgets: "Widgets to install",
+    widgetsHint:
+      "Starting a conversation from this Copilot installs the ticked widgets into it; they can be adjusted there afterwards, in session parameters.",
   },
 
 
@@ -506,6 +519,44 @@ const en: typeof MessageSchema = {
     enabled: "Enabled (parsing skips this entry when off)",
   },
 
+  widgets: {
+    install: "Install",
+    uninstall: "Uninstall",
+    heading: "Widgets",
+    workspaceLead: "Widgets installed here appear in the right sidebar of every conversation in this workspace.",
+    sessionLead: "Widgets installed here affect this conversation only.",
+    panel: {
+      layoutTop: "Move the tab strip to the top",
+      layoutLeft: "Move the tab strip to the left",
+      collapse: "Collapse the widget panel",
+      expand: "Expand the widget panel",
+      resize: "Resize the widget panel (arrow keys for a nudge)",
+      more: "More widgets",
+    },
+    open: "Open the widget panel",
+    noSession: "No conversation yet — a widget has to be installed into one.",
+    loadFailed: "Couldn't load the data",
+    retry: "Retry",
+    messages: "Messages",
+    tokens: "Tokens",
+    workspaceStats: {
+      /** "(Demo)" is part of the name, not a note about it — see the remark in `zh-CN.ts`. */
+      name: "Workspace stats (Demo)",
+      hint: "This workspace's conversations, with each one's message count and token use.",
+      empty: "This workspace has no conversations yet.",
+    },
+    workspaceSettings: {
+      title: "Workspace settings",
+      liveHint: "Changes show up in the right sidebar immediately.",
+    },
+    sessionStats: {
+      name: "Conversation stats (Demo)",
+      hint: "This conversation's message count and token use.",
+      noSession: "Open a conversation and its numbers appear here.",
+      context: "Context this turn",
+    },
+  },
+
   sessionSettings: {
     title: "Session parameters",
     scopeExisting: "These parameters apply to this conversation only.",
@@ -515,18 +566,6 @@ const en: typeof MessageSchema = {
     systemPromptPlaceholder: "What should this conversation be?",
     systemPromptHint:
       "This conversation's own. A new conversation copies one in from its Copilot and the two are independent afterwards — editing it here does not change that Copilot.",
-    model: "Model",
-    inherit: "Inherit default",
-    temperatureHint: "Between 0 and 2; higher answers are more random.",
-    topPHint: "Between 0 and 1; usually adjusted instead of temperature, not alongside it.",
-    maxOutput: "Max output",
-    maxOutputHint: "In tokens; caps how long a single reply can be.",
-    maxHistory: "History messages to carry",
-    maxHistoryAll: "All (no truncation)",
-    maxHistoryHint: "In messages; the oldest are dropped first once the limit is passed.",
-    maxSteps: "Max tool steps",
-    maxStepsHint:
-      "How many times the model → tool loop may run within a single reply.",
     reset: "Reset",
   },
 
@@ -565,6 +604,8 @@ const en: typeof MessageSchema = {
     UNAUTHENTICATED: "Your session has ended. Sign in again.",
     USERNAME_REQUIRED: "A username is required.",
     USERNAME_TOO_LONG: "A username cannot be longer than {max} characters.",
+    UNKNOWN_WIDGET: "This build has no such widget. Reload the page and try again.",
+    WIDGET_SCOPE_UNSUPPORTED: "That widget cannot be installed at this level.",
   },
 
   /**

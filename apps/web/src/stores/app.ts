@@ -11,6 +11,8 @@ import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
 import { closeSettings, closeSources, showLogin, showWorkspaceHome, uiState } from "../composables/ui";
+import { emitWidgetEvent } from "../composables/widgetEvents";
+import { WIDGET_MODULES, type WidgetContext } from "../widgets/registry";
 import type {
   AskUserAnswers,
   Attachment,
@@ -36,6 +38,9 @@ import type {
   ToolCall,
   UpdateProviderInput,
   User,
+  WidgetId,
+  WidgetScope,
+  WidgetState,
   Workspace,
 } from "../api/types";
 import { MAX_ATTACHMENT_BYTES, isInteractiveTool, type InteractiveAnswer } from "../api/types";
@@ -68,6 +73,8 @@ export interface CopilotDraft {
   allTools: boolean;
   tools: string[];
   settings: CopilotDefaults;
+  /** Widgets conversations started from this Copilot install, at session scope. */
+  widgets: WidgetId[];
   visibility: CopilotVisibility;
 }
 
@@ -149,6 +156,18 @@ export const useAppStore = defineStore("app", () => {
   const copilots = ref<Copilot[]>([]);
   const sessions = ref<Session[]>([]);
   const messages = ref<Message[]>([]);
+  /**
+   * The widget installs for the two objects the panel can be showing.
+   *
+   * Both lists are *resolved* by the server — one entry per widget this build knows at that
+   * level, `enabled` already settled — so a client-side default for "nothing has decided" would
+   * be a second answer to a question that already has one.
+   *
+   * Kept apart rather than merged because the strip draws them as two groups with a divider, and
+   * the group an entry belongs to is not recoverable from its id.
+   */
+  const workspaceWidgets = ref<WidgetState[]>([]);
+  const sessionWidgets = ref<WidgetState[]>([]);
 
   const activeWorkspaceId = ref<string | null>(null);
   const activeSessionId = ref<string | null>(null);
@@ -369,6 +388,26 @@ export const useAppStore = defineStore("app", () => {
     return 0;
   });
 
+  /*
+   * The installed widgets, as ids. `enabled` is the whole question the strip asks, so the lists
+   * the panel and the layout read are these rather than the `WidgetState[]` behind them — the
+   * same reason `sidebarRail` is derived once instead of tested at each of its two readers.
+   *
+   * `enabledWidgetIds` is the concatenation *in group order*, which is what makes "workspace
+   * first, then session" a property of the data rather than of the render.
+   */
+  const workspaceWidgetIds = computed(() =>
+    workspaceWidgets.value.filter((w) => w.enabled).map((w) => w.id)
+  );
+  const sessionWidgetIds = computed(() =>
+    sessionWidgets.value.filter((w) => w.enabled).map((w) => w.id)
+  );
+  /** Whether the panel exists at all: it is shown only when something is installed. */
+  const enabledWidgetIds = computed(() => [
+    ...workspaceWidgetIds.value,
+    ...sessionWidgetIds.value,
+  ]);
+
   const isConfigured = computed(() => !!config.value?.providers.some((p) => p.hasApiKey));
 
   /**
@@ -419,6 +458,10 @@ export const useAppStore = defineStore("app", () => {
     copilots.value = [];
     sessions.value = [];
     messages.value = [];
+    // The installs belong to the objects, so they go with them — an uninstalled-but-still-listed
+    // widget would keep the panel on screen for whoever signs in next.
+    workspaceWidgets.value = [];
+    sessionWidgets.value = [];
     activeWorkspaceId.value = null;
     activeSessionId.value = null;
     activeCopilotId.value = null;
@@ -542,14 +585,44 @@ export const useAppStore = defineStore("app", () => {
     activeCopilotId.value = null;
     draftSettings.value = {};
     messages.value = [];
+    // The conversation being left had its own installs, and they belong to it.
+    sessionWidgets.value = [];
     resetFileTree();
-    await loadSessions();
+    // Both are reads of the same workspace and neither needs the other, so they go together
+    // rather than as two round trips on every switch.
+    await Promise.all([loadSessions(), loadWorkspaceWidgets()]);
+    // After the reads, so a widget that reacts by fetching sees the workspace it is now in
+    // rather than the one that was there a moment ago.
+    emitWidgetEvent({ type: "workspace.selected", workspaceId: id });
   }
 
-  async function createWorkspace(name: string): Promise<void> {
-    const ws = await api.createWorkspace(name);
+  /**
+   * Create a workspace, optionally with widgets already chosen.
+   *
+   * The selection is a parameter rather than a follow-up call because a workspace does not exist
+   * when its boxes are ticked — so this is the one write that carries them all, and it is what
+   * makes installing a widget a moment rather than a sequence of flips.
+   */
+  async function createWorkspace(name: string, widgets?: WidgetId[]): Promise<void> {
+    const ws = await api.createWorkspace(name, widgets);
     workspaces.value.push(ws);
-    if (!activeWorkspaceId.value) activeWorkspaceId.value = ws.id;
+    if (!activeWorkspaceId.value) {
+      activeWorkspaceId.value = ws.id;
+      await loadWorkspaceWidgets();
+    }
+    /*
+     * The newly installed widgets are told, which is one of the two moments the lifecycle is
+     * defined at: a **created object's** installs are initialised here, and a *later* install is
+     * initialised by `setWidgetEnabled`. The whole selection is chosen before the workspace
+     * exists, so this is the only place it can happen.
+     *
+     * The list passed is the one that was asked for, and that is exactly the installed set: the
+     * create route writes a row for every widget that differs from the default, so with an empty
+     * default set the two are the same list. `undefined` — a caller with no opinion — installs the
+     * defaults, which are also empty today; the day they are not, this is the line that has to
+     * read the resolved list instead.
+     */
+    await runInstallHooks("workspace", ws.id, widgets ?? []);
   }
 
   /**
@@ -718,32 +791,72 @@ export const useAppStore = defineStore("app", () => {
       activeWorkspaceId.value = workspaces.value[0]?.id ?? null;
       activeSessionId.value = null;
       messages.value = [];
+      sessionWidgets.value = [];
       await loadSessions();
+      // The next workspace may have its own installs; leaving the deleted one's would show a
+      // panel for widgets nothing claims.
+      if (activeWorkspaceId.value) await loadWorkspaceWidgets();
+      else workspaceWidgets.value = [];
     }
   }
 
+  /**
+   * Open a conversation.
+   *
+   * The widgets come from the same reply as the messages, in one request: the read answers both
+   * groups, so the strip and the transcript arrive together rather than the strip filling in a
+   * moment later.
+   */
   async function selectSession(id: string): Promise<void> {
     activeSessionId.value = id;
     activeCopilotId.value = activeSession.value?.copilotId ?? null;
-    messages.value = await api.listMessages(id);
+    const [loaded, widgets] = await Promise.all([
+      api.listMessages(id),
+      api.listSessionWidgets(id),
+    ]);
+    messages.value = loaded;
+    workspaceWidgets.value = widgets.workspace;
+    sessionWidgets.value = widgets.session;
     pendingAttachments.value = [];
     streaming.value = EMPTY_STREAMING();
   }
 
-  async function createSession(copilotId?: string | null): Promise<Session | null> {
+  /**
+   * Start a conversation.
+   *
+   * The parameters and the widgets go in the **create** request rather than a `PATCH` afterwards.
+   * The two-step that used to be here left a window in which the conversation existed with
+   * parameters nobody chose, and — the half that is observable — a failure between the calls left
+   * it that way for good.
+   *
+   * `settings` defaults to the staged `draftSettings`, which is what the welcome screen's
+   * settings dialog writes into; the new-session dialog passes its own draft instead. Null values
+   * are dropped rather than sent, because `null` means "inherit" and the server's merge would
+   * take it literally as "unset this" over the Copilot's copied value.
+   */
+  async function createSession(
+    options: { copilotId?: string | null; settings?: SessionSettings; widgets?: WidgetId[] } = {}
+  ): Promise<Session | null> {
     if (!activeWorkspaceId.value) return null;
-    const session = await api.createSession(activeWorkspaceId.value, {
-      copilotId: copilotId ?? activeCopilotId.value ?? null,
+    const workspaceId = activeWorkspaceId.value;
+    const staged = Object.entries(options.settings ?? draftSettings.value).filter(
+      ([, v]) => v != null
+    );
+    const created = await api.createSession(workspaceId, {
+      copilotId: options.copilotId ?? activeCopilotId.value ?? null,
+      ...(staged.length ? { settings: Object.fromEntries(staged) } : {}),
+      // `[]` is a decision and is sent as one — it means "none", and omitting it would fall
+      // through to the Copilot's selection instead. Only `undefined` leaves the choice open.
+      ...(options.widgets !== undefined ? { widgets: options.widgets } : {}),
     });
-    // Carry over anything picked on the welcome screen, so the choice survives.
-    const carried = Object.entries(draftSettings.value).filter(([, v]) => v != null);
-    const created = carried.length
-      ? await api.updateSession(session.id, { settings: draftSettings.value })
-      : session;
     draftSettings.value = {};
-    if (carried.length) replaceSession(created);
     sessions.value = [created, ...sessions.value.filter((s) => s.id !== created.id)];
     await selectSession(created.id);
+    // After `selectSession`, so the list is the server's resolved answer rather than the request's
+    // — a Copilot's selection is copied in by the server, and this call may have named no widgets
+    // of its own at all.
+    await runInstallHooks("session", created.id, sessionWidgets.value.filter((w) => w.enabled).map((w) => w.id));
+    emitWidgetEvent({ type: "session.created", workspaceId, sessionId: created.id });
     return created;
   }
 
@@ -752,6 +865,110 @@ export const useAppStore = defineStore("app", () => {
     if (!trimmed) return;
     const updated = await api.updateSession(id, { title: trimmed });
     replaceSession(updated);
+    // Announced because a widget that lists conversations shows the title, and the *server* is
+    // where the new one was settled.
+    emitWidgetEvent({ type: "session.renamed", sessionId: id, title: updated.title });
+  }
+
+  /* --------------------------------- widgets --------------------------------- */
+
+  async function loadWorkspaceWidgets(): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) {
+      workspaceWidgets.value = [];
+      return;
+    }
+    workspaceWidgets.value = await api.listWorkspaceWidgets(workspaceId);
+  }
+
+  /**
+   * Install or uninstall one widget, then run its lifecycle hook, and answer the new state.
+   *
+   * The hook runs **after** the write: by the time it is called the user's action has already done
+   * what they asked, so a hook that throws cannot report a failure — nor undo the state the server
+   * now holds. It is logged instead, and a widget whose *data* fails says so inside its own panel,
+   * which is the split `fileTreeError` and `filePreviewError` already make.
+   *
+   * No once-only guard on the hooks: install / uninstall / install on the same object is
+   * supported, and re-firing `onInstall` is exactly what "initialise the instance" means.
+   *
+   * The reply is returned because a caller may be holding its own copy of the rows. The workspace
+   * settings dialog is one: it can be opened for a workspace that is not the active one, so it
+   * keeps its own list rather than borrowing this module's — and it is that list, not this one,
+   * that has to be patched.
+   */
+  async function setWidgetEnabled(
+    scope: WidgetScope,
+    scopeId: string,
+    widgetId: WidgetId,
+    enabled: boolean
+  ): Promise<WidgetState> {
+    const state =
+      scope === "workspace"
+        ? await api.setWorkspaceWidget(scopeId, widgetId, enabled)
+        : await api.setSessionWidget(scopeId, widgetId, enabled);
+
+    /*
+     * Patch the shared list **only when it is about this object**. These two lists belong to the
+     * active workspace and the active conversation; writing a foreign id into them would put one
+     * workspace's installs on another's panel, which is the same failure as reading them from the
+     * wrong place.
+     */
+    const isActive =
+      scope === "workspace"
+        ? scopeId === activeWorkspaceId.value
+        : scopeId === activeSessionId.value;
+    if (isActive) {
+      const list = scope === "workspace" ? workspaceWidgets : sessionWidgets;
+      const idx = list.value.findIndex((w) => w.id === state.id);
+      if (idx === -1) list.value = [...list.value, state];
+      else list.value[idx] = state;
+    }
+
+    await runWidgetHook(enabled ? "onInstall" : "onUninstall", { scope, scopeId, widgetId });
+    // From the reply rather than composed locally, so a caller renders the record rather than
+    // what this function believed it asked for.
+    return state;
+  }
+
+  /**
+   * Run a widget's lifecycle hook, swallowing whatever it throws.
+   *
+   * Swallowed rather than reported, and the ordering is what makes that honest: the record is
+   * committed by now, so a toast would read as "the install failed" when it did not. A hook that
+   * threw is a defect in a built-in widget that no user action can fix, so it is logged for the
+   * developer who wrote it.
+   */
+  async function runWidgetHook(
+    kind: "onInstall" | "onUninstall",
+    ctx: WidgetContext
+  ): Promise<void> {
+    const hook = WIDGET_MODULES[ctx.widgetId]?.[kind];
+    if (!hook) return;
+    try {
+      await hook(ctx);
+    } catch (err) {
+      console.warn(`[widgets] ${ctx.widgetId}.${kind} threw`, err);
+    }
+  }
+
+  /**
+   * Announce a whole selection that was installed by an object's *creation*.
+   *
+   * The other half of the lifecycle, and the reason it is a separate function rather than a loop
+   * at each call site: a create installs a set in one write, so there is no per-widget moment for
+   * `setWidgetEnabled` to hook into. Sequential rather than `Promise.all` — a widget's setup is
+   * its own business, and running several at once would make their relative order depend on
+   * timing for no benefit.
+   */
+  async function runInstallHooks(
+    scope: WidgetScope,
+    scopeId: string,
+    widgetIds: WidgetId[]
+  ): Promise<void> {
+    for (const widgetId of widgetIds) {
+      await runWidgetHook("onInstall", { scope, scopeId, widgetId });
+    }
   }
 
   /**
@@ -769,6 +986,7 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function deleteSession(id: string): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
     await api.deleteSession(id);
     sessions.value = sessions.value.filter((s) => s.id !== id);
     if (activeSessionId.value === id) {
@@ -776,7 +994,10 @@ export const useAppStore = defineStore("app", () => {
       activeCopilotId.value = null;
       messages.value = [];
       pendingAttachments.value = [];
+      // Its installs go with it, or the strip would keep offering a conversation that is gone.
+      sessionWidgets.value = [];
     }
+    if (workspaceId) emitWidgetEvent({ type: "session.deleted", workspaceId, sessionId: id });
   }
 
   /**
@@ -810,6 +1031,7 @@ export const useAppStore = defineStore("app", () => {
       allTools: draft.allTools,
       tools: draft.tools,
       settings: draft.settings,
+      widgets: draft.widgets,
       visibility: draft.visibility,
     };
     if (draft.id) {
@@ -1216,8 +1438,11 @@ export const useAppStore = defineStore("app", () => {
    * never opened. A failure *inside* a turn arrives as an `error` event on a 200 and is
    * not one of these: by then the server has already accepted the request, so a caller
    * that rolled back on this would be undoing something the server did write.
+   *
+   * `sessionId` is taken so the end of the turn can be announced with it — see the emit in the
+   * `finally` below, which is the one point every turn ends at.
    */
-  async function consume(stream: AsyncGenerator<ChatStreamEvent>): Promise<boolean> {
+  async function consume(stream: AsyncGenerator<ChatStreamEvent>, sessionId: string): Promise<boolean> {
     // Whose turn this is. If the account goes away mid-stream the events stop being applied at
     // all, so a signed-out turn cannot write into the next account's conversation.
     const epoch = accountEpoch;
@@ -1246,6 +1471,11 @@ export const useAppStore = defineStore("app", () => {
         // callers that start one. Silent, and a no-op when the tree was never opened: this
         // is a courtesy to the panel, not part of finishing a turn.
         await refreshFileTree({ silent: true }).catch(() => undefined);
+        // And the end of the turn is announced here for the same reason the two re-reads are:
+        // this is the one point every turn ends at. Unconditionally, including a request that
+        // failed — a failed turn still persisted a message, so a widget showing a count would
+        // otherwise be showing one that is no longer true.
+        emitWidgetEvent({ type: "turn.finished", sessionId });
       }
     }
     return !requestFailed;
@@ -1295,12 +1525,14 @@ export const useAppStore = defineStore("app", () => {
 
     clearPendingAttachments();
     streaming.value = { ...EMPTY_STREAMING(), active: true };
+    emitWidgetEvent({ type: "turn.started", sessionId });
 
     await consume(
       streamChat(sessionId, {
         message: content,
         attachments,
-      })
+      }),
+      sessionId
     );
   }
 
@@ -1338,8 +1570,14 @@ export const useAppStore = defineStore("app", () => {
     toolCall.answer = submission.answers;
 
     streaming.value = { ...EMPTY_STREAMING(), active: true };
+    // A resumed turn moves the message counts and the token totals just as a fresh one does, so
+    // it is announced from the same place rather than from only the fresh path.
+    emitWidgetEvent({ type: "turn.started", sessionId });
 
-    const accepted = await consume(streamAnswers(sessionId, { toolCallId, ...submission }));
+    const accepted = await consume(
+      streamAnswers(sessionId, { toolCallId, ...submission }),
+      sessionId
+    );
     if (!accepted) {
       // The server never took the answer — a 409 because it was already skipped, say — so
       // the card goes back to waiting rather than claiming a decision nobody recorded.
@@ -1386,6 +1624,8 @@ export const useAppStore = defineStore("app", () => {
     copilots,
     sessions,
     messages,
+    workspaceWidgets,
+    sessionWidgets,
     activeWorkspaceId,
     activeSessionId,
     activeCopilotId,
@@ -1421,6 +1661,9 @@ export const useAppStore = defineStore("app", () => {
     contextTokens,
     isConfigured,
     documentsParsing,
+    workspaceWidgetIds,
+    sessionWidgetIds,
+    enabledWidgetIds,
     // actions
     init,
     signIn,
@@ -1439,6 +1682,8 @@ export const useAppStore = defineStore("app", () => {
     renameSession,
     updateSettings,
     deleteSession,
+    loadWorkspaceWidgets,
+    setWidgetEnabled,
     setProviderAndModel,
     updateSessionPrompt,
     saveCopilot,

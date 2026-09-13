@@ -4,7 +4,13 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { isCompact } from "../composables/breakpoints";
 import { useScrollFollow } from "../composables/scrollFollow";
-import { openDrawer, showWorkspaceHome, uiState } from "../composables/ui";
+import {
+  closeWidgetDrawer,
+  openDrawer,
+  openWidgetDrawer,
+  showWorkspaceHome,
+  uiState,
+} from "../composables/ui";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
 import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
@@ -17,6 +23,18 @@ const store = useAppStore();
 const { t } = useI18n();
 const showNewSession = ref(false);
 const messagesEl = ref<HTMLElement | null>(null);
+
+/**
+ * The widget panel's topbar control, on a compact viewport only.
+ *
+ * One function rather than an open/close pair, matching `toggleSidebar`: the only control that
+ * reaches it is a toggle, and a pair would put the "which one am I" question at the call site,
+ * answered by reading the flag the button already renders from.
+ */
+function toggleWidgetDrawer(): void {
+  if (uiState.widgetDrawerOpen) closeWidgetDrawer();
+  else openWidgetDrawer();
+}
 
 /* --------------------------------- leaving ----------------------------------- */
 
@@ -232,6 +250,25 @@ watch(
 
       <!-- The title block takes the free space, so the actions land on the right. -->
       <TopbarControls />
+
+      <!--
+        The widget panel's only way in on a compact viewport, since it is off-canvas there — and
+        the last thing in the row rather than beside the nav toggle, because the two drawers are
+        at opposite edges of the screen: the sidebar's toggle stays on the left, next to the way
+        out, and this one sits where the panel it opens actually appears.
+      -->
+      <button
+        v-if="isCompact && store.enabledWidgetIds.length > 0"
+        class="icon-btn widget-toggle"
+        data-testid="widget-toggle"
+        :title="t('widgets.open')"
+        :aria-label="t('widgets.open')"
+        :aria-expanded="uiState.widgetDrawerOpen"
+        aria-controls="widget-panel"
+        @click="toggleWidgetDrawer"
+      >
+        <Icon name="panel-right" />
+      </button>
     </header>
 
     <!-- Split into three keys rather than one message with <strong> in it: no message

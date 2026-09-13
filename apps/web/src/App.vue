@@ -1,22 +1,52 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "./stores/app";
 import Sidebar from "./components/Sidebar.vue";
 import ChatView from "./components/ChatView.vue";
 import WorkspaceHome from "./components/WorkspaceHome.vue";
 import LoginView from "./components/LoginView.vue";
+import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
 import SourcesDialog from "./components/dialogs/SourcesDialog.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
-import { closeDrawer, closeSettings, sidebarRail, uiState } from "./composables/ui";
+import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
+import {
+  closeDrawer,
+  closeSettings,
+  closeWidgetDrawer,
+  sidebarRail,
+  uiState,
+} from "./composables/ui";
 import { isCompact } from "./composables/breakpoints";
+import { widgetPanel } from "./composables/widgetPanel";
 import { confirmState } from "./composables/confirm";
 import Icon from "./components/Icon.vue";
 
 const store = useAppStore();
 const { t } = useI18n();
+
+/**
+ * Whether the widget panel exists at all.
+ *
+ * Two conditions, and neither is about the viewport: the panel shows on a conversation page and
+ * only when something is installed. Behind 900px it is rendered as a drawer rather than not at
+ * all — the *same* element, laid out by a media query, which is why this does not test `isCompact`
+ * while the grid track below does.
+ */
+const showWidgetPanel = computed(
+  () => uiState.view === "chat" && store.enabledWidgetIds.length > 0
+);
+
+/**
+ * Whether the panel is a third grid track.
+ *
+ * Only where it is in flow. On a compact viewport it is a fixed overlay, and `.app.with-widgets`
+ * would add a track the drawer does not occupy — a sliver of empty column beside a panel that is
+ * already covering the pane.
+ */
+const widgetPanelInFlow = computed(() => showWidgetPanel.value && !isCompact.value);
 
 onMounted(() => {
   store.init().catch((e) => store.setError(e instanceof Error ? e.message : String(e)));
@@ -34,15 +64,19 @@ onMounted(() => {
  * any of them is up leaves the topmost layer to handle it.
  */
 function onKeydown(event: KeyboardEvent) {
-  if (event.key !== "Escape" || !uiState.drawerOpen) return;
+  if (event.key !== "Escape") return;
+  // The widget drawer is the same case as the left one, and the two can be open at once — so
+  // each is handled by the same handler and neither falls through to the other.
+  if (!uiState.drawerOpen && !uiState.widgetDrawerOpen) return;
   if (confirmState.open || uiState.settingsOpen || store.filePreviewPath) return;
   closeDrawer();
+  closeWidgetDrawer();
 }
 
 watch(
-  () => uiState.drawerOpen,
-  (open) => {
-    if (open) window.addEventListener("keydown", onKeydown);
+  () => uiState.drawerOpen || uiState.widgetDrawerOpen,
+  (anyOpen) => {
+    if (anyOpen) window.addEventListener("keydown", onKeydown);
     else window.removeEventListener("keydown", onKeydown);
   }
 );
@@ -110,7 +144,11 @@ watch(
          two conditions inside it, and `style.css` for why the track is the element that
          has to move. */
       'sidebar-collapsed': sidebarRail,
+      /* And the widget panel is a third track, for the same reason: it is a column beside the
+         conversation, not a floating thing over it. */
+      'with-widgets': widgetPanelInFlow,
     }"
+    :style="{ '--widget-w': widgetPanel.widthCss.value }"
   >
     <LoginView v-if="uiState.authReady && uiState.view === 'login'" />
 
@@ -121,12 +159,14 @@ watch(
         <Sidebar :inert="!uiState.drawerOpen && isCompact" />
 
         <!--
-          Only on a compact viewport, and only while the drawer is open. `inert` takes the pane
-          behind the drawer out of the tab order and the accessibility tree, which is the same
-          job a focus trap does with a fraction of the state. `ChatView` is single-root, so the
-          attribute falls through to `<main>`.
+          Only on a compact viewport, and only while one of the drawers is open. `inert` takes the
+          pane behind it out of the tab order and the accessibility tree, which is the same job a
+          focus trap does with a fraction of the state. `ChatView` is single-root, so the attribute
+          falls through to `<main>` — and it tests *both* drawers, since either one covers it.
         -->
-        <ChatView :inert="uiState.drawerOpen && isCompact" />
+        <ChatView :inert="(uiState.drawerOpen || uiState.widgetDrawerOpen) && isCompact" />
+
+        <WidgetPanel v-if="showWidgetPanel" />
 
         <div
           v-if="isCompact && uiState.drawerOpen"
@@ -135,6 +175,15 @@ watch(
           aria-hidden="true"
           @click="closeDrawer"
         />
+        <!-- A backdrop of its own rather than a shared one, so a click can only dismiss the
+             drawer it was pointing at. -->
+        <div
+          v-if="isCompact && uiState.widgetDrawerOpen"
+          class="drawer-backdrop"
+          data-testid="widget-drawer-backdrop"
+          aria-hidden="true"
+          @click="closeWidgetDrawer"
+        />
       </template>
     </template>
 
@@ -142,6 +191,12 @@ watch(
     <ConfirmDialog />
     <!-- Reachable from the sidebar footer, the composer's model picker and the home page. -->
     <SettingsDialog v-if="uiState.settingsOpen" @close="closeSettings" />
+    <!-- Per workspace rather than per installation, so it is not a tab of the dialog above.
+         Keyed on the id: opening it for a different workspace has to rebuild the list. -->
+    <WorkspaceSettingsDialog
+      v-if="uiState.workspaceSettingsId"
+      :key="uiState.workspaceSettingsId"
+    />
     <!-- The account's uploaded files. Opened from the home page, because a source belongs to
          the account rather than to the workspace you happen to be in. -->
     <SourcesDialog />

@@ -17,6 +17,8 @@ import type {
   ProviderConfig,
   PublicConfig,
   Session,
+  SessionStats,
+  SessionWidgets,
   Source,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
@@ -25,7 +27,10 @@ import type {
   UpdateSessionInput,
   UploadAttachmentInput,
   User,
+  WidgetId,
+  WidgetState,
   Workspace,
+  WorkspaceStats,
 } from "@ilearnassist/shared";
 import { ApiError, translateApiError } from "../utils/apiError";
 
@@ -135,8 +140,13 @@ export const api = {
   getConfig: () => request<PublicConfig>("/config"),
 
   listWorkspaces: () => request<Workspace[]>("/workspaces"),
-  createWorkspace: (name: string) =>
-    request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify({ name }) }),
+  /**
+   * `widgets` is the whole workspace-scope selection, chosen before the workspace existed —
+   * the create dialog ticks boxes for an object that does not exist yet, so this is the one
+   * write that carries them all. Omitted means the server's defaults.
+   */
+  createWorkspace: (name: string, widgets?: WidgetId[]) =>
+    request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify({ name, widgets }) }),
   renameWorkspace: (id: string, name: string) =>
     request<Workspace>(`/workspaces/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteWorkspace: (id: string) =>
@@ -178,6 +188,34 @@ export const api = {
     request<{ ok: boolean }>(`/sessions/${id}`, { method: "DELETE" }),
 
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
+
+  /*
+   * Widgets.
+   *
+   * The installs are a `PUT` on one widget rather than a `PATCH` on a list, because that is what
+   * a toggle is: the resource is `(scope, scopeId, widgetId)` and `enabled` is its whole state,
+   * so repeating the request is the same as making it once.
+   */
+  listWorkspaceWidgets: (workspaceId: string) =>
+    request<WidgetState[]>(`/workspaces/${workspaceId}/widgets`),
+  setWorkspaceWidget: (workspaceId: string, widgetId: WidgetId, enabled: boolean) =>
+    request<WidgetState>(`/workspaces/${workspaceId}/widgets/${widgetId}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  /** Both groups at once, so the tab strip cannot render half-drawn. */
+  listSessionWidgets: (sessionId: string) =>
+    request<SessionWidgets>(`/sessions/${sessionId}/widgets`),
+  setSessionWidget: (sessionId: string, widgetId: WidgetId, enabled: boolean) =>
+    request<WidgetState>(`/sessions/${sessionId}/widgets/${widgetId}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+
+  /* The statistics the widget panels read. About the object, not about a widget. */
+  getWorkspaceStats: (workspaceId: string) =>
+    request<WorkspaceStats>(`/workspaces/${workspaceId}/stats`),
+  getSessionStats: (sessionId: string) => request<SessionStats>(`/sessions/${sessionId}/stats`),
 
   /**
    * Stop the turn currently streaming for a session.

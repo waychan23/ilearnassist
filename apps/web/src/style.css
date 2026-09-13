@@ -386,6 +386,26 @@ body {
   grid-template-columns: 1fr;
 }
 
+/*
+ * The widget panel is the third track, and it is set from `App.vue` rather than declared here —
+ * the width is a preference the user drags, so it arrives as `--widget-w` on the element.
+ *
+ * `var(--widget-w)` with **no fallback**, deliberately. An unresolvable custom property makes the
+ * whole `grid-template-columns` declaration invalid at computed-value time, and the grid then
+ * falls back to a single implicit column — every child stacked in one, with nothing logged. A
+ * fallback would hide that: it would resolve to *something* and the layout would look nearly
+ * right while the panel and the conversation shared a column. The class and the declaration come
+ * from the same component, so the property is always set when the class is on, and a mistake here
+ * should be loud rather than plausible.
+ */
+.app.with-widgets {
+  grid-template-columns: 272px 1fr var(--widget-w);
+}
+
+.app.sidebar-collapsed.with-widgets {
+  grid-template-columns: 52px 1fr var(--widget-w);
+}
+
 .sidebar {
   background: var(--sidebar);
   border-right: 1px solid var(--border);
@@ -868,6 +888,306 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---------------------------------- widgets --------------------------------- */
+
+/*
+ * The right sidebar. A third chrome column beside the left one, so it lives beside the sidebar's
+ * own rules — not in the messages region, which it is not part of.
+ *
+ * Built from surfaces the sheet already has (`--sidebar`, `--panel`, `--border`, `--text-*`,
+ * `--accent`), which is why no new colour token was needed and nothing had to be restated for the
+ * light palette. The three widths here — the rail, the handle, and the panel's own default — are
+ * px literals, the documented exception: width is not a spacing relationship.
+ */
+.widget-panel {
+  grid-column: 3;
+  background: var(--sidebar);
+  border-left: 1px solid var(--border);
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.widget-panel.vertical {
+  /* The strip becomes a rail inside the panel's left edge, so the two sit in a row. */
+  flex-direction: row;
+}
+
+.widget-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.widget-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.widget-rail {
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.widget-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+/*
+ * Collapsed: the strip and the body go, by name, and the rail stays.
+ *
+ * `display: none` rather than `v-if` for the same reason `.sidebar.collapsed` does it: the control
+ * that collapsed the panel has to still be on screen to undo it, so the *content* is what
+ * disappears rather than the component.
+ */
+.widget-panel.collapsed .widget-tabs,
+.widget-panel.collapsed .widget-body,
+.widget-panel.collapsed .widget-rail {
+  display: none;
+}
+
+.widget-panel.collapsed .widget-head {
+  justify-content: center;
+  border-bottom: none;
+  padding: var(--space-3);
+}
+
+/* The drag handle, on the panel's left edge. */
+.widget-resize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  /* Without this a touch drag scrolls the page instead of resizing. */
+  touch-action: none;
+}
+.widget-resize:hover,
+.widget-resize:focus-visible {
+  background: var(--accent-bg);
+}
+
+/* --------------------------------- tab strip -------------------------------- */
+
+.widget-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.widget-tabs.vertical {
+  flex-direction: column;
+  align-items: stretch;
+  padding: var(--space-3);
+  gap: var(--space-1);
+  overflow-y: auto;
+}
+
+/*
+ * A variant of `.tab`, not a copy — and the difference is why it is not the same class.
+ * `.tab`'s only state signal is a `border-bottom` underline, which does not survive a vertical
+ * rail, and the strip here additionally has an overflow menu and a draggable width. Promoting
+ * `.tab` with a `.vertical` modifier would have meant migrating two dialogs and the sidebar's own
+ * strip in the same change, for a feature that does not need them touched.
+ *
+ * Keyed on `aria-selected`, like `.segment` is keyed on `aria-pressed`: the state a screen reader
+ * announces and the state the sheet paints are then one fact rather than two.
+ */
+.widget-tab {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--fs-3);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  max-width: 168px;
+  min-width: 0;
+  /* Never squeezed: the fit arithmetic measures these, and a tab the browser shrank would be
+     measured at the shrunken size and then never fit again. */
+  flex-shrink: 0;
+  text-align: left;
+}
+.widget-tab:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.widget-tab[aria-selected="true"] {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.widget-tabs.vertical .widget-tab {
+  max-width: none;
+}
+
+.widget-tabs-divider {
+  flex-shrink: 0;
+  background: var(--border);
+  width: 1px;
+  align-self: stretch;
+  margin: var(--space-2) var(--space-1);
+}
+.widget-tabs.vertical .widget-tabs-divider {
+  width: auto;
+  height: 1px;
+  align-self: auto;
+  margin: var(--space-1) var(--space-2);
+}
+
+/*
+ * The overflow button, pinned to the strip's right end rather than following the last tab.
+ *
+ * `margin-left: auto` puts it there; **`position` is deliberately not set**, so the menu it opens
+ * resolves against `.widget-tabs` instead of against this button. That is the whole difference
+ * between a usable menu and an invisible one: anchored here, a `min-width` menu grows leftward
+ * from a button that sits mid-strip, runs past the panel's left edge, and is clipped away by
+ * `.widget-panel`'s `overflow: hidden` — leaving a menu that is present, focusable and impossible
+ * to click. Anchored to the strip, it hangs off the strip's right edge, which is at most 66px
+ * inside the panel, so even the narrowest panel holds it.
+ */
+.widget-more {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ------------------------------ widget content ------------------------------ */
+
+.widget-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.widget-totals {
+  display: flex;
+  gap: var(--space-7);
+}
+.widget-totals.pending .widget-total-value {
+  color: var(--text-3);
+}
+
+.widget-total-value {
+  font-size: var(--fs-6);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.widget-total-label {
+  font-size: var(--fs-2);
+  color: var(--text-3);
+  margin-top: var(--space-1);
+}
+
+.widget-figures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+.widget-figures > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.widget-figures dt {
+  color: var(--text-3);
+  font-size: var(--fs-2);
+}
+.widget-figures dd {
+  margin: 0;
+  font-size: var(--fs-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.widget-session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.widget-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  text-align: left;
+}
+.widget-session-row:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.widget-session-row.active {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.widget-row-figures {
+  display: flex;
+  gap: var(--space-4);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.widget-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  color: var(--danger-text);
+  font-size: var(--fs-2);
+}
+
+.widget-empty {
+  color: var(--text-3);
+  font-size: var(--fs-2);
+}
+
+/*
+ * The install list. `.list-row` and `.btn.small` are the shared controls; only the row's own
+ * proportions are set here.
+ */
+.widget-toggle-row {
+  align-items: center;
+  gap: var(--space-5);
+}
+.widget-toggle-row .widget-name {
+  font-size: var(--fs-3);
 }
 
 /* --------------------------------- messages --------------------------------- */
@@ -1669,6 +1989,22 @@ body {
   box-shadow: var(--shadow-popover);
 }
 
+/*
+ * The widget strip's overflow menu, which shares `.overlay-popover`'s surface and anchors the
+ * other way — under the button rather than above it.
+ *
+ * Declared **here**, immediately after what it overrides, and that placement is the whole of why
+ * it works: `.overlay-popover` sets `bottom`, so leaving it in place while adding `top` would
+ * stretch the menu between the two anchors. A rule in the widgets section above would lose on
+ * source order to a class declared down here, which is the same trap the responsive block warns
+ * about.
+ */
+.widget-menu {
+  bottom: auto;
+  top: calc(100% + var(--space-2));
+  min-width: 160px;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1743,6 +2079,40 @@ body {
 .tool-checks {
   gap: var(--space-4);
   margin-top: var(--space-3);
+}
+
+/*
+ * A collapsed section of a form.
+ *
+ * Promoted from `CopilotDialog`'s scoped block when the new-session dialog needed the same
+ * disclosure — the second copy, which is this system's threshold. The element is a `<details>` so
+ * that open and closed is the browser's state rather than a flag, and `[open]` is what the
+ * summary's spacing keys on.
+ */
+.defaults {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-5) var(--space-6);
+  background: var(--panel-2);
+}
+.defaults summary {
+  cursor: pointer;
+  font-size: var(--fs-3);
+  color: var(--text-2);
+}
+.defaults[open] summary {
+  margin-bottom: var(--space-6);
+}
+
+/* A group of install checkboxes inside a form field. */
+.widget-checks {
+  margin-top: var(--space-6);
+}
+.widget-checks > label {
+  display: block;
+  font-size: var(--fs-3);
+  color: var(--text-2);
+  margin-bottom: var(--space-3);
 }
 
 
@@ -1832,6 +2202,36 @@ body {
     inset: 0;
     background: var(--scrim);
     z-index: var(--z-backdrop);
+  }
+
+  /*
+   * The widget panel becomes a drawer at the right, mirroring the sidebar's at the left.
+   *
+   * `position: fixed` takes it out of the grid, which is why `App.vue` withholds
+   * `.app.with-widgets` on a compact viewport: the class would add a third track for a panel that
+   * no longer occupies one. Its width is capped against the viewport rather than fixed, because a
+   * 320px panel on a 412px screen is most of the screen — and the drag handle is not rendered
+   * here at all, since a fixed overlay has no width to drag.
+   */
+  .widget-panel {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-end: 0;
+    width: min(320px, 88vw);
+    z-index: var(--z-drawer);
+    transform: translateX(100%);
+    /* Load-bearing for the same reason the sidebar's is: a closed drawer that keeps its buttons
+       in the tab order is a set of controls nobody can see. */
+    visibility: hidden;
+    transition:
+      transform var(--dur-slow) var(--ease-drawer),
+      visibility 0s linear var(--dur-slow);
+  }
+
+  .widget-panel.open {
+    transform: none;
+    visibility: visible;
+    transition-delay: 0s, 0s;
   }
 
   /* One rule for every form grid: four copies collapsed into one class in the previous
@@ -1950,7 +2350,10 @@ body {
   .composer .attach-btn,
   .composer .params-btn,
   .topbar .nav-toggle,
-  .topbar .back-toggle {
+  .topbar .back-toggle,
+  /* Compact-only, so this one is a touch target on essentially every screen it appears on —
+     leaving it out would be the one topbar control that stayed small under a finger. */
+  .topbar .widget-toggle {
     min-width: 44px;
     min-height: 44px;
   }

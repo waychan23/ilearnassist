@@ -17,13 +17,20 @@ import type {
   ProviderModel,
   Session,
   SessionSettings,
+  SessionStats,
   Source,
   ToolCall,
   User,
+  WidgetId,
+  WidgetScope,
+  WidgetState,
   Workspace,
+  WorkspaceStats,
 } from "@ilearnassist/shared";
+import { DEFAULT_WIDGET_IDS, isWidgetId } from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
 import { applySchema } from "./schema.js";
+import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
 
 /* ---------------------------------- row shapes ---------------------------------- */
 
@@ -81,9 +88,17 @@ interface CopilotRow {
   all_tools: number | null;
   tools: string;
   settings: string | null;
+  /** Nullable: `null` is a row written before the column existed, i.e. "never set". */
+  widgets: string | null;
   visibility: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** One `widget_instances` row, as it is stored. */
+interface WidgetRow {
+  widget_id: string;
+  enabled: number;
 }
 
 interface SessionRow {
@@ -292,6 +307,13 @@ const mapCopilot = (r: CopilotRow): Copilot => ({
   allTools: asAllTools(r.all_tools),
   tools: safeParseArray<string>(r.tools),
   settings: safeParseObject<CopilotDefaults>(r.settings),
+  // `null` is "never set" and resolves to the defaults; an array (including `[]`) is a decision.
+  // An id this build does not know is dropped rather than handed on, because a reader derives
+  // from the registry — the same move `all_tools` makes against a stale `tools` list.
+  widgets:
+    r.widgets === null
+      ? [...DEFAULT_WIDGET_IDS]
+      : safeParseArray<string>(r.widgets).filter(isWidgetId),
   visibility: r.visibility === "public" ? "public" : "private",
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -361,6 +383,21 @@ function safeParseObject<T extends object>(json: string | null): T {
   } catch {
     return {} as T;
   }
+}
+
+/**
+ * One message's usage, or `null` when the column held nothing.
+ *
+ * `null` and `{}` are different answers, and the difference is load-bearing for the statistics:
+ * those count messages by their entries in an array, so a message with no usage has to arrive as
+ * `null` rather than as a zeroed object — otherwise a user message and a turn the user stopped
+ * would both look like turns that recorded figures.
+ *
+ * A column holding *malformed* JSON is the tolerant case and parses to `{}`, which sums to zero
+ * and is what a damaged row should contribute.
+ */
+function parseUsage(json: string | null): MessageUsage | null {
+  return json ? safeParseObject<MessageUsage>(json) : null;
 }
 
 /**
@@ -532,6 +569,14 @@ export interface AppDb {
     allTools: boolean;
     tools: string[];
     settings: CopilotDefaults;
+    /**
+     * Widgets a conversation started from this Copilot installs, at session scope.
+     *
+     * Required here rather than optional, matching the rest of this input: the *route* decides
+     * what "absent" means (leave the stored value alone) and passes the resolved list, so this
+     * layer only ever writes a decision.
+     */
+    widgets: WidgetId[];
     visibility: CopilotVisibility;
   }): Copilot;
   /** Owner-only (`id = ? AND user_id = ?`). `undefined` for a Copilot someone else owns. */
@@ -545,6 +590,7 @@ export interface AppDb {
       allTools: boolean;
       tools: string[];
       settings: CopilotDefaults;
+      widgets: WidgetId[];
       visibility: CopilotVisibility;
     }
   ): Copilot | undefined;
@@ -669,6 +715,43 @@ export interface AppDb {
    */
   reserveCounter(scope: string, scopeId: string, name: string, count: number): number[];
 
+  /*
+   * Widgets.
+   *
+   * The reads return the **resolved** list — one entry per widget the registry knows at that
+   * level, with `enabled` already settled — rather than the stored rows, because a stored row
+   * and a defaulted row must not be distinguishable at a call site. That resolution is the whole
+   * reason `widget_instances` can hold only decisions.
+   *
+   * Rows are never deleted by anything here. An uninstall is `setWidgetEnabled(…, false)`.
+   */
+  listWorkspaceWidgetsForUser(userId: string, workspaceId: string): WidgetState[];
+  listSessionWidgetsForUser(userId: string, sessionId: string): WidgetState[];
+  /**
+   * Record a decision, upserting. Returns false when the object is not the caller's — a foreign
+   * id inserts nothing, which is the same answer a missing one gives.
+   *
+   * A caller reaching this has already read the object for its 404; the statement's own owner
+   * check is the guarantee that survives someone removing that read.
+   */
+  setWorkspaceWidgetForUser(
+    userId: string,
+    workspaceId: string,
+    widgetId: WidgetId,
+    enabled: boolean
+  ): boolean;
+  setSessionWidgetForUser(
+    userId: string,
+    sessionId: string,
+    widgetId: WidgetId,
+    enabled: boolean
+  ): boolean;
+
+  /** Per-conversation message counts and summed usage for one workspace, newest first. */
+  statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
+  /** The same numbers for one conversation. `undefined` when it is not the caller's. */
+  statsForSessionForUser(userId: string, sessionId: string): SessionStats | undefined;
+
   listProviders(): ProviderRecord[];
   getProvider(id: string): ProviderRecord | undefined;
   createProvider(input: { id: string; name: string; baseURL: string; apiKey?: string }): ProviderRecord;
@@ -764,6 +847,13 @@ export function createDb(dbPath: string): AppDb {
   ensureColumn(db, "sessions", "system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "sessions", "all_tools", "all_tools INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "sessions", "tools", "tools TEXT NOT NULL DEFAULT '[]'");
+  // No `NOT NULL` and no default, unlike its neighbours above, and the difference is deliberate:
+  // those columns were given a default that *preserved* the meaning their rows already had, and
+  // there is no such value here. `'[]'` would read as "this Copilot installs nothing" for every
+  // Copilot written before the column existed — a decision nobody made, silently narrowing
+  // conversations that were never re-edited. NULL means "never set", which resolves to the
+  // defaults in `mapCopilot`, so an untouched Copilot behaves exactly as it did before.
+  ensureColumn(db, "copilots", "widgets", "widgets TEXT");
 
   /*
    * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
@@ -944,8 +1034,8 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtGetOwnedCopilot = db.prepare(`${copilotSelect} WHERE c.id = ? AND c.user_id = ?`);
   const stmtCreateCopilot = db.prepare(
-    `INSERT INTO copilots (id, user_id, name, description, system_prompt, all_tools, tools, settings, visibility, created_at, updated_at)
-     VALUES (@id, @userId, @name, @description, @systemPrompt, @allTools, @tools, @settings, @visibility, @createdAt, @updatedAt)`
+    `INSERT INTO copilots (id, user_id, name, description, system_prompt, all_tools, tools, settings, widgets, visibility, created_at, updated_at)
+     VALUES (@id, @userId, @name, @description, @systemPrompt, @allTools, @tools, @settings, @widgets, @visibility, @createdAt, @updatedAt)`
   );
   /*
    * `AND user_id = @userId` is redundant with the owned read the accessor does first, and kept
@@ -953,8 +1043,8 @@ export function createDb(dbPath: string): AppDb {
    */
   const stmtUpdateCopilotForUser = db.prepare(
     `UPDATE copilots SET name = @name, description = @description, system_prompt = @systemPrompt,
-     all_tools = @allTools, tools = @tools, settings = @settings, visibility = @visibility,
-     updated_at = @updatedAt
+     all_tools = @allTools, tools = @tools, settings = @settings, widgets = @widgets,
+     visibility = @visibility, updated_at = @updatedAt
      WHERE id = @id AND user_id = @userId`
   );
   const stmtDeleteCopilotForUser = db.prepare("DELETE FROM copilots WHERE id = ? AND user_id = ?");
@@ -1042,6 +1132,64 @@ export function createDb(dbPath: string): AppDb {
     `INSERT INTO counters (scope, scope_id, name, value) VALUES (?, ?, ?, ?)
      ON CONFLICT (scope, scope_id, name) DO UPDATE SET value = value + excluded.value
      RETURNING value`
+  );
+
+  /* ------------------------------- widgets -------------------------------- */
+  /*
+   * The owner is reached through the object the row hangs off — a workspace directly, a session
+   * through its workspace — which is how `sessions` reaches its owner too. Every statement below
+   * asserts it in the SQL rather than leaving it to the caller to have checked first: the read
+   * that a route does for its 404 and the write's own `WHERE` are two independent guarantees,
+   * and the second is the one that still holds if someone removes the first.
+   */
+  const stmtWorkspaceWidgetRowsForUser = db.prepare(
+    `SELECT wi.widget_id, wi.enabled FROM widget_instances wi
+       JOIN workspaces w ON w.id = @scopeId
+      WHERE wi.scope = 'workspace' AND wi.scope_id = @scopeId AND w.user_id = @userId`
+  );
+  const stmtSessionWidgetRowsForUser = db.prepare(
+    `SELECT wi.widget_id, wi.enabled FROM widget_instances wi
+       JOIN sessions s ON s.id = @scopeId
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE wi.scope = 'session' AND wi.scope_id = @scopeId AND w.user_id = @userId`
+  );
+  /*
+   * An upsert, so install / uninstall / install on the same pair is one row rather than a
+   * duplicate-key error, and so `created_at` keeps the first decision's timestamp while
+   * `updated_at` moves. `SELECT … FROM <owner>` is what makes the owner part of the write: a
+   * foreign id inserts nothing, and `changes` then reports 0.
+   */
+  const stmtSetWorkspaceWidgetForUser = db.prepare(
+    `INSERT INTO widget_instances (scope, scope_id, widget_id, enabled, created_at, updated_at)
+     SELECT 'workspace', w.id, @widgetId, @enabled, @now, @now FROM workspaces w
+      WHERE w.id = @scopeId AND w.user_id = @userId
+     ON CONFLICT (scope, scope_id, widget_id)
+       DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`
+  );
+  const stmtSetSessionWidgetForUser = db.prepare(
+    `INSERT INTO widget_instances (scope, scope_id, widget_id, enabled, created_at, updated_at)
+     SELECT 'session', s.id, @widgetId, @enabled, @now, @now
+       FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+      WHERE s.id = @scopeId AND w.user_id = @userId
+     ON CONFLICT (scope, scope_id, widget_id)
+       DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`
+  );
+
+  /*
+   * Two narrow projections for the statistics: the role (so a count can tell the two apart if it
+   * ever wants to) and the usage blob. `usage` is read whole and parsed in `widgets.ts` rather
+   * than summed here — see the note on `sumUsage` for why the arithmetic is not in SQL.
+   *
+   * Ordered ascending by `created_at`, because `contextTokens` is the *last* turn's figure and
+   * "last" has to mean the same thing to the query as it does to the reader.
+   */
+  const stmtSessionUsageRows = db.prepare(
+    `SELECT m.role, m.usage FROM messages m WHERE m.session_id = ? ORDER BY m.created_at ASC`
+  );
+  const stmtWorkspaceUsageRows = db.prepare(
+    `SELECT m.session_id, m.role, m.usage FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+      WHERE s.workspace_id = ? ORDER BY m.created_at ASC`
   );
 
   /* ------------------------------ providers ------------------------------- */
@@ -1233,6 +1381,7 @@ export function createDb(dbPath: string): AppDb {
         ...input,
         ...storeTools(input),
         settings: JSON.stringify(input.settings),
+        widgets: JSON.stringify(input.widgets),
         createdAt: ts,
         updatedAt: ts,
       });
@@ -1250,6 +1399,7 @@ export function createDb(dbPath: string): AppDb {
         ...input,
         ...storeTools(input),
         settings: JSON.stringify(input.settings),
+        widgets: JSON.stringify(input.widgets),
         updatedAt: now(),
       });
       const r = stmtGetOwnedCopilot.get(id, userId) as CopilotRow;
@@ -1391,6 +1541,83 @@ export function createDb(dbPath: string): AppDb {
       // `value` is the *last* number in the block, so the block is counted back from it.
       const end = row.value;
       return Array.from({ length: count }, (_, i) => end - count + i + 1);
+    },
+
+    listWorkspaceWidgetsForUser(userId, workspaceId) {
+      const rows = stmtWorkspaceWidgetRowsForUser.all({
+        userId,
+        scopeId: workspaceId,
+      }) as WidgetRow[];
+      // An empty set is also what a foreign workspace id produces, which is correct here: the
+      // caller's 404 comes from its own scoped read, and this is not the layer that decides it.
+      return resolveWidgetStates("workspace", rows);
+    },
+    listSessionWidgetsForUser(userId, sessionId) {
+      const rows = stmtSessionWidgetRowsForUser.all({
+        userId,
+        scopeId: sessionId,
+      }) as WidgetRow[];
+      return resolveWidgetStates("session", rows);
+    },
+    setWorkspaceWidgetForUser(userId, workspaceId, widgetId, enabled) {
+      return (
+        stmtSetWorkspaceWidgetForUser.run({
+          userId,
+          scopeId: workspaceId,
+          widgetId,
+          enabled: enabled ? 1 : 0,
+          now: now(),
+        }).changes > 0
+      );
+    },
+    setSessionWidgetForUser(userId, sessionId, widgetId, enabled) {
+      return (
+        stmtSetSessionWidgetForUser.run({
+          userId,
+          scopeId: sessionId,
+          widgetId,
+          enabled: enabled ? 1 : 0,
+          now: now(),
+        }).changes > 0
+      );
+    },
+
+    statsForWorkspace(userId, workspaceId) {
+      const workspace = workspaceForUser(workspaceId, userId);
+      if (!workspace) return undefined;
+
+      const rows = stmtWorkspaceUsageRows.all(workspaceId) as {
+        session_id: string;
+        usage: string | null;
+      }[];
+      const bySession = new Map<string, (MessageUsage | null)[]>();
+      for (const row of rows) {
+        const list = bySession.get(row.session_id) ?? [];
+        list.push(parseUsage(row.usage));
+        bySession.set(row.session_id, list);
+      }
+
+      // Driven by the session list rather than by the rows, so a conversation with no messages
+      // still appears with zeros — a widget that silently omitted it would read as the
+      // conversation not existing. `listSessionsForUser` already orders newest first.
+      return buildWorkspaceStats({
+        workspaceId,
+        sessions: (stmtListSessionsForUser.all(workspaceId, userId) as SessionRow[]).map((s) => ({
+          sessionId: s.id,
+          title: s.title,
+          usages: bySession.get(s.id) ?? [],
+        })),
+      });
+    },
+    statsForSessionForUser(userId, sessionId) {
+      const row = getSessionRowForUser(sessionId, userId);
+      if (!row) return undefined;
+      const rows = stmtSessionUsageRows.all(sessionId) as { usage: string | null }[];
+      return buildSessionStats({
+        sessionId,
+        title: row.title,
+        usages: rows.map((r) => parseUsage(r.usage)),
+      });
     },
 
     listProviders() {

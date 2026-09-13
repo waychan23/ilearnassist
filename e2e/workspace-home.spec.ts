@@ -99,13 +99,15 @@ test("the sidebar's header leaves the workspace too, and carries nothing else", 
   await page.goto("/");
   await enterWorkspace(page);
 
-  // Two controls, and neither creates anything: out on the left, the rail's toggle on the
-  // right. Creating a workspace lives on the home page, a click away, rather than a few
-  // pixels from the button that goes back to it — where a mis-click would start a workspace
-  // instead of leaving one. The toggle is named rather than counted, so an icon button
-  // added here later has to say what it is.
-  await expect(page.locator(".workspace-head button")).toHaveCount(2);
+  // Three controls, and none of them creates anything: out on the left, the workspace's own
+  // settings in the middle, the rail's toggle on the right. Creating a workspace lives on the
+  // home page, a click away, rather than a few pixels from the button that goes back to it —
+  // where a mis-click would start a workspace instead of leaving one. The count is here so an
+  // icon button added later has to say what it is, and the *name* is what says it: the middle
+  // one is the workspace name, made into a button, which is why the guard moved from two.
+  await expect(page.locator(".workspace-head button")).toHaveCount(3);
   await expect(page.getByTestId("sidebar-toggle")).toBeVisible();
+  await expect(page.getByTestId("workspace-settings-open")).toBeVisible();
 
   await page.getByTestId("all-workspaces").click();
 

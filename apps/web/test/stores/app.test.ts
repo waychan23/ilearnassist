@@ -10,6 +10,8 @@ import type {
   Session,
   Source,
   User,
+  WidgetId,
+  WidgetState,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
@@ -38,6 +40,12 @@ const mocks = vi.hoisted(() => ({
     updateSession: vi.fn(),
     deleteSession: vi.fn(),
     listMessages: vi.fn(),
+    listWorkspaceWidgets: vi.fn(),
+    setWorkspaceWidget: vi.fn(),
+    listSessionWidgets: vi.fn(),
+    setSessionWidget: vi.fn(),
+    getWorkspaceStats: vi.fn(),
+    getSessionStats: vi.fn(),
     stopSession: vi.fn(),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
@@ -190,6 +198,9 @@ function copilotFixture(id: string, userId: string): Copilot {
     // every tool rather than this one.
     tools: ["read_file"],
     settings: {},
+    // A selection, so a copy that dropped it would be visible — the same reason the tool list
+    // above is a restriction rather than empty.
+    widgets: ["session_stats"],
     visibility: "private",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -202,10 +213,35 @@ function streamOf(...events: ChatStreamEvent[]) {
   });
 }
 
+/**
+ * A widget state, resolved as the server resolves it: one entry per widget this build knows.
+ *
+ * The default is **nothing installed**, which is also what a fresh object gets — so a test that
+ * is not about widgets sees the same layout it saw before they existed, and the ones that are
+ * about widgets say what they installed.
+ */
+function widgetState(...enabled: WidgetId[]): WidgetState[] {
+  return [
+    { id: "workspace_stats", scope: "workspace", enabled: enabled.includes("workspace_stats") },
+    { id: "session_stats", scope: "session", enabled: enabled.includes("session_stats") },
+  ];
+}
+
 /** Put the store in a state where a session is selected and ready to chat. */
-async function readyStore(options: { sessions?: Session[]; messages?: Message[] } = {}) {
+async function readyStore(
+  options: { sessions?: Session[]; messages?: Message[]; widgets?: WidgetId[] } = {}
+) {
   mocks.api.listSessions.mockResolvedValue(options.sessions ?? [session()]);
   mocks.api.listMessages.mockResolvedValue(options.messages ?? []);
+  // The conversation read answers both groups, so one state serves both keys.
+  const states = widgetState(...(options.widgets ?? []));
+  mocks.api.listSessionWidgets.mockResolvedValue({
+    workspace: states.filter((w) => w.scope === "workspace"),
+    session: states.filter((w) => w.scope === "session"),
+  });
+  mocks.api.listWorkspaceWidgets.mockResolvedValue(
+    states.filter((w) => w.scope === "workspace")
+  );
 
   const store = useAppStore();
   await store.init();
@@ -263,7 +299,10 @@ describe("init", () => {
     const store = useAppStore();
     await store.init();
 
-    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Default");
+    // The widget list is **omitted**, not sent empty, and that is the distinction the API is
+    // built on: this workspace was created by the app rather than by the dialog, so nobody made a
+    // choice about it and it takes the server's default rather than asserting "none".
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Default", undefined);
     expect(store.workspaces).toHaveLength(1);
   });
 
@@ -485,6 +524,7 @@ describe("provider and model resolution", () => {
       allTools: true,
       tools: [],
       settings: { providerId: "p2", modelId: "m3" },
+      widgets: [],
       visibility: "private",
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -811,7 +851,12 @@ describe("sessions", () => {
     expect(store.streaming.active).toBe(false);
   });
 
-  it("carries settings picked before the session existed onto the new session", async () => {
+  it("carries settings picked before the session existed in the create call", async () => {
+    /*
+     * In the create request rather than a `PATCH` afterwards, which is what it used to be. Two
+     * writes left a window in which the conversation existed with parameters nobody had chosen,
+     * and a failure between them left it that way for good.
+     */
     const store = await readyStore();
     store.activeSessionId = null;
     await store.updateSettings({ temperature: 0.4, maxSteps: 3 });
@@ -819,18 +864,28 @@ describe("sessions", () => {
 
     await store.createSession();
 
-    expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", { settings: { temperature: 0.4, maxSteps: 3 } });
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.objectContaining({ settings: { temperature: 0.4, maxSteps: 3 } })
+    );
+    // And nothing is patched afterwards, which is the half that makes it one write.
+    expect(mocks.api.updateSession).not.toHaveBeenCalled();
     expect(store.draftSettings).toEqual({});
   });
 
-  it("does not call the API when there are no staged settings", async () => {
+  it("omits settings entirely when nothing was staged", async () => {
+    // Not an empty object: the server merges what it is given over the Copilot's copied values,
+    // so `{}` would be a no-op with the same meaning — but omitting it says "no opinion" rather
+    // than "no settings", which is the honest statement about a form nobody filled in.
     const store = await readyStore();
     store.activeSessionId = null;
-    mocks.api.updateSession.mockClear();
 
     await store.createSession();
 
-    expect(mocks.api.updateSession).not.toHaveBeenCalled();
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.not.objectContaining({ settings: expect.anything() })
+    );
   });
 
   it("trims a rename and ignores a blank one", async () => {
@@ -906,6 +961,268 @@ describe("sessions", () => {
 
     expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", { settings: { temperature: 0.9 } });
     expect(store.sessionSettings.temperature).toBe(0.9);
+  });
+});
+
+describe("widgets", () => {
+  it("loads both groups when a conversation is selected", async () => {
+    const store = await readyStore({ widgets: ["workspace_stats", "session_stats"] });
+    expect(store.workspaceWidgetIds).toEqual(["workspace_stats"]);
+    expect(store.sessionWidgetIds).toEqual(["session_stats"]);
+    // In group order, which is what makes "workspace first, then session" a property of the data
+    // rather than of the render.
+    expect(store.enabledWidgetIds).toEqual(["workspace_stats", "session_stats"]);
+  });
+
+  it("shows nothing when nothing is installed", async () => {
+    // The default, and the state a fresh workspace is in. The panel does not render at all.
+    const store = await readyStore();
+    expect(store.enabledWidgetIds).toEqual([]);
+  });
+
+  it("patches the list from the reply rather than from what it asked for", async () => {
+    // The server resolves the state, so the reply is the record — a client that composed it
+    // locally would be asserting its own intent rather than the stored fact.
+    const store = await readyStore();
+    mocks.api.setWorkspaceWidget.mockResolvedValue({
+      id: "workspace_stats",
+      scope: "workspace",
+      enabled: true,
+    });
+
+    await store.setWidgetEnabled("workspace", "w1", "workspace_stats", true);
+
+    expect(mocks.api.setWorkspaceWidget).toHaveBeenCalledWith("w1", "workspace_stats", true);
+    expect(store.workspaceWidgetIds).toEqual(["workspace_stats"]);
+  });
+
+  it("records an uninstall without dropping the row from the list", async () => {
+    // `enabled: false` is the state, so the entry stays — which is also what the server stores.
+    const store = await readyStore({ widgets: ["session_stats"] });
+    mocks.api.setSessionWidget.mockResolvedValue({
+      id: "session_stats",
+      scope: "session",
+      enabled: false,
+    });
+
+    await store.setWidgetEnabled("session", "s1", "session_stats", false);
+
+    expect(store.sessionWidgetIds).toEqual([]);
+    expect(store.sessionWidgets).toHaveLength(1);
+    expect(store.sessionWidgets[0]!.enabled).toBe(false);
+  });
+
+  it("does not write a foreign object's installs into the active lists", async () => {
+    /*
+     * The workspace settings dialog can be opened for a workspace nobody has entered, so it keeps
+     * its own rows — and this is the half that has to hold for that to be safe: a write to
+     * another workspace must not land in the list the panel is rendering.
+     */
+    const store = await readyStore({ widgets: ["workspace_stats"] });
+    mocks.api.setWorkspaceWidget.mockResolvedValue({
+      id: "workspace_stats",
+      scope: "workspace",
+      enabled: false,
+    });
+
+    await store.setWidgetEnabled("workspace", "w-other", "workspace_stats", false);
+
+    expect(store.workspaceWidgetIds).toEqual(["workspace_stats"]);
+  });
+
+  it("runs the lifecycle hook, and a hook that throws cannot fail the write", async () => {
+    /*
+     * The claim the ordering exists for: the record is committed before the hook runs, so a hook
+     * that throws is a defect in a built-in widget rather than a failure of the user's action.
+     * Reported nowhere the user can see, and the state stays as the server wrote it.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { WIDGET_MODULES } = await import("../../src/widgets/registry.js");
+    const installed = vi.fn(() => {
+      throw new Error("hook bug");
+    });
+    const original = WIDGET_MODULES.session_stats.onInstall;
+    WIDGET_MODULES.session_stats.onInstall = installed;
+
+    try {
+      const store = await readyStore();
+      mocks.api.setSessionWidget.mockResolvedValue({
+        id: "session_stats",
+        scope: "session",
+        enabled: true,
+      });
+
+      await expect(
+        store.setWidgetEnabled("session", "s1", "session_stats", true)
+      ).resolves.toBeDefined();
+
+      expect(installed).toHaveBeenCalledWith({
+        scope: "session",
+        scopeId: "s1",
+        widgetId: "session_stats",
+      });
+      // The list is the server's answer, and the toast is untouched.
+      expect(store.sessionWidgetIds).toEqual(["session_stats"]);
+      expect(store.error).toBeNull();
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      WIDGET_MODULES.session_stats.onInstall = original;
+      warn.mockRestore();
+    }
+  });
+
+  it("runs the install hook for a workspace's widgets, which arrive in the create call", async () => {
+    /*
+     * The half of the lifecycle that a per-widget toggle cannot cover: the whole selection is
+     * chosen before the workspace exists, so the *creation* is the only moment there is. Unlike
+     * the `setWidgetEnabled` case, the list comes from the caller — with the default set empty,
+     * what was asked for and what was installed are the same list.
+     */
+    const { WIDGET_MODULES } = await import("../../src/widgets/registry.js");
+    const installed = vi.fn();
+    const original = WIDGET_MODULES.workspace_stats.onInstall;
+    WIDGET_MODULES.workspace_stats.onInstall = installed;
+
+    try {
+      const store = await readyStore();
+      mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
+      await store.createWorkspace("Fresh", ["workspace_stats"]);
+
+      expect(installed).toHaveBeenCalledWith({
+        scope: "workspace",
+        scopeId: WORKSPACE.id,
+        widgetId: "workspace_stats",
+      });
+    } finally {
+      WIDGET_MODULES.workspace_stats.onInstall = original;
+    }
+  });
+
+  it("runs the install hook for what a new conversation actually got", async () => {
+    // From the *resolved* list rather than the request's: the server copies a Copilot's selection
+    // in, and a create may have named no widgets at all — so the reply is the only statement of
+    // what was installed.
+    const { WIDGET_MODULES } = await import("../../src/widgets/registry.js");
+    const installed = vi.fn();
+    const original = WIDGET_MODULES.session_stats.onInstall;
+    WIDGET_MODULES.session_stats.onInstall = installed;
+
+    try {
+      const store = await readyStore();
+      mocks.api.createSession.mockResolvedValue(session());
+      // What the server resolved for the new conversation, which is what `selectSession` reads.
+      mocks.api.listSessionWidgets.mockResolvedValue({
+        workspace: [],
+        session: [{ id: "session_stats", scope: "session", enabled: true }],
+      });
+
+      await store.createSession();
+
+      expect(installed).toHaveBeenCalledWith({
+        scope: "session",
+        scopeId: "s1",
+        widgetId: "session_stats",
+      });
+    } finally {
+      WIDGET_MODULES.session_stats.onInstall = original;
+    }
+  });
+
+  it("does not run a hook for a widget that was not installed", async () => {
+    const { WIDGET_MODULES } = await import("../../src/widgets/registry.js");
+    const installed = vi.fn();
+    const original = WIDGET_MODULES.workspace_stats.onInstall;
+    WIDGET_MODULES.workspace_stats.onInstall = installed;
+
+    try {
+      const store = await readyStore();
+      mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
+      await store.createWorkspace("Fresh");
+
+      expect(installed).not.toHaveBeenCalled();
+    } finally {
+      WIDGET_MODULES.workspace_stats.onInstall = original;
+    }
+  });
+
+  it("clears both lists when the account goes", async () => {
+    // Through `signOut` rather than `forgetAccount` directly, because the latter is deliberately
+    // not on the store's public surface — it is reached from sign-out, from an expired session
+    // and from nothing else.
+    const store = await readyStore({ widgets: ["workspace_stats", "session_stats"] });
+    expect(store.enabledWidgetIds).toHaveLength(2);
+
+    mocks.api.logout.mockResolvedValue(undefined);
+    await store.signOut();
+
+    expect(store.workspaceWidgets).toEqual([]);
+    expect(store.sessionWidgets).toEqual([]);
+  });
+});
+
+describe("widget events", () => {
+  it("announces the end of a turn exactly once, at the point every turn ends", async () => {
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+
+    try {
+      streamOf({ type: "text", delta: "hi" }, { type: "done" });
+      const store = await readyStore();
+      await store.sendMessage("hello");
+
+      expect(seen.filter((t) => t === "turn.finished")).toHaveLength(1);
+      expect(seen).toContain("turn.started");
+    } finally {
+      off();
+    }
+  });
+
+  it("announces a turn whose request failed, because it still persisted a message", async () => {
+    // A failed turn writes a `⚠️` assistant message, so a widget showing a count would otherwise
+    // be showing one that is no longer true.
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+
+    try {
+      mocks.streamChat.mockImplementation(async function* () {
+        throw new Error("network down");
+      });
+      const store = await readyStore();
+      await store.sendMessage("hello");
+
+      expect(seen.filter((t) => t === "turn.finished")).toHaveLength(1);
+    } finally {
+      off();
+    }
+  });
+
+  it("announces a resumed turn as well as a fresh one", async () => {
+    // A resumed `ask_user` turn moves the same numbers, and comes through a different route — so
+    // it is announced from the same place rather than from only the fresh path.
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+
+    try {
+      streamOf({ type: "text", delta: "ok" }, { type: "done" });
+      const store = await readyStore({
+        messages: [
+          message({
+            role: "assistant",
+            toolCalls: [
+              { id: "c1", name: "ask_user", input: "{}", status: "awaiting" },
+            ],
+          }),
+        ],
+      });
+      await store.answerQuestion("c1", { action: "cancel" });
+
+      expect(seen.filter((t) => t === "turn.finished")).toHaveLength(1);
+    } finally {
+      off();
+    }
   });
 });
 

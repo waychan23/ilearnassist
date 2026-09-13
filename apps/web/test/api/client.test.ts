@@ -193,6 +193,66 @@ describe("workspace files", () => {
   });
 });
 
+describe("widgets and statistics", () => {
+  it("addresses one widget as a resource, and toggles it with a PUT", async () => {
+    // A `PUT` on the triple rather than a `PATCH` on a list: the widget *is* the resource and
+    // `enabled` is its whole state, which is what makes a double-clicked toggle idempotent.
+    const fetchMock = stubFetch(() =>
+      jsonResponse({ id: "session_stats", scope: "session", enabled: true })
+    );
+    await api.setSessionWidget("s1", "session_stats", true);
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s1/widgets/session_stats");
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("PUT");
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe('{"enabled":true}');
+  });
+
+  it("reads both of a conversation's groups from one route", async () => {
+    // One request, because the strip is one control: split across two, it could render with the
+    // divider in the wrong place for a frame.
+    const fetchMock = stubFetch(() => jsonResponse({ workspace: [], session: [] }));
+    await api.listSessionWidgets("s1");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s1/widgets");
+  });
+
+  it("keeps the workspace-scope read separate from the conversation one", async () => {
+    // The settings dialog needs a workspace's installs where there is no conversation to ask
+    // about — from the home page's card, or the welcome screen.
+    const fetchMock = stubFetch(() => jsonResponse([]));
+    await api.listWorkspaceWidgets("w1");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/workspaces/w1/widgets");
+  });
+
+  it("reads statistics from the object rather than from a widget's namespace", async () => {
+    // Two widgets read the same two routes and a third will; hanging them off one widget would
+    // make the next consumer add a second path to the same query.
+    const fetchMock = stubFetch(() => jsonResponse({}));
+    await api.getWorkspaceStats("w1");
+    await api.getSessionStats("s1");
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/workspaces/w1/stats");
+    expect(fetchMock.mock.calls[1]![0]).toBe("/api/sessions/s1/stats");
+  });
+
+  it("sends a workspace's widget selection in the create request", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ id: "w1" }));
+    await api.createWorkspace("Notes", ["workspace_stats"]);
+
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe(
+      '{"name":"Notes","widgets":["workspace_stats"]}'
+    );
+  });
+
+  it("omits the widget field when no selection was made", async () => {
+    // The distinction the API is built on: an absent field means "nobody decided" and takes the
+    // server's default, while `[]` means none.
+    const fetchMock = stubFetch(() => jsonResponse({ id: "w1" }));
+    await api.createWorkspace("Notes");
+
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe('{"name":"Notes"}');
+  });
+});
+
 describe("attachmentUrl", () => {
   it("points at the source's bytes, by the source alone", () => {
     // No session in the URL: the file belongs to the account, so the same source referenced

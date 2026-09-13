@@ -32,9 +32,12 @@ import type {
   UpdateWorkspaceInput,
   UploadAttachmentInput,
   User,
+  WidgetId,
+  WidgetScope,
+  WidgetState,
   Workspace,
 } from "@ilearnassist/shared";
-import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
+import { DEFAULT_WIDGET_IDS, MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
 import {
   DEFAULT_SESSION_TITLE,
@@ -57,6 +60,7 @@ import {
   parseErrorCodeOf,
   parseErrorDetail,
 } from "./documents/index.js";
+import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import type { DocumentService } from "./documents/service.js";
 import { removeParsedText } from "./documents/store.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -147,6 +151,19 @@ function apiError(
 function parseApiError(err: unknown): ApiErrorBody {
   const detail = parseErrorDetail(err);
   return apiError(parseErrorCodeOf(err), describeParseError(err), detail ? { detail } : undefined);
+}
+
+/**
+ * The envelope for a refused widget selection, from the code `parseWidgetIds` chose.
+ *
+ * The two codes get different sentences because they are different mistakes: an id this build
+ * does not know is a version skew, while a widget at the wrong level is a request that was
+ * assembled wrongly — and the second names the thing to change.
+ */
+function widgetError(code: "UNKNOWN_WIDGET" | "WIDGET_SCOPE_UNSUPPORTED"): ApiErrorBody {
+  return code === "UNKNOWN_WIDGET"
+    ? apiError(code, "no such widget")
+    : apiError(code, "that widget cannot be installed at this level");
 }
 
 /**
@@ -419,12 +436,32 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const name = body?.name?.trim();
     if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
 
+    // Validated before anything is created, so a bad widget id cannot leave a half-made
+    // workspace behind: the name check above and this one are both refusals that must precede
+    // the write.
+    const widgets = parseWidgetIds(body?.widgets, "workspace");
+    if (!widgets.ok) return reply.code(400).send(widgetError(widgets.code));
+
     const slug = uniqueSlug(treeFor(user).workspacesRoot, name);
     // Creates the workspace's own directory *and* the two inside it — `workdir/` for the
     // agent to work in, `sessions/` for its conversations. One call, so neither can be
     // forgotten and a workspace is never half-made.
     const dirPath = createWorkspaceDir(treeFor(user).workspacesRoot, slug);
     const workspace = db.createWorkspace({ id: newId(), userId: user.id, name, slug, dirPath });
+
+    /*
+     * The widget selection lands here, in one go, because a workspace does not exist when its
+     * boxes are ticked — which is what makes `installed` a moment per widget rather than a
+     * sequence of flips. Only the *differences* from the default are written, so an object whose
+     * state equals the defaults needs no rows at all; with an empty default set that is one row
+     * per ticked widget and nothing else.
+     *
+     * No failure path from here on: the workspace exists, and a write that threw would leave it
+     * unusable rather than uncreated.
+     */
+    for (const row of widgetRowsForSelection("workspace", widgets.ids)) {
+      db.setWorkspaceWidgetForUser(user.id, workspace.id, row.id, row.enabled);
+    }
     return reply.code(201).send(workspace);
   });
 
@@ -530,6 +567,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.post("/api/copilots", async (request, reply) => {
     const body = request.body as CreateCopilotInput;
     if (!body?.name?.trim()) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
+    // At **session** scope, which is the level a Copilot installs at: its selection is copied
+    // into the conversation it starts, so a workspace-scope widget here is a request that cannot
+    // mean anything.
+    const widgets = parseWidgetIds(body.widgets, "session");
+    if (!widgets.ok) return reply.code(400).send(widgetError(widgets.code));
     const copilot = db.createCopilot({
       id: newId(),
       userId: actor(request).id,
@@ -541,6 +583,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       allTools: body.allTools !== false,
       tools: body.tools ?? [],
       settings: body.settings ?? {},
+      widgets: widgets.ids ?? [...DEFAULT_WIDGET_IDS],
       // Private unless asked otherwise: publishing puts a persona in front of every account,
       // so it is something the owner opts into rather than a default they discover later.
       visibility: body.visibility === "public" ? "public" : "private",
@@ -556,6 +599,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // usable but not editable, and this is the read that keeps those two apart.
     const existing = db.getOwnedCopilot(id, userId);
     if (!existing) return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
+    const widgets = parseWidgetIds(body.widgets, "session");
+    if (!widgets.ok) return reply.code(400).send(widgetError(widgets.code));
     const copilot = db.updateCopilotForUser(id, userId, {
       name: body.name?.trim() ?? existing.name,
       description: body.description ?? existing.description,
@@ -565,6 +610,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       allTools: body.allTools ?? existing.allTools,
       tools: body.tools ?? existing.tools,
       settings: body.settings ?? existing.settings,
+      // Absent leaves the stored selection alone, for the same reason — a form that does not
+      // mention widgets must not clear them.
+      widgets: widgets.ids ?? existing.widgets,
       visibility: body.visibility ?? existing.visibility,
     });
     if (!copilot) return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
@@ -607,6 +655,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
     }
 
+    const widgets = parseWidgetIds(body?.widgets, "session");
+    if (!widgets.ok) return reply.code(400).send(widgetError(widgets.code));
+
     const session = db.createSession({
       id: newId(),
       workspaceId,
@@ -622,8 +673,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       allTools: copilot?.allTools ?? true,
       tools: copilot ? [...copilot.tools] : [],
       title: body?.title?.trim() || DEFAULT_SESSION_TITLE,
-      settings: copilot ? { ...copilot.settings } : {},
+      /*
+       * The parameters are merged here rather than patched in afterwards, which is what the
+       * client used to do: create, then `PATCH /api/sessions/:id`. Two writes leave a window in
+       * which the conversation exists with parameters nobody chose, and — the half that is
+       * observable — a failure between them leaves it that way permanently.
+       *
+       * The Copilot's own values are the **base**, since it is a copy of them, and the request's
+       * are laid over. That reproduces exactly what `{...existing, ...input.settings}` produced.
+       */
+      settings: { ...(copilot?.settings ?? {}), ...(body?.settings ?? {}) },
     });
+
+    /*
+     * Three tiers, in order: what the dialog sent, what the Copilot installs, what a fresh
+     * conversation defaults to. `undefined` falls through and `[]` stops — the absent/empty
+     * distinction `all_tools` documents, for the same reason: "nobody decided" and "decided:
+     * none" are different claims, and collapsing them would make a Copilot's selection
+     * unoverridable.
+     */
+    const desired = widgets.ids ?? (copilot ? copilot.widgets : undefined);
+    for (const row of widgetRowsForSelection("session", desired)) {
+      db.setSessionWidgetForUser(userId, session.id, row.id, row.enabled);
+    }
     // The conversation's own directory, made now rather than the first time something wants
     // it, so that reserving it means it is *there*. Best-effort: nothing writes into it yet,
     // and a data root on a read-only volume must not turn starting a conversation into an
@@ -698,6 +770,157 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     }
     return db.listMessagesForUser(id, userId);
+  });
+
+  /* --------------------------------- widgets --------------------------------- */
+
+  /*
+   * These live in this plugin rather than in one of their own, and the reason is the auth hook
+   * above: `onRequest` belongs to the `routes` plugin, so a sibling would either have to
+   * re-implement the deny-by-default gate — two copies of the rule that exists to have one — or
+   * leave six endpoints open.
+   *
+   * The write is a `PUT` on `(scope, scopeId, widgetId)` rather than a `PATCH` on a collection,
+   * because the triple *is* the resource and `{ enabled }` is its whole state. That makes a
+   * double-clicked toggle idempotent, which is the only property a toggle actually needs.
+   */
+
+  /**
+   * A workspace's widgets at workspace scope, resolved and in registry order.
+   *
+   * Separate from the session read below because the settings dialog must work from the home
+   * page's card and from the welcome screen, where there is no conversation to ask about.
+   */
+  app.get("/api/workspaces/:id/widgets", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getWorkspaceForUser(id, userId)) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
+    return db.listWorkspaceWidgetsForUser(userId, id);
+  });
+
+  app.put("/api/workspaces/:id/widgets/:widgetId", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, widgetId } = request.params as { id: string; widgetId: string };
+    const body = request.body as { enabled?: boolean };
+    if (!db.getWorkspaceForUser(id, userId)) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
+    const result = setWidget(userId, "workspace", id, widgetId, body);
+    return result.ok ? result.state : reply.code(result.status).send(result.body);
+  });
+
+  /**
+   * A conversation's widgets: **both groups, in one reply**.
+   *
+   * The tab strip is a single control, so splitting this across two reads would let it render
+   * half-drawn — and the divider's position depends on both lists. The client's two groups are
+   * the `enabled` entries of each, in the order they arrive.
+   */
+  app.get("/api/sessions/:id/widgets", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    return {
+      workspace: db.listWorkspaceWidgetsForUser(userId, found.session.workspaceId),
+      session: db.listSessionWidgetsForUser(userId, id),
+    };
+  });
+
+  app.put("/api/sessions/:id/widgets/:widgetId", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, widgetId } = request.params as { id: string; widgetId: string };
+    const body = request.body as { enabled?: boolean };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const result = setWidget(userId, "session", id, widgetId, body);
+    return result.ok ? result.state : reply.code(result.status).send(result.body);
+  });
+
+  type WidgetWrite =
+    | { ok: true; state: WidgetState }
+    | { ok: false; status: 400 | 404; body: ApiErrorBody };
+
+  /**
+   * Validate one widget id, set it, and answer its resolved state.
+   *
+   * Shared by the two writes because they differ only in which object they name. The id goes
+   * through the same `parseWidgetIds` every other path uses — as a one-element list — so "is this
+   * a widget this build knows, at this level" has exactly one implementation rather than a second
+   * one that could drift.
+   *
+   * The reply is not composed by hand: it is read back out of the same resolved list the `GET`
+   * returns, so what a toggle answers and what a reload shows cannot disagree.
+   */
+  function setWidget(
+    userId: string,
+    scope: WidgetScope,
+    scopeId: string,
+    widgetId: string,
+    body: { enabled?: boolean }
+  ): WidgetWrite {
+    const parsed = parseWidgetIds([widgetId], scope);
+    if (!parsed.ok) return { ok: false, status: 400, body: widgetError(parsed.code) };
+    if (typeof body?.enabled !== "boolean") {
+      return { ok: false, status: 400, body: apiError("DATA_REQUIRED", "enabled is required") };
+    }
+    const id = widgetId as WidgetId;
+
+    const wrote =
+      scope === "workspace"
+        ? db.setWorkspaceWidgetForUser(userId, scopeId, id, body.enabled)
+        : db.setSessionWidgetForUser(userId, scopeId, id, body.enabled);
+    // Unreachable while the scoped read before it stands, and answered rather than ignored: that
+    // read already sent the 404 for a foreign id, so this is the branch that would matter if
+    // someone removed it.
+    if (!wrote) {
+      return {
+        ok: false,
+        status: 404,
+        body: apiError(
+          scope === "workspace" ? "WORKSPACE_NOT_FOUND" : "SESSION_NOT_FOUND",
+          "not found"
+        ),
+      };
+    }
+
+    const states =
+      scope === "workspace"
+        ? db.listWorkspaceWidgetsForUser(userId, scopeId)
+        : db.listSessionWidgetsForUser(userId, scopeId);
+    const state = states.find((s) => s.id === id);
+    // A bug rather than a reachable state: the validator just proved this build knows the id at
+    // this level, and `resolveWidgetStates` walks that same registry. Throwing gives Fastify's
+    // 500, which is the honest answer to "the validator and the reader disagree".
+    if (!state) throw new Error(`setWidget: ${id} vanished between validation and read`);
+    return { ok: true, state };
+  }
+
+  /* ----------------------------------- stats ----------------------------------- */
+
+  /*
+   * Not under `/widgets`, deliberately: these are numbers about the object, not about a widget.
+   * Two widgets already read the same two endpoints and a third will, so hanging them off one
+   * widget's namespace would make the next consumer add a second path to the same query.
+   */
+
+  app.get("/api/workspaces/:id/stats", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const stats = db.statsForWorkspace(userId, id);
+    if (!stats) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    return stats;
+  });
+
+  app.get("/api/sessions/:id/stats", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const stats = db.statsForSessionForUser(userId, id);
+    if (!stats) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    return stats;
   });
 
   /* ---------------------------------- sources ---------------------------------- */
