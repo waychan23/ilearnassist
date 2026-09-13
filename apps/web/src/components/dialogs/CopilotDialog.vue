@@ -5,7 +5,12 @@ import { useAppStore } from "../../stores/app";
 // From `shared`, not a local literal: the server filters by exactly these names, so a copy
 // that drifted would offer a tool the server does not know, or hide one it does. It had
 // already drifted once — the local list was missing `read_document`.
-import { ALL_TOOL_NAMES, WIDGET_IDS, widgetsForScope } from "../../api/types";
+import {
+  ALL_TOOL_NAMES,
+  WIDGET_IDS,
+  isWidgetBoundTool,
+  widgetsForScope,
+} from "../../api/types";
 import type { Copilot, SessionSettings, WidgetId } from "../../api/types";
 import type { CopilotDraft } from "../../stores/app";
 import { widgetLabel } from "../../widgets/registry";
@@ -23,6 +28,14 @@ const toolLabel = (name: string): string => {
   const key = "tools.name." + name;
   return te(key) ? t(key) : name;
 };
+
+/**
+ * Widget-bound tools are not checkable: a Copilot allow-list can neither enable them (the
+ * widget install does) nor remove them (they bypass the list in all three states), so a box
+ * here would be a control that did nothing. They still live in `ALL_TOOL_NAMES` so a stale
+ * allow-list naming one never errors.
+ */
+const pickableTools = computed(() => ALL_TOOL_NAMES.filter((name) => !isWidgetBoundTool(name)));
 
 /**
  * The generation parameters are a child component's business now — it was the third copy of that
@@ -220,7 +233,7 @@ function save() {
             </label>
             <div class="form-grid tool-checks">
               <label
-                v-for="name in ALL_TOOL_NAMES"
+                v-for="name in pickableTools"
                 :key="name"
                 class="check-row"
                 :data-testid="`tool-check-${name}`"
@@ -236,6 +249,7 @@ function save() {
             <div class="hint">
               {{ allTools ? t("copilot.allToolsHint") : t("copilot.toolsHint") }}
             </div>
+            <div class="hint">{{ t("copilot.boundToolsHint") }}</div>
           </div>
 
           <!-- Unticked by default. Publishing puts this wording in front of every account,

@@ -285,6 +285,58 @@ const DDL = `
     updated_at TEXT NOT NULL,
     PRIMARY KEY (scope, scope_id, widget_id)
   );
+
+  -- The plan widget's versioned tree. One plan per session (the UNIQUE below); a conversation
+  -- that wants a second plan gets one in another conversation, decided through ila_make_plan's
+  -- conflict card.
+  --
+  -- Versions are *structural* snapshots: plan_versions.tree_json is the full tree (ids,
+  -- titles, parent order) as each edit left it, and that is all a history browse shows.
+  -- Progress lives once, on plan_nodes, keyed by the node's stable id — a server-assigned
+  -- UUID that survives renames and moves — so the current tree carries live status while old
+  -- versions never change. There is deliberately no node-level version number: nothing about
+  -- a node's progress is versioned, only the tree's shape is.
+  --
+  -- Deletion is a status, not a row deletion. A node missing from a new submission is kept as
+  -- a tombstone (removed_version set, parent/position frozen at its last place), rendered
+  -- struck through in the current tree; it drops out of that version's snapshot, which is
+  -- exactly what makes Vn browseable as what Vn was.
+  --
+  -- New tables, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'not_started',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS plan_versions (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    tree_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (plan_id, version)
+  );
+  CREATE INDEX IF NOT EXISTS idx_plan_versions_plan ON plan_versions(plan_id, version);
+
+  CREATE TABLE IF NOT EXISTS plan_nodes (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    parent_id TEXT,
+    position INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'not_started',
+    introduced_version INTEGER NOT NULL,
+    removed_version INTEGER,
+    -- The progress tool call that last marked this node completed: the message the widget
+    -- jumps to. Cleared if the node ever leaves the completed status.
+    done_tool_call_id TEXT,
+    done_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_plan_nodes_plan ON plan_nodes(plan_id, parent_id, position);
 `;
 
 /**

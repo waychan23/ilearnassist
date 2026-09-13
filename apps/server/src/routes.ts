@@ -37,7 +37,12 @@ import type {
   WidgetState,
   Workspace,
 } from "@ilearnassist/shared";
-import { DEFAULT_WIDGET_IDS, MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
+import {
+  boundToolNamesForWidgetIds,
+  DEFAULT_WIDGET_IDS,
+  MAX_ATTACHMENT_BYTES,
+  PLAN_TOOL_NAMES,
+} from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
 import {
   DEFAULT_SESSION_TITLE,
@@ -61,6 +66,7 @@ import {
   parseErrorDetail,
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
+import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import type { DocumentService } from "./documents/service.js";
 import { removeParsedText } from "./documents/store.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -70,6 +76,7 @@ import { fallbackTitle, generateTitle } from "./agent/title.js";
 import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
+import { PLAN_GUIDANCE } from "./tools/planTools.js";
 import { SUSPENDING_TOOLS } from "./tools/suspending.js";
 import {
   isSupportedMime,
@@ -923,6 +930,63 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return stats;
   });
 
+  /* ----------------------------------- plans ----------------------------------- */
+
+  /*
+   * Routes about the conversation's plan, not `/widgets/...`: a plan is the object the
+   * widget renders, and a later UI editor would talk to the same endpoints. No plan yet is a
+   * 200 `{ plan: null }` (the widget's empty state), not a 404; a missing conversation is.
+   */
+
+  app.get("/api/sessions/:id/plan", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const row = db.getPlanForSessionForUser(userId, id);
+    return { plan: row ? buildPlanView(db, row) : null };
+  });
+
+  /**
+   * Jump study to one chapter: the widget's play button. Everything undone before it is
+   * marked skipped, the target and its parent chapters open. The user-facing message naming
+   * the chapter is composed by the client, which then sends it through `/chat` normally.
+   */
+  app.post("/api/sessions/:id/plan/nodes/:nodeId/jump", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, nodeId } = request.params as { id: string; nodeId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    try {
+      const result = jumpToNode(db, id, nodeId);
+      return { plan: result.view, number: result.number, title: result.title, skippedCount: result.skippedCount };
+    } catch {
+      // No plan, unknown/deleted/completed node: the same 404 a missing object gives, since
+      // the jump target is the thing that does not exist.
+      return reply.code(404).send(apiError("PLAN_NODE_NOT_FOUND", "that plan node cannot be jumped to"));
+    }
+  });
+
+  app.get("/api/sessions/:id/plan/versions/:version", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, version: rawVersion } = request.params as { id: string; version: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const version = Number.parseInt(rawVersion, 10);
+    const snapshot = Number.isInteger(version)
+      ? readPlanVersion(db, userId, id, version)
+      : undefined;
+    if (!snapshot) {
+      return reply
+        .code(404)
+        .send(apiError("PLAN_VERSION_NOT_FOUND", "that plan version does not exist"));
+    }
+    return snapshot;
+  });
+
   /* ---------------------------------- sources ---------------------------------- */
 
   /**
@@ -1436,6 +1500,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     tools: StructuredToolInterface[];
     vision: boolean;
     toolUse: boolean;
+    /** Present when the plan widget is installed; appended to the turn's system prompt. */
+    planGuidance?: string;
   }
 
   /**
@@ -1457,6 +1523,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     input: {
       provider?: string;
       model?: string;
+      /** The signed-in account; widget reads and sources are owner-scoped by it. */
+      userId: string;
       /** Whose sources tree `read_document` reads from. */
       user: UserLayout;
       /**
@@ -1476,31 +1544,36 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const provider = db.getProvider(providerId);
     const modelId = resolveModelId(provider, input.model, session.settings);
 
+    // Widget-bound tools. Read fresh per turn from the installed session widgets (a widget
+    // can be installed mid-conversation), then derive the bound tool names: if any plan tool
+    // is bound, the plan context is present and `buildTools` assembles all three regardless
+    // of the allow-list. Plan tools are currently the only bound tools.
+    const planInstalled = boundToolNamesForWidgetIds(
+      db
+        .listSessionWidgetsForUser(input.userId, session.id)
+        .filter((w) => w.enabled)
+        .map((w) => w.id)
+    ).some((name) => (PLAN_TOOL_NAMES as readonly string[]).includes(name));
+
     const tools = buildTools({
       workspaceDir: workspace.workdirPath,
       webSearch: config.tools.webSearch,
       webFetch: config.tools.webFetch,
       fileToolsEnabled: config.tools.fileTools.enabled,
-      // The session's own snapshot, not a Copilot's live list: an allowlist that narrowed the
-      // tool set must not evaporate because the Copilot it came from was deleted.
-      //
-      // `undefined` when every tool is available and the list otherwise, even when empty —
-      // that empty case is a conversation deliberately denied every tool, and passing it
-      // through as "no restriction" is precisely the bug this shape fixes.
+      // The session's own snapshot, not a Copilot's live list. `undefined` when every tool
+      // is available and the list otherwise, even when empty ("no tools" is representable).
       allowedNames: session.allTools ? undefined : session.tools,
       documents: {
         user: input.user,
         sources: input.sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
-      // `quiz` numbers its questions from a counter scoped to this conversation, so a session
-      // numbers its questions once — across turns, across `ask_user` calls between them, and
-      // across a reload. The tool gets a closure rather than the db, and the counter's name
-      // travels with the tool that owns the sequence.
+      // `quiz` numbers its questions from a counter scoped to this conversation.
       quiz: {
         reserveQuestionNumbers: (count) =>
           db.reserveCounter("session", session.id, QUIZ_QUESTION_COUNTER, count),
       },
+      plan: planInstalled ? { db, sessionId: session.id } : undefined,
     });
 
     return {
@@ -1509,6 +1582,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       tools,
       vision: isVisionModel(provider, modelId),
       toolUse: isToolUseModel(provider, modelId),
+      planGuidance: planInstalled ? PLAN_GUIDANCE : undefined,
     };
   }
 
@@ -1661,6 +1735,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const ctx = turnContext(session, workspace, {
       provider: body.provider,
       model: body.model,
+      userId,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
     });
@@ -1700,6 +1775,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         userMessage: message,
         attachments: storedAttachments,
         tools: ctx.tools,
+        planGuidance: ctx.planGuidance,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
@@ -1751,12 +1827,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     // Which tool this call belongs to decides how its `input` is read and how a submission
     // is judged — looked up by the *stored* call's name, so the client cannot pick the
-    // reading. An unregistered name is the same 409 as a stale question.
-    const resolved = SUSPENDING_TOOLS[pending.call.name]?.resolve(pending.call, {
-      ...body,
-      action,
-      toolCallId,
-    });
+    // reading. An unregistered name is the same 409 as a stale question. A `commit` spec
+    // (ila_make_plan) writes something as part of the answer; a `resolve` spec (ask_user,
+    // quiz) only renders it.
+    const spec = SUSPENDING_TOOLS[pending.call.name];
+    const submission: AnswerToolCallInput = { ...body, action, toolCallId };
+    const resolved = spec?.commit
+      ? spec.commit(pending.call, submission, { db, userId, session, workspace })
+      : spec?.resolve?.(pending.call, submission);
     if (!resolved) {
       return reply.code(409).send(
         apiError("QUESTION_NOT_PENDING", "that tool call does not hold a question set")
@@ -1780,6 +1858,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     );
 
     const ctx = turnContext(session, workspace, {
+      userId,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
     });
@@ -1787,6 +1866,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     await reply.hijack();
     const sse = createSseWriter(reply);
     sse.send({ type: "meta", sessionId: id });
+
+    // The plan fork created another conversation and committed V1 into it; tell the client
+    // to switch before the (short) resumed turn in THIS conversation streams its reply.
+    if (resolved.navigateToSessionId) {
+      sse.send({ type: "plan_session_created", sessionId: resolved.navigateToSessionId });
+    }
 
     const turn = beginTurn(request, id);
 
@@ -1808,6 +1893,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         history,
         userMessage: null,
         tools: ctx.tools,
+        planGuidance: ctx.planGuidance,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });

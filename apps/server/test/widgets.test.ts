@@ -128,6 +128,7 @@ describe("resolveWidgetStates", () => {
   it("answers one entry per known widget, defaulting the ones nothing decided", () => {
     expect(resolveWidgetStates("session", [])).toEqual([
       { id: "session_stats", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("session_stats") },
+      { id: "plan", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("plan") },
     ]);
   });
 
@@ -356,7 +357,10 @@ describe("over HTTP", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       workspace: [{ id: "workspace_stats", scope: "workspace", enabled: true }],
-      session: [{ id: "session_stats", scope: "session", enabled: true }],
+      session: [
+        { id: "session_stats", scope: "session", enabled: true },
+        { id: "plan", scope: "session", enabled: false },
+      ],
     });
   });
 
@@ -367,6 +371,7 @@ describe("over HTTP", () => {
     const session = await newSession(env, ws.id, { copilotId });
     expect(await sessionWidgetsOf(session.id)).toEqual([
       { id: "session_stats", scope: "session", enabled: true },
+      { id: "plan", scope: "session", enabled: false },
     ]);
   });
 
@@ -396,6 +401,7 @@ describe("over HTTP", () => {
 
     expect(await sessionWidgetsOf(session.id)).toEqual([
       { id: "session_stats", scope: "session", enabled: true },
+      { id: "plan", scope: "session", enabled: false },
     ]);
   });
 

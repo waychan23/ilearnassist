@@ -274,6 +274,9 @@ export default {
       read_document: "读取文档",
       ask_user: "询问用户",
       ila_quiz: "小测",
+      ila_make_plan: "制定/编辑计划",
+      ila_read_plan: "查看计划",
+      ila_update_plan_progress: "更新计划进度",
     },
     done: "完成",
     running: "运行中",
@@ -417,6 +420,7 @@ export default {
     allTools: "全部工具可用",
     allToolsHint: "这个 Copilot 可以使用所有工具，之后新增的工具也会自动包含。",
     toolsHint: "只有勾选的工具可用；一个都不勾选就是不使用任何工具。",
+    boundToolsHint: "部分工具随控件自动启用（例如「计划」控件的制定/查看/更新计划工具），不在此列表中，也无需勾选。",
     public: "公开这个 Copilot",
     publicHint: "公开后所有账号都能看到并使用它，但只有你能修改或删除。",
     defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",
@@ -641,6 +645,66 @@ export default {
       noSession: "打开一个会话后，这里会显示它的统计。",
       context: "本轮上下文",
     },
+    plan: {
+      name: "计划",
+      hint: "由助手维护的学习计划：树状目录、进度跟踪与历史版本。",
+      noSession: "打开一个会话后，这里会显示它的计划。",
+    },
+  },
+
+  /**
+   * The plan widget's own strings. Widget display name/hint live under `widgets.plan`; these
+   * are the panel and its tree.
+   */
+  plan: {
+    empty: "这个会话还没有计划。让助手制定一个学习计划后，它会出现在这里。",
+    version: "计划版本",
+    versionLatest: "最新 V{n}",
+    versionN: "V{n}",
+    historyBanner: "正在浏览历史版本 V{n}（只读，不影响最新计划）",
+    historyLoadFailed: "这个历史版本读取失败，可能已不存在。",
+    showLevel: "只展开到第 {n} 级",
+    expandAll: "全部展开",
+    expandCurrentPath: "只展开当前学习节点所在的路径",
+    expand: "展开",
+    collapse: "折叠",
+    jumpToCompletion: "跳转到完成这个节点的位置",
+    jumpToStart: "跳转到开始学习这个节点的位置",
+    jumpToChapter: "跳到本章节",
+    jumpConfirm: "是否跳到章节 {number} {title} 学习？",
+    jumpConfirmDetail: "尚未完成的前置章节会标记为「已跳过」（包括当前进行中的章节），以后可以回来补学。",
+    jumpConfirmOk: "跳到本章节",
+    /** The user message assembled after a jump; {number} and {title} name the target. */
+    jumpMessage: "调整进度，跳到章节{number} {title}",
+    adjust: "调整计划",
+    adjustPlaceholder: "边浏览计划边写下调整意见，例如：把第三章拆成两章、增加一节练习…",
+    adjustSend: "发送调整意见",
+    adjustCancel: "取消",
+    /** The user message prefix assembled from the footer composer. */
+    adjustMessage: "调整计划：{text}",
+    status: {
+      not_started: "未开始",
+      in_progress: "进行中",
+      completed: "已完成",
+      skipped: "已跳过",
+      deleted: "已删除",
+    },
+  },
+
+  /** The `ila_make_plan` create-vs-new-conversation choice card. */
+  planConflict: {
+    title: "已存在一个计划",
+    preparing: "等待你的选择",
+    awaiting: "等待你的选择",
+    answered: "已选择",
+    dismissed: "已取消",
+    question: "这个会话已经有一个计划了。要把新内容作为新版本覆盖到当前计划，还是为它新建一个会话？",
+    edit: "覆盖当前计划（新版本）",
+    newSession: "新建会话并放入该计划",
+    cancel: "取消",
+    choseEdit: "已将新计划作为新版本覆盖到当前会话。",
+    choseNewSession: "已新建一个会话，并把该计划作为 V1 放入其中，页面已自动跳转。",
+    dismissedHint: "你取消了选择，助手不会改动现有计划。",
   },
 
   sessionSettings: {
@@ -692,6 +756,8 @@ export default {
     USERNAME_TOO_LONG: "用户名不能超过 {max} 个字符。",
     UNKNOWN_WIDGET: "当前版本没有这个控件，请刷新页面后再试。",
     WIDGET_SCOPE_UNSUPPORTED: "这个控件不能在当前层级安装。",
+    PLAN_VERSION_NOT_FOUND: "这个计划版本不存在。",
+    PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
   },
 
   /**

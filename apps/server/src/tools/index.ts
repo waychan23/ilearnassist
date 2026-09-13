@@ -3,10 +3,12 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 // allow-list this module filters by: Settings → Copilots checkboxes produce these names. Kept
 // here as a re-export so the server's own callers and tests read it as a tool-assembly fact.
 export { ALL_TOOL_NAMES, type ToolName } from "@ilearnassist/shared";
+import { isWidgetBoundTool } from "@ilearnassist/shared";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildFileTools } from "./fileTools.js";
+import { buildPlanTools, type PlanToolContext } from "./planTools.js";
 import { buildWebFetchTool } from "./webFetch.js";
 import { buildWebSearchTool } from "./webSearch.js";
 import { buildQuizTool, type QuizToolContext } from "./quiz.js";
@@ -27,6 +29,9 @@ const NON_FILE_TOOLS = new Set<string>([
   "read_document",
   "ask_user",
   "ila_quiz",
+  "ila_make_plan",
+  "ila_read_plan",
+  "ila_update_plan_progress",
 ]);
 
 export interface BuildToolsInput {
@@ -60,6 +65,13 @@ export interface BuildToolsInput {
    * for it. It is a callback because the tool must not know where a number comes from.
    */
   quiz: QuizToolContext;
+  /**
+   * Present only when the conversation has the plan widget installed: its bound tools are
+   * then assembled regardless of the session's tool allow-list — the widget install is the
+   * single switch, in all three of the allow-list's states (every tool / a named list /
+   * none). Like `documents`, the absence carries no tool at all.
+   */
+  plan?: PlanToolContext;
 }
 
 /**
@@ -90,15 +102,21 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   if (input.documents && input.documents.sources.length > 0) {
     all.push(buildDocumentTool(input.documents));
   }
+  // Widget-bound tools: assembled only when their widget is installed, which is exactly when
+  // this context is present — nothing else gates them.
+  if (input.plan) all.push(...buildPlanTools(input.plan));
 
   // Absent means "no restriction"; an empty array means "no tools". The two used to be the same
   // thing — `length > 0` was the test — which made a Copilot with no tools checked silently
-  // become a Copilot with every tool, and left "deny everything" unrepresentable.
+  // become a Copilot with every tool, and left "deny everything" unexpressible.
   const allowed = input.allowedNames ? new Set(input.allowedNames) : null;
 
   return all.filter((t) => {
     if (!input.fileToolsEnabled && !NON_FILE_TOOLS.has(t.name)) return false;
-    if (allowed && !allowed.has(t.name)) return false;
+    // A widget-bound tool bypasses the allow-list in all three of its states: it is assembled
+    // solely because its widget is installed, and a ticked/unticked box must neither enable nor
+    // remove it (it is not shown in the checklist for that reason).
+    if (allowed && !allowed.has(t.name) && !isWidgetBoundTool(t.name)) return false;
     return true;
   });
 }

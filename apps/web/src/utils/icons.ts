@@ -168,6 +168,34 @@ export const ICON_PATHS = {
    */
   "tabs-top": ["M2.5 2.5H13.5V13.5H2.5Z", "M2.5 6.5H13.5"],
   "tabs-left": ["M2.5 2.5H13.5V13.5H2.5Z", "M6.5 2.5V13.5"],
+
+  /* The plan widget's tree states. Empty ring = not started; ring with a hand = in
+     progress; `skip` is a fast-forward step (moved past, may return); `history` is the
+     version dropdown; `list-tree` is the collapse-level control. */
+  circle: ["M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 1 1 11 0"],
+  progress: [
+    "M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 1 1 11 0",
+    "M8 5.5V8l2.2 1.4",
+  ],
+  skip: ["M4.5 4.5L9 8L4.5 11.5", "M10 4.5L14 8L10 11.5", "M12 4.5V11.5"],
+  history: [
+    "M3 8a5.5 5.5 0 1 1 1.6 3.9",
+    "M3 4.5V8h3.5",
+  ],
+  /* The current-leaf path control: the leaf being tracked, ring and dot. */
+  target: [
+    "M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 1 1 11 0",
+    "M10.3 8a2.3 2.3 0 1 1-4.6 0 2.3 2.3 0 1 1 4.6 0",
+  ],
+  "list-tree": [
+    "M8 4h5.5",
+    "M8 8h5.5",
+    "M8 12h5.5",
+    "M2.5 4V6.5A1.5 1.5 0 0 0 4 8h4",
+    "M2.5 8v2.5A1.5 1.5 0 0 0 4 12h4",
+  ],
+  /* The plan tree's "jump to this chapter" action on not-started/skipped nodes. */
+  play: ["M5.5 3.5L12.5 8L5.5 12.5Z"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICON_PATHS;

@@ -337,7 +337,10 @@ const unsureReasonId = (index: number) => `${uid.value}-unsure-${index}`;
               <span class="option-key">{{ letter(oi) }}</span>
               <span class="option-text">
                 <span class="option-label">{{ option.label }}</span>
-                <span v-if="option.description" class="option-desc">{{ option.description }}</span>
+                <!--
+                  The description explains the choice: showing it before the answer hands
+                  the explanation out as a hint. It is revealed in the settled view below.
+                -->
               </span>
             </label>
           </div>

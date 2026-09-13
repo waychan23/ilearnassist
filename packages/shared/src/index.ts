@@ -40,9 +40,30 @@ export const ALL_TOOL_NAMES = [
   "read_document",
   "ask_user",
   "ila_quiz",
+  "ila_make_plan",
+  "ila_read_plan",
+  "ila_update_plan_progress",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
+
+/**
+ * The plan tools' names. Declared here rather than in the plan section below because the
+ * widget registry binds the plan widget to them at module-eval time, and a `const` used in
+ * an initializer has to exist first.
+ *
+ * They are widget-bound (see `WidgetDefinition.boundTools`): assembled for a turn only when
+ * the session has the plan widget installed, and never selectable in a Copilot's tool
+ * allow-list — that list can neither enable nor disable them.
+ */
+export const PLAN_MAKE_TOOL_NAME = "ila_make_plan";
+export const PLAN_READ_TOOL_NAME = "ila_read_plan";
+export const PLAN_PROGRESS_TOOL_NAME = "ila_update_plan_progress";
+export const PLAN_TOOL_NAMES = [
+  PLAN_MAKE_TOOL_NAME,
+  PLAN_READ_TOOL_NAME,
+  PLAN_PROGRESS_TOOL_NAME,
+] as const;
 
 /** One choice the model offers, plus the sentence explaining what picking it means. */
 export interface AskUserOption {
@@ -225,14 +246,31 @@ export const QUIZ_NOTES_MAX = 2000;
  * which calls belong below the reply they were introduced by. Written once so a third one
  * is added here rather than in four comparisons that are free to disagree.
  */
-export const INTERACTIVE_TOOL_NAMES = [ASK_USER_TOOL_NAME, QUIZ_TOOL_NAME] as const;
+export const INTERACTIVE_TOOL_NAMES = [
+  ASK_USER_TOOL_NAME,
+  QUIZ_TOOL_NAME,
+  PLAN_MAKE_TOOL_NAME,
+] as const;
 
 export function isInteractiveTool(name: string): boolean {
   return (INTERACTIVE_TOOL_NAMES as readonly string[]).includes(name);
 }
 
+/**
+ * The answer recorded for an `ila_make_plan` call that found the conversation already had a
+ * plan — the "create a second plan" fork the spec requires a person to decide.
+ *
+ * `edit` overwrites the existing plan as a new version in this conversation. `new_session`
+ * creates a fresh conversation (with the plan widget installed) and writes V1 there;
+ * `newSessionId` names it so the client can switch to it.
+ */
+export interface PlanConflictAnswer {
+  choice: "edit" | "new_session";
+  newSessionId?: string;
+}
+
 /** One answer shape per suspending tool; the tool call's `name` is the discriminant. */
-export type InteractiveAnswer = AskUserAnswers | QuizAnswers;
+export type InteractiveAnswer = AskUserAnswers | QuizAnswers | PlanConflictAnswer;
 
 /* ------------------------------------ widgets ------------------------------------ */
 
@@ -259,7 +297,7 @@ export type WidgetScope = (typeof WIDGET_SCOPES)[number];
  * `apps/web/src/widgets/registry.ts`. The last of those is typed by this list, so forgetting
  * it is a `vue-tsc` error rather than a blank tab.
  */
-export const WIDGET_IDS = ["workspace_stats", "session_stats"] as const;
+export const WIDGET_IDS = ["workspace_stats", "session_stats", "plan"] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
 
@@ -271,12 +309,46 @@ export interface WidgetDefinition {
    * Copilot installs into a session.
    */
   scopes: readonly WidgetScope[];
+  /**
+   * Tools that come with the widget: they are assembled for a turn exactly when the widget is
+   * installed at the object the turn runs in, **bypassing the session's tool allow-list in all
+   * three of its states** (every tool / a named list / none). They are never shown in the
+   * Copilot tool checklist, because the allow-list can neither enable nor remove them — the
+   * widget install is the single switch. A tool here is still only *assembled* when its own
+   * per-turn preconditions hold (e.g. the plan tools require a session context).
+   */
+  boundTools?: readonly ToolName[];
 }
 
 export const WIDGETS: readonly WidgetDefinition[] = [
   { id: "workspace_stats", scopes: ["workspace"] },
   { id: "session_stats", scopes: ["session"] },
+  { id: "plan", scopes: ["session"], boundTools: PLAN_TOOL_NAMES },
 ];
+
+/**
+ * Every tool bound to at least one of `ids`, de-duplicated. The server reads this when
+ * assembling a turn's tools; the client reads it to keep the bound tools out of the tool
+ * checklist.
+ */
+export function boundToolNamesForWidgetIds(ids: readonly WidgetId[]): ToolName[] {
+  const enabled = new Set(ids);
+  const out = new Set<ToolName>();
+  for (const widget of WIDGETS) {
+    if (!enabled.has(widget.id)) continue;
+    for (const name of widget.boundTools ?? []) out.add(name);
+  }
+  return [...out];
+}
+
+/** Whether a tool name belongs to any widget (bound tools are never hand-picked). */
+const WIDGET_BOUND_TOOL_NAMES: ReadonlySet<string> = new Set(
+  WIDGETS.flatMap((w) => w.boundTools ?? [])
+);
+
+export function isWidgetBoundTool(name: string): boolean {
+  return WIDGET_BOUND_TOOL_NAMES.has(name);
+}
 
 /**
  * What a brand-new object starts with — deliberately **empty**, so the panel is opt-in and the
@@ -331,6 +403,105 @@ export interface WidgetState {
 export interface SessionWidgets {
   workspace: WidgetState[];
   session: WidgetState[];
+}
+
+/* ------------------------------------ plans ------------------------------------ */
+
+/** A plan's own progress. */
+export const PLAN_STATUSES = ["not_started", "in_progress", "completed"] as const;
+export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
+/**
+ * A node's progress. The two states beyond the plan's:
+ * - `skipped` — the learner moved on without doing it yet and may come back (it still counts
+ *   as a live, unfinished node).
+ * - `deleted` — a plan edit removed it. A tombstone, not a row deletion: the node keeps its
+ *   id and last position, rendered struck through, and progress is never computed over it.
+ */
+export const PLAN_NODE_STATUSES = [...PLAN_STATUSES, "skipped", "deleted"] as const;
+export type PlanNodeStatus = (typeof PLAN_NODE_STATUSES)[number];
+
+/** A node as the model submits it to `ila_make_plan`. Ids are absent at first creation. */
+export interface PlanNodeInput {
+  id?: string;
+  title: string;
+  children?: PlanNodeInput[];
+}
+
+/**
+ * A node in a version's **structural** snapshot. History versions carry only structure —
+ * never progress — so browsing V1 is reading V1 as it was edited, independent of today.
+ */
+export interface PlanSnapshotNode {
+  id: string;
+  title: string;
+  children?: PlanSnapshotNode[];
+}
+
+/** A node of the current plan: structure plus the live progress the widget renders. */
+export interface PlanTreeNode extends PlanSnapshotNode {
+  status: PlanNodeStatus;
+  /**
+   * The tool-call whose card marks where work on this node began — the
+   * `ila_update_plan_progress` call that first put it `in_progress` (placed before the
+   * teaching content, so a click jumps to the node's start), falling back to the call that
+   * completed it when a model finished a node without a separate start call. Cleared when
+   * the node returns to not-started/skipped.
+   */
+  anchorToolCallId?: string;
+  children?: PlanTreeNode[];
+}
+
+/** Anything carrying an id/children tree, which is both snapshot and current nodes. */
+interface PlanNumberedNode {
+  id: string;
+  children?: PlanNumberedNode[];
+}
+
+/**
+ * Hierarchical ordinal for every node, from sibling positions: the second root is "2", its
+ * third child "2.3". Pure and structural (status-free), so history snapshots and the live
+ * tree number the same way and the server can use it for the jump message.
+ */
+export function planNodeNumbers(nodes: readonly PlanNumberedNode[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (list: readonly PlanNumberedNode[], prefix: number[]): void => {
+    list.forEach((node, index) => {
+      const number = [...prefix, index + 1].join(".");
+      out.set(node.id, number);
+      if (node.children) walk(node.children, [...prefix, index + 1]);
+    });
+  };
+  walk(nodes, []);
+  return out;
+}
+
+export interface PlanVersionSummary {
+  version: number;
+  createdAt: string;
+}
+
+/** The current plan, for `GET /api/sessions/:id/plan`. */
+export interface PlanView {
+  planId: string;
+  version: number;
+  status: PlanStatus;
+  tree: PlanTreeNode[];
+  /** Every version, oldest first — the widget's version dropdown. */
+  versions: PlanVersionSummary[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One historical version, structure only, for `…/plan/versions/:version`. */
+export interface PlanSnapshot {
+  version: number;
+  createdAt: string;
+  tree: PlanSnapshotNode[];
+}
+
+export interface GetPlanResponse {
+  plan: PlanView | null;
 }
 
 /* ------------------------------------ stats ------------------------------------ */
@@ -498,6 +669,11 @@ export const API_ERROR_CODES = [
   // request the caller assembled wrongly. The sentences differ, so the codes do.
   "UNKNOWN_WIDGET",
   "WIDGET_SCOPE_UNSUPPORTED",
+  // A history version was asked for (…/plan/versions/:version) that never existed. No plan
+  // at all is a 200 `{ plan: null }`, not this — that is the ordinary empty state.
+  "PLAN_VERSION_NOT_FOUND",
+  // The plan-jump target does not exist: no plan, unknown/deleted node, or a completed node.
+  "PLAN_NODE_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -1123,6 +1299,12 @@ export type ChatStreamEvent =
   | { type: "message_done"; message: Message }
   /** Sent after the first turn when a model-written title replaced the placeholder. */
   | { type: "title"; sessionId: string; title: string }
+  /**
+   * The `ila_make_plan` "new session" fork committed a V1 plan into a freshly created
+   * conversation; the client switches to it. Emitted on the *old* conversation's stream
+   * before the resumed run continues.
+   */
+  | { type: "plan_session_created"; sessionId: string }
   /**
    * A turn that failed. `message` is the raw text and is what gets persisted into history,
    * so it is never rewritten.

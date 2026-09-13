@@ -43,7 +43,12 @@ import type {
   WidgetState,
   Workspace,
 } from "../api/types";
-import { MAX_ATTACHMENT_BYTES, isInteractiveTool, type InteractiveAnswer } from "../api/types";
+import {
+  MAX_ATTACHMENT_BYTES,
+  isInteractiveTool,
+  PLAN_TOOL_NAMES,
+  type InteractiveAnswer,
+} from "../api/types";
 
 interface StreamingState {
   active: boolean;
@@ -1388,6 +1393,20 @@ export const useAppStore = defineStore("app", () => {
       case "tool_end": {
         const tc = streaming.value.toolCalls.find((t) => t.id === ev.toolCall.id);
         if (tc) tc.output = ev.toolCall.output;
+        // A plan tool commits inside the turn; its widget refetches now rather than at
+        // turn end, so the tree moves while the model is still writing its reply.
+        if ((PLAN_TOOL_NAMES as readonly string[]).includes(ev.toolCall.name)) {
+          emitWidgetEvent({
+            type: "plan.changed",
+            sessionId: activeSessionId.value ?? "",
+          });
+        }
+        break;
+      }
+      case "plan_session_created": {
+        // Applied at the end of `consume`, not here — the old conversation's resumed turn
+        // is still streaming and must finish before the view switches.
+        pendingPlanSessionId = ev.sessionId;
         break;
       }
       case "usage":
@@ -1442,6 +1461,14 @@ export const useAppStore = defineStore("app", () => {
    * `sessionId` is taken so the end of the turn can be announced with it — see the emit in the
    * `finally` below, which is the one point every turn ends at.
    */
+  /**
+   * A `plan_session_created` event arrived on this stream: the make-plan fork created another
+   * conversation, and the end of this stream is when we switch to it. Stored on the stream
+   * rather than applied immediately so the (short) resumed turn in the old conversation can
+   * finish streaming without the view vanishing mid-token.
+   */
+  let pendingPlanSessionId: string | null = null;
+
   async function consume(stream: AsyncGenerator<ChatStreamEvent>, sessionId: string): Promise<boolean> {
     // Whose turn this is. If the account goes away mid-stream the events stop being applied at
     // all, so a signed-out turn cannot write into the next account's conversation.
@@ -1466,6 +1493,14 @@ export const useAppStore = defineStore("app", () => {
         // Pick up the server-assigned title and this turn's updated_at without clobbering
         // the optimistic bubbles already in `messages`.
         await loadSessions().catch(() => undefined);
+        // The make-plan fork created another conversation: switch to it now its short reply
+        // has finished, but only if the reader is still on the conversation that chose the
+        // fork — a manual switch away wins over the navigation.
+        const planSessionId = pendingPlanSessionId;
+        pendingPlanSessionId = null;
+        if (planSessionId && activeSessionId.value === sessionId) {
+          await selectSession(planSessionId).catch(() => undefined);
+        }
         // A turn is the one thing that reliably writes into the workspace, so the tree is
         // re-read here — at the single point every turn ends, rather than from the two
         // callers that start one. Silent, and a no-op when the tree was never opened: this
@@ -1494,6 +1529,29 @@ export const useAppStore = defineStore("app", () => {
       if (found) return found;
     }
     return undefined;
+  }
+
+  /**
+   * Send a plan-panel message through the ordinary chat flow — the "adjust plan" composer
+   * and the "jump to chapter" action both reduce to a user message after a server write.
+   */
+  async function sendPanelMessage(text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (!trimmed || streaming.value.active) return;
+    await sendMessage(trimmed);
+  }
+
+  /**
+   * The plan widget's "jump to chapter": the server marks prior undone nodes skipped and
+   * opens the target in one transaction, then a normal user message drives the turn.
+   * Returns false when the target is gone (the panel refetches elsewhere).
+   */
+  async function planJumpToNode(nodeId: string, message: string): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || streaming.value.active) return false;
+    await api.jumpPlanNode(sessionId, nodeId);
+    await sendPanelMessage(message);
+    return true;
   }
 
   async function sendMessage(text: string, attachments: Attachment[] = []): Promise<void> {
@@ -1704,6 +1762,8 @@ export const useAppStore = defineStore("app", () => {
     clearPendingAttachments,
     sendMessage,
     answerQuestion,
+    sendPanelMessage,
+    planJumpToNode,
     stopMessage,
     setError,
     loadDirectory,

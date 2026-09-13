@@ -13,7 +13,10 @@ import type {
   DocumentParsingConfig,
   DriverInfo,
   FileContent,
+  GetPlanResponse,
   Message,
+  PlanSnapshot,
+  PlanView,
   ProviderConfig,
   PublicConfig,
   Session,
@@ -216,6 +219,17 @@ export const api = {
   getWorkspaceStats: (workspaceId: string) =>
     request<WorkspaceStats>(`/workspaces/${workspaceId}/stats`),
   getSessionStats: (sessionId: string) => request<SessionStats>(`/sessions/${sessionId}/stats`),
+
+  // Plans. `{ plan: null }` is the ordinary empty state, not an error.
+  getPlan: (sessionId: string) => request<GetPlanResponse>(`/sessions/${sessionId}/plan`),
+  getPlanVersion: (sessionId: string, version: number) =>
+    request<PlanSnapshot>(`/sessions/${sessionId}/plan/versions/${version}`),
+  // Move study to one chapter: prior undone nodes are marked skipped server-side.
+  jumpPlanNode: (
+    sessionId: string,
+    nodeId: string
+  ): Promise<{ plan: PlanView; number: string; title: string; skippedCount: number }> =>
+    request(`/sessions/${sessionId}/plan/nodes/${nodeId}/jump`, { method: "POST" }),
 
   /**
    * Stop the turn currently streaming for a session.

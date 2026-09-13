@@ -30,7 +30,19 @@ export type WidgetEvent =
    * every turn ends at rather than from the three that start one. It carries the session id so a
    * session-scope widget can ignore another conversation's turns.
    */
-  | { type: "turn.finished"; sessionId: string };
+  | { type: "turn.finished"; sessionId: string }
+  /**
+   * A plan tool (`ila_make_plan` / `ila_update_plan_progress`) committed during a turn, so the
+   * plan widget refetches mid-turn without waiting for the turn to end. Carries the session id
+   * like `turn.finished`.
+   */
+  | { type: "plan.changed"; sessionId: string }
+  /**
+   * A widget asked to scroll the conversation to a tool-call card — a plan node's start
+   * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
+   * event. Scrolling to the card (rather than the message top) lands on the node's start.
+   */
+  | { type: "chat.jump"; toolCallId: string };
 
 type WidgetEventHandler = (event: WidgetEvent) => void;
 

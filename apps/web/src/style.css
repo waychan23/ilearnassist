@@ -1190,6 +1190,216 @@ body {
   font-size: var(--fs-3);
 }
 
+/* --------------------------------- plan widget --------------------------------- */
+
+/*
+ * The widget fills the whole panel body (whose own scroll is neutralised by the negative
+ * margins) so the tree scrolls inside `.plan-scroll` while the adjust-plan footer stays
+ * pinned at the panel's bottom edge.
+ */
+.plan-widget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  height: 100%;
+  margin: calc(-1 * var(--space-5));
+}
+.plan-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+.plan-footer {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: var(--space-4) var(--space-5);
+  background: var(--panel);
+}
+.plan-adjust-open {
+  width: 100%;
+}
+.plan-adjust {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.plan-adjust-input {
+  resize: vertical;
+  min-height: calc(var(--fs-4) * 3);
+}
+.plan-adjust-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+/* The non-full-bleed states keep the panel body's own padding that the margins remove. */
+.plan-widget > .widget-empty,
+.plan-widget > .widget-error {
+  padding: var(--space-5);
+}
+
+.plan-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.plan-version {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.plan-version select {
+  width: 100%;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2);
+}
+.plan-state.completed {
+  color: var(--success);
+  border-color: var(--success);
+}
+.plan-state.in_progress {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.plan-tree-ops {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.plan-op {
+  width: auto;
+  min-width: var(--space-9);
+  padding: 0 var(--space-3);
+  font-size: var(--fs-2);
+  font-variant-numeric: tabular-nums;
+}
+.plan-op .icon {
+  font-size: var(--fs-3);
+}
+
+.plan-history-banner,
+.plan-history-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--fs-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+}
+.plan-history-banner {
+  color: var(--text-2);
+  background: var(--panel-2);
+}
+.plan-history-error {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+.plan-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.plan-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* The level comes from the node depth; the gutter is one indent per level. */
+  padding-left: calc(var(--space-4) * var(--plan-depth, 0));
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.plan-caret,
+.plan-caret-spacer {
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.plan-caret {
+  color: var(--text-3);
+  border-radius: var(--radius-sm);
+}
+.plan-caret .icon {
+  font-size: var(--fs-2);
+}
+.plan-play {
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+}
+.plan-play .icon {
+  font-size: var(--fs-2);
+}
+.plan-status-icon {
+  flex: none;
+  width: var(--space-8);
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-3);
+}
+.plan-no {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  margin-right: var(--space-2);
+}
+.plan-status-icon .icon {
+  font-size: var(--fs-3);
+}
+.plan-status-icon[data-status="completed"] {
+  color: var(--success);
+}
+.plan-status-icon[data-status="in_progress"] {
+  color: var(--warning);
+}
+.plan-status-icon[data-status="skipped"] {
+  color: var(--warning);
+}
+.plan-status-icon[data-status="deleted"] {
+  color: var(--text-3);
+}
+.plan-title {
+  min-width: 0;
+  text-align: left;
+  font-size: var(--fs-3);
+  color: var(--text);
+  background: none;
+  border: none;
+  padding: 0;
+}
+/* A completed node is the jump target. */
+.plan-link {
+  cursor: pointer;
+  color: var(--accent);
+}
+.plan-link:hover {
+  text-decoration: underline;
+}
+.plan-row.deleted .plan-title {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
 /* --------------------------------- messages --------------------------------- */
 
 .msg {

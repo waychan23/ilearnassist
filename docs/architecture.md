@@ -190,6 +190,52 @@ The new table needed **no `SCHEMA_VERSION` bump** — the DDL runs on every open
 created before it simply gains it (the `counters` precedent, pinned by a test). `copilots.widgets`
 came in through `ensureColumn` for the same reason.
 
+#### Widget-bound tools
+
+A widget may declare `boundTools` in `WIDGETS`: tools that are assembled for a turn **iff the
+widget is installed on the session**, read fresh per turn from `widget_instances` in
+`turnContext()`. They bypass the session's tool allow-list in all three of its states —
+"every tool", a named list, and the empty "no tools" list — because the widget install is the
+single switch and the tools are deliberately absent from the Copilot tool checklist
+(`isWidgetBoundTool`). Like `read_document`, they are still only assembled when their per-turn
+context exists (`plan?: PlanToolContext`): an allow-list can never switch them on for a
+conversation without the widget. The first consumer is the **plan** widget.
+
+### The plan widget (`plans.ts`, `planTools.ts`)
+
+One versioned study plan per session, written only by the model and rendered by the
+session-scoped plan widget. The split is:
+
+- **Versions are structural snapshots.** `plan_versions.tree_json` is the full tree
+  (id/title/children) each edit produced, and is all a history browse shows. **Progress lives
+  once, on `plan_nodes`**, keyed by a server-assigned UUID that survives renames and moves, so
+  the current tree carries live status while old versions never change and need no node-level
+  version number.
+- **Deletion is a status, not a row deletion.** A node missing from a new submission becomes a
+  tombstone (`status='deleted'`, `removed_version` set, last parent/position frozen): it drops
+  out of that version's snapshot while the current view renders it struck through where it used
+  to be. Reusing a tombstone id is refused; a replacement is a new node without an id.
+- `ila_make_plan` creates V1 (no ids) or edits (ids from `ila_read_plan`); a fresh-looking
+  submission against an existing plan is the third suspending tool — the turn ends on a choice
+  card, and `POST /answers` commits either fork ("edit this plan" or "new conversation", which
+  snapshots the session, installs the widget, writes V1, and streams `plan_session_created`).
+- `ila_update_plan_progress` batches node status changes. The node's **start anchor** is the
+  `in_progress` call placed before its content (tool call id, in the `done_tool_call_id`
+  column — widened without a rename): kept through completion, cleared when the node returns
+  to not-started/skipped, and what the panel's click scrolls to (the tool-call card, not the
+  message top). The plan auto-completes when every live node is completed; `deleted` is
+  unreachable from this tool. The tool description carries the *mark-before-teaching* timing
+  rule, which is what makes the anchor meaningful rather than a completion marker.
+- The panel's two user actions reduce to a user message on the ordinary `/chat` path. The
+  footer "adjust plan" composer sends `调整计划：<text>`; "jump to chapter" first POSTs
+  `/plan/nodes/:id/jump`, which in one transaction marks every prior undone node `skipped`
+  (including the chapter currently in progress) and opens the target plus its containing
+  chapters, then sends `调整进度，跳到章节<number> <title>`. `planNodeNumbers` derives the
+  `1` / `1.1` ordinals from sibling position, for both the tree view and that message.
+- While the widget is installed the turn's system prompt also gets `PLAN_GUIDANCE`: mark a
+  node before teaching it, stay on the plan at node boundaries, and after an off-plan detour
+  ask the user whether to return to the track.
+
 ### The workspace file browser (`files.ts`)
 
 The sidebar's second panel: a read-only tree of the active workspace, expanded one level at a

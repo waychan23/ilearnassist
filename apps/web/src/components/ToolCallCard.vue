@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { QUIZ_TOOL_NAME, isInteractiveTool, type ToolCall } from "../api/types";
+import { PLAN_MAKE_TOOL_NAME, QUIZ_TOOL_NAME, isInteractiveTool, type ToolCall } from "../api/types";
 import AskUserCard from "./AskUserCard.vue";
+import PlanConflictCard from "./PlanConflictCard.vue";
 import QuizCard from "./QuizCard.vue";
 import Icon from "./Icon.vue";
 
@@ -19,10 +20,12 @@ const props = defineProps<{ toolCall: ToolCall }>();
  * card on the name alone left it showing its "preparing" placeholder forever; falling
  * through to the ordinary card shows the `Tool error: …` the model actually got.
  */
-const card = computed<"ask" | "quiz" | null>(() => {
+const card = computed<"ask" | "quiz" | "plan" | null>(() => {
   if (!isInteractiveTool(props.toolCall.name)) return null;
   if (props.toolCall.status === undefined && props.toolCall.output !== undefined) return null;
-  return props.toolCall.name === QUIZ_TOOL_NAME ? "quiz" : "ask";
+  if (props.toolCall.name === QUIZ_TOOL_NAME) return "quiz";
+  if (props.toolCall.name === PLAN_MAKE_TOOL_NAME) return "plan";
+  return "ask";
 });
 const open = ref(false);
 const { t, te } = useI18n();
@@ -65,7 +68,13 @@ const prettyInput = computed(() => {
 <template>
   <AskUserCard v-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
-  <div v-else class="tool-card" data-testid="tool-call">
+  <PlanConflictCard v-else-if="card === 'plan'" :tool-call="toolCall" />
+  <div
+    v-else
+    class="tool-card"
+    data-testid="tool-call"
+    :data-tool-call-id="toolCall.id"
+  >
     <div class="tool-head" @click="open = !open">
       <Icon :name="done ? 'check' : 'retry'" :class="done ? 'ok' : 'run'" />
       <span class="name">{{ label }}</span>
