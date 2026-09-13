@@ -337,6 +337,51 @@ const DDL = `
     done_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_plan_nodes_plan ON plan_nodes(plan_id, parent_id, position);
+
+  -- The quiz widget's questions. One row per question, created when 'ila_quiz' suspends —
+  -- BEFORE the user answers — so that a question the learner walked away from is already a
+  -- thing the panel can list and later re-answer.
+  --
+  -- Two ids on purpose: 'id' is a global UUID, the row's identity for the grading tool and
+  -- the make-up route; 'qid' is the session-scoped Qn number the model and the card use
+  -- (counter 'quiz_question', unique within one session). 'position' equals that number, so
+  -- questions list in ask order without a second column.
+  --
+  -- 'node_id'/'node_title' bind the question to the plan chapter it was asked under; both
+  -- null means a session-level question (outside the plan). The title is a snapshot with no
+  -- FK, so the row survives a plan edit that tombstones the node and still groups under it.
+  --
+  -- Status answers the question's lifecycle independently of the tool call that posed it:
+  -- pending → answered (submitted, possibly later made up) / skipped (walked away) /
+  -- dismissed (the whole quiz explicitly cancelled). A make-up updates the SAME row, so a
+  -- re-answered question is never a duplicate; grading clears with it, since the old verdict
+  -- judged a different answer.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS quiz_questions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    node_id TEXT,
+    node_title TEXT,
+    tool_call_id TEXT NOT NULL,
+    qid TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    header TEXT NOT NULL,
+    question TEXT NOT NULL,
+    multi_select INTEGER NOT NULL DEFAULT 0,
+    options_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    user_answer_json TEXT,
+    verdict TEXT,
+    feedback TEXT,
+    grade_tool_call_id TEXT,
+    created_at TEXT NOT NULL,
+    answered_at TEXT,
+    graded_at TEXT,
+    UNIQUE (session_id, qid)
+  );
+  CREATE INDEX IF NOT EXISTS idx_quiz_session ON quiz_questions(session_id, position);
+  CREATE INDEX IF NOT EXISTS idx_quiz_call ON quiz_questions(tool_call_id);
 `;
 
 /**

@@ -40,6 +40,7 @@ export const ALL_TOOL_NAMES = [
   "read_document",
   "ask_user",
   "ila_quiz",
+  "ila_review_quiz",
   "ila_make_plan",
   "ila_read_plan",
   "ila_update_plan_progress",
@@ -146,6 +147,13 @@ export const ASK_USER_OTHER_MAX = 500;
  * `Document*`: a symbol is scoped by its module, a tool name is global.
  */
 export const QUIZ_TOOL_NAME = "ila_quiz";
+/**
+ * The grading companion: a normal (non-suspending) tool the model calls once after judging
+ * quiz answers, writing structured verdicts the quiz widget filters on. Bound to the same
+ * widget as `ila_quiz`; see `QUIZ_TOOL_NAMES` and the quiz widget in `WIDGETS`.
+ */
+export const QUIZ_REVIEW_TOOL_NAME = "ila_review_quiz";
+export const QUIZ_TOOL_NAMES = [QUIZ_TOOL_NAME, QUIZ_REVIEW_TOOL_NAME] as const;
 
 /**
  * One choice the model offers.
@@ -190,6 +198,13 @@ export interface QuizQuestionInput {
  */
 export interface QuizQuestion extends QuizQuestionInput {
   id: string;
+  /**
+   * The question's GLOBAL id, assigned by the server when the quiz is registered in the
+   * database at suspension time — distinct from `id` (the session-scoped `Qn`), which is
+   * only unique within a conversation. This is what `ila_review_quiz` and the widget routes
+   * name a question by. Absent only on legacy calls persisted before the quiz widget.
+   */
+  uid?: string;
 }
 
 /**
@@ -236,6 +251,74 @@ export const QUIZ_HEADER_MAX = 12;
 export const QUIZ_UNSURE_REASON_MAX = 500;
 /** Cap on one question's notes, for the same reason. */
 export const QUIZ_NOTES_MAX = 2000;
+
+/* ----------------------------- quiz question records ----------------------------- */
+
+/**
+ * A question's lifecycle as the quiz widget stores it. Distinct from `ToolCallStatus`:
+ * the call is "awaiting" while pending, and a quiz has its own dismissed state (the whole
+ * set explicitly cancelled, unlike `skipped`, which the user walked away from and may make
+ * up later).
+ */
+export const QUIZ_QUESTION_STATUSES = ["pending", "answered", "skipped", "dismissed"] as const;
+export type QuizQuestionStatus = (typeof QUIZ_QUESTION_STATUSES)[number];
+
+/**
+ * The model's verdict on one answered question. `unsure` is the answer that made no claim:
+ * neither right nor wrong, which the wrong-only filter must not count.
+ */
+export const QUIZ_VERDICTS = ["correct", "incorrect", "unsure"] as const;
+export type QuizVerdict = (typeof QUIZ_VERDICTS)[number];
+
+/** One question as the quiz widget reads it (`GET /api/sessions/:id/quizzes`). */
+export interface QuizQuestionView {
+  /** The global UUID; the row's identity across conversations and edits. */
+  id: string;
+  /** The session-scoped `Qn` shown to user and model. */
+  qid: string;
+  /** The Qn number; the list ordering across a session's quizzes. */
+  position: number;
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: QuizOption[];
+  status: QuizQuestionStatus;
+  verdict: QuizVerdict | null;
+  /** The model's explanation, once `ila_review_quiz` has graded the answer. */
+  feedback: string | null;
+  answer: QuizAnswer | null;
+  /** The plan node this question was about; null for session-level ("其他问题") questions. */
+  nodeId: string | null;
+  /** Snapshot of the node title at creation, surviving the node's later deletion. */
+  nodeTitle: string | null;
+  /** The `ila_quiz` call that posed it — also the chat scroll anchor. */
+  toolCallId: string;
+  createdAt: string;
+  answeredAt: string | null;
+  gradedAt: string | null;
+}
+
+export interface GetQuizQuestionsResponse {
+  questions: QuizQuestionView[];
+}
+
+/** Body of the make-up answer POST; the question itself comes from the row. */
+export interface QuizMakeupAnswerBody {
+  answer: QuizAnswer;
+}
+
+/** One item of `ila_review_quiz`: the verdict for one question by its global id. */
+export interface QuizReviewItem {
+  quizId: string;
+  verdict: QuizVerdict;
+  explanation: string;
+}
+export interface QuizReviewInput {
+  reviews: QuizReviewItem[];
+}
+/** A quiz carries at most ten questions, and one review call grades one quiz. */
+export const QUIZ_REVIEW_MAX_REVIEWS = QUIZ_MAX_QUESTIONS;
+export const QUIZ_REVIEW_EXPLANATION_MAX = 2000;
 
 /**
  * The tools whose calls suspend the turn, and are therefore answered through a card rather
@@ -297,7 +380,7 @@ export type WidgetScope = (typeof WIDGET_SCOPES)[number];
  * `apps/web/src/widgets/registry.ts`. The last of those is typed by this list, so forgetting
  * it is a `vue-tsc` error rather than a blank tab.
  */
-export const WIDGET_IDS = ["workspace_stats", "session_stats", "plan"] as const;
+export const WIDGET_IDS = ["workspace_stats", "session_stats", "plan", "quiz"] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
 
@@ -324,6 +407,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   { id: "workspace_stats", scopes: ["workspace"] },
   { id: "session_stats", scopes: ["session"] },
   { id: "plan", scopes: ["session"], boundTools: PLAN_TOOL_NAMES },
+  { id: "quiz", scopes: ["session"], boundTools: QUIZ_TOOL_NAMES },
 ];
 
 /**
@@ -674,6 +758,10 @@ export const API_ERROR_CODES = [
   "PLAN_VERSION_NOT_FOUND",
   // The plan-jump target does not exist: no plan, unknown/deleted node, or a completed node.
   "PLAN_NODE_NOT_FOUND",
+  // A quiz row id the make-up POST names is not this conversation's.
+  "QUIZ_QUESTION_NOT_FOUND",
+  // The question exists but is not make-up-eligible: only skipped questions can be re-answered.
+  "QUIZ_NOT_ANSWERABLE",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

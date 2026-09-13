@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebFetchConfig, WebSearchConfig } from "../../src/config.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
-import { PLAN_TOOL_NAMES } from "@ilearnassist/shared";
+import { PLAN_TOOL_NAMES, QUIZ_TOOL_NAMES } from "@ilearnassist/shared";
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
 import type { QuizToolContext } from "../../src/tools/quiz.js";
+import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
 
 let workspace: string;
@@ -15,20 +16,25 @@ const webSearch: WebSearchConfig = { provider: "bing", maxResults: 5 };
 const webFetch: WebFetchConfig = { enabled: true, maxChars: 20_000 };
 
 /**
- * `quiz` numbers its questions from a counter the route supplies; a stub keeps these cases
- * off a database. Nothing here is about the numbering itself.
+ * `quiz` numbers and registers its questions through callbacks the route supplies; stubs
+ * keep these assembly cases off a database. Nothing here is about the numbering itself.
  */
 const quiz: QuizToolContext = {
   reserveQuestionNumbers: (count) => Array.from({ length: count }, (_, i) => i + 1),
+  registerQuestions: ({ items }) => items.map((item) => ({ uid: `uid-${item.qid}`, qid: item.qid })),
 };
+// The db/session are only touched when the grading tool is invoked, so a structural stub
+// keeps these assembly tests off a database.
+const quizReview = { db: {}, sessionId: "s1" } as unknown as QuizReviewToolContext;
 
 function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] {
+  // No quiz context by default: the quiz tools are widget-bound, so the absence itself is
+  // under test. Cases that want them spread `{ quiz, quizReview }`.
   return buildTools({
     workspaceDir: workspace,
     webSearch,
     webFetch,
     fileToolsEnabled: true,
-    quiz,
     ...input,
   }).map((t) => t.name);
 }
@@ -53,7 +59,11 @@ const documents = {
  * readable document, the plan tools an installed plan widget. They live in ALL_TOOL_NAMES
  * (what may be allow-listed) but are absent from a turn with neither.
  */
-const CONTEXT_ASSEMBLED = ["read_document", ...PLAN_TOOL_NAMES] as const;
+const CONTEXT_ASSEMBLED = [
+  "read_document",
+  ...PLAN_TOOL_NAMES,
+  ...QUIZ_TOOL_NAMES,
+] as const;
 
 // The db/session are only touched when a plan tool is invoked, so a structural stub keeps
 // these assembly tests off a database.
@@ -84,12 +94,11 @@ describe("buildTools", () => {
   });
 
   it("keeps the non-workspace tools but drops the file tools when fileTools is disabled", () => {
-    // The suspending tools are here with the web tools because they read nothing at all —
-    // switching off the workspace sandbox is a statement about file access, not about
-    // talking to the user.
+    // `ask_user` is here with the web tools because it reads nothing at all — switching
+    // off the workspace sandbox is a statement about file access, not about talking to the
+    // user. The quiz tools are widget-bound, so they stay absent here.
     expect(names({ fileToolsEnabled: false }).sort()).toEqual([
       "ask_user",
-      "ila_quiz",
       "web_fetch",
       "web_search",
     ]);
@@ -113,7 +122,7 @@ describe("buildTools", () => {
     // What a Copilot with `allTools: true` produces — the flag becomes an absent list, not an
     // empty one, precisely so that this case and the next one stay distinguishable.
     expect(names({ documents })).toHaveLength(
-      ALL_TOOL_NAMES.length - PLAN_TOOL_NAMES.length
+      ALL_TOOL_NAMES.length - PLAN_TOOL_NAMES.length - QUIZ_TOOL_NAMES.length
     );
   });
 
@@ -131,15 +140,43 @@ describe("buildTools", () => {
     expect(names({ allowedNames: ["read_file"], documents })).toEqual(["read_file"]);
   });
 
-  it("offers quiz by default, and keeps it when the file tools are off", () => {
-    // Like `ask_user`, it reads nothing from the workspace, so switching the file tools off
-    // must not take a conversation's ability to be quizzed with them.
-    expect(names()).toContain("ila_quiz");
-    expect(names({ fileToolsEnabled: false })).toContain("ila_quiz");
+  /* ------------------------------ quiz (widget-bound) ------------------------------ */
+
+  it("assembles no quiz tools without a quiz context", () => {
+    const built = names();
+    for (const name of QUIZ_TOOL_NAMES) expect(built).not.toContain(name);
   });
 
-  it("lets a Copilot allow-list exclude quiz", () => {
-    expect(names({ allowedNames: ["ask_user"] })).toEqual(["ask_user"]);
+  it("assembles both quiz tools with a quiz context", () => {
+    const built = names({ quiz, quizReview });
+    for (const name of QUIZ_TOOL_NAMES) expect(built).toContain(name);
+  });
+
+  it("lets widget-bound quiz tools bypass the allow-list in every state", () => {
+    // Named list: not in it, still there.
+    expect(names({ quiz, quizReview, allowedNames: ["read_file"] }).sort()).toEqual(
+      [...QUIZ_TOOL_NAMES, "read_file"].sort()
+    );
+    // Empty list ("no tools"): the bound tools survive, and nothing else does.
+    expect(names({ quiz, quizReview, allowedNames: [] }).sort()).toEqual(
+      [...QUIZ_TOOL_NAMES].sort()
+    );
+    // An allow-list that does not name quiz cannot remove it: the widget is the switch.
+    const namedOnly = names({ quiz, quizReview, allowedNames: ["read_file"] });
+    expect(namedOnly).not.toContain("ask_user");
+    for (const name of QUIZ_TOOL_NAMES) expect(namedOnly).toContain(name);
+  });
+
+  it("keeps the quiz tools when file tools are disabled", () => {
+    const built = names({ quiz, quizReview, fileToolsEnabled: false });
+    for (const name of QUIZ_TOOL_NAMES) expect(built).toContain(name);
+  });
+
+  it("assembles ila_quiz without its grading companion when only the quiz context is given", () => {
+    // Routes always pass both; this is the defensive half of the optional pair.
+    const built = names({ quiz });
+    expect(built).toContain("ila_quiz");
+    expect(built).not.toContain("ila_review_quiz");
   });
 
   it("applies the allow-list on top of the config gates", () => {
@@ -167,8 +204,8 @@ describe("buildTools", () => {
     );
     // Empty list ("no tools"): the bound tools survive, and nothing else does.
     expect(names({ plan, allowedNames: [] }).sort()).toEqual([...PLAN_TOOL_NAMES].sort());
-    // Absent list: the default nine plus read_document's gate aside, the bound tools add three.
-    expect(names({ plan })).toHaveLength(9 + PLAN_TOOL_NAMES.length);
+    // Absent list: the default eight plus read_document's gate aside, the bound tools add three.
+    expect(names({ plan })).toHaveLength(8 + PLAN_TOOL_NAMES.length);
   });
 
   it("keeps the plan tools when file tools are disabled", () => {
@@ -183,7 +220,6 @@ describe("buildTools", () => {
       webFetch,
       fileToolsEnabled: true,
       allowedNames: ["write_file"],
-      quiz,
     });
     await writeFile!.invoke({ path: "a.txt", content: "x" });
     // Written under the given workspace, proving the closure captured it.

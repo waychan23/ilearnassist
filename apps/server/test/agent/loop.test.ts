@@ -606,6 +606,8 @@ describe("runAgentStream — a suspending tool ends the turn", () => {
   const quiz = (start = 1) => [
     buildQuizTool({
       reserveQuestionNumbers: (count) => Array.from({ length: count }, (_, i) => start + i),
+      registerQuestions: ({ items }) =>
+        items.map((item) => ({ uid: `uid-${item.qid}`, qid: item.qid })),
     }),
   ];
 

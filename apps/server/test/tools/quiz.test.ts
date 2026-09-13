@@ -14,6 +14,7 @@ import {
   readQuizQuestions,
   renderQuizResult,
   validateQuizAnswers,
+  type QuizRegisterInput,
 } from "../../src/tools/quiz.js";
 import { Suspension } from "../../src/tools/suspension.js";
 
@@ -35,7 +36,12 @@ const numbering =
   (count: number): number[] =>
     Array.from({ length: count }, (_, i) => start + i);
 
-const tool = (start = 1) => buildQuizTool({ reserveQuestionNumbers: numbering(start) });
+/** A registration stand-in: one deterministic uid per numbered question. */
+const register = (input: QuizRegisterInput) =>
+  input.items.map((item) => ({ uid: `uid-${item.qid}`, qid: item.qid }));
+
+const tool = (start = 1) =>
+  buildQuizTool({ reserveQuestionNumbers: numbering(start), registerQuestions: register });
 
 const option = (label: string) => ({ label });
 
@@ -63,7 +69,42 @@ describe("quiz schema", () => {
     // The suspension is the tool's *success* path: reaching this means the questions were
     // valid, and the only thing left to do is number them and stop.
     const err = await suspend(questions);
-    expect(err.questions[0]).toEqual({ ...questions[0], id: "Q1" });
+    expect(err.questions[0]).toEqual({ ...questions[0], id: "Q1", uid: "uid-Q1" });
+  });
+
+  it("registers the numbered questions and gives each back a global uid", async () => {
+    const registerQuestions = vi.fn(register);
+    const built = buildQuizTool({
+      reserveQuestionNumbers: numbering(1),
+      registerQuestions,
+    });
+    const err = await built
+      .invoke({ nodeId: "node-7", questions: [question(), question({ header: "状态" })] } as never)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(QuizSuspension);
+
+    // One call for the whole quiz: the Qn, its numeric position, and the model's node
+    // binding travel together, so the rows and the numbering cannot disagree.
+    expect(registerQuestions).toHaveBeenCalledTimes(1);
+    const arg = registerQuestions.mock.calls[0]![0];
+    expect(arg.modelNodeId).toBe("node-7");
+    expect(arg.items.map((i) => [i.qid, i.position])).toEqual([
+      ["Q1", 1],
+      ["Q2", 2],
+    ]);
+    expect((err as QuizSuspension).questions.map((q) => q.uid)).toEqual(["uid-Q1", "uid-Q2"]);
+  });
+
+  it("surfaces a registration failure as a tool error, not a suspension", async () => {
+    const built = buildQuizTool({
+      reserveQuestionNumbers: numbering(1),
+      registerQuestions: () => {
+        throw new Error("ila_quiz: node x is not a live node in this conversation's plan");
+      },
+    });
+    await expect(built.invoke({ questions: [question()] } as never)).rejects.toThrow(
+      /not a live node/
+    );
   });
 
   it("is a Suspension, so the loop's one arm catches it without knowing the tool", async () => {
@@ -92,16 +133,23 @@ describe("quiz schema", () => {
     // Validation runs before the body, which is what keeps a rejected call from burning
     // counter numbers. An empty set is the simplest malformed one.
     const reserve = vi.fn(numbering(1));
+    const registerQuestions = vi.fn(register);
     await expect(
-      buildQuizTool({ reserveQuestionNumbers: reserve }).invoke({ questions: [] } as never)
+      buildQuizTool({ reserveQuestionNumbers: reserve, registerQuestions }).invoke({
+        questions: [],
+      } as never)
     ).rejects.toThrow(/did not match expected schema/);
     expect(reserve).not.toHaveBeenCalled();
+    expect(registerQuestions).not.toHaveBeenCalled();
   });
 
   it("fails loudly when the context reserves the wrong number of ids", async () => {
     // Two questions sharing one id would be one answer slot for two questions, and a card
     // cannot show that. A tool error is louder than a duplicate id on screen.
-    const short = buildQuizTool({ reserveQuestionNumbers: () => [1] });
+    const short = buildQuizTool({
+      reserveQuestionNumbers: () => [1],
+      registerQuestions: register,
+    });
     const err = await short
       .invoke({ questions: [question(), question({ header: "状态" })] } as never)
       .catch((e: unknown) => e);
@@ -385,8 +433,22 @@ describe("renderQuizResult", () => {
     const rendered = renderQuizResult(questions, { Q1: { selected: ["滚动"] } }, "submit");
 
     expect(JSON.parse(rendered)).toEqual({
-      user_answers: [{ id: "Q1", question: "Flink 有哪几种窗口？", selected: ["滚动"] }],
+      // No uid on a legacy question: quiz_id falls back to the Qn.
+      user_answers: [
+        {
+          id: "Q1",
+          quiz_id: "Q1",
+          question: "Flink 有哪几种窗口？",
+          selected: ["滚动"],
+        },
+      ],
     });
+  });
+
+  it("uses the global uid as quiz_id when the question was registered", () => {
+    const withUid: QuizQuestion[] = [{ ...question(), id: "Q1", uid: "uuid-123" }];
+    const rendered = renderQuizResult(withUid, { Q1: { selected: ["滚动"] } }, "submit");
+    expect(JSON.parse(rendered).user_answers[0].quiz_id).toBe("uuid-123");
   });
 
   it("omits the optional fields rather than sending empty strings", () => {
@@ -408,6 +470,7 @@ describe("renderQuizResult", () => {
 
     expect(JSON.parse(rendered).user_answers[0]).toEqual({
       id: "Q1",
+      quiz_id: "Q1",
       question: "Flink 有哪几种窗口？",
       selected: [],
       unsure: true,

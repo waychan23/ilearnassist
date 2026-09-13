@@ -14,10 +14,13 @@ import type {
   DriverInfo,
   FileContent,
   GetPlanResponse,
+  GetQuizQuestionsResponse,
   Message,
   PlanSnapshot,
   PlanView,
   ProviderConfig,
+  QuizAnswer,
+  QuizQuestionView,
   PublicConfig,
   Session,
   SessionStats,
@@ -230,6 +233,17 @@ export const api = {
     nodeId: string
   ): Promise<{ plan: PlanView; number: string; title: string; skippedCount: number }> =>
     request(`/sessions/${sessionId}/plan/nodes/${nodeId}/jump`, { method: "POST" }),
+
+  // Quiz questions for the quiz widget. An empty list is the ordinary empty state.
+  listQuizQuestions: (sessionId: string) =>
+    request<GetQuizQuestionsResponse>(`/sessions/${sessionId}/quizzes`),
+  // Make-up answer for one skipped question: validates/persists, after which the client
+  // drives an ordinary chat turn that grades it.
+  answerQuizQuestion: (sessionId: string, quizId: string, answer: QuizAnswer) =>
+    request<{ question: QuizQuestionView }>(
+      `/sessions/${sessionId}/quizzes/${quizId}/answer`,
+      { method: "POST", body: JSON.stringify({ answer }) }
+    ),
 
   /**
    * Stop the turn currently streaming for a session.

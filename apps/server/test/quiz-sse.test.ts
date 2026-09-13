@@ -68,8 +68,9 @@ beforeEach(() => {
 });
 
 async function freshSession(): Promise<Session> {
+  // `ila_quiz` is widget-bound: the quiz widget assembles both quiz tools for the turn.
   const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
-  return newSession(env, workspace.id);
+  return newSession(env, workspace.id, { widgets: ["quiz"] });
 }
 
 async function chat(sessionId: string, message: string) {
@@ -228,13 +229,22 @@ describe("quiz over the wire", () => {
     expect(sent.messages[2]!.tool_calls?.[0]!.function.arguments).toContain("Q1");
 
     const result = JSON.parse(String(sent.messages[3]!.content)) as {
-      user_answers: { id: string; question: string; selected: string[]; notes?: string }[];
+      user_answers: {
+        id: string;
+        quiz_id: string;
+        question: string;
+        selected: string[];
+        notes?: string;
+      }[];
     };
-    expect(result.user_answers[0]).toEqual({
+    // quiz_id is the global uid the panel grades by; the Qn stays the id.
+    expect(result.user_answers[0]).toMatchObject({
       id: "Q1",
       question: "Flink 里按时间切分的窗口是哪一种？",
       selected: ["滚动窗口"],
     });
+    expect(typeof result.user_answers[0]!.quiz_id).toBe("string");
+    expect(result.user_answers[0]!.quiz_id).not.toBe("Q1");
     expect(result.user_answers[1]).toMatchObject({
       id: "Q2",
       selected: ["RocksDB", "HashMap"],
@@ -271,7 +281,7 @@ describe("quiz over the wire", () => {
       user_answers: { id: string; selected: string[]; unsure?: boolean; unsure_reason?: string }[];
     };
 
-    expect(result.user_answers[0]).toEqual({
+    expect(result.user_answers[0]).toMatchObject({
       id: "Q1",
       question: "Flink 里按时间切分的窗口是哪一种？",
       selected: [],

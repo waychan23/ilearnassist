@@ -47,7 +47,10 @@ import {
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
   PLAN_TOOL_NAMES,
+  QUIZ_REVIEW_TOOL_NAME,
   type InteractiveAnswer,
+  type QuizAnswer,
+  type QuizQuestionView,
 } from "../api/types";
 
 interface StreamingState {
@@ -1401,6 +1404,14 @@ export const useAppStore = defineStore("app", () => {
             sessionId: activeSessionId.value ?? "",
           });
         }
+        // A grading call commits verdicts mid-turn; the quiz widget refetches now rather
+        // than waiting for turn end. `ila_quiz` itself never emits tool_end (it suspends).
+        if (ev.toolCall.name === QUIZ_REVIEW_TOOL_NAME) {
+          emitWidgetEvent({
+            type: "quiz.changed",
+            sessionId: activeSessionId.value ?? "",
+          });
+        }
         break;
       }
       case "plan_session_created": {
@@ -1551,6 +1562,34 @@ export const useAppStore = defineStore("app", () => {
     if (!sessionId || streaming.value.active) return false;
     await api.jumpPlanNode(sessionId, nodeId);
     await sendPanelMessage(message);
+    return true;
+  }
+
+  /**
+   * The quiz widget's make-up answer for a question originally skipped/dismissed:
+   * persist the answer on the SAME row (the server refuses pending/answered), then START
+   * an ordinary chat turn whose message quotes the global id, so the model grades that
+   * question instead of posing a new quiz.
+   *
+   * Resolves (true) as soon as the answer is persisted and the turn is dispatched — the
+   * stream itself runs in the background so the detail dialog can close immediately rather
+   * than covering the chat while the model answers. False on the streaming guard or a
+   * rejected POST (whose translated error is surfaced, leaving the dialog open).
+   */
+  async function makeupQuizAnswer(
+    question: QuizQuestionView,
+    answer: QuizAnswer,
+    message: string
+  ): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || streaming.value.active) return false;
+    try {
+      await api.answerQuizQuestion(sessionId, question.id, answer);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+    void sendPanelMessage(message);
     return true;
   }
 
@@ -1764,6 +1803,7 @@ export const useAppStore = defineStore("app", () => {
     answerQuestion,
     sendPanelMessage,
     planJumpToNode,
+    makeupQuizAnswer,
     stopMessage,
     setError,
     loadDirectory,

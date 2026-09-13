@@ -20,6 +20,7 @@ import type {
   ProviderConfig,
   ProviderModelInput,
   PublicConfig,
+  QuizAnswers,
   Session,
   SessionSettings,
   Source,
@@ -42,6 +43,8 @@ import {
   DEFAULT_WIDGET_IDS,
   MAX_ATTACHMENT_BYTES,
   PLAN_TOOL_NAMES,
+  QUIZ_TOOL_NAME,
+  QUIZ_TOOL_NAMES,
 } from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
 import {
@@ -67,6 +70,14 @@ import {
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
+import {
+  dismissQuizQuestions,
+  listQuizQuestionViews,
+  makeupAnswer,
+  recordQuizAnswers,
+  registerQuizQuestions,
+  skipQuizQuestions,
+} from "./quizzes.js";
 import type { DocumentService } from "./documents/service.js";
 import { removeParsedText } from "./documents/store.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -77,6 +88,7 @@ import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { PLAN_GUIDANCE } from "./tools/planTools.js";
+import { QUIZ_GUIDANCE } from "./tools/quizReview.js";
 import { SUSPENDING_TOOLS } from "./tools/suspending.js";
 import {
   isSupportedMime,
@@ -987,6 +999,51 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return snapshot;
   });
 
+  /* ---------------------------------- quizzes ---------------------------------- */
+
+  /*
+   * The conversation's quiz questions, for the quiz widget. Same object-not-widget shape
+   * as the plan routes: an endpoint about the thing the panel renders, so the rows exist
+   * even when the widget was uninstalled. No questions yet is a 200 with an empty list.
+   */
+  app.get("/api/sessions/:id/quizzes", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return { questions: listQuizQuestionViews(db, userId, id) };
+  });
+
+  /**
+   * Make-up answer for one question originally skipped. JSON rather than SSE: it only
+   * validates and persists; the client follows with an ordinary `/chat` message that
+   * drives the model's grading, so the resumed turn streams through the same path a normal
+   * message does. The row is updated in place — never duplicated.
+   */
+  app.post("/api/sessions/:id/quizzes/:quizId/answer", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, quizId } = request.params as { id: string; quizId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const result = makeupAnswer(db, userId, id, quizId, request.body);
+    if (!result.ok) {
+      return reply
+        .code(result.status)
+        .send(
+          apiError(
+            result.code,
+            result.reason ??
+              (result.code === "QUIZ_NOT_ANSWERABLE"
+                ? "that question is not open to a make-up answer"
+                : "quiz question not found")
+          )
+        );
+    }
+    return { question: result.view };
+  });
+
   /* ---------------------------------- sources ---------------------------------- */
 
   /**
@@ -1502,6 +1559,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     toolUse: boolean;
     /** Present when the plan widget is installed; appended to the turn's system prompt. */
     planGuidance?: string;
+    /** Present when the quiz widget is installed; appended to the turn's system prompt. */
+    quizGuidance?: string;
   }
 
   /**
@@ -1545,15 +1604,21 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const modelId = resolveModelId(provider, input.model, session.settings);
 
     // Widget-bound tools. Read fresh per turn from the installed session widgets (a widget
-    // can be installed mid-conversation), then derive the bound tool names: if any plan tool
-    // is bound, the plan context is present and `buildTools` assembles all three regardless
-    // of the allow-list. Plan tools are currently the only bound tools.
-    const planInstalled = boundToolNamesForWidgetIds(
+    // can be installed mid-conversation), then derive the bound tool names: if a widget's
+    // tools are bound, that tool context is present and `buildTools` assembles them
+    // regardless of the allow-list. One read decides both widgets.
+    const boundNames = boundToolNamesForWidgetIds(
       db
         .listSessionWidgetsForUser(input.userId, session.id)
         .filter((w) => w.enabled)
         .map((w) => w.id)
-    ).some((name) => (PLAN_TOOL_NAMES as readonly string[]).includes(name));
+    );
+    const planInstalled = boundNames.some((name) =>
+      (PLAN_TOOL_NAMES as readonly string[]).includes(name)
+    );
+    const quizInstalled = boundNames.some((name) =>
+      (QUIZ_TOOL_NAMES as readonly string[]).includes(name)
+    );
 
     const tools = buildTools({
       workspaceDir: workspace.workdirPath,
@@ -1568,11 +1633,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         sources: input.sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
-      // `quiz` numbers its questions from a counter scoped to this conversation.
-      quiz: {
-        reserveQuestionNumbers: (count) =>
-          db.reserveCounter("session", session.id, QUIZ_QUESTION_COUNTER, count),
-      },
+      // `ila_quiz` and its grading companion are widget-bound: both contexts exist only
+      // when the quiz widget is installed. The counter and the question rows are scoped to
+      // this conversation.
+      quiz: quizInstalled
+        ? {
+            reserveQuestionNumbers: (count) =>
+              db.reserveCounter("session", session.id, QUIZ_QUESTION_COUNTER, count),
+            registerQuestions: (input2) => registerQuizQuestions(db, session.id, input2),
+          }
+        : undefined,
+      quizReview: quizInstalled ? { db, sessionId: session.id } : undefined,
       plan: planInstalled ? { db, sessionId: session.id } : undefined,
     });
 
@@ -1583,6 +1654,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       vision: isVisionModel(provider, modelId),
       toolUse: isToolUseModel(provider, modelId),
       planGuidance: planInstalled ? PLAN_GUIDANCE : undefined,
+      quizGuidance: quizInstalled ? QUIZ_GUIDANCE : undefined,
     };
   }
 
@@ -1730,7 +1802,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // Any question still waiting for an answer belongs to a turn the user has now moved
     // on from. Retiring it here — before the new user turn is written — is what makes the
     // card read "skipped" rather than staying live on a conversation that has moved past it.
-    db.skipAwaitingToolCalls(id);
+    // The retired quiz calls' question rows go with them, so the panel's skipped filter
+    // matches the cards.
+    const retired = db.skipAwaitingToolCalls(id);
+    skipQuizQuestions(
+      db,
+      id,
+      retired.filter((c) => c.name === QUIZ_TOOL_NAME).map((c) => c.id)
+    );
 
     const ctx = turnContext(session, workspace, {
       provider: body.provider,
@@ -1776,6 +1855,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         attachments: storedAttachments,
         tools: ctx.tools,
         planGuidance: ctx.planGuidance,
+        quizGuidance: ctx.quizGuidance,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
@@ -1857,6 +1937,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       )
     );
 
+    // The quiz panel's rows follow the call: a submission answers its pending rows with the
+    // validated per-question answers; a cancel dismisses them. A legacy uid-less call has
+    // no rows, so both are no-ops there.
+    if (pending.call.name === QUIZ_TOOL_NAME) {
+      if (action === "cancel") {
+        dismissQuizQuestions(db, id, toolCallId);
+      } else {
+        recordQuizAnswers(
+          db,
+          id,
+          toolCallId,
+          (resolved.answer ?? {}) as QuizAnswers
+        );
+      }
+    }
+
     const ctx = turnContext(session, workspace, {
       userId,
       user: treeFor(actor(request)),
@@ -1894,6 +1990,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         userMessage: null,
         tools: ctx.tools,
         planGuidance: ctx.planGuidance,
+        quizGuidance: ctx.quizGuidance,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });

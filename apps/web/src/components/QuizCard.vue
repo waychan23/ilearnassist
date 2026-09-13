@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   QUIZ_TOOL_NAME,
@@ -9,21 +9,12 @@ import {
   type ToolCall,
 } from "../api/types";
 import { useAppStore } from "../stores/app";
-import { autosizeTextarea } from "../utils/autosize";
 import Icon from "./Icon.vue";
+import QuizQuestionForm, { type QuizDraft } from "./QuizQuestionForm.vue";
 
 const props = defineProps<{ toolCall: ToolCall }>();
 const store = useAppStore();
 const { t } = useI18n();
-
-/** One question's in-progress answer, before it is turned into a `QuizAnswer`. */
-interface Draft {
-  selected: string[];
-  /** The third state. Mutually exclusive with `selected`, which is why it is not a choice. */
-  unsure: boolean;
-  unsureReason: string;
-  notes: string;
-}
 
 /**
  * Questions come out of the tool call's `input`, which the tool numbered and the server
@@ -40,7 +31,7 @@ const questions = computed<QuizQuestion[]>(() => {
   }
 });
 
-const draft = reactive<Draft[]>([]);
+const draft = reactive<QuizDraft[]>([]);
 const current = ref(0);
 const open = ref(false);
 
@@ -57,7 +48,8 @@ watch(
   (list) => {
     while (draft.length > list.length) draft.pop();
     while (draft.length < list.length) {
-      draft.push({ selected: [], unsure: false, unsureReason: "", notes: "" });
+      const empty: QuizDraft = { selected: [], unsure: false, unsureReason: "", notes: "" };
+      draft.push(empty);
     }
     if (current.value >= list.length) current.value = Math.max(0, list.length - 1);
   },
@@ -149,66 +141,8 @@ function letter(index: number): string {
   return String.fromCharCode(65 + index);
 }
 
-function toggleOption(index: number, label: string): void {
-  const question = questions.value[index];
-  const d = draft[index];
-  if (!question || !d) return;
-
-  // Choosing is the alternative to being unsure, so it releases that state in either mode.
-  // The reason text stays in the draft, in case they change their mind back.
-  d.unsure = false;
-
-  if (question.multiSelect) {
-    d.selected = d.selected.includes(label)
-      ? d.selected.filter((l) => l !== label)
-      : [...d.selected, label];
-    return;
-  }
-
-  d.selected = [label];
-  // And no auto-advance here, unlike `ask_user`: the question the user just answered is
-  // exactly the one they may want to qualify — a note, or "I guessed" — so stepping away
-  // from it would take the boxes they need with it. The tab's tick is the progress signal.
-}
-
-function toggleUnsure(index: number, on: boolean): void {
-  const d = draft[index];
-  if (!d) return;
-  d.unsure = on;
-  // Mutually exclusive, in this direction too: "I don't know" and a choice are two
-  // different claims, and the server refuses an answer that makes both.
-  if (on) d.selected = [];
-}
-
 function goTo(index: number): void {
   if (index >= 0 && index < questions.value.length) current.value = index;
-}
-
-/**
- * Grow a box to its content as it is typed into.
- *
- * Driven by the event rather than by a watcher on the draft: the textarea's own value is
- * already the new one by the time `input` fires, so there is nothing to wait for.
- */
-function growFromEvent(event: Event): void {
-  autosizeTextarea(event.target as HTMLTextAreaElement);
-}
-
-/**
- * …and size one that appears with text already in it.
- *
- * Two ways that happens, and neither produces an `input` event: the panel is keyed by the
- * question, so switching tabs re-creates the box, and the unsure box is revealed by a
- * checkbox that can be unticked and ticked again while its text stays in the draft.
- *
- * After the DOM flush rather than during it, which a ref callback would otherwise be: a box
- * measured in the commit phase reports the height it had before its own styles applied, so
- * a freshly mounted one came out at about half a row and the first keystroke was what
- * corrected it.
- */
-function growOnMount(el: unknown): void {
-  if (!(el instanceof HTMLTextAreaElement)) return;
-  void nextTick(() => autosizeTextarea(el));
 }
 
 function submit(): void {
@@ -241,8 +175,6 @@ function dismiss(): void {
 const uid = computed(() => `quiz-${props.toolCall.id.replace(/[^a-zA-Z0-9_-]/g, "")}`);
 const tabId = (index: number) => `${uid.value}-tab-${index}`;
 const panelId = `${uid.value}-panel`;
-const notesId = (index: number) => `${uid.value}-notes-${index}`;
-const unsureReasonId = (index: number) => `${uid.value}-unsure-${index}`;
 </script>
 
 <template>
@@ -320,88 +252,14 @@ const unsureReasonId = (index: number) => `${uid.value}-unsure-${index}`;
           silently losing the answer to the question the user navigated back to. The
           answers live in `draft`, so re-creating the inputs costs nothing.
         -->
-        <div v-if="draft[current]" :key="current" class="question-body">
-          <div class="options">
-            <label
-              v-for="(option, oi) in questions[current]?.options ?? []"
-              :key="oi"
-              class="option"
-              :data-testid="`quiz-option-${current}-${oi}`"
-            >
-              <input
-                :type="questions[current]?.multiSelect ? 'checkbox' : 'radio'"
-                :name="`${uid}-q-${current}`"
-                :checked="draft[current]!.selected.includes(option.label)"
-                @change="toggleOption(current, option.label)"
-              />
-              <span class="option-key">{{ letter(oi) }}</span>
-              <span class="option-text">
-                <span class="option-label">{{ option.label }}</span>
-                <!--
-                  The description explains the choice: showing it before the answer hands
-                  the explanation out as a hint. It is revealed in the settled view below.
-                -->
-              </span>
-            </label>
-          </div>
-
-          <!--
-            Appended here, never offered by the model: a multiple-choice list with no escape
-            hatch forces a guess and then records it as knowledge. A checkbox rather than a
-            member of the group above, because it is a third state — and it deliberately
-            carries no `name`, so it can never join a single-select question's radio group.
-          -->
-          <label class="option unsure" :data-testid="`quiz-unsure-${current}`">
-            <input
-              type="checkbox"
-              :checked="draft[current]!.unsure"
-              @change="toggleUnsure(current, !draft[current]!.unsure)"
-            />
-            <!--
-              An empty spacer where the options keep their letter, so the labels still line
-              up — and deliberately no letter of its own. Numbering it `D` after three
-              options would present the escape hatch as a fourth one, which is exactly what
-              the model is told not to offer.
-            -->
-            <span class="option-key" aria-hidden="true"></span>
-            <span class="option-text">
-              <span class="option-label">{{ t("quiz.unsure") }}</span>
-              <span class="option-desc">{{ t("quiz.unsureHint") }}</span>
-            </span>
-          </label>
-          <div v-if="draft[current]!.unsure" class="field">
-            <!-- Labelled rather than only placeheld: the placeholder is gone the moment
-                 there is a reason in the box, and this one is not obviously the same thing
-                 as the note below it. -->
-            <label class="field-label" :for="unsureReasonId(current)">
-              {{ t("quiz.unsureReasonLabel") }}
-            </label>
-            <textarea
-              :id="unsureReasonId(current)"
-              v-model="draft[current]!.unsureReason"
-              class="textarea"
-              rows="1"
-              :ref="growOnMount"
-              :placeholder="t('quiz.unsureReasonPlaceholder')"
-              :data-testid="`quiz-unsure-reason-${current}`"
-              @input="growFromEvent"
-            />
-          </div>
-
-          <div class="field">
-            <label class="field-label" :for="notesId(current)">{{ t("quiz.notesLabel") }}</label>
-            <textarea
-              :id="notesId(current)"
-              v-model="draft[current]!.notes"
-              class="textarea"
-              rows="1"
-              :ref="growOnMount"
-              :placeholder="t('quiz.notesPlaceholder')"
-              :data-testid="`quiz-notes-${current}`"
-              @input="growFromEvent"
-            />
-          </div>
-        </div>
+        <QuizQuestionForm
+          v-if="draft[current] && questions[current]"
+          :key="current"
+          :question="questions[current]!"
+          :draft="draft[current]!"
+          :index="current"
+          testid-prefix="quiz"
+        />
       </div>
 
       <div class="quiz-foot">
@@ -636,72 +494,6 @@ const unsureReasonId = (index: number) => `${uid.value}-unsure-${index}`;
   font-size: var(--fs-2);
 }
 
-.question-body {
-  display: grid;
-  gap: var(--space-4);
-}
-.options {
-  display: grid;
-  gap: var(--space-3);
-}
-.option {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--fs-3);
-}
-.option:hover {
-  border-color: var(--accent);
-}
-.option input {
-  margin: 0;
-  flex: none;
-  accent-color: var(--accent);
-}
-/* Dashed, so the third state is visibly not one of the options it sits below. */
-.option.unsure {
-  border-style: dashed;
-}
-.option-key {
-  flex: none;
-  color: var(--text-3);
-  font-size: var(--fs-2);
-}
-.option-text {
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.option-label {
-  color: var(--text);
-}
-.option-desc {
-  color: var(--text-3);
-  font-size: var(--fs-2);
-}
-
-.field {
-  display: grid;
-  gap: var(--space-2);
-}
-.field-label {
-  color: var(--text-3);
-  font-size: var(--fs-2);
-}
-/*
- * One row until the content needs more — `autosizeTextarea` grows it from there. The global
- * `.textarea` carries a 96px floor and a manual resize grip, and neither belongs on a box
- * that sizes itself: the grip's work would be undone by the next keystroke, and the floor is
- * the thing standing between "one row" and three.
- */
-.field .textarea {
-  min-height: 0;
-  resize: none;
-}
 
 .quiz-foot {
   display: flex;

@@ -166,6 +166,36 @@ A widget can bring tools: list them in its `WIDGETS` entry as `boundTools` (name
 The plan widget is session-scoped. A future "workspace-level default that auto-installs into new
 sessions" is a separate mechanism and is intentionally not built yet.
 
+### A bound suspending tool with persisted rows: the quiz widget
+
+The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and the normal
+`ila_review_quiz` — and is the template for a widget whose panel shows data the tools produce:
+
+- **Two ids per question.** The tool assigns the session-scoped `Qn` (the `quiz_question`
+  counter, unique within the conversation); its `registerQuestions` context callback creates
+  the `quiz_questions` row AT SUSPENSION TIME and hands back a global UUID (`uid`, the
+  `quiz_id` the model echoes). The card keeps using Qn; the panel and the grading/answer
+  routes key off the UUID.
+- **Rows follow the call's lifecycle.** Pending when posed; answered/dismissed from the
+  `/answers` route; skipped when the user walks away (`skipAwaitingToolCalls` now returns
+  the retired calls so the `/chat` route can retire their rows). A GET reconciles crash
+  orphans (pending rows whose call is no longer awaiting) to skipped.
+- **Grading is a normal bound tool**, not a suspending one: the model calls
+  `ila_review_quiz` with exact `quiz_id`s after judging (instructed by the tool description
+  and `QUIZ_GUIDANCE`); its `tool_end` emits `quiz.changed` for mid-turn panel refresh.
+- **Make-up answers are POST-then-chat, never a second quiz.** An unanswered question —
+  walked-away (`skipped`) or cancelled with the card (`dismissed`), treated alike — is
+  re-answered through `POST /sessions/:id/quizzes/:quizId/answer` (status-guarded UPDATE of
+  the same row), after which the client sends an ordinary `/chat` message quoting the
+  global id; the resumed turn grades that one id. `pending` (live card) and `answered` are
+  not eligible.
+- **Plan binding is the tool's own concern.** An optional top-level `nodeId` names a live
+  plan node (an invalid id is a tool error before any insert); without it the question binds
+  to the current `in_progress` node, and without a plan it is a session-level question.
+
+See `apps/server/src/quizzes.ts` for the domain logic and `apps/web/src/utils/quizTree.ts`
+for the panel's pure tree/filter builder.
+
 ## What is deliberately not supported
 
 - **External / dynamic installation.** A widget is a component in the web bundle; there is nothing
