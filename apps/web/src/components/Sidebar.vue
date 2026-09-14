@@ -364,7 +364,6 @@ async function onDeleteSession(session: Session) {
     >
       <span class="gear"><Icon name="shield" /></span>
       <span class="label">{{ t("admin.title") }}</span>
-      <span class="sub truncate">{{ store.account?.username ?? "" }}</span>
     </button>
 
     <!-- Sign out sits beside Settings rather than on a menu of its own: it is one action and
