@@ -4,9 +4,12 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECT_PATHS,
+  THREAD_REASONING_ENV,
   deepMerge,
+  parseThreadReasoning,
   resolveDataRoot,
   resolveEnv,
+  threadReasoningSetting,
   validateConfig,
   withDefaults,
   type AppConfig,
@@ -276,6 +279,50 @@ describe("resolveDataRoot", () => {
     vi.stubEnv("ILA_DATA_DIR", "/tmp/from-env");
     try {
       expect(resolveDataRoot()).toBe("/tmp/from-env");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("threadReasoningSetting", () => {
+  it("defaults to auto when the variable is absent or blank", () => {
+    expect(parseThreadReasoning(undefined)).toBe("auto");
+    expect(parseThreadReasoning(null)).toBe("auto");
+    expect(parseThreadReasoning("")).toBe("auto");
+    expect(parseThreadReasoning("   ")).toBe("auto");
+    expect(threadReasoningSetting({})).toBe("auto");
+  });
+
+  it.each([
+    ["on", "on"],
+    ["ON", "on"],
+    [" true ", "on"],
+    ["1", "on"],
+    ["enabled", "on"],
+    ["yes", "on"],
+    ["off", "off"],
+    ["False", "off"],
+    ["0", "off"],
+    ["disabled", "off"],
+    ["no", "off"],
+    ["auto", "auto"],
+  ])("parses %j as %s", (raw, expected) => {
+    expect(parseThreadReasoning(raw)).toBe(expected);
+  });
+
+  it("throws on an unrecognised value, naming the variable and the accepted values", () => {
+    // A typo silently falling back to auto would run an A/B experiment whose knob did not
+    // move; the boot-time error is the whole point.
+    expect(() => parseThreadReasoning("oops")).toThrow(
+      new RegExp(`${THREAD_REASONING_ENV}.*auto, on, off`)
+    );
+  });
+
+  it("reads the real environment by default", () => {
+    vi.stubEnv(THREAD_REASONING_ENV, "off");
+    try {
+      expect(threadReasoningSetting()).toBe("off");
     } finally {
       vi.unstubAllEnvs();
     }

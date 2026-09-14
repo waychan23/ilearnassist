@@ -429,6 +429,53 @@ export function resolveDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   return isAbsolute(raw) ? resolve(raw) : resolve(PROJECT_ROOT, raw);
 }
 
+/** The environment variable that overrides the thread classifier's reasoning mode. */
+export const THREAD_REASONING_ENV = "ILA_THREAD_REASONING";
+
+/**
+ * Whether the thread classifier's out-of-band model call may run chain-of-thought.
+ *
+ * - `auto` (unset): follow the model record — a model with the `reasoning` capability thinks
+ *   (the provider's own default; nothing is sent), any other model never does.
+ * - `on` / `off`: an explicit override sent on the wire as `thinking.type` (the DeepSeek /
+ *   Ark shape). Still gated on the model's `reasoning` capability, so a provider that does
+ *   not know the field is never sent it.
+ */
+export type ThreadReasoningSetting = "auto" | "on" | "off";
+
+const THREAD_REASONING_ALIASES: Record<string, ThreadReasoningSetting> = {
+  auto: "auto",
+  on: "on",
+  off: "off",
+  enabled: "on",
+  disabled: "off",
+  true: "on",
+  false: "off",
+  "1": "on",
+  "0": "off",
+  yes: "on",
+  no: "off",
+};
+
+/** Parse `ILA_THREAD_REASONING`: blank/absent is `auto`, anything unrecognised throws. */
+export function parseThreadReasoning(raw: string | undefined | null): ThreadReasoningSetting {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return "auto";
+  const setting = THREAD_REASONING_ALIASES[value];
+  if (!setting) {
+    throw new Error(
+      `${THREAD_REASONING_ENV} has an invalid value ${JSON.stringify(value)}: ` +
+        "expected one of auto, on, off (or true/false, 1/0, enabled/disabled)."
+    );
+  }
+  return setting;
+}
+
+/** Read the thread-classifier reasoning override from the process environment. */
+export function threadReasoningSetting(env: NodeJS.ProcessEnv = process.env): ThreadReasoningSetting {
+  return parseThreadReasoning(env[THREAD_REASONING_ENV]);
+}
+
 /**
  * The built frontend (`apps/web/dist`), which this server also serves so the whole app
  * answers on one origin with no reverse proxy in front of it.

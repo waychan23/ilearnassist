@@ -609,6 +609,14 @@ Fuller map in `docs/reference.md`.
   append-only `<dataRoot>/logs/threads.log` (`threadLog.ts`): one human-readable block per
   real classification (context, turns, raw model answer, per-turn resolution, counts) and
   failure blocks, configured only in the process entry point so tests never write it.
+  Whether this out-of-band call may think is the `ILA_THREAD_REASONING` env var
+  (`auto`/`on`/`off`, parsed once in `config.ts` and read once at route registration):
+  `auto` follows the model record's `reasoning` capability and sends nothing — DeepSeek V4
+  defaults thinking ON — while `off` sends `thinking:{"type":"disabled"}` in the body (the
+  DeepSeek/Ark shape, through `modelKwargs`) and `on` forces enabled. The field is sent
+  *only* to models declared with the `reasoning` capability, the same gate the main loop's
+  reasoning replay uses; an unknown body field is a 400 on strict OpenAI-compatible
+  endpoints. It changes this classifier call alone — never the conversation's own turns.
 - **History must stay user/assistant balanced.** On a chat error, a `⚠️ …`
   assistant message is persisted so the next turn's history is well-formed. An
   assistant message's `tool_calls` are only replayed into history when the
