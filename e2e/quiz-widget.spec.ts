@@ -373,3 +373,89 @@ test("the follow-up box sends a normal chat message quoting the question", async
   );
   expect(quizId.length).toBeGreaterThan(8);
 });
+
+test("folding a chapter keeps the tree, and only the tree", async ({ page, request }) => {
+  // The regression: the empty state used to key off *rendered* question rows, so folding the
+  // folder that held every match read as "there are no questions" — the tree was replaced by
+  // "还没有测验题" and the folder the user had just folded vanished with it.
+  await sessionWithWidgets(page, unique("Quiz fold"));
+
+  await scriptLlm(request as APIRequestContext, {
+    title: "折叠加章",
+    turns: [
+      { toolCalls: [{ id: "call_plan", name: "ila_make_plan", args: { tree: PLAN_TREE } }] },
+      { content: "计划建好了。" },
+    ],
+  });
+  await send(page, "制定学习计划");
+  await page.getByTestId("widget-tab-plan").click();
+  await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(3);
+
+  /** A plan node's id by the title its row shows. */
+  const planNodeId = async (title: string): Promise<string> =>
+    page.locator('[data-testid^="plan-node-"]').evaluateAll((els, wanted) => {
+      const found = els.find((el) => (el.textContent ?? "").includes(wanted as string));
+      return found?.getAttribute("data-testid")!.replace("plan-node-", "") ?? "";
+    }, title);
+
+  const chapterId = await planNodeId("Chapter 1");
+  const introId = await planNodeId("1.1 Intro");
+  expect(chapterId).not.toBe("");
+  expect(introId).not.toBe("");
+
+  // The intro chapter is what the quiz binds to, so both questions hang off the chapter that
+  // is about to be folded — the case the bug needed, where collapsing hides every match.
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        toolCalls: [
+          {
+            id: "call_progress",
+            name: "ila_update_plan_progress",
+            args: { nodes: [{ id: introId, status: "in_progress" }] },
+          },
+        ],
+      },
+      { content: "我们开始。" },
+    ],
+  });
+  await send(page, "开始第一章");
+
+  await page.getByTestId("widget-tab-quiz").click();
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "先测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: TWO_QUESTIONS } }],
+      },
+    ],
+  });
+  await send(page, "测测我");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+
+  await page.getByTestId("quiz-view-tree").click();
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+
+  // Fold the top-level chapter that holds them both. Everything under it goes, but the tree
+  // stays: the folder is still on screen, with the count that says what is inside it.
+  const chapterGroup = page.locator(`[data-testid="quiz-node-${chapterId}"]`);
+  await chapterGroup.click();
+
+  await expect(chapterGroup).toBeVisible();
+  await expect(page.locator(`[data-testid="quiz-node-${introId}"]`)).toHaveCount(0);
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(0);
+  await expect(page.getByTestId("quiz-tree")).toBeVisible();
+  await expect(page.getByTestId("quiz-empty")).toHaveCount(0);
+  await expect(chapterGroup.locator(".node-count")).toHaveText("2");
+
+  // Unfolding brings them back — the toggle is still a toggle.
+  await chapterGroup.click();
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+  await expect(page.locator(`[data-testid="quiz-node-${introId}"]`)).toBeVisible();
+
+  // Folding the *leaf* behaves the same way, which is the same bug one level down.
+  await page.locator(`[data-testid="quiz-node-${introId}"]`).click();
+  await expect(page.locator(`[data-testid="quiz-node-${introId}"]`)).toBeVisible();
+  await expect(page.getByTestId("quiz-tree")).toBeVisible();
+  await expect(page.getByTestId("quiz-empty")).toHaveCount(0);
+});

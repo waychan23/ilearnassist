@@ -124,13 +124,22 @@ const filteredQuestions = computed(() =>
   questions.value.filter(matches).sort((a, b) => a.position - b.position)
 );
 
-const treeRows = computed<QuizTreeRow[]>(() =>
-  flattenQuizTree(buildQuizTree(questions.value, plan.value?.tree ?? null, filter.value), collapsed.value)
+const treeRows = computed<QuizTreeRow[]>(
+  () => flattenQuizTree(buildQuizTree(questions.value, plan.value?.tree ?? null, filter.value), collapsed.value)
 );
 
-const visibleQuestionCount = computed(() =>
-  view.value === "list" ? filteredQuestions.value.length : treeRows.value.filter((r) => r.kind === "question").length
-);
+/**
+ * Whether the current filter kept anything at all.
+ *
+ * Deliberately **not** "are any question rows on screen", which is what this used to ask and
+ * what made folding a chapter empty the panel: collapsing hides a folder's questions from the
+ * tree, so a chapter holding every match flattened to no question rows, the empty state took
+ * over from the tree, and the folder the user had just folded disappeared with it. Whether
+ * rows are *rendered* and whether there is anything *to show* are different questions, and only
+ * the second one is what an empty state may be about.
+ */
+const hasMatches = computed(() => filteredQuestions.value.length > 0);
+const hasAnyQuestion = computed(() => questions.value.length > 0);
 
 /* ----------------------------------- rows ----------------------------------- */
 
@@ -244,8 +253,12 @@ function statusTitle(q: QuizQuestionView): string {
         </select>
       </div>
 
-      <div v-if="visibleQuestionCount === 0" class="widget-empty" data-testid="quiz-empty">
-        {{ t("quiz.empty") }}
+      <!-- Two different nothings, and they read differently: a conversation with no quizzes
+           yet, and one whose quizzes the filter is hiding. Both literals are written here
+           rather than reached through a computed key — the catalog guard scans for `t("…")`
+           call sites, so a key behind a variable looks like a dead one. -->
+      <div v-if="!hasMatches" class="widget-empty" data-testid="quiz-empty">
+        {{ hasAnyQuestion ? t("quiz.noMatch") : t("quiz.empty") }}
       </div>
 
       <!-- Flat list -->

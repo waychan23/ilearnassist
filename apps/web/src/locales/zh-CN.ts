@@ -462,6 +462,8 @@ export default {
 
     /* ------------------------------ quiz widget panel ------------------------------ */
     empty: "还没有测验题",
+    /** The other nothing: questions exist, but the status filter is hiding all of them. */
+    noMatch: "没有符合筛选条件的题目",
     viewList: "列表",
     viewTree: "按章节",
     filterAll: "全部",
