@@ -87,9 +87,15 @@ const en: typeof MessageSchema = {
 
   admin: {
     title: "Platform console",
-    subtitle: "Manage the accounts on this installation.",
+    subtitle: {
+      users: "Manage the accounts on this installation.",
+      providers: "Configure the model services every account shares; ordinary users choose from what is configured here.",
+      documents: "Configure how documents are parsed for every account.",
+    },
     nav: {
       users: "Users",
+      providers: "Model services",
+      documents: "Documents",
     },
     create: "New user",
     roles: "Roles",
@@ -474,11 +480,7 @@ const en: typeof MessageSchema = {
 
   settings: {
     title: "Settings",
-    tabs: {
-      providers: "Providers / models",
-      documents: "Document parsing",
-      copilot: "Defaults & tools",
-    },
+    installationMoved: "Model services and document parsing are configured in the platform console.",
     providers: {
       countConfigured: "{count} provider configured | {count} providers configured",
       add: "New provider",
@@ -544,6 +546,7 @@ const en: typeof MessageSchema = {
       summaryNoTools: "no tools",
     },
     defaults: {
+      appSection: "Default model",
       provider: "Default provider",
       providerHint: "Used when a new conversation does not name one. Currently: {name}",
       model: "Default model",
@@ -622,7 +625,8 @@ const en: typeof MessageSchema = {
     chooseTitle: "Choose a model (applies to this conversation)",
     noModelsTitle: "No model is available yet",
     keyMissing: "No key",
-    empty: "No models available yet. Add a provider and its models under Settings → Providers.",
+    empty: "No models available yet. Ask an administrator to configure one.",
+    emptyAdmin: "No models available yet. Add a provider under Platform console → Model services.",
     manage: "Manage models…",
   },
 

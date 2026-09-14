@@ -74,6 +74,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   <div ref="rootEl" class="model-picker">
     <button
       class="btn ghost model-btn"
+      data-testid="model-picker"
       :title="hasAnyAvailable ? t('modelSelector.chooseTitle') : t('modelSelector.noModelsTitle')"
       @click="open = !open"
     >
@@ -82,7 +83,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       <Icon class="caret" :class="{ open }" name="caret-down" />
     </button>
 
-    <div v-if="open" class="overlay-popover menu">
+    <div v-if="open" class="overlay-popover menu" data-testid="model-picker-menu">
       <template v-for="group in groups" :key="group.providerId">
         <div class="group-head">
           {{ group.providerName }}
@@ -107,10 +108,22 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       </template>
 
       <div v-if="groups.length === 0" class="empty">
-        {{ t("modelSelector.empty") }}
+        {{ store.canAdmin ? t("modelSelector.emptyAdmin") : t("modelSelector.empty") }}
       </div>
 
-      <button class="menu-item foot" @click="open = false; emit('manage')">{{ t("modelSelector.manage") }}</button>
+      <!--
+        Only for an account that may actually configure models. The list above is what everybody
+        chooses from; writing it is a platform administrator's, and a footer that opened a screen
+        which refused the first save would be a control that exists to fail.
+      -->
+      <button
+        v-if="store.canAdmin"
+        class="menu-item foot"
+        data-testid="model-manage"
+        @click="open = false; emit('manage')"
+      >
+        {{ t("modelSelector.manage") }}
+      </button>
     </div>
   </div>
 </template>

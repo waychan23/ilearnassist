@@ -722,9 +722,9 @@ describe("installation-wide settings", () => {
     }
   });
 
-  it("leave an administrator able to change them", async () => {
-    // The gate has to be a gate and not a wall: Settings is a superadmin's, and every one of
-    // these routes was reachable before there were roles at all.
+  it("leave a superadmin able to change them", async () => {
+    // The gate has to be a gate and not a wall: these routes were reachable before there were
+    // roles at all, and the bootstrap account is the one that must never be locked out.
     env = await startTestServer();
     expect(
       (
@@ -738,6 +738,50 @@ describe("installation-wide settings", () => {
     expect((await env.inject({ method: "PUT", url: "/api/defaults", payload: {} })).statusCode).toBe(
       200
     );
+  });
+
+  it("leave an ordinary administrator able to change them, which is the job", async () => {
+    /*
+     * The split the feature is built on: an administrator *configures* the models and an
+     * ordinary account *chooses among* them. So this gate is the wider one, unlike the account
+     * routes — appointing an administrator is a superadmin's act, and running the installation
+     * is what the `admin` role is appointed to do.
+     */
+    env = await startTestServer();
+    const ada = await createAndSignIn(env, "Ada", ["admin"]);
+
+    const created = await ada.inject({
+      method: "POST",
+      url: "/api/providers",
+      payload: { name: "Second", baseURL: "http://127.0.0.1:1/v1" },
+    });
+    expect(created.statusCode).toBe(201);
+
+    // And the app default, which is the one that decides where everybody's prompts go.
+    expect((await ada.inject({ method: "PUT", url: "/api/defaults", payload: {} })).statusCode).toBe(
+      200
+    );
+    expect(
+      (await ada.inject({ method: "POST", url: "/api/document-parsers", payload: {} })).statusCode
+    ).toBe(400);
+  });
+
+  it("are still refused to an account that administers nothing", async () => {
+    // The other half, and the reason the tier is worth having: a user may choose a model, and
+    // may not write one into the list everybody chooses from.
+    env = await startTestServer();
+    const bob = await createAndSignIn(env, "Bob");
+
+    const res = await bob.inject({
+      method: "POST",
+      url: "/api/providers",
+      payload: { name: "Mine", baseURL: "http://127.0.0.1:1/v1" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json<Body>().error.code).toBe("FORBIDDEN");
+
+    // Readable, though: the composer's model list is everybody's.
+    expect((await bob.inject({ method: "GET", url: "/api/providers" })).statusCode).toBe(200);
   });
 });
 

@@ -6,7 +6,7 @@ import AttachmentChips from "./AttachmentChips.vue";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
 import SessionSettingsDialog from "./dialogs/SessionSettingsDialog.vue";
-import { openSettings } from "../composables/ui";
+import { showAdmin } from "../composables/ui";
 import { autosizeTextarea } from "../utils/autosize";
 import Icon from "./Icon.vue";
 
@@ -220,7 +220,9 @@ function onKeydown(e: KeyboardEvent) {
 
           <div class="toolbar-right">
             <TokenCountPopover :pending-text="text" />
-            <ModelSelector @manage="openSettings()" />
+            <!-- "Manage models…" is a platform administrator's screen, so it opens the console
+                 on the model services rather than the dialog that used to hold them. -->
+            <ModelSelector @manage="showAdmin('providers')" />
           </div>
         </div>
 
