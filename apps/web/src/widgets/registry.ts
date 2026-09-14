@@ -6,6 +6,8 @@ import SessionStatsWidget from "./SessionStatsWidget.vue";
 import PlanWidget from "./PlanWidget.vue";
 import QuizWidget from "./QuizWidget.vue";
 import ThreadWidget from "./ThreadWidget.vue";
+import NotesWidget from "./NotesWidget.vue";
+import { claimNotes, releaseNotes } from "../composables/notes";
 
 /**
  * What a widget is on the client: its component, its catalog strings, and its lifecycle.
@@ -60,6 +62,8 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
       return t("widgets.quiz.name");
     case "thread":
       return t("widgets.thread.name");
+    case "notes":
+      return t("widgets.notes.name");
   }
 }
 
@@ -76,6 +80,8 @@ export function widgetHint(id: WidgetId, t: Translate): string {
       return t("widgets.quiz.hint");
     case "thread":
       return t("widgets.thread.hint");
+    case "notes":
+      return t("widgets.notes.hint");
   }
 }
 
@@ -123,6 +129,25 @@ export interface WidgetModule {
    * starts, so this can be the first hook a widget ever sees.
    */
   onUninstall?(ctx: WidgetContext): void | Promise<void>;
+  /**
+   * Fired when the widget becomes — or stops being — the installed widget of the object
+   * currently on screen. `null` means "not installed on what is on screen", which is also the
+   * answer while a workspace is open but no conversation is.
+   *
+   * **This is not `onMount`.** `WidgetPanel` keeps only the active tab's component mounted
+   * (`:key="active"`), so a widget that needs the host's cooperation for as long as it is
+   * *installed* — rather than for as long as it is *visible* — cannot get it from a
+   * component lifecycle hook: the notes widget would stop marking up messages the moment the
+   * reader looked at the plan. The store calls this instead, whenever one of the three things
+   * the answer depends on changes (which view is on screen, which session is active, which
+   * widgets are enabled).
+   *
+   * Idempotent and synchronous by contract: it is called for every widget on every such
+   * change, most of them with `null` and nothing to do. `ctx` is a single context rather than
+   * a list, which quietly assumes a widget is installed at one level at a time — true of
+   * everything in `WIDGETS` today, and the assumption to revisit if one ever declares both.
+   */
+  onActive?(ctx: WidgetContext | null): void;
   component: Component;
 }
 
@@ -131,6 +156,20 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
   session_stats: { component: SessionStatsWidget },
   plan: { component: PlanWidget },
   quiz: { component: QuizWidget },
+  notes: {
+    component: NotesWidget,
+    /*
+     * The claim is taken here rather than in the component for the reason above: this widget
+     * owns a conversation's *marks*, not just its tab, and those have to keep working while
+     * another tab is in front. Uninstalling releases it, both through `onActive(null)` on the
+     * way out and here, so a widget the panel never mounts still gives the claim up.
+     */
+    onActive: (ctx) => {
+      if (ctx?.scope === "session") claimNotes(ctx.scopeId);
+      else releaseNotes();
+    },
+    onUninstall: () => releaseNotes(),
+  },
   // Installing mid-conversation kicks the first backfill sync immediately; repeated
   // installs simply re-run it (idempotent — nothing unassigned makes no model call). The
   // panel itself loops the same route while an unclassified backlog remains.

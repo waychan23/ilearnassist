@@ -838,6 +838,11 @@ export default {
       hint: "随会话自动整理的主题脉络：按计划章节与背景补充归类，点击可定位到对应消息。",
       noSession: "打开一个会话后，这里会随对话自动整理它的脉络。",
     },
+    notes: {
+      name: "笔记",
+      hint: "在消息里选中内容即可标注或写下笔记：按内容关联，可随时定位回原文。",
+      noSession: "打开一个会话后，这里会显示它的笔记。",
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */
@@ -845,6 +850,59 @@ export default {
     study: {
       name: "学习套装",
       hint: "一次安装/卸载 计划、测验、脉络 三个控件。",
+    },
+  },
+
+  /**
+   * The notes widget's own strings. Widget display name/hint live under `widgets.notes`;
+   * these are the panel, the floating bar over a selection, and the window.
+   *
+   * `types.*` is reached through a `switch` with the key written out per case, never
+   * `` t(`notes.types.${type}`) `` — a built key is invisible to the catalog guard, and
+   * satisfying it would mean a bare `notes.` in `DYNAMIC_PREFIXES`, a prefix that hides a
+   * typo in every string here.
+   */
+  notes: {
+    types: {
+      annotation: "标注",
+      idea: "灵感",
+      question: "疑问",
+      other: "其他",
+    },
+    /** `count` is a plural: `en` carries both branches, `zh-CN` the one. */
+    count: "{count} 条笔记",
+    add: "新建笔记",
+    empty: "还没有笔记。在消息里选中一段内容，就可以标注或写笔记。",
+    /** A note with neither a body nor an annotation — the row still has to say something. */
+    untitled: "（无内容）",
+    open: "打开这条笔记",
+    /** The conversation is marked up by a different widget. Deliberately nameless. */
+    claimedByOther: "另一个控件正在使用本会话的标注能力，暂时无法在此标注。",
+    toolbar: {
+      label: "标注这条消息",
+      annotate: "标注",
+      note: "笔记",
+    },
+    editor: {
+      title: "笔记",
+      newTitle: "新建笔记",
+      editTitle: "编辑笔记",
+      quoteLabel: "标注原文",
+      contentLabel: "笔记内容",
+      contentPlaceholder: "写下你的想法…",
+      typeLabel: "笔记类型",
+      save: "保存",
+      saving: "保存中…",
+      locate: "定位",
+      discardTitle: "放弃未保存的修改？",
+      discardMessage: "关闭后，这次编辑的内容不会保留。",
+      discardAction: "放弃",
+    },
+    remove: {
+      title: "删除这条笔记？",
+      message: "笔记删除后不会出现在列表里。",
+      detail: "消息本身和它的标注原文都会保留。",
+      action: "删除",
     },
   },
 
@@ -974,6 +1032,8 @@ export default {
     PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
     QUIZ_QUESTION_NOT_FOUND: "找不到这道测验题。",
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
+    NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
+    NOTE_TYPE_INVALID: "这个笔记类型不存在。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
     MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
     NO_REPLY_TO_REGENERATE: "没有可以重新生成的回复（最后一条不是助手回复，或者它正在等待你的回答）。",

@@ -13,8 +13,21 @@ import {
   uiState,
 } from "../composables/ui";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
+import {
+  captureMessageNote,
+  noteClaim,
+  registerMessageNotesHost,
+  type NoteEditorRequest,
+  type NoteRevealTarget,
+  type NoteSaveInput,
+} from "../composables/messageNotes";
+import { useMessageSelection } from "../composables/messageSelection";
+import { useWidgetActivation } from "../composables/widgetActivation";
+import type { NoteHighlightMark } from "../utils/noteAnchor";
 import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
+import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
+import NoteEditor from "./NoteEditor.vue";
 import Composer from "./Composer.vue";
 import TopbarControls from "./TopbarControls.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
@@ -189,6 +202,141 @@ watch(
   () => store.activeSessionId,
   () => scrollToBottom()
 );
+
+/**
+ * Tell the installed widgets they are live — `WidgetModule.onActive`.
+ *
+ * Here rather than in the store because this component is what renders the panel, so its
+ * lifetime *is* the answer to "is a widget on screen"; leaving the view is the one
+ * transition the effect inside cannot see, and this scope is what reports it.
+ */
+useWidgetActivation();
+
+/* ---------------------------------- notes ---------------------------------- */
+/*
+ * The message list's half of the notes capability. Everything here is about the DOM — which
+ * text is selected, where to draw a mark, where to scroll — and nothing about notes as
+ * records: what a capture turns into, and what a window's buttons do, are the widget's, and
+ * arrive through the bridge.
+ *
+ * This is the one place the reader can tell the capability is installed at all. The bridge's
+ * claim names the conversation the *widget* controls, and this view is that conversation's
+ * message list, so the two agreeing is what puts the toolbar on screen.
+ */
+const notesActive = computed(() => noteClaim.value?.sessionId === store.activeSessionId);
+const { selection, clear: clearSelection } = useMessageSelection(messagesEl, notesActive);
+
+/** The marks to draw, as the widget last reported them. */
+const noteMarks = ref<readonly NoteHighlightMark[]>([]);
+
+/** The open window, and where it floats. */
+const editorRequest = ref<NoteEditorRequest | null>(null);
+const editorAnchor = ref<{ x: number; y: number } | null>(null);
+const editorBusy = ref(false);
+/**
+ * Where the window should open, set by the toolbar just before the capture is routed.
+ *
+ * A ref rather than an argument because the window is opened *by the widget* — choosing 笔记
+ * hands the selection over and the answer comes back through `openEditor`, which is what
+ * keeps this view from having to know which intent produced it.
+ */
+const pendingAnchor = ref<{ x: number; y: number } | null>(null);
+
+function closeEditor(): void {
+  editorRequest.value = null;
+  editorAnchor.value = null;
+}
+
+/**
+ * Scroll to a note's message and flash its mark.
+ *
+ * The flash is what makes 定位 worth having: the message may be a screenful tall, and landing
+ * at its top without a sign of *which words* leaves the reader to re-read it. A mark that is
+ * not on screen at all — a note whose quote no longer resolves — scrolls anyway, so the
+ * button always visibly does something.
+ */
+function revealNote(target: NoteRevealTarget): void {
+  scrollToMessage(target.messageId);
+  const container = messagesEl.value;
+  if (!container) return;
+  const marks = container.querySelectorAll(`mark[data-note-id="${target.noteId}"]`);
+  for (const mark of marks) mark.classList.add("note-flash");
+  setTimeout(() => {
+    for (const mark of marks) mark.classList.remove("note-flash");
+  }, 1200);
+}
+
+function onToolbarPick(intent: "annotation" | "note"): void {
+  const current = selection.value;
+  const sessionId = store.activeSessionId;
+  if (!current || !sessionId) return;
+  pendingAnchor.value = { x: current.x, y: current.top };
+  captureMessageNote({
+    sessionId,
+    messageId: current.messageId,
+    quote: current.anchor.quote,
+    occurrence: current.anchor.occurrence,
+    intent,
+  });
+  clearSelection();
+}
+
+async function onEditorSave(input: NoteSaveInput): Promise<void> {
+  const request = editorRequest.value;
+  if (!request) return;
+  editorBusy.value = true;
+  try {
+    // Kept open on failure: the words are only in the window, and a failed save is exactly
+    // when throwing them away costs the most.
+    if (await request.save(input)) closeEditor();
+  } finally {
+    editorBusy.value = false;
+  }
+}
+
+async function onEditorRemove(): Promise<void> {
+  const request = editorRequest.value;
+  if (!request?.remove) return;
+  editorBusy.value = true;
+  try {
+    if (await request.remove()) closeEditor();
+  } finally {
+    editorBusy.value = false;
+  }
+}
+
+/** 定位 leaves the window open: the point of it is to read the note against its message. */
+function onEditorLocate(): void {
+  const request = editorRequest.value;
+  if (request?.locate) revealNote(request.locate);
+}
+
+/**
+ * Register the host while this view is up.
+ *
+ * Deregistering on unmount leaves the claim alone — the widget is still installed, and the
+ * messages it marks are still there; what is gone is the DOM to draw them in. A claim made
+ * while this view was unmounted is found when it comes back, because the host reads the
+ * claim rather than being told about it.
+ */
+let unregisterNotesHost: (() => void) | null = null;
+onMounted(() => {
+  unregisterNotesHost = registerMessageNotesHost({
+    setHighlights(marks) {
+      noteMarks.value = marks;
+    },
+    reveal: revealNote,
+    openEditor(request) {
+      editorRequest.value = request;
+      editorAnchor.value = pendingAnchor.value;
+      pendingAnchor.value = null;
+    },
+  });
+});
+onBeforeUnmount(() => {
+  unregisterNotesHost?.();
+  unregisterNotesHost = null;
+});
 </script>
 
 <template>
@@ -337,8 +485,11 @@ watch(
           v-for="(m, i) in store.messages"
           :key="m.id"
           :message="m"
+          :note-marks="noteMarks"
           :is-last="i === store.messages.length - 1"
         />
+        <!-- The streaming bubble gets no marks: an annotation needs a message row to be filed
+             against, and this one has none yet. It draws none for the same reason. -->
         <MessageItem v-if="store.streaming.active" :streaming="store.streaming" />
       </div>
       <MessageMinimapRail
@@ -366,6 +517,29 @@ watch(
     </div>
 
     <Composer />
+
+    <!--
+      The two marks of the notes capability, both teleported to `body` by the components
+      themselves: the toolbar follows a selection in the viewport, and the window floats near
+      whatever opened it. Inside `.messages-wrap` they would be clipped by the scroller and
+      carried away by its scroll.
+    -->
+    <MessageSelectionToolbar
+      v-if="selection"
+      :anchor="{ x: selection.x, top: selection.top }"
+      @pick="onToolbarPick"
+    />
+    <NoteEditor
+      v-if="editorRequest"
+      :draft="editorRequest.draft"
+      :locate="editorRequest.locate"
+      :anchor="editorAnchor"
+      :busy="editorBusy"
+      @save="onEditorSave"
+      @remove="onEditorRemove"
+      @locate="onEditorLocate"
+      @close="closeEditor"
+    />
 
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
   </main>

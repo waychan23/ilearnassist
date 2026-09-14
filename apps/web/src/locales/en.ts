@@ -715,6 +715,11 @@ const en: typeof MessageSchema = {
       hint: "Topic chains organised as the conversation happens: grouped by plan chapter versus background; click to locate the message.",
       noSession: "Open a conversation and its topic threads are organised here.",
     },
+    notes: {
+      name: "Notes",
+      hint: "Select text in a message to mark it or write about it — tied to what you marked, and locatable again at any time.",
+      noSession: "Open a conversation and its notes are listed here.",
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */
@@ -736,6 +741,47 @@ const en: typeof MessageSchema = {
     expand: "Expand",
     collapse: "Collapse",
     nodeMissing: "removed from the plan",
+  },
+
+  notes: {
+    types: {
+      annotation: "Marked",
+      idea: "Idea",
+      question: "Question",
+      other: "Other",
+    },
+    count: "{count} note | {count} notes",
+    add: "New note",
+    empty: "No notes yet. Select something in a message to mark it or write about it.",
+    untitled: "(empty)",
+    open: "Open this note",
+    claimedByOther: "Another widget is using this conversation's annotations, so marking is unavailable here.",
+    toolbar: {
+      label: "Annotate this message",
+      annotate: "Mark",
+      note: "Note",
+    },
+    editor: {
+      title: "Note",
+      newTitle: "New note",
+      editTitle: "Edit note",
+      quoteLabel: "Marked text",
+      contentLabel: "Your note",
+      contentPlaceholder: "What are you thinking?",
+      typeLabel: "Kind of note",
+      save: "Save",
+      saving: "Saving…",
+      locate: "Go to it",
+      discardTitle: "Discard unsaved changes?",
+      discardMessage: "What you typed will not be kept when this closes.",
+      discardAction: "Discard",
+    },
+    remove: {
+      title: "Delete this note?",
+      message: "It will no longer appear in the list.",
+      detail: "The message and the text you marked are both kept.",
+      action: "Delete",
+    },
   },
 
   plan: {
@@ -845,6 +891,8 @@ const en: typeof MessageSchema = {
     QUIZ_QUESTION_NOT_FOUND: "That quiz question cannot be found.",
     QUIZ_NOT_ANSWERABLE:
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
+    NOTE_NOT_FOUND: "That note cannot be found — it may already have been deleted.",
+    NOTE_TYPE_INVALID: "That kind of note does not exist.",
     MESSAGE_NOT_FOUND: "That message cannot be found — it may already have been deleted.",
     MESSAGE_NOT_LAST: "Only the last message can be deleted. Reload the page and try again.",
     NO_REPLY_TO_REGENERATE:

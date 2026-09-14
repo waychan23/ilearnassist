@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { isInteractiveTool, type Message, type ToolCall } from "../api/types";
 import { confirm } from "../composables/confirm";
+import { openNoteFromHighlight } from "../composables/messageNotes";
 import { renderMarkdown } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
+import { applyNoteHighlights, noteIdAt, type NoteHighlightMark } from "../utils/noteAnchor";
 import ToolCallCard from "./ToolCallCard.vue";
 import AttachmentChips from "./AttachmentChips.vue";
 import ReasoningBlock from "./ReasoningBlock.vue";
@@ -32,6 +34,13 @@ const props = defineProps<{
    * the last of. `ChatView` is the one place that knows the order.
    */
   isLast?: boolean;
+  /**
+   * The conversation's note highlights. Passed in rather than read from the notes module:
+   * this component is the message list, and the message list's side of the notes capability
+   * is the bridge — it draws `data-note-id` marks and hands clicks over by id without
+   * knowing what a note is.
+   */
+  noteMarks?: readonly NoteHighlightMark[];
 }>();
 
 const { t } = useI18n();
@@ -113,6 +122,58 @@ const rendered = computed(() => {
   const html = renderMarkdown(content.value);
   return props.streaming ? html + '<span class="streaming-cursor"></span>' : html;
 });
+
+/* ---------------------------------- notes ---------------------------------- */
+
+/**
+ * The element a note's anchor is measured against — the message's own content, in whichever
+ * of the two shapes this message renders as.
+ *
+ * One ref for two elements is fine because the branches are exclusive. What matters is that
+ * it is on the *content* and not on the whole `.msg`: the anchor's offsets are counted over
+ * this element's visible text, so a region including the avatar, the reasoning block or a
+ * tool card would make them mean something different at capture time than at draw time.
+ */
+const noteRoot = ref<HTMLElement | null>(null);
+
+/** This message's marks. Filtered here because a message only draws its own. */
+const myNoteMarks = computed(() =>
+  (props.noteMarks ?? []).filter((mark) => mark.messageId === props.message?.id)
+);
+
+/**
+ * Draw the marks, after the DOM has the content they were measured against.
+ *
+ * `flush: "post"` is not optional: a default `watch` runs *before* Vue writes the new
+ * `v-html`, so on the render where the content changes the marks would be applied to the old
+ * DOM and then thrown away with it. The common case never re-renders at all — a persisted
+ * message's markdown is byte-identical each time — which is also why there is no attempt to
+ * keep marks across a re-render other than redrawing them.
+ */
+function drawNoteMarks(): void {
+  const root = noteRoot.value;
+  const messageId = props.message?.id;
+  if (!root || !messageId) return;
+  // Nothing to draw and nothing drawn: leave the DOM alone rather than re-walking it. This is
+  // every message but one or two, on every note the reader adds.
+  if (myNoteMarks.value.length === 0 && !root.querySelector("mark[data-note-id]")) return;
+  applyNoteHighlights(root, messageId, myNoteMarks.value);
+}
+
+watch([rendered, myNoteMarks], () => void nextTick(drawNoteMarks), { flush: "post" });
+onMounted(() => void nextTick(drawNoteMarks));
+
+/**
+ * A click on a highlight opens its note.
+ *
+ * Routed by id through the bridge rather than resolved here: this component knows a mark
+ * carries a `data-note-id` and nothing about what one points at. A click anywhere else in the
+ * message — including on a link — is left alone.
+ */
+function onContentClick(event: MouseEvent): void {
+  const noteId = noteIdAt(event.target as Element | null);
+  if (noteId) openNoteFromHighlight(noteId);
+}
 
 /** Token accounting for a finished assistant turn, when the provider reported it. */
 /* ------------------------------- copy action ------------------------------- */
@@ -209,7 +270,14 @@ const usageText = computed(() => {
         v-if="attachments.length"
         :attachments="attachments"
       />
-      <div v-if="content" class="bubble">{{ content }}</div>
+      <!-- `data-note-root` marks the element an annotation is measured against: the anchor's
+           offsets are counted over this element's visible text, so it has to be the content
+           and not the whole message (an avatar or a tool card would silently change what
+           "the 4th character" means). The one message whose id is absent — the streaming
+           bubble — is also the one that cannot be annotated, so the attribute is harmless. -->
+      <div v-if="content" ref="noteRoot" class="bubble" data-note-root @click="onContentClick">
+        {{ content }}
+      </div>
       <div v-if="content && !props.streaming" class="actions">
         <button class="icon-btn act" :title="copied ? t('common.copied') : t('common.copy')" @click="copyMessage">
           <Icon :name="copied ? 'check' : 'copy'" /> {{ copied ? t("common.copied") : t("common.copy") }}
@@ -243,7 +311,15 @@ const usageText = computed(() => {
         :duration-ms="reasoningMs"
       />
       <ToolCallCard v-for="tc in actionToolCalls" :key="tc.id" :tool-call="tc" />
-      <div v-if="rendered" class="markdown" data-testid="message-content" v-html="rendered"></div>
+      <div
+        v-if="rendered"
+        ref="noteRoot"
+        class="markdown"
+        data-note-root
+        data-testid="message-content"
+        @click="onContentClick"
+        v-html="rendered"
+      ></div>
       <!-- Outside the content block above: a stop pressed before any text arrived leaves
            an empty reply, and that one still needs to say why it is empty. -->
       <div v-if="stopped" class="stopped-note" data-testid="message-stopped">

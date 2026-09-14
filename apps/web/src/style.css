@@ -93,6 +93,14 @@
   --bubble-bg: #2b3f6b;
   --bubble-fg: #eaf0ff;
   --accent-bg: rgba(76, 139, 245, 0.16);
+  /*
+   * A note's highlight, and the only violet in the palette. Not the accent tint: a mark
+   * and a selection are two different claims about the same words, and a reader who
+   * has just dragged over some text should not have to work out which one they are
+   * looking at. Not `--warning`'s amber either — that means "something is wrong", and
+   * an annotation is not a warning.
+   */
+  --note-bg: rgba(154, 130, 246, 0.22);
   --focus-ring: #7aa7ff;
 
   /* ---- spacing (2px base) — `padding`, `margin` and `gap` only ---- */
@@ -212,6 +220,14 @@
   --bubble-bg: #dbe7ff;
   --bubble-fg: #16233b;
   --accent-bg: rgba(47, 111, 235, 0.1);
+  /*
+   * A note's highlight, and the only violet in the palette. Not the accent tint: a mark
+   * and a selection are two different claims about the same words, and a reader who
+   * has just dragged over some text should not have to work out which one they are
+   * looking at. Not `--warning`'s amber either — that means "something is wrong", and
+   * an annotation is not a warning.
+   */
+  --note-bg: rgba(124, 97, 231, 0.16);
   --focus-ring: #2f6feb;
   /* Not the dark theme's 0.55: on white that composites the whole page to
      #737373, which erases the sidebar and topbar boundaries and reads as if the
@@ -251,6 +267,14 @@
     --bubble-bg: #dbe7ff;
     --bubble-fg: #16233b;
     --accent-bg: rgba(47, 111, 235, 0.1);
+    /*
+     * A note's highlight, and the only violet in the palette. Not the accent tint: a mark
+     * and a selection are two different claims about the same words, and a reader who
+     * has just dragged over some text should not have to work out which one they are
+     * looking at. Not `--warning`'s amber either — that means "something is wrong", and
+     * an annotation is not a warning.
+     */
+    --note-bg: rgba(124, 97, 231, 0.16);
     --focus-ring: #2f6feb;
     /* Not the dark theme's 0.55: on white that composites the whole page to
        #737373, which erases the sidebar and topbar boundaries and reads as if the
@@ -1451,6 +1475,33 @@ body {
   word-break: break-word;
 }
 
+/*
+ * A note's mark, and the flash 定位 gives it.
+ *
+ * Global, and not in `MessageItem.vue` — the marks are wrapped around nodes that `v-html`
+ * wrote, which a scoped style cannot reach (`:deep()` appears nowhere in the app, and adding
+ * the first use of it for this would be a rule with one reader and no discoverability). It
+ * sits with `.markdown` because that is the content it colours.
+ *
+ * `--note-bg` rather than `--accent-bg`: a highlight is a different claim from a selection or
+ * a hover, and sharing the accent tint would make "this text is marked" and "this row is
+ * active" the same colour in the two places they appear side by side.
+ */
+.note-highlight {
+  background: var(--note-bg);
+  color: inherit;
+  /* No padding or radius: a mark can span elements, and those would show as gaps at every
+     boundary in the middle of one highlight. */
+  border-radius: 0;
+}
+/* `outline` rather than `background`, so the flash paints over the highlight instead of
+   replacing it and needs no second colour to return to. */
+.note-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  transition: outline-color var(--dur-slow);
+}
+
 .markdown p {
   margin: 0 0 var(--space-5);
 }
@@ -2163,6 +2214,28 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * The same idea for a paragraph: keep the first few lines, ellipsis the rest.
+ *
+ * `-webkit-line-clamp` and not a character count, because the ellipsis has to land where the
+ * *line* ends — the same words are one line in a narrow panel and three in a wide one, and a
+ * string prefix cut by a character count would either overflow or leave the row short.
+ * `-webkit-box` is what the property requires; it is supported everywhere that matters and
+ * the alternative is a JS measurement per row per resize.
+ */
+.clamp-2,
+.clamp-4 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-2 {
+  -webkit-line-clamp: 2;
+}
+.clamp-4 {
+  -webkit-line-clamp: 4;
 }
 
 /*
