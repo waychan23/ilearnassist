@@ -509,6 +509,46 @@ const DDL = `
   CREATE INDEX IF NOT EXISTS idx_threads_session ON session_threads(session_id, branch, created_at);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_plan_node
     ON session_threads(session_id, plan_node_id) WHERE plan_node_id IS NOT NULL;
+
+  -- The notes widget's records: what the learner marked and what they wrote about it.
+  --
+  -- Unlike quiz_questions and session_threads above, this one DOES carry deleted_at: a note
+  -- is not derived from the conversation, it is the user's own writing, which puts it on the
+  -- same side as messages rather than on the same side as a classification. Its bytes are
+  -- kept for the same reason a deleted message's are — a delete costs no disk, and a future
+  -- restore has something to restore.
+  --
+  -- session_id is NOT NULL and message_id is nullable, and that asymmetry is the entity:
+  -- every note belongs to a conversation, only an annotation belongs to a message. The
+  -- session FK is house style for a child table, but note what it does and does not do —
+  -- sessions are soft-deleted, so the cascade is a backstop that normal use never fires;
+  -- hiding follows the reads filtering IS NULL, exactly as it does for messages.
+  --
+  -- message_id has NO foreign key, deliberately. A regenerate or a tail delete soft-deletes
+  -- a message, and the note must survive it: the quote column is the record of what was
+  -- annotated and still displays. A dangling id is a state the reads report (messageMissing)
+  -- rather than a state the schema forbids. Same shape as plan_nodes.done_tool_call_id.
+  --
+  -- quote/occurrence are the anchor (see NoteAnchor in packages/shared): a text-quote anchor
+  -- over the message's visible text, not a character offset, because offsets into rendered
+  -- HTML do not survive a re-render. quote = '' is "no annotation", which is one signal and
+  -- not two, so occurrence is NOT NULL DEFAULT 0 rather than nullable.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    message_id TEXT,
+    type TEXT NOT NULL DEFAULT 'annotation',
+    quote TEXT NOT NULL DEFAULT '',
+    occurrence INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_notes_session ON notes(session_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id);
 `;
 
 /**

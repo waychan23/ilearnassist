@@ -56,6 +56,15 @@ function seed(userId: string): void {
     role: "user",
     content: "hi",
   });
+  db.createNote({
+    id: `n-${userId}`,
+    sessionId: `s-${userId}`,
+    messageId: `m-${userId}`,
+    type: "annotation",
+    quote: "hi",
+    occurrence: 0,
+    content: `${userId}'s own`,
+  });
 }
 
 function addCopilot(id: string, userId: string, visibility: "private" | "public"): void {
@@ -295,6 +304,34 @@ describe("widgets", () => {
     expect(db.statsForWorkspace(BOB, `w-${BOB}`)?.sessions.map((s) => s.sessionId)).toEqual([
       `s-${BOB}`,
     ]);
+  });
+});
+
+describe("notes", () => {
+  it("lists only the caller's own conversation's notes", () => {
+    expect(db.listNotesForUser(ADA, `s-${BOB}`)).toEqual([]);
+    expect(db.listNotesForUser(BOB, `s-${BOB}`).map((n) => n.id)).toEqual([`n-${BOB}`]);
+  });
+
+  it("does not find another account's note by id", () => {
+    expect(db.getNoteForUser(ADA, `s-${BOB}`, `n-${BOB}`)).toBeUndefined();
+    expect(db.getNoteForUser(ADA, `s-${ADA}`, "n-nope")).toBeUndefined();
+  });
+
+  it("does not reach a note through another conversation's id", () => {
+    /*
+     * `updateNote`/`softDeleteNote` take a bare session id, the documented shape for an
+     * accessor every caller reaches after a `ForUser` read has resolved the session. The
+     * session id in the WHERE is therefore the scoping that matters here — it is what keeps a
+     * note id from one conversation out of another conversation's route, which the owner
+     * check upstream cannot see.
+     */
+    expect(db.updateNote(`s-${ADA}`, `n-${BOB}`, { content: "stolen" })).toBeUndefined();
+    expect(db.softDeleteNote(`s-${ADA}`, `n-${BOB}`)).toBe(false);
+
+    // Unchanged, which is the half that matters: a refused write that still wrote would pass
+    // an assertion on the return value alone.
+    expect(db.getNoteForUser(BOB, `s-${BOB}`, `n-${BOB}`)?.content).toBe(`${BOB}'s own`);
   });
 });
 
