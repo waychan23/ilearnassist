@@ -246,12 +246,19 @@ function openEditorForCapture(capture: NoteCapture): void {
   });
 }
 
-/** The window over a note the user picked out of the list, in either state. */
-export function openNoteEditor(note: Note): void {
+/**
+ * The window over a note the user picked out of the list, in either state.
+ *
+ * `anchor` is the row the reader clicked, so the window opens beside the thing that was
+ * pointed at rather than somewhere of its own choosing — the same rule the capture flow
+ * follows, with the selection in place of the row.
+ */
+export function openNoteEditor(note: Note, anchor?: { x: number; y: number } | null): void {
   const sessionId = loadedSessionId.value;
   if (!sessionId) return;
   requestNoteEditor({
     draft: { noteId: note.id, quote: note.quote, type: note.type, content: note.content },
+    anchor: anchor ?? null,
     // 定位 exists only when there is a place to go: an unanchored note never had one, and a
     // note whose message was deleted has lost it. Both are "no button" rather than a button
     // that does nothing.
@@ -271,6 +278,8 @@ export function openNewNoteEditor(): void {
   requestNoteEditor({
     draft: { quote: "", type: "other", content: "" },
     locate: null,
+    // Nothing was pointed at, so the card docks to the corner rather than inventing a place.
+    anchor: null,
     save: (input) =>
       create(sessionId, { type: input.type, content: input.content }),
   });

@@ -328,7 +328,9 @@ onMounted(() => {
     reveal: revealNote,
     openEditor(request) {
       editorRequest.value = request;
-      editorAnchor.value = pendingAnchor.value;
+      // The opener's own anchor wins: a window opened from the panel knows its row, and the
+      // selection anchor here is only ever the answer for a capture.
+      editorAnchor.value = request.anchor ?? pendingAnchor.value;
       pendingAnchor.value = null;
     },
   });

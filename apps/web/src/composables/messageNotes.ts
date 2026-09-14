@@ -74,6 +74,13 @@ export interface NoteEditorRequest {
   /** Null when there is nowhere to go back to — no annotation, or a message since deleted. */
   locate: NoteRevealTarget | null;
   /**
+   * Where to float, in viewport coordinates — supplied by whoever opened the window, because
+   * only they know: the message list has the selection's rect, the panel has the row's.
+   * Absent or null docks the card to the corner, which is what the panel's own "new note"
+   * button gets, having nothing it was pointed at.
+   */
+  anchor?: { x: number; y: number } | null;
+  /**
    * Persist the edit. **Resolves whether it worked**, and the host closes the window on
    * `true` and keeps it open on `false` — a failure means the words are still only in the
    * window, so closing it would throw them away at the exact moment they are most wanted.

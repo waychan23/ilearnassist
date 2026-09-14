@@ -67,6 +67,18 @@ function typeLabel(type: NoteType): string {
   }
 }
 
+/**
+ * Open a row's note, anchored to the row.
+ *
+ * The coordinates come from the click rather than from the panel's own box: the window floats
+ * beside what was pointed at, and only the event knows where that was. Its clamping puts the
+ * card to the *left* of the panel, since there is no room to the right of it.
+ */
+function openRow(note: Note, event: MouseEvent): void {
+  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+  openNoteEditor(note, rect ? { x: rect.left, y: rect.top + rect.height / 2 } : null);
+}
+
 function retry(): void {
   const sessionId = store.activeSessionId;
   if (sessionId) void loadNotes(sessionId);
@@ -130,7 +142,7 @@ function retryClaim(): void {
             class="note-row"
             :data-testid="`note-row-${note.id}`"
             :title="t('notes.open')"
-            @click="openNoteEditor(note)"
+            @click="openRow(note, $event)"
           >
             <span class="note-row-head">
               <span class="badge" :class="{ muted: note.type === 'other' }">
