@@ -240,16 +240,20 @@ session-scoped plan widget. The split is:
 
 The third session widget derives topic chains — a message belongs to one `session_threads`
 row through `messages.thread_id` — by classifying each *turn* (a user message plus its
-assistant replies) with a small out-of-band model call, the `agent/title.ts` shape:
-non-streaming, `maxRetries: 0`, failures swallowed. Unlike the titler it runs after **every**
+assistant replies) with an out-of-band model call after the turn finishes. The call
+**streams** (a non-streaming 20s timeout aborted slow reasoning runs — healthy calls already
+took 14–18s, and a backfill once made the model think for 109s and emit nothing) with a 60s
+backstop; the main-loop shape rather than the titler's buffered call. It runs after every
 finished turn while the widget is installed, is never awaited (fire-and-forget from
-`finishTurn`, so `done` does not wait), and joins one in-flight promise per session. Turns are
-the oldest run of unassigned messages, at most eight per call, and an unusable answer (any
-malformed JSON, or a count that is not exactly the turn count) writes nothing — the messages
-stay unassigned and the identical idempotent call retries them, so backfill and keeping up
-are one code path. One rule beats the model: a turn whose own `ila_update_plan_progress`
-call moved a node is that node's thread regardless of the answer, because history has to be
-classifiable against *past* plan status. The `计划`/`其他` headings are rendered, not stored —
+`finishTurn`, so `done` does not wait), and joins one in-flight promise per session.
+Turns are the oldest run of unassigned messages, at most five per call (messages clipped
+to 350 chars). Turns whose own `ila_update_plan_progress` tool call named a plan node are
+placed deterministically *without a model call* — the node comes out of the turn's own
+calls, not the plan's current status, which would be a lie during backfill — and only
+ambiguous turns (background, digressions) are sent. A failed/empty/unusable answer blocks
+just those turns; deterministic ones in the same chunk still land, and the identical
+idempotent call retries the rest, so backfill and keeping up are one code path. The
+`计划`/`其他` headings are rendered, not stored —
 their labels are translated and the plan branch nests off the live plan tree on the client
 (`utils/threadTree.ts`), so a renamed node never freezes a title. A widget **group** bundles
 widgets only in the install UI (`WIDGET_GROUPS`, client-side): one master button loops the

@@ -23,12 +23,17 @@ import { logTimestamp, threadLog } from "./threadLog.js";
  * and is injected, so this module is unit-testable with a fake classifier.
  */
 
-/** At most this many still-unassigned turns are classified by one model call. */
-export const MAX_TURNS_PER_SYNC = 8;
+/**
+ * At most this many still-unassigned turns are classified by one model call. Five rather
+ * than eight on purpose: each extra turn is more prompt AND more unseen reasoning, and a
+ * reasoning model that exhausts its output budget emits an empty answer. Backfill simply
+ * takes a couple more calls; the live path is always one turn.
+ */
+export const MAX_TURNS_PER_SYNC = 5;
 /** Hard cap on messages read for one chunk; a pathological ask_user chain is the only overflow. */
 const MAX_MESSAGES_PER_CHUNK = MAX_TURNS_PER_SYNC * 20;
 /** How much of one message is shown to the classifier. */
-const MAX_MESSAGE_CHARS = 500;
+const MAX_MESSAGE_CHARS = 350;
 /** Classified messages shown before the new turns, so a chunk boundary reads continuously. */
 const RECENT_TAIL = 3;
 /** One-line leaf preview length. */
@@ -322,29 +327,17 @@ export function syncThreads(
   db: AppDb,
   sessionId: string,
   classify: ThreadClassifier,
-  source: ThreadSyncSource = "turn"
+  source: ThreadSyncSource = "turn",
+  /** Which model the classifier calls — observation-log only. */
+  model = ""
 ): Promise<SyncResult> {
   const joined = inflight.get(sessionId);
   if (joined) return joined;
-  const run = runSync(db, sessionId, classify, source).finally(() => {
+  const run = runSync(db, sessionId, classify, source, model).finally(() => {
     inflight.delete(sessionId);
   });
   inflight.set(sessionId, run);
   return run;
-}
-
-/** One line describing what the model decided, before it is resolved to a stored thread. */
-function describeDecision(decision: ThreadDecision): string {
-  switch (decision.kind) {
-    case "continue":
-      return "延续当前脉络（continue）";
-    case "existing":
-      return `追加到已有脉络 ${decision.ref}`;
-    case "new":
-      return decision.branch === "plan"
-        ? `新脉络（计划${decision.node ? ` 节点 ${decision.node}` : ""}）「${decision.title || "未命名"}」`
-        : `新脉络（其他）「${decision.title || "未命名"}」`;
-  }
 }
 
 /** A short turn label for the per-turn "判定" lines. */
@@ -357,7 +350,8 @@ async function runSync(
   db: AppDb,
   sessionId: string,
   classify: ThreadClassifier,
-  source: ThreadSyncSource
+  source: ThreadSyncSource,
+  model: string
 ): Promise<SyncResult> {
   const pending = db.listPendingThreadMessages(sessionId, MAX_MESSAGES_PER_CHUNK);
   if (pending.length === 0) {
@@ -395,13 +389,16 @@ async function runSync(
     : -1;
   const currentThreadRef = currentIndex >= 0 ? `e${currentIndex + 1}` : undefined;
 
-  const prompt = buildThreadPrompt({
-    plan,
-    existing,
-    recent,
-    currentThreadRef,
-    turns,
-  });
+  /*
+   * Deterministic turns never reach the model: when a turn's own progress tool call names
+   * a live plan node, its home is known. Only the remaining turns (background, digressions,
+   * plain "继续") are sent for classification — one chapter lesson with a progress call used
+   * to cost the model a 100-second reasoning run it had no business making.
+   */
+  const forcedNodeIds = turns.map((turn) => progressNodeForTurn(turn, planNodes));
+  const modelTurns = turns
+    .map((turn, i) => ({ turn, i }))
+    .filter(({ i }) => !forcedNodeIds[i]);
 
   // Resolve "eN" against the list the model saw.
   const existingByRef = new Map(existing.map((t, i) => [`e${i + 1}`, t]));
@@ -444,7 +441,11 @@ async function runSync(
     }
     lines.push("本次轮次：");
     turns.forEach((turn, i) => {
-      lines.push(`  ${turnLabel(turn, i)}`);
+      const forced = forcedNodeIds[i];
+      const mark = forced
+        ? `  → 由工具调用直接定位：计划 ${planNodes.get(forced)?.number ?? "?"}（无需模型）`
+        : "";
+      lines.push(`  ${turnLabel(turn, i)}${mark}`);
       for (const m of turn.messages) {
         lines.push(`    ${m.role}: ${clip(m.content || "(无文字)", MAX_MESSAGE_CHARS)}${toolNames(m)}`);
       }
@@ -458,84 +459,91 @@ async function runSync(
     `[${logTimestamp()}] 会话 ${sessionId} — ${
       source === "turn" ? "回合结束自动整理" : "面板/安装触发的同步"
     }`,
-    `待分类 ${totalPending} 条，本次处理 ${turns.length} 个轮次（${turns.reduce(
+    `模型：${model || "(未知)"}｜待分类 ${totalPending} 条，本次处理 ${turns.length} 个轮次（${turns.reduce(
       (n, t) => n + t.messages.length,
       0
-    )} 条消息）`,
+    )} 条消息），其中 ${modelTurns.length} 个需要模型判定`,
   ];
 
-  let raw: string;
-  try {
-    raw = await classify(THREAD_SYSTEM_PROMPT, prompt);
-  } catch (err) {
-    threadLog(() =>
-      [
-        ...header(),
-        ...contextLines(),
-        `✗ 模型调用失败：${err instanceof Error ? err.message : String(err)}`,
-        "本次轮次保持未分类，将在下个回合或下次同步时重试。",
-      ].join("\n") + "\n"
-    );
-    throw err;
+  // Ask the model only about the non-deterministic turns. A failed/empty/unusable answer
+  // blocks just those: deterministic turns are still applied below, and the ambiguous ones
+  // stay unassigned for the next sync — one model hiccup never stalls the whole backlog.
+  let raw = "";
+  let modelError: string | null = null;
+  if (modelTurns.length > 0) {
+    const prompt = buildThreadPrompt({ plan, existing, recent, currentThreadRef, turns: modelTurns.map((m) => m.turn) });
+    try {
+      raw = await classify(THREAD_SYSTEM_PROMPT, prompt);
+    } catch (err) {
+      modelError = `${Date.now() - startedAt} ms：${err instanceof Error ? err.message : String(err)}`;
+    }
   }
-
-  const decisions = parseThreadDecisions(raw, turns.length);
-  if (!decisions) {
-    threadLog(() =>
-      [
-        ...header(),
-        ...contextLines(),
-        `✗ 模型返回无法解析（需要恰好 ${turns.length} 个判定），本次轮次保持未分类。原始返回：`,
-        clip(raw.trim(), 2_000) || "(空)",
-      ].join("\n") + "\n"
-    );
-    throw new Error("thread classifier returned an unusable answer");
+  // With zero model turns nothing was called: an empty answer is expected, not a failure.
+  const parsed = modelError || modelTurns.length === 0 ? null : parseThreadDecisions(raw, modelTurns.length);
+  if (modelTurns.length > 0 && !modelError && !parsed && raw.trim().length === 0) {
+    modelError = `${Date.now() - startedAt} ms：模型返回为空（输出预算被思考链耗尽）`;
+  } else if (modelTurns.length > 0 && !modelError && !parsed) {
+    modelError = `模型返回无法解析（需要恰好 ${modelTurns.length} 个判定），原始返回：${
+      clip(raw.trim(), 1_000) || "(空)"
+    }`;
   }
+  const decisionsByTurn = new Map<number, ThreadDecision>();
+  parsed?.forEach((decision, j) => decisionsByTurn.set(modelTurns[j]!.i, decision));
 
   let assigned = 0;
   /** Human-readable per-turn resolution lines, collected inside the transaction. */
   const actions: string[] = [];
+  const skipped: string[] = [];
 
   const writes = (): void => {
     for (let i = 0; i < turns.length; i++) {
       const turn = turns[i]!;
-      const decision = decisions[i]!;
       const messageIds = turn.messages.map((m) => m.id);
+      const forcedNodeId = forcedNodeIds[i];
+      const decision = decisionsByTurn.get(i);
 
-      // Deterministic precedence: a turn whose own tool call moved the plan follows that node,
-      // whatever the model said.
-      const forcedNodeId = progressNodeForTurn(turn, planNodes);
+      // Deterministic precedence: a turn whose own tool call moved the plan follows that node;
+      // it never needed the model. Turns the model could not decide are left unassigned.
+      if (!forcedNodeId && !decision) {
+        skipped.push(`  ${turnLabel(turn, i)} → 保持未分类，等下次同步重试`);
+        continue;
+      }
 
       let thread: ThreadRecord | undefined;
       let outcome: string;
+      // The guard above left a decision for every non-forced turn.
+      const dec: ThreadDecision = decision!;
       if (forcedNodeId) {
         thread = ensurePlanThread(db, sessionId, forcedNodeId, planNodes);
         const number = planNodes.get(forcedNodeId)?.number ?? "?";
-        outcome = `归入计划 ${number}「${thread.title}」（工具调用优先，覆盖模型判定：${describeDecision(decision)}）`;
-      } else if (decision.kind === "existing") {
+        outcome = `归入计划 ${number}「${thread.title}」（工具调用直接定位，无需模型）`;
+      } else if (dec.kind === "existing") {
         // A ref that no longer resolves continues the live thread; with neither, the turn
         // starts its own "other" thread — resolution must always land so later turns keep a
         // tail to attach to.
-        const target = existingByRef.get(decision.ref);
+        const target = existingByRef.get(dec.ref);
         thread = target ?? current ?? createOtherThread(db, sessionId, fallbackTitle(turn));
         outcome =
           target === thread
-            ? `追加到已有脉络 ${decision.ref}「${thread.title}」`
-            : `模型指向 ${decision.ref} 但已失效，改为${target === undefined && current ? "延续当前脉络" : "新建脉络"}「${thread.title}」`;
-      } else if (decision.kind === "new") {
-        if (decision.branch === "plan" && plan) {
+            ? `追加到已有脉络 ${dec.ref}「${thread.title}」`
+            : `模型指向 ${dec.ref} 但已失效，改为${target === undefined && current ? "延续当前脉络" : "新建脉络"}「${thread.title}」`;
+      } else if (dec.kind === "new") {
+        if (dec.branch === "plan" && plan) {
           const nodeId =
-            (decision.node ? numberToId.get(decision.node) : undefined) ??
-            currentPlanNode(plan);
+            (dec.node ? numberToId.get(dec.node) : undefined) ?? currentPlanNode(plan);
           if (nodeId) {
             thread = ensurePlanThread(db, sessionId, nodeId, planNodes);
             outcome = `新建/归入计划脉络 ${planNodes.get(nodeId)?.number ?? "?"}「${thread.title}」`;
           } else {
-            thread = createOtherThread(db, sessionId, decision.title || fallbackTitle(turn));
+            thread = createOtherThread(db, sessionId, dec.title || fallbackTitle(turn));
             outcome = "模型判定为计划脉络但没有可对应的节点，新建「其他」脉络「" + thread.title + "」";
           }
         } else {
-          thread = createOtherThread(db, sessionId, decision.title || fallbackTitle(turn));
+          thread = createOtherThread(
+            db,
+            sessionId,
+            dec.kind === "new" ? dec.title || fallbackTitle(turn) : fallbackTitle(turn)
+          );
           outcome = `新建「其他」脉络「${thread.title}」`;
         }
       } else {
@@ -556,17 +564,33 @@ async function runSync(
   db.raw.transaction(writes)();
 
   const unassigned = db.countPendingThreadMessages(sessionId);
-  threadLog(() =>
-    [
-      ...header(),
-      ...contextLines(),
-      "模型原始返回：",
-      clip(raw.trim(), 2_000),
-      "判定：",
-      ...actions,
-      `结果：${assigned} 条消息归入脉络，剩余未分类 ${unassigned} 条，耗时 ${Date.now() - startedAt} ms`,
-    ].join("\n") + "\n"
-  );
+  if (modelError) {
+    threadLog(() =>
+      [
+        ...header(),
+        ...contextLines(),
+        `✗ 模型判定失败（${modelError}）`,
+        `确定性轮次照常归入；${modelTurns.length} 个需要判定的轮次保持未分类，将在下个回合或下次同步时重试。`,
+        "判定：",
+        ...actions,
+        ...skipped,
+        `结果：${assigned} 条消息归入脉络，剩余未分类 ${unassigned} 条，耗时 ${Date.now() - startedAt} ms`,
+      ].join("\n") + "\n"
+    );
+  } else {
+    threadLog(() =>
+      [
+        ...header(),
+        ...contextLines(),
+        ...(modelTurns.length > 0
+          ? ["模型原始返回：", clip(raw.trim(), 2_000)]
+          : ["模型调用：跳过（所有轮次均可由计划工具调用直接定位）"]),
+        "判定：",
+        ...actions,
+        `结果：${assigned} 条消息归入脉络，剩余未分类 ${unassigned} 条，耗时 ${Date.now() - startedAt} ms`,
+      ].join("\n") + "\n"
+    );
+  }
 
   return { turns: turns.length, messages: assigned, unassigned };
 }

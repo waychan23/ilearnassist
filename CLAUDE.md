@@ -584,15 +584,18 @@ Fuller map in `docs/reference.md`.
 - **Thread classification is a best-effort post-turn side effect, never part of the turn.**
   The thread widget (`apps/server/src/threads.ts` + `agent/threads.ts`) classifies *turns*
   (a user message plus its assistant replies), not individual messages, after every
-  finished turn while the widget is installed. The call is fire-and-forget from
-  `finishTurn` (never awaited — `done` does not wait on it), joins one in-flight promise
-  per session, and a malformed answer writes nothing: messages stay unassigned and the
-  same idempotent sync retries them, which is also what makes an install-time backfill the
-  same code path as keeping up. Deterministic precedence: a turn whose own
-  `ila_update_plan_progress` call moved a node is that node's thread whatever the model
-  said — classification must read history from the turn's own tool calls, never from the
-  plan's current status. The `计划`/`其他` headings are rendered client-side with
-  translated labels, never stored. The classification process is observable through the
+  finished turn while the widget is installed. The call **streams** with a 60s backstop —
+  never make it non-streaming with a short timeout again: reasoning models think long
+  before answering, and that aborted healthy calls at 20s — is fire-and-forget from
+  `finishTurn` (never awaited — `done` does not wait on it), and joins one in-flight
+  promise per session. Turns whose own `ila_update_plan_progress` call moved a plan node
+  are placed deterministically WITHOUT calling the model (read from the turn's own tool
+  calls, never the plan's current status, which would be a lie during backfill); only
+  ambiguous turns are sent, at most five per call, and a bad/empty answer blocks just
+  those while deterministic turns in the chunk still land and the same idempotent sync
+  retries the rest. That is also what makes an install-time backfill the same code path
+  as keeping up. The `计划`/`其他` headings are rendered client-side with translated
+  labels, never stored. The classification process is observable through the
   append-only `<dataRoot>/logs/threads.log` (`threadLog.ts`): one human-readable block per
   real classification (context, turns, raw model answer, per-turn resolution, counts) and
   failure blocks, configured only in the process entry point so tests never write it.

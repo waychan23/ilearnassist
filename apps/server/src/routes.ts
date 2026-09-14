@@ -1686,7 +1686,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const provider = db.getProvider(resolveProviderId(undefined, owned.session.settings));
     const modelId = resolveModelId(provider, undefined, owned.session.settings);
     try {
-      await syncThreads(db, id, makeThreadClassifier({ provider, modelId }), "sync");
+      await syncThreads(db, id, makeThreadClassifier({ provider, modelId }), "sync", modelId);
     } catch (err) {
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
@@ -2265,7 +2265,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return;
     }
     if (!installed) return;
-    void syncThreads(db, sessionId, makeThreadClassifier({ provider, modelId }), "turn").catch((err) => {
+    void syncThreads(db, sessionId, makeThreadClassifier({ provider, modelId }), "turn", modelId).catch((err) => {
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
         "thread sync after turn left messages unassigned"
