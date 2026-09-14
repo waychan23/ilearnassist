@@ -1,6 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { ProviderRecord } from "../db.js";
+import type { ThreadReasoningSetting } from "../config.js";
 import type { ThreadClassifier } from "../threads.js";
 
 /**
@@ -26,6 +27,13 @@ const TIMEOUT_MS = 60_000;
 export interface ThreadModelInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /**
+   * Whether this call may run chain-of-thought. Defaults to `auto`: a model declaring the
+   * `reasoning` capability is left to the provider's own default (thinking is ON for DeepSeek
+   * V4), any other model is never sent the field. `on`/`off` force the switch on the wire as
+   * `thinking.type` (the DeepSeek / Ark shape), capability-gated like the main loop's replay.
+   */
+  reasoning?: ThreadReasoningSetting;
 }
 
 function chunkText(chunk: { content: unknown }): string {
@@ -51,12 +59,25 @@ function chunkText(chunk: { content: unknown }): string {
  * cannot tell the mode apart.
  */
 export function makeThreadClassifier(input: ThreadModelInput): ThreadClassifier {
-  const { provider, modelId } = input;
+  const { provider, modelId, reasoning = "auto" } = input;
   return async (systemPrompt: string, userPrompt: string): Promise<string> => {
     if (!provider) throw new Error("No provider configured.");
     const model = modelId || provider.models[0]?.modelId || "";
     if (!model) throw new Error("No model configured.");
     if (!provider.apiKey) throw new Error("Provider has no API key.");
+
+    // The kill switch exists only for a model declared as a reasoning model, mirroring the
+    // gate `buildHistoryMessages` uses for replaying reasoning_content: a provider that never
+    // uses the field must never see it — an unknown `thinking` body field is a 400 on strict
+    // OpenAI-compatible endpoints. In `auto` nothing is sent either way, so the provider's own
+    // default stands (thinking ON for DeepSeek V4, absent everywhere else).
+    const reasoningModel = provider.models.some(
+      (m) => m.modelId === model && m.capabilities.includes("reasoning")
+    );
+    const modelKwargs =
+      reasoningModel && reasoning !== "auto"
+        ? { thinking: { type: reasoning === "off" ? "disabled" : "enabled" } }
+        : undefined;
 
     const llm = new ChatOpenAI({
       model,
@@ -68,6 +89,7 @@ export function makeThreadClassifier(input: ThreadModelInput): ThreadClassifier 
       maxRetries: 0,
       timeout: TIMEOUT_MS,
       streaming: true,
+      ...(modelKwargs ? { modelKwargs } : {}),
     });
 
     // Fenced so the conversation excerpt is data, never instructions.

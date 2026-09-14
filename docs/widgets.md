@@ -216,6 +216,12 @@ not the plan/quiz tool shape. The mechanics, and why:
   streamed connection: a reasoning model thinks long before its answer, and a non-streaming
   20s call aborted slow-but-healthy responses (the log showed successes at 14–18s before a
   provider slowdown made every call time out). Reasoning chunks keep the request alive.
+- **Reasoning is env-switchable, per classification call.** `ILA_THREAD_REASONING` is
+  `auto` (default: think only for models with the `reasoning` capability; nothing is sent,
+  so the provider's default stands — DeepSeek V4 ships thinking ON), `off` (send
+  `thinking:{"type":"disabled"}`, the DeepSeek/Ark shape) or `on` (force enabled). The field
+  is capability-gated, so models without the flag never see it. The conversation's own turns
+  are unaffected — the switch touches this out-of-band call alone.
 - **Deterministic turns skip the model entirely.** A turn whose own `ila_update_plan_progress`
   call opened node N belongs to N — read out of the *turn's* tool calls, not the plan's
   current status, which would be a lie during backfill. Only ambiguous turns (background,

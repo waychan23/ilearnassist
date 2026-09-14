@@ -61,7 +61,7 @@ import {
   SUPERADMIN_ROLE,
   USERNAME_MAX_LENGTH,
 } from "@ilearnassist/shared";
-import type { AppConfig } from "./config.js";
+import { threadReasoningSetting, type AppConfig } from "./config.js";
 import {
   DEFAULT_SESSION_TITLE,
   newId,
@@ -242,6 +242,10 @@ function fileErrorReply(err: unknown): { status: 400 | 404; body: ApiErrorBody }
 
 export default async function routes(app: FastifyInstance, opts: RoutesOptions): Promise<void> {
   const { config, db, documents, layout } = opts;
+
+  // Read once at registration — the classifier call cannot differ between two turns of one
+  // launch, and an unrecognised value names itself at boot instead of silently doing nothing.
+  const threadReasoning = threadReasoningSetting();
 
   /**
    * The turn currently streaming for each session, so another request can stop it.
@@ -1686,7 +1690,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const provider = db.getProvider(resolveProviderId(undefined, owned.session.settings));
     const modelId = resolveModelId(provider, undefined, owned.session.settings);
     try {
-      await syncThreads(db, id, makeThreadClassifier({ provider, modelId }), "sync", modelId);
+      await syncThreads(
+        db,
+        id,
+        makeThreadClassifier({ provider, modelId, reasoning: threadReasoning }),
+        "sync",
+        modelId
+      );
     } catch (err) {
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
@@ -2265,7 +2275,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return;
     }
     if (!installed) return;
-    void syncThreads(db, sessionId, makeThreadClassifier({ provider, modelId }), "turn", modelId).catch((err) => {
+    void syncThreads(
+      db,
+      sessionId,
+      makeThreadClassifier({ provider, modelId, reasoning: threadReasoning }),
+      "turn",
+      modelId
+    ).catch((err) => {
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
         "thread sync after turn left messages unassigned"
