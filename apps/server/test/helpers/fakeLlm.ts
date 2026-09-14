@@ -264,14 +264,26 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
       }
       seen.push(body);
 
+      // Body-keyed matches are for the thread CLASSIFIER only: its system prompt carries this
+      // marker, while the auto-titler and the main agent turn never do. The classifier runs
+      // once per turn, and its body accumulates earlier turns in its recent-tail, so take the
+      // LAST matching needle (the current turn's) rather than the first.
+      const CLASSIFIER_MARKER = "topic-classification function";
+      const isClassifier = raw.includes(CLASSIFIER_MARKER);
+      const classifierHit = isClassifier
+        ? [...matches].reverse().find((m) => raw.includes(m.includes))
+        : undefined;
+
       if (body.stream !== true) {
-        const hit = matches.find((m) => raw.includes(m.includes));
+        // The titler (non-streaming) always gets the sticky title; a classifier answer only
+        // goes to a classifier request.
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(nonStreamingBody(hit ? hit.content : title)));
+        res.end(JSON.stringify(nonStreamingBody(classifierHit ? classifierHit.content : title)));
         return;
       }
 
-      const turn = queue.shift() ?? DEFAULT_TURN;
+      // A matched streamed reply consumes nothing from the agent-turn queue.
+      const turn = classifierHit ? { content: classifierHit.content } : (queue.shift() ?? DEFAULT_TURN);
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",

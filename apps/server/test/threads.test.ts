@@ -299,14 +299,74 @@ describe("syncThreads", () => {
     expect(view.threads[0]!.messages).toHaveLength(4);
   });
 
-  it("leaves every message unassigned when the classifier answer is unusable", async () => {
+  it("leaves every message unassigned but does not throw when the answer is unusable", async () => {
+    // A bad model answer blocks only the ambiguous turns: deterministic progress still lands,
+    // the call resolves, and the next sync retries the same messages.
     userMessage("你好");
     assistantMessage("你好");
-    await expect(
-      syncThreads(db, SESSION, async () => "garbage")
-    ).rejects.toBeTruthy();
-    expect(buildThreadViews(db, OWNER, SESSION).unassigned).toBe(2);
+    let called = 0;
+    const result = await syncThreads(db, SESSION, async () => {
+      called += 1;
+      return "garbage";
+    });
+    expect(called).toBe(1);
+    expect(result.messages).toBe(0);
+    expect(result.unassigned).toBe(2);
     expect(buildThreadViews(db, OWNER, SESSION).threads).toHaveLength(0);
+  });
+
+  it("never calls the model when every turn is deterministically placed", async () => {
+    forceMakePlan(db, SESSION, { tree: [{ title: "第一章" }] });
+    const nodeId = readCurrentPlan(db, SESSION)!.tree[0]!.id;
+    userMessage("学第一章");
+    assistantMessage("", [
+      {
+        id: newId(),
+        name: PLAN_PROGRESS_TOOL_NAME,
+        input: JSON.stringify({ nodes: [{ id: nodeId, status: "in_progress" }] }),
+      },
+    ]);
+
+    let called = 0;
+    const result = await syncThreads(db, SESSION, async () => {
+      called += 1;
+      return "{}";
+    });
+
+    expect(called).toBe(0);
+    expect(result.messages).toBe(2);
+    expect(result.unassigned).toBe(0);
+    expect(buildThreadViews(db, OWNER, SESSION).threads[0]).toMatchObject({
+      branch: "plan",
+      planNodeId: nodeId,
+    });
+  });
+
+  it("still applies deterministic turns when the model fails mid-backfill", async () => {
+    forceMakePlan(db, SESSION, { tree: [{ title: "第一章" }] });
+    const nodeId = readCurrentPlan(db, SESSION)!.tree[0]!.id;
+    // A deterministic plan turn, followed by an ambiguous digression.
+    userMessage("学第一章");
+    assistantMessage("", [
+      {
+        id: newId(),
+        name: PLAN_PROGRESS_TOOL_NAME,
+        input: JSON.stringify({ nodes: [{ id: nodeId, status: "in_progress" }] }),
+      },
+    ]);
+    userMessage("对了考试周几");
+    assistantMessage("周一");
+
+    const result = await syncThreads(db, SESSION, async () => {
+      throw new Error("Request timed out.");
+    });
+
+    // The plan turn landed; the digression waits for the next sync.
+    expect(result.messages).toBe(2);
+    expect(result.unassigned).toBe(2);
+    const view = buildThreadViews(db, OWNER, SESSION);
+    expect(view.threads).toHaveLength(1);
+    expect(view.threads[0]).toMatchObject({ branch: "plan", planNodeId: nodeId });
   });
 });
 
@@ -370,13 +430,15 @@ describe("the observation log", () => {
         JSON.stringify({ decisions: [{ thread: "new", branch: "other", title: "闲聊" }] })
     );
     let text = readFileSync(logFile(), "utf8");
-    expect(text).toContain("工具调用优先");
+    expect(text).toContain("工具调用直接定位");
     expect(text).toContain("归入计划 1「第一章」");
+    expect(text).toContain("模型调用：跳过");
 
     userMessage("再聊聊");
     assistantMessage("好");
-    await expect(syncThreads(db, SESSION, async () => "not json")).rejects.toBeTruthy();
+    await syncThreads(db, SESSION, async () => "not json");
     text = readFileSync(logFile(), "utf8");
+    expect(text).toContain("模型判定失败");
     expect(text).toContain("模型返回无法解析");
     expect(text).toContain("保持未分类");
   });

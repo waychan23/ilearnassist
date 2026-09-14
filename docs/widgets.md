@@ -212,13 +212,20 @@ not the plan/quiz tool shape. The mechanics, and why:
   open — join one in-flight `Map<sessionId, Promise>`. The write re-reads what is still
   unassigned inside one transaction, so the map is an optimisation, not the correctness
   argument.
-- **Failure means "leave it unassigned".** No rows are written for a malformed answer
-  (including the exact-count mismatch), and the next turn or a panel sync retries — so
-  backfill and "keep up" are the same idempotent code path, and one unit is at most 8 turns
-  (one model call). The POST route swallows classifier errors for the same reason.
-- **Deterministic precedence beats the model.** A turn whose own `ila_update_plan_progress`
-  call opened node N belongs to N whatever the classifier said — read out of the *turn's*
-  tool calls, not the plan's current status, which would be a lie during backfill.
+- **The call streams, with a 60s backstop.** Unlike the titler, the classifier opens a
+  streamed connection: a reasoning model thinks long before its answer, and a non-streaming
+  20s call aborted slow-but-healthy responses (the log showed successes at 14–18s before a
+  provider slowdown made every call time out). Reasoning chunks keep the request alive.
+- **Deterministic turns skip the model entirely.** A turn whose own `ila_update_plan_progress`
+  call opened node N belongs to N — read out of the *turn's* tool calls, not the plan's
+  current status, which would be a lie during backfill. Only ambiguous turns (background,
+  digressions) are sent; a five-turn backfill that made the model think for 109s and emit
+  nothing was the reason for both this and the 5-turn/350-char chunk cap.
+- **Failure means "leave the ambiguous turns unassigned".** A failed/empty/unusable answer
+  blocks just the model turns — deterministic turns in the same chunk still land — and the
+  next turn or a panel sync retries, so backfill and "keep up" are one idempotent path and
+  one model hiccup never stalls the whole backlog. One unit is at most 5 turns (one model
+  call); the POST route swallows classifier errors for the same reason.
 - **The two branch headings are not rows.** `计划` / `其他` carry translated labels and are
   rendered client-side (`apps/web/src/utils/threadTree.ts` nests the plan branch by the
   *live* plan tree), so a stored label cannot freeze in the conversation's language. Real
