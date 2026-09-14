@@ -368,6 +368,8 @@ const en: typeof MessageSchema = {
 
     /* ------------------------------ quiz widget panel ------------------------------ */
     empty: "No quiz questions yet",
+    /** The other nothing: questions exist, but the status filter is hiding all of them. */
+    noMatch: "No questions match this filter",
     viewList: "List",
     viewTree: "By chapter",
     filterAll: "All",
