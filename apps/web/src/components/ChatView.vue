@@ -327,7 +327,14 @@ watch(
             <Icon name="plus" /> {{ t("chat.startAction") }}
           </button>
         </div>
-        <MessageItem v-for="m in store.messages" :key="m.id" :message="m" />
+        <!-- `isLast` is what puts the tail actions (delete, regenerate) on one message and
+             nobody else; the streaming bubble is not in the array, so it is never last. -->
+        <MessageItem
+          v-for="(m, i) in store.messages"
+          :key="m.id"
+          :message="m"
+          :is-last="i === store.messages.length - 1"
+        />
         <MessageItem v-if="store.streaming.active" :streaming="store.streaming" />
       </div>
       <MessageMinimapRail

@@ -381,13 +381,43 @@ Fuller map in `docs/reference.md`.
     once. Only the extracted *text* stays a file. `attachments.ts` has no root constant: the
     tree belongs to a user under a data directory the process chose at launch, so every
     function takes the layout — which is also what keeps any data path out of import time.
-- **A source's bytes outlive the message that referenced them, and deleting is two different
-  acts.** `DELETE /api/sessions/:id` removes the conversation's *references* — the links
-  cascade with the row — and leaves the files alone, because another conversation may be
-  reading them. `DELETE /api/sources/:id` is the one that means "delete this file": it removes
-  the bytes, the extracted text and every reference. So the deletion matrix is asymmetric on
-  purpose, and `DocumentService.cancelSource` is per *source* rather than per session for the
-  same reason — cancelling by session would abort a parse another conversation is waiting on.
+- **Every application entity is soft-deleted, and `deleted_at` is the whole of it.** Workspaces,
+  sources, copilots, sessions, messages, providers, models and document parsers each carry a
+  nullable `deleted_at`, added by `ensureColumn` (`CREATE TABLE IF NOT EXISTS` skips a table that
+  is already there, so the DDL alone would only reach new installs). Set means gone: **every read,
+  join and count filters `IS NULL`** — that is the rule, and a SELECT added without it is the one
+  way this breaks. Relations are never dismantled: the cascade that used to clean up no longer
+  fires, so a deleted parent's children stay and are hidden by filtering the parent
+  (`sessions`/`messages` reach their owner through `workspaces`, which is why filtering one
+  workspace hides a whole tree), quiz and plan rows keep their `tool_call_id` anchors, and
+  `softDeleteProvider` marks its models in the same transaction because nothing else will.
+  **On-disk bytes are kept too** — workspace and session directories, a source's raw and parsed
+  files — so a delete costs no disk and a future restore has something to restore. Two hard
+  `DELETE`s survive on purpose: `pruneAuthTokens`' housekeeping, and one-time migrations (the
+  `DELETE FROM copilots` that drops rows written before ownership existed). The agent's
+  `delete_file` tool is *not* an application deletion — it is a real filesystem operation inside
+  the workspace sandbox, and it stays one. A source is the one entity with a rule of its own:
+  `UNIQUE (user_id, sha256)` means identical bytes can never be two rows, so re-uploading a
+  deleted file *revives* that row (`findDeletedSourceByHash` + `reviveSourceForUser`) rather than
+  inserting beside it — and because its links survived, the file comes back everywhere it was
+  used. `DocumentService.cancelSource` is per *source* rather than per session for the older
+  reason: cancelling by session would abort a parse another conversation is waiting on.
+- **A message is deleted from the tail only, and deleting one is not the same as regenerating
+  it.** `DELETE /api/sessions/:id/messages/:messageId` refuses anything but the conversation's
+  last live message (`MESSAGE_NOT_LAST`), and `POST /api/sessions/:id/regenerate` peels the last
+  assistant reply and runs the turn again. Both read the live tail and write inside **one
+  transaction**: two tabs see the same "last", and without it both would pass the check and both
+  would write. Regenerate is the `/answers` shape rather than `/chat`'s — the user message is
+  already persisted, so history is read *after* the peel and `userMessage: null` is what keeps it
+  from arriving twice, with its attachments rebuilt from the persisted row by
+  `buildHistoryMessages` rather than re-sent by the client. It emits `message_removed` right after
+  `meta`, because the server has already dropped the row by then and a client that waited for
+  `message_done` would render the old reply and the new one together for the whole turn. The
+  filter is load bearing in two places at once: `stmtListMessages` hides a deleted message from
+  the conversation *and* from the model's context, because that one statement is also what
+  `listMessagesOf` — and therefore `findAwaitingToolCall` and `skipAwaitingToolCalls` — reads.
+  Both routes refuse while a turn is streaming (`TURN_IN_PROGRESS`); `/chat` deliberately has no
+  such guard, which is a pre-existing hole and not a pattern to copy.
 - **A message's attachment is a snapshot, and its two halves come from different sides.** The
   **name** is the client's, because it is the one that message used — a shared source can only
   remember the first name it ever saw. The **parse state** is the server's, re-read from the

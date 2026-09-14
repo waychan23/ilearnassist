@@ -149,6 +149,7 @@ describe("quiz over the wire", () => {
     expect(res.statusCode).toBe(200);
     expect(eventTypes(res.body)).toEqual([
       "meta",
+      "message_saved",
       "text",
       "tool_start",
       "usage",

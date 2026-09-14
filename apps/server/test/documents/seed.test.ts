@@ -64,8 +64,8 @@ describe("seedDocumentParsersFromConfig", () => {
   it("does not resurrect parsers the user deleted", () => {
     // The whole reason for a seeded-marker setting rather than an emptiness check.
     seedDocumentParsersFromConfig(db, seed);
-    db.deleteDocumentParser("docling");
-    db.deleteDocumentParser("mineru");
+    db.softDeleteDocumentParser("docling");
+    db.softDeleteDocumentParser("mineru");
     expect(db.listDocumentParsers()).toEqual([]);
 
     seedDocumentParsersFromConfig(db, seed);

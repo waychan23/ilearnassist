@@ -126,13 +126,38 @@ describe("workspaces", () => {
     expect((await inject({ method: "DELETE", url: "/api/workspaces/nope" })).statusCode).toBe(404);
   });
 
-  it("removes the directory when the workspace is deleted", async () => {
+  it("keeps the directory, and the rows under it, when the workspace is deleted", async () => {
+    // The delete hides the workspace; nothing on disk or in the tables is dismantled. That is
+    // what would make a restore possible, and it is also why a re-created name cannot land on
+    // the same path — `uniqueSlug` sees the directory and mints the next one.
     const workspace = await newWorkspace(env, "Disposable");
     writeFileSync(join(workspace.dirPath, "note.txt"), "x");
+    const session = await newSession(env, workspace.id);
 
     const res = await inject({ method: "DELETE", url: `/api/workspaces/${workspace.id}` });
     expect(res.statusCode).toBe(200);
-    expect(existsSync(workspace.dirPath)).toBe(false);
+    expect(existsSync(join(workspace.dirPath, "note.txt"))).toBe(true);
+
+    const listed = await inject({ method: "GET", url: "/api/workspaces" });
+    expect(listed.json().map((w: { id: string }) => w.id)).not.toContain(workspace.id);
+    const gone = await inject({ method: "GET", url: `/api/workspaces/${workspace.id}` });
+    expect(gone.statusCode).toBe(404);
+    // The conversation went with it, without its row being touched.
+    const sessions = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/sessions`,
+    });
+    expect(sessions.statusCode).toBe(404);
+    expect(
+      env.server.db.raw
+        .prepare("SELECT deleted_at FROM sessions WHERE id = ?")
+        .get(session.id)
+    ).toMatchObject({ deleted_at: null });
+
+    // A second workspace with the same name gets the next free directory rather than the
+    // deleted one's.
+    const again = await newWorkspace(env, "Disposable");
+    expect(again.dirPath).not.toBe(workspace.dirPath);
   });
 
   /**
@@ -934,7 +959,11 @@ describe("sources", () => {
     expect(theirs).toEqual([]);
   });
 
-  it("deletes a file for good, everywhere it is used", async () => {
+  it("hides a deleted file everywhere, and revives it on re-upload", async () => {
+    // The soft delete's one piece of real policy: `UNIQUE (user_id, sha256)` means the same
+    // bytes cannot become a second row, so a re-upload has to bring *this* row back — with its
+    // bytes, its parse state and its links, which is what makes it the same file rather than a
+    // lookalike that happens to have the same contents.
     const attachment = await uploadAttachment(env, session.id, {
       name: "doomed.txt",
       mimeType: "text/plain",
@@ -944,11 +973,26 @@ describe("sources", () => {
     const res = await inject({ method: "DELETE", url: `/api/sources/${attachment.id}` });
     expect(res.statusCode).toBe(200);
 
-    // The bytes go, the link goes, and the download stops answering.
-    expect(existsSync(rawPathOf(attachment))).toBe(false);
+    // Hidden from every reader, and the bytes stay.
+    expect(existsSync(rawPathOf(attachment))).toBe(true);
     expect(
       (await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })).json<unknown[]>()
     ).toEqual([]);
+    const all = (await inject({ method: "GET", url: "/api/sources" })).json<{ id: string }[]>();
+    expect(all.map((s) => s.id)).not.toContain(attachment.id);
     expect((await inject({ method: "GET", url: `/api/sources/${attachment.id}/raw` })).statusCode).toBe(404);
+
+    const revived = await uploadAttachment(env, session.id, {
+      name: "doomed.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("bye"),
+    });
+    expect(revived.id).toBe(attachment.id);
+    expect(
+      (await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })).json<
+        { id: string }[]
+      >()
+    ).toMatchObject([{ id: attachment.id }]);
+    expect((await inject({ method: "GET", url: `/api/sources/${attachment.id}/raw` })).statusCode).toBe(200);
   });
 });

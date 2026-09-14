@@ -97,7 +97,17 @@ describe("POST /api/sessions/:id/chat", () => {
     // Framing: meta first, done last, and the answer in between.
     expect(events[0]).toEqual({ type: "meta", sessionId: session.id });
     expect(events.at(-1)).toEqual({ type: "done" });
-    expect(eventTypes(res.body)).toEqual(["meta", "text", "usage", "message_done", "title", "done"]);
+    expect(eventTypes(res.body)).toEqual([
+      "meta",
+      // The persisted row for the user's own message: the client has been drawing that
+      // bubble optimistically and needs the server's id to be able to address it.
+      "message_saved",
+      "text",
+      "usage",
+      "message_done",
+      "title",
+      "done",
+    ]);
 
     const done = events.find((e) => e.type === "message_done") as { message: Message };
     expect(done.message).toMatchObject({ role: "assistant", content: "Hello from the model" });
@@ -133,6 +143,7 @@ describe("POST /api/sessions/:id/chat", () => {
 
     expect(events.map((e) => e.type)).toEqual([
       "meta",
+      "message_saved",
       "text",
       "tool_start",
       "tool_end",

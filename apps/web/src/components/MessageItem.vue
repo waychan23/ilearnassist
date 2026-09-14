@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { isInteractiveTool, type Message, type ToolCall } from "../api/types";
+import { confirm } from "../composables/confirm";
 import { renderMarkdown } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
 import ToolCallCard from "./ToolCallCard.vue";
@@ -23,6 +24,14 @@ interface StreamingState {
 const props = defineProps<{
   message?: Message;
   streaming?: StreamingState;
+  /**
+   * This is the conversation's last surviving message.
+   *
+   * Both tail actions hang off it, and it is passed in rather than derived here because the
+   * component is also rendered for the transient streaming turn, which is in no array to be
+   * the last of. `ChatView` is the one place that knows the order.
+   */
+  isLast?: boolean;
 }>();
 
 const { t } = useI18n();
@@ -121,6 +130,62 @@ async function copyMessage() {
   }
 }
 
+/**
+ * Whether this reply is one the model can be asked to write again.
+ *
+ * A reply still waiting on an answer is not: the question card below it owns that state, and
+ * regenerating would discard the very question the user is in the middle of answering. The
+ * server refuses the same case, so this is the button agreeing with the route.
+ */
+const awaitingAnswer = computed(() =>
+  (props.message?.toolCalls ?? []).some((tc) => isInteractiveTool(tc.name) && tc.status === "awaiting")
+);
+
+const canRegenerate = computed(
+  () =>
+    !!props.message &&
+    props.isLast === true &&
+    props.message.role === "assistant" &&
+    !props.streaming &&
+    !store.streaming.active &&
+    !awaitingAnswer.value
+);
+
+/**
+ * Whether the delete control belongs on this message.
+ *
+ * Both roles, last message only — deleting the tail and then the tail that emerges is the one
+ * deletion that cannot leave a reply hanging over a question that is gone. A middle message
+ * would be exactly that, so nothing is offered there rather than offered and refused.
+ */
+const canDelete = computed(
+  () => !!props.message && props.isLast === true && !props.streaming && !store.streaming.active
+);
+
+async function deleteMessage(): Promise<void> {
+  const message = props.message;
+  if (!message) return;
+  const ok = await confirm({
+    title: t("message.delete.title"),
+    message: t("message.delete.message"),
+    detail: t("message.delete.detail"),
+    confirmText: t("message.delete.action"),
+    danger: true,
+  });
+  if (ok) await store.deleteMessage(message.id);
+}
+
+async function regenerate(): Promise<void> {
+  const ok = await confirm({
+    title: t("message.regenerate.title"),
+    message: t("message.regenerate.message"),
+    detail: t("message.regenerate.detail"),
+    confirmText: t("message.regenerate.action"),
+    danger: true,
+  });
+  if (ok) await store.regenerateLastMessage();
+}
+
 const usage = computed(() => props.message?.usage ?? null);
 const usageText = computed(() => {
   const u = usage.value;
@@ -148,6 +213,16 @@ const usageText = computed(() => {
       <div v-if="content && !props.streaming" class="actions">
         <button class="icon-btn act" :title="copied ? t('common.copied') : t('common.copy')" @click="copyMessage">
           <Icon :name="copied ? 'check' : 'copy'" /> {{ copied ? t("common.copied") : t("common.copy") }}
+        </button>
+        <button
+          v-if="canDelete"
+          class="icon-btn act danger"
+          data-testid="message-delete"
+          :title="t('message.delete.action')"
+          :aria-label="t('message.delete.action')"
+          @click="deleteMessage"
+        >
+          <Icon name="trash" />
         </button>
       </div>
     </div>
@@ -183,6 +258,26 @@ const usageText = computed(() => {
           @click="copyMessage"
         >
           <Icon :name="copied ? 'check' : 'copy'" /> {{ copied ? t("common.copied") : t("common.copy") }}
+        </button>
+        <button
+          v-if="canRegenerate"
+          class="icon-btn act"
+          data-testid="message-regenerate"
+          :title="t('message.regenerate.action')"
+          :aria-label="t('message.regenerate.action')"
+          @click="regenerate"
+        >
+          <Icon name="retry" />
+        </button>
+        <button
+          v-if="canDelete"
+          class="icon-btn act danger"
+          data-testid="message-delete"
+          :title="t('message.delete.action')"
+          :aria-label="t('message.delete.action')"
+          @click="deleteMessage"
+        >
+          <Icon name="trash" />
         </button>
         <span v-if="usageText" class="usage-line" :title="t('message.contextTokens', { count: formatTokens(usage?.contextTokens ?? 0) })">
           {{ usageText }}

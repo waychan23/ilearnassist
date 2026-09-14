@@ -513,6 +513,18 @@ export default {
     copyReply: "复制回复",
     stopped: "已停止",
     contextTokens: "本轮上下文 {count} tokens",
+    delete: {
+      title: "删除这条消息",
+      message: "确定删除这条消息吗？",
+      detail: "消息将从对话中移除，之后的对话不会再看到它。删除后，上一条消息会成为新的末尾。",
+      action: "删除",
+    },
+    regenerate: {
+      title: "重新生成回复",
+      message: "确定让模型重新回答这条消息吗？",
+      detail: "当前回复会被删除，模型将针对同一条消息重新作答。",
+      action: "重新生成",
+    },
     usage: {
       input: "输入",
       output: "输出",
@@ -929,6 +941,10 @@ export default {
     PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
     QUIZ_QUESTION_NOT_FOUND: "找不到这道测验题。",
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
+    MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
+    MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
+    NO_REPLY_TO_REGENERATE: "没有可以重新生成的回复（最后一条不是助手回复，或者它正在等待你的回答）。",
+    TURN_IN_PROGRESS: "上一条回复还在生成中，请先停止或等它结束。",
 
     INVALID_CREDENTIALS: "用户名或密码不正确。",
     ACCOUNT_DISABLED: "这个账号已被禁用，请联系管理员。",
