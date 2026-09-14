@@ -10,7 +10,9 @@ import {
   showAccount,
   showAdmin,
   showChat,
+  showWorkspaceHome,
 } from "../composables/ui";
+import { isUnauthenticatedError } from "../utils/apiError";
 import { formatRelativeTime } from "../utils/format";
 import type { Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
@@ -41,13 +43,17 @@ const showCreateWorkspace = ref(false);
  * rather than after a round trip; the sidebar renders its empty state and fills in. On a
  * failure the user is put back on this page, which is where the retry is — leaving them in
  * a chat pane belonging to a workspace that never loaded is the one outcome with no way out.
+ * The one failure that must *not* navigate is a dead session: the global 401 handler has
+ * already cleared the account and switched to the login screen, and showing the chat pane
+ * again here would just switch it back.
  */
 async function openWorkspace(workspace: Workspace): Promise<void> {
   showChat();
   try {
     await store.selectWorkspace(workspace.id);
   } catch (e) {
-    showChat();
+    if (isUnauthenticatedError(e)) return;
+    showWorkspaceHome();
     store.setError(e instanceof Error ? e.message : String(e));
   }
 }
