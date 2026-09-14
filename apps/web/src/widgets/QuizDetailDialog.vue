@@ -208,34 +208,42 @@ async function submitFollowup(): Promise<void> {
         <div class="modal-body">
           <p class="question-text" v-html="questionHtml" data-testid="quiz-detail-question" />
 
-          <p class="section-label">{{ t("quiz.detail.yourAnswer") }}</p>
-          <ul class="offered">
-            <li
-              v-for="(option, oi) in question.options"
-              :key="oi"
-              class="offered-option"
-              :class="{ chosen: isChosen(option.label) }"
-              :data-chosen="isChosen(option.label) ? 'true' : 'false'"
-            >
-              <span class="mark-slot">
-                <Icon v-if="isChosen(option.label)" name="check" class="chosen-mark" />
-              </span>
-              <span class="option-key">{{ letter(oi) }}</span>
-              <span class="offered-text">
-                {{ option.label }}
-                <span v-if="option.description" class="option-desc">{{ option.description }}</span>
-              </span>
-            </li>
-            <li v-if="chosenUnsure()" class="offered-option chosen" data-chosen="true">
-              <span class="mark-slot"><Icon name="check" class="chosen-mark" /></span>
-              <span class="offered-text">
-                {{ t("quiz.unsure") }}
-                <span v-if="question.answer?.unsureReason" class="option-desc">
-                  {{ question.answer.unsureReason }}
+          <!--
+            Read-back of the given answer only. An unanswered question (pending, or
+            make-up-eligible skipped/dismissed) shows nothing here: the option descriptions
+            explain the choices and would hand the reasoning out before the make-up form
+            below has been used — and the form lists the same choices itself.
+          -->
+          <template v-if="question.answer">
+            <p class="section-label">{{ t("quiz.detail.yourAnswer") }}</p>
+            <ul class="offered">
+              <li
+                v-for="(option, oi) in question.options"
+                :key="oi"
+                class="offered-option"
+                :class="{ chosen: isChosen(option.label) }"
+                :data-chosen="isChosen(option.label) ? 'true' : 'false'"
+              >
+                <span class="mark-slot">
+                  <Icon v-if="isChosen(option.label)" name="check" class="chosen-mark" />
                 </span>
-              </span>
-            </li>
-          </ul>
+                <span class="option-key">{{ letter(oi) }}</span>
+                <span class="offered-text">
+                  {{ option.label }}
+                  <span v-if="option.description" class="option-desc">{{ option.description }}</span>
+                </span>
+              </li>
+              <li v-if="chosenUnsure()" class="offered-option chosen" data-chosen="true">
+                <span class="mark-slot"><Icon name="check" class="chosen-mark" /></span>
+                <span class="offered-text">
+                  {{ t("quiz.unsure") }}
+                  <span v-if="question.answer?.unsureReason" class="option-desc">
+                    {{ question.answer.unsureReason }}
+                  </span>
+                </span>
+              </li>
+            </ul>
+          </template>
 
           <p v-if="question.answer?.notes" class="notes">
             <span class="field-label">{{ t("quiz.notesLabel") }}</span>

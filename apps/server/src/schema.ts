@@ -416,6 +416,14 @@ const DDL = `
     question TEXT NOT NULL,
     multi_select INTEGER NOT NULL DEFAULT 0,
     options_json TEXT NOT NULL,
+    --
+    -- The answer key, supplied by the model at question time and never shown to the
+    -- client: toView() omits both columns. NULL means the model gave no key; an answered
+    -- (or made-up) question is graded by a resumed tool result / system note that reads
+    -- them here. Added with ensureColumn for files written before the columns existed.
+    --
+    reference_answer_json TEXT,
+    explanation TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     user_answer_json TEXT,
     verdict TEXT,

@@ -23,6 +23,7 @@ import { WIDGET_MODULES, type WidgetContext } from "../widgets/registry";
 import type {
   AskUserAnswers,
   Attachment,
+  ChatInput,
   ChatStreamEvent,
   Copilot,
   CopilotDefaults,
@@ -1599,11 +1600,17 @@ export const useAppStore = defineStore("app", () => {
   /**
    * Send a plan-panel message through the ordinary chat flow — the "adjust plan" composer
    * and the "jump to chapter" action both reduce to a user message after a server write.
+   * `chatExtras` carries server-only routing on that same turn: the quiz make-up passes
+   * `makeupQuizId` so the grading key is attached to the system prompt, never to the
+   * visible message.
    */
-  async function sendPanelMessage(text: string): Promise<void> {
+  async function sendPanelMessage(
+    text: string,
+    chatExtras: Partial<ChatInput> = {}
+  ): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed || streaming.value.active) return;
-    await sendMessage(trimmed);
+    await sendMessage(trimmed, [], chatExtras);
   }
 
   /**
@@ -1643,11 +1650,17 @@ export const useAppStore = defineStore("app", () => {
       setError(e instanceof Error ? e.message : String(e));
       return false;
     }
-    void sendPanelMessage(message);
+    // Name the row: the server appends its (hidden) answer key to this turn's system
+    // prompt so the model grades against it instead of reconstructing one.
+    void sendPanelMessage(message, { makeupQuizId: question.id });
     return true;
   }
 
-  async function sendMessage(text: string, attachments: Attachment[] = []): Promise<void> {
+  async function sendMessage(
+    text: string,
+    attachments: Attachment[] = [],
+    chatExtras: Partial<ChatInput> = {}
+  ): Promise<void> {
     const content = text.trim();
     if ((!content && attachments.length === 0) || streaming.value.active) return;
 
@@ -1682,6 +1695,7 @@ export const useAppStore = defineStore("app", () => {
       streamChat(sessionId, {
         message: content,
         attachments,
+        ...chatExtras,
       }),
       sessionId
     );

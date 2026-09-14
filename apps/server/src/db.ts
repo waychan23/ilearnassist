@@ -217,6 +217,8 @@ interface QuizQuestionRow {
   question: string;
   multi_select: number;
   options_json: string;
+  reference_answer_json: string | null;
+  explanation: string | null;
   status: string;
   user_answer_json: string | null;
   verdict: string | null;
@@ -243,6 +245,10 @@ export interface QuizQuestionRecord {
   question: string;
   multiSelect: boolean;
   options: QuizOption[];
+  /** The model's answer-key labels; null when the question was posed without a key. */
+  referenceAnswer: string[] | null;
+  /** The model's answer analysis; never sent to the client. */
+  explanation: string | null;
   status: QuizQuestionStatus;
   answer: QuizAnswer | null;
   verdict: QuizVerdict | null;
@@ -265,6 +271,8 @@ export interface QuizQuestionInsert {
   question: string;
   multiSelect: boolean;
   options: QuizOption[];
+  referenceAnswer?: string[];
+  explanation?: string;
   createdAt: string;
 }
 
@@ -625,6 +633,10 @@ const mapQuizQuestion = (r: QuizQuestionRow): QuizQuestionRecord => ({
   question: r.question,
   multiSelect: r.multi_select !== 0,
   options: safeParseArray<QuizOption>(r.options_json),
+  referenceAnswer: r.reference_answer_json
+    ? safeParseArray<string>(r.reference_answer_json)
+    : null,
+  explanation: r.explanation,
   status: r.status as QuizQuestionStatus,
   answer: r.user_answer_json ? safeParseObject<QuizAnswer>(r.user_answer_json) : null,
   verdict: (r.verdict as QuizVerdict | null) ?? null,
@@ -1384,6 +1396,14 @@ export function createDb(dbPath: string): AppDb {
      *   is real; it is accepted here because the alternative was refusing the database outright.
      */
     if (copilotOwnerAdded) db.exec("DELETE FROM copilots");
+
+    /*
+     * Quiz questions gained the model's answer key. Both columns are nullable and stay
+     * server-side: nothing to backfill, and a row written before them simply has no key,
+     * which is the same quiz posed without one.
+     */
+    ensureColumn(db, "quiz_questions", "reference_answer_json", "reference_answer_json TEXT");
+    ensureColumn(db, "quiz_questions", "explanation", "explanation TEXT");
   }).immediate();
 
   const now = () => new Date().toISOString();
@@ -1811,9 +1831,10 @@ export function createDb(dbPath: string): AppDb {
   const stmtInsertQuizQuestion = db.prepare(
     `INSERT INTO quiz_questions
        (id, session_id, node_id, node_title, tool_call_id, qid, position, header, question,
-        multi_select, options_json, status, created_at)
+        multi_select, options_json, reference_answer_json, explanation, status, created_at)
      VALUES (@id, @sessionId, @nodeId, @nodeTitle, @toolCallId, @qid, @position, @header,
-             @question, @multiSelect, @optionsJson, 'pending', @createdAt)`
+             @question, @multiSelect, @optionsJson, @referenceAnswerJson, @explanation,
+             'pending', @createdAt)`
   );
   // The named calls are always server-bound UUIDs, so the placeholder list is built from
   // length rather than interpolated values.
@@ -2431,6 +2452,11 @@ export function createDb(dbPath: string): AppDb {
           question: row.question,
           multiSelect: row.multiSelect ? 1 : 0,
           optionsJson: JSON.stringify(row.options),
+          referenceAnswerJson:
+            row.referenceAnswer && row.referenceAnswer.length > 0
+              ? JSON.stringify(row.referenceAnswer)
+              : null,
+          explanation: row.explanation ?? null,
           createdAt: row.createdAt,
         });
       }

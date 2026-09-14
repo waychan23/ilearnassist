@@ -347,6 +347,166 @@ describe("the make-up POST", () => {
   });
 });
 
+describe("answer key", () => {
+  it("redacts the key even when the quiz call fails schema validation", async () => {
+    // A rejected call lands on the loop's ordinary tool-error path, so its raw args are
+    // what gets persisted — the redaction has to happen there, not only at suspension.
+    const session = await quizSession();
+    const SECRET = "永远不该出现在错误帧里的解析";
+    llm.setTurns([
+      {
+        toolCalls: [
+          {
+            id: "call_bad_quiz",
+            name: "ila_quiz",
+            args: {
+              questions: [
+                {
+                  header: "坏",
+                  question: "只有一个选项？",
+                  options: [{ label: "唯一" }],
+                  referenceAnswer: ["唯一"],
+                  explanation: SECRET,
+                },
+              ],
+            },
+          },
+        ],
+      },
+      { content: "出错了。" },
+    ]);
+    const { events } = await chat(session.id, "开始");
+
+    for (const event of events) {
+      if (event.type === "tool_start" || event.type === "tool_end" || event.type === "message_done") {
+        expect(JSON.stringify(event)).not.toContain(SECRET);
+      }
+    }
+    const messages = await env.inject({
+      method: "GET",
+      url: `/api/sessions/${session.id}/messages`,
+    });
+    expect(messages.body).not.toContain(SECRET);
+  });
+
+  const SECRET = "时间窗口按时间切分，状态后端根本不是窗口。";
+  const KEYED = [
+    {
+      header: "窗口",
+      question: "Flink 里按时间切分的窗口是哪一种？",
+      options: [{ label: "滚动窗口" }, { label: "状态后端" }],
+      referenceAnswer: ["滚动窗口"],
+      explanation: SECRET,
+    },
+  ];
+
+  /** The agent-loop requests only; the auto-titler also calls the model, non-streaming. */
+  function loopRequests(): Record<string, unknown>[] {
+    return llm.requests().filter((r) => r.stream === true);
+  }
+
+  it("hides the key from every client frame and the panel, then returns it in the grading tool result", async () => {
+    const session = await quizSession();
+    llm.setTurns([
+      { content: "先测一下。", toolCalls: quizScript({ questions: KEYED }) },
+      { content: "讲完了。" },
+    ]);
+    const { events } = await chat(session.id, "开始");
+
+    // The live tool_start carries the model's raw args and message_done carries the
+    // persisted call: neither may contain the key while the question is still answerable.
+    for (const event of events) {
+      if (event.type === "tool_start" || event.type === "message_done") {
+        expect(JSON.stringify(event)).not.toContain("referenceAnswer");
+        expect(JSON.stringify(event)).not.toContain(SECRET);
+      }
+    }
+    // The panel's own read is clean too.
+    expect(JSON.stringify(await quizRows(session.id))).not.toContain(SECRET);
+    // As is the persisted conversation a reload would fetch.
+    const messages = await env.inject({
+      method: "GET",
+      url: `/api/sessions/${session.id}/messages`,
+    });
+    expect(messages.body).not.toContain(SECRET);
+
+    const toolCallId = callIdFrom(events);
+    const { res } = await answer(session.id, {
+      toolCallId,
+      action: "submit",
+      answers: { Q1: { selected: ["滚动窗口"] } },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // The resumed grading turn gets the key back in its tool result — and the replayed
+    // assistant tool call still carries no key.
+    const sent = loopRequests().at(-1) as {
+      messages: { role: string; content: unknown; tool_calls?: { function: { arguments: string } }[] }[];
+    };
+    const replayed = sent.messages.find((m) => m.tool_calls !== undefined)!;
+    expect(replayed.tool_calls![0]!.function.arguments).not.toContain(SECRET);
+    const toolResult = String(sent.messages.find((m) => m.role === "tool")!.content);
+    expect(toolResult).toContain("reference_answer");
+    expect(toolResult).toContain("滚动窗口");
+    expect(toolResult).toContain(SECRET);
+  });
+
+  it("attaches the key only to the make-up turn that names the answered row", async () => {
+    const session = await quizSession();
+    llm.setTurns([{ toolCalls: quizScript({ questions: KEYED }) }, { content: "好。" }]);
+    await chat(session.id, "开始");
+    llm.reset();
+    llm.setTurns([{ content: "先讲别的。" }]);
+    await chat(session.id, "先讲别的");
+    const row = (await quizRows(session.id))[0]!;
+    expect(row.status).toBe("skipped");
+
+    // A make-up turn naming an unknown id is a 404; naming a still-skipped row is a 409.
+    const unknown = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: { message: "补答", makeupQuizId: "no-such-id" },
+    });
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json()).toMatchObject({ error: { code: "QUIZ_QUESTION_NOT_FOUND" } });
+
+    const notAnswered = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: { message: "补答", makeupQuizId: row.id },
+    });
+    expect(notAnswered.statusCode).toBe(409);
+    expect(notAnswered.json()).toMatchObject({ error: { code: "QUIZ_NOT_ANSWERABLE" } });
+
+    // The real make-up flow: POST the answer, then the ordinary chat turn naming the row.
+    const post = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/quizzes/${row.id}/answer`,
+      payload: { answer: { selected: ["滚动窗口"] } },
+    });
+    expect(post.statusCode).toBe(200);
+
+    llm.reset();
+    llm.setTurns([{ content: "补答判好了。" }]);
+    const makeup = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: { message: "补答 Q1：滚动窗口", makeupQuizId: row.id },
+    });
+    expect(makeup.statusCode).toBe(200);
+
+    const sent = loopRequests().at(-1) as {
+      messages: { role: string; content: unknown }[];
+    };
+    const systemPrompt = String(sent.messages[0]!.content);
+    expect(systemPrompt).toContain("make-up answer");
+    expect(systemPrompt).toContain("Reference answer: 滚动窗口");
+    expect(systemPrompt).toContain(SECRET);
+    // The visible user message stays free of the key.
+    expect(String(sent.messages.at(-1)!.content)).not.toContain(SECRET);
+  });
+});
+
 describe("plan node binding", () => {
   const PLAN_TREE = [{ title: "第一章", children: [{ title: "窗口模型" }] }];
 

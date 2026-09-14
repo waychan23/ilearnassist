@@ -91,6 +91,7 @@ import {
   makeupAnswer,
   recordQuizAnswers,
   registerQuizQuestions,
+  renderMakeupKeyNote,
   skipQuizQuestions,
 } from "./quizzes.js";
 import type { DocumentService } from "./documents/service.js";
@@ -2395,6 +2396,35 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       .map((a) => (readable.has(a.id) ? toAttachment(readable.get(a.id)!, a.name) : undefined))
       .filter((a): a is Attachment => a !== undefined);
 
+    /*
+     * The quiz widget's make-up flow follows this same /chat turn with the row it just
+     * answered. The answer key lives server-side and never enters the visible message:
+     * when the row exists, is owned here and is answered, its key (if one was given) is
+     * appended to THIS turn's system prompt only. A missing id or a non-answered row is a
+     * stale client rather than a turn to grade loosely.
+     */
+    let quizMakeupNote: string | undefined;
+    const makeupQuizId = typeof body?.makeupQuizId === "string" ? body.makeupQuizId : undefined;
+    if (makeupQuizId !== undefined) {
+      const makeupRow = db.getQuizQuestionForUser(userId, id, makeupQuizId);
+      if (!makeupRow) {
+        return reply
+          .code(404)
+          .send(apiError("QUIZ_QUESTION_NOT_FOUND", "quiz question not found"));
+      }
+      if (makeupRow.status !== "answered") {
+        return reply
+          .code(409)
+          .send(
+            apiError(
+              "QUIZ_NOT_ANSWERABLE",
+              "that question is not open to a make-up answer"
+            )
+          );
+      }
+      quizMakeupNote = renderMakeupKeyNote(makeupRow) ?? undefined;
+    }
+
     // Any question still waiting for an answer belongs to a turn the user has now moved
     // on from. Retiring it here — before the new user turn is written — is what makes the
     // card read "skipped" rather than staying live on a conversation that has moved past it.
@@ -2452,6 +2482,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         tools: ctx.tools,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
+        quizMakeupNote,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
@@ -2508,9 +2539,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // quiz) only renders it.
     const spec = SUSPENDING_TOOLS[pending.call.name];
     const submission: AnswerToolCallInput = { ...body, action, toolCallId };
-    const resolved = spec?.commit
-      ? spec.commit(pending.call, submission, { db, userId, session, workspace })
-      : spec?.resolve?.(pending.call, submission);
+    const commitCtx = { db, userId, session, workspace };
+    const resolved = spec?.resolve
+      ? spec.resolve(pending.call, submission, commitCtx)
+      : spec?.commit?.(pending.call, submission, commitCtx);
     if (!resolved) {
       return reply.code(409).send(
         apiError("QUESTION_NOT_PENDING", "that tool call does not hold a question set")

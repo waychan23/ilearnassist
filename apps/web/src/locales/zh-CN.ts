@@ -444,7 +444,6 @@ export default {
      * rather than for the control, because the box under it is where they say which.
      */
     unsure: "不确定",
-    unsureHint: "选它会清空上面的选择：这是第三种作答，不是其中一个选项。",
     unsureReasonLabel: "不确定的原因",
     unsureReasonPlaceholder: "可以说说为什么：没学过、记不清，或者觉得题目本身有问题…",
     notesLabel: "我的想法",

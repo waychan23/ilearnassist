@@ -12,6 +12,7 @@ import {
   QuizSuspension,
   buildQuizTool,
   readQuizQuestions,
+  redactQuizInput,
   renderQuizResult,
   validateQuizAnswers,
   type QuizRegisterInput,
@@ -205,6 +206,77 @@ describe("quiz schema", () => {
     const err = await suspend([question(), question({ header: "状态", multiSelect: true })]);
     expect(err.questions[0]!.multiSelect).toBeUndefined();
     expect(err.questions[1]!.multiSelect).toBe(true);
+  });
+});
+
+describe("quiz answer key", () => {
+  const keyed = () =>
+    question({
+      referenceAnswer: ["滑动"],
+      explanation: "滑动窗口才会按滑动步长触发。",
+    });
+
+  it("passes the key to registration, but strips it from the suspension the client sees", async () => {
+    const registerQuestions = vi.fn(register);
+    const built = buildQuizTool({
+      reserveQuestionNumbers: numbering(1),
+      registerQuestions,
+    });
+    const err = await built
+      .invoke({ questions: [keyed()] } as never)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(QuizSuspension);
+
+    // The row keeps the key — it is what grading reads after the answer comes back.
+    const item = registerQuestions.mock.calls[0]![0].items[0]!;
+    expect(item.referenceAnswer).toEqual(["滑动"]);
+    expect(item.explanation).toMatch(/滑动窗口/);
+
+    // Everything that re-renders the card is clean: the thrown questions and the recorded
+    // input both omit the fields, so the answer cannot leak before it is answered.
+    const suspension = err as QuizSuspension;
+    expect(suspension.questions[0]).not.toHaveProperty("referenceAnswer");
+    expect(suspension.questions[0]).not.toHaveProperty("explanation");
+    const recorded = JSON.stringify(suspension.recordedInput);
+    expect(recorded).not.toMatch(/referenceAnswer|滑动窗口才会/);
+  });
+
+  it("rejects a reference answer that names an option never offered", async () => {
+    // A key the answer could never match would grade every real choice wrong.
+    await expect(
+      ask([question({ referenceAnswer: ["不存在的选项"] })])
+    ).rejects.toThrow(/referenceAnswer must name options that were offered/);
+  });
+
+  it("accepts a question posed without any key", async () => {
+    const err = await suspend([question()]);
+    expect(err.questions[0]).not.toHaveProperty("referenceAnswer");
+  });
+
+  it("redacts the key from a raw tool call the client receives while it runs", () => {
+    const raw = JSON.stringify({
+      questions: [
+        {
+          header: "窗口",
+          question: "Flink 有哪几种窗口？",
+          options: [{ label: "滚动" }, { label: "滑动" }],
+          referenceAnswer: ["滑动"],
+          explanation: "secret analysis",
+        },
+      ],
+    });
+
+    const redacted = redactQuizInput(raw);
+    expect(redacted).not.toMatch(/referenceAnswer|secret analysis/);
+    // The rest of the call is untouched, so the card still renders the question.
+    expect(JSON.parse(redacted).questions[0].options).toHaveLength(2);
+  });
+
+  it("leaves non-quiz JSON and malformed input alone", () => {
+    expect(redactQuizInput("not json")).toBe("not json");
+    expect(redactQuizInput(JSON.stringify({ something: 1 }))).toBe(
+      JSON.stringify({ something: 1 })
+    );
   });
 });
 
@@ -484,6 +556,43 @@ describe("renderQuizResult", () => {
 
     expect(JSON.parse(rendered).user_answers).toHaveLength(1);
     expect(JSON.parse(rendered).user_answers[0].selected).toEqual([]);
+  });
+
+  it("hands the answer key back with a submitted answer, for grading", () => {
+    // The one moment the key is visible to the model: the resumed tool result. It comes
+    // from the quiz rows (keyed by Qn), not from the persisted call.
+    const keys = new Map([
+      ["Q1", { referenceAnswer: ["滚动", "滑动"], explanation: "窗口只有这两类" }],
+    ]);
+    const rendered = renderQuizResult(
+      questions,
+      { Q1: { selected: ["滚动"] } },
+      "submit",
+      keys
+    );
+
+    expect(JSON.parse(rendered).user_answers[0]).toMatchObject({
+      reference_answer: ["滚动", "滑动"],
+      explanation: "窗口只有这两类",
+    });
+  });
+
+  it("omits key fields that were not supplied, and never carries them on a cancel", () => {
+    const keys = new Map([["Q1", { referenceAnswer: null, explanation: null }]]);
+    const submitted = JSON.parse(
+      renderQuizResult(questions, { Q1: { selected: ["滚动"] } }, "submit", keys)
+    );
+    expect(submitted.user_answers[0]).not.toHaveProperty("reference_answer");
+    expect(submitted.user_answers[0]).not.toHaveProperty("explanation");
+
+    const fullKeys = new Map([
+      ["Q1", { referenceAnswer: ["滑动"], explanation: "analysis" }],
+    ]);
+    const cancelled = JSON.parse(
+      renderQuizResult(questions, {}, "cancel", fullKeys)
+    );
+    // A dismissed question was never answered, so its key stays hidden.
+    expect(JSON.stringify(cancelled)).not.toMatch(/reference_answer|analysis/);
   });
 
   it("tells the model plainly when the user dismissed the quiz", () => {
