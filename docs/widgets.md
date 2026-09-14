@@ -196,6 +196,54 @@ The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and
 See `apps/server/src/quizzes.ts` for the domain logic and `apps/web/src/utils/quizTree.ts`
 for the panel's pure tree/filter builder.
 
+### An out-of-band post-turn widget: the thread widget
+
+The thread widget (`id: "thread"`) brings **no `boundTools`**: it derives its data with a
+second, small out-of-band model call after every finished turn — the `agent/title.ts` shape,
+not the plan/quiz tool shape. The mechanics, and why:
+
+- **Turns, not messages, are classified.** A user message plus every assistant reply up to
+  the next user message is one unit, so an exchange can never be split across two threads.
+  The unit is the *oldest run of still-unassigned messages*; an assistant-first run (the
+  regenerate case) is its own turn.
+- **One shared promise per session, fire-and-forget.** `finishTurn` calls `syncThreads`
+  *without awaiting* (the auto-titler is awaited, the classifier deliberately is not —
+  `done` cannot wait on it), and concurrent triggers — the turn ending while the panel is
+  open — join one in-flight `Map<sessionId, Promise>`. The write re-reads what is still
+  unassigned inside one transaction, so the map is an optimisation, not the correctness
+  argument.
+- **Failure means "leave it unassigned".** No rows are written for a malformed answer
+  (including the exact-count mismatch), and the next turn or a panel sync retries — so
+  backfill and "keep up" are the same idempotent code path, and one unit is at most 8 turns
+  (one model call). The POST route swallows classifier errors for the same reason.
+- **Deterministic precedence beats the model.** A turn whose own `ila_update_plan_progress`
+  call opened node N belongs to N whatever the classifier said — read out of the *turn's*
+  tool calls, not the plan's current status, which would be a lie during backfill.
+- **The two branch headings are not rows.** `计划` / `其他` carry translated labels and are
+  rendered client-side (`apps/web/src/utils/threadTree.ts` nests the plan branch by the
+  *live* plan tree), so a stored label cannot freeze in the conversation's language. Real
+  threads live in `session_threads`; a message names one via `messages.thread_id`.
+- **Scroll is a second widget-bus event.** `chat.jump` targets a tool-call card;
+  `chat.jumpToMessage` targets an existing `[data-message-id]` through `scrollToMessage`.
+- The panel drives install-time backfill (loops `POST …/threads/sync` while `unassigned >
+  0`); the registry's `onInstall` only kicks the first chunk. The post-turn hook is what
+  keeps an installed conversation current whether or not the tab is open.
+- **Observation log.** `threadLog.ts` appends one human-readable block per real classification
+  to `<dataRoot>/logs/threads.log` (`threadLogPath`, configured only in `index.ts`, so the
+  test server writes nothing): the plan state, existing threads, the recent tail, each turn's
+  messages, the model's raw answer, the per-turn resolution (new/appended/continued, and the
+  tool-call precedence overriding the model), the assigned counts and elapsed ms — plus a
+  failure block when the call or its answer is unusable. No block is written for a no-op.
+
+### Widget groups
+
+`WIDGET_GROUPS` in the shared package is a **client-side** bundling only (the study pack is
+计划 + 测验 + 脉络): an id and its members, no table and no route. The install lists render a
+master row (`WidgetToggleList` → `@toggle-group`) that loops the group's members through the
+ordinary `setWidgetEnabled` writes, so each widget still owns its row, route and lifecycle
+hook. A member already in the target state is skipped, which is what keeps install-all from
+re-firing an installed widget's `onInstall`.
+
 ## What is deliberately not supported
 
 - **External / dynamic installation.** A widget is a component in the web bundle; there is nothing

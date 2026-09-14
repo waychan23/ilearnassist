@@ -481,6 +481,34 @@ const DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_quiz_session ON quiz_questions(session_id, position);
   CREATE INDEX IF NOT EXISTS idx_quiz_call ON quiz_questions(tool_call_id);
+
+  -- The thread widget's derived topic chains. Classification is an out-of-band model call
+  -- that runs after every turn (like the auto-titler), so these rows are derived data the
+  -- way plan_nodes and quiz_questions are: no deleted_at, owner-scoped through sessions in
+  -- the reads.
+  --
+  -- Only REAL threads are stored. The 计划 / 其他 headings are a rendering fact with
+  -- translated labels, so they are never rows (a stored label would freeze in the
+  -- conversation's language). A plan thread is one plan node, and the partial unique index
+  -- is the idempotency key that makes "one node, one thread" survive a re-sync.
+  --
+  -- A message names its thread through messages.thread_id (added by ensureColumn). Turns,
+  -- not messages, are classified: a user message and the assistant reply of one turn share
+  -- a thread, so an exchange can never be split across two.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS session_threads (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    branch TEXT NOT NULL,
+    title TEXT NOT NULL,
+    plan_node_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_threads_session ON session_threads(session_id, branch, created_at);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_plan_node
+    ON session_threads(session_id, plan_node_id) WHERE plan_node_id IS NOT NULL;
 `;
 
 /**

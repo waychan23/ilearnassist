@@ -789,6 +789,56 @@ describe("schema versioning", () => {
     }
   });
 
+  it("gains the session_threads table and messages.thread_id on an existing file", () => {
+    // Twin of the widget_instances test: derived data with its own table, so no
+    // SCHEMA_VERSION bump — an old file simply gains the table and the nullable column.
+    const path = join(root, "pre-threads.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    expect(tablesIn(path)).not.toContain("session_threads");
+
+    const opened = createDb(path);
+    try {
+      expect(tablesIn(path)).toContain("session_threads");
+      opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
+      opened.createWorkspace({
+        id: "w1",
+        userId: OWNER,
+        name: "W",
+        slug: "w",
+        dirPath: join(root, "w"),
+      });
+      opened.createSession({
+        id: "s1",
+        workspaceId: "w1",
+        copilotId: null,
+        copilotName: "",
+        systemPrompt: "",
+        allTools: true,
+        tools: [],
+        title: DEFAULT_SESSION_TITLE,
+      });
+      // Old messages read as "not classified yet" — the same state a fresh one is in.
+      const message = opened.createMessage({
+        id: "m1",
+        sessionId: "s1",
+        role: "user",
+        content: "hello",
+      });
+      expect(opened.countPendingThreadMessages("s1")).toBe(1);
+      const thread = opened.insertThread({
+        id: "t1",
+        sessionId: "s1",
+        branch: "other",
+        title: "问候",
+      });
+      expect(opened.assignMessagesToThread("s1", [message.id], thread.id)).toBe(1);
+      expect(opened.countPendingThreadMessages("s1")).toBe(0);
+      expect(opened.listThreadsForUser(OWNER, "s1")).toHaveLength(1);
+    } finally {
+      opened.raw.close();
+    }
+  });
+
   it("adds a nullable widgets column Copilots had no way to have", () => {
     /*
      * `ensureColumn` rather than a version bump, because this *adds* a column instead of changing

@@ -48,6 +48,16 @@ export function dataLayout(dataRoot: string): DataLayout {
   };
 }
 
+/**
+ * The thread widget's observation log: one append-only, human-readable file for watching how
+ * the classifier splits a conversation into topic chains. Process-level (not per user), and
+ * created lazily on the first write, so an installation that never installs the widget has no
+ * `logs/` directory at all.
+ */
+export function threadLogPath(dataRoot: string): string {
+  return join(dataRoot, "logs", "threads.log");
+}
+
 /** One user's tree. `userSlug` is `users.slug`, which a rename does not change. */
 export interface UserLayout {
   userRoot: string;

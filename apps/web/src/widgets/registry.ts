@@ -1,9 +1,11 @@
 import type { Component } from "vue";
 import type { WidgetId, WidgetScope } from "@ilearnassist/shared";
+import { api } from "../api/client";
 import WorkspaceStatsWidget from "./WorkspaceStatsWidget.vue";
 import SessionStatsWidget from "./SessionStatsWidget.vue";
 import PlanWidget from "./PlanWidget.vue";
 import QuizWidget from "./QuizWidget.vue";
+import ThreadWidget from "./ThreadWidget.vue";
 
 /**
  * What a widget is on the client: its component, its catalog strings, and its lifecycle.
@@ -56,6 +58,8 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
       return t("widgets.plan.name");
     case "quiz":
       return t("widgets.quiz.name");
+    case "thread":
+      return t("widgets.thread.name");
   }
 }
 
@@ -70,6 +74,32 @@ export function widgetHint(id: WidgetId, t: Translate): string {
       return t("widgets.plan.hint");
     case "quiz":
       return t("widgets.quiz.hint");
+    case "thread":
+      return t("widgets.thread.hint");
+  }
+}
+
+/**
+ * A widget group's display name, same literal-key-per-case discipline as `widgetLabel`:
+ * the id comes from shared `WIDGET_GROUPS`, but the words resolve here so the catalog
+ * guard's static scan sees the key.
+ */
+export function widgetGroupLabel(groupId: string, t: Translate): string {
+  switch (groupId) {
+    case "study":
+      return t("widgetGroups.study.name");
+    default:
+      return groupId;
+  }
+}
+
+/** One line naming what a group bundles, for the install list's group row. */
+export function widgetGroupHint(groupId: string, t: Translate): string {
+  switch (groupId) {
+    case "study":
+      return t("widgetGroups.study.hint");
+    default:
+      return "";
   }
 }
 
@@ -101,4 +131,14 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
   session_stats: { component: SessionStatsWidget },
   plan: { component: PlanWidget },
   quiz: { component: QuizWidget },
+  // Installing mid-conversation kicks the first backfill sync immediately; repeated
+  // installs simply re-run it (idempotent — nothing unassigned makes no model call). The
+  // panel itself loops the same route while an unclassified backlog remains.
+  thread: {
+    component: ThreadWidget,
+    onInstall: ({ scope, scopeId }) => {
+      if (scope !== "session") return;
+      void api.syncSessionThreads(scopeId).catch(() => {});
+    },
+  },
 };

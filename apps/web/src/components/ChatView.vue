@@ -118,19 +118,23 @@ function jumpToAnchor(anchor: MessageMinimapAnchor) {
 }
 
 // A plan node's start anchor jumps to the exact tool-call card (placed before the node's
-// teaching content), which is more precise than scrolling the whole message to the top.
-// The widget cannot reach this scroll container, which is the one cross-component event the
-// widget bus carries that is not about a turn.
+// teaching content), which is more precise than scrolling the whole message to the top; a
+// thread's heading jumps to its first message row. The widget cannot reach this scroll
+// container, which is the one cross-component event the widget bus carries that is not about
+// a turn.
 onMounted(() => {
   unsubscribeFromWidgets = subscribeWidgetEvents((event) => {
-    if (event.type !== "chat.jump") return;
-    const container = messagesEl.value;
-    if (!container) return;
-    // The attribute is on every tool-call card, persisted or currently streaming.
-    const target = container.querySelector<HTMLElement>(
-      `[data-tool-call-id="${event.toolCallId}"]`
-    );
-    if (target) scrollRectIntoView(container, target);
+    if (event.type === "chat.jump") {
+      const container = messagesEl.value;
+      if (!container) return;
+      // The attribute is on every tool-call card, persisted or currently streaming.
+      const target = container.querySelector<HTMLElement>(
+        `[data-tool-call-id="${event.toolCallId}"]`
+      );
+      if (target) scrollRectIntoView(container, target);
+    } else if (event.type === "chat.jumpToMessage") {
+      scrollToMessage(event.messageId);
+    }
   });
 });
 onBeforeUnmount(() => {

@@ -58,6 +58,19 @@ async function toggle(id: WidgetId, enabled: boolean): Promise<void> {
   }
 }
 
+async function toggleGroup(groupId: string, enabled: boolean): Promise<void> {
+  const workspaceId = uiState.workspaceSettingsId;
+  if (!workspaceId) return;
+  try {
+    await store.setWidgetGroupEnabled("workspace", workspaceId, groupId, enabled);
+    // Several writes landed; refetch rather than stitching every reply into the local list.
+    rows.value = await api.listWorkspaceWidgets(workspaceId);
+    error.value = null;
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 /** Whether the widget installed here reaches the conversation on screen right now. */
 function isActiveWorkspace(): boolean {
   return store.activeWorkspaceId === uiState.workspaceSettingsId;
@@ -101,6 +114,7 @@ function isActiveWorkspace(): boolean {
             :rows="rows"
             testid-prefix="workspace-widget"
             @toggle="toggle"
+            @toggle-group="toggleGroup"
           />
 
           <!--

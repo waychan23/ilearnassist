@@ -1,6 +1,8 @@
 import { assertHasAdministrator, NoAdministratorError } from "./adminCli.js";
 import { loadConfig, PROJECT_PATHS, resolveDataRoot } from "./config.js";
 import { buildServer } from "./server.js";
+import { threadLogPath } from "./paths.js";
+import { configureThreadLog } from "./threadLog.js";
 
 /**
  * Process entry point. All the wiring lives in `buildServer`; this module only resolves
@@ -12,6 +14,11 @@ async function main(): Promise<void> {
   // decision, not a config value, and a missing one should produce one actionable sentence
   // and a non-zero exit rather than a stack trace from a module that every test imports.
   const dataRoot = resolveDataRoot();
+
+  // The thread widget's observation log (<dataRoot>/logs/threads.log), created lazily on the
+  // first classification. Configured in the process entry only, so the test server (which
+  // calls buildServer directly) stays silent.
+  configureThreadLog(threadLogPath(dataRoot));
 
   const config = loadConfig();
   const { app, db } = await buildServer({

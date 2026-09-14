@@ -581,6 +581,21 @@ Fuller map in `docs/reference.md`.
   supplies a title via `PATCH /api/sessions/:id`, which flips it to `user`; the
   auto-titler must then never touch it. The titler runs on the first turn only, and
   every failure is swallowed — it must not be able to fail a chat turn.
+- **Thread classification is a best-effort post-turn side effect, never part of the turn.**
+  The thread widget (`apps/server/src/threads.ts` + `agent/threads.ts`) classifies *turns*
+  (a user message plus its assistant replies), not individual messages, after every
+  finished turn while the widget is installed. The call is fire-and-forget from
+  `finishTurn` (never awaited — `done` does not wait on it), joins one in-flight promise
+  per session, and a malformed answer writes nothing: messages stay unassigned and the
+  same idempotent sync retries them, which is also what makes an install-time backfill the
+  same code path as keeping up. Deterministic precedence: a turn whose own
+  `ila_update_plan_progress` call moved a node is that node's thread whatever the model
+  said — classification must read history from the turn's own tool calls, never from the
+  plan's current status. The `计划`/`其他` headings are rendered client-side with
+  translated labels, never stored. The classification process is observable through the
+  append-only `<dataRoot>/logs/threads.log` (`threadLog.ts`): one human-readable block per
+  real classification (context, turns, raw model answer, per-turn resolution, counts) and
+  failure blocks, configured only in the process entry point so tests never write it.
 - **History must stay user/assistant balanced.** On a chat error, a `⚠️ …`
   assistant message is persisted so the next turn's history is well-formed. An
   assistant message's `tool_calls` are only replayed into history when the

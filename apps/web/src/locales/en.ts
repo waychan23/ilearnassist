@@ -710,6 +710,32 @@ const en: typeof MessageSchema = {
       hint: "This conversation's quiz questions: chapter grouping, wrong-answer filter, make-up and follow-up.",
       noSession: "Open a conversation and its quiz questions appear here.",
     },
+    thread: {
+      name: "Threads",
+      hint: "Topic chains organised as the conversation happens: grouped by plan chapter versus background; click to locate the message.",
+      noSession: "Open a conversation and its topic threads are organised here.",
+    },
+  },
+
+  /** Client-side widget groups: a master row in the install list, no row of their own. */
+  widgetGroups: {
+    study: {
+      name: "Study pack",
+      hint: "Install or uninstall the Plan, Quiz and Threads widgets together.",
+    },
+  },
+
+  thread: {
+    planBranch: "Plan",
+    otherBranch: "Other (background)",
+    empty: "Topic threads are organised here as the conversation goes.",
+    syncing: "Organising threads…",
+    unassigned: "1 message left to organise | {count} messages left to organise",
+    toolCall: "(tool call)",
+    locate: "Go to the message where this thread began",
+    expand: "Expand",
+    collapse: "Collapse",
+    nodeMissing: "removed from the plan",
   },
 
   plan: {

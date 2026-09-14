@@ -55,10 +55,23 @@ export interface FakeTurn {
   holdMs?: number;
 }
 
+/**
+ * A body-keyed reply for non-streaming requests. First entry whose `includes` substring is
+ * found in the raw request body wins; without a hit the plain `title` reply is used. This is
+ * what lets one fake server answer two different out-of-band calls in one turn — the
+ * auto-titler and the thread classifier both POST non-streaming completions.
+ */
+export interface FakeNonStreamingMatch {
+  includes: string;
+  content: string;
+}
+
 export interface FakeLlmOptions {
   port?: number;
   /** Reply used for non-streaming requests (the auto-titler). */
   title?: string;
+  /** Body-keyed replies for non-streaming requests, checked before `title`. */
+  matches?: FakeNonStreamingMatch[];
 }
 
 export interface FakeLlm {
@@ -70,6 +83,8 @@ export interface FakeLlm {
   setTurns(turns: FakeTurn[]): void;
   /** Text returned for non-streaming requests (`generateTitle`). */
   setTitle(title: string): void;
+  /** Replace the body-keyed non-streaming replies. */
+  setMatches(matches: FakeNonStreamingMatch[]): void;
   /** Bodies of every `/chat/completions` request received, oldest first. */
   requests(): Record<string, unknown>[];
   /**
@@ -182,6 +197,7 @@ function sleep(ms: number): Promise<void> {
 export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLlm> {
   let queue: FakeTurn[] = [];
   let title = options.title ?? "Fake Conversation Title";
+  let matches: FakeNonStreamingMatch[] = options.matches ?? [];
   const seen: Record<string, unknown>[] = [];
   /** Streaming requests disconnected before their turn finished writing. */
   let aborted = 0;
@@ -194,9 +210,14 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
       // Control plane — lets the e2e drive a server it does not share a process with.
       if (url.startsWith("/__script")) {
         try {
-          const body = JSON.parse(raw || "{}") as { turns?: FakeTurn[]; title?: string };
+          const body = JSON.parse(raw || "{}") as {
+            turns?: FakeTurn[];
+            title?: string;
+            matches?: FakeNonStreamingMatch[];
+          };
           if (body.turns) queue = [...body.turns];
           if (body.title) title = body.title;
+          if (body.matches) matches = body.matches;
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: true }));
         } catch {
@@ -219,6 +240,7 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
         queue = [];
         seen.length = 0;
         aborted = 0;
+        matches = [];
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
         return;
@@ -243,8 +265,9 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
       seen.push(body);
 
       if (body.stream !== true) {
+        const hit = matches.find((m) => raw.includes(m.includes));
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(nonStreamingBody(title)));
+        res.end(JSON.stringify(nonStreamingBody(hit ? hit.content : title)));
         return;
       }
 
@@ -309,6 +332,9 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
     setTitle(next) {
       title = next;
     },
+    setMatches(next) {
+      matches = next;
+    },
     requests() {
       return seen;
     },
@@ -319,6 +345,7 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
       queue = [];
       seen.length = 0;
       aborted = 0;
+      matches = [];
     },
     async close() {
       await new Promise<void>((resolve, reject) => {

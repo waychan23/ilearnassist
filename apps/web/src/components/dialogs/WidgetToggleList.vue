@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { widgetsForScope, type WidgetId, type WidgetScope, type WidgetState } from "../../api/types";
-import { widgetHint, widgetLabel } from "../../widgets/registry";
+import {
+  widgetGroupsForScope,
+  widgetsForScope,
+  type WidgetId,
+  type WidgetScope,
+  type WidgetState,
+} from "../../api/types";
+import { widgetGroupHint, widgetGroupLabel, widgetHint, widgetLabel } from "../../widgets/registry";
 
 /**
- * A scope's widgets, with an install/uninstall toggle each.
+ * A scope's widgets, with an install/uninstall toggle each — plus, above its members, a
+ * row per client-side widget **group** (see shared `WIDGET_GROUPS`) whose master button
+ * installs or uninstalls every member in one click. A group has no row and no route: each
+ * member still toggles through the ordinary `toggle` emit, so the group button is sugar
+ * over the same writes.
  *
  * The control is a button whose **label is the action** and whose state rides on `aria-pressed`,
  * which is the shape `sidebar.collapse`/`expand` already uses: a button that described its state
@@ -28,7 +38,10 @@ const props = defineProps<{
   testidPrefix: string;
 }>();
 
-const emit = defineEmits<{ toggle: [id: WidgetId, enabled: boolean] }>();
+const emit = defineEmits<{
+  toggle: [id: WidgetId, enabled: boolean];
+  toggleGroup: [groupId: string, enabled: boolean];
+}>();
 
 const { t } = useI18n();
 
@@ -43,11 +56,71 @@ const entries = computed(() => {
     enabled: known.get(def.id) ?? false,
   }));
 });
+
+/** Groups whose members exist at this scope, with the members' rows and the master state. */
+const groups = computed(() => {
+  const stateOf = new Map(entries.value.map((e) => [e.id, e.enabled]));
+  return widgetGroupsForScope(props.scope).map((group) => {
+    const memberEntries = group.members.map((id) => ({
+      id,
+      enabled: stateOf.get(id) ?? false,
+    }));
+    return {
+      id: group.id,
+      entries: memberEntries,
+      allEnabled: memberEntries.every((e) => e.enabled),
+    };
+  });
+});
+
+/** Widgets that belong to no group at this scope, listed after the group blocks. */
+const restEntries = computed(() => {
+  const grouped = new Set(groups.value.flatMap((g) => g.entries.map((e) => e.id)));
+  return entries.value.filter((e) => !grouped.has(e.id));
+});
 </script>
 
 <template>
   <div class="widget-toggle-list">
-    <div v-for="entry in entries" :key="entry.id" class="list-row widget-toggle-row">
+    <template v-for="group in groups" :key="group.id">
+      <div class="list-row widget-group-row">
+        <div>
+          <div class="widget-name">{{ widgetGroupLabel(group.id, t) }}</div>
+          <div class="hint">{{ widgetGroupHint(group.id, t) }}</div>
+        </div>
+        <button
+          class="btn small"
+          :class="{ primary: !group.allEnabled }"
+          :aria-pressed="group.allEnabled"
+          :data-testid="`${testidPrefix}-group-${group.id}`"
+          @click="emit('toggleGroup', group.id, !group.allEnabled)"
+        >
+          {{ group.allEnabled ? t("widgets.uninstall") : t("widgets.install") }}
+        </button>
+      </div>
+
+      <div
+        v-for="entry in group.entries"
+        :key="entry.id"
+        class="list-row widget-toggle-row widget-group-member"
+      >
+        <div>
+          <div class="widget-name">{{ widgetLabel(entry.id, t) }}</div>
+          <div class="hint">{{ widgetHint(entry.id, t) }}</div>
+        </div>
+        <button
+          class="btn small"
+          :class="{ primary: !entry.enabled }"
+          :aria-pressed="entry.enabled"
+          :data-testid="`${testidPrefix}-toggle-${entry.id}`"
+          @click="emit('toggle', entry.id, !entry.enabled)"
+        >
+          {{ entry.enabled ? t("widgets.uninstall") : t("widgets.install") }}
+        </button>
+      </div>
+    </template>
+
+    <div v-for="entry in restEntries" :key="entry.id" class="list-row widget-toggle-row">
       <div>
         <div class="widget-name">{{ widgetLabel(entry.id, t) }}</div>
         <div class="hint">{{ widgetHint(entry.id, t) }}</div>

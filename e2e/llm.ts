@@ -9,10 +9,18 @@ import { expect, type APIRequestContext } from "@playwright/test";
 
 export const FAKE_LLM = `http://127.0.0.1:${process.env.ILA_FAKE_LLM_PORT ?? 3898}`;
 
-/** Discard anything a previous test scripted, and queue the turns for the next one. */
+/**
+ * Discard anything a previous test scripted, and queue the turns for the next one.
+ * `matches` body-keys non-streaming replies (the auto-titler and the thread classifier both
+ * POST those): first entry whose `includes` substring is in the request body wins.
+ */
 export async function scriptLlm(
   request: APIRequestContext,
-  body: { turns: unknown[]; title?: string },
+  body: {
+    turns: unknown[];
+    title?: string;
+    matches?: Array<{ includes: string; content: string }>;
+  },
 ): Promise<void> {
   await request.post(`${FAKE_LLM}/__reset`);
   const res = await request.post(`${FAKE_LLM}/__script`, { data: body });

@@ -404,7 +404,7 @@ export type WidgetScope = (typeof WIDGET_SCOPES)[number];
  * `apps/web/src/widgets/registry.ts`. The last of those is typed by this list, so forgetting
  * it is a `vue-tsc` error rather than a blank tab.
  */
-export const WIDGET_IDS = ["workspace_stats", "session_stats", "plan", "quiz"] as const;
+export const WIDGET_IDS = ["workspace_stats", "session_stats", "plan", "quiz", "thread"] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
 
@@ -432,7 +432,45 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   { id: "session_stats", scopes: ["session"] },
   { id: "plan", scopes: ["session"], boundTools: PLAN_TOOL_NAMES },
   { id: "quiz", scopes: ["session"], boundTools: QUIZ_TOOL_NAMES },
+  // The thread widget brings no tools: its classification is an out-of-band model call,
+  // like the auto-titler, not a tool the agent can call.
+  { id: "thread", scopes: ["session"] },
 ];
+
+/**
+ * Client-side widget **groups**: a purely presentational bundling offered by the install
+ * dialogs (e.g. the "study" group installs 计划 / 测验 / 脉络 together). A group has no row
+ * and no route — each member still writes its own `widget_instances` entry through the
+ * ordinary per-widget write, so ungrouping or installing one member alone stays ordinary.
+ * Ids and membership only; the words live in the web registry's label switch.
+ */
+export interface WidgetGroupDefinition {
+  id: string;
+  members: readonly WidgetId[];
+}
+
+export const WIDGET_GROUPS: readonly WidgetGroupDefinition[] = [
+  { id: "study", members: ["plan", "quiz", "thread"] },
+];
+
+export function widgetsInGroup(groupId: string): readonly WidgetId[] {
+  return WIDGET_GROUPS.find((g) => g.id === groupId)?.members ?? [];
+}
+
+/** A group as the install dialog for `scope` sees it: members that accept the scope only. */
+export interface ScopedWidgetGroup {
+  id: string;
+  members: WidgetId[];
+}
+
+/** Groups with at least one member installable at `scope`, in registry order. */
+export function widgetGroupsForScope(scope: WidgetScope): readonly ScopedWidgetGroup[] {
+  const known = new Set(widgetsForScope(scope).map((w) => w.id));
+  return WIDGET_GROUPS.map((g) => ({
+    id: g.id,
+    members: g.members.filter((m): m is WidgetId => known.has(m)),
+  })).filter((g) => g.members.length > 0);
+}
 
 /**
  * Every tool bound to at least one of `ids`, de-duplicated. The server reads this when
@@ -610,6 +648,50 @@ export interface PlanSnapshot {
 
 export interface GetPlanResponse {
   plan: PlanView | null;
+}
+
+/* ----------------------------------- threads ----------------------------------- */
+
+/**
+ * A thread's branch:
+ * - `plan` — work following the study plan; the thread is one plan node, nested under the
+ *   plan's own hierarchy by the client.
+ * - `other` — everything before the plan exists and every off-plan detour afterwards.
+ */
+export const THREAD_BRANCHES = ["plan", "other"] as const;
+export type ThreadBranch = (typeof THREAD_BRANCHES)[number];
+
+/** One message in a thread, as the panel renders it: a one-line preview, not the body. */
+export interface ThreadMessageView {
+  id: string;
+  role: Role;
+  /** One-line, ellipsised for the row. */
+  preview: string;
+  /** The full text, for the row tooltip. Empty for a tool-only assistant message. */
+  content: string;
+  createdAt: string;
+}
+
+/**
+ * One topic chain (a linked list of messages, oldest first). The two branch headings
+ * (计划 / 其他) are NOT threads: they are a rendering fact with translated labels, so they
+ * are never stored.
+ */
+export interface ThreadView {
+  id: string;
+  branch: ThreadBranch;
+  /** Model-given title for an `other` thread; a plan thread prefers the live node title. */
+  title: string;
+  /** The plan node this thread IS, when `branch === "plan"` (one node, one thread). */
+  planNodeId?: string;
+  messages: ThreadMessageView[];
+}
+
+/** `GET /api/sessions/:id/threads` and the sync route's response. */
+export interface GetSessionThreadsResponse {
+  threads: ThreadView[];
+  /** Messages the classifier has not reached yet; the panel shows this as backfill progress. */
+  unassigned: number;
 }
 
 /* ------------------------------------ stats ------------------------------------ */
