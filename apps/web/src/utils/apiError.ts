@@ -59,6 +59,20 @@ export function translateApiError(
   return fallback ?? "";
 }
 
+/**
+ * Whether a failure means "the session is gone" rather than "this action failed".
+ *
+ * Used by call sites that navigate in a `catch` (optimistically switching views first): after
+ * such an error the global handler has already cleared the account and shown the login
+ * screen, so navigating again would fight it — the exact bug where entering a workspace right
+ * after being kicked left the user on the chat pane. A 401 from `/auth/login` (wrong
+ * credentials) is also an `ApiError` with this status, which is why this is only truthful at
+ * call sites acting on app data, never on the sign-in form.
+ */
+export function isUnauthenticatedError(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
+
 /** The same lookup for a parse failure that arrived on an attachment rather than an error. */
 export function translateParseError(
   code: ParseErrorCode | undefined,

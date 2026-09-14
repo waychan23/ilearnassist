@@ -96,6 +96,50 @@ export function setUnauthenticatedHandler(handler: () => void): void {
   onUnauthenticated = handler;
 }
 
+/**
+ * Whether this tab's session has been declared over.
+ *
+ * Set the first time a 401 survives a refresh — a revoked pair, an expired refresh token —
+ * and kept until a new pair is stored (a sign-in, a successful refresh, a self-reset) or the
+ * stored pair is deliberately cleared. Two things depend on it:
+ *
+ * - The handler below fires **once**. A cold tab fires several requests together, so a kick
+ *   answers all of them with 401 at once; without this the login screen would be torn down
+ *   and rebuilt several times in a row, with one toast per request.
+ * - Every later request short-circuits (see `send`/`streamPost`) instead of hitting a server
+ *   that will only ever refuse it. After a kick the page keeps trying — widgets re-fetch,
+ *   dialogs load, turns send — and each real 401 is console noise that tells nobody anything
+ *   new. They reject with the same coded error the server would have sent, so callers' catches
+ *   behave identically.
+ */
+let sessionEnded = false;
+
+/** Declare the session over exactly once, however many parallel 401s arrive together. */
+function markSessionEnded(): void {
+  if (sessionEnded) return;
+  sessionEnded = true;
+  onUnauthenticated?.();
+}
+
+/** The rejection a request gets after the session has ended, identical in shape to the
+ * server's own 401 envelope so callers cannot tell the two apart. */
+function sessionEndedError(): ApiError {
+  return new ApiError(
+    "UNAUTHENTICATED",
+    translateApiError("UNAUTHENTICATED", undefined, undefined) || "Request failed (401)",
+    401
+  );
+}
+
+/**
+ * Requests still allowed once the session has ended.
+ *
+ * The sign-in call is the one that starts the next session; the refresh is what proved this
+ * one ended. Everything else rejects locally, including `/auth/me` — after an explicit
+ * session death nobody needs to ask the server who they are.
+ */
+const SESSION_RECOVERY_PATHS = new Set(["/auth/login", "/auth/refresh"]);
+
 /* --------------------------------- the token --------------------------------- */
 /*
  * Where the bearer token lives between requests.
@@ -139,6 +183,11 @@ let tokens: StoredTokens | null = readStored();
 
 export function setStoredTokens(next: AuthTokens | StoredTokens | null): void {
   tokens = next ? { accessToken: next.accessToken, refreshToken: next.refreshToken } : null;
+  // Any explicit write resets the verdict: a fresh pair is a new session, and a deliberate
+  // clear is a fresh start. Note the ordering this depends on: a refused refresh clears the
+  // pair *inside* `refreshTokens`, and the session-ended flag is set only afterwards by the
+  // caller, so the clear there cannot wipe the verdict of the very 401 being handled.
+  sessionEnded = false;
   try {
     if (tokens) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(tokens));
     else localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -228,6 +277,24 @@ const ANSWERS_WITH_401 = new Set([
 ]);
 
 /**
+ * What a 401 comes to after the one permitted refresh attempt.
+ *
+ * Shared by `send`, `streamPost` and `sourceImageUrl`, because the image fetch used to carry
+ * its own 401 handling — which was none: a kicked account opening an attached image got a
+ * silent failure and stayed on a page whose session was already over. `signalsEnd` is the
+ * `!ANSWERS_WITH_401.has(path)` question, asked by the caller because only it knows the path:
+ * a 401 on `/auth/me` is an answer, not an expiry, and must not tear the app down.
+ */
+async function recoverFrom401(
+  mayRefresh: boolean,
+  signalsEnd: boolean
+): Promise<RefreshOutcome> {
+  const outcome = mayRefresh ? await refreshTokens() : "refused";
+  if (outcome === "refused" && signalsEnd) markSessionEnded();
+  return outcome;
+}
+
+/**
  * The headers a request goes out with, with the bearer token on them if there is one.
  *
  * One function for both the JSON calls and the image fetch, because the two must not disagree
@@ -240,6 +307,11 @@ function authHeaders(extra?: HeadersInit): Headers {
 }
 
 async function send<T>(path: string, init: RequestInit | undefined, mayRefresh: boolean): Promise<T> {
+  // After the session has ended, nothing but a new sign-in may leave the tab — see
+  // `SESSION_RECOVERY_PATHS`. The rejection mirrors a real 401, so every catch site behaves
+  // the way it does against the server.
+  if (sessionEnded && !SESSION_RECOVERY_PATHS.has(path)) throw sessionEndedError();
+
   // Only send a JSON content-type when there is actually a body. Fastify (5.x)
   // rejects body-less requests that claim `application/json` with a 400
   // (FST_ERR_CTP_EMPTY_JSON_BODY), which broke DELETE calls.
@@ -264,12 +336,11 @@ async function send<T>(path: string, init: RequestInit | undefined, mayRefresh: 
     // One refresh, one retry. The retry is safe because a 401 comes from the gate, which
     // refuses *before* any handler runs — so nothing was persisted and nothing can be done
     // twice.
-    const outcome = mayRefresh ? await refreshTokens() : "refused";
+    const outcome = await recoverFrom401(mayRefresh, !ANSWERS_WITH_401.has(path));
     if (outcome === "refreshed") return send<T>(path, init, false);
-    // Only a *refused* refresh is an expired session. An unreachable one falls through to the
-    // error below with the pair still stored, so the user is told the request failed rather
-    // than that they were signed out.
-    if (outcome === "refused" && !ANSWERS_WITH_401.has(path)) onUnauthenticated?.();
+    // A refused refresh has declared the session over and moved the app to the login screen
+    // once. An unreachable one falls through to the error below with the pair still stored, so
+    // the user is told the request failed rather than that they were signed out.
   }
   if (!res.ok) throw toApiError(await errorBody(res), res.status);
   return res.json() as Promise<T>;
@@ -573,7 +644,16 @@ export const api = {
  * alone, so two conversations referencing the same file fetch the same bytes.
  */
 export async function sourceImageUrl(sourceId: string): Promise<string> {
-  const res = await fetch(`/api/sources/${sourceId}/raw`, { headers: authHeaders() });
+  // Same session-ended short-circuit and one refresh as `send`: an image attached in a
+  // conversation a kick has ended must take the reader to the login screen like any other
+  // request, rather than failing quietly behind it.
+  if (sessionEnded) throw sessionEndedError();
+  const fetchBytes = () => fetch(`/api/sources/${sourceId}/raw`, { headers: authHeaders() });
+  let res = await fetchBytes();
+  if (res.status === 401) {
+    const outcome = await recoverFrom401(true, true);
+    if (outcome === "refreshed") res = await fetchBytes();
+  }
   if (!res.ok) throw toApiError(await errorBody(res), res.status);
   return URL.createObjectURL(await res.blob());
 }
@@ -636,24 +716,25 @@ async function* streamPost(
   body: unknown,
   mayRefresh = true
 ): AsyncGenerator<ChatStreamEvent> {
+  // Same short-circuit as `send`: a turn sent after a kick fails locally, without paying for
+  // a request the gate will refuse and without the console errors that report nothing new.
+  if (sessionEnded) throw sessionEndedError();
   const res = await fetch(`/api${path}`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (res.status === 401) {
-    const outcome = mayRefresh ? await refreshTokens() : "refused";
+    const outcome = await recoverFrom401(mayRefresh, true);
     if (outcome === "refreshed") {
       yield* streamPost(path, body, false);
       return;
     }
-    const body_ = await errorBody(res);
     // Same rule as `send`, including the distinction: a turn that 401s and cannot be refreshed
     // means the session went away mid-conversation, and the user has to be sent back to the
     // login screen rather than left with an error about a message they cannot send. An
     // unreachable refresh is not that, and ends as a failed turn with the token still held.
-    if (outcome === "refused") onUnauthenticated?.();
-    throw toApiError(body_, res.status);
+    throw toApiError(await errorBody(res), res.status);
   }
   if (!res.ok) throw toApiError(await errorBody(res), res.status);
   // A 200 with no body breaks the SSE contract below rather than being a server-reported

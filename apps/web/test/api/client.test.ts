@@ -458,6 +458,125 @@ describe("the bearer token", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(handlers).not.toHaveBeenCalled();
   });
+
+  describe("a session that has ended", () => {
+    /*
+     * The kick: every token row is revoked server-side, so the next requests answer 401 and
+     * the refresh answers 401 too. A cold tab fires several requests at once, and the page
+     * keeps trying afterwards (widgets, dialogs, turns) — the whole bug was that the login
+     * screen went up and an optimistic catch navigated straight back to the chat pane.
+     */
+    function revokedFetcher() {
+      return vi.fn(async (url: unknown) =>
+        String(url) === "/api/auth/refresh"
+          ? jsonResponse(
+              { error: { code: "INVALID_REFRESH_TOKEN", message: "spent" } },
+              { status: 401 }
+            )
+          : jsonResponse(
+              { error: { code: "UNAUTHENTICATED", message: "no" } },
+              { status: 401 }
+            )
+      );
+    }
+
+    it("declares the session over once however many requests 401 together", async () => {
+      const onUnauthenticated = vi.fn();
+      setUnauthenticatedHandler(onUnauthenticated);
+      setStoredTokens({ accessToken: "stale", refreshToken: "spent" });
+      const fetchMock = revokedFetcher();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await Promise.allSettled([api.listWorkspaces(), api.listCopilots()]);
+
+      // Both data requests were already in flight, and they share the one refresh attempt.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // The handler — what takes the app to the login screen — runs exactly once.
+      expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops later requests at the door with the same coded 401", async () => {
+      const onUnauthenticated = vi.fn();
+      setUnauthenticatedHandler(onUnauthenticated);
+      setStoredTokens({ accessToken: "stale", refreshToken: "spent" });
+      const fetchMock = revokedFetcher();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(api.listWorkspaces()).rejects.toBeInstanceOf(ApiError);
+      const callsAfterRefusal = fetchMock.mock.calls.length;
+
+      // Every request the kicked page goes on to make — widgets re-fetching, dialogs loading,
+      // a turn being sent — rejects locally, as the same UNAUTHENTICATED 401 the server would
+      // answer, without touching the network again.
+      const later = await api.listSessions("w1").catch((e: unknown) => e);
+      expect(later).toBeInstanceOf(ApiError);
+      expect((later as ApiError).status).toBe(401);
+      expect((later as ApiError).code).toBe("UNAUTHENTICATED");
+      expect(fetchMock).toHaveBeenCalledTimes(callsAfterRefusal);
+      expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    });
+
+    it("still lets a sign-in through, and its pair clears the ended state", async () => {
+      setStoredTokens({ accessToken: "stale", refreshToken: "spent" });
+      const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+        const path = String(url);
+        if (path === "/api/auth/refresh") {
+          return jsonResponse(
+            { error: { code: "INVALID_REFRESH_TOKEN", message: "spent" } },
+            { status: 401 }
+          );
+        }
+        if (path === "/api/auth/login") {
+          return jsonResponse({
+            user: { id: "u1", username: "Ada" },
+            tokens: { accessToken: "new-at", refreshToken: "new-rt", expiresIn: 60 },
+          });
+        }
+        const header = init?.headers as Headers;
+        return header.get("Authorization") === "Bearer new-at"
+          ? jsonResponse([{ id: "w1" }])
+          : jsonResponse(
+              { error: { code: "UNAUTHENTICATED", message: "no" } },
+              { status: 401 }
+            );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(api.listWorkspaces()).rejects.toBeInstanceOf(ApiError);
+
+      // The next session's sign-in is the one request exempt from the short-circuit.
+      await expect(api.login("ada", "secret")).resolves.toMatchObject({
+        user: { username: "Ada" },
+      });
+      // And app data flows again under the new pair.
+      await expect(api.listWorkspaces()).resolves.toEqual([{ id: "w1" }]);
+      expect(localStorage.getItem("ila-auth")).toContain("new-at");
+    });
+
+    it("rejects a streamed turn locally instead of sending it to a dead session", async () => {
+      setStoredTokens({ accessToken: "stale", refreshToken: "spent" });
+      const fetchMock = revokedFetcher();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(api.listWorkspaces()).rejects.toBeInstanceOf(ApiError);
+      const callsAfterRefusal = fetchMock.mock.calls.length;
+
+      // The generator throws when iteration starts — a send after a kick is a failed turn
+      // with no request paid for, and the login screen is already up.
+      await expect(collect("s-dead")).rejects.toBeInstanceOf(ApiError);
+      expect(fetchMock).toHaveBeenCalledTimes(callsAfterRefusal);
+    });
+
+    it("takes an attached image through the same refresh and handler", async () => {
+      const onUnauthenticated = vi.fn();
+      setUnauthenticatedHandler(onUnauthenticated);
+      setStoredTokens({ accessToken: "stale", refreshToken: "spent" });
+      vi.stubGlobal("fetch", revokedFetcher());
+
+      await expect(sourceImageUrl("a1")).rejects.toBeInstanceOf(ApiError);
+      expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("fileToBase64", () => {
