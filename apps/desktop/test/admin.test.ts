@@ -177,34 +177,51 @@ describe("mayStartServer", () => {
 /**
  * The reset, which is the panel's way back into a locked account.
  *
- * A one-shot child now rather than a request to the running server, so the boundary asserted
- * here is the same one the two commands above have — argv, the envelope, both output streams —
- * with one claim of its own: it is asked with **no username**, because the panel does not know
- * any names and "the first enabled superadmin" is the account it means.
+ * A one-shot child rather than a request to the running server, so the boundary asserted here
+ * is the same one the two commands above have — argv, stdin, the envelope, both output streams
+ * — with two claims of its own: it is asked with **no username** (the panel does not know any
+ * names, and "the first enabled superadmin" is the account it means), and the operator's
+ * chosen password rides stdin and is not echoed back on the result.
  */
 describe("resetAdministratorPassword", () => {
-  it("asks for the reset and hands back the password exactly once", async () => {
-    fakeCli(
-      'process.stdout.write(JSON.stringify({ ok: true, command: "reset-admin", dataRoot: "/data", username: "Ada", password: "abcd-efgh-ijkl-mnop" }));'
-    );
-    const result = await resetAdministratorPassword(ctx());
+  it("hands the chosen password over stdin and reports only the username", async () => {
+    // Asserts the security-relevant half: the password is on stdin, not argv (which the
+    // process table would show), the child is told --password-stdin, and the success envelope
+    // carries no password back.
+    fakeCli(`
+      const args = process.argv.slice(2);
+      let input = "";
+      process.stdin.on("data", (c) => (input += c));
+      process.stdin.on("end", () => {
+        const wantsStdin = args.includes("--password-stdin");
+        const inArgv = args.some((a) => a.includes("secret"));
+        process.stdout.write(
+          JSON.stringify({
+            ok: wantsStdin && !inArgv && input === "secret\\n",
+            command: "reset-admin",
+            username: "Ada",
+          })
+        );
+      });
+    `);
+    const result = await resetAdministratorPassword(ctx(), { password: "secret" });
 
-    expect(result).toEqual({ ok: true, username: "Ada", password: "abcd-efgh-ijkl-mnop" });
+    expect(result).toEqual({ ok: true, username: "Ada" });
   });
 
   it("names the first enabled superadmin rather than a username of its own", async () => {
     // The panel has no name to send. If a username ever crept into these arguments it would be
     // one the panel invented, and a rename on the server would turn the button into a refusal.
     fakeCli(
-      'const ok = process.argv.slice(2).join(" ") === "reset-admin --json";' +
-        'process.stdout.write(JSON.stringify(ok ? { ok: true, command: "reset-admin", dataRoot: "/data", username: "Ada", password: "x" } : { ok: false, error: { code: "USAGE", message: "wrong argv" } }));'
+      'const ok = process.argv.slice(2).join(" ") === "reset-admin --json --password-stdin";' +
+        'process.stdout.write(JSON.stringify(ok ? { ok: true, command: "reset-admin", dataRoot: "/data", username: "Ada" } : { ok: false, error: { code: "USAGE", message: "wrong argv" } }));'
     );
-    expect((await resetAdministratorPassword(ctx())).ok).toBe(true);
+    expect((await resetAdministratorPassword(ctx(), { password: "secret" })).ok).toBe(true);
   });
 
   it("refuses with no data folder before spawning anything", async () => {
     // Nothing to write into, and no child worth starting.
-    const result = await resetAdministratorPassword(ctx({ dataDir: "" }));
+    const result = await resetAdministratorPassword(ctx({ dataDir: "" }), { password: "secret" });
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a fault");
@@ -217,7 +234,7 @@ describe("resetAdministratorPassword", () => {
     fakeCli(
       'process.stderr.write(JSON.stringify({ ok: false, error: { code: "ADMIN_NOT_FOUND", message: "nothing to reset" } })); process.exit(1);'
     );
-    const result = await resetAdministratorPassword(ctx());
+    const result = await resetAdministratorPassword(ctx(), { password: "secret" });
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a fault");
@@ -225,13 +242,12 @@ describe("resetAdministratorPassword", () => {
   });
 
   it("treats a reply that is not a reset as a bad response, not a success", async () => {
-    // `reset-admin` is the only command that produces this value, so a create envelope coming
-    // back means the bundle and this build disagree — and reading it as an empty password would
-    // be the worst possible way to find that out.
+    // `reset-admin` is the only command that produces this value, so a status envelope coming
+    // back means the bundle and this build disagree — the same guard the create wrapper has.
     fakeCli(
       'process.stdout.write(JSON.stringify({ ok: true, command: "status", hasAdmin: true, adminUsername: "Ada" }));'
     );
-    const result = await resetAdministratorPassword(ctx());
+    const result = await resetAdministratorPassword(ctx(), { password: "secret" });
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a fault");

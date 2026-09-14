@@ -238,9 +238,13 @@ test("an ordinary administrator runs the console but cannot touch the superadmin
   for (const action of ["toggle", "reset", "kick"]) {
     await expect(page.getByTestId(`admin-${action}-${SIGNED_IN_AS}`)).toBeDisabled();
   }
-  // ...and the role boxes on it too, which is how the row says *why* it is out of reach: the
-  // tier is visible rather than the row simply being inert.
-  await expect(page.getByTestId("admin-role-superadmin").first()).toBeDisabled();
+  // ...and the tier is stated rather than offered as a box: the superadmin role cannot be
+  // granted or taken away from a screen at all, so not even a disabled checkbox is drawn.
+  const superRow = page
+    .locator('[data-testid="admin-user"]')
+    .filter({ hasText: SIGNED_IN_AS });
+  await expect(superRow.getByTestId("admin-role-superadmin")).toBeVisible();
+  await expect(superRow.locator('input[type="checkbox"]')).toHaveCount(0);
 
   // An ordinary account is still theirs to run, so this is a tier rule and not a dead page.
   const row = page.locator('[data-testid="admin-user"][data-username="someone"]');
@@ -259,10 +263,12 @@ test("an ordinary administrator cannot appoint one, and the dialog says why", as
   await page.getByTestId("open-admin").click();
   await page.getByTestId("admin-new-user").click();
 
-  // Drawn but unticked and untickable, rather than hidden: the boxes are how somebody learns
-  // that appointing administrators is not theirs to do.
+  // Drawn but unticked and untickable, rather than hidden: the box is how somebody learns
+  // that appointing administrators is not theirs to do...
   await expect(page.getByTestId("admin-create-role-admin")).toBeDisabled();
-  await expect(page.getByTestId("admin-create-role-superadmin")).toBeDisabled();
+  // ...while the superadmin box does not exist for anyone: the role is made in the desktop
+  // control panel during setup and never assigned here.
+  await expect(page.getByTestId("admin-create-role-superadmin")).toHaveCount(0);
   await expect(page.getByTestId("admin-create-dialog")).toContainText("只有超级管理员");
 
   // And it does not merely hide the control: a request that asks anyway is refused whole, not
@@ -276,6 +282,48 @@ test("an ordinary administrator cannot appoint one, and the dialog says why", as
     data: { username: "usurper", roles: ["admin"] },
   });
   expect(refused.status()).toBe(403);
+});
+
+test("the superadmin role cannot be created or appointed from the console", async ({
+  page,
+  request,
+}) => {
+  // The UI half: the dialog offers only "administrator" and an ordinary account, and says why
+  // the missing one is missing.
+  await openConsole(page);
+  await page.getByTestId("admin-new-user").click();
+  await expect(page.getByTestId("admin-create-role-superadmin")).toHaveCount(0);
+  await expect(page.getByTestId("admin-create-role-admin")).toBeVisible();
+  await expect(page.getByTestId("admin-create-role-user")).toBeVisible();
+  await expect(page.getByTestId("admin-create-dialog")).toContainText("控制面板");
+
+  // The API half, which is the rule that actually matters. The browser is the bootstrap
+  // superadmin, and even it may neither create a second superadmin nor promote anybody to one.
+  const token = await page.evaluate(() => {
+    const raw = window.localStorage.getItem("ila-auth");
+    return raw ? (JSON.parse(raw) as { accessToken: string }).accessToken : "";
+  });
+  const auth = { headers: { Authorization: `Bearer ${token}` } };
+
+  const created = await request.post(
+    "/api/admin/users",
+    { ...auth, data: { username: "second-super", roles: ["superadmin"] } }
+  );
+  expect(created.status()).toBe(403);
+  expect((await created.json()).error.code).toBe("SUPERADMIN_NOT_GRANTABLE");
+
+  const ordinary = await request.post(
+    "/api/admin/users",
+    { ...auth, data: { username: "plain-account" } }
+  );
+  expect(ordinary.ok()).toBeTruthy();
+  const id = ((await ordinary.json()) as { user: { id: string } }).user.id;
+  const promoted = await request.patch(`/api/admin/users/${id}`, {
+    ...auth,
+    data: { roles: ["superadmin"] },
+  });
+  expect(promoted.status()).toBe(403);
+  expect((await promoted.json()).error.code).toBe("SUPERADMIN_NOT_GRANTABLE");
 });
 
 /**

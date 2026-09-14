@@ -176,14 +176,30 @@ describe("POST /api/admin/users", () => {
     ).not.toMatchObject({ password_hash: password });
   });
 
-  it("makes an administrator when asked", async () => {
+  it("makes an ordinary administrator when the superadmin asks", async () => {
+    env = await startTestServer();
+    const res = await env.inject({
+      method: "POST",
+      url: "/api/admin/users",
+      payload: { username: "Bob", roles: ["admin"] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<UserCredentials>().user.roles).toEqual(["admin"]);
+  });
+
+  it("never mints a superadmin through the console, even for a superadmin", async () => {
+    // The one superadmin is the account the desktop control panel bootstraps with the server
+    // stopped. Granting the role here would be the second mint path, so it does not exist —
+    // the box is absent from the dialog and a hand-written request gets the same refusal.
     env = await startTestServer();
     const res = await env.inject({
       method: "POST",
       url: "/api/admin/users",
       payload: { username: "Bob", roles: ["superadmin"] },
     });
-    expect(res.json<UserCredentials>().user.roles).toEqual(["superadmin"]);
+    expect(res.statusCode).toBe(403);
+    expect(res.json<Body>().error.code).toBe("SUPERADMIN_NOT_GRANTABLE");
+    expect(env.server.db.findUserByUsername("Bob")).toBeUndefined();
   });
 
   it("refuses a role this build does not know rather than dropping it", async () => {
@@ -274,13 +290,30 @@ describe("PATCH /api/admin/users/:id", () => {
     const res = await env.inject({
       method: "PATCH",
       url: `/api/admin/users/${bob.user.id}`,
-      payload: { roles: ["superadmin"] satisfies UserRole[] },
+      payload: { roles: ["admin"] satisfies UserRole[] },
     });
-    expect(res.json<AdminUser>().roles).toEqual(["superadmin"]);
+    expect(res.statusCode).toBe(200);
+    expect(res.json<AdminUser>().roles).toEqual(["admin"]);
     // The role is read per request rather than baked into the token, so it takes effect now.
     expect(
       (await bob.inject({ method: "GET", url: "/api/admin/users" })).statusCode
     ).toBe(200);
+  });
+
+  it("refuses to promote an account to superadmin, whoever is asking", async () => {
+    // There is exactly one superadmin, the control-panel bootstrap account. Promotion here
+    // would be a second mint path, so it is refused rather than silently downgraded.
+    env = await startTestServer();
+    const bob = await createAndSignIn(env, "Bob");
+
+    const res = await env.inject({
+      method: "PATCH",
+      url: `/api/admin/users/${bob.user.id}`,
+      payload: { roles: ["superadmin"] },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json<Body>().error.code).toBe("SUPERADMIN_NOT_GRANTABLE");
+    expect(env.server.db.getUser(bob.user.id)!.roles).toEqual(["user"]);
   });
 
   it("leaves fields the request does not mention alone", async () => {
@@ -291,7 +324,7 @@ describe("PATCH /api/admin/users/:id", () => {
     await env.inject({
       method: "PATCH",
       url: `/api/admin/users/${bob.user.id}`,
-      payload: { roles: ["superadmin"] },
+      payload: { roles: ["admin"] },
     });
 
     const res = await env.inject({
@@ -299,7 +332,7 @@ describe("PATCH /api/admin/users/:id", () => {
       url: `/api/admin/users/${bob.user.id}`,
       payload: { disabled: true },
     });
-    expect(res.json<AdminUser>().roles).toEqual(["superadmin"]);
+    expect(res.json<AdminUser>().roles).toEqual(["admin"]);
   });
 
   it("refuses an unknown account and an unknown role", async () => {
@@ -356,48 +389,39 @@ describe("PATCH /api/admin/users/:id", () => {
     }
   });
 
-  it("leaves at least one administrator, whichever way accounts are changed", async () => {
-    // The invariant, and the reason there is no separate "you may not remove the last
-    // administrator" rule to go with the self-guard: reaching this route at all means the
-    // caller is an enabled superadmin, so one administrator always survives whoever is
-    // changed. By induction the count cannot reach zero.
+  it("lets the superadmin demote an ordinary administrator, but never the bootstrap one", async () => {
+    // An installation has one superadmin and it is not editable through a screen. The
+    // superadmin may still take the ordinary tier back from an account it gave it to; the
+    // bootstrap account cannot demote *itself* (self-guard) and nobody else may touch its row
+    // (`manageRefusal`, pinned in the two-tier describe below).
     env = await startTestServer({ username: "Ada" });
-    const bob = await createAndSignIn(env, "Bob");
-    await env.inject({
+    const bob = await createAndSignIn(env, "Bob", ["admin"]);
+
+    const demoted = await env.inject({
       method: "PATCH",
       url: `/api/admin/users/${bob.user.id}`,
-      payload: { roles: ["superadmin"] },
-    });
-
-    // Bob may demote Ada — he is an administrator too, so the console stays reachable...
-    const demoted = await bob.inject({
-      method: "PATCH",
-      url: `/api/admin/users/${env.user.id}`,
       payload: { roles: ["user"] },
     });
     expect(demoted.statusCode).toBe(200);
+    expect(demoted.json<AdminUser>().roles).toEqual(["user"]);
 
-    // ...and that is exactly why he may not then demote himself.
-    const self = await bob.inject({
-      method: "PATCH",
-      url: `/api/admin/users/${bob.user.id}`,
-      payload: { roles: ["user"] },
-    });
-    expect(self.statusCode).toBe(400);
-    expect(self.json<Body>().error.code).toBe("CANNOT_MODIFY_SELF");
-    expect(
-      env.server.db.listUsers().filter((u) => !u.disabled && u.roles.includes("superadmin"))
-    ).toHaveLength(1);
+    // Still exactly one enabled superadmin, and it is the bootstrap account.
+    const superadmins = env.server.db
+      .listUsers()
+      .filter((u) => !u.disabled && u.roles.includes("superadmin"));
+    expect(superadmins).toHaveLength(1);
+    expect(superadmins[0]!.username).toBe("Ada");
   });
 
   it("allows a change that does not cost the account its own authority", async () => {
-    // The guard is about *losing* the role, not about touching the row: re-enabling yourself,
-    // or re-stating the roles you already hold, is an ordinary edit.
+    // The guard is about *losing* the role, not about touching the row: re-enabling yourself
+    // is an ordinary edit. Roles are omitted here because the superadmin role can no longer
+    // be restated through a write body.
     env = await startTestServer();
     const res = await env.inject({
       method: "PATCH",
       url: `/api/admin/users/${env.user.id}`,
-      payload: { disabled: false, roles: ["superadmin"] },
+      payload: { disabled: false },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json<AdminUser>().roles).toEqual(["superadmin"]);
@@ -616,23 +640,36 @@ describe("the two tiers of administrator", () => {
     expect((await bob.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
   });
 
-  it("refuses an ordinary administrator every action on an administrator's row", async () => {
+  it("refuses an ordinary administrator every action on another administrator's row", async () => {
     const { env: e, ada } = await tiers();
+    // A peer administrator: two ordinary admins may not manage each other either — the tier
+    // that appoints an administrator is the tier that undoes one.
+    const cara = await createAndSignIn(e, "Cara", ["admin"]);
 
-    // The superadmin who bootstrapped the installation.
-    for (const [method, url, payload] of [
-      ["PATCH", `/api/admin/users/${e.user.id}`, { disabled: true }],
-      ["PATCH", `/api/admin/users/${e.user.id}`, { roles: ["user"] }],
-      ["POST", `/api/admin/users/${e.user.id}/password`, {}],
-      ["POST", `/api/admin/users/${e.user.id}/revoke`, {}],
+    // Both the superadmin who bootstrapped the installation and the peer administrator.
+    for (const target of [
+      ["the bootstrap superadmin", e.user.id],
+      ["a peer administrator", cara.user.id],
     ] as const) {
-      const res = await ada.inject({ method, url, payload });
-      expect(res.statusCode, `${method} ${url}`).toBe(403);
-      expect(res.json<Body>().error.code, `${method} ${url}`).toBe("CANNOT_MODIFY_ADMIN");
+      for (const [method, url, payload] of [
+        ["PATCH", `/api/admin/users/${target[1]}`, { disabled: true }],
+        ["PATCH", `/api/admin/users/${target[1]}`, { roles: ["user"] }],
+        ["POST", `/api/admin/users/${target[1]}/password`, {}],
+        ["POST", `/api/admin/users/${target[1]}/revoke`, {}],
+      ] as const) {
+        const res = await ada.inject({ method, url, payload });
+        expect(res.statusCode, `${target[0]}: ${method} ${url}`).toBe(403);
+        expect(res.json<Body>().error.code, `${target[0]}: ${method} ${url}`).toBe(
+          "CANNOT_MODIFY_ADMIN"
+        );
+      }
     }
 
-    // And the row is untouched: still an enabled superadmin who can sign in.
+    // And the rows are untouched: still an enabled superadmin who can sign in...
     expect((await e.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(200);
+    // ...and the peer still holds the admin role.
+    expect(e.server.db.getUser(cara.user.id)!.disabled).toBe(false);
+    expect(e.server.db.getUser(cara.user.id)!.roles).toEqual(["admin"]);
   });
 
   it("refuses to let an ordinary administrator appoint one — including a peer", async () => {
@@ -665,9 +702,8 @@ describe("the two tiers of administrator", () => {
     expect(users.find((u) => u.username === "Cara")!.roles).toEqual(["user"]);
   });
 
-  it("lets a superadmin administer another administrator, and another superadmin", async () => {
+  it("lets a superadmin take an ordinary administrator's tier back as well as give it", async () => {
     const { env: e, ada } = await tiers();
-    const root = await createAndSignIn(e, "Root", ["superadmin"]);
 
     // Disable and kick an ordinary administrator.
     expect(
@@ -676,17 +712,20 @@ describe("the two tiers of administrator", () => {
     ).toBe(200);
     expect((await ada.inject({ method: "GET", url: "/api/auth/me" })).statusCode).toBe(401);
 
-    // And the second superadmin is reachable too — the refusal above is one tier's, not a rule
-    // about who may be edited at all. The caller keeps their own authority, so somebody always
-    // remains (see the self-guard).
-    const demoted = await e.inject({
+    // Re-enable as an ordinary account: the superadmin may demote an administrator down to a
+    // plain account. The bootstrap superadmin itself is never on the receiving end — there is
+    // no second superadmin to act, and self-demotion is the self-guard's refusal.
+    const restored = await e.inject({
       method: "PATCH",
-      url: `/api/admin/users/${root.user.id}`,
-      payload: { roles: ["user"] },
+      url: `/api/admin/users/${ada.user.id}`,
+      payload: { disabled: false, roles: ["user"] },
     });
-    expect(demoted.statusCode).toBe(200);
-    expect(demoted.json<AdminUser>().roles).toEqual(["user"]);
-    // Still one enabled superadmin: the account that made the request.
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json<AdminUser>().roles).toEqual(["user"]);
+    // Still exactly one superadmin: the account that made the request.
+    expect(
+      e.server.db.listUsers().filter((u) => !u.disabled && u.roles.includes("superadmin"))
+    ).toHaveLength(1);
     expect((await e.inject({ method: "GET", url: "/api/admin/users" })).statusCode).toBe(200);
   });
 });

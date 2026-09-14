@@ -110,6 +110,8 @@ const en: typeof MessageSchema = {
     rowLocked: "Only a superadmin can manage administrator accounts.",
     resetPanel: "A superadmin cannot reset their own password here — do it in the desktop control panel.",
     grantHint: "Only a superadmin can grant the administrator role.",
+    superadminFixed:
+      "The superadmin is created when the desktop control panel is first set up — it cannot be created or assigned here, and there is exactly one.",
     disable: {
       action: "Disable",
       title: "Disable account",
@@ -821,6 +823,8 @@ const en: typeof MessageSchema = {
     CANNOT_MODIFY_SELF: "You cannot disable or demote your own account.",
     CANNOT_MODIFY_ADMIN: "Only a superadmin can manage administrator accounts.",
     ROLES_NOT_GRANTABLE: "Only a superadmin can grant the administrator role.",
+    SUPERADMIN_NOT_GRANTABLE:
+      "The superadmin is created by the desktop control panel during setup and cannot be created or assigned here.",
     PANEL_RESET_REQUIRED:
       "A superadmin cannot reset their own password here — do it in the desktop control panel.",
   },

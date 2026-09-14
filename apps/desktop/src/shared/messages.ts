@@ -97,11 +97,12 @@ export interface PanelMessages {
   "action.cancel": string;
   "action.chooseDataDir": string;
   /**
-   * Resetting the superadmin's password, and what comes back.
+   * Resetting the superadmin's password.
    *
-   * `action.resetAdmin` opens it and `reset.confirm` guards it, because it is destructive in
-   * the way that matters: the account it replaces a password for is the one that can do
-   * everything, and the reset ends its sessions too.
+   * `action.resetAdmin` opens a sheet that collects the new password and a confirmation, the
+   * same shape as the create-administrator form — the operator is assumed to *be* the
+   * superadmin, so they choose the replacement rather than receiving a generated one. The
+   * destructive half (sessions end everywhere) is stated in `reset.detail`.
    *
    * The failure wording is **not** here. It used to be three strings of its own, because the
    * reset was a request to a running server and its failures were about the server — nothing
@@ -109,16 +110,12 @@ export interface PanelMessages {
    * same refusals the create form renders are the ones it renders, from `cli.fault.<code>`.
    */
   "action.resetAdmin": string;
-  "reset.confirmTitle": string;
-  "reset.confirmDetail": string;
-  "reset.confirm": string;
+  "reset.title": string;
+  "reset.detail": string;
+  "reset.newPassword": string;
+  "reset.submit": string;
   "reset.working": string;
   "reset.done": string;
-  "reset.username": string;
-  "reset.password": string;
-  "reset.copy": string;
-  "reset.copied": string;
-  "reset.dismiss": string;
   /**
    * The administrator CLI, in every way it can refuse.
    *
@@ -231,17 +228,13 @@ const zhCN: PanelMessages = {
   "action.copied": "已复制",
   "action.reveal": "在访达中显示",
   "action.resetAdmin": "重置超级管理员密码",
-  "reset.confirmTitle": "重置超级管理员密码",
-  "reset.confirmDetail":
-    "系统会生成一个新的随机密码，并让超级管理员在所有设备上退出登录。忘记密码时，这是唯一的找回方式。",
-  "reset.confirm": "重置",
+  "reset.title": "重置超级管理员密码",
+  "reset.detail":
+    "为超级管理员设置一个新密码。重置后，该账号会在所有设备上退出登录。正在操作这台电脑的就是超级管理员本人，所以新密码由你直接设置，而不是由系统随机生成。",
+  "reset.newPassword": "新密码",
+  "reset.submit": "重置密码",
   "reset.working": "正在重置…",
-  "reset.done": "密码已重置。请把下面的新密码交给超级管理员：",
-  "reset.username": "用户名",
-  "reset.password": "新密码",
-  "reset.copy": "复制",
-  "reset.copied": "已复制",
-  "reset.dismiss": "关闭",
+  "reset.done": "超级管理员「{name}」的密码已重置，并已在所有设备上退出登录。",
   "action.createAdmin": "创建超级管理员",
   "create.title": "创建超级管理员",
   "create.detail":
@@ -338,17 +331,13 @@ const en: PanelMessages = {
   "action.copied": "Copied",
   "action.reveal": "Show in Finder",
   "action.resetAdmin": "Reset superadmin password",
-  "reset.confirmTitle": "Reset the superadmin password",
-  "reset.confirmDetail":
-    "A new random password will be generated and the superadmin will be signed out everywhere. For a forgotten password, this is the only way back in.",
-  "reset.confirm": "Reset",
+  "reset.title": "Reset the superadmin password",
+  "reset.detail":
+    "Choose a new password for the superadmin. The account is signed out everywhere when this runs. The person at this machine is taken to be the superadmin, so the password is chosen here rather than generated.",
+  "reset.newPassword": "New password",
+  "reset.submit": "Reset password",
   "reset.working": "Resetting…",
-  "reset.done": "The password has been reset. Give the superadmin the new one:",
-  "reset.username": "Username",
-  "reset.password": "New password",
-  "reset.copy": "Copy",
-  "reset.copied": "Copied",
-  "reset.dismiss": "Close",
+  "reset.done": "Superadmin “{name}” has a new password and is signed out everywhere.",
   "action.createAdmin": "Create superadmin",
   "create.title": "Create the superadmin",
   "create.detail":

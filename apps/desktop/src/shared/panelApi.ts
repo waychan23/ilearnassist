@@ -32,11 +32,12 @@ export const PANEL_CHANNELS = {
   chooseDataDir: "panel:choose-data-dir",
   revealDataDir: "panel:reveal-data-dir",
   /**
-   * Give the installation's administrator a new password.
+   * Give the installation's administrator a new password chosen by the operator.
    *
    * The one command here that is not about the server *process*: it is the way back in for an
    * administrator who cannot sign in, which is the one state the app itself can never resolve.
-   * See `PanelApi.resetAdminPassword`.
+   * The password comes in with the call, on stdin of the one-shot child — see
+   * `PanelApi.resetAdminPassword`.
    */
   resetAdminPassword: "panel:reset-admin-password",
   /**
@@ -181,20 +182,21 @@ export type CreateAdministratorResult =
   | { ok: false; fault: AdminFault };
 
 /**
- * The password the reset produced, or why there is not one.
+ * The username whose password was replaced, or why it was not.
+ *
+ * The operator chooses the password, so there is nothing to hand back: the chosen value never
+ * crosses the IPC boundary in the reply and is not rendered — only the name confirms what
+ * happened. (The CLI still supports `--generate` for a terminal, and that path returns a
+ * password, but the panel never asks for it.)
  *
  * The fault is an `AdminFault` — the same union the two commands beside it answer with — rather
  * than a fourth shape of its own. Both are conversations with the same child, so a code that
  * means "the CLI could not run" means it here too, and the panel renders the two with one
  * catalog. `ADMIN_NOT_FOUND` is the one that is specific to this command: a data root nobody
  * has set up yet, which the panel says in the same breath as offering to create one.
- *
- * The password is in the successful arm only, and it is **not** stored anywhere on the way
- * through — the panel holds it long enough to render it once, exactly as the console does.
- * Only a hash reaches the database, so a panel that forgot to show it could not fetch it back.
  */
 export type ResetResult =
-  | { ok: true; username: string; password: string }
+  | { ok: true; username: string }
   | { ok: false; fault: AdminFault };
 
 export interface PanelApi {
@@ -216,12 +218,14 @@ export interface PanelApi {
   openInBrowser(): Promise<void>;
   revealDataDir(): Promise<void>;
   /**
-   * Replace the superadmin's password with a generated one, and hand it back.
+   * Replace the superadmin's password with the one the operator chose.
    *
    * The way back in when the password is forgotten: every other path needs somebody already
    * signed in, which is exactly what a forgotten password prevents. Local access to the machine
-   * is the proof of identity here, and turning this panel on is what "local access" means —
-   * there is no secret to hold, because the child this runs is one only this machine can run.
+   * is the proof of identity here — the panel assumes the person at this machine *is* the
+   * superadmin, which is why the new password is typed here (the same flow as creating the
+   * first administrator) rather than generated and shown once. It reaches the one-shot child
+   * on stdin, never an argv string the process table would show.
    *
    * It is also the only place a superadmin's own password can be replaced: the web console
    * refuses it (`PANEL_RESET_REQUIRED`), because a console reached with a credential the caller
@@ -234,11 +238,8 @@ export interface PanelApi {
    *
    * It ends the account's sessions as well, so a password replaced while the old one is still
    * live has really been replaced.
-   *
-   * Resolves `null` when the confirmation was dismissed — an outcome rather than a failure,
-   * and a different one from any of `ResetFault`'s.
    */
-  resetAdminPassword(): Promise<ResetResult | null>;
+  resetAdminPassword(input: { password: string }): Promise<ResetResult>;
   /** Ask the bundled CLI whether this data root has an administrator. */
   adminStatus(): Promise<AdminStatusResult>;
   /**

@@ -39,7 +39,8 @@ interface CliResetEnvelope {
   ok: true;
   command: "reset-admin";
   username: string;
-  password: string;
+  /** Present only when the CLI invented the password (`--generate`); the panel never does. */
+  password?: string;
 }
 interface CliErrorEnvelope {
   ok: false;
@@ -200,7 +201,7 @@ export async function createFirstAdministrator(
 }
 
 /**
- * Replace a superadmin's password, and hand the generated one back.
+ * Replace a superadmin's password with the one the operator chose.
  *
  * A one-shot child rather than a request to the server, and that is what makes the button work
  * in **every** state rather than only while the server happens to be up. It used to be an HTTP
@@ -209,13 +210,23 @@ export async function createFirstAdministrator(
  * the same moment as something else being wrong. The CLI writes the row itself, exactly as
  * `create-admin` does, so there is one implementation of the reset and no secret to hold.
  *
- * The password is in the *result* and nowhere else. It is never logged, never broadcast, and
- * never written to `desktop.json`: the panel holds it long enough to render it once.
+ * The operator **chooses** the password, exactly as when creating the first administrator: the
+ * person at this machine is assumed to be the superadmin, so handing them a random one and
+ * forcing a change on login would contradict what the create flow assumes. It rides stdin —
+ * never an argv string, which the process table would show — and it is not echoed back in the
+ * result, logged, broadcast, or written to `desktop.json`.
  */
-export async function resetAdministratorPassword(ctx: AdminContext): Promise<ResetResult> {
+export async function resetAdministratorPassword(
+  ctx: AdminContext,
+  input: { password: string }
+): Promise<ResetResult> {
   if (!ctx.dataDir) return { ok: false, fault: { code: "no_data_dir" } };
 
-  const result = await runCli(ctx, ["reset-admin", "--json"]);
+  const result = await runCli(
+    ctx,
+    ["reset-admin", "--json", "--password-stdin"],
+    `${input.password}\n`
+  );
 
   // Both streams, like the two commands above: a refusal is written to stderr even though the
   // envelope goes to stdout on success.
@@ -225,7 +236,7 @@ export async function resetAdministratorPassword(ctx: AdminContext): Promise<Res
   if (envelope.command !== "reset-admin") {
     return { ok: false, fault: { code: "bad_response", message: "unexpected CLI reply" } };
   }
-  return { ok: true, username: envelope.username, password: envelope.password };
+  return { ok: true, username: envelope.username };
 }
 
 const STATUS_TIMEOUT_MS = 10_000;

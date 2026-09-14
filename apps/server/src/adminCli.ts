@@ -383,10 +383,20 @@ export interface ResetAdminInput {
   dataRoot: string;
   /** Who to reset. Absent means the first enabled superadmin — the panel's case. */
   username?: string;
+  /**
+   * The new password the operator chose, or undefined to invent one.
+   *
+   * The control panel always hands one in: the person at that machine is assumed to *be* the
+   * superadmin, the same assumption `create-admin` makes for the first one, so they choose the
+   * replacement rather than being given a random one to read and change. A chosen password is
+   * never echoed back on the result. `--generate` remains the terminal's path, and only that
+   * path returns the password.
+   */
+  password?: string;
 }
 
 /**
- * Replace a superadmin's password with a generated one, and hand it back.
+ * Replace a superadmin's password — chosen by the operator, or invented and handed back.
  *
  * The way back in for a forgotten password, and it runs **with the server stopped or running**
  * — which is what the panel needs, because the state a forgotten password creates is often
@@ -402,12 +412,20 @@ export interface ResetAdminInput {
  * superadmin's own password is replaced: the web console refuses it, because a console reached
  * with a credential the caller already holds is a weaker second way in.
  *
- * `mustChangePassword` is left clear. Whoever ran this is holding the machine, and the value
- * they are about to use is one they just generated for themselves.
+ * `mustChangePassword` is left clear. Whoever ran this is holding the machine: a generated
+ * password is one they just produced for themselves, and a chosen one is theirs already.
  */
 export async function resetAdmin(input: ResetAdminInput): Promise<AdminCliOutcome> {
   const dirProblem = dataRootProblem(input.dataRoot);
   if (dirProblem) return dirProblem;
+
+  // The same shared policy create-admin enforces, so "too short" is refused by the same rule
+  // and with the same code whichever channel the password arrived on.
+  const chosen = input.password;
+  if (chosen !== undefined) {
+    const weak = passwordProblem(chosen);
+    if (weak) return { ok: false, body: weak };
+  }
 
   const layout = dataLayout(input.dataRoot);
   if (!existsSync(layout.sqliteFile)) {
@@ -439,7 +457,8 @@ export async function resetAdmin(input: ResetAdminInput): Promise<AdminCliOutcom
       return fail("ADMIN_NOT_FOUND", "this data folder has no administrator to reset");
     }
 
-    const password = generatePassword();
+    const generated = chosen === undefined;
+    const password = generated ? generatePassword() : chosen;
     // Hashed outside any transaction, exactly as `createAdmin` does: `scrypt` is ~100ms and no
     // lock should be held across it.
     const passwordHash = await hashPassword(password);
@@ -464,7 +483,9 @@ export async function resetAdmin(input: ResetAdminInput): Promise<AdminCliOutcom
       command: "reset-admin",
       dataRoot: input.dataRoot,
       username: target.username,
-      password,
+      // Only an invented password is handed back: the caller already knows one they chose, and
+      // echoing it over the IPC boundary would be a leak with no upside.
+      ...(generated ? { password } : {}),
     };
     return { ok: true, value };
   } catch (error) {

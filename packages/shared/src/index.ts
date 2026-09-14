@@ -826,6 +826,16 @@ export const API_ERROR_CODES = [
   // A role this account is not allowed to grant. Distinct from `INVALID_FIELD` (which is a role
   // this build does not know): here the role is real and the caller may not hand it out.
   "ROLES_NOT_GRANTABLE",
+  /*
+   * The superadmin role is not granted from a screen, by anybody.
+   *
+   * An installation has exactly one superadmin, the account the desktop control panel
+   * bootstraps with the server stopped (`cli create-admin`, which itself refuses once one
+   * exists). Neither the create-account dialog nor an account edit may hand the role out, and
+   * that is a rule on every HTTP caller rather than a box the console decided not to draw — a
+   * hand-written request must meet the same refusal as a click.
+   */
+  "SUPERADMIN_NOT_GRANTABLE",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -998,6 +1008,20 @@ export const ADMIN_ROLE: UserRole = "admin";
  * given a second role to keep working.
  */
 export const PLATFORM_ADMIN_ROLES: readonly UserRole[] = [SUPERADMIN_ROLE, ADMIN_ROLE];
+
+/**
+ * The roles the platform console is allowed to assign.
+ *
+ * **`superadmin` is deliberately absent.** An installation has exactly one superadmin, the
+ * account the desktop control panel creates with the server stopped; the web console creates
+ * and edits accounts but can neither mint a second one nor appoint one. The server enforces
+ * the same refusal (`SUPERADMIN_NOT_GRANTABLE`) — this list is the shape the checkboxes take,
+ * not the guard itself.
+ *
+ * A superadmin grants `admin`; an ordinary administrator sees that box locked (their tier may
+ * run accounts, not appoint one). Both may hold `user`, which is the default.
+ */
+export const CONSOLE_GRANTABLE_ROLES: readonly UserRole[] = [ADMIN_ROLE, "user"];
 
 /**
  * Whether an account is the installation's *original* administrator. Ignores `disabled`.
@@ -1274,17 +1298,18 @@ export interface AdminCreateResult {
 /**
  * A superadmin's password, replaced by the control panel.
  *
- * The same shape as `AdminCreateResult`'s success arm and for the same reason: the generated
- * password is shown once and only a hash is stored, so this reply is the only place it exists.
- * `generated` is not a flag here — the panel never chooses this password, and a variant that
- * could be either would be an arm nobody uses.
+ * The same shape as `AdminCreateResult`'s success arm: `password` is present only when the CLI
+ * *generated* one (`--generate`, the terminal's path) — the panel hands the operator's own
+ * choice in on stdin and gets no password back, because echoing a chosen credential back over
+ * IPC is a leak with no upside. Either way only a hash is stored.
  */
 export interface AdminResetResult {
   ok: true;
   command: "reset-admin";
   dataRoot: string;
   username: string;
-  password: string;
+  /** The invented password, shown once. Absent when the caller chose it. */
+  password?: string;
 }
 
 export type AdminCliResult = AdminStatusResult | AdminCreateResult | AdminResetResult;

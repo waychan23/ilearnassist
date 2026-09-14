@@ -425,8 +425,9 @@ describe("reset-admin", () => {
     const value = resetOf(await resetAdmin({ dataRoot: root }));
 
     expect(value.username).toBe("Ada");
-    expect(value.password).not.toBe("the-old-one");
-    expect(value.password.length).toBeGreaterThanOrEqual(12);
+    const generated = value.password;
+    expect(generated).not.toBe("the-old-one");
+    expect(generated!.length).toBeGreaterThanOrEqual(12);
 
     // The new one verifies and the old one does not — read straight out of the file, because
     // the point is what was written and not what a route would say about it.
@@ -435,9 +436,52 @@ describe("reset-admin", () => {
       const row = db.prepare("SELECT password_hash AS h FROM users WHERE username = 'Ada'").get() as {
         h: string;
       };
-      expect(row.h).not.toContain(value.password);
-      expect(await verifyPassword(value.password, row.h)).toBe(true);
+      expect(row.h).not.toContain(generated);
+      expect(await verifyPassword(generated!, row.h)).toBe(true);
       expect(await verifyPassword("the-old-one", row.h)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("sets the password the operator chose and does not hand it back", async () => {
+    // The panel's path: the person at the machine is the superadmin, so they choose the new
+    // password rather than receiving a generated one. It is not echoed on the result.
+    await createAdmin({ dataRoot: root, username: "Ada", password: "the-old-one" });
+
+    const outcome = await resetAdmin({ dataRoot: root, password: "the-new-one" });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected success");
+    expect(outcome.value).toMatchObject({ command: "reset-admin", username: "Ada" });
+    expect("password" in outcome.value).toBe(false);
+
+    const db = new Database(dbFile(), { readonly: true });
+    try {
+      const row = db.prepare("SELECT password_hash AS h FROM users WHERE username = 'Ada'").get() as {
+        h: string;
+      };
+      expect(row.h).not.toContain("the-new-one");
+      expect(await verifyPassword("the-new-one", row.h)).toBe(true);
+      expect(await verifyPassword("the-old-one", row.h)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses a chosen password the shared policy rejects", async () => {
+    await createAdmin({ dataRoot: root, username: "Ada", password: "the-old-one" });
+
+    const outcome = await resetAdmin({ dataRoot: root, password: "x" });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("expected a refusal");
+    expect(outcome.body.error.code).toBe("PASSWORD_TOO_SHORT");
+    // The old credential is untouched.
+    const db = new Database(dbFile(), { readonly: true });
+    try {
+      const row = db.prepare("SELECT password_hash AS h FROM users WHERE username = 'Ada'").get() as {
+        h: string;
+      };
+      expect(await verifyPassword("the-old-one", row.h)).toBe(true);
     } finally {
       db.close();
     }
@@ -493,7 +537,7 @@ describe("reset-admin", () => {
           await env.server.app.inject({
             method: "POST",
             url: "/api/auth/login",
-            payload: { username: "Ada", password: value.password },
+            payload: { username: "Ada", password: value.password! },
           })
         ).statusCode
       ).toBe(200);

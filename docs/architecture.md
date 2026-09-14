@@ -675,9 +675,13 @@ so raising them later still verifies what was written before.
 
 **Roles are a JSON array on the account**, because the checks are written as "does this account
 hold role R" — so a third role, or an account holding two, is a row that changes and nothing
-else. Three exist: `superadmin` (the account the installation was bootstrapped with, and the
-only one that may appoint another administrator), `admin` (granted by a superadmin, and the
-role that runs the installation), and `user`.
+else. Three exist: `superadmin` (the single account the installation was bootstrapped with,
+and the only one that may appoint an ordinary administrator), `admin` (granted by a
+superadmin, and the role that runs the installation), and `user`. Exactly one superadmin
+exists: it is made by the desktop control panel with the server stopped (`cli create-admin`,
+which itself refuses once an enabled superadmin exists), and the HTTP routes refuse to grant
+the role to anyone — `SUPERADMIN_NOT_GRANTABLE` is the answer for every caller, so there is no
+second mint path through the console.
 
 **Either administrator role reaches the platform console, and either may write the
 installation-wide settings.** Providers, document parsers, the parsing policy and the app
@@ -686,8 +690,9 @@ stay open for the composer. The split the feature is built on is *configure vers
 administrator configures the models, and an ordinary account chooses among them. That is a
 security boundary rather than a preference — a provider's `baseURL` is where every
 conversation's prompts go, and testing a parser makes the *server* fetch a URL the caller chose.
-What the two tiers differ in is *accounts*: an ordinary administrator runs them, and may not
-touch one that holds an administrative role.
+What the two tiers differ in is *accounts*: an ordinary administrator runs the ordinary
+accounts, and may not touch one that holds an administrative role — not the superadmin, and not
+another administrator. Only the superadmin reaches those rows.
 
 **Every route requires a session unless it says `config: { public: true }`.** One `onRequest`
 hook, deny by default, so a route added without a thought about auth is refused rather than
@@ -718,11 +723,14 @@ transaction, so two processes racing to bootstrap make exactly one administrator
 **The control panel is the way back in — through the CLI, not through a route.**
 `cli reset-admin` replaces a superadmin's password and ends its sessions, and it is a *child*
 of the panel rather than a request to the server, so it works whether the server is up,
-stopped, or refusing to start. There is deliberately no HTTP route for this: every route needs
-somebody already signed in, which is exactly what a forgotten password prevents, and a recovery
-path that needs a healthy server is not much of a recovery path. The panel could always write
-the database directly — it runs on the operator's machine and holds the CLI — so a per-launch
-shared secret guarded nothing a process boundary did not already.
+stopped, or refusing to start. The panel takes the new password in a two-field sheet — the
+operator is assumed to be the superadmin, so they choose it, like `create-admin`, rather than
+receiving a generated one; the CLI still supports `--generate` from a terminal. There is
+deliberately no HTTP route for this: every route needs somebody already signed in, which is
+exactly what a forgotten password prevents, and a recovery path that needs a healthy server is
+not much of a recovery path. The panel could always write the database directly — it runs on
+the operator's machine and holds the CLI — so a per-launch shared secret guarded nothing a
+process boundary did not already.
 
 ### Routes (`routes.ts`)
 
@@ -738,7 +746,7 @@ attachments, providers and app defaults.
 | `DELETE /api/sources/:id` | delete the file, its text and every reference to it |
 | `POST /api/auth/login` | sign in with a name and a password. Answers 409 `SETUP_REQUIRED` when the installation has no administrator, which the server itself will not serve |
 | `pnpm … server cli create-admin` | create the first administrator, outside the server — the only way, and it works with the server stopped |
-| `pnpm … server cli reset-admin` | replace a superadmin's forgotten password; also outside the server, and the only place a superadmin's **own** password can be replaced |
+| `pnpm … server cli reset-admin (--password-stdin \| --generate)` | replace a superadmin's forgotten password; also outside the server, and the only place a superadmin's **own** password can be replaced |
 | `POST /api/auth/refresh` | exchange a refresh token for a fresh pair, spending the one presented |
 | `POST /api/auth/logout` | end this client's session — reached from **Sign out** in the sidebar footer, the workspace home and the account page |
 | `GET /api/auth/me` | who the caller is; a 401 is the answer, not a refusal |

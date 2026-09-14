@@ -2,9 +2,8 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useTheme } from "../composables/theme";
-import { useLocale } from "../composables/locale";
-import type { Locale } from "../utils/locale";
 import Icon from "./Icon.vue";
+import LocaleSelect from "./LocaleSelect.vue";
 
 /**
  * The language picker and the theme button, as one unit.
@@ -15,12 +14,12 @@ import Icon from "./Icon.vue";
  * the theme trio's labels, its icon map and the `data-testid`s the specs select on would
  * otherwise have been copied into a second header that drifts from this one.
  *
- * The labels stay here rather than in `chat.*` for the same reason: the control belongs to
+ * The picker itself is `LocaleSelect`, which the signed-out login screen also mounts — the
+ * labels stay here rather than in `chat.*` for the same reason: the control belongs to
  * neither view.
  */
 const { t } = useI18n();
 const theme = useTheme();
-const { locale, setLocale, available } = useLocale();
 
 /** Icons are not translatable — only the labels are. */
 const THEME_ICON = { light: "sun", dark: "moon", auto: "monitor" } as const;
@@ -32,28 +31,11 @@ const themeLabel = computed(() =>
     ? t("theme.autoCurrent", { current: t(`theme.${theme.resolved.value}`) })
     : t(`theme.${theme.mode.value}`)
 );
-
-function onLocaleChange(event: Event): void {
-  setLocale((event.target as HTMLSelectElement).value as Locale);
-}
 </script>
 
 <template>
   <div class="topbar-actions">
-    <!-- A select, not a cycle button: N locales on one icon is not legible, and the
-         labels are autonyms so they stay readable in either language. -->
-    <select
-      class="locale-select"
-      :value="locale"
-      :title="t('locale.switchLabel')"
-      :aria-label="t('locale.switchLabel')"
-      data-testid="locale-select"
-      @change="onLocaleChange"
-    >
-      <option v-for="l in available" :key="l" :value="l">
-        {{ l === "zh-CN" ? t("locale.zhCN") : t("locale.en") }}
-      </option>
-    </select>
+    <LocaleSelect />
     <button
       class="icon-btn theme-toggle"
       :title="t('theme.toggleTitle', { label: themeLabel })"
@@ -75,17 +57,5 @@ function onLocaleChange(event: Event): void {
 .theme-toggle {
   font-size: var(--fs-5);
   padding: var(--space-2) var(--space-4);
-}
-.locale-select {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-2);
-  font-size: var(--fs-2);
-  padding: 3px var(--space-2);
-  cursor: pointer;
-}
-.locale-select:hover {
-  color: var(--text);
 }
 </style>
