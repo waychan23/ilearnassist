@@ -111,9 +111,15 @@ function onResize(): void {
 
 onMounted(() => {
   window.addEventListener("resize", onResize);
-  // Focus the body: the window exists because there is something to write, and the type
-  // selector is already at its default.
-  void nextTick(() => card.value?.querySelector("textarea")?.focus());
+  // Both of these need the element, which the `immediate` placement watcher ran too early to
+  // have: without the second `place` the card would keep `position: null` and render at the
+  // top-left of the page rather than near anything.
+  void nextTick(() => {
+    place();
+    // Focus the body: the window exists because there is something to write, and the type
+    // selector is already at its default.
+    card.value?.querySelector("textarea")?.focus();
+  });
 });
 onBeforeUnmount(() => window.removeEventListener("resize", onResize));
 

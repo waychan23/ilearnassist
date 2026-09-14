@@ -68,6 +68,7 @@ being a colour.
 | `--warning`, `--warning-bg`, `--warning-border` | Caution states. Darkened in the light theme rather than reused — the dark tone is 1.7:1 on a light panel |
 | `--success` | Confirmation and healthy status |
 | `--bubble-bg`, `--bubble-fg` | The user's message bubble. A **pair**: a rule that paints the background must state the foreground, because an inherited `--text` flips independently of the surface it lands on |
+| `--note-bg` | Behind a passage a note is about. The palette's only violet, and deliberately neither `--accent-bg` (a mark and a selection are two different claims about the same words) nor `--warning`'s amber (an annotation is not a warning). It colours text, so it has no foreground of its own — the text on it keeps `--text` |
 | `--code-bg`, `--code-fg`, `--code-fg-2` | Code surfaces, also a paired triple. Each theme's `--code-fg` matches the colour its highlight.js sheet uses for untokenised code, so the two agree instead of differing by a shade |
 | `--scrollbar`, `--scrollbar-hover` | Webkit scrollbar thumb |
 
@@ -243,6 +244,8 @@ Tier 2, in `style.css`, for structures several components need:
 | `.btn.ghost` | | A text button with no chrome until hovered |
 | `.pill` | | The rounded outline shared by the Copilot tag and the token counter — shape only |
 | `.truncate` | | The single truncation rule. Includes `min-width: 0`, which is what makes the other three declarations do anything on a flex item |
+| `.clamp-2`, `.clamp-4` | | The same idea for a paragraph: keep N lines and ellipsis the rest. By **line** and not by character count, because the same words are one line in a narrow pane and three in a wide one |
+| `.note-highlight`, `.note-flash` | | The mark under an annotated passage, and the flash 定位 gives it. Global rather than scoped, because they wrap nodes `v-html` wrote — and `.note-highlight` carries no padding or radius, since one highlight can span elements and either would show as a gap at every boundary |
 
 ### Naming a scoped class
 

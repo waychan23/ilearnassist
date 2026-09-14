@@ -104,27 +104,32 @@ export function useMessageSelection(
     if (selection.value) clear();
   }
 
-  function attach(): void {
-    const element = container.value;
-    if (!element) return;
+  /**
+   * The element the listeners are actually on, rather than whatever `container` currently
+   * holds: the container arrives after mount and can be replaced, and a `detach` that read
+   * the ref would remove from the new element and leave the listeners on the old one.
+   */
+  let attached: HTMLElement | null = null;
+
+  function attach(element: HTMLElement): void {
+    attached = element;
     element.addEventListener("mouseup", onMouseUp);
     element.addEventListener("scroll", onScroll, { passive: true });
     document.addEventListener("selectionchange", onSelectionChange);
   }
 
   function detach(): void {
-    container.value?.removeEventListener("mouseup", onMouseUp);
-    container.value?.removeEventListener("scroll", onScroll);
+    attached?.removeEventListener("mouseup", onMouseUp);
+    attached?.removeEventListener("scroll", onScroll);
+    attached = null;
     document.removeEventListener("selectionchange", onSelectionChange);
   }
 
   watch(
     [container, enabled],
-    ([element], previous) => {
-      // The container is a `ref` on a `v-if` element, so it arrives after mount and can be
-      // replaced. Re-attaching is the only way the listener follows it.
-      if (previous) detach();
-      if (element) attach();
+    ([element]) => {
+      detach();
+      if (element) attach(element);
       if (!enabled.value) clear();
     },
     { immediate: true }

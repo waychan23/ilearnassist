@@ -108,6 +108,16 @@ test.describe("the notes widget", () => {
     // The annotated original, read-only, above the field it is about.
     await expect(page.getByTestId("note-editor-quote")).toHaveText(SECOND_PHRASE);
 
+    // Floating *near* the selection means floating inside the window: the placement measures
+    // the card and clamps it, so this is the assertion that it was placed at all rather than
+    // left at the page's origin.
+    const box = (await editor.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+
     await page.getByTestId("note-editor-content").fill("暗反应是不是也需要光？");
     await page.getByTestId("note-type-question").click();
     await page.getByTestId("note-editor-save").click();
@@ -149,6 +159,14 @@ test.describe("the notes widget", () => {
     await anchored.click();
     const locate = page.getByTestId("note-editor-locate");
     await expect(locate).toBeVisible();
+
+    // Opened from the panel, which sits at the right edge: the card has nowhere to go on that
+    // side, so the placement flips it to the left of the row it came from rather than off the
+    // screen — and does not cover the row either, which is the point of anchoring to it.
+    const rowBox = (await anchored.boundingBox())!;
+    const card = (await page.getByTestId("note-editor").boundingBox())!;
+    expect(card.x + card.width).toBeLessThanOrEqual(rowBox.x);
+
     await locate.click();
 
     // Locating flashes the mark rather than opening anything, and leaves the window up so the
