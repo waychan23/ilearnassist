@@ -49,11 +49,13 @@ import {
   DEFAULT_USER_ROLES,
   isEnabledSuperadmin,
   DEFAULT_WIDGET_IDS,
+  isPlatformAdmin,
   isUserRole,
   MAX_ATTACHMENT_BYTES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   PLAN_TOOL_NAMES,
+  PLATFORM_ADMIN_ROLES,
   QUIZ_TOOL_NAME,
   QUIZ_TOOL_NAMES,
   SUPERADMIN_ROLE,
@@ -291,6 +293,80 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     void reply.code(403).send(apiError("FORBIDDEN", "only a superadmin can manage accounts"));
     return undefined;
   }
+
+  /**
+   * The signed-in account *and* a platform administrator of either tier.
+   *
+   * The wider of the two gates, and the one that reaches the console itself. A superadmin
+   * passes it because `isPlatformAdmin` reads the closed set rather than comparing one role —
+   * which is what keeps the bootstrap account from needing a second role bolted on to keep
+   * working.
+   *
+   * This is an *entry* gate and never the whole rule. Every route below narrows it further,
+   * because the two tiers differ in what they may do rather than in what they may reach: an
+   * ordinary administrator runs the installation's accounts, and an account that administers
+   * it is not one of them.
+   */
+  function requirePlatformAdmin(
+    request: FastifyRequest,
+    reply: FastifyReply
+  ): UserRecord | undefined {
+    const user = actor(request);
+    if (isPlatformAdmin(user)) return user;
+    void reply.code(403).send(apiError("FORBIDDEN", "only an administrator can manage accounts"));
+    return undefined;
+  }
+
+  /**
+   * Why this administrator may not change that account, or undefined.
+   *
+   * The tiering rule, in one place, because it is the same answer for demote, disable, reset
+   * and kick — and four copies of it is four chances for one to be forgotten.
+   *
+   * A superadmin may act on anybody. An ordinary administrator may act on accounts that
+   * administer nothing: not on a superadmin, and not on a peer either. That last part is a
+   * deliberate choice rather than an oversight — two ordinary administrators disabling each
+   * other is a race whose winner is whoever clicked second, and the tier that appoints
+   * administrators is the tier that should be able to undo one.
+   *
+   * **Your own row is not "an administrator's row."** The tier rule is about one administrator
+   * reaching another, and every route below already has its own careful answer for the self
+   * case — an ordinary administrator may still reset their own password, and neither tier may
+   * disable or demote itself. Leaving `me` out of this predicate is what keeps those from being
+   * shadowed by a broader refusal that never considered them.
+   */
+  function manageRefusal(
+    me: UserRecord,
+    target: UserRecord
+  ): ApiErrorBody | undefined {
+    if (isSuperadmin(me)) return undefined;
+    if (target.id === me.id) return undefined;
+    if (isPlatformAdmin(target)) {
+      return apiError("CANNOT_MODIFY_ADMIN", "only a superadmin can manage an administrator");
+    }
+    return undefined;
+  }
+
+  /**
+   * Why this administrator may not hand out those roles, or undefined.
+   *
+   * Separate from `manageRefusal` because it is about the *value being written* rather than
+   * the row being read: creating a new account with `admin` is not touching an administrator,
+   * and it is still the appointment this tier does not have. Refused rather than quietly
+   * stripped down to `user` — a request that asked for an administrator and got an ordinary
+   * account reports success and delivers something else.
+   */
+  function grantRefusal(me: UserRecord, roles: UserRole[]): ApiErrorBody | undefined {
+    if (isSuperadmin(me)) return undefined;
+    if (roles.some((role) => PLATFORM_ADMIN_ROLES.includes(role))) {
+      return apiError("ROLES_NOT_GRANTABLE", "only a superadmin can grant the administrator role");
+    }
+    return undefined;
+  }
+
+  /** Whether a set of roles still includes something that administers the platform. */
+  const holdsAdminRole = (roles: UserRole[]): boolean =>
+    roles.some((role) => PLATFORM_ADMIN_ROLES.includes(role));
 
   /**
    * A hash to check a login against when there is no account to check it against.
@@ -561,7 +637,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    */
 
   app.get("/api/admin/users", async (request, reply) => {
-    if (!requireSuperadmin(request, reply)) return reply;
+    // The wider gate: an ordinary administrator has to be able to *see* the accounts, which is
+    // also how the console knows what it may offer them. What they may then do with each row is
+    // decided per row below, and refused by each write route in its own right.
+    if (!requirePlatformAdmin(request, reply)) return reply;
     const users = db.listUsers().map(toAdminUser);
     return { users };
   });
@@ -578,7 +657,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * a password the account keeps.
    */
   app.post("/api/admin/users", async (request, reply) => {
-    const admin = requireSuperadmin(request, reply);
+    const admin = requirePlatformAdmin(request, reply);
     if (!admin) return reply;
 
     const body = request.body as CreateUserInput | undefined;
@@ -592,6 +671,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (!roles) {
       return reply.code(400).send(apiError("INVALID_FIELD", "unknown role", { field: "roles" }));
     }
+    const ungrantable = grantRefusal(admin, roles);
+    if (ungrantable) return reply.code(403).send(ungrantable);
     // Checked before `createAccount`, because that is the side with the filesystem half of
     // slug uniqueness — and a name already taken should be a 409, not a second directory.
     if (db.findUserByUsername(username)) {
@@ -622,12 +703,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * still worked for up to a day would be a control that reports a state it does not have.
    */
   app.patch("/api/admin/users/:id", async (request, reply) => {
-    const admin = requireSuperadmin(request, reply);
+    const admin = requirePlatformAdmin(request, reply);
     if (!admin) return reply;
 
     const { id } = request.params as { id: string };
     const target = db.getUser(id);
     if (!target) return reply.code(404).send(apiError("USER_NOT_FOUND", "no such account"));
+
+    const refusal = manageRefusal(admin, target);
+    if (refusal) return reply.code(403).send(refusal);
 
     const body = request.body as UpdateUserInput | undefined;
     const roles = body?.roles === undefined ? undefined : normalizeRoles(body.roles);
@@ -635,6 +719,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply
         .code(400)
         .send(apiError("INVALID_FIELD", "unknown role", { field: "roles" }));
+    }
+    if (roles) {
+      const ungrantable = grantRefusal(admin, roles);
+      if (ungrantable) return reply.code(403).send(ungrantable);
     }
 
     /*
@@ -651,21 +739,26 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         .code(400)
         .send(apiError("INVALID_FIELD", "disabled must be true or false", { field: "disabled" }));
     }
-    const losesSuperadmin =
-      isSuperadmin(target) &&
-      (disabled === true || (roles !== undefined && !roles.includes(SUPERADMIN_ROLE)));
+    const losesAdminRole =
+      holdsAdminRole(target.roles) &&
+      (disabled === true || (roles !== undefined && !holdsAdminRole(roles)));
 
     /*
      * The self-guard is the whole of the "somebody has to remain" rule, and it is enough.
      *
      * A separate "you may not remove the last administrator" check looks like the obvious
-     * second half, and it is unreachable: reaching this route at all means the caller holds
-     * the superadmin role on an account the gate already refused to see disabled, so there is
-     * always one administrator besides the target. By induction the count can never reach
-     * zero — which is why the check that *is* here is about who is asking rather than about
-     * how many are left. Written the other way it would be a branch no test could cover.
+     * second half, and it is unreachable: reaching this route at all means the caller holds a
+     * role that administers the platform, on an account the gate already refused to see
+     * disabled, so there is always one administrator besides the target. By induction the
+     * count can never reach zero — which is why the check that *is* here is about who is
+     * asking rather than about how many are left. Written the other way it would be a branch
+     * nobody could cover.
+     *
+     * It reads `holdsAdminRole` rather than the superadmin role alone, and the difference is
+     * the second tier: an ordinary administrator demoting themselves would lose the console
+     * they are standing in exactly as a superadmin would, so the same refusal is owed to both.
      */
-    if (losesSuperadmin && target.id === admin.id) {
+    if (losesAdminRole && target.id === admin.id) {
       return reply
         .code(400)
         .send(apiError("CANNOT_MODIFY_SELF", "you cannot disable or demote your own account"));
@@ -694,14 +787,34 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * Every session the target holds is ended either way. When the target is the caller, fresh
    * tokens come back in the reply — otherwise the administrator would be signed out by their
    * own action, which is the one way this route could look like a bug.
+   *
+   * **A superadmin's own password is not reset here at all.** That is the one case this route
+   * refuses outright, and it is a rule rather than a convenience: the console is reached with a
+   * credential the caller already holds, so a self-reset here would be a second and weaker way
+   * to replace the single credential that can undo the installation — one that leaves no trace
+   * anywhere but a token row. The control panel is the way back in by design, because turning it
+   * on is what "this is the machine" means. Resetting *another* administrator's is ordinary.
    */
   app.post("/api/admin/users/:id/password", async (request, reply) => {
-    const admin = requireSuperadmin(request, reply);
+    const admin = requirePlatformAdmin(request, reply);
     if (!admin) return reply;
 
     const { id } = request.params as { id: string };
     const target = db.getUser(id);
     if (!target) return reply.code(404).send(apiError("USER_NOT_FOUND", "no such account"));
+
+    const refusal = manageRefusal(admin, target);
+    if (refusal) return reply.code(403).send(refusal);
+    if (target.id === admin.id && isSuperadmin(admin)) {
+      return reply
+        .code(400)
+        .send(
+          apiError(
+            "PANEL_RESET_REQUIRED",
+            "a superadmin resets their own password in the control panel"
+          )
+        );
+    }
 
     const body = request.body as { password?: unknown } | undefined;
     const chosen = readPassword(body?.password);
@@ -741,7 +854,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * session and signing yourself out already has a button.
    */
   app.post("/api/admin/users/:id/revoke", async (request, reply) => {
-    const admin = requireSuperadmin(request, reply);
+    const admin = requirePlatformAdmin(request, reply);
     if (!admin) return reply;
 
     const { id } = request.params as { id: string };
@@ -752,6 +865,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         .code(400)
         .send(apiError("CANNOT_MODIFY_SELF", "sign out from the account menu instead"));
     }
+    const refusal = manageRefusal(admin, target);
+    if (refusal) return reply.code(403).send(refusal);
 
     return { ok: true, revoked: revokeAllTokens(db, target.id) };
   });

@@ -800,13 +800,32 @@ export const API_ERROR_CODES = [
   // booleans, so this is only ever a hand-written request, and guessing at what it meant is how
   // a self-disable slipped past the guard that exists to prevent it.
   "INVALID_FIELD",
-  // The caller is signed in but is not a superadmin. Distinct from "not signed in" (401):
-  // the credential is fine, the account simply may not do this.
+  // The caller is signed in but holds no role that may do this. Distinct from "not signed in"
+  // (401): the credential is fine, the account simply may not do this.
   "FORBIDDEN",
   // The change would lock the console out of itself — disabling or demoting the account making
   // the request. There is deliberately no separate "last administrator" code: this refusal is
   // what makes that unreachable, since only a signed-in administrator can reach the route.
   "CANNOT_MODIFY_SELF",
+  /*
+   * Two refusals that only exist because there are two tiers of administrator.
+   *
+   * `CANNOT_MODIFY_ADMIN` is the ordinary admin who reached a row holding an administrative
+   * role: they may run the installation's *accounts*, and an account that administers it is not
+   * one of them. It is about the target, not the action, which is why it is not `FORBIDDEN` —
+   * the same caller may disable an ordinary account in the same breath.
+   *
+   * `PANEL_RESET_REQUIRED` is a superadmin trying to reset *their own* password from the web
+   * console. That is refused rather than merely discouraged: the console is reached with a
+   * credential the superadmin already has, so a self-reset there would be a second, weaker way
+   * to replace the one credential that can undo everything — and the control panel, which
+   * proves identity by being the machine, is the way back in by design.
+   */
+  "CANNOT_MODIFY_ADMIN",
+  "PANEL_RESET_REQUIRED",
+  // A role this account is not allowed to grant. Distinct from `INVALID_FIELD` (which is a role
+  // this build does not know): here the role is real and the caller may not hand it out.
+  "ROLES_NOT_GRANTABLE",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -944,7 +963,7 @@ export interface Message {
  * changes and nothing else. A single-valued column would make every check a comparison
  * against a name, and the first account needing two of them would be a migration.
  */
-export const USER_ROLES = ["superadmin", "user"] as const;
+export const USER_ROLES = ["superadmin", "admin", "user"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -953,6 +972,48 @@ export const isUserRole = (value: unknown): value is UserRole =>
 
 /** The role that reaches the platform console. Named once so the check reads the same way. */
 export const SUPERADMIN_ROLE: UserRole = "superadmin";
+
+/**
+ * The ordinary administrator: granted by a superadmin, and able to run the platform day to day.
+ *
+ * A second tier rather than a second flag, and the split is about *who may appoint whom* rather
+ * than about which screens exist. A superadmin is the account the installation was bootstrapped
+ * with — created by the control panel or the CLI, and the only one that can promote anybody else
+ * — so a superadmin cannot be edited, disabled or signed out from the web console at all. An
+ * `admin` administers the installation's accounts and its shared settings, and the accounts it
+ * may touch are the ones that hold no administrative role.
+ *
+ * Composed into `isPlatformAdmin` below rather than compared directly at call sites: every
+ * screen that asks "may this account administer" wants the whole set, and a check written as
+ * `roles.includes(ADMIN_ROLE)` is one that silently excludes the superadmin.
+ */
+export const ADMIN_ROLE: UserRole = "admin";
+
+/**
+ * Every role that may administer the platform.
+ *
+ * **A superadmin is a platform admin**, and that is the point of spelling it as a set rather
+ * than writing `isSuperadmin(x) || isAdmin(x)` at each of a dozen call sites — the second tier
+ * is an *addition* to the first, not a replacement, so the bootstrap account never has to be
+ * given a second role to keep working.
+ */
+export const PLATFORM_ADMIN_ROLES: readonly UserRole[] = [SUPERADMIN_ROLE, ADMIN_ROLE];
+
+/**
+ * Whether an account is the installation's *original* administrator. Ignores `disabled`.
+ *
+ * The narrower of the two questions, and the one that decides who may appoint whom. It lives
+ * here beside `isPlatformAdmin` rather than in the server's `auth.ts` — where it started — for
+ * the `ALL_TOOL_NAMES` reason: the console draws different controls for the two tiers, so the
+ * server's checks and the page's disabled states have to be the *same* predicate, and two
+ * spellings of `roles.includes("superadmin")` is how they stop being.
+ */
+export const isSuperadmin = (user: Pick<User, "roles">): boolean =>
+  user.roles.includes(SUPERADMIN_ROLE);
+
+/** Whether an account holds a role that may administer the platform. Ignores `disabled`. */
+export const isPlatformAdmin = (user: Pick<User, "roles">): boolean =>
+  user.roles.some((role) => PLATFORM_ADMIN_ROLES.includes(role));
 
 /**
  * An administrator who can actually sign in.
@@ -965,6 +1026,11 @@ export const SUPERADMIN_ROLE: UserRole = "superadmin";
  */
 export const isEnabledSuperadmin = (user: Pick<User, "roles"> & { disabled: boolean }): boolean =>
   !user.disabled && user.roles.includes(SUPERADMIN_ROLE);
+
+/** The same question for the wider set: an enabled account that may administer the platform. */
+export const isEnabledPlatformAdmin = (
+  user: Pick<User, "roles"> & { disabled: boolean }
+): boolean => !user.disabled && isPlatformAdmin(user);
 
 /**
  * What an account holds when nobody says otherwise.

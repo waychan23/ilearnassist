@@ -346,8 +346,12 @@ export function panelTokenMatches(provided: string | undefined): boolean {
 
 /* ---------------------------------- accounts --------------------------------- */
 
-export const isSuperadmin = (user: Pick<User, "roles">): boolean =>
-  user.roles.includes(SUPERADMIN_ROLE);
+/**
+ * Re-exported rather than re-implemented. The predicate moved to `@ilearnassist/shared` when the
+ * console grew a second tier, because the page and the routes have to ask the *same* question —
+ * see the note on `isSuperadmin` there. Call sites on this side are unchanged.
+ */
+export { isSuperadmin } from "@ilearnassist/shared";
 
 /* ------------------------------ credential policy ----------------------------- */
 

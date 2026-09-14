@@ -12,7 +12,7 @@ import {
   showChat,
 } from "../composables/ui";
 import { formatRelativeTime } from "../utils/format";
-import { SUPERADMIN_ROLE, type Workspace } from "../api/types";
+import type { Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
 import TopbarControls from "./TopbarControls.vue";
 import Icon from "./Icon.vue";
@@ -171,10 +171,11 @@ function activityLabel(workspace: Workspace): string {
       <!--
         The platform console, for the accounts the server would let in. Drawn from the role the
         server reported rather than from anything the page decided — and a hidden button is not
-        a permission, so the routes answer 403 for everybody else regardless.
+        a permission, so the routes answer 403 for everybody else regardless. `canAdmin` is the
+        whole "administrators of either tier" question, so the three entry points cannot drift.
       -->
       <button
-        v-if="store.account?.roles.includes(SUPERADMIN_ROLE)"
+        v-if="store.canAdmin"
         class="icon-btn"
         data-testid="open-admin"
         :title="t('admin.title')"

@@ -157,11 +157,49 @@ body.is-mac {
   gap: var(--space-1);
 }
 
+/* The wordmark and the language control share the top line, the one pushed left and the other
+   right — the header is a drag region, and this row is what keeps the control off the centred
+   subtitle's line without a second stacked block. */
+.header__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
 .wordmark {
   margin: 0;
   font-size: var(--fs-7);
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+
+/*
+ * The language control.
+ *
+ * `no-drag` is load-bearing and not tidiness: `.header` is a title-bar drag region, so a form
+ * control inside it that does not opt out cannot be clicked at all — the press moves the window
+ * instead. Every other control in this sheet carries the same declaration for the same reason.
+ */
+.locale {
+  -webkit-app-region: no-drag;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  padding: var(--space-1) var(--space-3);
+}
+
+.locale:hover {
+  border-color: var(--text-3);
+  color: var(--text);
+}
+
+.locale:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .subtitle {

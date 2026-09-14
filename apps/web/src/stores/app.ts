@@ -53,6 +53,7 @@ import type {
 import {
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
+  isPlatformAdmin,
   PLAN_TOOL_NAMES,
   QUIZ_REVIEW_TOOL_NAME,
   type InteractiveAnswer,
@@ -318,6 +319,20 @@ export const useAppStore = defineStore("app", () => {
    * `copilots` would show nothing in exactly those cases.
    */
   const activeCopilotName = computed(() => activeSession.value?.copilotName || null);
+
+  /**
+   * Whether the console is worth offering this account.
+   *
+   * Derived here rather than compared at each of the three places that draw an entry point —
+   * the home page's header, the sidebar's menu and the account page — because the two tiers are
+   * an *addition* and a check written as `roles.includes("superadmin")` at one of the three is
+   * how an ordinary administrator ends up with a console they can reach from two buttons and not
+   * from the third. `isPlatformAdmin` is the shared spelling of the rule the server enforces.
+   *
+   * Still not a permission: it decides whether a button is drawn, and the routes answer 403 for
+   * anybody else regardless.
+   */
+  const canAdmin = computed(() => (account.value ? isPlatformAdmin(account.value) : false));
 
   /**
    * The Copilot list, split into the two groups the UI shows.
@@ -1785,6 +1800,7 @@ export const useAppStore = defineStore("app", () => {
     activeWorkspace,
     activeSession,
     activeCopilotName,
+    canAdmin,
     activeSystemPrompt,
     myCopilots,
     publicCopilots,

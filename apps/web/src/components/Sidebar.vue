@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import { isCompact } from "../composables/breakpoints";
-import { SUPERADMIN_ROLE, type Session } from "../api/types";
+import type { Session } from "../api/types";
 import {
   closeDrawer,
   openSettings,
@@ -356,7 +356,7 @@ async function onDeleteSession(session: Session) {
     </button>
 
     <button
-      v-if="store.account?.roles.includes(SUPERADMIN_ROLE)"
+      v-if="store.canAdmin"
       class="menu-item"
       :title="t('admin.title')"
       data-testid="open-admin-sidebar"

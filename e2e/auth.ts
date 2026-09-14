@@ -112,12 +112,20 @@ async function tokenFor(
  * with it is replace it. Going round that would leave a `mustChangePassword` account that
  * every route refuses, and a spec using it would be testing a state no real account is in.
  */
-export async function ensureUser(request: APIRequestContext, username: string): Promise<string> {
+export async function ensureUser(
+  request: APIRequestContext,
+  username: string,
+  /**
+   * The roles to give it. Defaults to whatever the server makes an account when nobody says —
+   * `["user"]` — so only a spec about the two tiers passes this.
+   */
+  roles?: readonly string[]
+): Promise<string> {
   const password = `e2e-${username}-password`;
   const admin = await tokenFor(request, SIGNED_IN_AS, SIGNED_IN_PASSWORD);
   const created = await request.post("/api/admin/users", {
     headers: { Authorization: `Bearer ${admin}` },
-    data: { username },
+    data: roles ? { username, roles } : { username },
   });
 
   // Already made earlier in this run. Signing in with the settled password is also the check

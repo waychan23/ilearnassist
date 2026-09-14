@@ -37,6 +37,8 @@ const DYNAMIC_PREFIXES = [
   "tools.name.",
   "providers.capabilities.",
   "settings.policy.",
+  /* `t(`admin.nav.${id}`)`, the console's left menu, over the closed section-id union. */
+  "admin.nav.",
 ];
 
 const isDynamic = (key: string): boolean => DYNAMIC_PREFIXES.some((p) => key.startsWith(p));

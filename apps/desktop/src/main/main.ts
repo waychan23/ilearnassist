@@ -14,10 +14,13 @@ import { networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { PANEL_CHANNELS, type PanelState, type ResetResult } from "../shared/panelApi.js";
 import {
+  choosePanelLocale,
+  isPanelLocaleChoice,
   PANEL_MESSAGES,
   resolvePanelLocale,
   translate,
   type PanelLocale,
+  type PanelLocaleChoice,
 } from "../shared/messages.js";
 import {
   ANY_INTERFACE_HOST,
@@ -61,8 +64,20 @@ const resourcesDir = app.isPackaged ? process.resourcesPath : join(appRoot, "dis
 const rendererEntry = join(appRoot, "dist", "renderer", "index.html");
 const preloadEntry = join(appRoot, "dist", "main", "preload.cjs");
 
-const locale: PanelLocale = resolvePanelLocale(app.getLocale());
-const messages = PANEL_MESSAGES[locale];
+/**
+ * Which language the panel is in, and the words for it.
+ *
+ * Resolved once at startup from the *settings*, which are not read until `whenReady` — so this
+ * is a placeholder for the few milliseconds before that, and `applyLocale` is what makes it true.
+ * `let` rather than `const` because the panel has a language control: everything that renders a
+ * string reads it through `t` below, so a change is one assignment plus a repaint of the chrome,
+ * rather than a restart.
+ */
+let locale: PanelLocale = resolvePanelLocale(app.getLocale());
+let messages = PANEL_MESSAGES[locale];
+/** The stored choice, `""` meaning "follow the system". Distinct from `locale`; see `PanelState`. */
+let localeChoice: PanelLocaleChoice = "";
+
 const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>): string =>
   translate(messages, key, values);
 
@@ -170,7 +185,33 @@ function currentState(): PanelState {
     lanAddress,
     needsDataDir: !resolveDataDir(),
     needsAdmin,
+    localeChoice,
+    locale,
   };
+}
+
+/**
+ * Adopt a language, and repaint every part of the panel that is not the page.
+ *
+ * There are four of them and they are easy to forget one at a time: the window title, the
+ * application menu, the tray menu and its tooltip, and — through `broadcast` — the page itself.
+ * They are all rendered from `t` and the mutable `locale`/`messages` pair above, so this is one
+ * assignment followed by a rebuild of each.
+ *
+ * Idempotent, and called on every startup as well as on every change: the panel must end up in
+ * the stored language whichever route got here.
+ */
+function applyLocale(choice: PanelLocaleChoice): void {
+  localeChoice = choice;
+  locale = choosePanelLocale(choice, app.getLocale());
+  messages = PANEL_MESSAGES[locale];
+
+  if (panelWindow && !panelWindow.isDestroyed()) panelWindow.setTitle(t("window.title"));
+  // The tray's tooltip is its own string rather than the window's, so it does not follow the
+  // title; and the menu is rebuilt rather than mutated because `Menu` items are immutable.
+  if (tray) tray.setToolTip(t("tray.tooltip"));
+  buildMenu();
+  refreshTrayMenu();
 }
 
 function broadcast(): void {
@@ -498,6 +539,30 @@ function registerIpc(): void {
     if (result.ok) await refreshAdminState();
     return result;
   });
+  /**
+   * Switch the panel's language.
+   *
+   * Anything the renderer sends that is not a language this build ships is read as "follow the
+   * system" rather than refused, and the broadcast is what tells the caller: the panel's `<select>`
+   * cannot produce a bad value, so a bad one is a request assembled by hand, and the answer to a
+   * request about a *preference* is to store the fallback the user is actually going to see.
+   */
+  ipcMain.handle(PANEL_CHANNELS.setLocale, (_event, choice: unknown) => {
+    const next: PanelLocaleChoice = isPanelLocaleChoice(choice) ? choice : "";
+    settings = { ...settings, locale: next };
+    try {
+      writeSettings(settingsFile, settings);
+    } catch (err) {
+      // Worth continuing, exactly as in `shareOnLan`: the choice still applies to this run, and
+      // refusing to switch language because a preferences file could not be written would make
+      // the control look broken.
+      console.error("Could not save the desktop settings:", err);
+    }
+    applyLocale(next);
+    broadcast();
+    return currentState();
+  });
+
   ipcMain.handle(PANEL_CHANNELS.quit, () => {
     quitting = true;
     app.quit();
@@ -639,6 +704,11 @@ if (!app.requestSingleInstanceLock()) {
     settingsFile = join(paths.root, "desktop.json");
     seedFirstRun(paths);
     settings = readSettings(settingsFile);
+
+    // Before anything is drawn or built: the stored language is what the menu bar, the tray and
+    // the window title are rendered from, and building them first would show one language for a
+    // frame and then swap it.
+    applyLocale(settings.locale);
 
     panelToken = randomUUID();
 

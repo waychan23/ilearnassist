@@ -81,12 +81,16 @@ const en: typeof MessageSchema = {
 
   roles: {
     superadmin: "Superadmin",
+    admin: "Administrator",
     user: "User",
   },
 
   admin: {
     title: "Platform console",
     subtitle: "Manage the accounts on this installation.",
+    nav: {
+      users: "Users",
+    },
     create: "New user",
     roles: "Roles",
     you: "You",
@@ -97,6 +101,9 @@ const en: typeof MessageSchema = {
     createPasswordHint:
       "The initial password is generated for you and shown once. Copy it and send it to the user — they have to change it the first time they sign in.",
     selfLocked: "You cannot disable or demote your own account.",
+    rowLocked: "Only a superadmin can manage administrator accounts.",
+    resetPanel: "A superadmin cannot reset their own password here — do it in the desktop control panel.",
+    grantHint: "Only a superadmin can grant the administrator role.",
     disable: {
       action: "Disable",
       title: "Disable account",
@@ -808,6 +815,10 @@ const en: typeof MessageSchema = {
     INVALID_FIELD: "\u201c{field}\u201d is not a valid value for that field.",
     FORBIDDEN: "This account is not allowed to do that.",
     CANNOT_MODIFY_SELF: "You cannot disable or demote your own account.",
+    CANNOT_MODIFY_ADMIN: "Only a superadmin can manage administrator accounts.",
+    ROLES_NOT_GRANTABLE: "Only a superadmin can grant the administrator role.",
+    PANEL_RESET_REQUIRED:
+      "A superadmin cannot reset their own password here — do it in the desktop control panel.",
   },
 
   /**

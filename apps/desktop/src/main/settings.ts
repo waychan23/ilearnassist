@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { isPanelLocaleChoice, type PanelLocaleChoice } from "../shared/messages.js";
 
 /**
  * The control panel's own preferences.
@@ -37,9 +38,20 @@ export interface DesktopSettings {
    * somewhere else".
    */
   dataDir: string;
+  /**
+   * Which language the panel speaks: `""` for "follow the operating system", or a shipped
+   * locale tag.
+   *
+   * Stored here rather than in the renderer's `localStorage`, and that is not a convenience:
+   * the panel's language is not only the page's. The menu bar, the tray menu, the window title
+   * and every native dialog — including the two that confirm a data folder and a password reset
+   * — are strings the **main** process renders, and they have to change with the page rather
+   * than a restart later. This file is the only thing both processes already share.
+   */
+  locale: PanelLocaleChoice;
 }
 
-export const DEFAULT_SETTINGS: DesktopSettings = { sharedOnLan: false, dataDir: "" };
+export const DEFAULT_SETTINGS: DesktopSettings = { sharedOnLan: false, dataDir: "", locale: "" };
 
 /**
  * Read the file, falling back to the defaults for anything missing or unreadable.
@@ -72,6 +84,12 @@ export function readSettings(file: string): DesktopSettings {
         typeof value["dataDir"] === "string" && value["dataDir"].trim()
           ? value["dataDir"]
           : DEFAULT_SETTINGS.dataDir,
+      // Narrowed to a value this build can render, and anything else read as "follow the
+      // system". That is a different question from what the choice *means* — which
+      // `choosePanelLocale` owns, system versus explicit — and it is the one this file has to
+      // answer, because it is the boundary where a hand-edited JSON value becomes a value the
+      // rest of the program is entitled to treat as a locale.
+      locale: isPanelLocaleChoice(value["locale"]) ? value["locale"] : DEFAULT_SETTINGS.locale,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
