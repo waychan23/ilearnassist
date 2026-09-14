@@ -4,13 +4,16 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StructuredToolInterface } from "@langchain/core/tools";
-import type {
-  Attachment,
-  ChatStreamEvent,
-  Message,
-  ModelCapability,
-  SessionSettings,
+import { tool, type StructuredToolInterface } from "@langchain/core/tools";
+import { z } from "zod";
+import {
+  PLAN_PROGRESS_TOOL_NAME,
+  QUIZ_REVIEW_TOOL_NAME,
+  type Attachment,
+  type ChatStreamEvent,
+  type Message,
+  type ModelCapability,
+  type SessionSettings,
 } from "@ilearnassist/shared";
 import { runAgentStream } from "../../src/agent/loop.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
@@ -583,6 +586,119 @@ describe("runAgentStream — known inconsistencies (pinned)", () => {
     expect(streamed).toBe("I will write that file now.All done.");
     // ...but only the final step's text is persisted, so a reload loses the narration.
     expect(result.content).toBe("All done.");
+  });
+});
+
+describe("runAgentStream — quiz grading rundown survives later steps", () => {
+  /*
+   * The general rule above (persist only the last step's utterance) has one exception:
+   * text streamed beside `ila_review_quiz` is the per-question verdict walkthrough — the
+   * turn's actual answer — whereas a following step that only moves the plan and asks
+   * whether to continue used to replace it, so the verdicts shown live vanished at
+   * `message_done`. These stand-ins speak the tool names the loop keys on; no database.
+   */
+  const RUNDOWN = "Q1：回答正确。滑动窗口按步长触发。\nQ2：也答对了，RocksDB 是状态后端。";
+
+  const gradingTool = (): StructuredToolInterface =>
+    tool(async () => JSON.stringify({ graded: [], note: "noted" }), {
+      name: QUIZ_REVIEW_TOOL_NAME,
+      description: "record quiz verdicts",
+      schema: z.object({ reviews: z.array(z.unknown()) }),
+    });
+  const progressTool = (): StructuredToolInterface =>
+    tool(async () => JSON.stringify({ ok: true }), {
+      name: PLAN_PROGRESS_TOOL_NAME,
+      description: "move the plan on",
+      schema: z.object({}),
+    });
+
+  const textOf = (events: ChatStreamEvent[]) =>
+    events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+
+  it("keeps the walkthrough when a later plan step's final message only asks what is next", async () => {
+    const { events, result } = await run({
+      tools: [gradingTool(), progressTool()],
+      turns: [
+        {
+          content: RUNDOWN,
+          toolCalls: [{ name: QUIZ_REVIEW_TOOL_NAME, args: { reviews: [] } }],
+        },
+        { toolCalls: [{ name: PLAN_PROGRESS_TOOL_NAME, args: {} }] },
+        { content: "本章进度已更新，要进入下一章节吗？" },
+      ],
+    });
+
+    // What streamed live is what survives: the verdicts no longer vanish when the final
+    // step replaces them.
+    expect(textOf(events)).toBe(`${RUNDOWN}本章进度已更新，要进入下一章节吗？`);
+    expect(result.content).toBe(`${RUNDOWN}\n\n本章进度已更新，要进入下一章节吗？`);
+  });
+
+  it("does not duplicate a walkthrough the final step repeats verbatim", async () => {
+    const { result } = await run({
+      tools: [gradingTool()],
+      turns: [
+        {
+          content: RUNDOWN,
+          toolCalls: [{ name: QUIZ_REVIEW_TOOL_NAME, args: { reviews: [] } }],
+        },
+        // The model re-answered with the same rundown plus the hand-back question.
+        { content: `${RUNDOWN}\n\n继续吗？` },
+      ],
+    });
+
+    expect(result.content).toBe(`${RUNDOWN}\n\n继续吗？`);
+    expect(result.content.split("滑动窗口按步长触发")).toHaveLength(2);
+  });
+
+  it("joins an earlier walkthrough with the preamble of a step that suspends", async () => {
+    const questions = [
+      {
+        header: "去向",
+        question: "接下来学哪一章？",
+        options: [{ label: "窗口" }, { label: "状态" }],
+      },
+    ];
+    const { result } = await run({
+      tools: [gradingTool(), buildAskUserTool()],
+      turns: [
+        {
+          content: RUNDOWN,
+          toolCalls: [{ name: QUIZ_REVIEW_TOOL_NAME, args: { reviews: [] } }],
+        },
+        {
+          content: "接下来怎么走，你定。",
+          toolCalls: [{ name: "ask_user", args: { questions } }],
+        },
+      ],
+    });
+
+    expect(result.awaiting).toBe(true);
+    expect(result.content).toBe(`${RUNDOWN}\n\n接下来怎么走，你定。`);
+  });
+
+  it("keeps the walkthrough when the step budget runs out mid-turn", async () => {
+    const { result } = await run({
+      tools: [gradingTool()],
+      settings: { maxSteps: 2 },
+      turns: [
+        {
+          content: RUNDOWN,
+          toolCalls: [{ name: QUIZ_REVIEW_TOOL_NAME, args: { reviews: [] } }],
+        },
+        {
+          content: "还在继续批改。",
+          toolCalls: [{ name: QUIZ_REVIEW_TOOL_NAME, args: { reviews: [] } }],
+        },
+      ],
+    });
+
+    expect(result.content).toContain(RUNDOWN);
+    expect(result.content).toContain("还在继续批改。");
+    expect(result.content).toContain("ran out of steps");
   });
 });
 

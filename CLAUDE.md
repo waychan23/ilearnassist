@@ -560,7 +560,17 @@ Fuller map in `docs/reference.md`.
   content, `finalContent` is *replaced* by just that step's text. So the live view shows
   narration + answer while `messages.content` holds only the answer, and a reload drops the
   narration. Pinned by a test in `apps/server/test/agent/loop.test.ts` — changing it is a
-  product decision, not a bug fix.
+  product decision, not a bug fix. **`ila_review_quiz` is the one exception:** text streamed
+  beside a grading call is the per-question verdict walkthrough — the turn's actual answer —
+  not narration, so `gradingUtterances` keeps it and `composeWithGradingUtterances` rejoins
+  it ahead of the last utterance at every normal ending (final answer, suspension, exhausted
+  budget); an utterance the last step repeats verbatim is dropped rather than doubled. The
+  reason it exists: a grading turn typically runs grading → `ila_update_plan_progress` → a
+  final "shall we move to the next chapter?" step, and the last-utterance rule used to make
+  the verdicts vanish from the persisted message at `message_done` after streaming them live.
+  The prompts push the model toward the safe shape too (all bookkeeping tool calls before
+  the prose; the full rundown in the final message), but the loop rule is the deterministic
+  backstop — do not delete one believing the other makes it redundant.
 - **A message holds the model's most recent utterance, never every step's run together.**
   `finalContent` *accumulates* each step's text as it streams, and it is the `lastUtterance`
   tracked per step that every ending actually reads from — the final answer, the suspension,

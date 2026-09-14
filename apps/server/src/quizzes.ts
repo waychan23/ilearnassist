@@ -458,7 +458,7 @@ export function renderReviewResult(result: {
   return JSON.stringify(
     {
       graded: result.graded,
-      note: "The quiz panel now shows these verdicts and explanations. Give the user the rundown in your reply.",
+      note: "The quiz panel now shows these verdicts and explanations. If the plan needs moving, call ila_update_plan_progress FIRST, before any prose; your FINAL message (after every tool call of the turn has returned) is where the full rundown goes. Walk through each question by its Qn label with its verdict and a brief why, including every correct one: an all-correct quiz still gets the per-question rundown, not only a congratulations.",
     },
     null,
     2

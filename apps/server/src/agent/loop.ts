@@ -8,6 +8,7 @@ import {
 } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
+  QUIZ_REVIEW_TOOL_NAME,
   QUIZ_TOOL_NAME,
   type Attachment,
   type ChatStreamEvent,
@@ -322,6 +323,23 @@ function trimHistory(history: Message[], settings: SessionSettings): Message[] {
 }
 
 /**
+ * Put the quiz grading rundown back in front of the turn's last utterance.
+ *
+ * Text a model streams beside an ordinary tool call is narration and is deliberately not
+ * persisted (only the final step's text is). Text beside `ila_review_quiz` is different: it
+ * is the per-question verdict walkthrough — the turn's actual answer — and a later step that
+ * only updates the plan and asks whether to continue used to replace it wholesale, so the
+ * verdicts streamed live vanished at `message_done`. An utterance the last step already
+ * repeats verbatim is dropped rather than shown twice; with nothing preserved this is the
+ * identity function, so every non-grading turn keeps the last-utterance rule exactly.
+ */
+function composeWithGradingUtterances(gradingUtterances: string[], last: string): string {
+  const prior = gradingUtterances.filter((u) => u.trim() && !last.includes(u));
+  if (prior.length === 0) return last;
+  return last.trim() ? `${prior.join("\n\n")}\n\n${last}` : prior.join("\n\n");
+}
+
+/**
  * A basic, bounded ReAct agent loop over LangChain primitives:
  *   model/stream (token streaming) -> tool calls -> tool execution -> repeat.
  * Emits `text`, `tool_start` and `tool_end` events as it runs, then a final `usage` event.
@@ -390,6 +408,11 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
    * legitimately end by asking rather than answering.
    */
   let lastUtterance = "";
+  /**
+   * Text streamed beside `ila_review_quiz` calls, in step order. Unlike ordinary tool
+   * narration it survives the last-utterance replacement — see `composeWithGradingUtterances`.
+   */
+  const gradingUtterances: string[] = [];
   /** Set when a step asked the user something; the turn ends once the step finishes. */
   let awaiting = false;
   /**
@@ -461,9 +484,23 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       if (stepText) lastUtterance = stepText;
 
       const calls = aiMessage.tool_calls ?? [];
+
+      // The verdict walkthrough streamed alongside a grading call is answer content, not
+      // narration: keep it even when a later step only updates the plan or asks what's next.
+      if (
+        calls.some((c) => c.name === QUIZ_REVIEW_TOOL_NAME) &&
+        stepText.trim() &&
+        !gradingUtterances.includes(stepText)
+      ) {
+        gradingUtterances.push(stepText);
+      }
+
       if (calls.length === 0) {
         // No tool calls: the model's final answer is this message's content.
-        finalContent = chunkText(aiMessage) || lastUtterance;
+        finalContent = composeWithGradingUtterances(
+          gradingUtterances,
+          chunkText(aiMessage) || lastUtterance
+        );
         ended = true;
         break;
       }
@@ -556,8 +593,10 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         // words, not every step's. A question is introduced by the sentence just before it,
         // and the narration from earlier steps — which the live stream already showed — is
         // not part of it. Falling back to the utterance rather than to the accumulation is
-        // what keeps a silent suspending step from re-joining everything after all.
-        finalContent = lastUtterance || finalContent;
+        // what keeps a silent suspending step from re-joining everything after all. A
+        // verdict walkthrough from an earlier grading call is answer content, so it survives.
+        finalContent =
+          composeWithGradingUtterances(gradingUtterances, lastUtterance) || finalContent;
         ended = true;
         break;
       }
@@ -579,7 +618,10 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   // A stopped turn never gets the note: an empty reply there is legitimate, because the
   // user asked for the turn to end there.
   if (!ended && !stopped) {
-    finalContent = lastUtterance ? `${lastUtterance}\n\n${OUT_OF_STEPS}` : OUT_OF_STEPS;
+    const kept = lastUtterance
+      ? composeWithGradingUtterances(gradingUtterances, lastUtterance)
+      : "";
+    finalContent = kept ? `${kept}\n\n${OUT_OF_STEPS}` : OUT_OF_STEPS;
   }
 
   // Empty (rather than all-zeros) when the provider reported nothing, so callers can tell
