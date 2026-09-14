@@ -117,6 +117,15 @@ const scopeNote = computed(() =>
                 (id, enabled) =>
                   store.setWidgetEnabled('session', store.activeSession!.id, id, enabled)
               "
+              @toggle-group="
+                (groupId, enabled) =>
+                  store.setWidgetGroupEnabled(
+                    'session',
+                    store.activeSession!.id,
+                    groupId,
+                    enabled
+                  )
+              "
             />
             <div v-else class="hint">{{ t("widgets.noSession") }}</div>
             <div class="hint">{{ t("widgets.sessionLead") }}</div>

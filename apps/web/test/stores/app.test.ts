@@ -51,6 +51,8 @@ const mocks = vi.hoisted(() => ({
     jumpPlanNode: vi.fn(),
     listQuizQuestions: vi.fn().mockResolvedValue({ questions: [] }),
     answerQuizQuestion: vi.fn(),
+    getSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
+    syncSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     stopSession: vi.fn(),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
@@ -1080,6 +1082,54 @@ describe("widgets", () => {
     await store.setWidgetEnabled("workspace", "w-other", "workspace_stats", false);
 
     expect(store.workspaceWidgetIds).toEqual(["workspace_stats"]);
+  });
+
+  it("installs a widget group as one action, skipping members already in the target state", async () => {
+    // Plan already installed; the group button installs the other two and leaves plan alone.
+    // (The shared `widgetState` helper models only the stats widgets, so seed the study
+    // group's states directly.)
+    const store = await readyStore();
+    store.sessionWidgets = [
+      { id: "plan", scope: "session", enabled: true },
+      { id: "quiz", scope: "session", enabled: false },
+      { id: "thread", scope: "session", enabled: false },
+    ];
+    mocks.api.setSessionWidget.mockImplementation(
+      async (_scope: string, id: string, enabled: boolean) => ({
+        id,
+        scope: "session",
+        enabled,
+      })
+    );
+
+    await store.setWidgetGroupEnabled("session", "s1", "study", true);
+
+    const ids = vi.mocked(mocks.api.setSessionWidget).mock.calls.map((call) => call[1]);
+    expect(ids).toContain("quiz");
+    expect(ids).toContain("thread");
+    expect(ids).not.toContain("plan");
+    expect(store.sessionWidgetIds).toEqual(["plan", "quiz", "thread"]);
+  });
+
+  it("uninstalls every member of a group", async () => {
+    const store = await readyStore({ widgets: ["plan", "quiz", "thread"] });
+    mocks.api.setSessionWidget.mockImplementation(
+      async (_scope: string, id: string, enabled: boolean) => ({
+        id,
+        scope: "session",
+        enabled,
+      })
+    );
+
+    await store.setWidgetGroupEnabled("session", "s1", "study", false);
+
+    const calls = vi.mocked(mocks.api.setSessionWidget).mock.calls;
+    expect(calls.map((call) => [call[1], call[2]])).toEqual([
+      ["plan", false],
+      ["quiz", false],
+      ["thread", false],
+    ]);
+    expect(store.sessionWidgetIds).toEqual([]);
   });
 
   it("runs the lifecycle hook, and a hook that throws cannot fail the write", async () => {

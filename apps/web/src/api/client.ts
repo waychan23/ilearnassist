@@ -19,6 +19,7 @@ import type {
   FileContent,
   GetPlanResponse,
   GetQuizQuestionsResponse,
+  GetSessionThreadsResponse,
   Message,
   PlanSnapshot,
   PlanView,
@@ -556,6 +557,15 @@ export const api = {
       `/sessions/${sessionId}/quizzes/${quizId}/answer`,
       { method: "POST", body: JSON.stringify({ answer }) }
     ),
+
+  // Threads (the thread widget): derived topic chains plus the still-unclassified count.
+  getSessionThreads: (sessionId: string) =>
+    request<GetSessionThreadsResponse>(`/sessions/${sessionId}/threads`),
+  // Classify one chunk of the oldest unassigned turns, then return the fresh view.
+  syncSessionThreads: (sessionId: string) =>
+    request<GetSessionThreadsResponse>(`/sessions/${sessionId}/threads/sync`, {
+      method: "POST",
+    }),
 
   /**
    * Stop the turn currently streaming for a session.

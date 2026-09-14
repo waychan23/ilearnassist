@@ -85,6 +85,8 @@ import {
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
+import { buildThreadViews, syncThreads } from "./threads.js";
+import { makeThreadClassifier } from "./agent/threads.js";
 import {
   dismissQuizQuestions,
   listQuizQuestionViews,
@@ -1650,6 +1652,50 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { question: result.view };
   });
 
+  /* ---------------------------------- threads ---------------------------------- */
+
+  /*
+   * The conversation's derived topic chains, for the thread widget. Object-not-widget shape,
+   * like the plan/quizzes routes: the derived rows are readable even if the widget was later
+   * uninstalled, and "nothing classified yet" is a 200 with an empty list plus an unassigned
+   * count (backfill still running), not a 404.
+   */
+  app.get("/api/sessions/:id/threads", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return buildThreadViews(db, userId, id);
+  });
+
+  /**
+   * Run one unit of classification (the oldest ≤8 unassigned turns, one model call), then
+   * return the fresh view. Idempotent: a second call with nothing unassigned makes no model
+   * call. The panel loops on it for the install-time backfill; the post-turn hook calls the
+   * same domain function. A classifier failure is swallowed here too — it must report the
+   * rows that exist rather than turn a panel refresh into an error.
+   */
+  app.post("/api/sessions/:id/threads/sync", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const owned = db.getSessionForUser(id, userId);
+    if (!owned) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const provider = db.getProvider(resolveProviderId(undefined, owned.session.settings));
+    const modelId = resolveModelId(provider, undefined, owned.session.settings);
+    try {
+      await syncThreads(db, id, makeThreadClassifier({ provider, modelId }), "sync");
+    } catch (err) {
+      app.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "thread sync left messages unassigned"
+      );
+    }
+    return buildThreadViews(db, userId, id);
+  });
+
   /* ---------------------------------- sources ---------------------------------- */
 
   /**
@@ -2197,6 +2243,36 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
   }
 
+  /**
+   * Classify the just-finished turn into the thread widget's topic chains. Fire-and-forget on
+   * purpose: it must not delay the stream's `done`, and a classification failure only leaves
+   * the new messages unassigned until the next turn or a panel sync — the same "a side effect
+   * can never fail a chat turn" contract the auto-titler keeps. Nothing happens when the
+   * widget is not installed, and `syncThreads` is itself a no-op without unassigned messages.
+   */
+  function triggerThreadSync(
+    userId: string,
+    sessionId: string,
+    provider: ProviderRecord | undefined,
+    modelId: string
+  ): void {
+    let installed = false;
+    try {
+      installed = db.listSessionWidgetsForUser(userId, sessionId).some(
+        (w) => w.id === "thread" && w.enabled
+      );
+    } catch {
+      return;
+    }
+    if (!installed) return;
+    void syncThreads(db, sessionId, makeThreadClassifier({ provider, modelId }), "turn").catch((err) => {
+      app.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "thread sync after turn left messages unassigned"
+      );
+    });
+  }
+
   /** Never returns `apiKey` — only whether one is set. */
   function publicDocumentParser(id: string): DocumentParserConfig {
     const parsers = documentParserConfigs();
@@ -2422,6 +2498,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         sse.send({ type: "title", sessionId: id, title });
       }
     }
+
+    // Topic classification runs after every finished turn while the widget is installed —
+    // not awaited, so it never delays `done`, and swallowed internally on failure.
+    triggerThreadSync(userId, id, ctx.provider, ctx.modelId);
   }
 
   /** Report a failed turn and keep history well-formed. */

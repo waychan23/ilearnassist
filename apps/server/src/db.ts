@@ -25,6 +25,7 @@ import type {
   SessionSettings,
   SessionStats,
   Source,
+  ThreadBranch,
   ToolCall,
   User,
   UserRole,
@@ -203,6 +204,39 @@ export interface PlanNodeInsert {
   title: string;
   status: PlanNodeStatus;
   introducedVersion: number;
+}
+
+interface ThreadRow {
+  id: string;
+  session_id: string;
+  branch: string;
+  title: string;
+  plan_node_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One derived topic chain. Only real threads are stored — the 计划 / 其他 headings are a
+ * rendering fact, never rows. A plan thread is one plan node (`planNodeId`).
+ */
+export interface ThreadRecord {
+  id: string;
+  sessionId: string;
+  branch: ThreadBranch;
+  title: string;
+  planNodeId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A message as it joins into a thread for the widget's read model. */
+export interface ThreadMessageRow {
+  threadId: string;
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
 }
 
 interface QuizQuestionRow {
@@ -619,6 +653,16 @@ const mapPlanNode = (r: PlanNodeRow): PlanNodeRecord => ({
   removedVersion: r.removed_version,
   anchorToolCallId: r.done_tool_call_id,
   anchorAt: r.done_at,
+});
+
+const mapThread = (r: ThreadRow): ThreadRecord => ({
+  id: r.id,
+  sessionId: r.session_id,
+  branch: r.branch as ThreadBranch,
+  title: r.title,
+  planNodeId: r.plan_node_id,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
 });
 
 const mapQuizQuestion = (r: QuizQuestionRow): QuizQuestionRecord => ({
@@ -1259,6 +1303,42 @@ export interface AppDb {
     gradedAt: string;
   }): boolean;
 
+  /*
+   * Threads (thread widget). Derived topic chains, the plan/quiz shape: no deleted_at,
+   * owner-scoped reads join through to the workspace, while the sync that runs on an
+   * already-resolved turn uses the bare session-id accessors.
+   */
+  listThreadsForUser(userId: string, sessionId: string): ThreadRecord[];
+  /** Unscoped — post-turn sync on an already-resolved session only. */
+  listThreadsBySession(sessionId: string): ThreadRecord[];
+  /** Unscoped — the sync's ordered join of messages into threads. */
+  listThreadMessagesBySession(sessionId: string): ThreadMessageRow[];
+  /** Unscoped live messages of a session, oldest first — the sync's segmentation input. */
+  listSessionMessages(sessionId: string): Message[];
+  insertThread(input: {
+    id: string;
+    sessionId: string;
+    branch: ThreadBranch;
+    title: string;
+    planNodeId?: string | null;
+  }): ThreadRecord;
+  /** The one thread this session has for a plan node, if any — the plan branch's idempotency. */
+  getThreadByPlanNode(sessionId: string, planNodeId: string): ThreadRecord | undefined;
+  listThreadMessagesForUser(userId: string, sessionId: string): ThreadMessageRow[];
+  /**
+   * Oldest live, still-unassigned messages of a session, capped. The classifier segments a
+   * run of these into turns. Bare session id: the sync's caller resolved the owner.
+   */
+  listPendingThreadMessages(sessionId: string, limit: number): Message[];
+  countPendingThreadMessagesForUser(userId: string, sessionId: string): number;
+  countPendingThreadMessages(sessionId: string): number;
+  /**
+   * Attach the named live messages to a thread. Only still-unassigned messages of THIS
+   * session move, so a stale id list can never hijack another session's message or reassign
+   * one a concurrent sync already placed. Returns how many moved.
+   */
+  assignMessagesToThread(sessionId: string, messageIds: string[], threadId: string): number;
+
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
   /** The same numbers for one conversation. `undefined` when it is not the caller's. */
@@ -1476,6 +1556,17 @@ export function createDb(dbPath: string): AppDb {
     ]) {
       ensureColumn(db, table, "deleted_at", "deleted_at TEXT");
     }
+
+    /*
+     * The thread widget names the topic chain a message belongs to. Nullable and nothing to
+     * backfill: a message written before the column simply reads as "not classified yet",
+     * which is the same state a freshly-sent message is in until the post-turn sync runs.
+     * The index covers both the pending read (thread_id IS NULL) and the thread join.
+     */
+    ensureColumn(db, "messages", "thread_id", "thread_id TEXT");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(session_id, thread_id, created_at)"
+    );
   }).immediate();
 
   const now = () => new Date().toISOString();
@@ -1996,6 +2087,66 @@ export function createDb(dbPath: string): AppDb {
             grade_tool_call_id = @gradeToolCallId, graded_at = @gradedAt
       WHERE id = @id AND session_id = @sessionId AND status = 'answered'`
   );
+
+  /* -------------------------------- threads ------------------------------- */
+  const stmtListThreadsForUser = db.prepare(
+    `SELECT t.* FROM session_threads t
+       JOIN sessions s ON s.id = t.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE t.session_id = @sessionId AND w.user_id = @userId
+      ORDER BY t.created_at ASC, t.rowid ASC`
+  );
+  const stmtListThreadsBySession = db.prepare(
+    "SELECT * FROM session_threads WHERE session_id = ? ORDER BY created_at ASC, rowid ASC"
+  );
+  const stmtListThreadMessagesBySession = db.prepare(
+    `SELECT m.thread_id AS thread_id, m.id AS id, m.role AS role, m.content AS content,
+            m.created_at AS created_at
+       FROM messages m
+      WHERE m.session_id = ? AND m.deleted_at IS NULL AND m.thread_id IS NOT NULL
+      ORDER BY m.created_at ASC, m.rowid ASC`
+  );
+  const stmtInsertThread = db.prepare(
+    `INSERT INTO session_threads (id, session_id, branch, title, plan_node_id, created_at, updated_at)
+     VALUES (@id, @sessionId, @branch, @title, @planNodeId, @now, @now)`
+  );
+  const stmtGetThreadByPlanNode = db.prepare(
+    "SELECT * FROM session_threads WHERE session_id = ? AND plan_node_id = ?"
+  );
+  const stmtListThreadMessagesForUser = db.prepare(
+    `SELECT m.thread_id AS thread_id, m.id AS id, m.role AS role, m.content AS content,
+            m.created_at AS created_at
+       FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE m.session_id = @sessionId AND w.user_id = @userId
+        AND m.deleted_at IS NULL AND m.thread_id IS NOT NULL
+      ORDER BY m.created_at ASC, m.rowid ASC`
+  );
+  // `rowid` is the tiebreak `stmtListMessages` does not need but the pending run does: two
+  // rows sharing a millisecond must keep insertion order for the turn segmentation to hold.
+  const stmtListPendingThreadMessages = db.prepare(
+    `SELECT * FROM messages
+      WHERE session_id = ? AND deleted_at IS NULL AND thread_id IS NULL
+      ORDER BY created_at ASC, rowid ASC LIMIT ?`
+  );
+  const stmtCountPendingThreadMessagesForUser = db.prepare(
+    `SELECT COUNT(*) AS n FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE m.session_id = @sessionId AND w.user_id = @userId
+        AND m.deleted_at IS NULL AND m.thread_id IS NULL`
+  );
+  const stmtCountPendingThreadMessages = db.prepare(
+    `SELECT COUNT(*) AS n FROM messages
+      WHERE session_id = ? AND deleted_at IS NULL AND thread_id IS NULL`
+  );
+  const stmtAssignMessagesToThread = (messageIds: string[]) =>
+    db.prepare(
+      `UPDATE messages SET thread_id = ?
+        WHERE session_id = ? AND deleted_at IS NULL AND thread_id IS NULL
+          AND id IN (${messageIds.map(() => "?").join(",")})`
+    );
 
   /*
    * Two narrow projections for the statistics: the role (so a count can tell the two apart if it
@@ -2680,6 +2831,101 @@ export function createDb(dbPath: string): AppDb {
           gradedAt: input.gradedAt,
         }).changes > 0
       );
+    },
+
+    listThreadsForUser(userId, sessionId) {
+      return (stmtListThreadsForUser.all({ userId, sessionId }) as ThreadRow[]).map(mapThread);
+    },
+
+    listThreadsBySession(sessionId) {
+      return (stmtListThreadsBySession.all(sessionId) as ThreadRow[]).map(mapThread);
+    },
+
+    listThreadMessagesBySession(sessionId) {
+      return (
+        stmtListThreadMessagesBySession.all(sessionId) as Array<{
+          thread_id: string;
+          id: string;
+          role: "user" | "assistant";
+          content: string;
+          created_at: string;
+        }>
+      ).map((r) => ({
+        threadId: r.thread_id,
+        id: r.id,
+        role: r.role,
+        content: r.content,
+        createdAt: r.created_at,
+      }));
+    },
+
+    listSessionMessages(sessionId) {
+      return listMessagesOf(sessionId);
+    },
+
+    insertThread(input) {
+      const ts = now();
+      stmtInsertThread.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        branch: input.branch,
+        title: input.title,
+        planNodeId: input.planNodeId ?? null,
+        now: ts,
+      });
+      return mapThread(
+        db.prepare("SELECT * FROM session_threads WHERE id = ?").get(input.id) as ThreadRow
+      );
+    },
+
+    getThreadByPlanNode(sessionId, planNodeId) {
+      const r = stmtGetThreadByPlanNode.get(sessionId, planNodeId) as ThreadRow | undefined;
+      return r ? mapThread(r) : undefined;
+    },
+
+    listThreadMessagesForUser(userId, sessionId) {
+      return (
+        stmtListThreadMessagesForUser.all({ userId, sessionId }) as Array<{
+          thread_id: string;
+          id: string;
+          role: "user" | "assistant";
+          content: string;
+          created_at: string;
+        }>
+      ).map((r) => ({
+        threadId: r.thread_id,
+        id: r.id,
+        role: r.role,
+        content: r.content,
+        createdAt: r.created_at,
+      }));
+    },
+
+    listPendingThreadMessages(sessionId, limit) {
+      return (stmtListPendingThreadMessages.all(sessionId, limit) as MessageRow[]).map(
+        mapMessage
+      );
+    },
+
+    countPendingThreadMessagesForUser(userId, sessionId) {
+      const row = stmtCountPendingThreadMessagesForUser.get({ userId, sessionId }) as {
+        n: number;
+      };
+      return row.n;
+    },
+
+    countPendingThreadMessages(sessionId) {
+      const row = stmtCountPendingThreadMessages.get(sessionId) as { n: number };
+      return row.n;
+    },
+
+    assignMessagesToThread(sessionId, messageIds, threadId) {
+      if (messageIds.length === 0) return 0;
+      return stmtAssignMessagesToThread(messageIds).run(
+        threadId,
+        sessionId,
+        ...messageIds
+      ).changes;
     },
 
     statsForWorkspace(userId, workspaceId) {

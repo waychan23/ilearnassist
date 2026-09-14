@@ -236,6 +236,25 @@ session-scoped plan widget. The split is:
   node before teaching it, stay on the plan at node boundaries, and after an off-plan detour
   ask the user whether to return to the track.
 
+### The thread widget (`threads.ts`, `agent/threads.ts`)
+
+The third session widget derives topic chains — a message belongs to one `session_threads`
+row through `messages.thread_id` — by classifying each *turn* (a user message plus its
+assistant replies) with a small out-of-band model call, the `agent/title.ts` shape:
+non-streaming, `maxRetries: 0`, failures swallowed. Unlike the titler it runs after **every**
+finished turn while the widget is installed, is never awaited (fire-and-forget from
+`finishTurn`, so `done` does not wait), and joins one in-flight promise per session. Turns are
+the oldest run of unassigned messages, at most eight per call, and an unusable answer (any
+malformed JSON, or a count that is not exactly the turn count) writes nothing — the messages
+stay unassigned and the identical idempotent call retries them, so backfill and keeping up
+are one code path. One rule beats the model: a turn whose own `ila_update_plan_progress`
+call moved a node is that node's thread regardless of the answer, because history has to be
+classifiable against *past* plan status. The `计划`/`其他` headings are rendered, not stored —
+their labels are translated and the plan branch nests off the live plan tree on the client
+(`utils/threadTree.ts`), so a renamed node never freezes a title. A widget **group** bundles
+widgets only in the install UI (`WIDGET_GROUPS`, client-side): one master button loops the
+ordinary per-widget writes; there is deliberately no group row or route.
+
 ### The workspace file browser (`files.ts`)
 
 The sidebar's second panel: a read-only tree of the active workspace, expanded one level at a

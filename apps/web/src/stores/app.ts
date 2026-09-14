@@ -58,6 +58,7 @@ import {
   isPlatformAdmin,
   PLAN_TOOL_NAMES,
   QUIZ_REVIEW_TOOL_NAME,
+  widgetGroupsForScope,
   type InteractiveAnswer,
   type QuizAnswer,
   type QuizQuestionView,
@@ -999,6 +1000,35 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Install or uninstall a whole client-side widget **group** (e.g. 计划/测验/脉络) as one
+   * click: the ordinary per-widget write for every member this scope accepts, sequential so
+   * the hooks run in order. A group has no row, so this is sugar over `setWidgetEnabled`.
+   * For the active object members already in the target state are skipped, which keeps an
+   * install-all click from re-firing an installed widget's setup hook.
+   */
+  async function setWidgetGroupEnabled(
+    scope: WidgetScope,
+    scopeId: string,
+    groupId: string,
+    enabled: boolean
+  ): Promise<void> {
+    const group = widgetGroupsForScope(scope).find((g) => g.id === groupId);
+    if (!group) return;
+    const activeList =
+      scope === "workspace"
+        ? scopeId === activeWorkspaceId.value
+          ? workspaceWidgets.value
+          : null
+        : scopeId === activeSessionId.value
+          ? sessionWidgets.value
+          : null;
+    for (const widgetId of group.members) {
+      if (activeList && activeList.find((w) => w.id === widgetId)?.enabled === enabled) continue;
+      await setWidgetEnabled(scope, scopeId, widgetId, enabled);
+    }
+  }
+
+  /**
    * Run a widget's lifecycle hook, swallowing whatever it throws.
    *
    * Swallowed rather than reported, and the ordering is what makes that honest: the record is
@@ -1934,6 +1964,7 @@ export const useAppStore = defineStore("app", () => {
     deleteSession,
     loadWorkspaceWidgets,
     setWidgetEnabled,
+    setWidgetGroupEnabled,
     setProviderAndModel,
     updateSessionPrompt,
     saveCopilot,

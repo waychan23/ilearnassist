@@ -47,7 +47,13 @@ export type WidgetEvent =
    * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
    * event. Scrolling to the card (rather than the message top) lands on the node's start.
    */
-  | { type: "chat.jump"; toolCallId: string };
+  | { type: "chat.jump"; toolCallId: string }
+  /**
+   * A widget asked to scroll the conversation to a message row — a thread's first message.
+   * Sibling of `chat.jump`, which targets a tool-call card: message anchors are
+   * `[data-message-id]`, and the minimap already scrolls to them through `scrollToMessage`.
+   */
+  | { type: "chat.jumpToMessage"; messageId: string };
 
 type WidgetEventHandler = (event: WidgetEvent) => void;
 

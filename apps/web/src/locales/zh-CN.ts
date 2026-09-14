@@ -833,6 +833,37 @@ export default {
       hint: "本会话的小测题目：按章节归类、错题筛选、补答与追问。",
       noSession: "打开一个会话后，这里会显示它的测验题目。",
     },
+    thread: {
+      name: "脉络",
+      hint: "随会话自动整理的主题脉络：按计划章节与背景补充归类，点击可定位到对应消息。",
+      noSession: "打开一个会话后，这里会随对话自动整理它的脉络。",
+    },
+  },
+
+  /** Client-side widget groups: a master row in the install list, no row of their own. */
+  widgetGroups: {
+    study: {
+      name: "学习套装",
+      hint: "一次安装/卸载 计划、测验、脉络 三个控件。",
+    },
+  },
+
+  /**
+   * The thread widget's own strings. Widget display name/hint live under `widgets.thread`;
+   * these are the panel and its tree.
+   */
+  thread: {
+    planBranch: "计划",
+    otherBranch: "其他（背景补充）",
+    empty: "对话进行中会在这里自动整理出主题脉络。",
+    syncing: "正在整理脉络…",
+    unassigned: "还有 {count} 条消息待整理",
+    /** A tool-only assistant message has no text to preview. */
+    toolCall: "（工具调用）",
+    locate: "定位到这条脉络开始的消息",
+    expand: "展开",
+    collapse: "折叠",
+    nodeMissing: "已从计划中删除",
   },
 
   /**
