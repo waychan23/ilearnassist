@@ -271,20 +271,29 @@ function render(next: PanelState): void {
   dataDirHint.textContent = needsDataDir ? t("hint.chooseDataDir") : "";
   dataDirHint.hidden = !needsDataDir;
 
-  // Only while the server is up: the reset is a conversation with it, and a button that could
-  // only fail is one the user has to guess the reason for.
-  buttons.resetAdmin.disabled = !running || resetting;
-  buttons.resetAdmin.textContent = resetting ? t("reset.working") : t("action.resetAdmin");
-
-  buttons.open.disabled = !running;
-  buttons.browser.disabled = !running;
-  buttons.copy.disabled = !running;
   // Start is also refused while an administrator is missing: the server exits on it, so a
   // button that produced "failed: exited 1" would be the exact failure the card prevents.
   // The card's own create control needs a folder to write into, and is inert until one is
   // chosen.
   const waitingForAdmin = needsAdmin === true;
   adminCard.hidden = !waitingForAdmin;
+
+  /*
+   * The reset is **not** gated on the server running, and that is the fix for a button that
+   * was unusable in the state it exists for. It is a one-shot child now — the same bundle the
+   * server comes from — so it works with the server up, stopped, or refusing to start; the last
+   * of those is exactly when somebody reaches for it.
+   *
+   * What it does need is a data root to write into, and something to write: while the create
+   * card is up there is provably no administrator yet, and a press could only come back with
+   * "there is nothing here to recover" under a card that already said so.
+   */
+  buttons.resetAdmin.disabled = needsDataDir || waitingForAdmin || resetting;
+  buttons.resetAdmin.textContent = resetting ? t("reset.working") : t("action.resetAdmin");
+
+  buttons.open.disabled = !running;
+  buttons.browser.disabled = !running;
+  buttons.copy.disabled = !running;
   buttons.adminCreate.disabled = needsDataDir || creating;
   buttons.start.disabled = busy || running || waitingForAdmin;
   buttons.stop.disabled = !(busy || running);
@@ -357,7 +366,7 @@ async function submitCreateAdmin(): Promise<void> {
   adminOk.hidden = true;
 
   if (!username || !password) {
-    showCreateError(password ? t("create.fault.USERNAME_REQUIRED") : t("create.fault.PASSWORD_REQUIRED"));
+    showCreateError(password ? t("cli.fault.USERNAME_REQUIRED") : t("cli.fault.PASSWORD_REQUIRED"));
     return;
   }
   if (password !== adminConfirm.value) {
@@ -396,12 +405,18 @@ function showCreateError(message: string): void {
   adminError.hidden = false;
 }
 
-/** A fault sentence: the CLI code if the catalog has it, else the sentence the child sent. */
+/**
+ * A fault sentence: the CLI code if the catalog has it, else the sentence the child sent.
+ *
+ * One function for both commands that spawn the CLI — creating the first administrator and
+ * resetting a forgotten password — because it is one conversation with one child, and a code
+ * means the same thing on either form.
+ */
 function describeAdminFault(
   catalog: PanelMessages,
   fault: { code: string; message?: string; params?: Record<string, string | number> }
 ): string {
-  const key = `create.fault.${fault.code}` as keyof PanelMessages;
+  const key = `cli.fault.${fault.code}` as keyof PanelMessages;
   // An unknown code renders the child's own sentence: `translate` falls back to the key, but
   // a raw code in the UI is less useful than the message the CLI already wrote.
   if (key in catalog) return translate(catalog, key, fault.params);
@@ -439,7 +454,8 @@ function renderReset(): void {
   // left showing the previous run's password — which is exactly the sort of stale credential
   // a reader would take for a new one.
   resetBox.dataset.state = "fault";
-  resetLead.textContent = t(`reset.fault.${reset.fault.code}` as keyof PanelMessages);
+  // The same catalog the create form renders, because it is the same child refusing.
+  resetLead.textContent = describeAdminFault(messages, reset.fault);
   resetUsername.textContent = "";
   resetPassword.textContent = "";
 }

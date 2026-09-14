@@ -198,6 +198,7 @@ The same CLI is the headless path on a machine with no panel:
 pnpm --filter @ilearnassist/server cli status                                        # is there an administrator?
 pnpm --filter @ilearnassist/server cli create-admin --username <you> --generate     # invent a password, shown once
 pnpm --filter @ilearnassist/server cli create-admin --username <you> --password-stdin   # type your own
+pnpm --filter @ilearnassist/server cli reset-admin [--username <name>]              # forgotten password
 ```
 
 ### The panel's language
@@ -297,28 +298,33 @@ administrator forgot their password is a directory full of files nobody can open
 carries that way in: **Reset superadmin password** generates a new one, shows it once, and signs
 the account out everywhere so the old one really is gone.
 
-**What makes it safe is `ILA_PANEL_TOKEN`.** The panel generates a secret when it launches,
-passes it to the server child it spawns, and sends it with the reset request; the server accepts
-`POST /api/auth/panel-reset` from nothing else. The secret is never written anywhere — not to
-`desktop.json`, not to the config overlay, not to a log line — so it does not exist between
-launches, and reaching the server over the network does not get you one. A launch that was not
-the panel (a checkout, a `pnpm dev`) has no token, and the route answers 404: it is simply not
-there.
+**It does not need the server to be running**, and that is the whole shape of it. The panel
+spawns the same `cli.mjs` it uses to create the first administrator — a one-shot child that
+writes the row itself — so the button means the same thing whether the server is up, stopped, or
+refusing to start. The last of those is exactly when somebody reaches for it.
 
-What it rests on is that sitting at the machine is the proof of identity. That is a real claim
-and not a figure of speech — anyone who can run this panel can also read the database file
-directly — so the token is not what makes the feature safe; it is what keeps the feature from
-being reachable from somewhere else.
+It used to be an HTTP route, guarded by a per-launch secret the panel shared with the server it
+spawned. The secret bought nothing the process boundary did not already buy: the panel could
+always write the database directly, because it runs on the operator's machine and holds the
+CLI — and anything that can run this panel can read the database file anyway. What the route
+did buy was a dependency on a healthy server, in the one control that exists for the moment
+something is wrong. So there is no `ILA_PANEL_TOKEN` any more, and no route; a checkout gets
+the same recovery through the terminal:
+
+```bash
+pnpm --filter @ilearnassist/server cli reset-admin              # the first enabled superadmin
+pnpm --filter @ilearnassist/server cli reset-admin --username <name>
+```
+
+It is also the **only** way a superadmin's own password is replaced — the web console refuses
+that outright (`PANEL_RESET_REQUIRED`), because a console reached with a credential the caller
+already holds is a weaker second way to the one credential that can undo the installation. An
+ordinary administrator is not in that position and changes their own password normally.
 
 The confirmation in front of it is not ceremony either. This replaces the credential of the one
 account that can do everything, and unlike disabling a user there is no second administrator
 behind it to put things right.
 
-**It is also the only way a superadmin can replace their own password.** The web console refuses
-a superadmin's own reset outright (`PANEL_RESET_REQUIRED`), because that console is reached with
-a credential the caller already holds — a self-reset there would be a second and weaker way to
-replace the one credential that can undo the installation. An ordinary administrator is not in
-that position and resets their own from the web like any other password change.
 
 ## Closing the window, and quitting
 
@@ -472,6 +478,7 @@ inputs as arguments:
 | `serverProcess.test.ts` | the whole state machine, against real child processes |
 | `lan.test.ts` | which address a phone can reach, and that it does not change between calls |
 | `settings.test.ts` | that no state of the preferences file can stop the app from opening |
+| `admin.test.ts` | the CLI boundary (argv, stdin, both streams, exits) and the Start gate |
 | `qr.test.ts` | that a decoder reads the URL back out of the code |
 | `messages.test.ts` | the panel's two catalogs |
 

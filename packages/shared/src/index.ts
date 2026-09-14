@@ -1186,6 +1186,15 @@ export const ADMIN_CLI_ERROR_CODES = [
   ...CREDENTIAL_ERROR_CODES,
   /** An enabled superadmin already exists, and there is deliberately only ever one bootstrap. */
   "ADMIN_EXISTS",
+  /**
+   * There is no administrator to act on.
+   *
+   * Distinct from `ADMIN_EXISTS` rather than folded into `USER_NOT_FOUND`, because the two
+   * commands that produce it are asking different questions: `reset-admin` on a data root
+   * nobody has set up is "there is nothing here to recover", which the panel says in the same
+   * breath as offering to create one.
+   */
+  "ADMIN_NOT_FOUND",
   /** No data root has been chosen — `ILA_DATA_DIR` is unset. */
   "DATA_DIR_MISSING",
   /** The path exists but is a file, or cannot be read as a directory. */
@@ -1262,7 +1271,23 @@ export interface AdminCreateResult {
   password?: string;
 }
 
-export type AdminCliResult = AdminStatusResult | AdminCreateResult;
+/**
+ * A superadmin's password, replaced by the control panel.
+ *
+ * The same shape as `AdminCreateResult`'s success arm and for the same reason: the generated
+ * password is shown once and only a hash is stored, so this reply is the only place it exists.
+ * `generated` is not a flag here — the panel never chooses this password, and a variant that
+ * could be either would be an arm nobody uses.
+ */
+export interface AdminResetResult {
+  ok: true;
+  command: "reset-admin";
+  dataRoot: string;
+  username: string;
+  password: string;
+}
+
+export type AdminCliResult = AdminStatusResult | AdminCreateResult | AdminResetResult;
 
 /** Creating an account from the console. The password is the server's to invent. */
 export interface CreateUserInput {

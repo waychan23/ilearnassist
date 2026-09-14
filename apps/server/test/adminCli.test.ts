@@ -2,7 +2,12 @@ import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdminCliErrorCode, AdminCreateResult, AdminStatusResult } from "@ilearnassist/shared";
+import type {
+  AdminCliErrorCode,
+  AdminCreateResult,
+  AdminResetResult,
+  AdminStatusResult,
+} from "@ilearnassist/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { verifyPassword } from "../src/auth.js";
 import { createDb } from "../src/db.js";
@@ -12,6 +17,8 @@ import {
   createAdmin,
   noAdministratorMessage,
   NoAdministratorError,
+  PANEL_LAUNCH_ENV,
+  resetAdmin,
 } from "../src/adminCli.js";
 import { dataLayout } from "../src/paths.js";
 import { startBareServer } from "./helpers/tempEnv.js";
@@ -57,7 +64,10 @@ function unreadableDatabase(): string {
   return root;
 }
 
-type AnyOutcome = Awaited<ReturnType<typeof createAdmin>> | ReturnType<typeof adminStatus>;
+type AnyOutcome =
+  | Awaited<ReturnType<typeof createAdmin>>
+  | Awaited<ReturnType<typeof resetAdmin>>
+  | ReturnType<typeof adminStatus>;
 
 /** The envelope's error code, asserting the outcome failed. */
 function codeOf(outcome: AnyOutcome): AdminCliErrorCode {
@@ -76,8 +86,16 @@ function statusOf(outcome: AnyOutcome): AdminStatusResult {
 
 /** The create value, asserting that is what came back. */
 function createOf(outcome: AnyOutcome): AdminCreateResult {
-  if (!outcome.ok || outcome.value.command === "status") {
+  if (!outcome.ok || (outcome.value.command !== "create-admin" && outcome.value.command !== "ensure-admin")) {
     throw new Error(`expected a create result, got ${JSON.stringify(outcome)}`);
+  }
+  return outcome.value;
+}
+
+/** The reset value, asserting that is what came back. */
+function resetOf(outcome: AnyOutcome): AdminResetResult {
+  if (!outcome.ok || outcome.value.command !== "reset-admin") {
+    throw new Error(`expected a reset result, got ${JSON.stringify(outcome)}`);
   }
   return outcome.value;
 }
@@ -372,16 +390,163 @@ describe("the boot refusal", () => {
   });
 
   it("names the panel when it launched the process, and the CLI otherwise", () => {
-    // Two readers of the same refusal: the one with the button and the one with the command.
-    const previous = process.env.ILA_PANEL_TOKEN;
+    // Two readers of the same refusal: the one with the button three centimetres away, and the
+    // one with a terminal. Telling either about the other's remedy is a sentence the reader has
+    // to translate first.
+    //
+    // The flag is a *flag* — the env var used to carry a launch-scoped secret guarding a
+    // recovery route, and it only ever decided which of these two sentences to print.
+    const previous = process.env[PANEL_LAUNCH_ENV];
     try {
-      delete process.env.ILA_PANEL_TOKEN;
+      delete process.env[PANEL_LAUNCH_ENV];
       expect(noAdministratorMessage()).toContain("cli create-admin");
-      process.env.ILA_PANEL_TOKEN = "a-launch-scoped-secret";
+      process.env[PANEL_LAUNCH_ENV] = "1";
       expect(noAdministratorMessage()).toContain("control panel");
     } finally {
-      if (previous === undefined) delete process.env.ILA_PANEL_TOKEN;
-      else process.env.ILA_PANEL_TOKEN = previous;
+      if (previous === undefined) delete process.env[PANEL_LAUNCH_ENV];
+      else process.env[PANEL_LAUNCH_ENV] = previous;
     }
+  });
+});
+
+/**
+ * `reset-admin`: the way back in for a forgotten password.
+ *
+ * The panel used to reach this through an HTTP route guarded by a per-launch secret. It is a
+ * CLI command now, and the reason is the one thing that test could not assert: it has to work
+ * **with the server stopped**, because a forgotten password is often found in the same moment
+ * as something else being wrong. What is pinned here is that it is a real write, that it signs
+ * the account out, and that it refuses everything it should.
+ */
+describe("reset-admin", () => {
+  it("replaces the superadmin's password, and only a hash is kept", async () => {
+    await createAdmin({ dataRoot: root, username: "Ada", password: "the-old-one" });
+
+    const value = resetOf(await resetAdmin({ dataRoot: root }));
+
+    expect(value.username).toBe("Ada");
+    expect(value.password).not.toBe("the-old-one");
+    expect(value.password.length).toBeGreaterThanOrEqual(12);
+
+    // The new one verifies and the old one does not — read straight out of the file, because
+    // the point is what was written and not what a route would say about it.
+    const db = new Database(dbFile(), { readonly: true });
+    try {
+      const row = db.prepare("SELECT password_hash AS h FROM users WHERE username = 'Ada'").get() as {
+        h: string;
+      };
+      expect(row.h).not.toContain(value.password);
+      expect(await verifyPassword(value.password, row.h)).toBe(true);
+      expect(await verifyPassword("the-old-one", row.h)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("leaves `mustChangePassword` clear", async () => {
+    // Whoever runs this is holding the machine, and the value they are about to use is one they
+    // just generated for themselves. A screen demanding they replace it would be a step with
+    // nothing behind it.
+    await createAdmin({
+      dataRoot: root,
+      username: "Ada",
+      password: "the-old-one",
+    });
+    await resetAdmin({ dataRoot: root });
+
+    const db = new Database(dbFile(), { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT must_change_password AS m FROM users WHERE username = 'Ada'")
+        .get() as { m: number };
+      expect(row.m).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("ends every session the account holds, which is half of what a reset is", async () => {
+    // A forgotten password that is replaced while the old session is still live has not really
+    // been replaced.
+    //
+    // Booted on the *same* root the CLI wrote to, because the claim is about a running server
+    // seeing a write another process made — which is exactly the shape of the panel using this
+    // while the server is up.
+    await createAdmin({ dataRoot: root, username: "Ada", password: "the-old-one" });
+    const env = await startBareServer({ dataRoot: root });
+    try {
+      const signedIn = await env.server.app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { username: "Ada", password: "the-old-one" },
+      });
+      const { tokens } = signedIn.json<{ tokens: { accessToken: string } }>();
+      const bearer = { authorization: `Bearer ${tokens.accessToken}` };
+      expect((await env.server.app.inject({ method: "GET", url: "/api/auth/me", headers: bearer })).statusCode).toBe(200);
+
+      const value = resetOf(await resetAdmin({ dataRoot: root }));
+
+      // The token that worked a moment ago does not, which is the whole claim.
+      expect((await env.server.app.inject({ method: "GET", url: "/api/auth/me", headers: bearer })).statusCode).toBe(401);
+      expect(
+        (
+          await env.server.app.inject({
+            method: "POST",
+            url: "/api/auth/login",
+            payload: { username: "Ada", password: value.password },
+          })
+        ).statusCode
+      ).toBe(200);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("works on a data root with no database at all, by refusing", async () => {
+    // Not "creates one": a question about a folder nobody has set up must not be the thing that
+    // puts a database in it.
+    await expect(resetAdmin({ dataRoot: join(root, "nothing-here") })).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(codeOf(await resetAdmin({ dataRoot: join(root, "nothing-here") }))).toBe("ADMIN_NOT_FOUND");
+  });
+
+  it("refuses when there is no administrator to reset", async () => {
+    freshDatabase();
+    expect(codeOf(await resetAdmin({ dataRoot: root }))).toBe("ADMIN_NOT_FOUND");
+  });
+
+  it("refuses an ordinary account, and refuses a name it cannot find", async () => {
+    // The panel recovers the credential that can undo the installation. An ordinary account's
+    // password is the web console's business, and this command is not a way round that.
+    const db = createDb(dbFile());
+    try {
+      const { createAccountRow } = await import("../src/auth.js");
+      const { hashPassword } = await import("../src/auth.js");
+      const { dataLayout: layout } = await import("../src/paths.js");
+      createAccountRow(db, layout(root), {
+        username: "Bob",
+        roles: ["user"],
+        passwordHash: await hashPassword("bobs-password"),
+        mustChangePassword: false,
+      });
+    } finally {
+      db.raw.close();
+    }
+
+    expect(codeOf(await resetAdmin({ dataRoot: root, username: "Bob" }))).toBe("ADMIN_NOT_FOUND");
+    expect(codeOf(await resetAdmin({ dataRoot: root, username: "Nobody" }))).toBe("ADMIN_NOT_FOUND");
+  });
+
+  it("resets the administrator named, case-insensitively", async () => {
+    await createAdmin({ dataRoot: root, username: "Ada", password: "the-old-one" });
+    expect(resetOf(await resetAdmin({ dataRoot: root, username: "ada" })).username).toBe("Ada");
+  });
+
+  it("refuses a database this build cannot read, rather than writing into it", async () => {
+    // A write to a file whose schema is unknown is a write nobody can undo. The read-only half
+    // of this module refuses these; the write half has to as well.
+    unreadableDatabase();
+    expect(codeOf(await resetAdmin({ dataRoot: root }))).toBe("SCHEMA_UNREADABLE");
   });
 });

@@ -69,6 +69,18 @@ const NEEDS_ADMIN: PanelState = {
  * it refuses to run without a data root — so the panel's job is to ask, and nothing that
  * needs a running server should look available.
  */
+/**
+ * A data folder that is set up, with the server **stopped**.
+ *
+ * The ordinary state a forgotten password is found in — and the one the reset button used to be
+ * dead in, because the reset was a request to the running server. Nothing about it needs the
+ * server now.
+ */
+const STOPPED_WITH_ADMIN: PanelState = {
+  ...RUNNING,
+  server: { state: "stopped", url: null, fault: null, dataDir: DATA_DIR, logs: [] },
+};
+
 const NEEDS_DATA_DIR: PanelState = {
   server: { state: "stopped", url: null, fault: null, dataDir: "", logs: [] },
   sharedOnLan: false,
@@ -443,13 +455,22 @@ test.describe("resetting the administrator's password", () => {
   const RESET = '[data-action="reset-admin"]';
   const BOX = '[data-role="reset"]';
 
-  test("is refused while there is no server to ask", async ({ page }) => {
-    // The reset is a request to the *running* server, so a stopped one makes the button
-    // useless — and a control that can only fail is one the user has to guess the reason for.
-    // This is also the empty-data-folder state, which is the same answer for a different
-    // reason: there is nothing listening either way.
+  test("is refused only when there is nowhere to write", async ({ page }) => {
+    // The one state it cannot help in: nobody has said where the data goes, so there is no
+    // database to reset a row in.
     await openPanel(page, NEEDS_DATA_DIR);
     await expect(page.locator(RESET)).toBeDisabled();
+  });
+
+  test("is offered with the server stopped, which is when it is most needed", async ({ page }) => {
+    /*
+     * The bug this spec exists for. The reset used to be a request to the *running* server, so
+     * the one control that exists for "I cannot sign in" needed a healthy server — and a
+     * forgotten password is often found in the same moment as something else being wrong. It is
+     * a one-shot child now, so a stopped server changes nothing.
+     */
+    await openPanel(page, STOPPED_WITH_ADMIN);
+    await expect(page.locator(RESET)).toBeEnabled();
   });
 
   test("is offered once the server is up", async ({ page }) => {
@@ -476,9 +497,9 @@ test.describe("resetting the administrator's password", () => {
   });
 
   test("says which failure it was rather than reporting a generic one", async ({ page }) => {
-    // Three faults, three next moves: start the server, set the installation up, or look at
-    // what the server said. One sentence covering all of them would be advice for one.
-    await openPanel(page, RUNNING, { ok: false, fault: { code: "no_admin" } });
+    // The child's own refusal, rendered from the same catalog the create form uses: it is one
+    // conversation with one process, so a code means the same thing on either form.
+    await openPanel(page, RUNNING, { ok: false, fault: { code: "ADMIN_NOT_FOUND" } });
     await page.locator(RESET).click();
     await expect(page.locator(BOX)).toContainText("还没有超级管理员");
     // No stale value left behind. The box is still in the document — the empty `<code>` is

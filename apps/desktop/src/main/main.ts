@@ -9,7 +9,6 @@ import {
   nativeTheme,
   shell,
 } from "electron";
-import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { PANEL_CHANNELS, type PanelState, type ResetResult } from "../shared/panelApi.js";
@@ -28,7 +27,12 @@ import {
   buildLaunchSpec,
   serverEntryFor,
 } from "./launch.js";
-import { createFirstAdministrator, queryAdministrator } from "./admin.js";
+import {
+  createFirstAdministrator,
+  mayStartServer,
+  queryAdministrator,
+  resetAdministratorPassword,
+} from "./admin.js";
 import { findLanAddress, lanUrlFor } from "./lan.js";
 import { hasExistingData, resolveAppPaths, seedFirstRun, type AppPaths } from "./paths.js";
 import { readSettings, writeSettings, type DesktopSettings } from "./settings.js";
@@ -123,13 +127,19 @@ function resolveDataDir(): string {
 }
 
 /**
- * Whether this data root still needs its first administrator.
+ * Whether this data root has an administrator.
+ *
+ * Held in the **positive** sense, and that is not a style preference — it is the fix for a bug
+ * that made Start do nothing at all. The field used to store `needsAdmin` (the negation) while
+ * both callers read it as "has one" and started only when it was true, so the button worked
+ * exactly once, on an empty data root where the server would then refuse to listen, and never
+ * again. One name for one fact, and the negation happens where it is rendered, in `currentState`.
  *
  * Cached and broadcast as a *hint*; `currentState` stays synchronous and the authoritative
  * answer is asked fresh before a Start and after a create. Undefined until the first check,
  * so the panel neither claims "ready" nor "create one" before it has looked.
  */
-let needsAdmin: boolean | undefined;
+let hasAdmin: boolean | undefined;
 let checkingAdmin = false;
 
 function adminContext() {
@@ -141,27 +151,35 @@ function adminContext() {
   };
 }
 
+/**
+ * Ask the bundled CLI, and answer with what it said.
+ *
+ * The return value is the *answer*, not the cached hint — the callers decide whether to spawn a
+ * server on it, and a stale or absent hint is not an answer. `undefined` means the question
+ * could not be answered at all (no data root, an unreadable database, a CLI that would not run),
+ * which is a third state and not the same as "no administrator".
+ */
 async function refreshAdminState(): Promise<boolean | undefined> {
-  if (checkingAdmin) return needsAdmin;
+  if (checkingAdmin) return hasAdmin;
   const dataDir = resolveDataDir();
   if (!dataDir) {
-    needsAdmin = undefined;
+    hasAdmin = undefined;
     broadcast();
-    return needsAdmin;
+    return hasAdmin;
   }
   checkingAdmin = true;
   try {
     const result = await queryAdministrator(adminContext());
-    if (result.ok) needsAdmin = !result.status.hasAdmin;
+    if (result.ok) hasAdmin = result.status.hasAdmin;
   } catch {
     // A check failing leaves the hint unset rather than wrong: the server's own refusal is
     // the backstop, and an unreadable database is reported when the user tries to create one.
-    needsAdmin = undefined;
+    hasAdmin = undefined;
   } finally {
     checkingAdmin = false;
   }
   broadcast();
-  return needsAdmin;
+  return hasAdmin;
 }
 
 /**
@@ -184,7 +202,9 @@ function currentState(): PanelState {
     lanUrl: settings.sharedOnLan ? lanUrlFor(status.url, lanAddress) : null,
     lanAddress,
     needsDataDir: !resolveDataDir(),
-    needsAdmin,
+    // The negation lives here and only here, so the field the panel renders and the field the
+    // Start gate reads can be one fact under one name.
+    needsAdmin: hasAdmin === undefined ? undefined : !hasAdmin,
     localeChoice,
     locale,
   };
@@ -476,16 +496,6 @@ function refreshTrayMenu(): void {
 
 // ---- wiring ----------------------------------------------------------------
 
-/**
- * The secret this launch shares with the server it spawns.
- *
- * Generated once per launch of the panel and never written anywhere — not to `desktop.json`,
- * not to the config overlay, not to a log line. It exists so the server can tell a request
- * that came from this process from one that came from the network, and a fresh panel is a
- * fresh secret with nothing to revoke. See `ILA_PANEL_TOKEN` in `apps/server/src/auth.ts`.
- */
-let panelToken = "";
-
 function registerIpc(): void {
   ipcMain.handle(PANEL_CHANNELS.getState, () => currentState());
   ipcMain.handle(PANEL_CHANNELS.start, async () => {
@@ -498,8 +508,7 @@ function registerIpc(): void {
     // without an administrator, so a stale "ready" hint here would turn this button into the
     // exact failure ("exited 1", no cause) the create flow exists to prevent. Two layers:
     // the panel refuses before spawning, the server refuses after, and they agree.
-    const has = await refreshAdminState();
-    if (has) {
+    if (mayStartServer(await refreshAdminState())) {
       await server.start();
     }
     return currentState();
@@ -570,24 +579,22 @@ function registerIpc(): void {
 }
 
 /**
- * Ask the server to replace the administrator's password, and report what came back.
+ * Replace the superadmin's password, and report what came back.
  *
- * A conversation with the *child process* rather than a write to the database, and that is
- * deliberate: the server owns the schema, the hashing and the token table, and a second
- * implementation of any of them in the panel is a second thing to keep in step. The secret
- * makes the route reachable only from here; everything else about it is the server's business.
+ * A conversation with a **one-shot child**, not a request to the server, and the difference is
+ * what makes the button work in every state rather than only while the server happens to be up.
+ * It used to be an HTTP route guarded by a per-launch secret, which meant the one control that
+ * exists for "I cannot sign in" also required a healthy running server — and a forgotten
+ * password tends to be discovered in the same moment as something else being wrong.
  *
  * Every failure is described rather than thrown: this is a button on a page, and a rejection
  * crossing the IPC boundary would reach the renderer as an unhandled promise with nothing to
  * render.
  */
 async function resetAdminPassword(): Promise<ResetResult | null> {
-  const url = server.status().url;
-  if (!url) return { ok: false, fault: { code: "not_running" } };
-
   // Confirmed first, and for the same reason choosing a data folder is: this is destructive in
-  // a way the button's four words cannot convey — it replaces the credential of the one
-  // account that can do everything, and signs it out wherever it is.
+  // a way the button's words cannot convey — it replaces the credential of the one account that
+  // can do everything, and signs it out wherever it is.
   const { response } = await dialog.showMessageBox({
     type: "warning",
     message: t("reset.confirmTitle"),
@@ -598,28 +605,7 @@ async function resetAdminPassword(): Promise<ResetResult | null> {
   });
   if (response !== 0) return null;
 
-  try {
-    const res = await fetch(new URL("/api/auth/panel-reset", url), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-ila-panel-token": panelToken },
-      body: "{}",
-    });
-
-    if (res.ok) {
-      const body = (await res.json()) as { user: { username: string }; password: string };
-      return { ok: true, username: body.user.username, password: body.password };
-    }
-    // 404 is the server's "there is no account to reset" — either nobody has been created on
-    // this data root yet, or the build predates the route. The first is the ordinary case and
-    // the one the panel has wording for, so it gets its own answer.
-    if (res.status === 404) return { ok: false, fault: { code: "no_admin" } };
-    return { ok: false, fault: { code: "unreachable", message: `HTTP ${res.status}` } };
-  } catch (error) {
-    return {
-      ok: false,
-      fault: { code: "unreachable", message: error instanceof Error ? error.message : String(error) },
-    };
-  }
+  return resetAdministratorPassword(adminContext());
 }
 
 function buildMenu(): void {
@@ -710,8 +696,6 @@ if (!app.requestSingleInstanceLock()) {
     // frame and then swap it.
     applyLocale(settings.locale);
 
-    panelToken = randomUUID();
-
     server = new ServerProcess(
       // Read at every start, so flipping the switch — or choosing a different data folder —
       // takes effect on the restart that follows it without replacing this object, which
@@ -723,9 +707,11 @@ if (!app.requestSingleInstanceLock()) {
           paths,
           dataDir: resolveDataDir(),
           host: settings.sharedOnLan ? ANY_INTERFACE_HOST : LOOPBACK_HOST,
-          panelToken,
         }),
-      { dataDir: resolveDataDir() }
+      // A function, like the spec above and for the same reason: the user can choose a different
+      // folder while this object is alive, and the panel must show the one they chose rather
+      // than the one it was constructed with. See `ServerProcessOptions.dataDir`.
+      { dataDir: resolveDataDir }
     );
     server.subscribe(broadcast);
 
@@ -745,8 +731,7 @@ if (!app.requestSingleInstanceLock()) {
     //   job is the create control. The check broadcasts `needsAdmin` either way, so the panel
     //   shows the right thing; starting is what the user does once they have made one.
     if (resolveDataDir()) {
-      const has = await refreshAdminState();
-      if (has) await server.start();
+      if (mayStartServer(await refreshAdminState())) await server.start();
     }
 
     app.on("activate", () => showPanel());

@@ -30,8 +30,18 @@ export interface ServerProcessOptions {
   stopTimeoutMs?: number;
   /** Cap on retained output. The panel shows diagnostics, not a transcript. */
   maxLogLines?: number;
-  /** Shown in the status so the user can find their database and workspaces. */
-  dataDir: string;
+  /**
+   * Shown in the status so the user can find their database and workspaces.
+   *
+   * A **function**, like the launch spec above, and for the same reason: the data root is the
+   * one thing the user can change while the panel is running. Passed by value it is captured at
+   * construction, so choosing a folder moved the server to it and left the row above showing the
+   * old one — or, on a first choice, an empty box where the path should be — until the app was
+   * restarted and rebuilt this object. Nothing about the *supervision* changes when the root
+   * changes (there is no process to reconcile; `chooseDataDir` stops the server first), so the
+   * class only ever needs to be able to *report* the current one.
+   */
+  dataDir: string | (() => string);
   /** Emission coalescing for pure log lines; see `#emitLogsSoon`. */
   logFlushMs?: number;
 }
@@ -48,7 +58,7 @@ const DEFAULTS = {
 
 export class ServerProcess {
   readonly #resolveSpec: () => LaunchSpec;
-  readonly #options: Required<Omit<ServerProcessOptions, "dataDir">> & { dataDir: string };
+  readonly #options: Required<Omit<ServerProcessOptions, "dataDir">> & { dataDir: () => string };
 
   #child: ChildProcess | null = null;
   #state: ServerState = "stopped";
@@ -66,7 +76,12 @@ export class ServerProcess {
 
   constructor(resolveSpec: (() => LaunchSpec) | LaunchSpec, options: ServerProcessOptions) {
     this.#resolveSpec = typeof resolveSpec === "function" ? resolveSpec : () => resolveSpec;
-    this.#options = { ...DEFAULTS, ...options };
+    const { dataDir, ...rest } = options;
+    this.#options = {
+      ...DEFAULTS,
+      ...rest,
+      dataDir: typeof dataDir === "function" ? dataDir : () => dataDir,
+    };
   }
 
   /** A snapshot. Callers never hold a reference into this object's mutable state. */
@@ -75,7 +90,9 @@ export class ServerProcess {
       state: this.#state,
       url: this.#url,
       fault: this.#fault,
-      dataDir: this.#options.dataDir,
+      // Read at snapshot time, not at construction: see the note on
+      // `ServerProcessOptions.dataDir`.
+      dataDir: this.#options.dataDir(),
       logs: [...this.#logs],
     };
   }

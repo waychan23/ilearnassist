@@ -306,44 +306,6 @@ export function revokeAllTokens(db: AppDb, userId: string, now: Date = new Date(
   return db.revokeUserTokens(userId, now.toISOString());
 }
 
-/* --------------------------------- the panel --------------------------------- */
-
-/**
- * The environment variable the control panel puts a launch-scoped secret in.
- *
- * The panel is the only thing that can recover a forgotten administrator password, because
- * by definition nobody is signed in when it is needed. It is not a back door for a different
- * reason than it looks: the secret is generated per launch, passed only to the child process
- * the panel itself spawned, and never written anywhere. Reaching the server from the network
- * does not get you one, and restarting the panel invalidates the old one.
- */
-export const PANEL_TOKEN_ENV = "ILA_PANEL_TOKEN";
-
-/** The header that secret travels in. Not `Authorization` — this is not a user's credential. */
-export const PANEL_TOKEN_HEADER = "x-ila-panel-token";
-
-export function panelToken(): string | undefined {
-  const value = process.env[PANEL_TOKEN_ENV];
-  return value && value.length > 0 ? value : undefined;
-}
-
-/**
- * Whether a presented secret is the panel's.
- *
- * Compared in constant time, and false for every way either side can be missing — no panel
- * token configured, no header sent, different lengths. The length check before
- * `timingSafeEqual` gives nothing away: a secret's length is not the part that is secret, and
- * `timingSafeEqual` throws on unequal buffers rather than answering.
- */
-export function panelTokenMatches(provided: string | undefined): boolean {
-  const expected = panelToken();
-  if (!expected || !provided) return false;
-  const a = Buffer.from(provided, "utf8");
-  const b = Buffer.from(expected, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
 /* ---------------------------------- accounts --------------------------------- */
 
 /**

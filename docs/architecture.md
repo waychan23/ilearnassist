@@ -684,10 +684,10 @@ a provider's `baseURL` is where every conversation's prompts go, and testing a p
 
 **Every route requires a session unless it says `config: { public: true }`.** One `onRequest`
 hook, deny by default, so a route added without a thought about auth is refused rather than
-open — the same move as the `read_document` whitelist. Six routes opt out: `health`,
-`auth/login`, `auth/refresh`, `auth/logout`, `auth/me` (obtaining a token, spending one, and
-asking whether you already hold a session) and `auth/panel-reset` (which carries the panel's
-secret instead of a session). The same hook enforces the **pending password change**: while
+open — the same move as the `read_document` whitelist. Five routes opt out: `health`,
+`auth/login`, `auth/refresh`, `auth/logout` and `auth/me` (obtaining a token, spending one,
+and asking whether you already hold a session). The same hook enforces the **pending password
+change**: while
 an account owes one, every route but `auth/me`, `auth/password` and `auth/logout` answers
 403, which is what makes "change it first" a rule rather than a screen.
 
@@ -708,13 +708,14 @@ second one, because on an installation carried over from the build where a usern
 credential that row owns the workspaces. The check and write run in one `BEGIN IMMEDIATE`
 transaction, so two processes racing to bootstrap make exactly one administrator.
 
-**The control panel is the way back in.** `POST /api/auth/panel-reset` is guarded by a secret
-the Electron panel generates per launch and passes only to the child process it spawned
-(`ILA_PANEL_TOKEN`). It is never written anywhere, so it does not exist between launches, and
-reaching the server over the network does not get anyone one. Without this there is no
-recovery at all: every other route needs somebody already signed in, which is exactly what a
-forgotten administrator password prevents. When the variable is absent — a checkout, a
-`pnpm dev` — the route answers 404 and is simply not there.
+**The control panel is the way back in — through the CLI, not through a route.**
+`cli reset-admin` replaces a superadmin's password and ends its sessions, and it is a *child*
+of the panel rather than a request to the server, so it works whether the server is up,
+stopped, or refusing to start. There is deliberately no HTTP route for this: every route needs
+somebody already signed in, which is exactly what a forgotten password prevents, and a recovery
+path that needs a healthy server is not much of a recovery path. The panel could always write
+the database directly — it runs on the operator's machine and holds the CLI — so a per-launch
+shared secret guarded nothing a process boundary did not already.
 
 ### Routes (`routes.ts`)
 
@@ -730,11 +731,11 @@ attachments, providers and app defaults.
 | `DELETE /api/sources/:id` | delete the file, its text and every reference to it |
 | `POST /api/auth/login` | sign in with a name and a password. Answers 409 `SETUP_REQUIRED` when the installation has no administrator, which the server itself will not serve |
 | `pnpm … server cli create-admin` | create the first administrator, outside the server — the only way, and it works with the server stopped |
+| `pnpm … server cli reset-admin` | replace a superadmin's forgotten password; also outside the server, and the only place a superadmin's **own** password can be replaced |
 | `POST /api/auth/refresh` | exchange a refresh token for a fresh pair, spending the one presented |
 | `POST /api/auth/logout` | end this client's session — reached from **Sign out** in the sidebar footer, the workspace home and the account page |
 | `GET /api/auth/me` | who the caller is; a 401 is the answer, not a refusal |
 | `POST /api/auth/password` | change your own password, with the current one. Ends every session and returns a replacement pair |
-| `POST /api/auth/panel-reset` | the control panel's way back into a locked account, guarded by a launch-scoped secret |
 | `GET /api/admin/users` | every account, with its roles and whether it is disabled |
 | `POST /api/admin/users` | create one, with a generated password shown exactly once |
 | `PATCH /api/admin/users/:id` | change its roles, or disable it (never delete — the row owns workspaces) |

@@ -218,7 +218,7 @@ apps/desktop/src/
 apps/server/src/
   index.ts                # bootstrap + assertHasAdministrator + the listening line + SIGTERM
   cli.ts                  # the administrator CLI entry (argv/stdin/exit codes; rules in adminCli.ts)
-  adminCli.ts             # status/create-admin rules, no process access; the boot gate too
+  adminCli.ts             # status/create-admin/reset-admin rules, no process access; the boot gate too
   webApp.ts               # serves the built frontend beside the API, when there is one
   config.ts               # YAML + ${ENV} resolution + .env loader + resolveDataRoot
   paths.ts                # the on-disk layout: data root → users/<slug> → workspaces, sources, db
@@ -718,9 +718,8 @@ Fuller map in `docs/reference.md`.
   **and the same hook enforces the pending password change.** One `onRequest` hook in
   `routes.ts`, deny-by-default: a route added tomorrow without a thought about auth is refused,
   which is the same "the safe state is the one you get by doing nothing" move as the
-  `read_document` whitelist. Six routes opt out with `public` — `health`, `auth/login`,
-  `auth/refresh`, `auth/logout`, `auth/me`, and `auth/panel-reset` (which carries the panel's
-  secret instead of a session) — and `auth/me`
+  `read_document` whitelist. Five routes opt out with `public` — `health`, `auth/login`,
+  `auth/refresh`, `auth/logout`, `auth/me` — and `auth/me`
   answering 401 is its *answer* rather than a refusal, which is why `client.ts` keeps a
   hand-written `ANSWERS_WITH_401` set rather than an `/auth/` prefix: reporting that 401 would
   open every first visit with an error about a session that never existed. The set is consulted
@@ -772,11 +771,23 @@ Fuller map in `docs/reference.md`.
   exactly one administrator (the HTTP route's "no `await` between the check and the write"
   argument does not survive a process boundary). The same command is the headless path:
   `pnpm --filter @ilearnassist/server cli create-admin …`; `ensure-admin` is its idempotent form,
-  which the Playwright config chains ahead of the server. Recovery for a forgotten password is
-  `POST /api/auth/panel-reset`, guarded by `ILA_PANEL_TOKEN` — a secret the Electron panel
-  generates per launch and passes only to the child it spawns, never written anywhere, so
-  reaching the server over the network does not get you one. Do not add an unauthenticated
+  which the Playwright config chains ahead of the server. Do not add an unauthenticated
   bootstrap route back: its guard was the panel's own process boundary, deliberately.
+- **Recovery for a forgotten password is a CLI command, and there is no route for it —
+  `reset-admin`, run by the panel as a one-shot child.** Every HTTP route needs somebody already
+  signed in, which is exactly what a forgotten password prevents, so recovery cannot live on
+  that side; and it must work **with the server stopped**, because a forgotten password is
+  usually found in the same moment as something else being wrong. There used to be a route
+  guarded by a per-launch secret (`ILA_PANEL_TOKEN`); it was deleted because the secret guarded
+  nothing a process boundary did not already — the panel runs on the operator's machine and
+  holds the CLI, and anyone who can run it can read the database file anyway — while the route
+  *did* cost a dependency on a healthy server, in the one control that exists for when something
+  is wrong. `ILA_LAUNCHED_BY_PANEL` replaces it, and is a **flag rather than a secret**: it only
+  decides whether a no-administrator refusal names the panel's button or the CLI command.
+  `resetAdmin` refuses a non-superadmin target, so it is not a way round the console's rules,
+  and it deliberately does **not** run `createDb`: DDL from a second process while the server is
+  up would race the schema the server already applied, so it opens the file, refuses an
+  unreadable one, and runs plain `UPDATE`s in one `IMMEDIATE` transaction.
 - **A setting every account shares is a superadmin's to change.** Providers, document parsers,
   the parsing policy and the app defaults are **installation-wide**, and their *writes* carry
   `requireSuperadmin` while their reads stay open — the composer needs the model list and the
@@ -874,6 +885,24 @@ Fuller map in `docs/reference.md`.
   Fastify's own "Server listening at …" banner, which is logged from inside `listen`
   before the process is necessarily ready. A control panel that claims a server is up
   when it is not is worse than one that says nothing, because the user has no way to tell.
+- **Whether Start may spawn a server is `mayStartServer(hasAdmin)`, and the field it reads is
+  named in the positive.** Both are consequences of a bug that made **Start do nothing at all**
+  once an administrator existed: the panel cached `needsAdmin` while both callers read it as
+  "has one" and started only when it was true, so the button worked exactly once — on an empty
+  data root, where the server would then refuse to listen. The rule is three inputs and two
+  answers: `true` starts, `false` does not (the server would exit on its own boot gate, and the
+  create card is already on screen), and **`undefined` starts anyway** — no data root, an
+  unreadable database, a CLI that would not run. Trying is what keeps the button from going
+  silent when the check it depends on is the thing that is broken; the server's gate is the
+  backstop and says so on stderr. A predicate cannot be inverted by accident the way a boolean
+  variable's meaning can, which is why this is a function and not an `if`.
+- **`ServerProcess`'s data root is a *function*, like its launch spec.** The user can choose a
+  different folder while the object is alive, and the panel renders the status's copy of it —
+  captured by value it showed the folder from construction, which on a first choice was an empty
+  box until the app was restarted. Nothing about the *supervision* changes when the root changes
+  (there is no process to reconcile; `chooseDataDir` stops the server first), so the class only
+  ever needs to be able to *report* the current one. `apps/web/src/stores/app.ts`'s `canAdmin`
+  is the same shape of fix one layer up.
 - **The desktop app never writes into its own bundle.** The *app's* state lives under
   `app.getPath("userData")`, reached through `ILA_PROJECT_ROOT`; the bundle is read-only and
   is replaced wholesale on every update. First-run seeding is idempotent and **never

@@ -181,22 +181,13 @@ export type CreateAdministratorResult =
   | { ok: false; fault: AdminFault };
 
 /**
- * Why the administrator's password could not be reset.
- *
- * A union rather than a sentence, for the reason `ServerFault` is: the panel is bilingual and
- * this is the side that knows *what* happened. `message` is the fallback for the case with no
- * code to key on — the server's own wording, or the network's.
- */
-export type ResetFault =
-  /** Nothing is listening: the server is not up, so there is nobody to ask. */
-  | { code: "not_running" }
-  /** Reachable, and it has no administrator to reset — a data root nobody has set up yet. */
-  | { code: "no_admin" }
-  /** The request itself failed: refused, timed out, or the server said something unexpected. */
-  | { code: "unreachable"; message: string };
-
-/**
  * The password the reset produced, or why there is not one.
+ *
+ * The fault is an `AdminFault` — the same union the two commands beside it answer with — rather
+ * than a fourth shape of its own. Both are conversations with the same child, so a code that
+ * means "the CLI could not run" means it here too, and the panel renders the two with one
+ * catalog. `ADMIN_NOT_FOUND` is the one that is specific to this command: a data root nobody
+ * has set up yet, which the panel says in the same breath as offering to create one.
  *
  * The password is in the successful arm only, and it is **not** stored anywhere on the way
  * through — the panel holds it long enough to render it once, exactly as the console does.
@@ -204,7 +195,7 @@ export type ResetFault =
  */
 export type ResetResult =
   | { ok: true; username: string; password: string }
-  | { ok: false; fault: ResetFault };
+  | { ok: false; fault: AdminFault };
 
 export interface PanelApi {
   getState(): Promise<PanelState>;
@@ -225,16 +216,24 @@ export interface PanelApi {
   openInBrowser(): Promise<void>;
   revealDataDir(): Promise<void>;
   /**
-   * Replace the administrator's password with a generated one, and hand it back.
+   * Replace the superadmin's password with a generated one, and hand it back.
    *
-   * The way back in when the password is forgotten: every other route needs somebody already
-   * signed in, which is exactly what a forgotten password prevents. Local access to the
-   * machine is the proof of identity here, and turning this panel on is what "local access"
-   * means — the secret it sends was generated for this launch and never leaves the process
-   * tree, so reaching the server over the network does not get anyone one.
+   * The way back in when the password is forgotten: every other path needs somebody already
+   * signed in, which is exactly what a forgotten password prevents. Local access to the machine
+   * is the proof of identity here, and turning this panel on is what "local access" means —
+   * there is no secret to hold, because the child this runs is one only this machine can run.
    *
-   * It also ends the administrator's sessions, so a password replaced while the old one is
-   * still live has really been replaced.
+   * It is also the only place a superadmin's own password can be replaced: the web console
+   * refuses it (`PANEL_RESET_REQUIRED`), because a console reached with a credential the caller
+   * already holds is a weaker second way to the one credential that can undo the installation.
+   *
+   * **It does not need the server to be running.** The work is a one-shot child of the same
+   * bundle the server comes from, so the button means the same thing whether the server is up,
+   * stopped, or refusing to start — and the last of those is exactly when somebody reaches for
+   * it.
+   *
+   * It ends the account's sessions as well, so a password replaced while the old one is still
+   * live has really been replaced.
    *
    * Resolves `null` when the confirmation was dismissed — an outcome rather than a failure,
    * and a different one from any of `ResetFault`'s.

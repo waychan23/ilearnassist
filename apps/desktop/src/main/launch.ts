@@ -77,18 +77,23 @@ export interface BuildLaunchSpecInput {
    * message naming the variable. The panel does not let it get that far — it asks first.
    */
   dataDir: string;
-  /**
-   * The secret the control panel shares with the server it spawned.
-   *
-   * Passed on every launch and never written anywhere, which is what makes the recovery route
-   * it guards a path *this* process can take and nothing else can. See `ILA_PANEL_TOKEN` in
-   * `apps/server/src/auth.ts` for why the panel is the only thing that may reset an
-   * administrator's password.
-   */
-  panelToken: string;
   /** Defaults to `process.env`; injectable so tests can spawn a plain `node`. */
   baseEnv?: Record<string, string | undefined>;
 }
+
+/**
+ * Tells a child it was spawned by the control panel.
+ *
+ * A **flag, not a secret** — it only decides which of two sentences the server prints when it
+ * refuses to start without an administrator (a packaged launch has a button; a checkout has a
+ * terminal). There was a secret here, guarding an HTTP recovery route; the CLI replaced that
+ * route, and with it went the reason for one. Anyone who can set this can already read the
+ * database, so it grants nothing and needs no protection.
+ *
+ * Spelled as a literal on both sides — this file writes it, `apps/server/src/adminCli.ts` reads
+ * it — for the `ILA_HOST` reason: two runtimes, and neither can import the other.
+ */
+export const PANEL_LAUNCH_ENV = "ILA_LAUNCHED_BY_PANEL";
 
 export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
   return {
@@ -101,7 +106,6 @@ export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
       // not get it — it never serves a page.
       ILA_WEB_DIR: input.paths.webDir,
       ILA_HOST: input.host,
-      ILA_PANEL_TOKEN: input.panelToken,
     },
   };
 }
@@ -109,11 +113,10 @@ export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
 /**
  * The environment every child that runs as this panel's server runtime shares.
  *
- * Split out so the **administrator CLI** gets the same three things — Node mode, the project
- * root, the data root — without getting the two it does not need: `ILA_HOST`, which is a
- * listen decision the CLI never makes, and `ILA_PANEL_TOKEN`, whose whole argument is that it
- * is handed to *one* child, the long-lived server. Widening it to a second process would buy
- * nothing and widen the secret for no benefit.
+ * Split out so the **administrator CLI** gets the same things the server does, minus the one it
+ * has no use for: `ILA_HOST`, which is a listen decision the CLI never makes. `PANEL_LAUNCH_ENV`
+ * *is* shared, deliberately — both children are spawned by the panel, and the flag is about who
+ * launched them rather than about what they may do.
  *
  * It deliberately carries `ILA_CONFIG_PATH`: the CLI resolves the data root through the same
  * `resolveDataRoot()` the server uses, and the overlay is where the packed app's config lives.
@@ -126,6 +129,7 @@ export function serverChildEnv(
   return {
     ...baseEnv,
     ELECTRON_RUN_AS_NODE: "1",
+    [PANEL_LAUNCH_ENV]: "1",
     // The server resolves `config/` against this, which is how the packed app ends up
     // reading the user's Application Support directory instead of its own read-only bundle.
     ILA_PROJECT_ROOT: paths.root,

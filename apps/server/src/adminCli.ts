@@ -5,6 +5,7 @@ import type {
   AdminCliErrorCode,
   AdminCliResult,
   AdminCreateResult,
+  AdminResetResult,
   AdminStatusResult,
 } from "@ilearnassist/shared";
 import { isEnabledSuperadmin, SUPERADMIN_ROLE } from "@ilearnassist/shared";
@@ -17,7 +18,6 @@ import {
   revokeAllTokens,
   usernameProblem,
 } from "./auth.js";
-import { panelToken } from "./auth.js";
 import { createDb, parseStoredRoles, type AppDb } from "./db.js";
 import { dataLayout, ensureUserLayout, userLayout } from "./paths.js";
 import { applySchema, schemaProblem, SchemaUnreadableError } from "./schema.js";
@@ -76,14 +76,28 @@ export class NoAdministratorError extends Error {
 }
 
 /**
+ * The environment variable the control panel sets on the children it spawns.
+ *
+ * **A flag, not a secret**, and the difference from what used to be here is the point: this
+ * only decides which of two sentences to print. The panel's recovery path no longer goes
+ * through a guarded HTTP route — it is the `reset-admin` command below, run as a one-shot child
+ * on the operator's own machine — so there is no longer a secret for the panel to hold, and
+ * nothing here grants anything. Anyone who can set this variable can already read the database.
+ *
+ * Spelled as a literal on both sides, like `ILA_HOST` and `ILA_PROJECT_ROOT`: the desktop app
+ * writes it in `launch.ts` and this package reads it, and neither can import the other's copy.
+ */
+export const PANEL_LAUNCH_ENV = "ILA_LAUNCHED_BY_PANEL";
+
+/**
  * The fix, named for whoever is reading it.
  *
- * `ILA_PANEL_TOKEN` is set only by the control panel — it is the launch-scoped secret the
- * recovery route is guarded by — so its presence is a reliable way to tell a packaged launch
- * from a checkout, and the two need different words: one has a button, the other has a command.
+ * A packaged launch has a button three centimetres away; a checkout has a terminal. Telling
+ * either one about the other's remedy is a sentence the reader has to translate first, which is
+ * why the two are separate rather than one message naming both.
  */
 export function noAdministratorMessage(): string {
-  if (panelToken()) {
+  if (process.env[PANEL_LAUNCH_ENV]) {
     return (
       "This data folder has no administrator, so there is nobody who could sign in.\n" +
       "Create one in the control panel — its window is open, and the button is on it."
@@ -361,6 +375,114 @@ export async function createAdmin(input: CreateAdminInput): Promise<AdminCliOutc
   } finally {
     db.raw.close();
   }
+}
+
+/* --------------------------------- reset-admin --------------------------------- */
+
+export interface ResetAdminInput {
+  dataRoot: string;
+  /** Who to reset. Absent means the first enabled superadmin — the panel's case. */
+  username?: string;
+}
+
+/**
+ * Replace a superadmin's password with a generated one, and hand it back.
+ *
+ * The way back in for a forgotten password, and it runs **with the server stopped or running**
+ * — which is what the panel needs, because the state a forgotten password creates is often
+ * also a state where starting a server is not the first thing on the agenda. It is a write, so
+ * unlike `adminStatus` this command cannot be read-only; what it deliberately does *not* do is
+ * migrate: it opens the file, refuses one this build cannot read, and runs plain `UPDATE`s. DDL
+ * from a second process while the server is up would be a schema change racing the one the
+ * server already applied.
+ *
+ * **Only a superadmin.** The panel is the one place the physical machine is the proof of
+ * identity, and the account it recovers is the one that can undo everything — so an ordinary
+ * administrator's password is not this command's business. It is also the *only* way a
+ * superadmin's own password is replaced: the web console refuses it, because a console reached
+ * with a credential the caller already holds is a weaker second way in.
+ *
+ * `mustChangePassword` is left clear. Whoever ran this is holding the machine, and the value
+ * they are about to use is one they just generated for themselves.
+ */
+export async function resetAdmin(input: ResetAdminInput): Promise<AdminCliOutcome> {
+  const dirProblem = dataRootProblem(input.dataRoot);
+  if (dirProblem) return dirProblem;
+
+  const layout = dataLayout(input.dataRoot);
+  if (!existsSync(layout.sqliteFile)) {
+    return fail("ADMIN_NOT_FOUND", "this data folder has no administrator to reset");
+  }
+
+  let db: Database.Database;
+  try {
+    // Read-write, because this is a write. `fileMustExist` keeps a typo'd data root from
+    // creating an empty database whose only administrator is the one it does not have.
+    db = new Database(layout.sqliteFile, { fileMustExist: true });
+  } catch (error) {
+    return fail("UNREADABLE", messageOf(error));
+  }
+
+  try {
+    const problem = schemaProblem(db);
+    if (problem) {
+      return fail("SCHEMA_UNREADABLE", "the database is a schema this build cannot read", {
+        found: problem.found,
+        needed: problem.needed,
+      });
+    }
+
+    const target = input.username?.trim()
+      ? findSuperadminByName(db, input.username.trim())
+      : findAdministrator(db);
+    if (!target) {
+      return fail("ADMIN_NOT_FOUND", "this data folder has no administrator to reset");
+    }
+
+    const password = generatePassword();
+    // Hashed outside any transaction, exactly as `createAdmin` does: `scrypt` is ~100ms and no
+    // lock should be held across it.
+    const passwordHash = await hashPassword(password);
+
+    // Both statements in one transaction, so no reader sees a password replaced while the
+    // sessions issued under the old one are still live.
+    db.transaction(() => {
+      db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?").run(
+        passwordHash,
+        target.id
+      );
+      // The reset is also the kick: a forgotten password that is replaced while the old session
+      // is still live has not really been replaced.
+      db.prepare("UPDATE auth_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(
+        new Date().toISOString(),
+        target.id
+      );
+    }).immediate();
+
+    const value: AdminResetResult = {
+      ok: true,
+      command: "reset-admin",
+      dataRoot: input.dataRoot,
+      username: target.username,
+      password,
+    };
+    return { ok: true, value };
+  } catch (error) {
+    return fail("INTERNAL", messageOf(error));
+  } finally {
+    db.close();
+  }
+}
+
+/** One superadmin by name, enabled or not — a lock with no key is what this command undoes. */
+function findSuperadminByName(db: Database.Database, username: string): AdminRow | undefined {
+  const row = db
+    .prepare(
+      "SELECT id, username, roles, disabled FROM users WHERE username = ? COLLATE NOCASE LIMIT 1"
+    )
+    .get(username) as AdminRow | undefined;
+  if (!row) return undefined;
+  return parseStoredRoles(row.roles).includes(SUPERADMIN_ROLE) ? row : undefined;
 }
 
 /** The parts of a success that do not depend on whether a password was invented. */
