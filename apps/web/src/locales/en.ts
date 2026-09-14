@@ -410,6 +410,19 @@ const en: typeof MessageSchema = {
     copyReply: "Copy the reply",
     stopped: "Stopped",
     contextTokens: "Context this turn: {count} tokens",
+    delete: {
+      title: "Delete this message",
+      message: "Delete this message?",
+      detail:
+        "It leaves the conversation and later turns will not see it. The message before it becomes the new last one.",
+      action: "Delete",
+    },
+    regenerate: {
+      title: "Regenerate the reply",
+      message: "Ask the model to answer this message again?",
+      detail: "The current reply is deleted and the model answers the same message again.",
+      action: "Regenerate",
+    },
     usage: {
       input: "In",
       output: "Out",
@@ -804,6 +817,11 @@ const en: typeof MessageSchema = {
     QUIZ_QUESTION_NOT_FOUND: "That quiz question cannot be found.",
     QUIZ_NOT_ANSWERABLE:
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
+    MESSAGE_NOT_FOUND: "That message cannot be found — it may already have been deleted.",
+    MESSAGE_NOT_LAST: "Only the last message can be deleted. Reload the page and try again.",
+    NO_REPLY_TO_REGENERATE:
+      "There is no reply to regenerate (the last message is not a reply, or it is waiting for your answer).",
+    TURN_IN_PROGRESS: "The previous reply is still being generated. Stop it or wait for it to finish.",
 
     INVALID_CREDENTIALS: "That username or password is not right.",
     ACCOUNT_DISABLED: "This account is disabled. Ask an administrator to re-enable it.",

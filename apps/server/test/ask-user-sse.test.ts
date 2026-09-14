@@ -128,6 +128,8 @@ describe("ask_user over the wire", () => {
     expect(res.statusCode).toBe(200);
     expect(eventTypes(res.body)).toEqual([
       "meta",
+      // The server's row for the user's own message, so the client can address it later.
+      "message_saved",
       "text",
       "tool_start",
       "usage",

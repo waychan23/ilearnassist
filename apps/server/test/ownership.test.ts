@@ -112,7 +112,7 @@ describe("workspaces", () => {
   });
 
   it("does not delete another account's workspace", () => {
-    expect(db.deleteWorkspaceForUser(`w-${BOB}`, ADA)).toBe(false);
+    expect(db.softDeleteWorkspaceForUser(`w-${BOB}`, ADA)).toBe(false);
     expect(db.getWorkspaceForUser(`w-${BOB}`, BOB)).toBeDefined();
   });
 
@@ -150,7 +150,7 @@ describe("sessions", () => {
   });
 
   it("does not delete another account's conversation", () => {
-    expect(db.deleteSessionForUser(`s-${BOB}`, ADA)).toBe(false);
+    expect(db.softDeleteSessionForUser(`s-${BOB}`, ADA)).toBe(false);
     expect(db.getSessionForUser(`s-${BOB}`, BOB)).toBeDefined();
   });
 });
@@ -227,7 +227,7 @@ describe("copilots", () => {
         visibility: "private",
       })
     ).toBeUndefined();
-    expect(db.deleteCopilotForUser("c-bob-public", ADA)).toBe(false);
+    expect(db.softDeleteCopilotForUser("c-bob-public", ADA)).toBe(false);
 
     // Unchanged, which is the half that actually matters: a refused write that still wrote
     // would pass an assertion on the return value alone.

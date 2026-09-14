@@ -786,6 +786,19 @@ export const API_ERROR_CODES = [
   "QUIZ_QUESTION_NOT_FOUND",
   // The question exists but is not make-up-eligible: only skipped questions can be re-answered.
   "QUIZ_NOT_ANSWERABLE",
+  // A message id that this conversation does not hold — unknown, another account's, another
+  // conversation's, or already soft-deleted. All four are the same answer on purpose, so an id
+  // cannot be probed for existence.
+  "MESSAGE_NOT_FOUND",
+  // Deletion peels the tail only: the named message is real but something now follows it. Two
+  // tabs, or a turn that landed between the read and the write, is how a client sees this.
+  "MESSAGE_NOT_LAST",
+  // Nothing to regenerate: no live messages, a tail that is the user's own message, or an
+  // assistant tail still waiting on the user's answer (the interactive card owns that state).
+  "NO_REPLY_TO_REGENERATE",
+  // A turn is streaming for this conversation right now. Only the two tail-mutating routes
+  // refuse on it — /chat has no such guard, deliberately (see its note in routes.ts).
+  "TURN_IN_PROGRESS",
 
   /*
    * Accounts and signing in.
@@ -1846,6 +1859,26 @@ export type ChatStreamEvent =
   | { type: "tool_end"; toolCall: ToolCall }
   | { type: "usage"; usage: MessageUsage }
   | { type: "message_done"; message: Message }
+  /**
+   * The server's row for the message the **user** just sent — the other half of
+   * `message_done`, and the only way the client ever learns that row's id.
+   *
+   * A turn echoes nothing back for the user's own message: the bubble is drawn optimistically,
+   * under a client-made `local-…` id, and the persisted copy has always been fetched rather
+   * than announced. That is fine until something has to *address* the row, which is exactly
+   * what deleting or regenerating a tail message does — a `local-` id names nothing the server
+   * has ever seen. Sent right after `meta`, before the model streams, so the swap lands while
+   * the reply is still arriving and never re-renders the list underneath the reader.
+   */
+  | { type: "message_saved"; message: Message }
+  /**
+   * A message left the conversation before the tokens that replace it arrive. Sent by the
+   * regenerate turn immediately after `meta`, so the client drops the row it is about to see
+   * re-answered instead of rendering both at once — the server has already soft-deleted it by
+   * then, and a client that waited for `message_done` would show the stale reply throughout the
+   * stream. `id` names the row; nothing else about it travels.
+   */
+  | { type: "message_removed"; id: string }
   /** Sent after the first turn when a model-written title replaced the placeholder. */
   | { type: "title"; sessionId: string; title: string }
   /**

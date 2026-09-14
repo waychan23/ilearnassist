@@ -817,6 +817,15 @@ export interface AppDb {
    * case dedupe makes common, since the whole point is that identical bytes are one row.
    */
   findSourceByHash(userId: string, sha256: string): SourceRecord | undefined;
+  /**
+   * The account's soft-deleted copy of these bytes, if it has one.
+   *
+   * The second half of the dedupe rule, and it exists because `UNIQUE (user_id, sha256)` makes
+   * a separate row impossible: re-uploading a file the user deleted has to bring *that* row
+   * back, so something has to find it. Never merged into `findSourceByHash` — that one answers
+   * "is this file already here", and a deleted file is not.
+   */
+  findDeletedSourceByHash(userId: string, sha256: string): SourceRecord | undefined;
   getSourceForUser(id: string, userId: string): SourceRecord | undefined;
   listSourcesForUser(userId: string): SourceRecord[];
   createSource(input: {
@@ -829,8 +838,14 @@ export interface AppDb {
     kind: "image" | "file";
     rawPath: string;
   }): SourceRecord;
-  /** Returns false when no such source existed, or it belonged to someone else. */
-  deleteSourceForUser(id: string, userId: string): boolean;
+  /** Marks the source deleted. Returns false when no live source existed, or it was not theirs. */
+  softDeleteSourceForUser(id: string, userId: string): boolean;
+  /**
+   * Clears the marker on a soft-deleted source and returns it, or undefined if there was
+   * nothing to revive. The bytes, the parse state and every link are untouched — the row was
+   * never dismantled, only hidden.
+   */
+  reviveSourceForUser(id: string, userId: string): SourceRecord | undefined;
 
   /**
    * Record what a parse did, in place.
@@ -904,8 +919,13 @@ export interface AppDb {
    * moved files would break every path the agent has already written into a conversation.
    */
   renameWorkspaceForUser(id: string, userId: string, name: string): Workspace | undefined;
-  /** Returns false when no such workspace existed, or it belonged to someone else. */
-  deleteWorkspaceForUser(id: string, userId: string): boolean;
+  /**
+   * Marks the workspace deleted. Returns false when no live workspace existed, or it was not
+   * this account's. The directory on disk stays — including the `sessions/` beside `workdir/`
+   * — and so does every row that hangs off it; they are reached through this one, so hiding it
+   * here is what hides them.
+   */
+  softDeleteWorkspaceForUser(id: string, userId: string): boolean;
 
   /*
    * Copilots are owned. The two *reads* below take the wider predicate — the account's own
@@ -967,8 +987,12 @@ export interface AppDb {
       visibility: CopilotVisibility;
     }
   ): Copilot | undefined;
-  /** Owner-only. Returns false when no such Copilot existed, or it belonged to someone else. */
-  deleteCopilotForUser(id: string, userId: string): boolean;
+  /**
+   * Owner-only, and a soft delete. Returns false when no live Copilot existed, or it belonged
+   * to someone else. Conversations already started from it are unaffected — they read their
+   * own snapshot, and `copilot_id` was only ever a link the UI may show.
+   */
+  softDeleteCopilotForUser(id: string, userId: string): boolean;
 
   listSessionsForUser(workspaceId: string, userId: string): Session[];
   /**
@@ -1022,8 +1046,13 @@ export interface AppDb {
   ): Session | undefined;
   /** Replace the title on behalf of the auto-titler, keeping `titleSource: "auto"`. */
   setAutoTitleForUser(id: string, userId: string, title: string): Session | undefined;
-  /** Returns false when no such session existed, or it belonged to someone else. */
-  deleteSessionForUser(id: string, userId: string): boolean;
+  /**
+   * Marks the conversation deleted. Returns false when no live session existed, or it belonged
+   * to someone else. Its messages, links, plans and quiz rows all stay, as does the reserved
+   * `sessions/<id>/` directory — every one of them is reached through this row, so filtering
+   * it here is what takes them out of view.
+   */
+  softDeleteSessionForUser(id: string, userId: string): boolean;
 
   /*
    * The session-id-only accessors below — `touchSession`, and `createMessage`,
@@ -1051,6 +1080,18 @@ export interface AppDb {
     /** The user cut this turn short; `content` is whatever had streamed by then. */
     stopped?: boolean;
   }): Message;
+
+  /**
+   * Mark one message deleted, scoped to its owner. Returns false when it was not there, was
+   * not this account's, or was already deleted.
+   *
+   * The *caller* decides whether it is the tail and does the two together in one transaction —
+   * this is the write, `listMessagesForUser` is the read, and the pair has to be atomic or two
+   * tabs can both see themselves as last and both peel. Nothing cascades and nothing cascades
+   * *to* a message: the row stays, the history read stops seeing it, and that is the whole
+   * effect.
+   */
+  softDeleteMessageForUser(sessionId: string, messageId: string, userId: string): boolean;
 
   /**
    * Find a suspended call by the tool-call id the client sent back, with the id of the
@@ -1230,7 +1271,14 @@ export interface AppDb {
     id: string,
     input: { name?: string; baseURL?: string; apiKey?: string }
   ): ProviderRecord | undefined;
-  deleteProvider(id: string): void;
+  /**
+   * Marks the provider deleted, and its models with it, in one transaction.
+   *
+   * The models are the part that needs saying: `models.provider_id` is `ON DELETE CASCADE`,
+   * and a soft delete fires no cascade, so without the second `UPDATE` a removed provider
+   * would leave its models resolvable and enumerable. They are the same act.
+   */
+  softDeleteProvider(id: string): void;
 
   createModel(input: {
     id: string;
@@ -1251,8 +1299,8 @@ export interface AppDb {
       capabilities?: ModelCapability[];
     }
   ): ProviderModel | undefined;
-  /** Returns false when no such model existed. */
-  deleteModel(id: string): boolean;
+  /** Marks the model deleted. Returns false when no live model existed. */
+  softDeleteModel(id: string): boolean;
 
   listDocumentParsers(): DocumentParserRecord[];
   getDocumentParser(id: string): DocumentParserRecord | undefined;
@@ -1274,7 +1322,8 @@ export interface AppDb {
       enabled?: boolean;
     }
   ): DocumentParserRecord | undefined;
-  deleteDocumentParser(id: string): void;
+  /** Marks the parser deleted. Distinct from `enabled`, which is configured-but-not-in-use. */
+  softDeleteDocumentParser(id: string): void;
 
   getSetting(key: string): string | undefined;
   setSetting(key: string, value: string): void;
@@ -1404,6 +1453,29 @@ export function createDb(dbPath: string): AppDb {
      */
     ensureColumn(db, "quiz_questions", "reference_answer_json", "reference_answer_json TEXT");
     ensureColumn(db, "quiz_questions", "explanation", "explanation TEXT");
+
+    /*
+     * The soft delete, on every application entity. Nullable and nothing to backfill: NULL is
+     * "live", which is what a row written before this column existed means. Added by
+     * `ensureColumn` rather than by the DDL above for the usual reason — `CREATE TABLE IF NOT
+     * EXISTS` skips a table that is already there, so an existing install would never gain it
+     * and would keep hard-deleting.
+     *
+     * The on-disk side is deliberately untouched: workspace and session directories, and a
+     * source's raw and parsed files, all stay. A deleted row is hidden, not destroyed.
+     */
+    for (const table of [
+      "workspaces",
+      "sources",
+      "copilots",
+      "sessions",
+      "messages",
+      "providers",
+      "models",
+      "document_parsers",
+    ]) {
+      ensureColumn(db, table, "deleted_at", "deleted_at TEXT");
+    }
   }).immediate();
 
   const now = () => new Date().toISOString();
@@ -1454,25 +1526,48 @@ export function createDb(dbPath: string): AppDb {
   );
 
   /* -------------------------------- sources -------------------------------- */
+  /*
+   * The live hash lookup and the deleted one, and the pair is the soft delete's one piece of
+   * real policy. `UNIQUE (user_id, sha256)` means the same bytes can never be two rows, so a
+   * re-upload of a deleted file has to *revive* the row rather than insert beside it — and
+   * finding it is a second lookup, because the first one has to keep answering "is this file
+   * already here" with a no.
+   */
   const stmtFindSourceByHash = db.prepare(
-    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ?"
+    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL"
   );
-  const stmtGetSourceForUser = db.prepare("SELECT * FROM sources WHERE id = ? AND user_id = ?");
+  const stmtFindDeletedSourceByHash = db.prepare(
+    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND deleted_at IS NOT NULL"
+  );
+  const stmtGetSourceForUser = db.prepare(
+    "SELECT * FROM sources WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
   const stmtListSourcesForUser = db.prepare(
-    "SELECT * FROM sources WHERE user_id = ? ORDER BY created_at ASC"
+    "SELECT * FROM sources WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
   );
   const stmtCreateSource = db.prepare(
     `INSERT INTO sources
        (id, user_id, sha256, name, mime_type, size, kind, raw_path, parse_status, created_at)
      VALUES (@id, @userId, @sha256, @name, @mimeType, @size, @kind, @rawPath, 'none', @createdAt)`
   );
-  const stmtDeleteSourceForUser = db.prepare("DELETE FROM sources WHERE id = ? AND user_id = ?");
+  /*
+   * A soft delete and its undo. The revive clears the marker and nothing else — the row's
+   * parse state, its name and its links are all still what they were, which is what makes a
+   * re-upload of the same bytes the same file rather than a lookalike.
+   */
+  const stmtSoftDeleteSourceForUser = db.prepare(
+    "UPDATE sources SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtReviveSourceForUser = db.prepare(
+    `UPDATE sources SET deleted_at = NULL WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL
+       RETURNING *`
+  );
   const stmtUpdateSourceParse = db.prepare(
     `UPDATE sources
         SET parse_status = @status, parse_error = @error, parse_error_code = @code,
             parser_id = @parserId, parsed_chars = @parsedChars, page_count = @pageCount,
             parse_updated_at = @updatedAt
-      WHERE id = @id AND user_id = @userId`
+      WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
   );
   /*
    * Both links assert their two owners in one statement. `INSERT OR IGNORE` because
@@ -1485,14 +1580,16 @@ export function createDb(dbPath: string): AppDb {
        FROM sessions s
        JOIN workspaces w ON w.id = s.workspace_id
        JOIN sources src ON src.id = @sourceId
-      WHERE s.id = @sessionId AND w.user_id = @userId AND src.user_id = @userId`
+      WHERE s.id = @sessionId AND w.user_id = @userId AND src.user_id = @userId
+        AND src.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
   );
   const stmtLinkSourceToWorkspace = db.prepare(
     `INSERT OR IGNORE INTO workspace_sources (workspace_id, source_id, created_at)
      SELECT w.id, src.id, @createdAt
        FROM workspaces w
        JOIN sources src ON src.id = @sourceId
-      WHERE w.id = @workspaceId AND w.user_id = @userId AND src.user_id = @userId`
+      WHERE w.id = @workspaceId AND w.user_id = @userId AND src.user_id = @userId
+        AND src.deleted_at IS NULL AND w.deleted_at IS NULL`
   );
   /*
    * The read whitelist: the conversation's own sources unioned with its workspace's. Reached
@@ -1504,6 +1601,7 @@ export function createDb(dbPath: string): AppDb {
        JOIN sessions s ON s.id = ss.session_id
        JOIN workspaces w ON w.id = s.workspace_id
       WHERE ss.session_id = ? AND w.user_id = ?
+        AND src.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL
       ORDER BY ss.created_at ASC, src.id ASC`
   );
   /*
@@ -1531,6 +1629,7 @@ export function createDb(dbPath: string): AppDb {
        ) GROUP BY source_id
      ) arm
      JOIN sources src ON src.id = arm.source_id
+     WHERE src.deleted_at IS NULL
      ORDER BY arm.linked_at ASC, src.id ASC`
   );
 
@@ -1548,11 +1647,12 @@ export function createDb(dbPath: string): AppDb {
    */
   const stmtListWorkspaces = db.prepare(
     `SELECT w.*, COUNT(s.id) AS session_count, MAX(s.updated_at) AS last_activity_at
-     FROM workspaces w LEFT JOIN sessions s ON s.workspace_id = w.id
-     WHERE w.user_id = ? GROUP BY w.id ORDER BY w.created_at ASC`
+     FROM workspaces w
+     LEFT JOIN sessions s ON s.workspace_id = w.id AND s.deleted_at IS NULL
+     WHERE w.user_id = ? AND w.deleted_at IS NULL GROUP BY w.id ORDER BY w.created_at ASC`
   );
   const stmtGetWorkspaceForUser = db.prepare(
-    "SELECT * FROM workspaces WHERE id = ? AND user_id = ?"
+    "SELECT * FROM workspaces WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   );
   /*
    * The same row as `stmtGetWorkspaceForUser`, with the stats a card needs. Separate rather
@@ -1563,18 +1663,19 @@ export function createDb(dbPath: string): AppDb {
    */
   const stmtGetWorkspaceWithStatsForUser = db.prepare(
     `SELECT w.*, COUNT(s.id) AS session_count, MAX(s.updated_at) AS last_activity_at
-     FROM workspaces w LEFT JOIN sessions s ON s.workspace_id = w.id
-     WHERE w.id = ? AND w.user_id = ? GROUP BY w.id`
+     FROM workspaces w
+     LEFT JOIN sessions s ON s.workspace_id = w.id AND s.deleted_at IS NULL
+     WHERE w.id = ? AND w.user_id = ? AND w.deleted_at IS NULL GROUP BY w.id`
   );
   const stmtCreateWorkspace = db.prepare(
     `INSERT INTO workspaces (id, user_id, name, slug, dir_path, created_at)
      VALUES (@id, @userId, @name, @slug, @dirPath, @createdAt)`
   );
   const stmtRenameWorkspaceForUser = db.prepare(
-    "UPDATE workspaces SET name = ? WHERE id = ? AND user_id = ?"
+    "UPDATE workspaces SET name = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   );
-  const stmtDeleteWorkspaceForUser = db.prepare(
-    "DELETE FROM workspaces WHERE id = ? AND user_id = ?"
+  const stmtSoftDeleteWorkspaceForUser = db.prepare(
+    "UPDATE workspaces SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   );
 
   /* ------------------------------- copilots ------------------------------- */
@@ -1594,13 +1695,16 @@ export function createDb(dbPath: string): AppDb {
      LEFT JOIN users u ON u.id = c.user_id`;
   const stmtListCopilotsForUser = db.prepare(
     `${copilotSelect} WHERE c.user_id IS NOT NULL AND (c.user_id = ? OR c.visibility = 'public')
+       AND c.deleted_at IS NULL
      ORDER BY c.created_at ASC`
   );
   const stmtGetCopilotForUser = db.prepare(
     `${copilotSelect} WHERE c.id = ? AND c.user_id IS NOT NULL
-       AND (c.user_id = ? OR c.visibility = 'public')`
+       AND (c.user_id = ? OR c.visibility = 'public') AND c.deleted_at IS NULL`
   );
-  const stmtGetOwnedCopilot = db.prepare(`${copilotSelect} WHERE c.id = ? AND c.user_id = ?`);
+  const stmtGetOwnedCopilot = db.prepare(
+    `${copilotSelect} WHERE c.id = ? AND c.user_id = ? AND c.deleted_at IS NULL`
+  );
   const stmtCreateCopilot = db.prepare(
     `INSERT INTO copilots (id, user_id, name, description, system_prompt, all_tools, tools, settings, widgets, visibility, created_at, updated_at)
      VALUES (@id, @userId, @name, @description, @systemPrompt, @allTools, @tools, @settings, @widgets, @visibility, @createdAt, @updatedAt)`
@@ -1613,9 +1717,11 @@ export function createDb(dbPath: string): AppDb {
     `UPDATE copilots SET name = @name, description = @description, system_prompt = @systemPrompt,
      all_tools = @allTools, tools = @tools, settings = @settings, widgets = @widgets,
      visibility = @visibility, updated_at = @updatedAt
-     WHERE id = @id AND user_id = @userId`
+     WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
   );
-  const stmtDeleteCopilotForUser = db.prepare("DELETE FROM copilots WHERE id = ? AND user_id = ?");
+  const stmtSoftDeleteCopilotForUser = db.prepare(
+    "UPDATE copilots SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
 
   /* ------------------------------- sessions ------------------------------- */
   /*
@@ -1626,11 +1732,14 @@ export function createDb(dbPath: string): AppDb {
    */
   const stmtListSessionsForUser = db.prepare(
     `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
-     WHERE s.workspace_id = ? AND w.user_id = ? ORDER BY s.updated_at DESC`
+     WHERE s.workspace_id = ? AND w.user_id = ?
+       AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+     ORDER BY s.updated_at DESC`
   );
   const stmtGetSessionForUser = db.prepare(
     `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
-     WHERE s.id = ? AND w.user_id = ?`
+     WHERE s.id = ? AND w.user_id = ?
+       AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
   );
   /** Unscoped: for the accessors documented as taking an already-resolved session id. */
   const stmtGetSession = db.prepare("SELECT * FROM sessions WHERE id = ?");
@@ -1644,15 +1753,18 @@ export function createDb(dbPath: string): AppDb {
     `UPDATE sessions SET title = @title, title_source = @titleSource, settings = @settings,
        system_prompt = @systemPrompt, all_tools = @allTools, tools = @tools,
        updated_at = @updatedAt
-      WHERE id = @id AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = @userId)`
+      WHERE id = @id AND deleted_at IS NULL
+        AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = @userId AND deleted_at IS NULL)`
   );
   const stmtSetAutoTitleForUser = db.prepare(
     `UPDATE sessions SET title = ?, updated_at = ?
-      WHERE id = ? AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ?)`
+      WHERE id = ? AND deleted_at IS NULL
+        AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
   );
-  const stmtDeleteSessionForUser = db.prepare(
-    `DELETE FROM sessions
-      WHERE id = ? AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ?)`
+  const stmtSoftDeleteSessionForUser = db.prepare(
+    `UPDATE sessions SET deleted_at = ?
+      WHERE id = ? AND deleted_at IS NULL
+        AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
   );
   const stmtTouchSession = db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?");
 
@@ -1661,22 +1773,30 @@ export function createDb(dbPath: string): AppDb {
    * Two ways to read the same rows, and the pair is the point: `stmtListMessages` is the
    * unscoped one, used only by the session-id-only accessors above, and the `ForUser` pair
    * is what a route can reach. They are not interchangeable.
+   *
+   * `deleted_at IS NULL` on all three is the whole soft delete as far as messages go, and it
+   * carries more weight here than anywhere else: `stmtListMessages` is also what
+   * `listMessagesOf` reads, so this one line hides a deleted message from the conversation,
+   * from `findAwaitingToolCall`, and from the history `buildHistoryMessages` turns into the
+   * model's context. There is no second place to forget.
    */
   const stmtListMessages = db.prepare(
-    "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC"
+    "SELECT * FROM messages WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
   );
   const stmtListMessagesForUser = db.prepare(
     `SELECT m.* FROM messages m
        JOIN sessions s ON s.id = m.session_id
        JOIN workspaces w ON w.id = s.workspace_id
       WHERE m.session_id = ? AND w.user_id = ?
+        AND m.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL
       ORDER BY m.created_at ASC`
   );
   const stmtGetMessageForUser = db.prepare(
     `SELECT m.* FROM messages m
        JOIN sessions s ON s.id = m.session_id
        JOIN workspaces w ON w.id = s.workspace_id
-      WHERE m.id = ? AND w.user_id = ?`
+      WHERE m.id = ? AND w.user_id = ?
+        AND m.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
   );
   /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
@@ -1685,6 +1805,21 @@ export function createDb(dbPath: string): AppDb {
      VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @usage, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
+  /*
+   * Mark one message deleted, scoped to its owner through the session's workspace. No
+   * `IS LAST` here on purpose: the caller has just read the live tail inside the same
+   * transaction and the check belongs there, where the row it decided about is the row it
+   * writes — a subquery repeating "the last one" would be a second opinion about the same
+   * question, taken at a different instant.
+   */
+  const stmtSoftDeleteMessageForUser = db.prepare(
+    `UPDATE messages SET deleted_at = @at
+      WHERE id = @id AND deleted_at IS NULL
+        AND session_id = @sessionId
+        AND session_id IN (
+          SELECT s.id FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+           WHERE w.user_id = @userId AND s.deleted_at IS NULL AND w.deleted_at IS NULL)`
+  );
 
   /* ------------------------------- counters ------------------------------- */
   /**
@@ -1871,50 +2006,71 @@ export function createDb(dbPath: string): AppDb {
    * "last" has to mean the same thing to the query as it does to the reader.
    */
   const stmtSessionUsageRows = db.prepare(
-    `SELECT m.role, m.usage FROM messages m WHERE m.session_id = ? ORDER BY m.created_at ASC`
+    `SELECT m.role, m.usage FROM messages m
+      WHERE m.session_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at ASC`
   );
   const stmtWorkspaceUsageRows = db.prepare(
     `SELECT m.session_id, m.role, m.usage FROM messages m
        JOIN sessions s ON s.id = m.session_id
-      WHERE s.workspace_id = ? ORDER BY m.created_at ASC`
+      WHERE s.workspace_id = ? AND s.deleted_at IS NULL AND m.deleted_at IS NULL
+      ORDER BY m.created_at ASC`
   );
 
   /* ------------------------------ providers ------------------------------- */
-  const stmtListProviders = db.prepare("SELECT * FROM providers ORDER BY sort_order ASC, created_at ASC");
-  const stmtGetProvider = db.prepare("SELECT * FROM providers WHERE id = ?");
+  const stmtListProviders = db.prepare(
+    "SELECT * FROM providers WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC"
+  );
+  const stmtGetProvider = db.prepare("SELECT * FROM providers WHERE id = ? AND deleted_at IS NULL");
   const stmtCreateProvider = db.prepare(
     `INSERT INTO providers (id, name, base_url, api_key, sort_order, created_at, updated_at)
      VALUES (@id, @name, @baseURL, @apiKey, @sortOrder, @createdAt, @updatedAt)`
   );
-  const stmtDeleteProvider = db.prepare("DELETE FROM providers WHERE id = ?");
+  const stmtSoftDeleteProvider = db.prepare(
+    "UPDATE providers SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL"
+  );
+  /*
+   * The cascade, spelled out. `models.provider_id` is `ON DELETE CASCADE`, and a soft delete
+   * fires no such thing — so a provider removed from the list would otherwise leave its models
+   * behind, still resolvable by id and still offered wherever models are enumerated. Marking
+   * them in the same transaction is what makes the two agree.
+   */
+  const stmtSoftDeleteModelsByProvider = db.prepare(
+    "UPDATE models SET deleted_at = ? WHERE provider_id = ? AND deleted_at IS NULL"
+  );
   const stmtNextProviderOrder = db.prepare(
     "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM providers"
   );
 
   /* -------------------------------- models -------------------------------- */
   const stmtModelsByProvider = db.prepare(
-    "SELECT * FROM models WHERE provider_id = ? ORDER BY sort_order ASC"
+    "SELECT * FROM models WHERE provider_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC"
   );
-  const stmtGetModel = db.prepare("SELECT * FROM models WHERE id = ?");
+  const stmtGetModel = db.prepare("SELECT * FROM models WHERE id = ? AND deleted_at IS NULL");
   const stmtCreateModel = db.prepare(
     `INSERT INTO models (id, provider_id, model_id, name, context_window, max_output, capabilities, sort_order)
      VALUES (@id, @providerId, @modelId, @name, @contextWindow, @maxOutput, @capabilities, @sortOrder)`
   );
-  const stmtDeleteModel = db.prepare("DELETE FROM models WHERE id = ?");
+  const stmtSoftDeleteModel = db.prepare(
+    "UPDATE models SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL"
+  );
   const stmtNextModelOrder = db.prepare(
     "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM models WHERE provider_id = ?"
   );
 
   /* --------------------------- document parsers --------------------------- */
   const stmtListDocumentParsers = db.prepare(
-    "SELECT * FROM document_parsers ORDER BY sort_order ASC, created_at ASC"
+    "SELECT * FROM document_parsers WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC"
   );
-  const stmtGetDocumentParser = db.prepare("SELECT * FROM document_parsers WHERE id = ?");
+  const stmtGetDocumentParser = db.prepare(
+    "SELECT * FROM document_parsers WHERE id = ? AND deleted_at IS NULL"
+  );
   const stmtCreateDocumentParser = db.prepare(
     `INSERT INTO document_parsers (id, name, kind, base_url, api_key, enabled, sort_order, created_at, updated_at)
      VALUES (@id, @name, @kind, @baseURL, @apiKey, @enabled, @sortOrder, @createdAt, @updatedAt)`
   );
-  const stmtDeleteDocumentParser = db.prepare("DELETE FROM document_parsers WHERE id = ?");
+  const stmtSoftDeleteDocumentParser = db.prepare(
+    "UPDATE document_parsers SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL"
+  );
   const stmtNextDocumentParserOrder = db.prepare(
     "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM document_parsers"
   );
@@ -2036,6 +2192,10 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtFindSourceByHash.get(userId, sha256) as SourceRow | undefined;
       return r ? mapSource(r) : undefined;
     },
+    findDeletedSourceByHash(userId, sha256) {
+      const r = stmtFindDeletedSourceByHash.get(userId, sha256) as SourceRow | undefined;
+      return r ? mapSource(r) : undefined;
+    },
     getSourceForUser(id, userId) {
       const r = stmtGetSourceForUser.get(id, userId) as SourceRow | undefined;
       return r ? mapSource(r) : undefined;
@@ -2048,8 +2208,12 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetSourceForUser.get(input.id, input.userId) as SourceRow;
       return mapSource(r);
     },
-    deleteSourceForUser(id, userId) {
-      return stmtDeleteSourceForUser.run(id, userId).changes > 0;
+    softDeleteSourceForUser(id, userId) {
+      return stmtSoftDeleteSourceForUser.run(now(), id, userId).changes > 0;
+    },
+    reviveSourceForUser(id, userId) {
+      const r = stmtReviveSourceForUser.get(id, userId) as SourceRow | undefined;
+      return r ? mapSource(r) : undefined;
     },
     updateSourceParse(id, userId, patch) {
       stmtUpdateSourceParse.run({
@@ -2100,8 +2264,8 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetWorkspaceWithStatsForUser.get(id, userId) as WorkspaceRow | undefined;
       return r ? mapWorkspace(r) : undefined;
     },
-    deleteWorkspaceForUser(id, userId) {
-      return stmtDeleteWorkspaceForUser.run(id, userId).changes > 0;
+    softDeleteWorkspaceForUser(id, userId) {
+      return stmtSoftDeleteWorkspaceForUser.run(now(), id, userId).changes > 0;
     },
 
     listCopilotsForUser(userId) {
@@ -2155,8 +2319,8 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetOwnedCopilot.get(id, userId) as CopilotRow;
       return mapCopilot(r);
     },
-    deleteCopilotForUser(id, userId) {
-      return stmtDeleteCopilotForUser.run(id, userId).changes > 0;
+    softDeleteCopilotForUser(id, userId) {
+      return stmtSoftDeleteCopilotForUser.run(now(), id, userId).changes > 0;
     },
 
     listSessionsForUser(workspaceId, userId) {
@@ -2221,8 +2385,8 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);
     },
-    deleteSessionForUser(id, userId) {
-      return stmtDeleteSessionForUser.run(id, userId).changes > 0;
+    softDeleteSessionForUser(id, userId) {
+      return stmtSoftDeleteSessionForUser.run(now(), id, userId).changes > 0;
     },
     touchSession(id) {
       stmtTouchSession.run(now(), id);
@@ -2250,6 +2414,11 @@ export function createDb(dbPath: string): AppDb {
       });
       const row = stmtGetMessageById.get(input.id) as MessageRow;
       return mapMessage(row);
+    },
+    softDeleteMessageForUser(sessionId, messageId, userId) {
+      return (
+        stmtSoftDeleteMessageForUser.run({ at: now(), id: messageId, sessionId, userId }).changes > 0
+      );
     },
 
     findAwaitingToolCall(sessionId, toolCallId) {
@@ -2588,8 +2757,14 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetProvider.get(id) as ProviderRow;
       return readProvider(r);
     },
-    deleteProvider(id) {
-      stmtDeleteProvider.run(id);
+    softDeleteProvider(id) {
+      // One transaction, because the two writes are one act: a provider hidden while its
+      // models stayed live would leave models resolvable under a provider nothing lists.
+      db.transaction(() => {
+        const at = now();
+        stmtSoftDeleteProvider.run(at, id);
+        stmtSoftDeleteModelsByProvider.run(at, id);
+      })();
     },
 
     createModel(input) {
@@ -2624,8 +2799,8 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetModel.get(id) as ModelRow;
       return mapModel(r);
     },
-    deleteModel(id) {
-      return stmtDeleteModel.run(id).changes > 0;
+    softDeleteModel(id) {
+      return stmtSoftDeleteModel.run(now(), id).changes > 0;
     },
 
     listDocumentParsers() {
@@ -2671,8 +2846,8 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetDocumentParser.get(id) as DocumentParserRow;
       return mapDocumentParser(r);
     },
-    deleteDocumentParser(id) {
-      stmtDeleteDocumentParser.run(id);
+    softDeleteDocumentParser(id) {
+      stmtSoftDeleteDocumentParser.run(now(), id);
     },
 
     getSetting(key) {

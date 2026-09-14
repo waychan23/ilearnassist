@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { mkdirSync, rmSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import type {
   AdminUser,
   AnswerToolCallInput,
@@ -95,7 +95,6 @@ import {
   skipQuizQuestions,
 } from "./quizzes.js";
 import type { DocumentService } from "./documents/service.js";
-import { removeParsedText } from "./documents/store.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { classifyProviderError } from "./agent/providerErrors.js";
@@ -135,7 +134,7 @@ import {
 } from "./auth.js";
 import type { UserRecord } from "./db.js";
 import { sessionDir, userLayout, type DataLayout, type UserLayout } from "./paths.js";
-import { createWorkspaceDir, removeWorkspaceDir, uniqueSlug } from "./workspace.js";
+import { createWorkspaceDir, uniqueSlug } from "./workspace.js";
 import { FileAccessError, listDirectory, readFileContent } from "./files.js";
 
 /**
@@ -1057,17 +1056,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return db.renameWorkspaceForUser(id, userId, name);
   });
 
+  /**
+   * Soft delete. The workspace leaves every list and the directory stays — `workdir/`, the
+   * reserved `sessions/` beside it, and every row hanging off this one. Nothing is dismantled:
+   * the rows are reached through the workspace, so hiding it here is what hides them, and the
+   * files being kept is what would make a future restore possible at all.
+   */
   app.delete("/api/workspaces/:id", async (request, reply) => {
-    const user = actor(request);
-    const userId = user.id;
+    const userId = actor(request).id;
     const { id } = request.params as { id: string };
-    const workspace = db.getWorkspaceForUser(id, userId);
-    if (!workspace) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
-    db.deleteWorkspaceForUser(id, userId);
-    // The workspace's *own* directory, so `sessions/` goes with it. The guard inside
-    // `removeWorkspaceDir` is written against this level — "a direct child of the
-    // workspaces root" — which is why `dirPath` holds this and not the sandbox.
-    removeWorkspaceDir(treeFor(user).workspacesRoot, workspace.dirPath);
+    if (!db.getWorkspaceForUser(id, userId)) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
+    db.softDeleteWorkspaceForUser(id, userId);
     return { ok: true };
   });
 
@@ -1192,9 +1193,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return copilot;
   });
 
+  /** Soft delete. Conversations started from it keep working — they read their own snapshot. */
   app.delete("/api/copilots/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!db.deleteCopilotForUser(id, actor(request).id)) {
+    if (!db.softDeleteCopilotForUser(id, actor(request).id)) {
       return reply.code(404).send(apiError("COPILOT_NOT_FOUND", "copilot not found"));
     }
     return { ok: true };
@@ -1309,30 +1311,27 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Delete a conversation.
+   * Soft delete a conversation.
    *
-   * **The uploaded files stay.** This used to abort any in-flight parse and remove the whole
-   * session upload directory, because the bytes and the parse sidecars lived inside it. A
-   * source belongs to the account now, so neither happens: deleting a conversation removes
-   * its *references* (the links cascade with the row) and leaves the files alone, because
-   * another conversation may be reading them — and because a file the user uploaded is not
-   * something to delete as a side effect of tidying up a chat. `DELETE /api/sources/:id` is
-   * the one that means "delete this file".
+   * Everything stays: the messages, the source links, the plan and its versions, the quiz rows,
+   * and the reserved `sessions/<id>/` directory. They are all reached through this row, so
+   * filtering it here is the whole of what removes them from view — and leaving them in place
+   * is what would let a restore put the conversation back together rather than in pieces.
+   *
+   * An in-flight turn is aborted first, the same way `POST /stop` aborts one, so a deleted
+   * conversation stops costing tokens immediately. It does not stop that turn's own `finishTurn`
+   * from writing its partial reply — but that row belongs to this session and is filtered out
+   * with it, which is exactly why nothing has to be reconciled afterwards.
    */
   app.delete("/api/sessions/:id", async (request, reply) => {
     const userId = actor(request).id;
     const { id } = request.params as { id: string };
-    const found = db.getSessionForUser(id, userId);
-    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-
-    db.deleteSessionForUser(id, userId);
-    // The reserved directory goes with the conversation. Best-effort, same as the create
-    // above: a directory nothing wrote to is not worth failing a delete over.
-    try {
-      rmSync(sessionDir(found.workspace.dirPath, id), { recursive: true, force: true });
-    } catch {
-      // Ignored on purpose.
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     }
+
+    activeTurns.get(id)?.abort();
+    db.softDeleteSessionForUser(id, userId);
     return { ok: true };
   });
 
@@ -1343,6 +1342,59 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     }
     return db.listMessagesForUser(id, userId);
+  });
+
+  /**
+   * Delete one message, and only ever the conversation's last live one.
+   *
+   * The tail rule is a product decision rather than a technical limit: peeling from the end is
+   * the one deletion that cannot leave a reply hanging over a question that is no longer there.
+   * Delete the last and the one before it becomes the last, so this is a loop the user can
+   * repeat — but a message with anything after it is refused, and the client does not even
+   * offer the control on one.
+   *
+   * The read and the write are one transaction. Two tabs both looking at a conversation see
+   * the same "last", and without the transaction both would pass the check and both would
+   * write; with it, the loser's `UPDATE` lands on a row that is no longer the tail and it gets
+   * the same 409 a middle message does.
+   *
+   * Answering questions the deleted message asked: a `ila_quiz` call that was still awaiting an
+   * answer leaves its question rows `pending`, which is a card that can never be submitted once
+   * the call is gone. They are retired here, in the same transaction, rather than left for the
+   * read-side reconciliation to notice later.
+   */
+  app.delete("/api/sessions/:id/messages/:messageId", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, messageId } = request.params as { id: string; messageId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    // A message id from another conversation is not this conversation's message, and answers
+    // the same way as one that does not exist.
+    const message = db.getMessageForUser(messageId, userId);
+    if (!message || message.sessionId !== id) {
+      return reply.code(404).send(apiError("MESSAGE_NOT_FOUND", "message not found"));
+    }
+    if (activeTurns.has(id)) {
+      return reply.code(409).send(apiError("TURN_IN_PROGRESS", "a reply is still being generated"));
+    }
+
+    const removed = db.raw.transaction(() => {
+      const live = db.listMessagesForUser(id, userId);
+      if (live.length === 0 || live[live.length - 1]!.id !== messageId) return false;
+      if (!db.softDeleteMessageForUser(id, messageId, userId)) return false;
+      skipQuizQuestions(
+        db,
+        id,
+        (message.toolCalls ?? []).filter((tc) => tc.name === QUIZ_TOOL_NAME).map((tc) => tc.id)
+      );
+      return true;
+    })();
+
+    if (!removed) {
+      return reply.code(409).send(apiError("MESSAGE_NOT_LAST", "only the last message can be deleted"));
+    }
+    return { ok: true };
   });
 
   /* --------------------------------- widgets --------------------------------- */
@@ -1693,8 +1745,37 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           );
       }
 
-      const existing = db.findSourceByHash(userId, sha256Of(bytes));
+      /*
+       * Three cases, and the middle one is the soft delete's.
+       *
+       * `UNIQUE (user_id, sha256)` makes identical bytes one row for the account, so a file the
+       * user deleted cannot be re-uploaded as a second row — the insert would be refused. It is
+       * *revived* instead: the row never lost its bytes, its parse state or its links, so
+       * bringing it back restores the file everywhere it was used, and the re-upload costs
+       * nothing but a marker.
+       */
+      const hash = sha256Of(bytes);
+      const existing = db.findSourceByHash(userId, hash);
       let source = existing;
+      let started = false;
+
+      if (!source) {
+        const deleted = db.findDeletedSourceByHash(userId, hash);
+        if (deleted) {
+          // A parse cancelled mid-flight left the row saying `pending` forever, because the run
+          // that would have written an outcome is the one that was stopped. Re-queue it; a row
+          // that already finished keeps its verdict.
+          const stuck = deleted.parseStatus === "pending" || deleted.parseStatus === "parsing";
+          source = db.reviveSourceForUser(deleted.id, userId) ?? deleted;
+          if (stuck && documents.handles(source)) {
+            started = true;
+            void documents.schedule(tree, userId, source).catch((err: unknown) => {
+              request.log.error(err, "failed to schedule document parsing");
+            });
+          }
+        }
+      }
+
       if (!source) {
         const sourceId = newId();
         // Both inputs to the path are server-side — an id we just made and a MIME type from
@@ -1711,13 +1792,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         source = db.createSource({
           id: sourceId,
           userId,
-          sha256: sha256Of(bytes),
+          sha256: hash,
           name,
           mimeType,
           size: bytes.byteLength,
           kind: kindFor(mimeType),
           rawPath,
         });
+        started = true;
 
         // Extraction runs *after* the response: a cloud parse can take minutes and the
         // composer must not hold the upload open for it. `schedule` writes `pending`
@@ -1733,19 +1815,20 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       db.linkSourceToWorkspace(userId, session.workspace.id, source.id);
 
       /*
-       * A source that was just created reports `pending` rather than being re-read. Re-reading
-       * would race the work it just queued — a small local PDF can be `ready` before this line
-       * runs, and a status that races the parse is not a status. The client polls
+       * A source this request started parsing reports `pending` rather than being re-read.
+       * Re-reading would race the work it just queued — a small local PDF can be `ready` before
+       * this line runs, and a status that races the parse is not a status. The client polls
        * `/sessions/:id/sources` for the outcome, so what it needs from the upload is a stable
        * "we started", which is what it gets.
        *
-       * A *reused* source reports what it already has, because nothing was started for it: its
-       * parse may be finished, or gone stale, or never have been needed.
+       * A source nothing was started for reports what it already has: its parse may be
+       * finished, or gone stale, or never have been needed. That is the reused case and the
+       * revived-and-already-parsed one alike.
        */
       const reported =
-        existing || !documents.handles(source)
-          ? source
-          : { ...source, parseStatus: "pending" as ParseStatus };
+        started && documents.handles(source)
+          ? { ...source, parseStatus: "pending" as ParseStatus }
+          : source;
       return reply.code(201).send(toAttachment(reported, name));
     }
   );
@@ -1827,13 +1910,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Delete a file for good, everywhere it is used.
+   * Soft delete a file everywhere it is used.
    *
-   * The bytes and the extracted text go, and every reference to it cascades away — so a
-   * conversation that used it simply stops listing it. The `messages.attachments` snapshots
-   * stay, deliberately: a message that was sent with a PDF should keep showing what was sent,
-   * and its thumbnail starts 404ing, rather than the chip vanishing from history it was part
-   * of. That is the cost of a shared source, and it is the right way round.
+   * The row keeps its bytes, its extracted text and every link; it stops being listed, stops
+   * being offered to the model, and starts 404ing on `/raw`. Because the links survive,
+   * re-uploading the same content brings the file back *with* its history — see the upload
+   * route, which revives this row rather than inserting beside it.
+   *
+   * The `messages.attachments` snapshots were always kept: a message sent with a PDF keeps
+   * showing what was sent, rather than the chip vanishing from history it was part of.
+   *
+   * An in-flight parse is still cancelled — not to protect the bytes, which are staying, but so
+   * a parse that can never be read does not keep running against a file the user has put away.
    */
   app.delete("/api/sources/:id", async (request, reply) => {
     const user = actor(request);
@@ -1841,15 +1929,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const source = db.getSourceForUser(sourceId, user.id);
     if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
 
-    // Stop a run before removing anything: a parse still going would finish by writing text
-    // for a source that no longer exists, and recreate the file we just deleted.
     documents.cancelSource(source.id);
-
-    const tree = treeFor(user);
-    db.deleteSourceForUser(source.id, user.id);
-    await removeParsedText(tree, source.id).catch(() => undefined);
-    const raw = resolveInSources(tree, source.rawPath);
-    if (raw) await rm(raw, { force: true }).catch(() => undefined);
+    db.softDeleteSourceForUser(source.id, user.id);
     return { ok: true };
   });
 
@@ -1953,7 +2034,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           )
         );
     }
-    db.deleteProvider(id);
+    db.softDeleteProvider(id);
     return { ok: true };
   });
 
@@ -1963,7 +2044,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const { providerId, modelId } = request.params as { providerId: string; modelId: string };
     const provider = db.getProvider(providerId);
     if (!provider) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
-    if (!db.deleteModel(modelId)) return reply.code(404).send(apiError("MODEL_NOT_FOUND", "model not found"));
+    if (!db.softDeleteModel(modelId)) return reply.code(404).send(apiError("MODEL_NOT_FOUND", "model not found"));
     return publicProvider(providerId);
   });
 
@@ -2026,7 +2107,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     // Unlike LLM providers there is no "last one" guard: running with zero cloud parsers is
     // a normal configuration (local-only), so deleting the final entry is allowed.
-    db.deleteDocumentParser(id);
+    db.softDeleteDocumentParser(id);
     if (db.getSetting(SETTING_DOCUMENT_DEFAULT_PARSER) === id) {
       db.setSetting(SETTING_DOCUMENT_DEFAULT_PARSER, "");
     }
@@ -2448,7 +2529,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
     const history = db.listMessagesForUser(id, userId);
 
-    db.createMessage({
+    const userMessage = db.createMessage({
       id: newId(),
       sessionId: id,
       role: "user",
@@ -2460,6 +2541,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     await reply.hijack();
     const sse = createSseWriter(reply);
     sse.send({ type: "meta", sessionId: id });
+    // The row this turn just wrote for the user's own message. The client has been showing an
+    // optimistic bubble under an id of its own making; this is what makes the row addressable,
+    // which a tail delete needs.
+    sse.send({ type: "message_saved", message: userMessage });
 
     const turn = beginTurn(request, id);
 
@@ -2608,6 +2693,125 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         workspace,
         // Read from the session, exactly as `/chat` does: a resumed turn must not rebuild the
         // persona differently from the one that asked the question it is resuming.
+        systemPrompt: session.systemPrompt,
+        settings: session.settings,
+        user: treeFor(actor(request)),
+        sessionId: id,
+        vision: ctx.vision,
+        toolUse: ctx.toolUse,
+        history,
+        userMessage: null,
+        tools: ctx.tools,
+        planGuidance: ctx.planGuidance,
+        quizGuidance: ctx.quizGuidance,
+        signal: turn.signal,
+        onEvent: (event: ChatStreamEvent) => sse.send(event),
+      });
+
+      await finishTurn(id, userId, session, ctx, result, sse, {
+        historyLength: history.length,
+        userMessage: null,
+      });
+    } catch (err) {
+      failTurn(id, err, sse);
+    } finally {
+      turn.finish();
+      sse.send({ type: "done" });
+      sse.end();
+    }
+  });
+
+  /**
+   * Answer the last user turn again: drop the assistant reply and run the model once more.
+   *
+   * The shape is the `/answers` one, not `/chat`'s, and that is the whole trick. `/chat`
+   * persists a user message and passes its text along to be *appended*; here the user message
+   * is already in the conversation and stays exactly as it was, so the history read after the
+   * delete already ends on it and `userMessage: null` is what keeps it from arriving twice.
+   * Its attachments come back the same way — `buildHistoryMessages` replays every persisted
+   * user message through `buildUserContent`, so the images and documents the turn originally
+   * carried are rebuilt from the row rather than re-sent by the client.
+   *
+   * The old reply is soft-deleted *before* history is read, so the model does not see the
+   * answer it is being asked to replace. It is replaced rather than duplicated, and a failure
+   * leaves the ⚠️ row `failTurn` writes as the new tail — the user can retry again.
+   *
+   * No title: a regenerate is never a first turn (`history` holds at least the user message,
+   * so `finishTurn`'s `historyLength === 0` test is false), and the conversation already has
+   * whatever name it earned.
+   */
+  app.post("/api/sessions/:id/regenerate", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    const { session, workspace } = found;
+
+    if (activeTurns.has(id)) {
+      return reply.code(409).send(apiError("TURN_IN_PROGRESS", "a reply is still being generated"));
+    }
+
+    const messages = db.listMessagesForUser(id, userId);
+    const last = messages[messages.length - 1];
+    /*
+     * Three things a regenerate is not, and each is the client's own state rather than a
+     * server fault: an empty conversation, a turn whose reply the user has not written yet (the
+     * tail is their own message), and an assistant turn still holding an unanswered question.
+     * The last one is refused because the interactive card owns that state — regenerating it
+     * would throw away the question the user is in the middle of answering.
+     */
+    if (
+      !last ||
+      last.role !== "assistant" ||
+      (last.toolCalls ?? []).some((tc) => tc.status === "awaiting")
+    ) {
+      return reply
+        .code(409)
+        .send(apiError("NO_REPLY_TO_REGENERATE", "there is no reply to regenerate"));
+    }
+
+    const peeled = db.raw.transaction(() => {
+      const live = db.listMessagesForUser(id, userId);
+      if (live.length === 0 || live[live.length - 1]!.id !== last.id) return false;
+      if (!db.softDeleteMessageForUser(id, last.id, userId)) return false;
+      skipQuizQuestions(
+        db,
+        id,
+        (last.toolCalls ?? []).filter((tc) => tc.name === QUIZ_TOOL_NAME).map((tc) => tc.id)
+      );
+      return true;
+    })();
+
+    if (!peeled) {
+      return reply
+        .code(409)
+        .send(apiError("NO_REPLY_TO_REGENERATE", "there is no reply to regenerate"));
+    }
+
+    const ctx = turnContext(session, workspace, {
+      userId,
+      user: treeFor(actor(request)),
+      sources: db.listReadableSources(userId, id, workspace.id),
+    });
+
+    // After the delete: the reply being replaced is not part of what the model is shown.
+    const history = db.listMessagesForUser(id, userId);
+
+    await reply.hijack();
+    const sse = createSseWriter(reply);
+    sse.send({ type: "meta", sessionId: id });
+    // The row is already gone server-side; say so before the replacement streams, or the
+    // client renders the old reply and the new one at the same time for the whole turn.
+    sse.send({ type: "message_removed", id: last.id });
+
+    const turn = beginTurn(request, id);
+
+    try {
+      const result = await runAgentStream({
+        provider: ctx.provider,
+        modelId: ctx.modelId,
+        workspace,
         systemPrompt: session.systemPrompt,
         settings: session.settings,
         user: treeFor(actor(request)),

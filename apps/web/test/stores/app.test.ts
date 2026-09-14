@@ -68,6 +68,7 @@ const mocks = vi.hoisted(() => ({
     updateDocumentParsing: vi.fn(),
     deleteProvider: vi.fn(),
     deleteModel: vi.fn(),
+    deleteMessage: vi.fn(),
     login: vi.fn(),
     logout: vi.fn(),
     me: vi.fn(),
@@ -80,6 +81,7 @@ const mocks = vi.hoisted(() => ({
   },
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
+  streamRegenerate: vi.fn(),
   fileToBase64: vi.fn(),
   /**
    * The client's 401 callback, captured rather than stubbed.
@@ -94,6 +96,7 @@ vi.mock("../../src/api/client", () => ({
   api: mocks.api,
   streamChat: mocks.streamChat,
   streamAnswers: mocks.streamAnswers,
+  streamRegenerate: mocks.streamRegenerate,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
   sourceImageUrl: (sourceId: string) => Promise.resolve(`blob:sources/${sourceId}`),
@@ -2360,5 +2363,111 @@ describe("the file tree after a turn", () => {
     await store.answerQuestion("call_ask", { action: "submit", answers: { "0": { selected: ["OAuth"] } } });
 
     expect(mocks.api.listFiles).toHaveBeenCalledWith("w1", "");
+  });
+});
+
+describe("deleting and regenerating the last message", () => {
+  it("swaps the optimistic user bubble for the row the server wrote", async () => {
+    // Without this the bubble keeps a `local-…` id for the life of the page, and the tail
+    // actions address rows by id — so deleting a message you had just sent would name an id
+    // the server has never seen, and 404.
+    const saved = message({ role: "user", content: "just sent" });
+    const store = await readyStore();
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { type: "message_saved", message: saved } as ChatStreamEvent;
+      yield { type: "done" } as ChatStreamEvent;
+    });
+
+    await store.sendMessage("just sent");
+
+    expect(store.messages.map((m) => m.id)).toEqual([saved.id]);
+    expect(store.messages[0]!.id.startsWith("local-")).toBe(false);
+  });
+
+  it("removes a deleted message from the conversation", async () => {
+    const first = message({ role: "user", content: "question" });
+    const reply = message({ role: "assistant", content: "answer" });
+    const store = await readyStore({ messages: [first, reply] });
+    mocks.api.deleteMessage.mockResolvedValue({ ok: true });
+
+    await store.deleteMessage(reply.id);
+
+    expect(mocks.api.deleteMessage).toHaveBeenCalledWith("s1", reply.id);
+    expect(store.messages.map((m) => m.id)).toEqual([first.id]);
+  });
+
+  it("keeps the message on screen when the server refuses, and says why", async () => {
+    // The tail moved under the click (another tab, or a turn that started), so the row the
+    // user aimed at is still there and a silent no-op is the one wrong answer.
+    const reply = message({ role: "assistant", content: "answer" });
+    const store = await readyStore({ messages: [reply] });
+    mocks.api.deleteMessage.mockRejectedValue(new ApiError("MESSAGE_NOT_LAST", "not last", 409));
+
+    await store.deleteMessage(reply.id);
+
+    expect(store.messages.map((m) => m.id)).toEqual([reply.id]);
+    expect(store.error).toBe("not last");
+  });
+
+  it("drops the old reply when the server says it is gone, then takes the new one", async () => {
+    // The server soft-deletes the reply itself and announces it, so the store does not guess
+    // — that is what keeps a regenerate from being a second opinion about what happened.
+    const question = message({ role: "user", content: "question" });
+    const old = message({ role: "assistant", content: "old answer" });
+    const fresh = message({ role: "assistant", content: "new answer" });
+    const store = await readyStore({ messages: [question, old] });
+
+    mocks.streamRegenerate.mockImplementation(async function* () {
+      yield { type: "message_removed", id: old.id } as ChatStreamEvent;
+      // Visible mid-stream: the old reply is already gone, which is the point of the event.
+      expect(store.messages.map((m) => m.id)).toEqual([question.id]);
+      yield { type: "text", delta: "new" } as ChatStreamEvent;
+      yield { type: "message_done", message: fresh } as ChatStreamEvent;
+      yield { type: "done" } as ChatStreamEvent;
+    });
+
+    await store.regenerateLastMessage();
+
+    expect(mocks.streamRegenerate).toHaveBeenCalledWith("s1");
+    expect(store.messages.map((m) => m.content)).toEqual(["question", "new answer"]);
+    expect(store.streaming.active).toBe(false);
+  });
+
+  it("does nothing while a turn is streaming", async () => {
+    // Both tail actions are hidden mid-turn for the same reason; this is the race.
+    const reply = message({ role: "assistant", content: "answer" });
+    const store = await readyStore({ messages: [reply] });
+    store.streaming = { ...store.streaming, active: true };
+
+    await store.regenerateLastMessage();
+    await store.deleteMessage(reply.id);
+
+    expect(mocks.streamRegenerate).not.toHaveBeenCalled();
+    expect(mocks.api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("regenerates only an assistant tail", async () => {
+    const question = message({ role: "user", content: "question" });
+    const store = await readyStore({ messages: [question] });
+
+    await store.regenerateLastMessage();
+
+    expect(mocks.streamRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("leaves a reply that is still awaiting an answer alone", async () => {
+    // The question card owns that state; regenerating would discard the question.
+    const suspended = message({
+      role: "assistant",
+      content: "may I ask?",
+      toolCalls: [
+        { id: "call_ask", name: "ask_user", input: "{}", status: "awaiting" },
+      ],
+    });
+    const store = await readyStore({ messages: [suspended] });
+
+    await store.regenerateLastMessage();
+
+    expect(mocks.streamRegenerate).not.toHaveBeenCalled();
   });
 });

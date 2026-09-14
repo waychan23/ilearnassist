@@ -89,10 +89,18 @@ describe("workspaces", () => {
     expect(db.listWorkspaces(OWNER).map((w) => w.id)).toEqual(["w1", "w2"]);
   });
 
-  it("deletes a workspace", () => {
+  it("soft-deletes a workspace, leaving the row in place", () => {
     addWorkspace("w1");
-    db.deleteWorkspaceForUser("w1", OWNER);
+    expect(db.softDeleteWorkspaceForUser("w1", OWNER)).toBe(true);
     expect(db.getWorkspaceForUser("w1", OWNER)).toBeUndefined();
+    expect(db.listWorkspaces(OWNER)).toEqual([]);
+    // The row is still there — that is what soft means, and what a restore would need.
+    const raw = db.raw.prepare("SELECT deleted_at FROM workspaces WHERE id = ?").get("w1") as {
+      deleted_at: string | null;
+    };
+    expect(raw.deleted_at).not.toBeNull();
+    // And a second delete finds nothing live to mark.
+    expect(db.softDeleteWorkspaceForUser("w1", OWNER)).toBe(false);
   });
 
   it("counts each workspace's sessions and dates its last activity", () => {
@@ -230,10 +238,12 @@ describe("copilots", () => {
     expect(db.updateCopilotForUser("nope", OWNER, input)).toBeUndefined();
   });
 
-  it("deletes a copilot", () => {
+  it("soft-deletes a copilot", () => {
     db.createCopilot(input);
-    expect(db.deleteCopilotForUser("c1", OWNER)).toBe(true);
+    expect(db.softDeleteCopilotForUser("c1", OWNER)).toBe(true);
     expect(db.getOwnedCopilot("c1", OWNER)).toBeUndefined();
+    expect(db.getCopilotForUser("c1", OWNER)).toBeUndefined();
+    expect(db.listCopilotsForUser(OWNER)).toEqual([]);
   });
 
   it("tolerates corrupt JSON in a JSON column", () => {
@@ -350,17 +360,24 @@ describe("sessions", () => {
       widgets: [],
       visibility: "public",
     });
-    db.deleteCopilotForUser("c1", OWNER);
+    db.softDeleteCopilotForUser("c1", OWNER);
 
     const after = db.getSessionForUser("s1", OWNER)!.session;
     expect(after).toMatchObject({
-      copilotId: null, // the link dangles rather than refusing the Copilot's deletion
-      copilotName: "Tutor", // and the label survives it, which is what the badge reads
+      // The link is *kept*, where the old hard delete nulled it through `ON DELETE SET NULL`:
+      // a soft delete fires no cascade, and there is nothing to gain by clearing a column the
+      // UI only ever looks up — a deleted Copilot is not returned by any read, so the link
+      // resolves to nothing on its own.
+      copilotId: "c1",
+      copilotName: "Tutor", // the label is what the badge reads, and it survives
       systemPrompt: "You teach.",
       allTools: false, // the *restriction* survives too, which is the half that matters
       tools: ["read_file"],
       settings: { temperature: 0.3 },
     });
+    // Which is the thing that matters: the Copilot is not reachable any more, so nothing can
+    // read its edited persona to answer with.
+    expect(db.getCopilotForUser("c1", OWNER)).toBeUndefined();
   });
 
   it("lets a conversation edit its own persona without touching the Copilot", () => {
@@ -438,11 +455,21 @@ describe("sessions", () => {
     expect(session.tools).toEqual([]);
   });
 
-  it("cascades messages away with the session", () => {
+  it("hides a soft-deleted session's messages without unlinking them", () => {
+    // The cascade this used to rely on no longer fires, so the rows stay. They are reached
+    // through the session, which is why filtering it is enough — and why nothing has to be
+    // dismantled to take a conversation out of view.
     addSession("s1", { title: "t" });
     db.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "hi" });
-    db.deleteSessionForUser("s1", OWNER);
+    db.softDeleteSessionForUser("s1", OWNER);
+
+    expect(db.getSessionForUser("s1", OWNER)).toBeUndefined();
+    expect(db.listSessionsForUser("w1", OWNER)).toEqual([]);
     expect(db.listMessagesForUser("s1", OWNER)).toEqual([]);
+    const remaining = db.raw
+      .prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id = ?")
+      .get("s1") as { n: number };
+    expect(remaining.n).toBe(1);
   });
 });
 
@@ -559,7 +586,7 @@ describe("providers and models", () => {
     expect(db.updateProvider("nope", { name: "x" })).toBeUndefined();
   });
 
-  it("orders models per provider and cascades on delete", () => {
+  it("orders models per provider, and hides the models when the provider goes", () => {
     db.createProvider({ id: "p1", name: "One", baseURL: "http://1" });
     db.createProvider({ id: "p2", name: "Two", baseURL: "http://2" });
     db.createModel({ id: "m1", providerId: "p1", modelId: "a", name: "A", capabilities: ["tool_use"] });
@@ -567,9 +594,18 @@ describe("providers and models", () => {
     db.createModel({ id: "m3", providerId: "p2", modelId: "c", name: "C", capabilities: [] });
 
     expect(db.getProvider("p1")!.models.map((m) => m.modelId)).toEqual(["a", "b"]);
-    db.deleteProvider("p1");
+    db.softDeleteProvider("p1");
     expect(db.getProvider("p1")).toBeUndefined();
     expect(db.listProviders().map((p) => p.id)).toEqual(["p2"]);
+    // `models.provider_id` is ON DELETE CASCADE and a soft delete fires no cascade, so the
+    // models have to be marked in the same transaction or they stay resolvable under a
+    // provider nothing lists.
+    const marked = db.raw
+      .prepare("SELECT id, deleted_at FROM models WHERE deleted_at IS NOT NULL ORDER BY id")
+      .all() as { id: string; deleted_at: string }[];
+    expect(marked.map((m) => m.id)).toEqual(["m1", "m2"]);
+    // p2's model is untouched, which is the half that says this is scoped to one provider.
+    expect(db.listProviders()[0]!.models.map((m) => m.modelId)).toEqual(["c"]);
   });
 
   it("updates a model field-by-field, keeping what was not sent", () => {
@@ -588,11 +624,12 @@ describe("providers and models", () => {
     expect(updated!.capabilities).toEqual(["tool_use"]);
   });
 
-  it("reports whether a model delete actually removed anything", () => {
+  it("reports whether a model delete actually marked anything", () => {
     db.createProvider({ id: "p1", name: "One", baseURL: "http://1" });
     db.createModel({ id: "m1", providerId: "p1", modelId: "a", name: "A", capabilities: [] });
-    expect(db.deleteModel("m1")).toBe(true);
-    expect(db.deleteModel("m1")).toBe(false);
+    expect(db.softDeleteModel("m1")).toBe(true);
+    // Already gone: the second call has nothing live to mark, so it says so.
+    expect(db.softDeleteModel("m1")).toBe(false);
   });
 });
 

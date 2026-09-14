@@ -499,6 +499,13 @@ export const api = {
     request<{ ok: boolean }>(`/sessions/${id}`, { method: "DELETE" }),
 
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
+  /**
+   * Delete a message. The server soft-deletes it and refuses anything but the conversation's
+   * last live message (`MESSAGE_NOT_LAST`), so a caller that raced another tab gets an error
+   * rather than a hole in the middle of the conversation.
+   */
+  deleteMessage: (sessionId: string, messageId: string) =>
+    request<{ ok: boolean }>(`/sessions/${sessionId}/messages/${messageId}`, { method: "DELETE" }),
 
   /*
    * Widgets.
@@ -616,7 +623,9 @@ export const api = {
   /** Every file the account has uploaded — the list the sources dialog manages. */
   listSources: () => request<Source[]>("/sources"),
   /**
-   * Delete a file for good: its bytes, its extracted text, and every reference to it.
+   * Delete a file. The server hides it — from every list, from the model's whitelist, from
+   * `/raw` — and keeps the bytes, the extracted text and its links, so re-uploading the same
+   * content brings it back with its history rather than as a new file.
    *
    * Distinct from deleting a conversation, which leaves files alone. The messages that were
    * sent with it keep their snapshots, so history still shows what was sent.
@@ -759,4 +768,16 @@ export function streamAnswers(
   input: AnswerToolCallInput
 ): AsyncGenerator<ChatStreamEvent> {
   return streamPost(`/sessions/${sessionId}/answers`, input);
+}
+
+/**
+ * Ask for the last reply again. No body: everything the turn needs — the user message it
+ * answers, its attachments — is already persisted, and the server reads it from there rather
+ * than trusting a client to hand back what it last saw.
+ *
+ * Consumed by the same loop as the other two. It carries one event they never send,
+ * `message_removed`, naming the reply the server just dropped.
+ */
+export function streamRegenerate(sessionId: string): AsyncGenerator<ChatStreamEvent> {
+  return streamPost(`/sessions/${sessionId}/regenerate`, {});
 }

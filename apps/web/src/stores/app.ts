@@ -5,6 +5,7 @@ import {
   setUnauthenticatedHandler,
   streamAnswers,
   streamChat,
+  streamRegenerate,
   fileToBase64,
 } from "../api/client";
 import { i18n } from "../i18n";
@@ -490,6 +491,9 @@ export const useAppStore = defineStore("app", () => {
     copilots.value = [];
     sessions.value = [];
     messages.value = [];
+    // The bubble it pointed at is gone with the messages, so the tracker goes too: a stale id
+    // here would swap the *next* account's first message out for a row that is not there.
+    pendingLocalMessageId = null;
     // The installs belong to the objects, so they go with them — an uninstalled-but-still-listed
     // widget would keep the panel on screen for whoever signs in next.
     workspaceWidgets.value = [];
@@ -1375,6 +1379,50 @@ export const useAppStore = defineStore("app", () => {
    * thumbnail starts 404ing. Dropping them here would make a past turn look like it never
    * happened.
    */
+  /**
+   * Delete the conversation's last message.
+   *
+   * The control that calls this is only rendered on the last one, so a refusal here is either
+   * a second tab having moved the tail or a turn that started between the render and the
+   * click — neither of which the user caused. It is reported rather than swallowed: the row
+   * they clicked is still on screen, and a click that does nothing is the thing the toast
+   * exists to prevent.
+   */
+  async function deleteMessage(messageId: string): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || streaming.value.active) return;
+    try {
+      await api.deleteMessage(sessionId, messageId);
+      messages.value = messages.value.filter((m) => m.id !== messageId);
+    } catch (e) {
+      setError(messageOf(e));
+    }
+  }
+
+  /**
+   * Ask for the last reply again, in the same conversation.
+   *
+   * Nothing is removed here: the server soft-deletes the old reply and says so on the stream
+   * (`message_removed`), which is what keeps this from being a second opinion about what the
+   * server just did. The rollback on a failed request is likewise not needed — a request that
+   * never opened left the reply in place.
+   */
+  async function regenerateLastMessage(): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || streaming.value.active) return;
+
+    const last = messages.value[messages.value.length - 1];
+    // Only an assistant tail has a reply to replace, and one still holding a question belongs
+    // to the card, not to this button. The control is hidden in both cases; this is the race.
+    if (!last || last.role !== "assistant") return;
+    if ((last.toolCalls ?? []).some((tc) => tc.status === "awaiting")) return;
+
+    streaming.value = { ...EMPTY_STREAMING(), active: true };
+    emitWidgetEvent({ type: "turn.started", sessionId });
+
+    await consume(streamRegenerate(sessionId), sessionId);
+  }
+
   async function deleteSource(sourceId: string): Promise<void> {
     try {
       await api.deleteSource(sourceId);
@@ -1478,6 +1526,28 @@ export const useAppStore = defineStore("app", () => {
       case "usage":
         streaming.value.usage = ev.usage;
         break;
+      case "message_saved": {
+        /*
+         * The server's row for the message the user just sent, replacing the optimistic
+         * bubble this client drew. Without the swap that bubble keeps its `local-…` id for
+         * the life of the page, and the tail actions address rows by id — so deleting a
+         * message you had just sent would ask the server about a name it has never seen.
+         */
+        if (pendingLocalMessageId === null) break;
+        const localId = pendingLocalMessageId;
+        pendingLocalMessageId = null;
+        messages.value = messages.value.map((m) => (m.id === localId ? ev.message : m));
+        break;
+      }
+      case "message_removed":
+        /*
+         * A regenerate dropped this reply server-side before the replacement streams. The
+         * row goes now rather than at `message_done`: leaving it would render the old answer
+         * and the new one at the same time for the length of the turn. Nothing else is
+         * touched — the stream that replaces it owns the banner.
+         */
+        messages.value = messages.value.filter((m) => m.id !== ev.id);
+        break;
       case "message_done":
         // The authoritative message is now in `messages`, so retire the transient
         // one — otherwise both render until `done`, and the server still has a
@@ -1534,6 +1604,13 @@ export const useAppStore = defineStore("app", () => {
    * finish streaming without the view vanishing mid-token.
    */
   let pendingPlanSessionId: string | null = null;
+
+  /**
+   * The id of the optimistic user bubble the current turn is standing in for, until the
+   * server says which row it wrote (`message_saved`). Null between turns, and between
+   * accounts — see `forgetAccount`.
+   */
+  let pendingLocalMessageId: string | null = null;
 
   async function consume(stream: AsyncGenerator<ChatStreamEvent>, sessionId: string): Promise<boolean> {
     // Whose turn this is. If the account goes away mid-stream the events stop being applied at
@@ -1677,9 +1754,12 @@ export const useAppStore = defineStore("app", () => {
     // doing it here too is what keeps the card honest until the page is next reloaded.
     for (const tc of awaitingToolCalls()) tc.status = "skipped";
 
-    // Optimistic user bubble.
+    // Optimistic user bubble, under an id this client made up. The server's own row arrives
+    // as `message_saved` and replaces it — see `pendingLocalMessageId` for why that matters.
+    const localId = `local-${Date.now()}`;
+    pendingLocalMessageId = localId;
     messages.value.push({
-      id: `local-${Date.now()}`,
+      id: localId,
       sessionId,
       role: "user",
       content,
@@ -1838,6 +1918,8 @@ export const useAppStore = defineStore("app", () => {
     signOut,
     loadSources,
     deleteSource,
+    deleteMessage,
+    regenerateLastMessage,
     refreshConfig,
     loadSessions,
     selectWorkspace,

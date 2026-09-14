@@ -16,6 +16,19 @@ import type Database from "better-sqlite3";
  *
  * `SCHEMA_VERSION` is deliberately the only history that survives a break: the file at a
  * refused version is left exactly as it was.
+ *
+ * ### `deleted_at` is the soft delete, and it is additive
+ *
+ * Every application entity carries a nullable `deleted_at`. Set means soft-deleted: the row
+ * stays, every read filters `IS NULL`, and the relations pointing at it stay too — nothing
+ * cascades any more, so a foreign key that used to clean up is now only ever a filter at query
+ * time. On-disk bytes (workspace and session directories, a source's raw and parsed files) are
+ * retained for the same reason.
+ *
+ * It is added by `ensureColumn`, so it needs no `SCHEMA_VERSION` bump: NULL is "live" and a
+ * row written before the column existed means exactly that. That is the same test as any other
+ * additive column — see the `users.disabled` and `auth_tokens.revoked_at` precedents, which are
+ * the same idea one entity at a time.
  */
 
 /**
@@ -131,6 +144,10 @@ const DDL = `
     slug TEXT NOT NULL,
     dir_path TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
+    -- Soft delete. The directory stays on disk, so 'uniqueSlug''s filesystem loop is what
+    -- keeps a re-created name off a deleted one's path; these two UNIQUEs are the backstop
+    -- they always were.
+    deleted_at TEXT,
     UNIQUE (user_id, slug)
   );
   CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id, created_at);
@@ -153,6 +170,10 @@ const DDL = `
     page_count INTEGER,
     parse_updated_at TEXT,
     created_at TEXT NOT NULL,
+    -- Soft delete, and the one that has to be read carefully: 'UNIQUE (user_id, sha256)' is
+    -- not going anywhere, so re-uploading the same bytes cannot make a second row. It revives
+    -- this one instead — see 'findDeletedSourceByHash' / 'reviveSourceForUser'.
+    deleted_at TEXT,
     UNIQUE (user_id, sha256)
   );
   CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id, created_at);
@@ -201,7 +222,10 @@ const DDL = `
     widgets TEXT,
     visibility TEXT NOT NULL DEFAULT 'private',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- Soft delete. A conversation that copied this Copilot keeps working untouched: the
+    -- snapshot is what it reads, and 'copilot_id' was only ever a link.
+    deleted_at TEXT
   );
   -- Deliberately no index on user_id, and it cannot be added here even if one were wanted:
   -- applySchema runs this DDL *before* the ensureColumn call that gives an older database the
@@ -227,7 +251,11 @@ const DDL = `
     title_source TEXT NOT NULL DEFAULT 'auto',
     settings TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- Soft delete. The reserved 'sessions/<id>/' directory and every row that hangs off this
+    -- one — messages, links, plans, quiz questions — stay; they are reached through this row,
+    -- so filtering it here is what hides them.
+    deleted_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at);
 
@@ -241,7 +269,12 @@ const DDL = `
     attachments TEXT,
     usage TEXT,
     stopped INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- Soft delete. This is the one users reach directly (delete / regenerate in the message
+    -- actions), and the filter on it is load bearing in two places at once: it hides the row
+    -- from the conversation *and* from the turn's history, which is what keeps a deleted
+    -- message out of the model's context. 'stmtListMessages' is where both arrive.
+    deleted_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 
@@ -252,7 +285,12 @@ const DDL = `
     api_key TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- Soft delete, and the API key stays in the row: this is a single-operator installation
+    -- whose database is already the thing that holds every key, so there is nothing a DELETE
+    -- protects that the file does not. 'softDeleteProvider' marks this provider's models in
+    -- the same transaction, because the cascade that used to do it no longer fires.
+    deleted_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS models (
@@ -263,7 +301,10 @@ const DDL = `
     context_window INTEGER,
     max_output INTEGER,
     capabilities TEXT NOT NULL DEFAULT '[]',
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    -- Soft delete. No table hangs off a model, so nothing else needs marking with it; a
+    -- dangling 'sessions.settings.modelId' already falls through 'resolveModelId''s chain.
+    deleted_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id, sort_order);
 
@@ -281,7 +322,11 @@ const DDL = `
     enabled INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- Soft delete, and a second concept beside 'enabled' rather than a replacement for it:
+    -- disabled is a parser that is configured and not in use, deleted is one that is gone.
+    -- 'sources.parser_id' has no foreign key, so nothing points at this row either way.
+    deleted_at TEXT
   );
 
   -- Monotonically increasing counters, one row per sequence. "value" is the highest number
