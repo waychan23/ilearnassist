@@ -330,6 +330,17 @@ describe("quiz description", () => {
     // wrong has learnt the least interesting half.
     expect(description).toMatch(/treat those as the most informative part/);
   });
+
+  it("requires explanations and a rundown for correct answers too", () => {
+    // The grading reply used to go thin exactly when every answer was right: no per-question
+    // verdict, no why. Persuasion in the description is the only lever, so pin it.
+    expect(description).toMatch(/a short explanation in the user's language for EVERY question/);
+    expect(description).toMatch(/briefly reinforce why the picked option is right/);
+    expect(description).toMatch(/never just "correct"/);
+    expect(description).toMatch(
+      /an all-correct quiz is a per-question rundown, not a one-line congratulations/
+    );
+  });
 });
 
 describe("validateQuizAnswers", () => {
