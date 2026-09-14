@@ -533,7 +533,15 @@ function registerIpc(): void {
     const failure = await shell.openPath(resolveDataDir() || paths.root);
     if (failure) console.error("Could not open the data folder:", failure);
   });
-  ipcMain.handle(PANEL_CHANNELS.resetAdminPassword, () => resetAdminPassword());
+  ipcMain.handle(PANEL_CHANNELS.resetAdminPassword, (_event, input: unknown) => {
+    // The password is read the same defensive way the create handler reads its two fields:
+    // the renderer is trusted but typed, IPC is not. It rides the child's stdin.
+    const password =
+      typeof input === "object" && input !== null && "password" in input
+        ? String((input as { password: unknown }).password ?? "")
+        : "";
+    return resetAdminPassword(password);
+  });
   ipcMain.handle(PANEL_CHANNELS.adminStatus, () => refreshAdminState());
   ipcMain.handle(PANEL_CHANNELS.createAdministrator, async (_event, input: unknown) => {
     const username =
@@ -579,7 +587,7 @@ function registerIpc(): void {
 }
 
 /**
- * Replace the superadmin's password, and report what came back.
+ * Replace the superadmin's password with the one the operator chose, and report what came back.
  *
  * A conversation with a **one-shot child**, not a request to the server, and the difference is
  * what makes the button work in every state rather than only while the server happens to be up.
@@ -587,25 +595,13 @@ function registerIpc(): void {
  * exists for "I cannot sign in" also required a healthy running server — and a forgotten
  * password tends to be discovered in the same moment as something else being wrong.
  *
- * Every failure is described rather than thrown: this is a button on a page, and a rejection
- * crossing the IPC boundary would reach the renderer as an unhandled promise with nothing to
- * render.
+ * No native confirmation here: the sheet that collects the password and its confirmation field
+ * *is* the deliberate act, the same shape as the create-administrator form. Every failure is
+ * described rather than thrown: this is a button on a page, and a rejection crossing the IPC
+ * boundary would reach the renderer as an unhandled promise with nothing to render.
  */
-async function resetAdminPassword(): Promise<ResetResult | null> {
-  // Confirmed first, and for the same reason choosing a data folder is: this is destructive in
-  // a way the button's words cannot convey — it replaces the credential of the one account that
-  // can do everything, and signs it out wherever it is.
-  const { response } = await dialog.showMessageBox({
-    type: "warning",
-    message: t("reset.confirmTitle"),
-    detail: t("reset.confirmDetail"),
-    buttons: [t("reset.confirm"), t("action.cancel")],
-    defaultId: 0,
-    cancelId: 1,
-  });
-  if (response !== 0) return null;
-
-  return resetAdministratorPassword(adminContext());
+async function resetAdminPassword(password: string): Promise<ResetResult> {
+  return resetAdministratorPassword(adminContext(), { password });
 }
 
 function buildMenu(): void {

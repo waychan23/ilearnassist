@@ -1,4 +1,4 @@
-import type { PanelState, ResetResult, ServerState } from "../shared/panelApi.js";
+import type { PanelState, ServerState } from "../shared/panelApi.js";
 import {
   PANEL_MESSAGES,
   describeFault,
@@ -81,12 +81,11 @@ const action = (name: string): HTMLButtonElement =>
 
 /* ---- the administrator's password ---------------------------------------- */
 
-const resetBox = element<HTMLElement>('[data-role="reset"]');
-const resetLead = element<HTMLElement>('[data-role="reset-lead"]');
-const resetUserLabel = element<HTMLElement>('[data-role="reset-user-label"]');
-const resetUsername = element<HTMLElement>('[data-role="reset-username"]');
-const resetPassLabel = element<HTMLElement>('[data-role="reset-pass-label"]');
-const resetPassword = element<HTMLElement>('[data-role="reset-password"]');
+const resetOverlay = element<HTMLElement>('[data-role="reset-overlay"]');
+const resetPasswordInput = element<HTMLInputElement>('[data-role="reset-password"]');
+const resetConfirmInput = element<HTMLInputElement>('[data-role="reset-confirm"]');
+const resetError = element<HTMLElement>('[data-role="reset-error"]');
+const resetOk = element<HTMLElement>('[data-role="reset-ok"]');
 
 /* ---- the first administrator -------------------------------------------- */
 
@@ -112,8 +111,7 @@ const buttons = {
   unshare: action("unshare"),
   qrCopy: action("qr-copy"),
   resetAdmin: action("reset-admin"),
-  resetCopy: action("reset-copy"),
-  resetDismiss: action("reset-dismiss"),
+  resetSubmit: action("reset-submit"),
   adminCreate: action("admin-create"),
   adminSubmit: action("admin-submit"),
 };
@@ -147,12 +145,9 @@ function applyStaticLabels(): void {
   buttons.share.textContent = t("action.share");
   buttons.unshare.textContent = t("action.unshare");
   buttons.resetAdmin.textContent = t("action.resetAdmin");
-  buttons.resetCopy.textContent = t("reset.copy");
-  buttons.resetDismiss.textContent = t("reset.dismiss");
+  buttons.resetSubmit.textContent = t("reset.submit");
   buttons.adminCreate.textContent = t("action.createAdmin");
   buttons.adminSubmit.textContent = t("create.submit");
-  resetUserLabel.textContent = t("reset.username");
-  resetPassLabel.textContent = t("reset.password");
   localeSelect.title = t("label.language");
   localeSelect.setAttribute("aria-label", t("label.language"));
   document.title = t("window.title");
@@ -189,15 +184,14 @@ applyStaticLabels();
 let state: PanelState | null = null;
 let logsOpen = false;
 /**
- * What the last reset produced, or null.
+ * Whether the reset sheet is open, and whether a reset is in flight.
  *
- * Component-local rather than part of `PanelState`, and deliberately: the state object is the
- * *server's*, broadcast on every change, and a password is not something to put in it — every
- * re-render would carry it back over the IPC boundary. It lives here until the user closes it,
- * which is the whole of its lifetime; nothing persists it.
+ * Component-local rather than part of `PanelState`, like the create sheet: the state object is
+ * the *server's*, broadcast on every change, and a transient form is not a server fact. The
+ * password fields' values never leave this renderer except in the one IPC call that submits
+ * them.
  */
-let reset: ResetResult | null = null;
-/** In flight, so the button cannot fire twice and the wait is visible. */
+let resetOpen = false;
 let resetting = false;
 let logCount = 0;
 /** The address the sheet is currently drawing, so a log line cannot repaint ~150 rects. */
@@ -290,6 +284,8 @@ function render(next: PanelState): void {
    */
   buttons.resetAdmin.disabled = needsDataDir || waitingForAdmin || resetting;
   buttons.resetAdmin.textContent = resetting ? t("reset.working") : t("action.resetAdmin");
+  // The sheet's submit says "working" while its request is in flight.
+  buttons.resetSubmit.textContent = resetting ? t("reset.working") : t("reset.submit");
 
   buttons.open.disabled = !running;
   buttons.browser.disabled = !running;
@@ -319,7 +315,7 @@ function render(next: PanelState): void {
   }
 
   renderQrSheet();
-  renderReset();
+  renderResetAdmin();
   renderCreateAdmin();
 }
 
@@ -429,35 +425,80 @@ function renderCreateAdmin(): void {
   if (createOpen && state?.needsDataDir) closeCreateAdmin();
 }
 
+/* ---- resetting the administrator password ------------------------------- */
+
+function openResetAdmin(): void {
+  if (!state || state.needsDataDir) return;
+  resetOpen = true;
+  resetError.hidden = true;
+  resetOk.hidden = true;
+  resetOverlay.hidden = false;
+  resetPasswordInput.value = "";
+  resetConfirmInput.value = "";
+  resetPasswordInput.disabled = false;
+  resetConfirmInput.disabled = false;
+  buttons.resetSubmit.hidden = false;
+  resetPasswordInput.focus();
+}
+
+function closeResetAdmin(): void {
+  resetOpen = false;
+  resetOverlay.hidden = true;
+}
+
+function showResetError(message: string): void {
+  resetOk.hidden = true;
+  resetError.textContent = message;
+  resetError.hidden = false;
+}
+
 /**
- * Draw whatever the last reset produced.
+ * Submit the chosen password.
  *
- * One function for all four outcomes, because they are one region of the page: the success
- * panel, the two lines of a fault, and nothing at all when there is nothing to say.
+ * The mismatch and empty-field checks are renderer courtesies, exactly as on the create form;
+ * the CLI's own length policy is what is actually enforced, and its coded refusal is rendered
+ * through the same catalog as a create refusal. Nothing chosen is echoed back: the success
+ * message names the account and that is all the IPC reply carries.
  */
-function renderReset(): void {
-  if (!reset) {
-    resetBox.hidden = true;
+async function submitResetAdmin(): Promise<void> {
+  if (resetting) return;
+  const password = resetPasswordInput.value;
+  resetError.hidden = true;
+  resetOk.hidden = true;
+
+  if (!password) {
+    showResetError(t("cli.fault.PASSWORD_REQUIRED"));
     return;
   }
-  resetBox.hidden = false;
-
-  if (reset.ok) {
-    resetBox.dataset.state = "done";
-    resetLead.textContent = t("reset.done");
-    resetUsername.textContent = reset.username;
-    resetPassword.textContent = reset.password;
+  if (password !== resetConfirmInput.value) {
+    showResetError(t("create.mismatch"));
     return;
   }
 
-  // A fault is a sentence with no code to copy, so the label lines are cleared rather than
-  // left showing the previous run's password — which is exactly the sort of stale credential
-  // a reader would take for a new one.
-  resetBox.dataset.state = "fault";
-  // The same catalog the create form renders, because it is the same child refusing.
-  resetLead.textContent = describeAdminFault(messages, reset.fault);
-  resetUsername.textContent = "";
-  resetPassword.textContent = "";
+  resetting = true;
+  buttons.resetSubmit.textContent = t("reset.working");
+  try {
+    const result = await window.panel.resetAdminPassword({ password });
+    if (result.ok) {
+      resetOk.textContent = t("reset.done", { name: result.username });
+      resetOk.hidden = false;
+      resetPasswordInput.disabled = true;
+      resetConfirmInput.disabled = true;
+      buttons.resetSubmit.hidden = true;
+      return;
+    }
+    showResetError(describeAdminFault(messages, result.fault));
+  } catch (error) {
+    showResetError(error instanceof Error ? error.message : String(error));
+  } finally {
+    resetting = false;
+    buttons.resetSubmit.textContent = t("reset.submit");
+  }
+}
+
+/** Close the sheet if a state broadcast while it is open takes away its data folder. */
+function renderResetAdmin(): void {
+  if (resetOpen && state?.needsDataDir) closeResetAdmin();
 }
 
 function setLogsOpen(open: boolean): void {
@@ -618,10 +659,15 @@ for (const control of document.querySelectorAll<HTMLElement>('[data-action="qr-d
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   // The create sheet first if it is open: the fields have focus, and typing in them is not a
-  // request to dismiss the QR sheet underneath.
+  // request to dismiss the sheet underneath.
   if (!adminOverlay.hidden) {
     event.preventDefault();
     closeCreateAdmin();
+    return;
+  }
+  if (!resetOverlay.hidden) {
+    event.preventDefault();
+    closeResetAdmin();
     return;
   }
   if (!qrOverlay.hidden) {
@@ -652,7 +698,6 @@ const copyTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>
 const COPY_LABEL = new Map<HTMLButtonElement, keyof PanelMessages>([
   [buttons.copy, "action.copyUrl"],
   [buttons.qrCopy, "action.copyUrl"],
-  [buttons.resetCopy, "reset.copy"],
 ]);
 
 function copy(button: HTMLButtonElement, text: string): void {
@@ -679,28 +724,20 @@ function copy(button: HTMLButtonElement, text: string): void {
 buttons.copy.addEventListener("click", () => copy(buttons.copy, urlCode.textContent ?? ""));
 buttons.qrCopy.addEventListener("click", () => copy(buttons.qrCopy, qrUrlCode.textContent ?? ""));
 
-buttons.resetAdmin.addEventListener("click", () => {
-  resetting = true;
-  reset = null;
-  if (state) render(state);
-  void window.panel.resetAdminPassword().then((result) => {
-    resetting = false;
-    // `null` is a dismissed confirmation, which is an outcome and not something to report.
-    if (result !== null) reset = result;
-    if (state) render(state);
+// The entry button opens the sheet; the actual reset is submitted from it.
+buttons.resetAdmin.addEventListener("click", openResetAdmin);
+buttons.resetSubmit.addEventListener("click", () => void submitResetAdmin());
+for (const control of document.querySelectorAll<HTMLElement>('[data-action="reset-cancel"]')) {
+  control.addEventListener("click", closeResetAdmin);
+}
+for (const field of [resetPasswordInput, resetConfirmInput]) {
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void submitResetAdmin();
+    }
   });
-});
-buttons.resetCopy.addEventListener("click", () => {
-  // Both lines in one press: they are only useful together, and the username is the half a
-  // reader would otherwise retype by hand.
-  const username = resetUsername.textContent ?? "";
-  const password = resetPassword.textContent ?? "";
-  copy(buttons.resetCopy, username && password ? `${t("reset.username")}: ${username}\n${t("reset.password")}: ${password}` : "");
-});
-buttons.resetDismiss.addEventListener("click", () => {
-  reset = null;
-  if (state) render(state);
-});
+}
 
 buttons.adminCreate.addEventListener("click", openCreateAdmin);
 buttons.adminSubmit.addEventListener("click", () => void submitCreateAdmin());

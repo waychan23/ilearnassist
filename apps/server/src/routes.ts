@@ -342,10 +342,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * and it is still the appointment this tier does not have. Refused rather than quietly
    * stripped down to `user` — a request that asked for an administrator and got an ordinary
    * account reports success and delivers something else.
+   *
+   * The superadmin role is refused for **every** HTTP caller, including a superadmin. An
+   * installation has exactly one superadmin, the account the control panel bootstraps with the
+   * server stopped; it cannot be created a second time or appointed from a screen, and the
+   * bootstrap CLI is the one place that can write it (and it refuses once one exists). This is
+   * why a request that merely *restates* the role the target already holds is refused too: no
+   * console flow ever sends one, so distinguishing "grant" from "keep" would buy nothing and
+   * leave a second mint path open.
    */
   function grantRefusal(me: UserRecord, roles: UserRole[]): ApiErrorBody | undefined {
-    if (isSuperadmin(me)) return undefined;
-    if (roles.some((role) => PLATFORM_ADMIN_ROLES.includes(role))) {
+    if (roles.includes(SUPERADMIN_ROLE)) {
+      return apiError(
+        "SUPERADMIN_NOT_GRANTABLE",
+        "the superadmin is created in the control panel and cannot be assigned here"
+      );
+    }
+    if (!isSuperadmin(me) && roles.some((role) => PLATFORM_ADMIN_ROLES.includes(role))) {
       return apiError("ROLES_NOT_GRANTABLE", "only a superadmin can grant the administrator role");
     }
     return undefined;

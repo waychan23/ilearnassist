@@ -787,7 +787,11 @@ Fuller map in `docs/reference.md`.
   `resetAdmin` refuses a non-superadmin target, so it is not a way round the console's rules,
   and it deliberately does **not** run `createDb`: DDL from a second process while the server is
   up would race the schema the server already applied, so it opens the file, refuses an
-  unreadable one, and runs plain `UPDATE`s in one `IMMEDIATE` transaction.
+  unreadable one, and runs plain `UPDATE`s in one `IMMEDIATE` transaction. The panel hands the
+  operator's **chosen** password to the child (`--password-stdin`), the same assumption
+  `create-admin` makes — the person at the machine is the superadmin — so no random password is
+  generated or shown and the success envelope carries no password back; the terminal path keeps
+  `--generate`. `cli reset-admin` requires exactly one of the two flags.
 - **A setting every account shares is an administrator's to change, and the split is
   "configure vs choose".** Providers and models, document parsers, the parsing policy and the app
   defaults are **installation-wide**; their *writes* carry `requirePlatformAdmin` (either tier)
@@ -824,22 +828,27 @@ Fuller map in `docs/reference.md`.
   an administrator resetting *their own* password does not set `mustChangePassword` (they chose
   the value a moment ago) while resetting anybody else's does; either way the reset ends the
   target's sessions and hands the caller a replacement pair when the target is themselves.
-- **There are two tiers of administrator, and the split is about who may appoint whom.**
-  `USER_ROLES` is `superadmin`, `admin`, `user`; `isPlatformAdmin` is the *set*
-  (`PLATFORM_ADMIN_ROLES`) rather than a comparison, so the bootstrap account never needs a
-  second role bolted on to keep working. A **superadmin** is the account the installation was
-  created with — the control panel or the CLI makes it, and it is the only role that may appoint
-  another administrator. An **admin** runs the installation's accounts and its shared settings,
-  and may not touch an account that administers it: not a superadmin, and not a peer either,
-  because two administrators disabling each other is a race whose winner is whoever clicked
-  second. The rule lives in one function, `manageRefusal`, because demote/disable/reset/kick are
-  the same answer four times and four copies is four chances to forget one; `grantRefusal` is
-  separate because it is about the *value being written* (an appointment) rather than the row
-  being read. **Your own row is excluded from `manageRefusal`** — every route already has its own
+- **There are two tiers of administrator, exactly one superadmin, and the split is about who
+  may appoint whom.** `USER_ROLES` is `superadmin`, `admin`, `user`; `isPlatformAdmin` is the
+  *set* (`PLATFORM_ADMIN_ROLES`) rather than a comparison, so the bootstrap account never needs
+  a second role bolted on to keep working. A **superadmin** is the single account the
+  installation was bootstrapped with — the desktop control panel's first-run card or
+  `cli create-admin`, both of which refuse once an enabled superadmin exists — and it is the
+  only role that may appoint an ordinary administrator. The web console cannot mint a
+  superadmin at all: its create/edit UI iterates only `CONSOLE_GRANTABLE_ROLES`
+  (`admin`, `user`), the superadmin row shows the tier as static text rather than a checkbox,
+  and any HTTP write containing the role answers `SUPERADMIN_NOT_GRANTABLE`, whoever sent it.
+  An **admin** runs the installation's ordinary accounts and its shared settings, and may not
+  touch an account that administers it: not the superadmin, and not a peer either, because two
+  administrators disabling each other is a race whose winner is whoever clicked second. The
+  rule lives in one function, `manageRefusal`, because demote/disable/reset/kick are the same
+  answer four times and four copies is four chances to forget one; `grantRefusal` is separate
+  because it is about the *value being written* (an appointment) rather than the row being
+  read. **Your own row is excluded from `manageRefusal`** — every route already has its own
   careful answer for the self case, and folding self in shadowed them (it made an ordinary
   administrator unable to reset their own password). Promotion is refused, not stripped down:
-  a request that asked for an administrator and silently got an ordinary account reports success
-  and delivers something else.
+  a request that asked for an administrator and silently got an ordinary account reports
+  success and delivers something else.
 - **A superadmin's own password is reset in the control panel, and nowhere else.**
   `POST /api/admin/users/:id/password` answers `PANEL_RESET_REQUIRED` when a superadmin names
   themselves. It is a rule rather than a convenience: the web console is reached with a

@@ -6,7 +6,7 @@ import { confirm } from "../composables/confirm";
 import { showWorkspaceHome, uiState, type AdminSection } from "../composables/ui";
 import { api } from "../api/client";
 import type { AdminUser, UserRole } from "../api/types";
-import { isPlatformAdmin, isSuperadmin, PLATFORM_ADMIN_ROLES, SUPERADMIN_ROLE, USER_ROLES } from "../api/types";
+import { ADMIN_ROLE, CONSOLE_GRANTABLE_ROLES, isPlatformAdmin, isSuperadmin } from "../api/types";
 import TopbarControls from "./TopbarControls.vue";
 import CopyButton from "./CopyButton.vue";
 import Icon from "./Icon.vue";
@@ -37,11 +37,12 @@ import type { IconName } from "../utils/icons";
  * and "remove this user" in practice means "stop them signing in", which is what the toggle
  * does, sessions and all.
  *
- * **Two tiers, and this page is where the difference shows.** A superadmin is the account the
- * installation was bootstrapped with: it may change anybody, and it is the only role that may
- * appoint another administrator. An ordinary administrator runs the installation's accounts and
- * may not touch an account that administers it — see `manageRefusal` on the server, which this
- * mirrors control for control.
+ * **Two tiers, and this page is where the difference shows.** Exactly one superadmin exists —
+ * the account the desktop control panel bootstraps with the server stopped — and it cannot be
+ * created, appointed, disabled or signed out from this console at all. It may change anybody
+ * else, and it is the only role that may appoint an ordinary administrator. An ordinary
+ * administrator runs the installation's accounts and may not touch an account that administers
+ * it — see `manageRefusal` on the server, which this mirrors control for control.
  */
 
 const store = useAppStore();
@@ -176,11 +177,15 @@ const lockedOut = (u: AdminUser): boolean => isSelf(u) && isPlatformAdmin(u);
  * administrator cannot demote themselves (see `lockedOut`); and only a superadmin may hand the
  * administrative roles to anybody — including to a brand-new account in the create dialog.
  */
+// The boxes cover only `CONSOLE_GRANTABLE_ROLES` (admin, user): the superadmin role is shown
+// as a static label on its row, never as an editable thing. Three rules remain, all the
+// server's: the row is out of this administrator's reach, an ordinary administrator cannot
+// hand out the admin tier, and an account's last role cannot be removed.
 const roleLocked = (u: AdminUser, role: UserRole): boolean =>
   busyId.value === u.id ||
   rowLocked(u) ||
-  (!amSuperadmin.value && PLATFORM_ADMIN_ROLES.includes(role)) ||
-  (u.roles.includes(role) && (u.roles.length === 1 || (role === SUPERADMIN_ROLE && isSelf(u))));
+  (!amSuperadmin.value && role === ADMIN_ROLE) ||
+  (u.roles.includes(role) && u.roles.length === 1);
 
 /**
  * Whether the reset control is refused, and it is the one refusal that is about a *kind* of
@@ -478,26 +483,36 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
                 writes immediately — this edits an account that already exists, which is the
                 toggle half of the "a checkbox installs what does not exist yet" rule.
 
-                The administrative boxes are drawn for an ordinary administrator but cannot be
-                ticked, because seeing which tier a row is in is how they know why the row is out
-                of reach; hiding them would leave a disabled row with no stated reason.
+                The superadmin row is the exception: the role cannot be granted or taken away
+                from a screen (the only superadmin is the one the control panel bootstrapped),
+                so it is shown as a static label rather than as a box that lies about being
+                tickable. The admin box is drawn for an ordinary administrator but cannot be
+                ticked, because seeing which tier a row is in is how they learn why it is out of
+                reach; hiding it would leave a disabled row with no stated reason.
               -->
               <div class="role-picker">
-                <label
-                  v-for="role in USER_ROLES"
-                  :key="role"
-                  class="role-option"
-                  :class="{ locked: roleLocked(u, role) }"
-                >
-                  <input
-                    type="checkbox"
-                    :checked="u.roles.includes(role)"
-                    :disabled="roleLocked(u, role)"
-                    :data-testid="`admin-role-${role}`"
-                    @change="setRoles(u, role)"
-                  />
-                  <span>{{ t(`roles.${role}`) }}</span>
-                </label>
+                <span
+                  v-if="isSuperadmin(u)"
+                  class="role-static"
+                  data-testid="admin-role-superadmin"
+                >{{ t("roles.superadmin") }}</span>
+                <template v-else>
+                  <label
+                    v-for="role in CONSOLE_GRANTABLE_ROLES"
+                    :key="role"
+                    class="role-option"
+                    :class="{ locked: roleLocked(u, role) }"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="u.roles.includes(role)"
+                      :disabled="roleLocked(u, role)"
+                      :data-testid="`admin-role-${role}`"
+                      @change="setRoles(u, role)"
+                    />
+                    <span>{{ t(`roles.${role}`) }}</span>
+                  </label>
+                </template>
               </div>
             </div>
 
@@ -583,21 +598,24 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
               <label>{{ t("admin.roles") }}</label>
               <div class="role-picker">
                 <label
-                  v-for="role in USER_ROLES"
+                  v-for="role in CONSOLE_GRANTABLE_ROLES"
                   :key="role"
                   class="role-option"
-                  :class="{ locked: !amSuperadmin && PLATFORM_ADMIN_ROLES.includes(role) }"
+                  :class="{ locked: !amSuperadmin && role === ADMIN_ROLE }"
                 >
                   <input
                     type="checkbox"
                     :checked="draftRoles.includes(role)"
-                    :disabled="!amSuperadmin && PLATFORM_ADMIN_ROLES.includes(role)"
+                    :disabled="!amSuperadmin && role === ADMIN_ROLE"
                     :data-testid="`admin-create-role-${role}`"
                     @change="toggleDraftRole(role)"
                   />
                   <span>{{ t(`roles.${role}`) }}</span>
                 </label>
               </div>
+              <!-- Stated because its absence asks the question: the superadmin role is made in
+                   the desktop control panel with the server stopped, never from here. -->
+              <p class="hint">{{ t("admin.superadminFixed") }}</p>
               <!-- Stated because it is not obvious from the form: only the account that was
                    created first can appoint administrators. -->
               <p v-if="!amSuperadmin" class="hint">{{ t("admin.grantHint") }}</p>
@@ -806,6 +824,14 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
    than by disappearing, and the cursor stops claiming it is clickable. */
 .role-option.locked {
   cursor: not-allowed;
+}
+
+/* The superadmin tier is not editable from a screen at all, so it reads as a badge rather than
+   as a disabled control — nobody can tick it, and a greyed-out checkbox would suggest
+   otherwise. */
+.role-static {
+  font-size: var(--fs-3);
+  color: var(--text-3);
 }
 
 .role-option.locked span {

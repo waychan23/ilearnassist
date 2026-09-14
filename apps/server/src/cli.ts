@@ -25,7 +25,7 @@ import { apiError } from "./apiError.js";
  *   cli status [--json]
  *   cli create-admin --username <name> (--password-stdin | --generate) [--json]
  *   cli ensure-admin --username <name> (--password-stdin | --generate) [--json]
- *   cli reset-admin [--username <name>] [--json]
+ *   cli reset-admin [--username <name>] (--password-stdin | --generate) [--json]
  */
 
 /** ok / coded refusal / usage. `1` alone proves nothing — an uncaught throw exits 1 too. */
@@ -127,12 +127,29 @@ async function run(args: Args): Promise<AdminCliOutcome | { usage: AdminCliError
      * installation somebody already administers. `--username` is optional: the panel does not
      * know any names, and "the first enabled superadmin" is the account it means.
      *
+     * Like create-admin it gets the password one of two ways: the panel hands over the
+     * operator's own choice on stdin, a terminal asks for `--generate`. Exactly one is
+     * required, for the same reason it is there: neither an empty stdin nor an invented
+     * password the caller did not ask for is a result anyone wants.
+     *
      * It refuses when the named account is not a superadmin rather than resetting it anyway —
      * see `resetAdmin`. The recovery path is for the credential that can undo the installation;
      * an ordinary account's password is the web console's business.
      */
-    case "reset-admin":
-      return resetAdmin({ dataRoot, username: args.username?.trim() || undefined });
+    case "reset-admin": {
+      if (args.generate === args.passwordStdin) {
+        return { usage: apiError("USAGE", "pass exactly one of --password-stdin or --generate") };
+      }
+      const password = args.passwordStdin ? await readPasswordLine() : undefined;
+      if (args.passwordStdin && password === undefined) {
+        return { usage: apiError("USAGE", "--password-stdin got nothing on stdin") };
+      }
+      return resetAdmin({
+        dataRoot,
+        username: args.username?.trim() || undefined,
+        password,
+      });
+    }
 
     default:
       return {
@@ -166,10 +183,16 @@ function report(outcome: AdminCliOutcome): void {
 
   if (value.command === "reset-admin") {
     process.stdout.write(
-      `Reset the password for "${value.username}" and signed it out everywhere.\n` +
-        `\nPassword (shown once — only a hash is stored): ${value.password}\n\n` +
-        `Sign in with it and change it from your account page.\n`
+      `Reset the password for "${value.username}" and signed it out everywhere.\n`
     );
+    // A chosen password is not echoed back — the caller already has it. Only the generated one
+    // is shown, once, because it exists nowhere but this line.
+    if (value.password) {
+      process.stdout.write(
+        `\nPassword (shown once — only a hash is stored): ${value.password}\n\n` +
+          `Sign in with it and change it from your account page.\n`
+      );
+    }
     return;
   }
 
@@ -192,7 +215,7 @@ const USAGE = `Usage:
   cli status [--json]
   cli create-admin --username <name> (--password-stdin | --generate) [--json]
   cli ensure-admin --username <name> (--password-stdin | --generate) [--json]
-  cli reset-admin [--username <name>] [--json]
+  cli reset-admin [--username <name>] (--password-stdin | --generate) [--json]
 `;
 
 async function main(): Promise<number> {

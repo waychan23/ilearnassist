@@ -149,6 +149,8 @@ export default {
     rowLocked: "只有超级管理员才能管理管理员账号。",
     resetPanel: "超级管理员不能在网页端重置自己的密码，请在桌面端控制面板中重置。",
     grantHint: "只有超级管理员才能授予管理员角色。",
+    superadminFixed:
+      "超级管理员只能由桌面控制面板在初始化时创建，不能在这里新建或指定；整个系统只有一个。",
     disable: {
       action: "禁用",
       title: "禁用账号",
@@ -945,6 +947,8 @@ export default {
     CANNOT_MODIFY_SELF: "不能禁用或降级自己的账号。",
     CANNOT_MODIFY_ADMIN: "只有超级管理员才能管理管理员账号。",
     ROLES_NOT_GRANTABLE: "只有超级管理员才能授予管理员角色。",
+    SUPERADMIN_NOT_GRANTABLE:
+      "超级管理员只能由桌面控制面板在初始化时创建，不能在网页端新建或授予。",
     PANEL_RESET_REQUIRED: "超级管理员不能在网页端重置自己的密码，请在桌面端控制面板中重置。",
   },
 

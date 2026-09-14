@@ -142,6 +142,60 @@ describe("the command line", () => {
   );
 
   it(
+    "resets the administrator from a typed password on stdin without echoing it",
+    async () => {
+      // Bootstrap first, the way the panel's create card does.
+      const created = await runCli(
+        ["create-admin", "--username", "ada", "--password-stdin", "--json"],
+        "the-old-one\n"
+      );
+      expect(created.code).toBe(0);
+
+      const secret = "typed-by-the-operator";
+      const run = await runCli(["reset-admin", "--password-stdin", "--json"], `${secret}\n`);
+
+      expect(run.code).toBe(0);
+      // The chosen password is the operator's own secret and never comes back over either
+      // stream — not in the JSON, not on stderr.
+      expect(run.stdout).not.toContain(secret);
+      expect(run.stderr).not.toContain(secret);
+      const envelope = parse(run.stdout);
+      expect(envelope).toMatchObject({ ok: true, command: "reset-admin", username: "ada" });
+      expect(envelope).not.toHaveProperty("password");
+    },
+    30_000
+  );
+
+  it(
+    "inventing a reset password hands it back once on stdout",
+    async () => {
+      await runCli(["create-admin", "--username", "ada", "--generate", "--json"]);
+
+      const run = await runCli(["reset-admin", "--generate", "--json"]);
+
+      expect(run.code).toBe(0);
+      const envelope = parse(run.stdout);
+      expect(envelope).toMatchObject({ ok: true, username: "ada" });
+      expect(typeof envelope.password).toBe("string");
+    },
+    30_000
+  );
+
+  it(
+    "refuses reset-admin without one of the password flags",
+    async () => {
+      await runCli(["create-admin", "--username", "ada", "--generate", "--json"]);
+
+      const run = await runCli(["reset-admin", "--json"]);
+
+      expect(run.code).toBe(2);
+      expect(run.stderr).toContain("--password-stdin");
+      expect(run.stderr).toContain("--generate");
+    },
+    30_000
+  );
+
+  it(
     "makes exactly one administrator when two of them run at once",
     async () => {
       /*

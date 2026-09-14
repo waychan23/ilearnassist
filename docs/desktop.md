@@ -198,7 +198,8 @@ The same CLI is the headless path on a machine with no panel:
 pnpm --filter @ilearnassist/server cli status                                        # is there an administrator?
 pnpm --filter @ilearnassist/server cli create-admin --username <you> --generate     # invent a password, shown once
 pnpm --filter @ilearnassist/server cli create-admin --username <you> --password-stdin   # type your own
-pnpm --filter @ilearnassist/server cli reset-admin [--username <name>]              # forgotten password
+pnpm --filter @ilearnassist/server cli reset-admin --password-stdin [--username <name>]   # type a new password
+pnpm --filter @ilearnassist/server cli reset-admin --generate [--username <name>]        # invent one, shown once
 ```
 
 ### The panel's language
@@ -295,8 +296,13 @@ markup.
 Every route in the app needs somebody already signed in, which is exactly what a forgotten
 password prevents — so without a way in that needs nobody signed in, an installation whose only
 administrator forgot their password is a directory full of files nobody can open. The panel
-carries that way in: **Reset superadmin password** generates a new one, shows it once, and signs
-the account out everywhere so the old one really is gone.
+carries that way in: **Reset superadmin password** opens a sheet where the operator types a new
+password twice, and signs the account out everywhere so the old one really is gone.
+
+The operator is assumed to **be** the superadmin — the person at this machine — which is the
+same assumption creating the first administrator makes, so the password is chosen here rather
+than generated and shown once. There is no "confirm" dialog: the two-password form is the
+deliberate act. Nothing chosen is echoed back; the reply names the account and nothing else.
 
 **It does not need the server to be running**, and that is the whole shape of it. The panel
 spawns the same `cli.mjs` it uses to create the first administrator — a one-shot child that
@@ -312,8 +318,9 @@ something is wrong. So there is no `ILA_PANEL_TOKEN` any more, and no route; a c
 the same recovery through the terminal:
 
 ```bash
-pnpm --filter @ilearnassist/server cli reset-admin              # the first enabled superadmin
-pnpm --filter @ilearnassist/server cli reset-admin --username <name>
+pnpm --filter @ilearnassist/server cli reset-admin --password-stdin   # type a new password
+pnpm --filter @ilearnassist/server cli reset-admin --generate         # invent one, shown once
+# either accepts --username <name>; without it the first enabled superadmin is used
 ```
 
 It is also the **only** way a superadmin's own password is replaced — the web console refuses
@@ -321,9 +328,8 @@ that outright (`PANEL_RESET_REQUIRED`), because a console reached with a credent
 already holds is a weaker second way to the one credential that can undo the installation. An
 ordinary administrator is not in that position and changes their own password normally.
 
-The confirmation in front of it is not ceremony either. This replaces the credential of the one
-account that can do everything, and unlike disabling a user there is no second administrator
-behind it to put things right.
+This replaces the credential of the one account that can do everything, and unlike disabling a
+user there is no second administrator behind it to put things right.
 
 
 ## Closing the window, and quitting

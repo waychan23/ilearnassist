@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import Icon from "./Icon.vue";
+import LocaleSelect from "./LocaleSelect.vue";
 
 /**
  * The sign-in screen.
@@ -16,6 +17,10 @@ import Icon from "./Icon.vue";
  * That is what keeps a stranger from claiming the installation: the old create-an-administrator
  * form was `public`, and on a LAN-shared server it was reachable by the whole network during
  * the one window in the product's life where there was no owner to refuse them.
+ *
+ * The language picker sits on this screen because it is the first thing a browser-language
+ * mismatch sees: nobody should have to sign in first just to read the form. It is the same
+ * `LocaleSelect` the signed-in headers carry; the choice persists, so the app keeps it.
  */
 
 const store = useAppStore();
@@ -53,6 +58,9 @@ async function submit(): Promise<void> {
 
 <template>
   <main class="auth">
+    <div class="auth-locale">
+      <LocaleSelect />
+    </div>
     <form class="auth-card" data-testid="login-form" @submit.prevent="submit">
       <header class="auth-head">
         <h1 class="auth-wordmark">{{ t("app.title") }}</h1>
@@ -113,12 +121,21 @@ async function submit(): Promise<void> {
 
 <style scoped>
 .auth {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-7);
   background: var(--bg);
+}
+
+/* The picker is a corner control rather than part of the card, which is about credentials:
+   it is a page-level choice, the same one the signed-in headers keep in their corner. */
+.auth-locale {
+  position: absolute;
+  top: var(--space-5);
+  right: var(--space-6);
 }
 
 .auth-card {

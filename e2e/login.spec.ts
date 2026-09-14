@@ -70,6 +70,30 @@ test.describe("with no session", () => {
     await expect(page.getByTestId("login-users")).toHaveCount(0);
   });
 
+  test("changes language on the sign-in screen without signing in, and keeps the choice", async ({
+    page,
+  }) => {
+    // The project's browser locale is zh-CN, and a signed-out visitor must not have to sign
+    // in first just to read the form in their language.
+    await page.goto("/");
+    await expect(page.getByTestId("login-submit")).toHaveText("登录");
+
+    await page.getByTestId("locale-select").selectOption("en");
+    await expect(page.getByTestId("login-submit")).toHaveText("Sign in");
+    await expect(page.getByTestId("auth-lead")).toHaveText(
+      "Sign in with your username and password."
+    );
+
+    // The choice persists the way the signed-in picker's does: stored before sign-in and
+    // read back by the pre-paint script on reload.
+    await page.reload();
+    await expect(page.getByTestId("login-submit")).toHaveText("Sign in");
+    await expect(page.getByTestId("locale-select")).toHaveValue("en");
+
+    await page.getByTestId("locale-select").selectOption("zh-CN");
+    await expect(page.getByTestId("login-submit")).toHaveText("登录");
+  });
+
   test("signs in and stays signed in across a reload", async ({ page }) => {
     // What the stored token is for. Without it the app would ask again on every refresh, and
     // the workspace list would never be reachable for longer than one page view.

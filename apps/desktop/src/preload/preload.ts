@@ -33,10 +33,10 @@ const api: PanelApi = {
   openApp: () => ipcRenderer.invoke(PANEL_CHANNELS.openApp) as Promise<void>,
   openInBrowser: () => ipcRenderer.invoke(PANEL_CHANNELS.openInBrowser) as Promise<void>,
   revealDataDir: () => ipcRenderer.invoke(PANEL_CHANNELS.revealDataDir) as Promise<void>,
-  // No argument, deliberately: which account is reset is the main process's to decide from the
-  // server's own answer, so page script cannot name one.
-  resetAdminPassword: () =>
-    ipcRenderer.invoke(PANEL_CHANNELS.resetAdminPassword) as Promise<ResetResult | null>,
+  // Which account is reset is the main process's to decide; the password is the operator's
+  // own choice and rides over IPC into the child's stdin, so it never reaches an argv string.
+  resetAdminPassword: (input) =>
+    ipcRenderer.invoke(PANEL_CHANNELS.resetAdminPassword, input) as Promise<ResetResult>,
   adminStatus: () =>
     ipcRenderer.invoke(PANEL_CHANNELS.adminStatus) as Promise<AdminStatusResult>,
   createAdministrator: (input) =>
