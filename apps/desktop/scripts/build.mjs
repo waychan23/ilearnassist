@@ -178,6 +178,11 @@ function buildWeb() {
   if (!existsSync(join(webDist, "index.html"))) {
     throw new Error(`The web build produced no index.html in ${webDist}`);
   }
+  // Clear first: Vite names assets by content hash, so copying over an older staging leaves
+  // every previous build's dead assets behind — and worse, `desktop:dev`'s `--no-web` then
+  // keeps serving a bundle that predates the current server's API. The hash names also mean
+  // a stale index.html next to fresh assets is a mismatch nothing would otherwise report.
+  rmSync(join(resources, "web"), { recursive: true, force: true });
   cpSync(webDist, join(resources, "web"), { recursive: true });
 }
 
