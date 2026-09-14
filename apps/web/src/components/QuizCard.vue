@@ -375,7 +375,17 @@ const panelId = `${uid.value}-panel`;
               <span class="option-key">{{ letter(oi) }}</span>
               <span class="offered-text">
                 {{ option.label }}
-                <span v-if="option.description" class="option-desc">{{ option.description }}</span>
+                <!--
+                  The description explains the choice. A question in a skipped/dismissed
+                  quiz was never answered and is still make-up eligible from the panel, so
+                  showing it there would leak the reasoning before the make-up: only
+                  settled answers get the explanation.
+                -->
+                <span
+                  v-if="option.description && recordedAnswer(index)"
+                  class="option-desc"
+                  >{{ option.description }}</span
+                >
               </span>
             </li>
             <!--

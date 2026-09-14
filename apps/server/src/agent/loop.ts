@@ -7,19 +7,21 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import type {
-  Attachment,
-  ChatStreamEvent,
-  Message,
-  MessageUsage,
-  SessionSettings,
-  ToolCall,
-  Workspace,
+import {
+  QUIZ_TOOL_NAME,
+  type Attachment,
+  type ChatStreamEvent,
+  type Message,
+  type MessageUsage,
+  type SessionSettings,
+  type ToolCall,
+  type Workspace,
 } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
 import type { UserLayout } from "../paths.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
 import { Suspension } from "../tools/suspension.js";
+import { redactQuizInput } from "../tools/quiz.js";
 import { buildModel } from "./model.js";
 
 /** Fallback ReAct step budget when a session does not set one. */
@@ -82,6 +84,12 @@ export interface RunAgentInput {
   planGuidance?: string;
   /** The same mechanism for the quiz widget: judge/record answers and recognise make-ups. */
   quizGuidance?: string;
+  /**
+   * The quiz make-up turn's grading key, appended to THIS turn's system prompt only: the
+   * question's reference answer and explanation, which never travel to the client. Absent
+   * on every ordinary turn.
+   */
+  quizMakeupNote?: string;
   /** Whose sources tree the attachment bytes live in. Derived per request, never held. */
   user: UserLayout;
   sessionId: string;
@@ -197,7 +205,8 @@ function buildSystemPrompt(
   workspace: Workspace,
   systemPrompt: string,
   planGuidance?: string,
-  quizGuidance?: string
+  quizGuidance?: string,
+  quizMakeupNote?: string
 ): string {
   const base =
     systemPrompt.trim() ||
@@ -216,8 +225,10 @@ function buildSystemPrompt(
   const planNote = planGuidance ? `\n\n${planGuidance}` : "";
   // Likewise for the quiz widget: installed or not is the whole switch.
   const quizNote = quizGuidance ? `\n\n${quizGuidance}` : "";
+  // One make-up turn's answer key, last: it is the most specific instruction in the prompt.
+  const makeupNote = quizMakeupNote ? `\n\n${quizMakeupNote}` : "";
 
-  return base + workspaceNote + planNote + quizNote;
+  return base + workspaceNote + planNote + quizNote + makeupNote;
 }
 
 /**
@@ -347,7 +358,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         input.workspace,
         input.systemPrompt,
         input.planGuidance,
-        input.quizGuidance
+        input.quizGuidance,
+        input.quizMakeupNote
       )
     ),
     ...history,
@@ -467,8 +479,12 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         const id = call.id ?? `call_${step}_${toolCalls.length}`;
         const name = call.name ?? "unknown";
         const args = JSON.stringify(call.args ?? {});
+        // The quiz tool's model-authored args may carry the answer key; every other tool's
+        // input is what the card renders. The suspending arm stores its own redacted record,
+        // but a call that fails validation lands on the ordinary path below.
+        const clientInput = name === QUIZ_TOOL_NAME ? redactQuizInput(args) : args;
 
-        input.onEvent({ type: "tool_start", toolCall: { id, name, input: args } });
+        input.onEvent({ type: "tool_start", toolCall: { id, name, input: clientInput } });
 
         let output = "";
         const t = toolByName.get(name);
@@ -529,8 +545,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
           output = `Unknown tool "${name}".`;
         }
 
-        toolCalls.push({ id, name, input: args, output });
-        input.onEvent({ type: "tool_end", toolCall: { id, name, input: args, output } });
+        toolCalls.push({ id, name, input: clientInput, output });
+        input.onEvent({ type: "tool_end", toolCall: { id, name, input: clientInput, output } });
 
         messages.push(new ToolMessage({ tool_call_id: id, name, content: output }));
       }

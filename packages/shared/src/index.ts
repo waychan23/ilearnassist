@@ -186,17 +186,41 @@ export interface QuizQuestionInput {
   multiSelect?: boolean;
   /** How many the model offered, `QUIZ_MIN_OPTIONS`–`QUIZ_MAX_OPTIONS`, labels distinct. */
   options: QuizOption[];
+  /**
+   * Optional answer key: the exact **labels** of the correct options.
+   *
+   * Grading material, never question material. The tool strips it from everything the
+   * client receives — the live `tool_start`, the persisted call the card re-renders from,
+   * and the widget's question rows — and only hands it back once the question has been
+   * answered: in the resumed tool result, or in the make-up turn's system-side grading
+   * note. Stored server-side on the quiz row, so a later make-up can be judged against it
+   * without it ever living in the conversation the client reads.
+   */
+  referenceAnswer?: string[];
+  /**
+   * Optional answer analysis ("why this is the answer"). Same secrecy as
+   * `referenceAnswer`: written for the grading turn, never shown before an answer exists.
+   */
+  explanation?: string;
 }
 
+/** Cap on the answer analysis, so one key cannot dwarf the context. */
+export const QUIZ_EXPLANATION_MAX = 1000;
+
 /**
- * One question as it is persisted and shown: the model's question plus the id the tool
- * assigned it (`Q1`, `Q2`, …), unique within its session.
+ * One question as it is persisted **in the conversation** and shown: the model's question
+ * plus the id the tool assigned it (`Q1`, `Q2`, …), unique within its session.
+ *
+ * Deliberately does NOT extend the whole input: `referenceAnswer`/`explanation` are the
+ * answer key and are stripped before a question is recorded or sent to the client. They
+ * live only in the tool's validated arguments and, server-side, on the quiz row.
  *
  * The id is the whole reason this is a type of its own. It travels in the tool call's
  * `input`, which is what lets a reload re-render the same ids; it comes back in the tool
  * result; and it keys the answer, so a later turn or tool can name a question exactly.
  */
-export interface QuizQuestion extends QuizQuestionInput {
+export interface QuizQuestion
+  extends Pick<QuizQuestionInput, "header" | "question" | "multiSelect" | "options"> {
   id: string;
   /**
    * The question's GLOBAL id, assigned by the server when the quiz is registered in the
@@ -1802,6 +1826,14 @@ export interface ChatInput {
   model?: string;
   /** Attachments previously uploaded for this session (metadata only, no bytes). */
   attachments?: Attachment[];
+  /**
+   * Set only by the quiz widget's make-up flow: the global id of a question whose answer
+   * was just posted and that this ordinary chat turn is meant to grade. The server verifies
+   * an owned, answered row and, when the question was posed with one, appends the answer
+   * key and explanation to THIS turn's system prompt only — the key never travels to the
+   * client and is not part of the visible message.
+   */
+  makeupQuizId?: string;
 }
 
 /* ---------------------------------- Chat stream events -------------------------------- */

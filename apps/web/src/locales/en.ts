@@ -352,7 +352,6 @@ const en: typeof MessageSchema = {
     dismissedHint: "You dismissed this quiz, so the assistant will use its own judgement.",
     multiSelectHint: "Select any that apply.",
     unsure: "Not sure",
-    unsureHint: "Picking this clears the choices above: it is a third answer, not one of them.",
     unsureReasonLabel: "Why you are unsure",
     unsureReasonPlaceholder:
       "Say why: you have not covered it, cannot recall it, or think the question is off…",

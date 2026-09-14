@@ -10,8 +10,10 @@ import {
   gradeQuizAnswers,
   listQuizQuestionViews,
   makeupAnswer,
+  quizAnswerKeysForCall,
   recordQuizAnswers,
   registerQuizQuestions,
+  renderMakeupKeyNote,
   skipQuizQuestions,
 } from "../src/quizzes.js";
 
@@ -333,6 +335,81 @@ describe("gradeQuizAnswers", () => {
         ],
       })
     ).toThrow(/appears more than once/);
+  });
+});
+
+/* ----------------------------------- answer key ----------------------------------- */
+
+describe("quiz answer key", () => {
+  function registerKeyed() {
+    registerQuizQuestions(db, SESSION, {
+      toolCallId: "call-1",
+      items: [
+        {
+          ...item("Q1", 1),
+          referenceAnswer: ["滑动"],
+          explanation: "滑动窗口按步长触发。",
+        },
+        item("Q2", 2),
+      ],
+    });
+  }
+
+  it("stores the key on the rows but never in the client views", () => {
+    registerKeyed();
+    const rows = db.listQuizQuestionsBySession(SESSION);
+    expect(rows[0]).toMatchObject({
+      referenceAnswer: ["滑动"],
+      explanation: "滑动窗口按步长触发。",
+    });
+    // Keyless question: nulls, not an empty key.
+    expect(rows[1]).toMatchObject({ referenceAnswer: null, explanation: null });
+
+    for (const view of listQuizQuestionViews(db, OWNER, SESSION)) {
+      expect(view).not.toHaveProperty("referenceAnswer");
+      expect(view).not.toHaveProperty("explanation");
+    }
+  });
+
+  it("reads the key back by the suspending call's id, keyed by Qn", () => {
+    registerKeyed();
+    // Only questions posed with a key (or explanation) appear.
+    const keys = quizAnswerKeysForCall(db, SESSION, "call-1");
+    expect(keys.size).toBe(1);
+    expect(keys.get("Q1")).toEqual({
+      referenceAnswer: ["滑动"],
+      explanation: "滑动窗口按步长触发。",
+    });
+    expect(quizAnswerKeysForCall(db, SESSION, "other-call").size).toBe(0);
+  });
+
+  it("builds the make-up grading note from a keyed row, and nothing for a keyless one", () => {
+    registerKeyed();
+    skipQuizQuestions(db, SESSION, ["call-1"]);
+    const skipped = db
+      .listQuizQuestionsBySession(SESSION)
+      .find((q) => q.qid === "Q1")!;
+    const note = renderMakeupKeyNote(skipped);
+    expect(note).toMatch(/make-up answer/);
+    expect(note).toMatch(/quiz_id: /);
+    expect(note).toMatch(/Reference answer: 滑动/);
+    expect(note).toMatch(/Explanation: 滑动窗口按步长触发。/);
+
+    const keyless = db
+      .listQuizQuestionsBySession(SESSION)
+      .find((q) => q.qid === "Q2")!;
+    expect(renderMakeupKeyNote(keyless)).toBeNull();
+  });
+
+  it("explanation-only rows still get a note", () => {
+    registerQuizQuestions(db, SESSION, {
+      toolCallId: "call-9",
+      items: [{ ...item("Q9", 9), explanation: "只有解析没有答案键。" }],
+    });
+    const row = db.listQuizQuestionsBySession(SESSION)[0]!;
+    const note = renderMakeupKeyNote(row);
+    expect(note).toMatch(/Explanation: 只有解析没有答案键。/);
+    expect(note).not.toMatch(/Reference answer/);
   });
 });
 

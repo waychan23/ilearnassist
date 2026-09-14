@@ -1390,6 +1390,12 @@ describe("quiz widgets", () => {
       selected: ["滚动"],
     });
     expect(mocks.streamChat).toHaveBeenCalled();
+    // The follow-up turn names the row so the server appends its hidden answer key to the
+    // system prompt; the visible message carries nothing.
+    expect(mocks.streamChat).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ makeupQuizId: "quiz-1" })
+    );
   });
 
   it("reports a rejected make-up POST without starting a turn, leaving the dialog to stay open", async () => {

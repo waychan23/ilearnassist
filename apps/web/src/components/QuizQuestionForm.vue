@@ -130,7 +130,6 @@ function growOnMount(el: unknown): void {
       <span class="option-key" aria-hidden="true"></span>
       <span class="option-text">
         <span class="option-label">{{ t("quiz.unsure") }}</span>
-        <span class="option-desc">{{ t("quiz.unsureHint") }}</span>
       </span>
     </label>
     <div v-if="draft.unsure" class="field">
@@ -210,10 +209,6 @@ function growOnMount(el: unknown): void {
 }
 .option-label {
   color: var(--text);
-}
-.option-desc {
-  color: var(--text-3);
-  font-size: var(--fs-2);
 }
 
 .field {

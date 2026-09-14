@@ -17,6 +17,7 @@ import {
   readPlanConflictTree,
   renderMakeResult,
 } from "../plans.js";
+import { quizAnswerKeysForCall } from "../quizzes.js";
 
 /**
  * What the answers route needs from a suspending tool.
@@ -60,10 +61,15 @@ export interface SuspendingTool {
   /**
    * `undefined` — this call holds no question set (the route answers 409).
    * `ok: false` — the submission is not acceptable (the route answers 400).
+   *
+   * Receives the same context `commit` does: a read-only resolver (the quiz spec) still
+   * needs the database to read its questions' answer keys back, which never live on the
+   * call the client sees.
    */
   resolve?(
     call: ToolCall,
-    submission: AnswerToolCallInput
+    submission: AnswerToolCallInput,
+    ctx: SuspensionCommitContext
   ): SuspensionResolved | SuspensionRejected | undefined;
 
   /** Side-effecting variant: the answer commits something before the turn resumes. */
@@ -91,17 +97,21 @@ const askUserSpec: SuspendingTool = {
 };
 
 const quizSpec: SuspendingTool = {
-  resolve(call, submission) {
+  // Takes the commit context even though it writes nothing: the model's answer key was
+  // stored on the quiz rows, never on the call the client receives, so the post-answer
+  // tool result has to read it back from the database before grading resumes.
+  resolve(call, submission, ctx) {
     const questions = readQuizQuestions(call);
     if (!questions) return undefined;
 
     const validated = validateQuizAnswers(questions, submission);
     if (!validated.ok) return { ok: false, reason: validated.reason };
 
+    const keys = quizAnswerKeysForCall(ctx.db, ctx.session.id, call.id);
     return {
       ok: true,
       answer: validated.answers,
-      output: renderQuizResult(questions, validated.answers, submission.action),
+      output: renderQuizResult(questions, validated.answers, submission.action, keys),
     };
   },
 };

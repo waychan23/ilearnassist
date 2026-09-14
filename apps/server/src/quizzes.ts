@@ -13,6 +13,7 @@ import {
 } from "@ilearnassist/shared";
 import {
   validateQuizAnswers,
+  type QuizAnswerKey,
   type QuizRegisterInput,
   type QuizRegistrationItem,
   type QuizRegisteredQuestion,
@@ -110,6 +111,8 @@ export function registerQuizQuestions(
     question: item.question,
     multiSelect: item.multiSelect === true,
     options: item.options,
+    referenceAnswer: item.referenceAnswer,
+    explanation: item.explanation,
     createdAt: ts,
   }));
 
@@ -168,6 +171,56 @@ export function dismissQuizQuestions(db: AppDb, sessionId: string, toolCallId: s
 /** The user sent a new message instead of answering: retire the calls' pending rows. */
 export function skipQuizQuestions(db: AppDb, sessionId: string, toolCallIds: string[]): void {
   db.skipQuizQuestions(sessionId, toolCallIds);
+}
+
+/**
+ * The answer keys registered under one suspending `ila_quiz` call, keyed by Qn. Read at
+ * resume time from the rows written at suspension — the persisted tool call carries no
+ * key, since its input is sent to and re-rendered by the client. Only questions posed with
+ * a key or an explanation appear; the grading turn for a keyless quiz is unchanged.
+ */
+export function quizAnswerKeysForCall(
+  db: AppDb,
+  sessionId: string,
+  toolCallId: string
+): Map<string, QuizAnswerKey> {
+  const map = new Map<string, QuizAnswerKey>();
+  for (const row of db.listQuizQuestionsBySession(sessionId)) {
+    if (row.toolCallId !== toolCallId) continue;
+    if ((row.referenceAnswer && row.referenceAnswer.length > 0) || row.explanation) {
+      map.set(row.qid, {
+        referenceAnswer: row.referenceAnswer,
+        explanation: row.explanation,
+      });
+    }
+  }
+  return map;
+}
+
+/**
+ * The system-side grading note for a make-up turn: the question's answer key, which the
+ * user never saw. Appended to THAT turn's system prompt only and never persisted in a
+ * visible message. Null when the question was posed without a key, so a make-up against a
+ * keyless quiz behaves exactly as before.
+ */
+export function renderMakeupKeyNote(row: QuizQuestionRecord): string | null {
+  const reference = row.referenceAnswer && row.referenceAnswer.length > 0 ? row.referenceAnswer : null;
+  const explanation = row.explanation ?? null;
+  if (!reference && !explanation) return null;
+
+  const lines = [
+    `The user's just-sent message is a make-up answer (补答) for this conversation's quiz ` +
+      `question ${row.qid} (quiz_id: ${row.id}), one they originally left unanswered. Grade that ` +
+      "answer now and record it with ONE ila_review_quiz call naming this exact quiz_id — do not " +
+      "call ila_quiz again and do not treat it as a new question.",
+    "What follows is the question's grading key. It was never shown to the user, so judge against " +
+      "it without reproducing it verbatim; give the user your own explanation in their language.",
+    "",
+    `Question: ${row.question}`,
+  ];
+  if (reference) lines.push(`Reference answer: ${reference.join("; ")}`);
+  if (explanation) lines.push(`Explanation: ${explanation}`);
+  return lines.join("\n");
 }
 
 /* ------------------------------------ reads ------------------------------------ */

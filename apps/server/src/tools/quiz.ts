@@ -1,6 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import {
+  QUIZ_EXPLANATION_MAX,
   QUIZ_HEADER_MAX,
   QUIZ_MAX_OPTIONS,
   QUIZ_MAX_QUESTIONS,
@@ -36,6 +37,25 @@ export interface QuizRegistrationItem {
   question: string;
   multiSelect?: boolean;
   options: { label: string; description?: string }[];
+  /** The model's answer key, persisted server-side only and omitted from client views. */
+  referenceAnswer?: string[];
+  explanation?: string;
+}
+
+/**
+ * A numbered question still carrying the model's answer key. The key lives only between
+ * schema validation and the suspension: `stripQuizKey` removes it before anything is
+ * persisted in the conversation or sent to the client.
+ */
+export type QuizQuestionWithKey = QuizQuestion & {
+  referenceAnswer?: string[];
+  explanation?: string;
+};
+
+/** Remove the answer key from a question, yielding the shape the conversation may carry. */
+export function stripQuizKey(question: QuizQuestionWithKey): QuizQuestion {
+  const { referenceAnswer: _referenceAnswer, explanation: _explanation, ...safe } = question;
+  return safe;
 }
 
 export interface QuizRegisterInput {
@@ -82,13 +102,40 @@ interface QuizInvokeConfig {
 export class QuizSuspension extends Suspension {
   readonly questions: QuizQuestion[];
 
-  constructor(questions: QuizQuestion[]) {
+  constructor(questions: QuizQuestionWithKey[]) {
+    // Strip the answer key before the recorded input is persisted in the assistant
+    // message and re-rendered by the card: the key exists only server-side, on the quiz
+    // row, and returns only in the post-answer tool result.
+    const safe = questions.map(stripQuizKey);
     super(
       "QuizSuspension",
-      `ila_quiz: suspended awaiting the user (${questions.length} question(s))`,
-      { questions }
+      `ila_quiz: suspended awaiting the user (${safe.length} question(s))`,
+      { questions: safe }
     );
-    this.questions = questions;
+    this.questions = safe;
+  }
+}
+
+/**
+ * Strip the answer key from a raw `ila_quiz` call's JSON before it is emitted to a client
+ * (`tool_start`, and the error path's `tool_end`). The key is model-input material the
+ * browser must not receive while a question is still answerable. Malformed JSON is
+ * returned untouched: it cannot be a well-formed quiz call, and the caller decides what
+ * happens to it.
+ */
+export function redactQuizInput(argsJson: string): string {
+  try {
+    const parsed = JSON.parse(argsJson) as { questions?: unknown };
+    if (!Array.isArray(parsed.questions)) return argsJson;
+    parsed.questions = parsed.questions.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const q = item as Record<string, unknown>;
+      const { referenceAnswer: _r, explanation: _e, ...rest } = q;
+      return rest;
+    });
+    return JSON.stringify(parsed);
+  } catch {
+    return argsJson;
   }
 }
 
@@ -105,27 +152,56 @@ const optionSchema = z.object({
     .describe("One sentence on what picking this implies. Optional."),
 });
 
-const questionSchema = z.object({
-  header: z
-    .string()
-    .min(1)
-    .max(QUIZ_HEADER_MAX)
-    .describe(`Tab label, at most ${QUIZ_HEADER_MAX} characters.`),
-  question: z.string().min(1).max(500).describe("The full question, ending in a question mark."),
-  multiSelect: z
-    .boolean()
-    .optional()
-    .describe('True to let the user tick several options. Omit for a single choice.'),
-  options: z
-    .array(optionSchema)
-    .min(QUIZ_MIN_OPTIONS)
-    .max(QUIZ_MAX_OPTIONS)
-    .refine(
-      (opts) => new Set(opts.map((o) => o.label)).size === opts.length,
-      "Option labels must be unique within a question."
-    )
-    .describe(`${QUIZ_MIN_OPTIONS}–${QUIZ_MAX_OPTIONS} distinct choices.`),
-});
+const questionSchema = z
+  .object({
+    header: z
+      .string()
+      .min(1)
+      .max(QUIZ_HEADER_MAX)
+      .describe(`Tab label, at most ${QUIZ_HEADER_MAX} characters.`),
+    question: z
+      .string()
+      .min(1)
+      .max(500)
+      .describe("The full question, ending in a question mark."),
+    multiSelect: z
+      .boolean()
+      .optional()
+      .describe('True to let the user tick several options. Omit for a single choice.'),
+    options: z
+      .array(optionSchema)
+      .min(QUIZ_MIN_OPTIONS)
+      .max(QUIZ_MAX_OPTIONS)
+      .refine(
+        (opts) => new Set(opts.map((o) => o.label)).size === opts.length,
+        "Option labels must be unique within a question."
+      )
+      .describe(`${QUIZ_MIN_OPTIONS}–${QUIZ_MAX_OPTIONS} distinct choices.`),
+    referenceAnswer: z
+      .array(z.string().min(1).max(80))
+      .min(1)
+      .max(QUIZ_MAX_OPTIONS)
+      .optional()
+      .describe(
+        "Optional answer key: the exact labels (not letters) of the correct option(s). " +
+          "Never shown to the user — it is returned to you with their answer so you can grade " +
+          "consistently. Every label must be one this question offered."
+      ),
+    explanation: z
+      .string()
+      .min(1)
+      .max(QUIZ_EXPLANATION_MAX)
+      .optional()
+      .describe(
+        "Optional answer analysis: why the reference answer is correct and the distractors are " +
+          "not. Never shown before the user answers; returned to you with their answer for grading."
+      ),
+  })
+  .refine(
+    (q) =>
+      (q.referenceAnswer ?? []).every((label) => q.options.some((o) => o.label === label)),
+    "referenceAnswer must name options that were offered."
+  );
 
 const inputSchema = z.object({
   nodeId: z
@@ -154,6 +230,8 @@ const DESCRIPTION = [
   "",
   "Rules:",
   "- Never reveal the answer: not in the question, not in an option's label, and not in an option's description. A question with its answer in it measures nothing.",
+  "- When you know the answer while posing the question, give `referenceAnswer` (the exact labels of the correct option(s)) and `explanation` (why). The user never sees either: they are stored server-side and handed back to you only once the question is answered — in the quiz result, or with the grading turn of a later make-up answer — so you grade against a key instead of reconstructing one.",
+  "- A `referenceAnswer` label must be one the question actually offers, and it is the label text, not a letter.",
   '- Write plain option labels with no letter in front of them — the client renders A, B, C… from the order you list them.',
   '- Do not offer your own "I don\'t know", "unsure" or "Other" choice: the client appends one to every question automatically, along with a box for the user to explain it or add their own take.',
   "- Do not invent or pass ids: the tool assigns each question a session-scoped id (Q1, Q2, …) AND a global quiz_id, both returned in the result, so you can refer to a question by id later.",
@@ -183,8 +261,8 @@ export function buildQuizTool(ctx: QuizToolContext) {
       // a collision, and a gap is invisible because an id is only ever shown as it was issued.
       const numbers = ctx.reserveQuestionNumbers(input.questions.length);
 
-      const numbered: { question: QuizQuestion; position: number }[] = input.questions.map(
-        (question, index) => {
+      const numbered: { question: QuizQuestionWithKey; position: number }[] =
+        input.questions.map((question, index) => {
           const number = numbers[index];
           // A context that reserved a short block would otherwise hand two questions the same
           // id — a card with one answer slot for two questions. Louder as a tool error.
@@ -193,8 +271,7 @@ export function buildQuizTool(ctx: QuizToolContext) {
             throw new Error(`ila_quiz: no question number was reserved for question ${index}`);
           }
           return { question: { ...question, id: `Q${number}` }, position: number };
-        }
-      );
+        });
 
       // Persist the questions (with their global uids) BEFORE suspending, so the panel can
       // list even the ones the learner walks away from. The loop stamps the provider's
@@ -213,10 +290,12 @@ export function buildQuizTool(ctx: QuizToolContext) {
           question: question.question,
           multiSelect: question.multiSelect,
           options: question.options,
+          referenceAnswer: question.referenceAnswer,
+          explanation: question.explanation,
         })),
       });
 
-      const questions: QuizQuestion[] = numbered.map(({ question }, index) => {
+      const questions: QuizQuestionWithKey[] = numbered.map(({ question }, index) => {
         const record = registered[index];
         if (!record || record.qid !== question.id) {
           throw new Error("ila_quiz: question registration did not return the question set");
@@ -307,6 +386,15 @@ export function validateQuizAnswers(
 }
 
 /**
+ * The answer key a question was posed with, as the grading turn needs it. Both fields are
+ * optional: a quiz the model gave no key to grade without one, the old behaviour.
+ */
+export interface QuizAnswerKey {
+  referenceAnswer?: string[] | null;
+  explanation?: string | null;
+}
+
+/**
  * The tool result the model reads.
  *
  * A tool-result string is *model input*, so it is deliberately not translated and not
@@ -317,11 +405,16 @@ export function validateQuizAnswers(
  * the one thing here it could not have reconstructed. The option letters are deliberately
  * absent — they are a UI affordance the model never sees, so putting them here would invent
  * a vocabulary it cannot use.
+ *
+ * `keys` is the one place the model's answer key comes back: on a submit, each question's
+ * `reference_answer`/`explanation` are appended for grading. They never appear on a cancel —
+ * a dismissed question is one the user never answered, and the key stays hidden.
  */
 export function renderQuizResult(
   questions: QuizQuestion[],
   answers: QuizAnswers,
-  action: "submit" | "cancel"
+  action: "submit" | "cancel",
+  keys?: ReadonlyMap<string, QuizAnswerKey>
 ): string {
   if (action === "cancel") {
     return JSON.stringify(
@@ -336,6 +429,7 @@ export function renderQuizResult(
 
   const rendered = questions.map((question) => {
     const answer = answers[question.id];
+    const key = keys?.get(question.id);
     return {
       id: question.id,
       // The GLOBAL id `ila_review_quiz` names; falls back to the Qn on a legacy call that
@@ -346,6 +440,11 @@ export function renderQuizResult(
       ...(answer?.unsure ? { unsure: true } : {}),
       ...(answer?.unsureReason ? { unsure_reason: answer.unsureReason } : {}),
       ...(answer?.notes ? { notes: answer.notes } : {}),
+      // Grading material, only now visible to the model — never to the user.
+      ...(key?.referenceAnswer && key.referenceAnswer.length > 0
+        ? { reference_answer: key.referenceAnswer }
+        : {}),
+      ...(key?.explanation ? { explanation: key.explanation } : {}),
     };
   });
 

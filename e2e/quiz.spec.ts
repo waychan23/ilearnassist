@@ -104,6 +104,11 @@ test("answers a three-question quiz through the tabs, and the record survives a 
   await expect(page.getByTestId("quiz-question")).toHaveText("Flink 里按时间切分的窗口是哪一种？");
   await expect(page.getByTestId("quiz-step")).toHaveText("第 1 / 3 题");
 
+  // The "unsure" choice keeps its label but carries no explanatory sub-copy: the old line
+  // about "the third answer, not one of the options" read as noise.
+  await expect(page.getByTestId("quiz-unsure-0")).toContainText("不确定");
+  await expect(page.locator("body")).not.toContainText("第三种作答");
+
   // The options are lettered by the client, from the order the model listed them, because
   // the model is told not to write letters of its own.
   await expect(page.getByTestId("quiz-option-0-0")).toContainText("A");
