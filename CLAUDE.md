@@ -26,15 +26,19 @@ description of that tree:
   users/<userSlug>/
     workspaces/<wsSlug>/
       workdir/                 the agent's file-tool sandbox and the file browser's root
-      sessions/<sessionId>/    created with the conversation; nothing writes here yet
+      sessions/<sessionId>/    a conversation's own files — the diagrams it draws
     sources/
       raw/<sourceId>.<ext>     an uploaded file, one per distinct content per account
       parsed/<sourceId>.txt    its extracted text
   db/sqlite/ilearnassist.sqlite
 ```
 
-`sessions/` is **reserved**: it is created so the layout is a thing you can look at rather
-than a thing that materialises by accident, and nothing writes into it yet.
+`sessions/<sessionId>/` is a conversation's **own** folder, and its one writer is `ila_diagram`
+— the model draws a diagram, the source lands here as `<name>.mmd`, and the conversation renders
+it. It is a sibling of `workdir/` rather than a corner of it, deliberately: the workdir is the
+sandbox `write_file` and the file tree share, and `write_file` cannot reach `sessions/`
+(`resolveInWorkspace` refuses the traversal), so this directory holds nothing a typed tool did
+not write. See `docs/diagrams.md`.
 
 ## Commands
 
@@ -227,7 +231,7 @@ apps/server/src/
   auth.ts                 # accounts: scrypt passwords, credential policy, bearer tokens, the gate
   db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
-  files.ts                # the workspace browser's read side: one level, one file
+  files.ts                # the file browser's read side, for both roots: one level, one file
   attachments.ts          # source paths + the sandbox guard + multimodal content building
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
@@ -243,6 +247,8 @@ apps/server/src/
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
+  tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
+  diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   widgets.ts              # sumUsage + the widget-selection validator (pure)
   notes.ts                # the notes widget's records: what a body may become a note (pure)
 apps/web/src/
@@ -255,6 +261,7 @@ apps/web/src/
   composables/messageNotes.ts   # the message list ↔ notes widget capability + its claim
   composables/messageSelection.ts  # noticing a selection inside one message
   composables/notes.ts    # the notes widget's data (module singleton, not a store)
+  composables/relativeTime.ts  # a timestamp as "3 分钟前", from the shared time.* keys
   composables/theme.ts    # light/dark/auto
   composables/widgetActivation.ts  # which widget is live on what is on screen (onActive)
   composables/widgetEvents.ts  # the widget event bus (no store import, so no cycle)
@@ -262,17 +269,19 @@ apps/web/src/
   utils/apiError.ts       # server code → user-facing message
   utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
   utils/locale.ts         # browser-language detection + the alias table
+  utils/mermaid.ts        # the lazy mermaid chunk: theme variables, parse, render
   utils/noteAnchor.ts     # selection → quote + occurrence, and back (pure, DOM-only)
   utils/widgetTabs.ts     # the tab strip's fit arithmetic (pure)
   widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
+  widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
-                          #   ToolCallCard, AskUserCard, Composer, TopbarControls, FileTree,
-                          #   WidgetPanel, WidgetTabStrip, GenerationParams, NoteEditor,
-                          #   MessageSelectionToolbar,
-                          #   dialogs (Settings, WorkspaceSettings, Sources, FilePreview,
-                          #   Confirm, WidgetToggleList)
+                          #   ToolCallCard, DiagramCard, MermaidDiagram, AskUserCard, Composer,
+                          #   TopbarControls, FileTree, WidgetPanel, WidgetTabStrip,
+                          #   GenerationParams, NoteEditor, MessageSelectionToolbar,
+                          #   dialogs (Settings, WorkspaceSettings, Sources, SessionFiles,
+                          #   FilePreview, Diagram, Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -321,12 +330,59 @@ Fuller map in `docs/reference.md`.
   contain `/`, `#`, `&` and CJK — and because `?path=a&path=b` parses to an *array*, which
   `files.ts` refuses rather than letting a string operation on it become a 500.
 - **A file's preview `kind` is the extension point.** `FileContent.kind` is a union
-  (`text` / `markdown` / `unsupported`), so the next format is a new member and a branch in
-  `FilePreviewDialog` — not a second endpoint. The server decides it, not the client: it is
-  the side that can sniff the bytes, and an unfamiliar extension is decided by a NUL check and
-  a UTF-8 decode rather than a table, which is what makes `Makefile` and `LICENSE` readable.
+  (`text` / `markdown` / `diagram` / `unsupported`), so the next format is a new member and a
+  branch in `FilePreviewDialog` — not a second endpoint. The server decides it, not the client:
+  it is the side that can sniff the bytes, and an unfamiliar extension is decided by a NUL check
+  and a UTF-8 decode rather than a table, which is what makes `Makefile` and `LICENSE` readable.
   Past the preview cap the reply is a 200 with `truncated: true`, never an error — a 2 GB log
   is exactly the file someone opens to see the top of.
+  **`diagram` is the first member added after the fact, and it taught that "the client switches
+  exhaustively" was only true of sites that switched.** The dialog dispatched on a `v-else-if`
+  chain whose last branch was `<pre v-else-if="content">`, so a `.mmd` compiled cleanly and
+  silently rendered as highlighted source — plausible-looking, and wrong. The chain *became* a
+  `switch` with an `unhandled(kind: never)` arm in the same change, which is what makes the next
+  member a `vue-tsc` error rather than a fallthrough. A new kind is only a compile error once a
+  site says so; until then the fallthrough is what handles it.
+- **A conversation's own directory has exactly one writer, and a diagram is a file plus a
+  row — each holding what the other cannot.** `sessions/<sessionId>/` is written by
+  `ila_diagram` and read by the session-files routes; `write_file` cannot reach it. The `.mmd`
+  is the source of the bytes; `session_diagrams` holds only what the file cannot answer: the
+  canonical `name` (the join key, so the client never derives one), the model's `summary`, the
+  `tool_call_id` that wrote or last revised it, and the `thread_id` the classifier put it in.
+  The one drift still unrepresentable is two copies of the bytes disagreeing — the row holds no
+  source and no `source_path` (a pure function of the session and the name). Drift is bounded and
+  reported at both ends: a `.mmd` nobody drew has a file but no row (the conversation-files dialog
+  shows it, the diagram panel does not), a row whose file is gone reads `fileMissing`. The row
+  has no `deleted_at` (derived data, like `session_threads`) and no `message_id` (the assistant
+  message does not exist when the tool runs). A revise upserts on `(session_id, name)`: one file,
+  one row, new summary and call id, `thread_id` cleared so the new shape is judged again. The
+  naming rule (`diagramFileName`, `slugify`) is server-side in `diagrams.ts`/`workspace.ts` — it
+  used to be shared because the client derived a name to find the call, and the row retired that
+  derivation; only `isDiagramFile` and the size/tool-name constants stay shared. See
+  `docs/diagrams.md`.
+  **A diagram rides the turn classification.** The thread is assigned after the turn, so the tool
+  writes `thread_id = null` and `threads.ts` places each diagram inside the same transaction as
+  its turn's messages, shown to the classifier under the message whose call drew it (name and
+  summary, never the source). The per-diagram answer is a second, **ref-keyed** array, so a bad
+  entry can never shift a turn decision; the only valid values are `continue` (the turn's own
+  thread) and an existing `eN` — never `new`, because a diagram has no messages of its own — and
+  a missing/unusable answer, and any diagram in a deterministically-forced plan turn, collapses
+  to the turn's thread. The invariant is one sentence and testable: a diagram's `thread_id` is
+  null iff the turn owning its latest call has no thread yet.
+- **Mermaid renders in its own component, never through `renderMarkdown`.** `renderMarkdown` is a
+  synchronous `string → string` on purpose — that is the reason KaTeX was chosen over MathJax —
+  and mermaid's API is async, so a diagram cannot go through the markdown path, and making the
+  whole pipeline async for the one case that needs it is a large change for a small feature.
+  `MermaidDiagram.vue` owns the async half (source that changes, a theme that flips, an unmount
+  mid-render) and `utils/mermaid.ts` holds the part with no DOM. Two of its options are security
+  boundaries rather than preferences, on the same footing as `html: false` and `trust: false`:
+  `securityLevel: "strict"` (the source is model-authored) and `htmlLabels: false` (SVG `<text>`,
+  no `foreignObject` of HTML). Its `themeVariables` are **concrete colours read from the palette**,
+  never `var()` references, because mermaid computes with them in JavaScript. A failed render shows
+  its own panel and keeps the source — it never blanks the bubble, the same reasoning as KaTeX's
+  `throwOnError: false`. `style.test.ts` cannot see any of this: mermaid's colours are inline SVG
+  attributes, so the runtime derivation is the whole mechanism and the theme case in
+  `e2e/diagram.spec.ts` is what holds it up.
 - **There is one code highlighter, and `highlight.js` is it.** `markdown.ts` exposes
   `highlightFile(code, fileName)` for the preview, and `renderMarkdown`'s fenced-code path
   calls the *same* internal helper and the *same* escaper — a file and a message must not
@@ -612,8 +668,12 @@ Fuller map in `docs/reference.md`.
   ambiguous turns are sent, at most five per call, and a bad/empty answer blocks just
   those while deterministic turns in the chunk still land and the same idempotent sync
   retries the rest. That is also what makes an install-time backfill the same code path
-  as keeping up. The `计划`/`其他` headings are rendered client-side with translated
-  labels, never stored. The classification process is observable through the
+  as keeping up. A diagram drawn in a turn rides the same pass: its `<diagram>` block (name
+  and the model's summary, never the source) is answered in a second ref-keyed array with
+  `continue`/`eN`, a bad entry collapses the diagram to its turn's thread, and a forced
+  plan turn's diagrams land in that node's thread with no model call. The `计划`/`其他`
+  headings are rendered client-side with translated labels, never stored. The classification
+  process is observable through the
   append-only `<dataRoot>/logs/threads.log` (`threadLog.ts`): one human-readable block per
   real classification (context, turns, raw model answer, per-turn resolution, counts) and
   failure blocks, configured only in the process entry point so tests never write it.
@@ -1090,6 +1150,18 @@ Fuller map in `docs/reference.md`.
   one entry comes back per widget at that level and a stored row is indistinguishable from a
   defaulted one.
 - **Widget-bound tools are switched by the install, and bypass the tool allow-list.** A `WIDGETS` entry may name `boundTools`; `turnContext()` reads the session's installed widgets per turn and assembles those tools (context-gated like `read_document`) regardless of the `allTools`/`tools` snapshot in all three states, including the empty "no tools" list. They are filtered out of the Copilot tool checklist (`isWidgetBoundTool`), since a box there can neither enable nor remove them. The plan widget binds `ila_make_plan` / `ila_read_plan` / `ila_update_plan_progress` (session scope only).
+  **A tool whose widget is a *viewer* must not be bound, and `ila_diagram` is the case that
+  settles it.** Binding is the right answer only when the widget is the capability's home — a
+  quiz nobody can answer, a plan nobody can see. `WIDGETS.diagram` deliberately names no
+  `boundTools`, because a bound tool is assembled *only* when its widget is installed and nothing
+  installs a widget by default (`DEFAULT_WIDGET_IDS` is empty): binding diagrams would leave the
+  model with no way to draw one in an ordinary conversation, which is the complaint the tool
+  exists to answer, and `isWidgetBoundTool` would keep the name out of the allow-list so it could
+  not even be switched on. It is an ordinary allow-listable tool, and it is deliberately **not** in
+  `NON_FILE_TOOLS` either — so `fileTools.enabled: false` means no diagrams, because a diagram
+  whose file was never written is half the feature. The panel is a viewer: it lists the
+  conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
+  folder is the separate conversation-files dialog. See `docs/diagrams.md`.
 - **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget, and `/sessions/:id/quizzes/:qid/answer` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: the make-up POST does a status-guarded UPDATE of the SAME row (never an insert, clearing stale grading), then the client drives an ordinary `/chat` turn quoting the UUID so the model grades it instead of posing a new quiz. An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in a system-prompt-only note (`renderMakeupKeyNote`, gated by `ChatInput.makeupQuizId` naming an owned **answered** row) for a make-up. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
 - **A note belongs to a conversation, and to a message only when something was annotated.** `notes.session_id` is `NOT NULL` and `message_id` is nullable, which is what makes a note the user typed from the panel the same kind of thing as one made by dragging over a sentence. `message_id` carries **no foreign key** on purpose: a regenerate or a tail delete soft-deletes a message, and the note is the user's own writing, so it survives with the quote it recorded — `messageMissing`, resolved by a `LEFT JOIN messages … AND m.deleted_at IS NULL` in the read that fetches the note, is how a read says so (never a client guess from a message list that only holds the conversation on screen). **An anchor is a text quote plus which occurrence of it**, counted over the message's **visible** text — never character offsets, which are offsets into rendered HTML and mean nothing after the next `v-html` assignment, and never a raw text walk, which sees every formula twice because KaTeX emits glyphs *and* hidden MathML. Notes bring no tools: the model neither reads them nor writes them.
 - **A widget can own a capability of the host, and exactly one holds it at a time.** The message list implements marking-up (selection, the floating bar, `<mark>`, the window) and knows nothing about notes as records; the notes widget owns the records and knows nothing about `Range`. `composables/messageNotes.ts` is the whole of what they share: a **claim**, per *conversation* rather than per widget (the message list on screen belongs to one session while the widget is installed in a different set of them), with a refusal that names the holder. The host registers on mount and the widget claims from `WidgetModule.onActive`, in either order, because the host **reads** the claim rather than being told about it. `onActive` is not `onMount`: `WidgetPanel` mounts only the active tab, so a claim owned by the component would drop the moment the reader looked at the plan, taking every highlight with it. It is called by `composables/widgetActivation.ts` — an effect owned by `ChatView`'s setup, because the panel being rendered *is* the answer to "is a widget live", and leaving the view (the one transition no reactive input expresses) is reported by that scope stopping. It is deliberately not a store `watch`: a store's setup belongs to no lifetime, and in a test suite every abandoned store instance keeps watching module-level singletons.

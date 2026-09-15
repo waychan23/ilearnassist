@@ -51,6 +51,49 @@ export default {
     copyFailed: "复制失败，请手动选中复制",
   },
 
+  /**
+   * How long ago something happened, from `composables/relativeTime.ts`.
+   *
+   * A namespace of its own rather than one per surface: the workspace cards and the file lists
+   * both show a timestamp, and the sentence is the same sentence. A key under either surface
+   * would be a copy of the other's wording.
+   */
+  time: {
+    now: "刚刚",
+    minutes: "{count} 分钟前",
+    hours: "{count} 小时前",
+    days: "{count} 天前",
+  },
+
+  /**
+   * Diagrams: the card that draws one in the conversation, and the viewer that enlarges it.
+   *
+   * Not under `tools.` with the tool's own name (`tools.name.ila_diagram`), because these are
+   * about the *drawing* rather than about the call: the same sentences are shown by the file
+   * preview, which knows nothing about a tool call.
+   */
+  diagram: {
+    /** While mermaid is parsing and laying out — measured in tens of milliseconds, not seconds,
+     *  but a diagram that appears from nowhere is a jump. */
+    rendering: "正在绘制图表…",
+    /** Mermaid rejected the source. The model's own syntax error, so the sentence says what
+     *  happened rather than blaming the app — and the source is shown with it. */
+    failed: "这张图无法绘制，Mermaid 无法解析下面的源码。",
+    /** Past the cap the source is shown and not drawn: layout is not linear in the input, and
+     *  a diagram nobody can read is not worth a frozen tab. */
+    tooLarge: "这张图超过 {size} 字符，已改为显示源码。",
+    /** The viewer. `expand` is its trigger, on the card and in the file preview. */
+    expand: "放大查看",
+    viewTitle: "查看图表",
+    zoomIn: "放大",
+    zoomOut: "缩小",
+    fit: "适应窗口",
+    /** The label on the card's disclosure, which shows the source rather than the drawing. */
+    source: "源码",
+    /** The label before the model's description in the viewer and file preview. */
+    summary: "说明",
+  },
+
   app: {
     /**
      * The product name. Shown when there is no session and no workspace to name the topbar
@@ -304,6 +347,21 @@ export default {
       truncated: "仅显示前 {size}",
       size: "大小",
     },
+    /**
+     * A conversation's own directory — where the diagrams it draws are written.
+     *
+     * Its own dialog rather than a second tree in the sidebar, because these files belong to
+     * one conversation rather than to the workspace, and because the sidebar's tree is the
+     * same directory the file tools write into. The lead says where they are, since "why is
+     * this not in the file tree" is the first question the list raises.
+     */
+    session: {
+      title: "会话文件",
+      lead: "这个会话自己产生的文件。它们放在会话自己的目录里，不在工作区中，所以文件树里看不到。",
+      empty: "这个会话还没有产生文件。",
+      failed: "读取会话文件失败。",
+      open: "预览这个文件",
+    },
   },
 
   session: {
@@ -358,11 +416,9 @@ export default {
       open: "打开工作区「{name}」",
       sessions: "{count} 个会话",
       activity: {
+        // Only this one is the card's own. The buckets are `time.*` below, shared with the
+        // file lists.
         never: "暂无活动",
-        now: "刚刚",
-        minutes: "{count} 分钟前",
-        hours: "{count} 小时前",
-        days: "{count} 天前",
       },
     },
   },
@@ -387,6 +443,7 @@ export default {
       ila_make_plan: "制定/编辑计划",
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
+      ila_diagram: "图表",
     },
     done: "完成",
     running: "运行中",
@@ -842,6 +899,21 @@ export default {
       name: "笔记",
       hint: "在消息里选中内容即可标注或写下笔记：按内容关联，可随时定位回原文。",
       noSession: "打开一个会话后，这里会显示它的笔记。",
+    },
+    diagram: {
+      name: "图表",
+      hint: "这个会话画过的图表：点一条即可查看，也可以回到它被画出来的那条消息。",
+      noSession: "打开一个会话后，这里会显示它画过的图表。",
+      /** The panel's own link to the whole folder, which holds more than diagrams. */
+      browse: "查看会话文件",
+      /** A row the conversation has a tool call for — the button that scrolls back to it. */
+      locate: "定位到生成它的消息",
+      empty: "这个会话还没有画过图表。",
+      failed: "读取图表失败。",
+      /** The thread the classifier put this diagram in. */
+      inThread: "属于：{title}",
+      /** The row exists but its file is gone. */
+      missing: "文件已不存在",
     },
   },
 

@@ -83,30 +83,33 @@ describe("resolveInWorkspace", () => {
 
 describe("slugify", () => {
   it("lowercases and dash-separates", () => {
-    expect(slugify("My New Workspace")).toBe("my-new-workspace");
+    expect(slugify("My New Workspace", "workspace")).toBe("my-new-workspace");
   });
 
   it("keeps CJK characters readable instead of dropping them", () => {
-    expect(slugify("递归练习")).toBe("递归练习");
+    expect(slugify("递归练习", "workspace")).toBe("递归练习");
   });
 
   it("collapses runs of punctuation and trims the edges", () => {
-    expect(slugify("  --hello...world--  ")).toBe("hello-world");
+    expect(slugify("  --hello...world--  ", "workspace")).toBe("hello-world");
   });
 
-  it("falls back to 'workspace' when nothing usable is left", () => {
-    expect(slugify("!!!")).toBe("workspace");
-    expect(slugify("   ")).toBe("workspace");
-  });
-
-  it("falls back to whatever the caller says instead, when asked", () => {
-    // A user's directory named "workspace" would be a quiet lie. The fallback is the
-    // caller's to name because only the caller knows what the slug is *for*.
+  it("falls back to what the caller named, when nothing usable is left", () => {
+    /*
+     * The fallback has no default, and this is why: a user's directory named "workspace" would
+     * be a quiet lie about what is in it, and a diagram's file even more so. Only the caller
+     * knows what the slug is *for*, so it is the caller that names the last resort — the
+     * parameter used to default to "workspace", which contradicted that and quietly made one
+     * caller's answer everybody's.
+     */
+    expect(slugify("!!!", "workspace")).toBe("workspace");
+    expect(slugify("   ", "workspace")).toBe("workspace");
     expect(slugify("!!!", "user")).toBe("user");
+    expect(slugify("!!!", "diagram")).toBe("diagram");
   });
 
   it("caps the length", () => {
-    expect(slugify("a".repeat(100)).length).toBe(48);
+    expect(slugify("a".repeat(100), "workspace").length).toBe(48);
   });
 });
 

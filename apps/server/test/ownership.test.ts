@@ -416,6 +416,12 @@ describe("over HTTP, with two signed-in accounts", () => {
       ["PATCH", `/api/sessions/${theirs.sessionId}`],
       ["DELETE", `/api/sessions/${theirs.sessionId}`],
       ["GET", `/api/sessions/${theirs.sessionId}/sources`],
+      // A conversation's own directory. Both, because a listing that leaked names would still
+      // be a leak even if the content route refused.
+      ["GET", `/api/sessions/${theirs.sessionId}/files`],
+      ["GET", `/api/sessions/${theirs.sessionId}/files/content?path=flow.mmd`],
+      // The panel's rows carry the model's summary — a name alone would already be a leak.
+      ["GET", `/api/sessions/${theirs.sessionId}/diagrams`],
       // Reaches a process-local map of running turns, so if the `ForUser` read in front of
       // it were dropped, an id guess would end someone else's generation.
       ["POST", `/api/sessions/${theirs.sessionId}/stop`],

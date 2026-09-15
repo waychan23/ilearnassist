@@ -6,6 +6,18 @@ const e2ePort = process.env.ILA_WEB_PORT;
 
 export default defineConfig({
   plugins: [vue()],
+  optimizeDeps: {
+    /*
+     * Pre-bundle mermaid at server start rather than on first use.
+     *
+     * It is a ~1 MB package of some two hundred modules, imported dynamically so that it never
+     * touches the initial load. Without this, Vite transforms all of them the first time a
+     * diagram appears — which in the browser suite is that spec's first assertion, and a cold
+     * transform there is the difference between a pass and a timeout. In `pnpm dev` it is a
+     * visible stall on the first diagram of the session.
+     */
+    include: ["mermaid"],
+  },
   server: {
     // Pinned and strict only when the e2e asks for it: if that port is taken the run must
     // fail loudly rather than silently testing whatever is on the next free port.

@@ -7,6 +7,7 @@ import PlanWidget from "./PlanWidget.vue";
 import QuizWidget from "./QuizWidget.vue";
 import ThreadWidget from "./ThreadWidget.vue";
 import NotesWidget from "./NotesWidget.vue";
+import DiagramWidget from "./DiagramWidget.vue";
 import { claimNotes, releaseNotes } from "../composables/notes";
 
 /**
@@ -64,6 +65,8 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
       return t("widgets.thread.name");
     case "notes":
       return t("widgets.notes.name");
+    case "diagram":
+      return t("widgets.diagram.name");
   }
 }
 
@@ -82,6 +85,8 @@ export function widgetHint(id: WidgetId, t: Translate): string {
       return t("widgets.thread.hint");
     case "notes":
       return t("widgets.notes.hint");
+    case "diagram":
+      return t("widgets.diagram.hint");
   }
 }
 
@@ -170,6 +175,10 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
     },
     onUninstall: () => releaseNotes(),
   },
+  // A viewer with no lifecycle: no `onActive` (it claims no host capability and needs no
+  // cooperation for as long as it is installed — it draws itself and nothing else), and no
+  // install hook (there is nothing to fetch beyond the listing it loads anyway).
+  diagram: { component: DiagramWidget },
   // Installing mid-conversation kicks the first backfill sync immediately; repeated
   // installs simply re-run it (idempotent — nothing unassigned makes no model call). The
   // panel itself loops the same route while an unclassified backlog remains.

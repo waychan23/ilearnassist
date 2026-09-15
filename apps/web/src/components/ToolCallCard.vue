@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { PLAN_MAKE_TOOL_NAME, QUIZ_TOOL_NAME, isInteractiveTool, type ToolCall } from "../api/types";
+import {
+  DIAGRAM_TOOL_NAME,
+  PLAN_MAKE_TOOL_NAME,
+  QUIZ_TOOL_NAME,
+  isInteractiveTool,
+  type ToolCall,
+} from "../api/types";
 import AskUserCard from "./AskUserCard.vue";
+import DiagramCard from "./DiagramCard.vue";
 import PlanConflictCard from "./PlanConflictCard.vue";
 import QuizCard from "./QuizCard.vue";
 import Icon from "./Icon.vue";
@@ -27,6 +34,21 @@ const card = computed<"ask" | "quiz" | "plan" | null>(() => {
   if (props.toolCall.name === PLAN_MAKE_TOOL_NAME) return "plan";
   return "ask";
 });
+
+/**
+ * A diagram, which is the one specialized card that is *not* a question.
+ *
+ * Its own dispatch rather than a fourth member of `card` above, because that computed tests
+ * `isInteractiveTool` — "suspends the turn" — and the diagram tool does not. Adding it to
+ * `INTERACTIVE_TOOL_NAMES` to reach that switch would move diagram cards into `MessageItem`'s
+ * question group (below the reply) and offer the server an answer it has no handler for.
+ *
+ * Gated on the name alone: a diagram call that failed has an `output` and no `status`, exactly
+ * like one whose `tool_start` has not been followed by its `tool_end` yet, so the *card*
+ * decides between a drawing and a failure — see `DiagramCard`, which reads the output.
+ */
+const isDiagram = computed(() => props.toolCall.name === DIAGRAM_TOOL_NAME);
+
 const open = ref(false);
 const { t, te } = useI18n();
 
@@ -66,7 +88,8 @@ const prettyInput = computed(() => {
 </script>
 
 <template>
-  <AskUserCard v-if="card === 'ask'" :tool-call="toolCall" />
+  <DiagramCard v-if="isDiagram" :tool-call="toolCall" />
+  <AskUserCard v-else-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
   <PlanConflictCard v-else-if="card === 'plan'" :tool-call="toolCall" />
   <div

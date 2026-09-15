@@ -75,14 +75,19 @@ export function resolveInWorkspace(
 }
 
 /**
- * Generate a filesystem-safe slug from a name.
+ * A filesystem-safe slug from a name.
  *
- * `fallback` is what a name made entirely of characters that do not survive the filter
- * becomes — a name of punctuation, say. It is a parameter because the caller is the only
- * one who knows what the slug is *for*, and "workspace" as a user's directory name would
- * be a quiet lie rather than a default.
+ * Letters and digits survive — Han included, deliberately, so `架构图` stays readable rather
+ * than becoming a row of hyphens — and everything else collapses to `-`. `fallback` is what a
+ * name made entirely of characters that do not survive becomes; it is required because the
+ * caller is the only one who knows what the slug is *for*, and any default would be a quiet
+ * lie about one of them.
+ *
+ * Server-side: it names directories and the diagram files, and the client no longer derives
+ * either (the diagram row carries the canonical file name), so it does not need to cross the
+ * wire.
  */
-export function slugify(name: string, fallback = "workspace"): string {
+export function slugify(name: string, fallback: string): string {
   const base = name
     .toLowerCase()
     .trim()
@@ -100,7 +105,7 @@ export function slugify(name: string, fallback = "workspace"): string {
  * would actually break — two workspaces resolving to one directory.
  */
 export function uniqueSlug(rootDir: string, name: string): string {
-  const candidate = slugify(name);
+  const candidate = slugify(name, "workspace");
   let slug = candidate;
   let i = 1;
   while (existsSync(resolve(rootDir, slug))) {

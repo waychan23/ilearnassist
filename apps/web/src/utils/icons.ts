@@ -103,6 +103,46 @@ export const ICON_PATHS = {
 
   file: ["M3.5 2.5H8.75L12.5 6.25V13.5H3.5Z", "M8.75 2.5V6.25H12.5"],
 
+  /* A diagram: one box splitting into two. The shape a flowchart makes at its first branch,
+   * which is what says "diagram" faster than any glyph of a chart would — and it is the mark
+   * for both the tool call that draws one and the panel that lists them. */
+  diagram: [
+    "M5.5 3H10.5V6H5.5Z",
+    "M8 6V8",
+    "M4.5 8H11.5",
+    "M4.5 8V10",
+    "M11.5 8V10",
+    "M3 10H6V13H3Z",
+    "M10 10H13V13H10Z",
+  ],
+
+  /* Open the diagram larger: four arrows out to the corners, the standard "this expands"
+   * mark. Not `folder-open`, which is about a directory's state rather than about size. */
+  expand: [
+    "M6.5 2.5H2.5V6.5",
+    "M2.5 2.5L6.5 6.5",
+    "M9.5 2.5H13.5V6.5",
+    "M13.5 2.5L9.5 6.5",
+    "M6.5 13.5H2.5V9.5",
+    "M2.5 13.5L6.5 9.5",
+    "M9.5 13.5H13.5V9.5",
+    "M13.5 13.5L9.5 9.5",
+  ],
+
+  /* The viewer's zoom pair: the same magnifier, one with a plus and one without, so the two
+   * read as one control rather than as two unrelated marks. */
+  "zoom-in": [
+    "M2.5 7a4.5 4.5 0 1 0 9 0a4.5 4.5 0 1 0 -9 0",
+    "M10.7 10.7L14 14",
+    "M7 4.75V9.25",
+    "M4.75 7H9.25",
+  ],
+  "zoom-out": [
+    "M2.5 7a4.5 4.5 0 1 0 9 0a4.5 4.5 0 1 0 -9 0",
+    "M10.7 10.7L14 14",
+    "M4.75 7H9.25",
+  ],
+
   /* The file tree's two directory marks. One shape with the front folded down for the open
    * state, so an expanded directory is legible without reading the caret beside it — the
    * caret says which rows belong to it, the folder says whether it is open. */

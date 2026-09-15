@@ -153,6 +153,40 @@ describe("readFileContent", () => {
     expect((await readFileContent(workspace, "README.md")).kind).toBe("markdown");
   });
 
+  it("classifies diagram source as a diagram, and sends the source", async () => {
+    // Both extensions, because `.mermaid` is what people arrive with and `.mmd` is what
+    // `ila_diagram` writes — the client draws either.
+    writeFileSync(join(workspace, "flow.mmd"), "flowchart TD\n  A --> B");
+    writeFileSync(join(workspace, "other.mermaid"), "sequenceDiagram\n  A->>B: hi");
+
+    const mmd = await readFileContent(workspace, "flow.mmd");
+    expect(mmd.kind).toBe("diagram");
+    expect(mmd.text).toBe("flowchart TD\n  A --> B");
+    expect((await readFileContent(workspace, "other.mermaid")).kind).toBe("diagram");
+  });
+
+  it("decides a diagram by its extension, before reading the bytes", async () => {
+    /*
+     * A decision, not an oversight. Markdown works the same way, and for the same reason: the
+     * source is what the client needs to draw the thing, so a `.mmd` that happens to hold NUL
+     * bytes gets sent as text and decodes to replacement characters rather than being refused
+     * as a binary — which is the honest outcome for a file that claims by its name to be
+     * diagram source. Nobody can produce one except by making it.
+     */
+    writeFileSync(join(workspace, "broken.mmd"), Buffer.from([0x00, 0x01, 0xff]));
+
+    const content = await readFileContent(workspace, "broken.mmd");
+    expect(content.kind).toBe("diagram");
+    expect(content.text).not.toBeNull();
+  });
+
+  it("still flags a diagram longer than the preview cap", async () => {
+    // A truncated diagram will not parse, which is the renderer's problem to survive — but the
+    // truncation is still reported, because a file that looks like it ends there is a lie.
+    writeFileSync(join(workspace, "big.mmd"), "x".repeat(MAX_PREVIEW_BYTES + 1_000));
+    expect((await readFileContent(workspace, "big.mmd")).truncated).toBe(true);
+  });
+
   /**
    * An extensionless file is the case a table of extensions cannot answer, and the reason
    * the classification reads the bytes at all.

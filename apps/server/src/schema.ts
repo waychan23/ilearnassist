@@ -549,6 +549,55 @@ const DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_notes_session ON notes(session_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id);
+
+  -- A conversation's diagrams: one row per .mmd file in that conversation's own folder.
+  --
+  -- The split with the file is "the file holds the source, the row holds what the file cannot
+  -- answer": the canonical file name (the join key to a FileEntry, so the client never derives
+  -- a name of its own), the model's one-line summary, the tool call that wrote or last revised
+  -- it, and the thread the classifier put it in. It is never a second copy of the bytes — a
+  -- row whose source disagrees with the file is the exact drift a row exists to make
+  -- impossible, so source and source_path are deliberately absent. The path is a pure
+  -- function of the session and the name, and storing it would bake a data-root-dependent
+  -- absolute path into a database that travels through backups.
+  --
+  -- Derived data, like quiz_questions and session_threads above, so it carries NO deleted_at:
+  -- the model wrote it in a turn, nothing in the product deletes a diagram, and a soft-deleted
+  -- session keeps its on-disk bytes anyway. A column no read filtered on would make the
+  -- soft-delete invariant false the moment it was written. A delete control arrives later by
+  -- ensureColumn plus IS NULL on every read, the house path. There is no message_id either:
+  -- the assistant message does not exist when the tool runs (finishTurn creates it after the
+  -- turn), and once the classifier assigns the thread directly nothing needs it.
+  --
+  -- name is the CANONICAL file name (auth-flow.mmd), not the model's raw "Auth Flow". That is
+  -- what makes (session_id, name) a real identity rather than a coincidence: three model names
+  -- that slugify alike are one file and one row — and it is the same value a FileEntry.name
+  -- carries, so a read matches a row to a file by identity. ON CONFLICT is therefore the
+  -- revise rule: a second call with the same name is the same diagram.
+  --
+  -- thread_id has NO foreign key. The classifier creates the thread in the same transaction it
+  -- assigns it in, so an FK only adds a way for that transaction to fail; and a revise clears
+  -- it back to NULL so the new shape is judged. tool_call_id is nullable the same way
+  -- plan_nodes.done_tool_call_id is: a call whose invoke config carried no id is a real state,
+  -- and '' in an id column is a value a later join silently matches.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS session_diagrams (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    thread_id TEXT,
+    name TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    tool_call_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  -- The identity and the read path in one index: the list is by session (the leftmost column),
+  -- and the unique constraint enforces one row per file. No (session_id, thread_id) index yet —
+  -- nothing groups a conversation's diagrams by thread; add one when that grouping exists.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_diagrams_session_name
+    ON session_diagrams(session_id, name);
+  CREATE INDEX IF NOT EXISTS idx_diagrams_call ON session_diagrams(tool_call_id);
 `;
 
 /**

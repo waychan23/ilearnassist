@@ -44,9 +44,26 @@ export const ALL_TOOL_NAMES = [
   "ila_make_plan",
   "ila_read_plan",
   "ila_update_plan_progress",
+  "ila_diagram",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
+
+/**
+ * The diagram tool's name.
+ *
+ * Shared for the `ASK_USER_TOOL_NAME` reason — the client switches on it, to pick the
+ * diagram card out of an assistant message's tool calls.
+ *
+ * It is deliberately **not** widget-bound, unlike the plan and quiz tools below. A bound
+ * tool is assembled only when its widget is installed, and nothing installs a widget by
+ * default (`DEFAULT_WIDGET_IDS` is empty), so binding it would mean the model has no diagram
+ * tool in every ordinary conversation — which is the complaint this tool exists to answer.
+ * `isWidgetBoundTool` would also keep it out of a Copilot's tool allow-list, where it could
+ * then be neither enabled nor disabled. The diagram *widget* is a viewer with no tools of
+ * its own.
+ */
+export const DIAGRAM_TOOL_NAME = "ila_diagram";
 
 /**
  * The plan tools' names. Declared here rather than in the plan section below because the
@@ -411,6 +428,7 @@ export const WIDGET_IDS = [
   "quiz",
   "thread",
   "notes",
+  "diagram",
 ] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
@@ -446,6 +464,21 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   // reads them nor writes them. It is deliberately *not* in the "study" pack — that pack is
   // material derived from the conversation, and this is what the learner made of it.
   { id: "notes", scopes: ["session"] },
+  /*
+   * The diagram widget brings no tools, and that is its whole design rather than an omission.
+   *
+   * `ila_diagram` is an ordinary allow-listable tool — see `DIAGRAM_TOOL_NAME`. Binding it here
+   * would assemble it only when this widget is installed, and nothing installs a widget by
+   * default (`DEFAULT_WIDGET_IDS` is empty), so the model would have no way to draw a diagram
+   * in an ordinary conversation. `isWidgetBoundTool` would also keep the name out of a
+   * Copilot's checklist, so it could not be switched on there either.
+   *
+   * This panel is a *viewer*: it lists the diagrams the conversation has already drawn, and
+   * draws the one you pick. The drawing itself is a file in the conversation's own directory —
+   * there is no diagram record — so the panel reads the folder, and a `.mmd` somebody put there
+   * by hand appears in it exactly like one the model drew.
+   */
+  { id: "diagram", scopes: ["session"] },
 ];
 
 /**
@@ -703,6 +736,39 @@ export interface GetSessionThreadsResponse {
   threads: ThreadView[];
   /** Messages the classifier has not reached yet; the panel shows this as backfill progress. */
   unassigned: number;
+}
+
+/* ---------------------------------- diagrams --------------------------------- */
+
+/**
+ * One diagram a conversation drew, as the API carries it.
+ *
+ * The source is deliberately not here: the `.mmd` file is the source, and the row is what the
+ * file cannot answer — the canonical name, the model's summary, the call that drew it, and the
+ * thread it belongs to. `threadTitle` is resolved server-side (the quiz view carries
+ * `nodeTitle` for the same reason) and is null exactly when `threadId` is.
+ */
+export interface Diagram {
+  id: string;
+  sessionId: string;
+  /** The thread the classifier put this diagram in; null until the turn it was drawn in is classified. */
+  threadId: string | null;
+  threadTitle: string | null;
+  /** The canonical file name inside the conversation's folder — `auth-flow.mmd`. */
+  name: string;
+  /** The model's one- or two-sentence description of what the diagram is about. */
+  summary: string;
+  /** The tool call that wrote, or last revised, it; null when none was stamped. */
+  toolCallId: string | null;
+  /** The row's file is not on disk. Resolved on read, like `Note.messageMissing`. */
+  fileMissing: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/sessions/:id/diagrams`. */
+export interface GetSessionDiagramsResponse {
+  diagrams: Diagram[];
 }
 
 /* ------------------------------------ notes ------------------------------------ */
@@ -1647,8 +1713,15 @@ export interface DirectoryListing {
  * A union rather than a boolean because the next formats are already planned — an image or
  * a PDF is a new member plus a branch, not a second endpoint and a rewrite. The client
  * switches exhaustively, so adding one is a compile error at every site that must handle it.
+ *
+ * `diagram` is the first member added after the fact, and it taught that the sentence above
+ * is only true of sites that *switch*. `FilePreviewDialog` dispatched on a `v-else-if` chain
+ * whose last branch was `<pre v-else-if="content">`, so a mermaid file compiled cleanly and
+ * silently rendered as highlighted text — plausible-looking, and wrong. The chain was turned
+ * into an exhaustive switch in the same change. A new kind is a compile error only once a
+ * site says so; until then the fallthrough is what handles it.
  */
-export const FILE_CONTENT_KINDS = ["text", "markdown", "unsupported"] as const;
+export const FILE_CONTENT_KINDS = ["text", "markdown", "diagram", "unsupported"] as const;
 export type FileContentKind = (typeof FILE_CONTENT_KINDS)[number];
 
 /**
@@ -1667,6 +1740,48 @@ export interface FileContent {
   kind: FileContentKind;
   text: string | null;
   truncated: boolean;
+  /**
+   * The model's one-line description of a diagram, set only on a **session-root** read of a
+   * file a `session_diagrams` row names. Absent in every other case — a workspace-root read,
+   * and a `.mmd` nobody drew here — so the client treats "not present" as "no summary".
+   */
+  summary?: string;
+}
+
+/**
+ * The extensions a diagram is written with, and the test a directory listing filters by.
+ *
+ * Shared rather than declared on the server, because the *client* is the side that has to
+ * pick the diagrams out of a listing — and a `DirectoryListing` carries names and sizes, not
+ * the `kind` that only a content read produces. This is the `ALL_TOOL_NAMES` argument again:
+ * the client writes the question and the server answers it, so a second copy is a viewer
+ * that quietly stops matching the day an extension is added here.
+ *
+ * `.mmd` is what `ila_diagram` writes; `.mermaid` is what people arrive with, and both are
+ * plain text so a `.mmd` from elsewhere reads as a diagram rather than as an unknown file.
+ */
+export const DIAGRAM_FILE_EXTENSIONS = ["mmd", "mermaid"] as const;
+
+/**
+ * How much diagram source is worth writing, and worth rendering.
+ *
+ * Shared, and the only size constant here that is: `MAX_HIGHLIGHT_CHARS` lives on the client
+ * because highlighting is the client's own work, but a diagram is refused on *both* sides of
+ * the wire — the tool will not write a source past this, and the renderer will not lay one
+ * out. Two copies of the number would be a diagram the tool accepts and the viewer declines
+ * to draw, which reads as a broken viewer rather than a very large diagram.
+ *
+ * Generous on purpose. A hand-written mermaid file is a few hundred bytes; this is the size
+ * at which a model has stopped drawing and started concatenating, and it exists because
+ * mermaid's layout is not linear in the input.
+ */
+export const MAX_DIAGRAM_CHARS = 50_000;
+
+/** Whether a file's *name* says it holds diagram source. Extension only, and case-blind. */
+export function isDiagramFile(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false;
+  return (DIAGRAM_FILE_EXTENSIONS as readonly string[]).includes(name.slice(dot + 1).toLowerCase());
 }
 
 /** What a model can do — drives vision handling and UI badges. */

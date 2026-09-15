@@ -300,6 +300,41 @@ not the plan/quiz tool shape. The mechanics, and why:
   tool-call precedence overriding the model), the assigned counts and elapsed ms — plus a
   failure block when the call or its answer is unusable. No block is written for a no-op.
 
+### A viewer widget with no tools: the diagram widget
+
+The diagram widget (`id: "diagram"`, `DiagramWidget.vue`) is the other way a widget can relate to a
+tool, and the one to reach for when the tool must exist **without** the widget.
+
+`ila_diagram` is an ordinary allow-listable tool, so `WIDGETS.diagram` has **no `boundTools`** —
+the absence is the design, not an oversight. Binding it would assemble the tool only when this
+widget is installed, and nothing installs a widget by default, so the model would have no way to
+draw a diagram in an ordinary conversation; `isWidgetBoundTool` would also keep the name out of a
+Copilot's tool checklist, so it could not be switched on there either. The panel is a *viewer*: it
+lists the conversation's diagrams and opens the one you pick.
+
+What that changes relative to the widgets above:
+
+- **Its data is rows, written by the tool.** It calls `GET /api/sessions/:id/diagrams`, the
+  `session_diagrams` rows the tool upserts beside each `.mmd`. The row carries the canonical file
+  name, the model's `summary`, the call id, and the thread the classifier placed it in — what the
+  file alone cannot answer. The whole-folder view is the separate session-files dialog, so a
+  `.mmd` copied in by hand is still reachable but is not listed as something the agent drew.
+- **Opening a row goes through the ordinary file preview**, not a dialog of its own: that dialog
+  already renders a diagram, already has the source toggle, already reports its own load failures,
+  and already offers the enlarged viewer. A fourth surface drawing the same picture is what this
+  avoids. The session-file content route attaches the row's summary to the preview.
+- **One carried affordance.** 定位 scrolls the conversation to the tool call that drew a diagram,
+  emitting the existing `chat.jump` with the row's `tool_call_id` — no client-side join. A row
+  whose call no longer exists (a regenerated message) simply has no button, and the jump no-ops on
+  a missing target.
+- **No `onActive` and no install hook.** It claims no host capability and needs no cooperation for
+  as long as it is installed — it draws itself and nothing else. `docs/widgets.md`'s step 8 asks
+  the question; this is the answer for a widget that owns only its own tab.
+- **`diagram.changed` is a bus event**, emitted from the store's `tool_end` arm beside
+  `plan.changed` and `quiz.changed`. The row is written during the tool call, so the event covers
+  it; `turn.finished` catches a later step and the arrival of the thread title after the
+  post-turn classifier.
+
 ### Widget groups
 
 `WIDGET_GROUPS` in the shared package is a **client-side** bundling only (the study pack is

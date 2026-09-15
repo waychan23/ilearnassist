@@ -34,6 +34,40 @@ const en: typeof MessageSchema = {
     copyFailed: "Copy failed — select the text and copy it yourself",
   },
 
+  /**
+   * How long ago something happened, from `composables/relativeTime.ts`.
+   *
+   * A namespace of its own rather than one per surface: the workspace cards and the file lists
+   * both show a timestamp, and the sentence is the same sentence. A key under either surface
+   * would be a copy of the other's wording.
+   */
+  time: {
+    now: "just now",
+    minutes: "1 minute ago | {count} minutes ago",
+    hours: "1 hour ago | {count} hours ago",
+    days: "1 day ago | {count} days ago",
+  },
+
+  /**
+   * Diagrams: the card that draws one in the conversation, and the viewer that enlarges it.
+   *
+   * Not under `tools.` with the tool's own name (`tools.name.ila_diagram`), because these are
+   * about the *drawing* rather than about the call: the same sentences are shown by the file
+   * preview, which knows nothing about a tool call.
+   */
+  diagram: {
+    rendering: "Drawing the diagram…",
+    failed: "This diagram cannot be drawn — mermaid could not parse the source below.",
+    tooLarge: "This diagram is over {size} characters, so its source is shown instead.",
+    expand: "Open larger",
+    viewTitle: "Diagram",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    fit: "Fit to width",
+    source: "Source",
+    summary: "Summary",
+  },
+
   app: {
     /**
      * The product name. Shown when there is no session and no workspace to name the topbar
@@ -242,6 +276,21 @@ const en: typeof MessageSchema = {
       truncated: "Showing the first {size}",
       size: "Size",
     },
+    /**
+     * A conversation's own directory — where the diagrams it draws are written.
+     *
+     * Its own dialog rather than a second tree in the sidebar, because these files belong to
+     * one conversation rather than to the workspace, and because the sidebar's tree is the
+     * same directory the file tools write into. The lead says where they are, since "why is
+     * this not in the file tree" is the first question the list raises.
+     */
+    session: {
+      title: "Conversation files",
+      lead: "Files this conversation made for itself. They live in the conversation's own folder rather than in the workspace, so the file tree does not show them.",
+      empty: "This conversation has not made any files yet.",
+      failed: "Could not read this conversation's files.",
+      open: "Preview this file",
+    },
   },
 
   session: {
@@ -287,11 +336,9 @@ const en: typeof MessageSchema = {
       open: "Open workspace {name}",
       sessions: "1 conversation | {count} conversations",
       activity: {
+        // Only this one is the card's own. The buckets are `time.*` below, shared with the
+        // file lists.
         never: "No activity yet",
-        now: "just now",
-        minutes: "1 minute ago | {count} minutes ago",
-        hours: "1 hour ago | {count} hours ago",
-        days: "1 day ago | {count} days ago",
       },
     },
   },
@@ -312,6 +359,7 @@ const en: typeof MessageSchema = {
       ila_make_plan: "Make / edit plan",
       ila_read_plan: "Read plan",
       ila_update_plan_progress: "Update plan progress",
+      ila_diagram: "Diagram",
     },
     done: "Done",
     running: "Running",
@@ -719,6 +767,21 @@ const en: typeof MessageSchema = {
       name: "Notes",
       hint: "Select text in a message to mark it or write about it — tied to what you marked, and locatable again at any time.",
       noSession: "Open a conversation and its notes are listed here.",
+    },
+    diagram: {
+      name: "Diagrams",
+      hint: "The diagrams this conversation has drawn — open one to look at it, or jump back to the reply it was drawn in.",
+      noSession: "Open a conversation and the diagrams it has drawn are listed here.",
+      /** The panel's own link to the whole folder, which holds more than diagrams. */
+      browse: "Conversation files",
+      /** A row the conversation has a tool call for — the button that scrolls back to it. */
+      locate: "Go to the reply that drew it",
+      empty: "This conversation has not drawn any diagrams yet.",
+      failed: "Could not read the diagrams.",
+      /** The thread the classifier put this diagram in. */
+      inThread: "In: {title}",
+      /** The row exists but its file is gone. */
+      missing: "The file is gone",
     },
   },
 
