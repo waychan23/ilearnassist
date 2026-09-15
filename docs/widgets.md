@@ -214,6 +214,13 @@ A widget can bring tools: list them in its `WIDGETS` entry as `boundTools` (name
   SSE event. Read-only suspending tools keep `resolve`.
 - **Mid-turn refresh needs no new SSE event.** The store emits a `plan.changed` widget event from
   the existing `tool_end` arm, so the panel refetches the moment a bound tool commits.
+- **Surfacing a widget's tab is not a new SSE event either, and a suspended tool has no
+  `tool_end`.** `ila_make_plan` opening the plan tab is a second, additive effect in the same
+  `tool_end` arm — an event narrowed to the make tool would stop the panel moving on progress. The
+  *edit* path is the case that matters: a conflicting make suspends on the card, a suspended call
+  emits no `tool_end`, so the store's own record of the user's `{choice: "edit"}` in
+  `answerQuestion` is the only signal that a plan was committed. When a tool both suspends and can
+  end in more than one way, look for the client-held decision rather than reaching for a new event.
 
 The plan widget is session-scoped. A future "workspace-level default that auto-installs into new
 sessions" is a separate mechanism and is intentionally not built yet.

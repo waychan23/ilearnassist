@@ -58,10 +58,12 @@ import {
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
   isPlatformAdmin,
+  PLAN_MAKE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   QUIZ_REVIEW_TOOL_NAME,
   widgetGroupsForScope,
   type InteractiveAnswer,
+  type PlanConflictAnswer,
   type QuizAnswer,
   type QuizQuestionView,
 } from "../api/types";
@@ -1625,12 +1627,21 @@ export const useAppStore = defineStore("app", () => {
         const tc = streaming.value.toolCalls.find((t) => t.id === ev.toolCall.id);
         if (tc) tc.output = ev.toolCall.output;
         // A plan tool commits inside the turn; its widget refetches now rather than at
-        // turn end, so the tree moves while the model is still writing its reply.
+        // turn end, so the tree moves while the model is still writing its reply. The event
+        // deliberately covers all three plan tools — narrowing it to the make tool would stop
+        // the panel moving on a progress update, which is the opposite of the point.
         if ((PLAN_TOOL_NAMES as readonly string[]).includes(ev.toolCall.name)) {
           emitWidgetEvent({
             type: "plan.changed",
             sessionId: activeSessionId.value ?? "",
           });
+          // …and exactly one of the three *opens* the panel on it. `ila_make_plan` covers both
+          // a first creation and a later edit (`PLAN_TOOL_NAMES`' own docblock says so); a read
+          // and a progress update are neither, so neither should pull the reader's tab out from
+          // under them. Distinguished here rather than with a new event, because the name is
+          // already in hand and a second event carrying the same fact would be two ways to
+          // learn one thing.
+          if (ev.toolCall.name === PLAN_MAKE_TOOL_NAME) activateWidget("plan");
         }
         // A grading call commits verdicts mid-turn; the quiz widget refetches now rather
         // than waiting for turn end. `ila_quiz` itself never emits tool_end (it suspends).
@@ -1776,6 +1787,10 @@ export const useAppStore = defineStore("app", () => {
         pendingPlanSessionId = null;
         if (planSessionId && activeSessionId.value === sessionId) {
           await selectSession(planSessionId).catch(() => undefined);
+          // The server made this conversation to hold a plan and installed the plan widget
+          // into it, so naming that tab is the stronger true statement than taking the first
+          // one. `activateWidget`'s guard supplies the fallback if that ever stops being so.
+          activateWidget("plan");
         }
         // A turn is the one thing that reliably writes into the workspace, so the tree is
         // re-read here — at the single point every turn ends, rather than from the two
@@ -1946,6 +1961,29 @@ export const useAppStore = defineStore("app", () => {
     };
     toolCall.status = submission.action === "cancel" ? "dismissed" : "answered";
     toolCall.answer = submission.answers;
+
+    /*
+     * A plan **edit** arrives through this route rather than through `tool_end`, and that is the
+     * whole reason this call site exists. `ila_make_plan` refuses a fresh-looking tree when the
+     * conversation already has a plan and suspends on the conflict card — and a suspended call
+     * emits no `tool_end` at all, by design (it is the same absence that keeps a pending
+     * `ask_user` out of the model's context). So "the user chose *edit this plan*" is the only
+     * client-visible moment at which a plan is known to have been committed here.
+     *
+     * Gated on the choice and not just the tool: `new_session` commits the plan into a different
+     * conversation, which the `plan_session_created` tail of `consume` handles instead.
+     *
+     * Deliberately optimistic, before the request below has been answered. A refusal costs a plan
+     * tab opened on a conversation whose plan did not change, and the panel's own state is the
+     * truth either way; moving it after the await would put a view change in a worse place.
+     */
+    if (
+      submission.action !== "cancel" &&
+      toolCall.name === PLAN_MAKE_TOOL_NAME &&
+      (submission.answers as PlanConflictAnswer | undefined)?.choice === "edit"
+    ) {
+      activateWidget("plan");
+    }
 
     streaming.value = { ...EMPTY_STREAMING(), active: true };
     // A resumed turn moves the message counts and the token totals just as a fresh one does, so
