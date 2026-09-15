@@ -2,9 +2,10 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import Icon from "./Icon.vue";
+import { noteToolbarPosition, type NoteToolbarAnchor } from "../utils/noteToolbar";
 
 /**
- * The two things a selection can become, floating over it.
+ * The two things a selection can become, floating beside it.
  *
  * **The `mousedown` guard is load-bearing.** Pressing a button collapses the browser's
  * selection — the press moves the caret before the click arrives — so a handler that read the
@@ -12,37 +13,22 @@ import Icon from "./Icon.vue";
  * in every test that does not press the button with a real pointer, which is why it is a
  * comment rather than a subtlety.
  *
- * Above the selection by preference, below it when there is no room, and clamped
- * horizontally: the anchor is a point in the viewport and the card must be wholly in it. It
- * is teleported to `body` rather than positioned inside the message list, which scrolls and
- * would carry the toolbar away with it.
+ * Where the card goes is `utils/noteToolbar.ts`; this component only hands it the anchor and the
+ * viewport, and draws the answer. It is teleported to `body` rather than positioned inside the
+ * message list, which scrolls and would carry the toolbar away with it.
  */
 const props = defineProps<{
-  /** The selection's horizontal midpoint, and the top of its first line. Viewport coords. */
-  anchor: { x: number; top: number };
+  /** The selection's bottom-right vertex, and the message list's right edge. Viewport coords. */
+  anchor: NoteToolbarAnchor;
 }>();
 
 const emit = defineEmits<{ pick: [intent: "annotation" | "note"] }>();
 
 const { t } = useI18n();
 
-const HEIGHT = 34;
-const GAP = 8;
-const EDGE = 8;
-/** Enough for the two labels and their icons; the CSS width is the same number. */
-const WIDTH = 172;
-
-const position = computed(() => {
-  const left = Math.min(
-    Math.max(EDGE, props.anchor.x - WIDTH / 2),
-    Math.max(EDGE, window.innerWidth - WIDTH - EDGE)
-  );
-  const above = props.anchor.top - HEIGHT - GAP;
-  // Below only when above would be off-screen — the selection's own line then sits between
-  // the toolbar and the text it belongs to, which reads as the toolbar having detached.
-  const top = above < EDGE ? props.anchor.top + 24 : above;
-  return { left, top };
-});
+const position = computed(() =>
+  noteToolbarPosition(props.anchor, { width: window.innerWidth, height: window.innerHeight })
+);
 </script>
 
 <template>
@@ -81,6 +67,8 @@ const position = computed(() => {
 .note-toolbar {
   position: fixed;
   z-index: var(--z-popover);
+  /* Enough for the two labels and their icons. The clamping in `utils/noteToolbar.ts` computes
+     with the same two numbers, so the card *cannot* grow past them — change them together. */
   width: 172px;
   height: 34px;
   display: flex;

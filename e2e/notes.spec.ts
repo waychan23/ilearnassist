@@ -112,6 +112,57 @@ test.describe("the notes widget", () => {
     await expect(replyContent(page).locator("mark.note-highlight")).toHaveCount(0);
   });
 
+  /*
+   * Where the bar lands, which the arithmetic's own tests cannot answer: they pin the rule, and
+   * this pins *what it is given* — the live selection's rectangle and the message list's edge,
+   * measured off the real scroller. The bar is anchored by its top-left corner on the selection's
+   * bottom-right vertex and must not cross the list's right edge, so a drag near the column's end
+   * does not float it over the panel beside the conversation.
+   */
+  test("floats off the selection's bottom-right corner, inside the message list", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("Notes");
+    await scriptLlm(request, { turns: [{ content: REPLY }], title: "光合作用" });
+    await notesSession(page, name);
+    await send(page, "讲讲光合作用");
+
+    // The reply overflows the pane and the follow leaves it scrolled to the end. Back at the top
+    // the wanted phrase — the first line of it — is on screen, and there is room beneath it, so
+    // the below-the-selection placement is the one under test rather than the flip.
+    await page.evaluate(() => {
+      (document.querySelector('[data-testid="messages"]') as HTMLElement).scrollTop = 0;
+    });
+
+    await selectText(page, replyContent(page), FIRST_PHRASE);
+
+    const box = await page.evaluate(() => {
+      const range = document.getSelection()?.getRangeAt(0).getBoundingClientRect();
+      const bar = (document.querySelector('[data-testid="note-toolbar"]') as HTMLElement)
+        .getBoundingClientRect();
+      const list = document.querySelector('[data-testid="messages"]') as HTMLElement;
+      return {
+        selection: range
+          ? { right: range.right, bottom: range.bottom }
+          : null,
+        bar: { left: bar.left, top: bar.top, right: bar.right },
+        listRight: list.getBoundingClientRect().left + list.clientWidth,
+      };
+    });
+
+    expect(box.selection).not.toBeNull();
+    // The corner, not the midpoint of the line: half a bar's width to the left is what the old
+    // placement would have produced, and it is a difference this asserts rather than tolerates.
+    expect(box.bar.left).toBeCloseTo(box.selection!.right, 1);
+    // Below it, by the gap — the bar hangs off the selection rather than standing over it.
+    expect(box.bar.top).toBeGreaterThan(box.selection!.bottom);
+    // And inside the conversation: the list's edge is the boundary, which with the panel open is
+    // well short of the window's.
+    expect(box.listRight).toBeLessThan(await page.evaluate(() => window.innerWidth));
+    expect(box.bar.right).toBeLessThanOrEqual(box.listRight);
+  });
+
   test("writes a note about a passage, with a kind, in a window that does not block the page", async ({
     page,
     request,
