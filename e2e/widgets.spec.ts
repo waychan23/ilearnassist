@@ -195,6 +195,31 @@ test.describe("the widget panel", () => {
     await expect(page.getByTestId("widget-session-stats")).toBeVisible();
   });
 
+  test("opens a new conversation on its first tab, not on one read elsewhere", async ({
+    page,
+  }) => {
+    const name = unique("FirstTab");
+    await createWorkspaceWith(page, name, ["workspace_stats"]);
+    await enterWorkspace(page, name);
+    await page.getByTestId("new-session").click();
+    await page.getByTestId("new-session-widget-check-session_stats").check();
+    await page.getByTestId("create-session").click();
+
+    // Read the *second* tab. The panel remembers the open tab in one global preference, so this
+    // is the value that used to decide what every later conversation opened on.
+    await page.getByTestId("widget-tab-session_stats").click();
+    await expect(page.getByTestId("widget-session-stats")).toBeVisible();
+
+    // A conversation made fresh has no last-read tab of its own, so it opens on the strip's
+    // first — the workspace group's — rather than on the tab just read in the one before it.
+    await page.getByTestId("new-session").click();
+    await page.getByTestId("new-session-widget-check-session_stats").check();
+    await page.getByTestId("create-session").click();
+
+    await expect(page.getByTestId("widget-workspace-stats")).toBeVisible();
+    await expect(page.getByTestId("widget-session-stats")).toHaveCount(0);
+  });
+
   test("uninstalling the open widget falls back rather than emptying the body", async ({
     page,
   }) => {

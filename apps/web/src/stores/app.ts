@@ -20,6 +20,7 @@ import {
   uiState,
 } from "../composables/ui";
 import { emitWidgetEvent } from "../composables/widgetEvents";
+import { widgetPanel } from "../composables/widgetPanel";
 import { WIDGET_MODULES, type WidgetContext } from "../widgets/registry";
 import type {
   AskUserAnswers,
@@ -983,6 +984,11 @@ export const useAppStore = defineStore("app", () => {
     // of its own at all.
     await runInstallHooks("session", created.id, sessionWidgets.value.filter((w) => w.enabled).map((w) => w.id));
     emitWidgetEvent({ type: "session.created", workspaceId, sessionId: created.id });
+    // Last, and the position is the meaning: "the first tab" is a statement about what is
+    // installed, and that is settled by the two calls above. Neither `collapsed` nor
+    // `widgetDrawerOpen` is touched — the panel is already *on* the right tab, and sliding a
+    // drawer over the conversation because a session was created is a panel nobody asked for.
+    activateFirstWidget();
     return created;
   }
 
@@ -1124,6 +1130,37 @@ export const useAppStore = defineStore("app", () => {
     for (const widgetId of widgetIds) {
       await runWidgetHook("onInstall", { scope, scopeId, widgetId });
     }
+  }
+
+  /**
+   * Bring a widget's tab to the front — if this conversation has it installed.
+   *
+   * The guard is the whole function. `widgetPanel.setActive` **persists** its argument, and an id
+   * this object does not have is a preference written for a tab that does not exist: the panel
+   * would fall back to `ids[0]` anyway, so the stored value would be a lie until the next click.
+   *
+   * `enabledWidgetIds` rather than either scope's own list: the strip draws both groups and "the
+   * first tab" is the workspace group's first member, which is the order that list is built in.
+   * Anything narrower would make this function's answer disagree with what is on screen.
+   */
+  function activateWidget(id: WidgetId): void {
+    if (!enabledWidgetIds.value.includes(id)) return;
+    widgetPanel.setActive(id);
+  }
+
+  /**
+   * The tab a freshly created conversation opens on: the strip's first.
+   *
+   * Writing it is the fix. `widgetPanel`'s active tab is **one global preference**
+   * (`gl-widget-active`) and the panel prefers the remembered id whenever it happens to be
+   * installed here — so a tab read in a *different* conversation wins over the panel's own
+   * `ids[0]` fallback, which is the "a new conversation opens on the wrong tab" report. A
+   * conversation the user has just made has no last-read tab of its own, so the first one is the
+   * only honest answer.
+   */
+  function activateFirstWidget(): void {
+    const first = enabledWidgetIds.value[0];
+    if (first) activateWidget(first);
   }
 
   /**

@@ -1264,6 +1264,86 @@ describe("widgets", () => {
   });
 });
 
+describe("the panel's open tab", () => {
+  /**
+   * The install lists, split by scope the way the server resolves them. A local helper rather
+   * than the shared `widgetState`, which models only the two stats widgets — and widening that
+   * one would change what every other case in this file sees.
+   */
+  function installed(...ids: WidgetId[]) {
+    const scopeOf = (id: WidgetId) => (id === "workspace_stats" ? "workspace" : "session");
+    return {
+      workspace: ids
+        .filter((id) => scopeOf(id) === "workspace")
+        .map((id) => ({ id, scope: "workspace" as const, enabled: true })),
+      session: ids
+        .filter((id) => scopeOf(id) === "session")
+        .map((id) => ({ id, scope: "session" as const, enabled: true })),
+    };
+  }
+
+  beforeEach(async () => {
+    // `widgetPanel` is a module singleton over one `localStorage`, so a stored tab survives
+    // between cases and a test that did not clear it would pass or fail on the order it ran in.
+    localStorage.removeItem("gl-widget-active");
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    widgetPanel.reload();
+  });
+
+  it("opens a new conversation on its first tab", async () => {
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue(installed("plan", "diagram"));
+    mocks.api.createSession.mockResolvedValue(session({ id: "s2" }));
+
+    await store.createSession({ widgets: ["plan", "diagram"] });
+
+    expect(widgetPanel.activeId.value).toBe("plan");
+  });
+
+  it("counts the workspace group first, which is the order the strip draws", async () => {
+    // "First tab" is the first of the flattened groups, not the first session widget: a panel
+    // whose groups are drawn workspace-then-session opens on the workspace one.
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue(installed("workspace_stats", "session_stats"));
+    mocks.api.createSession.mockResolvedValue(session({ id: "s2" }));
+
+    await store.createSession({ widgets: ["workspace_stats", "session_stats"] });
+
+    expect(widgetPanel.activeId.value).toBe("workspace_stats");
+  });
+
+  it("writes nothing when the new conversation installed nothing", async () => {
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore();
+    widgetPanel.setActive("diagram");
+    mocks.api.listSessionWidgets.mockResolvedValue(installed());
+    mocks.api.createSession.mockResolvedValue(session({ id: "s2" }));
+
+    await store.createSession({ widgets: [] });
+
+    // There is no first tab to name, and an id written here would be a preference for a tab
+    // that does not exist.
+    expect(widgetPanel.activeId.value).toBe("diagram");
+  });
+
+  it("leaves the tab alone when an existing conversation is selected", async () => {
+    // What makes the fix narrow rather than a general reset: opening a conversation you were
+    // already reading still comes back to the tab you last read, which is the behaviour the
+    // panel is built on.
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore({ widgets: [] });
+    mocks.api.listSessionWidgets.mockResolvedValue(installed("plan", "diagram"));
+    await store.selectSession("s1");
+    widgetPanel.setActive("diagram");
+
+    await store.selectSession("s1");
+
+    expect(widgetPanel.activeId.value).toBe("diagram");
+  });
+});
+
 describe("widget events", () => {
   it("announces the end of a turn exactly once, at the point every turn ends", async () => {
     const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");

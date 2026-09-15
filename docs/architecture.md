@@ -1221,6 +1221,16 @@ The width is clamped on **read** as well as on write, because a value that was f
 set is not necessarily fine now. Collapse is deliberately not persisted, matching
 `uiState.sidebarCollapsed`.
 
+The open tab is **one global preference, and that is why a conversation's creation writes it.**
+The strip prefers the remembered id whenever it happens to be installed, so a tab read in one
+conversation would win over the panel's own `ids[0]` fallback in every later one — the reported
+"a new conversation opens on the wrong tab". `createSession` therefore ends by writing the strip's
+first tab (`activateFirstWidget`), which is the same expression the fallback computes, so the fix
+and the fallback cannot disagree. Selecting a conversation that already exists deliberately does
+**not** touch it: that is where coming back to the tab you last read is the point. The write is
+guarded (`activateWidget`) because an id the object does not have is a preference for a tab that
+does not exist — a stored id nothing can draw is a lie until the next click.
+
 **Events exist for what the store cannot see.** `composables/widgetEvents.ts` is a small typed bus
 so a widget learns about a change the *server* made — a turn ending moved the message counts and
 the token totals, and nothing the client did knows by how much — plus lifecycle changes like a

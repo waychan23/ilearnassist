@@ -1184,6 +1184,16 @@ Fuller map in `docs/reference.md`.
   not an event, because two ways to learn one fact drift. `turn.finished` comes from `consume()`'s
   `finally`, the one point every turn ends at, unconditionally within the account-epoch guard since
   a failed turn still persisted a message.
+- **The panel's open tab is one global preference, and creating a conversation resets it.**
+  `widgetPanel.activeId` is persisted under `gl-widget-active` and shared by every conversation, and
+  the strip prefers it whenever it happens to be installed — so a tab read in one conversation used
+  to decide what every later one opened on. `createSession` therefore ends by writing the strip's
+  first tab, which is the same expression `WidgetPanel.active` falls back to, so the two cannot
+  disagree. Every write goes through `activateWidget(id)`, which refuses an id this object does not
+  have: a preference for a tab that does not exist is one the strip would silently override, so the
+  stored value would be a lie until the next click. Selecting an *existing* conversation
+  deliberately does not touch the tab at all — coming back to the one you last read is the point
+  there, and it is what `e2e/widgets.spec.ts` pins.
 - **A widget's catalog key is a literal at a call site, which is why the dynamic-prefix allowlist
   stays narrow.** `widgets/registry.ts` resolves names through a `switch` over the closed id union
   with a literal key per case, not through `t(\`widgets.${id}.name\`)` — that would have forced a
