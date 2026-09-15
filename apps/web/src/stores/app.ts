@@ -53,6 +53,7 @@ import type {
   Workspace,
 } from "../api/types";
 import {
+  DIAGRAM_TOOL_NAME,
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
   isPlatformAdmin,
@@ -121,6 +122,16 @@ export interface DocumentParserDraft {
   apiKey: string;
   enabled: boolean;
 }
+
+/**
+ * Which tree a file preview is reading.
+ *
+ * Two roots with the same rules and the same routes' shape: the workspace's `workdir/`, which
+ * the file tree browses, and a conversation's own `sessions/<id>/`, where the diagrams it draws
+ * are written. `"workspace"` is the default so every existing caller of `openFile` reads the
+ * same way it always did.
+ */
+export type FileRoot = "workspace" | "session";
 
 /** Whether an attachment is still queued or being read. */
 function isSettling(attachment: Attachment): boolean {
@@ -287,6 +298,24 @@ export const useAppStore = defineStore("app", () => {
   const fileContent = ref<FileContent | null>(null);
   const fileContentLoading = ref(false);
   const filePreviewError = ref<string | null>(null);
+  /**
+   * Which root the open preview is reading.
+   *
+   * Web-local — there is no wire type for it, because the two endpoints already differ and
+   * this only decides which one `openFile` calls and which context the dialog names. It is
+   * state rather than an argument threaded to the dialog because the dialog is always mounted
+   * (`App.vue` has no `v-if` on it) and only ever sees the store.
+   */
+  const filePreviewRoot = ref<FileRoot>("workspace");
+
+  /**
+   * The last `openFile` to be *started*.
+   *
+   * Two opens can be in flight — a click on one file, then another before the first replies —
+   * and the roots differ in which id a switch invalidates, so the reply that arrives late must
+   * not write the state the current one owns.
+   */
+  let filePreviewSeq = 0;
 
   /** The visible rows, depth-first — see `utils/fileTree.ts` for the walk. */
   const fileRows = computed(() => flattenTree(fileListings.value, fileExpanded.value));
@@ -508,6 +537,7 @@ export const useAppStore = defineStore("app", () => {
     // The half-arrived reply is as much a part of the account as the messages are, and the
     // login screen has no business showing either.
     streaming.value = EMPTY_STREAMING();
+    // Closes the open preview too, whichever root it read.
     resetFileTree();
     closeSettings();
     closeSources();
@@ -655,6 +685,9 @@ export const useAppStore = defineStore("app", () => {
     messages.value = [];
     // The conversation being left had its own installs, and they belong to it.
     sessionWidgets.value = [];
+    // Both roots become wrong here — there is no session any more, and the workspace is a
+    // different one — so an open preview must go. `resetFileTree` closes it, which is why
+    // there is no `closeFile()` beside this.
     resetFileTree();
     // Both are reads of the same workspace and neither needs the other, so they go together
     // rather than as two round trips on every switch.
@@ -814,30 +847,50 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * Open a file in the preview.
+   * Open a file in the preview, from either root.
    *
    * Unlike the rest of the store's actions this one reports its own failure instead of
    * throwing, because its caller is a dialog that is already open: the error has one
    * obvious home, and it is the body of the thing the user just asked for.
+   *
+   * The read and the id it needs are resolved *before* the await, so a switch during the
+   * round trip cannot re-point the request at the context the user moved to — the same
+   * captured-id shape `loadDirectory` uses for the tree.
    */
-  async function openFile(path: string): Promise<void> {
+  async function openFile(path: string, root: FileRoot = "workspace"): Promise<void> {
     const workspaceId = activeWorkspaceId.value;
-    if (!workspaceId) return;
+    const sessionId = activeSessionId.value;
+    let load: (() => Promise<FileContent>) | null = null;
+    if (root === "session") {
+      if (sessionId) load = () => api.readSessionFileContent(sessionId, path);
+    } else if (workspaceId) {
+      load = () => api.readFileContent(workspaceId, path);
+    }
+    if (!load) return;
 
+    const seq = ++filePreviewSeq;
+    filePreviewRoot.value = root;
     filePreviewPath.value = path;
     fileContent.value = null;
     filePreviewError.value = null;
     fileContentLoading.value = true;
     try {
-      fileContent.value = await api.readFileContent(workspaceId, path);
+      const content = await load();
+      // A later open owns the state by now; this reply is for a file nobody is looking at.
+      if (seq !== filePreviewSeq) return;
+      fileContent.value = content;
     } catch (e) {
+      if (seq !== filePreviewSeq) return;
       filePreviewError.value = messageOf(e);
     } finally {
-      fileContentLoading.value = false;
+      if (seq === filePreviewSeq) fileContentLoading.value = false;
     }
   }
 
   function closeFile(): void {
+    // Bumping the sequence is what makes a close a *cancellation* rather than a reset: a
+    // reply still in flight would otherwise land in the state of the next thing opened.
+    filePreviewSeq++;
     filePreviewPath.value = null;
     fileContent.value = null;
     filePreviewError.value = null;
@@ -876,6 +929,11 @@ export const useAppStore = defineStore("app", () => {
    * moment later.
    */
   async function selectSession(id: string): Promise<void> {
+    // A conversation's own file belongs to the conversation being left, so the preview closes
+    // with it. A *workspace* file is still the file it was — the workspace has not changed —
+    // so that one is left open, which is also what it did before either root existed.
+    if (filePreviewRoot.value === "session") closeFile();
+
     activeSessionId.value = id;
     activeCopilotId.value = activeSession.value?.copilotId ?? null;
     const [loaded, widgets] = await Promise.all([
@@ -1545,6 +1603,14 @@ export const useAppStore = defineStore("app", () => {
             sessionId: activeSessionId.value ?? "",
           });
         }
+        // A diagram call has written its file by now. Nothing local knows what the folder
+        // holds, which is the definition of something a widget cannot see for itself.
+        if (ev.toolCall.name === DIAGRAM_TOOL_NAME) {
+          emitWidgetEvent({
+            type: "diagram.changed",
+            sessionId: activeSessionId.value ?? "",
+          });
+        }
         break;
       }
       case "plan_session_created": {
@@ -1915,6 +1981,7 @@ export const useAppStore = defineStore("app", () => {
     fileLoadingPath,
     fileTreeError,
     filePreviewPath,
+    filePreviewRoot,
     fileContent,
     fileContentLoading,
     filePreviewError,

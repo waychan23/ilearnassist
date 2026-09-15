@@ -43,6 +43,17 @@ export type WidgetEvent =
    */
   | { type: "quiz.changed"; sessionId: string }
   /**
+   * An `ila_diagram` call wrote its file during a turn, so the diagram widget refetches
+   * mid-turn without waiting for the turn to end. Carries the session id like `plan.changed`.
+   *
+   * This one is squarely inside the doctrine that events exist for what the store cannot see:
+   * the diagram tool's *result is a file on disk*, and nothing local knows what the directory
+   * holds now — not how many `.mmd` files there are, and not what they are called. A widget
+   * that watched the message list for a new diagram call would be a second way to learn one
+   * fact, and it would still miss a file somebody put in the folder by hand.
+   */
+  | { type: "diagram.changed"; sessionId: string }
+  /**
    * A widget asked to scroll the conversation to a tool-call card — a plan node's start
    * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
    * event. Scrolling to the card (rather than the message top) lands on the node's start.

@@ -490,6 +490,19 @@ export const api = {
     request<FileContent>(
       `/workspaces/${workspaceId}/files/content?path=${encodeURIComponent(path)}`
     ),
+  /**
+   * The same two reads for a conversation's own directory — where the diagrams it draws are
+   * written. The flat directory is the whole of it: one level, no tree, and the same
+   * envelopes as the workspace's.
+   */
+  listSessionFiles: (sessionId: string, path: string) =>
+    request<DirectoryListing>(
+      `/sessions/${sessionId}/files?path=${encodeURIComponent(path)}`
+    ),
+  readSessionFileContent: (sessionId: string, path: string) =>
+    request<FileContent>(
+      `/sessions/${sessionId}/files/content?path=${encodeURIComponent(path)}`
+    ),
 
   listSessions: (workspaceId: string) =>
     request<Session[]>(`/workspaces/${workspaceId}/sessions`),

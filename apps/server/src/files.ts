@@ -1,5 +1,6 @@
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { DIAGRAM_FILE_EXTENSIONS } from "@ilearnassist/shared";
 import type {
   ApiErrorCode,
   DirectoryListing,
@@ -10,7 +11,7 @@ import type {
 import { resolveInWorkspace } from "./workspace.js";
 
 /**
- * The workspace's read side: what a directory holds, and what is in a file.
+ * A file browser's read side: what a directory holds, and what is in a file.
  *
  * This is the browser's counterpart to `tools/fileTools.ts`. The two are deliberately not
  * one module. `list_files` speaks to a model — capped at 200 entries, one level, no size,
@@ -18,10 +19,16 @@ import { resolveInWorkspace } from "./workspace.js";
  * entry it is given and needs metadata to do it. Sharing the traversal would mean either a
  * tool that returns sizes it never uses or a listing that silently stops at a model's cap.
  *
- * `resolveInWorkspace` remains the boundary for both. It is *lexical*, though — it stops
- * `../../etc/passwd` and says nothing about a symlink inside the workspace pointing out of
- * it — so every read here is additionally checked against the workspace's real path. The
- * write tools keep their existing behaviour: changing what a *model* may reach is a product
+ * It reads **either root**, which is why nothing here derives one: `root` is a parameter,
+ * and the two callers are the workspace's `workdir/` and a conversation's own
+ * `sessions/<sessionId>/`. Those are different trees with the same rules — one level at a
+ * time, the same envelopes, the same sandbox — so a session browser is a second *caller*,
+ * not a second module. A copy would be two places for the traversal to drift.
+ *
+ * `resolveInWorkspace` remains the boundary for both roots. It is *lexical*, though — it
+ * stops `../../etc/passwd` and says nothing about a symlink inside the tree pointing out of
+ * it — so every read here is additionally checked against the root's real path. The write
+ * tools keep their existing behaviour: changing what a *model* may reach is a product
  * decision, not something to slip in behind a file viewer.
  */
 
@@ -54,6 +61,10 @@ const BINARY_EXTENSIONS = new Set([
 /** Markdown, which the client renders rather than showing as source. */
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdx"]);
 
+/** Diagram source, which the client draws rather than showing as source. Shared with the
+ *  session browser, which filters a *listing* by the same list — see `isDiagramFile`. */
+const DIAGRAM_EXTENSIONS = new Set<string>(DIAGRAM_FILE_EXTENSIONS);
+
 /**
  * A path or file the browser cannot serve.
  *
@@ -72,23 +83,28 @@ export class FileAccessError extends Error {
 }
 
 /**
- * Resolve a workspace-relative path, then prove it really is inside the workspace.
+ * Resolve a path relative to `root`, then prove it really is inside that root.
  *
  * Two steps, and the second is the one this module exists to add. `resolveInWorkspace`
  * settles the *string* — `..`, absolute paths, siblings whose name merely starts with the
- * workspace's — and `realpath` settles what the string points at, which is how a symlink to
- * `/etc/passwd` is caught. `realpath` also resolves the workspace root itself, so a root
- * that is reached through a symlink (a temp directory on macOS, say) compares equal instead
- * of failing every read.
+ * root's — and `realpath` settles what the string points at, which is how a symlink to
+ * `/etc/passwd` is caught. `realpath` also resolves the root itself, so a root that is
+ * reached through a symlink (a temp directory on macOS, say) compares equal instead of
+ * failing every read.
+ *
+ * `resolveInWorkspace` keeps its name and its message while the parameter is widened: it is
+ * the boundary CLAUDE.md names, and the arrow points the same way in both roots the browser
+ * now serves. Only the *label* would change, and a message string is not worth churning the
+ * one function the invariants point at.
  */
-async function resolveReal(workspaceDir: string, userPath: string): Promise<string> {
-  const sandboxed = resolveInWorkspace(workspaceDir, userPath, true);
+async function resolveReal(root: string, userPath: string): Promise<string> {
+  const sandboxed = resolveInWorkspace(root, userPath, true);
   if (!sandboxed.ok || !sandboxed.path) {
     throw new FileAccessError("INVALID_FILE_PATH", sandboxed.error ?? "Invalid path.");
   }
 
   const [realRoot, realTarget] = await Promise.all([
-    realpath(resolve(workspaceDir)).catch(() => resolve(workspaceDir)),
+    realpath(resolve(root)).catch(() => resolve(root)),
     realpath(sandboxed.path).catch(() => null),
   ]);
 
@@ -108,7 +124,7 @@ async function resolveReal(workspaceDir: string, userPath: string): Promise<stri
 }
 
 /**
- * `""` and `"."` both mean the workspace root.
+ * `""` and `"."` both mean the root being browsed.
  *
  * The two refusals are about what a query string can smuggle in. `?path=a&path=b` arrives as
  * an *array*, and a string operation on it would be a `TypeError` — a 500 for a malformed
@@ -156,11 +172,11 @@ function isoOrNull(value: number | undefined): string | null {
  * cost one `readdir` rather than a walk of sixty thousand files.
  */
 export async function listDirectory(
-  workspaceDir: string,
+  root: string,
   relPath?: string | string[]
 ): Promise<DirectoryListing> {
   const rel = normalizeRel(relPath);
-  const abs = await resolveReal(workspaceDir, rel);
+  const abs = await resolveReal(root, rel);
 
   // A directory that is itself a symlink out of the workspace is caught by `resolveReal`,
   // whose fallback for a missing path is the lexical one — so this `stat` is also what
@@ -213,6 +229,11 @@ export async function listDirectory(
  */
 function classify(ext: string, bytes: Buffer): FileContentKind {
   if (MARKDOWN_EXTENSIONS.has(ext)) return "markdown";
+  // Ahead of the sniff, like Markdown: a diagram is text by definition, and the client needs
+  // the source to draw it. A binary that happens to be named `.mmd` is therefore sent as
+  // text and decodes to replacement characters — a decision, not an oversight, and pinned by
+  // a test so it stays one.
+  if (DIAGRAM_EXTENSIONS.has(ext)) return "diagram";
   if (BINARY_EXTENSIONS.has(ext)) return "unsupported";
 
   // A NUL byte is what text files do not contain, and it is the check that needs no
@@ -262,7 +283,7 @@ async function readHead(
  * first 256 KB and saying so.
  */
 export async function readFileContent(
-  workspaceDir: string,
+  root: string,
   relPath?: string | string[]
 ): Promise<FileContent> {
   const rel = normalizeRel(relPath);
@@ -270,7 +291,7 @@ export async function readFileContent(
     throw new FileAccessError("INVALID_FILE_PATH", "A file path is required.");
   }
 
-  const abs = await resolveReal(workspaceDir, rel);
+  const abs = await resolveReal(root, rel);
   const info = await stat(abs).catch((err) => {
     throw asFileError(err, rel);
   });

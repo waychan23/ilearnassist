@@ -15,12 +15,18 @@ import { join } from "node:path";
  *   users/<userSlug>/
  *     workspaces/<wsSlug>/
  *       workdir/                 the agent's file-tool sandbox and the file browser's root
- *       sessions/<sessionId>/    reserved for per-conversation files; nothing writes here yet
+ *       sessions/<sessionId>/    a conversation's own files — the diagrams it draws
  *     sources/
  *       raw/<sourceId>.<ext>     an uploaded file
  *       parsed/<sourceId>.txt    its extracted text
  *   db/sqlite/ilearnassist.sqlite
  * ```
+ *
+ * The session directory is deliberately a *sibling* of `workdir/` rather than a corner of it:
+ * the workdir is the sandbox `write_file` and the file tree share, and a conversation's own
+ * files are not the same kind of thing. Putting them inside it would also make them
+ * indistinguishable from files the model wrote — and would put them where `list_files` reaches
+ * them, which is not what a diagram's file is for.
  *
  * Every path here is *derived* from the two slugs and an id — never stored as a fact in its
  * own right. That is what keeps a rename from having to move files: the username changes,
@@ -109,7 +115,13 @@ export function workspaceSessionsDir(workspaceRoot: string): string {
   return join(workspaceRoot, "sessions");
 }
 
-/** One conversation's own directory. Named by session id, which is never user-supplied. */
+/**
+ * One conversation's own directory. Named by session id, which is never user-supplied.
+ *
+ * Where a conversation keeps the files it makes for itself — today, the `.mmd` sources
+ * `ila_diagram` writes. Its one writer is that tool; `sessions/<id>/` is outside `workdir/`, so
+ * no file tool can reach it and a diagram's file is not something the model can edit by path.
+ */
 export function sessionDir(workspaceRoot: string, sessionId: string): string {
   return join(workspaceSessionsDir(workspaceRoot), sessionId);
 }

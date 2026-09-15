@@ -1065,9 +1065,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /**
    * Soft delete. The workspace leaves every list and the directory stays — `workdir/`, the
-   * reserved `sessions/` beside it, and every row hanging off this one. Nothing is dismantled:
-   * the rows are reached through the workspace, so hiding it here is what hides them, and the
-   * files being kept is what would make a future restore possible at all.
+   * `sessions/` beside it holding each conversation's own files, and every row hanging off this
+   * one. Nothing is dismantled: the rows are reached through the workspace, so hiding it here
+   * is what hides them, and the files being kept is what would make a future restore possible
+   * at all. For the diagrams the agent drew, that is the whole of the file's life: there is no
+   * row to hide, so the bytes on disk *are* what a restore would have to find.
    */
   app.delete("/api/workspaces/:id", async (request, reply) => {
     const userId = actor(request).id;
@@ -1278,10 +1280,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     for (const row of widgetRowsForSelection("session", desired)) {
       db.setSessionWidgetForUser(userId, session.id, row.id, row.enabled);
     }
-    // The conversation's own directory, made now rather than the first time something wants
-    // it, so that reserving it means it is *there*. Best-effort: nothing writes into it yet,
-    // and a data root on a read-only volume must not turn starting a conversation into an
-    // error over a directory nobody is using.
+    /*
+     * The conversation's own directory, made now rather than when something first wants it, so
+     * that "this conversation has a folder" is true from the moment it exists.
+     *
+     * Best-effort, and the writer does not depend on it: `ila_diagram` makes the directory
+     * itself before it writes, the session-files listing makes it before it reads, and this
+     * route is not the only way a session comes to exist — the plan widget's snapshot fork
+     * writes one straight to the database. A data root on a read-only volume must not turn
+     * starting a conversation into an error over a directory nobody is using *yet*.
+     */
     try {
       mkdirSync(sessionDir(workspace.dirPath, session.id), { recursive: true });
     } catch {
@@ -1321,9 +1329,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * Soft delete a conversation.
    *
    * Everything stays: the messages, the source links, the plan and its versions, the quiz rows,
-   * and the reserved `sessions/<id>/` directory. They are all reached through this row, so
-   * filtering it here is the whole of what removes them from view — and leaving them in place
-   * is what would let a restore put the conversation back together rather than in pieces.
+   * and the conversation's own `sessions/<id>/` directory with the diagrams it drew. They are
+   * all reached through this row, so filtering it here is the whole of what removes them from
+   * view — and leaving them in place is what would let a restore put the conversation back
+   * together rather than in pieces. The directory is the sharpest case of that: a diagram is a
+   * file and nothing else, so there is no row to bring back and the bytes are the record.
    *
    * An in-flight turn is aborted first, the same way `POST /stop` aborts one, so a deleted
    * conversation stops costing tokens immediately. It does not stop that turn's own `finishTurn`
@@ -1762,6 +1772,77 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(result.status).send(apiError(result.code, "note not found"));
     }
     return { ok: true };
+  });
+
+  /* ------------------------------- session files ------------------------------- */
+
+  /*
+   * A conversation's own directory, read with the same two endpoints as a workspace's.
+   *
+   * `sessions/<sessionId>/` is where a conversation's own files go — today, the `.mmd`
+   * sources `ila_diagram` draws — and it is deliberately *not* inside `workdir/`, so nothing
+   * here is reachable by the file tools and nothing the model writes with `write_file`
+   * appears here. The two roots share `files.ts` rather than a copy of it: one level at a
+   * time, the same envelopes, the same sandbox, the same strictness. This is a second
+   * caller, not a second browser.
+   *
+   * The root is `sessionDir(workspace.dirPath, …)` — `dirPath`, **never** `workdirPath`. The
+   * second is `dirPath/workdir`, so deriving from it would put a conversation's own files
+   * inside the tree the model may already write into, which is the one thing this directory
+   * exists to be separate from.
+   *
+   * Ownership is `getSessionForUser`, so another account's session id and an id that never
+   * existed answer the same 404.
+   *
+   * The listing makes the directory first, best-effort. A conversation's directory is made
+   * when it is created — but that mkdir is deliberately best-effort, and it is not the only
+   * way a session comes to exist: the plan widget's "make a new plan" fork writes its
+   * snapshot session straight through `db.createSession` and never goes near that route. So
+   * "this conversation has no files yet" would otherwise be a 404 for a session that is
+   * perfectly healthy, and the panel would show an error where its empty state belongs. The
+   * write is idempotent, it is the app's own directory, and it is what makes the layout
+   * `paths.ts` describes actually true. A volume that will not allow it still lists
+   * whatever is there — the mkdir is swallowed for the same reason the creation-time one is.
+   */
+  app.get("/api/sessions/:id/files", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const { path } = request.query as { path?: string | string[] };
+    const found = db.getSessionForUser(id, userId);
+    if (!found) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    const root = sessionDir(found.workspace.dirPath, found.session.id);
+    try {
+      mkdirSync(root, { recursive: true });
+    } catch {
+      // Ignored on purpose — see above.
+    }
+
+    try {
+      return await listDirectory(root, path);
+    } catch (err) {
+      const { status, body } = fileErrorReply(err);
+      return reply.code(status).send(body);
+    }
+  });
+
+  app.get("/api/sessions/:id/files/content", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const { path } = request.query as { path?: string | string[] };
+    const found = db.getSessionForUser(id, userId);
+    if (!found) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    try {
+      return await readFileContent(sessionDir(found.workspace.dirPath, found.session.id), path);
+    } catch (err) {
+      const { status, body } = fileErrorReply(err);
+      return reply.code(status).send(body);
+    }
   });
 
   /* ---------------------------------- sources ---------------------------------- */
@@ -2473,6 +2554,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         : undefined,
       quizReview: quizInstalled ? { db, sessionId: session.id } : undefined,
       plan: planInstalled ? { db, sessionId: session.id } : undefined,
+      // The conversation's own directory — `dirPath`, not `workdirPath`. The workdir is the
+      // agent's sandbox and the file browser's root; deriving from it would put a
+      // conversation's files inside the tree the model may already write into.
+      diagram: { sessionDir: sessionDir(workspace.dirPath, session.id) },
     });
 
     return {

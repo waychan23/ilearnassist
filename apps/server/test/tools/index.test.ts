@@ -4,16 +4,30 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebFetchConfig, WebSearchConfig } from "../../src/config.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
-import { PLAN_TOOL_NAMES, QUIZ_TOOL_NAMES } from "@ilearnassist/shared";
+import { DIAGRAM_TOOL_NAME, PLAN_TOOL_NAMES, QUIZ_TOOL_NAMES } from "@ilearnassist/shared";
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
 import type { QuizToolContext } from "../../src/tools/quiz.js";
 import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
+import type { DiagramToolContext } from "../../src/tools/diagram.js";
 
 let workspace: string;
 
 const webSearch: WebSearchConfig = { provider: "bing", maxResults: 5 };
 const webFetch: WebFetchConfig = { enabled: true, maxChars: 20_000 };
+
+/**
+ * The diagram tool is assembled like a file tool, not like a widget tool: `turnContext`
+ * always supplies its directory, so it is present by default here too — a default that
+ * omitted it would be testing an installation that does not exist, and every allow-list case
+ * below would pass for the wrong reason.
+ *
+ * A function rather than a const, because the temp workspace it points into is made in
+ * `beforeEach` and a module-scope `join(workspace, …)` would run against `undefined`.
+ */
+function diagram(): DiagramToolContext {
+  return { sessionDir: join(workspace, "sessions", "s1") };
+}
 
 /**
  * `quiz` numbers and registers its questions through callbacks the route supplies; stubs
@@ -29,12 +43,15 @@ const quizReview = { db: {}, sessionId: "s1" } as unknown as QuizReviewToolConte
 
 function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] {
   // No quiz context by default: the quiz tools are widget-bound, so the absence itself is
-  // under test. Cases that want them spread `{ quiz, quizReview }`.
+  // under test. Cases that want them spread `{ quiz, quizReview }`. The diagram context is
+  // present because the route always passes one — pass `{ diagram: undefined }` to test the
+  // other half. Spread last, so a case can override either.
   return buildTools({
     workspaceDir: workspace,
     webSearch,
     webFetch,
     fileToolsEnabled: true,
+    diagram: diagram(),
     ...input,
   }).map((t) => t.name);
 }
@@ -204,13 +221,49 @@ describe("buildTools", () => {
     );
     // Empty list ("no tools"): the bound tools survive, and nothing else does.
     expect(names({ plan, allowedNames: [] }).sort()).toEqual([...PLAN_TOOL_NAMES].sort());
-    // Absent list: the default eight plus read_document's gate aside, the bound tools add three.
-    expect(names({ plan })).toHaveLength(8 + PLAN_TOOL_NAMES.length);
+    // Absent list: the default set plus the plan tools. Said that way rather than as a count,
+    // so a new tool has to be added to nothing — and `read_document`'s absence (this fixture
+    // has no sources) is not silently part of a number.
+    expect(names({ plan })).toHaveLength(names().length + PLAN_TOOL_NAMES.length);
   });
 
   it("keeps the plan tools when file tools are disabled", () => {
     const built = names({ plan, fileToolsEnabled: false });
     for (const name of PLAN_TOOL_NAMES) expect(built).toContain(name);
+  });
+
+  /* ----------------------- diagram (ordinary, allow-listable) ----------------------- */
+
+  it("assembles ila_diagram by default, unlike the widget-bound tools", () => {
+    // The route always supplies the directory, so a turn that can run at all can draw.
+    expect(names()).toContain(DIAGRAM_TOOL_NAME);
+  });
+
+  it("assembles no diagram tool without a directory", () => {
+    expect(names({ diagram: undefined })).not.toContain(DIAGRAM_TOOL_NAME);
+  });
+
+  it("treats the diagram tool as allow-listable in all three states", () => {
+    /*
+     * The reason it is not widget-bound. A bound tool is the widget's to switch, and nothing
+     * installs a widget by default — so binding this one would leave the model with no way to
+     * draw a diagram in the ordinary conversation, which is the complaint the tool answers.
+     * Here a Copilot can turn diagrams off without turning the panel off, and vice versa.
+     */
+    expect(names({ allowedNames: [DIAGRAM_TOOL_NAME] })).toEqual([DIAGRAM_TOOL_NAME]);
+    expect(names({ allowedNames: ["read_file"] })).not.toContain(DIAGRAM_TOOL_NAME);
+    // "No tools" really does mean no tools, this one included.
+    expect(names({ allowedNames: [] })).toEqual([]);
+  });
+
+  it("drops the diagram tool when the file tools are disabled", () => {
+    /*
+     * Deliberate, and the one place this tool behaves like a file tool rather than like the
+     * widget-bound ones above. `fileTools.enabled: false` is an operator saying "this
+     * installation's agent does not write files" — and a diagram whose file was never
+     * written is half the feature, since the file is what the browser half exists to open.
+     */
+    expect(names({ fileToolsEnabled: false })).not.toContain(DIAGRAM_TOOL_NAME);
   });
 
   it("binds the file tools to the workspace they were built for", async () => {

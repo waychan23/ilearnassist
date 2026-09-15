@@ -186,6 +186,13 @@ escape it (see `resolveInWorkspace` in `apps/server/src/workspace.ts`). Turning
 this off removes all file tools; `web_search` and `web_fetch` remain available,
 since neither touches the workspace.
 
+**`ila_diagram` goes with them.** It writes outside the workspace — a diagram's
+source lands in the conversation's own `sessions/<sessionId>/` folder — but a
+diagram whose file was never written is half the feature, so the switch that means
+"this agent does not write files" is what turns diagrams off too. That is a
+deliberate entry in the tool assembly rather than an oversight: see the
+`NON_FILE_TOOLS` note in `apps/server/src/tools/index.ts`.
+
 ## Copilots
 
 A Copilot is a reusable persona: a system prompt, a tool allow-list and default

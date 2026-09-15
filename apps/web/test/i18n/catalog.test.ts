@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { API_ERROR_CODES, PARSE_ERROR_CODES } from "@ilearnassist/shared";
+import { ALL_TOOL_NAMES, API_ERROR_CODES, PARSE_ERROR_CODES } from "@ilearnassist/shared";
 import zhCN from "../../src/locales/zh-CN";
 import en from "../../src/locales/en";
 import { flatten, placeholders, textOf, translationCallSites } from "../helpers/catalog";
@@ -104,6 +104,27 @@ describe("server error codes", () => {
   it("has a message for every ParseErrorCode in both catalogs", () => {
     const missing = PARSE_ERROR_CODES.filter(
       (code) => !(`parseErrors.${code}` in zh) || !(`parseErrors.${code}` in enFlat)
+    );
+    expect(missing).toEqual([]);
+  });
+});
+
+describe("tool display names", () => {
+  it("has a name for every tool in both catalogs", () => {
+    /*
+     * `tools.name.*` is in `DYNAMIC_PREFIXES` — the key is built as `"tools.name." + name` —
+     * and that exemption was the whole of what looked after it. Nothing checked that the keys
+     * *exist*, and a missing one does not fail loudly: `ToolCallCard` and `DiagramCard` both
+     * fall back to the raw tool name rather than rendering a key path, and
+     * `CopilotDialog`'s tool checklist resolves the same namespace. So `ila_diagram` shipped
+     * with its card head reading `ila_diagram`, and the only reason it was noticed is that a
+     * screenshot showed it.
+     *
+     * Iterating the shared list is the point of declaring `ALL_TOOL_NAMES` as a runtime list,
+     * exactly as the two error-code cases above iterate theirs.
+     */
+    const missing = ALL_TOOL_NAMES.filter(
+      (name) => !(`tools.name.${name}` in zh) || !(`tools.name.${name}` in enFlat)
     );
     expect(missing).toEqual([]);
   });

@@ -57,6 +57,19 @@ export const uiState = reactive({
    * any more — which is exactly the file someone goes looking for here.
    */
   sourcesOpen: false,
+  /**
+   * The conversation's own files.
+   *
+   * Distinct from `sourcesOpen` in both halves of what a file can be: a source is the
+   * *account's*, uploaded by the user, and lives outside every workspace; this is one
+   * conversation's own directory, written by the agent — the diagrams it draws. The two lists
+   * never overlap, which is what makes them two dialogs rather than two tabs of one.
+   *
+   * A flag rather than a session id, unlike `workspaceSettingsId`: the entry points are the
+   * diagram widget and the chat topbar, both of which mean *this* conversation, and the dialog
+   * watching `activeSessionId` is what keeps it honest if the conversation changes underneath.
+   */
+  sessionFilesOpen: false,
   drawerOpen: false,
   /**
    * The widget panel off-canvas at the *right*, on a compact viewport.
@@ -126,6 +139,15 @@ export function openSources(): void {
 
 export function closeSources(): void {
   uiState.sourcesOpen = false;
+}
+
+/** The conversation's own files — see `sessionFilesOpen`. */
+export function openSessionFiles(): void {
+  uiState.sessionFilesOpen = true;
+}
+
+export function closeSessionFiles(): void {
+  uiState.sessionFilesOpen = false;
 }
 
 /** Only meaningful on a compact viewport; wider ones render the sidebar in place. */
@@ -205,10 +227,11 @@ export const sidebarRail = computed(
 export function showLogin(): void {
   uiState.view = "login";
   closeDrawer();
-  // Both drawers belong to the pane being torn down, and both dialogs to an account that is
-  // leaving, so all four go with them.
+  // Both drawers belong to the pane being torn down, and all three dialogs to an account that
+  // is leaving, so all five go with them.
   closeWidgetDrawer();
   closeWorkspaceSettings();
+  closeSessionFiles();
 }
 
 /**
@@ -235,6 +258,8 @@ export function showWorkspaceHome(): void {
   uiState.view = "home";
   closeDrawer();
   closeWidgetDrawer();
+  // A conversation's files are the conversation's; the list is not a page about the workspace.
+  closeSessionFiles();
 }
 
 /** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */

@@ -300,6 +300,40 @@ not the plan/quiz tool shape. The mechanics, and why:
   tool-call precedence overriding the model), the assigned counts and elapsed ms — plus a
   failure block when the call or its answer is unusable. No block is written for a no-op.
 
+### A viewer widget with no tools: the diagram widget
+
+The diagram widget (`id: "diagram"`, `DiagramWidget.vue`) is the other way a widget can relate to a
+tool, and the one to reach for when the tool must exist **without** the widget.
+
+`ila_diagram` is an ordinary allow-listable tool, so `WIDGETS.diagram` has **no `boundTools`** —
+the absence is the design, not an oversight. Binding it would assemble the tool only when this
+widget is installed, and nothing installs a widget by default, so the model would have no way to
+draw a diagram in an ordinary conversation; `isWidgetBoundTool` would also keep the name out of a
+Copilot's tool checklist, so it could not be switched on there either. The panel is a *viewer*: it
+lists what the conversation has drawn and opens the one you pick.
+
+What that changes relative to the widgets above:
+
+- **Its data is a directory, not rows.** It calls `GET /api/sessions/:id/files` and filters by
+  `isDiagramFile` — the same route the session file browser uses. There is no diagram table to
+  read, so a `.mmd` somebody put in the folder by hand appears exactly like one the model drew,
+  and a revision leaves no stale second row.
+- **Opening a row goes through the ordinary file preview**, not a dialog of its own: that dialog
+  already renders a diagram, already has the source toggle, already reports its own load failures,
+  and already offers the enlarged viewer. A fourth surface drawing the same picture is what this
+  avoids.
+- **One derived affordance.** 定位 scrolls the conversation to the tool call that drew a diagram,
+  built by scanning the messages (`utils/diagramAnchors.ts`) and emitting the existing `chat.jump`.
+  The join is by file name, which is why `diagramFileName` is shared with the server; a row with
+  no call simply has no button rather than one that goes nowhere.
+- **No `onActive` and no install hook.** It claims no host capability and needs no cooperation for
+  as long as it is installed — it draws itself and nothing else. `docs/widgets.md`'s step 8 asks
+  the question; this is the answer for a widget that owns only its own tab.
+- **`diagram.changed` is a bus event**, emitted from the store's `tool_end` arm beside
+  `plan.changed` and `quiz.changed`. This one is squarely inside the doctrine that events exist for
+  what the store cannot see: the tool's result is *a file on disk*, and nothing local knows what
+  the directory now holds — not how many, and not what they are called.
+
 ### Widget groups
 
 `WIDGET_GROUPS` in the shared package is a **client-side** bundling only (the study pack is

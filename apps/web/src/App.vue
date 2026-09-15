@@ -13,6 +13,7 @@ import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
 import SourcesDialog from "./components/dialogs/SourcesDialog.vue";
+import SessionFilesDialog from "./components/dialogs/SessionFilesDialog.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
 import {
@@ -217,6 +218,10 @@ watch(
     <!-- The account's uploaded files. Opened from the home page, because a source belongs to
          the account rather than to the workspace you happen to be in. -->
     <SourcesDialog />
+    <!-- A conversation's own folder — the diagrams it drew. Read from `activeSessionId`, so it
+         is mounted beside the sources dialog rather than inside the chat pane, which unmounts
+         on the way back to the workspace home. -->
+    <SessionFilesDialog />
     <!-- Mounted for its lifetime rather than behind a `v-if` on the file: it renders nothing
          until one is opened, and the Sidebar — which would be the natural host — unmounts on
          the way back to the workspace home. -->

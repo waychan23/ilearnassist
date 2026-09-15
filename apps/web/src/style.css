@@ -1668,6 +1668,37 @@ body {
   color: var(--code-fg-2);
 }
 
+/*
+ * Where a diagram is drawn. Three surfaces use it — the tool card, the file preview and the
+ * viewer dialog — so it is here rather than three times over.
+ *
+ * Global rather than scoped, and that is not a style preference: the SVG arrives through
+ * `v-html`, and Vue stamps the scope attribute on the elements *it* renders, never on injected
+ * children. A scoped `svg { … }` rule would therefore match nothing at all. Everything else
+ * about a diagram is scoped to `MermaidDiagram.vue`, because everything else is markup that
+ * component writes itself.
+ *
+ * The `svg` rule is mostly a backstop. Mermaid emits `width="100%"` with its own inline
+ * `max-width`, so a drawing already shrinks to fit and centres itself; `max-width: 100%` here
+ * only matters if a version stops capping its own width, and `height: auto` is what keeps the
+ * aspect ratio when it does. `background` matches the surface, which is the same token the
+ * renderer passes as mermaid's `background` theme variable — the two have to agree, or the
+ * SVG paints its own rectangle in a colour the page around it does not use.
+ */
+.diagram-stage {
+  background: var(--panel);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  overflow: auto;
+}
+
+.diagram-stage svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
 .streaming-cursor::after {
   content: "▍";
   color: var(--accent);

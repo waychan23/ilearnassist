@@ -13,7 +13,7 @@ import {
   showWorkspaceHome,
 } from "../composables/ui";
 import { isUnauthenticatedError } from "../utils/apiError";
-import { formatRelativeTime } from "../utils/format";
+import { relativeTime } from "../composables/relativeTime";
 import type { Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
 import TopbarControls from "./TopbarControls.vue";
@@ -120,27 +120,16 @@ function sessionLabel(workspace: Workspace): string {
 }
 
 /**
- * The card's activity line. The relative buckets come from `formatRelativeTime` as a
- * description and are worded here, because the wording has to come from the catalogs — and
- * because `en` plurals branch on the count where `zh-CN` does not.
+ * The card's activity line.
+ *
+ * The buckets are `relativeTime`'s, from the shared `time.*` keys — the file lists show the
+ * same sentence, so it lives in one place. Only `never` is this card's own: "no activity yet"
+ * is a statement about a workspace rather than a bucket of time, and a file always has a
+ * modification date.
  */
 function activityLabel(workspace: Workspace): string {
   if (!workspace.lastActivityAt) return t("workspace.home.activity.never");
-  const rel = formatRelativeTime(workspace.lastActivityAt);
-  switch (rel.kind) {
-    case "now":
-      return t("workspace.home.activity.now");
-    case "minutes":
-      return t("workspace.home.activity.minutes", { count: rel.count }, rel.count);
-    case "hours":
-      return t("workspace.home.activity.hours", { count: rel.count }, rel.count);
-    case "days":
-      return t("workspace.home.activity.days", { count: rel.count }, rel.count);
-    /* Past a week it is a bare date, and there is nothing to say about it beyond the value
-       — which is why this branch has no catalog entry. */
-    case "date":
-      return rel.value;
-  }
+  return relativeTime(workspace.lastActivityAt);
 }
 </script>
 

@@ -1,5 +1,6 @@
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { slugify } from "@ilearnassist/shared";
 import { workspaceSessionsDir, workspaceWorkdir } from "./paths.js";
 
 /**
@@ -75,23 +76,18 @@ export function resolveInWorkspace(
 }
 
 /**
- * Generate a filesystem-safe slug from a name.
+ * The slug rule, re-exported from `shared`.
  *
- * `fallback` is what a name made entirely of characters that do not survive the filter
- * becomes — a name of punctuation, say. It is a parameter because the caller is the only
- * one who knows what the slug is *for*, and "workspace" as a user's directory name would
- * be a quiet lie rather than a default.
+ * It moved there when the client needed the same answer: the diagram widget has a tool call
+ * carrying the name the model chose and a directory holding what the server made of it, and
+ * matching the two is what puts "go to the reply that drew it" on the right row. A second
+ * implementation on the web side would be a button on the wrong row, or on none.
+ *
+ * Re-exported rather than deleted so this module stays the one place the server's callers and
+ * its tests reach for a directory name — see `uniqueSlug` and `uniqueUserSlug` below, which
+ * are still this module's business because uniqueness is a filesystem and database question.
  */
-export function slugify(name: string, fallback = "workspace"): string {
-  const base = name
-    .toLowerCase()
-    .trim()
-    // Keep CJK characters (and common scripts) so non-Latin names stay readable.
-    .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return base || fallback;
-}
+export { slugify };
 
 /**
  * A slug for a new workspace's directory, unique within its user's workspaces root.
@@ -100,7 +96,7 @@ export function slugify(name: string, fallback = "workspace"): string {
  * would actually break — two workspaces resolving to one directory.
  */
 export function uniqueSlug(rootDir: string, name: string): string {
-  const candidate = slugify(name);
+  const candidate = slugify(name, "workspace");
   let slug = candidate;
   let i = 1;
   while (existsSync(resolve(rootDir, slug))) {

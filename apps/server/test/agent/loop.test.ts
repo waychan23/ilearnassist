@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -18,6 +18,7 @@ import {
 import { runAgentStream } from "../../src/agent/loop.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
 import { buildAskUserTool } from "../../src/tools/askUser.js";
+import { buildDiagramTool } from "../../src/tools/diagram.js";
 import { buildQuizTool } from "../../src/tools/quiz.js";
 import { buildFileTools } from "../../src/tools/fileTools.js";
 import type { ProviderRecord } from "../../src/db.js";
@@ -391,6 +392,47 @@ describe("runAgentStream — history handling", () => {
     expect(sent.messages[1]!.role).toBe("user");
     expect(JSON.stringify(sent.messages)).toContain("newest");
     expect(JSON.stringify(sent.messages)).not.toContain("oldest");
+  });
+
+  it("keeps a diagram's source in history, so the model can revise its own drawing", async () => {
+    /*
+     * The revise story, and why the diagram tool has no read companion. A non-suspending
+     * tool's arguments are persisted verbatim onto the call, and `buildHistoryMessages`
+     * replays every call that has an output — so on a later turn the model is shown the source
+     * it drew, which is the only copy it can reach. `redactQuizInput` is the precedent for
+     * this not being automatic: a redaction added here later would silently take away the
+     * model's ability to correct its own diagram, and nothing else would fail.
+     */
+    const diagram = buildDiagramTool({ sessionDir: join(scratch, "ws", "sessions", "s1") });
+    const source = "flowchart TD\n  A --> B";
+
+    const first = await run({
+      tools: [diagram],
+      turns: [
+        { toolCalls: [{ id: "call_1", name: "ila_diagram", args: { name: "flow", source } }] },
+        { content: "Drawn." },
+      ],
+    });
+
+    const call = first.result.toolCalls[0]!;
+    expect(call.input).toContain("flowchart TD");
+    // The tool really ran against the real filesystem closure: the file is on disk.
+    expect(existsSync(join(scratch, "ws", "sessions", "s1", "flow.mmd"))).toBe(true);
+
+    await run({
+      turns: [{ content: "ok" }],
+      history: [
+        message({ role: "user", content: "draw it" }),
+        message({
+          role: "assistant",
+          content: "Drawn.",
+          toolCalls: [{ id: "call_1", name: "ila_diagram", input: call.input, output: call.output }],
+        }),
+      ],
+    });
+
+    const sent = llm.requests().at(-1) as { messages: unknown[] };
+    expect(JSON.stringify(sent.messages)).toContain("flowchart TD");
   });
 
   it("always sends the workspace sandbox note in the system prompt", async () => {

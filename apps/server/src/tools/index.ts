@@ -6,6 +6,7 @@ export { ALL_TOOL_NAMES, type ToolName } from "@ilearnassist/shared";
 import { isWidgetBoundTool } from "@ilearnassist/shared";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
+import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildFileTools } from "./fileTools.js";
 import { buildPlanTools, type PlanToolContext } from "./planTools.js";
@@ -23,6 +24,13 @@ import { buildQuizReviewTool, type QuizReviewToolContext } from "./quizReview.js
  * A literal list rather than the client's `INTERACTIVE_TOOL_NAMES`: the two answer
  * different questions (does this tool touch the sandbox? versus which card renders it),
  * and one of them is a client concern.
+ *
+ * `ila_diagram` is deliberately **not** here, even though it writes outside the workspace
+ * too. The question this list answers is read literally ("does this tool touch the
+ * workspace?") but it is asked on behalf of a switch that means "this installation's agent
+ * does not write files" — and a diagram whose file was never written is not the feature,
+ * it is half of it. So `fileTools.enabled: false` means no diagrams, and the test in
+ * `test/tools/index.test.ts` pins that rather than leaving it to be discovered.
  */
 const NON_FILE_TOOLS = new Set<string>([
   "web_search",
@@ -75,6 +83,18 @@ export interface BuildToolsInput {
    * none). Like `documents`, the absence carries no tool at all.
    */
   plan?: PlanToolContext;
+  /**
+   * Present when this conversation can draw a diagram, which is whenever its own directory
+   * can be resolved — always, in practice; the field is optional so a test can pin what its
+   * absence assembles (nothing).
+   *
+   * **Not widget-bound**, unlike `plan` and `quiz` above. A bound tool is assembled only when
+   * its widget is installed, and nothing installs a widget by default, so binding this one
+   * would leave the model with no way to draw a diagram in every ordinary conversation —
+   * which is the complaint the tool exists to answer. The diagram widget is a viewer with no
+   * bound tools of its own.
+   */
+  diagram?: DiagramToolContext;
 }
 
 /**
@@ -110,6 +130,9 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     if (input.quizReview) all.push(buildQuizReviewTool(input.quizReview));
   }
   if (input.plan) all.push(...buildPlanTools(input.plan));
+  // Ordinary, allow-listable, and gated by `fileToolsEnabled` like the file tools — see
+  // `NON_FILE_TOOLS` above for why that is the decision rather than an oversight.
+  if (input.diagram) all.push(buildDiagramTool(input.diagram));
 
   // Absent means "no restriction"; an empty array means "no tools". The two used to be the same
   // thing — `length > 0` was the test — which made a Copilot with no tools checked silently

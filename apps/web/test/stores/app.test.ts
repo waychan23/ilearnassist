@@ -56,6 +56,8 @@ const mocks = vi.hoisted(() => ({
     stopSession: vi.fn(),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
+    listSessionFiles: vi.fn(),
+    readSessionFileContent: vi.fn(),
     uploadAttachment: vi.fn(),
     listSessionSources: vi.fn(),
     listSources: vi.fn(),
@@ -1398,6 +1400,39 @@ describe("plan widgets", () => {
   });
 });
 
+describe("the diagram widget", () => {
+  it("emits diagram.changed when the tool finishes, and not for another tool", async () => {
+    /*
+     * The event exists because the tool's *result is a file*, and nothing the client holds
+     * knows what the conversation's folder contains now — so the panel cannot learn it from
+     * any local state, however it watches. Emitted from the one `tool_end` arm the other
+     * mid-turn events already use.
+     */
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      streamOf(
+        {
+          type: "tool_end",
+          toolCall: { id: "d1", name: "ila_diagram", input: "{}", output: "Wrote flow.mmd" },
+        },
+        {
+          type: "tool_end",
+          toolCall: { id: "f1", name: "write_file", input: "{}", output: "x" },
+        },
+        { type: "done" }
+      );
+      const store = await readyStore();
+      await store.sendMessage("draw it");
+
+      expect(seen.filter((t) => t === "diagram.changed")).toHaveLength(1);
+    } finally {
+      off();
+    }
+  });
+});
+
 describe("quiz widgets", () => {
   it("emits quiz.changed when the grading tool finishes, and not for ila_quiz or other tools", async () => {
     const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
@@ -2334,6 +2369,135 @@ describe("file browser", () => {
     await store.loadDirectory("");
 
     expect(store.fileTruncatedAt).toBe(1);
+  });
+});
+
+describe("a conversation's own files", () => {
+  const diagram = {
+    path: "flow.mmd",
+    name: "flow.mmd",
+    size: 20,
+    modifiedAt: "2026-01-01T00:00:00.000Z",
+    kind: "diagram" as const,
+    text: "flowchart TD\n  A --> B",
+    truncated: false,
+  };
+
+  it("reads a session file from the conversation's own route", async () => {
+    const store = await readyStore();
+    mocks.api.readSessionFileContent.mockResolvedValue(diagram);
+
+    await store.openFile("flow.mmd", "session");
+
+    expect(mocks.api.readSessionFileContent).toHaveBeenCalledWith("s1", "flow.mmd");
+    expect(mocks.api.readFileContent).not.toHaveBeenCalled();
+    expect(store.filePreviewRoot).toBe("session");
+    expect(store.fileContent).toEqual(diagram);
+  });
+
+  it("reads a workspace file by default, so the file tree is unchanged", async () => {
+    // The parameter defaults: every call site that predates the second root reads the same
+    // way it always did.
+    const store = await readyStore();
+    mocks.api.readFileContent.mockResolvedValue({ ...diagram, kind: "text", text: "x" });
+
+    await store.openFile("README.md");
+
+    expect(mocks.api.readFileContent).toHaveBeenCalledWith("w1", "README.md");
+    expect(mocks.api.readSessionFileContent).not.toHaveBeenCalled();
+    expect(store.filePreviewRoot).toBe("workspace");
+  });
+
+  it("opens nothing for a session file with no conversation", async () => {
+    // There is nothing for the path to be relative to, and the dialog would show a file from
+    // a conversation the user is not in.
+    const store = await readyStore();
+    store.activeSessionId = null;
+
+    await store.openFile("flow.mmd", "session");
+
+    expect(mocks.api.readSessionFileContent).not.toHaveBeenCalled();
+    expect(store.filePreviewPath).toBeNull();
+  });
+
+  it("closes a conversation's file when the conversation changes", async () => {
+    // It belongs to the conversation being left. Nothing else clears it there — a session
+    // switch keeps the workspace, so `resetFileTree` does not run.
+    const store = await readyStore();
+    mocks.api.readSessionFileContent.mockResolvedValue(diagram);
+    await store.openFile("flow.mmd", "session");
+
+    await store.selectSession("s2");
+
+    expect(store.filePreviewPath).toBeNull();
+    expect(store.fileContent).toBeNull();
+  });
+
+  it("leaves a workspace file open when the conversation changes", async () => {
+    // The workspace has not changed, so the file on screen is still the file it was. Closing
+    // it would be a new behaviour for the tree, and not one anybody asked for.
+    const store = await readyStore();
+    mocks.api.readFileContent.mockResolvedValue({ ...diagram, kind: "text", text: "x" });
+    await store.openFile("README.md");
+
+    await store.selectSession("s2");
+
+    expect(store.filePreviewPath).toBe("README.md");
+  });
+
+  it("drops a session file that arrives after the conversation changed", async () => {
+    // The read is captured with its id before the await, so a switch mid-flight cannot land
+    // one conversation's file under another's heading.
+    const store = await readyStore();
+    const gate = deferred<void>();
+    mocks.api.readSessionFileContent.mockImplementation(async () => {
+      await gate.promise;
+      return diagram;
+    });
+
+    const loading = store.openFile("flow.mmd", "session");
+    await store.selectSession("s2");
+    gate.resolve();
+    await loading;
+
+    expect(store.fileContent).toBeNull();
+    expect(store.fileContentLoading).toBe(false);
+  });
+
+  it("drops a reply that a later open has already superseded", async () => {
+    const store = await readyStore();
+    const first = deferred<void>();
+    mocks.api.readFileContent
+      .mockImplementationOnce(async () => {
+        await first.promise;
+        return { ...diagram, path: "slow.txt", name: "slow.txt", kind: "text", text: "slow" };
+      })
+      .mockResolvedValue({ ...diagram, path: "fast.txt", name: "fast.txt", kind: "text", text: "fast" });
+
+    const slow = store.openFile("slow.txt");
+    await store.openFile("fast.txt");
+    first.resolve();
+    await slow;
+
+    expect(store.fileContent?.name).toBe("fast.txt");
+    expect(store.filePreviewPath).toBe("fast.txt");
+  });
+
+  it("cancels an in-flight read when the preview is closed", async () => {
+    const store = await readyStore();
+    const gate = deferred<void>();
+    mocks.api.readFileContent.mockImplementation(async () => {
+      await gate.promise;
+      return { ...diagram, path: "a.txt", name: "a.txt", kind: "text", text: "x" };
+    });
+
+    const loading = store.openFile("a.txt");
+    store.closeFile();
+    gate.resolve();
+    await loading;
+
+    expect(store.fileContent).toBeNull();
+    expect(store.fileContentLoading).toBe(false);
   });
 });
 
