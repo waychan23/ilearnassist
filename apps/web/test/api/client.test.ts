@@ -292,6 +292,112 @@ describe("sourceImageUrl", () => {
   });
 });
 
+describe("readRawFile", () => {
+  /** A response with no usable type, which is what the raw route deliberately sends. */
+  function rawResponse(body: string) {
+    return {
+      ok: true,
+      status: 200,
+      blob: async () => new Blob([body], { type: "application/octet-stream" }),
+    };
+  }
+
+  it("carries /api on the URL, unlike the paths in the api object", async () => {
+    /*
+     * The regression this exists for. Every path in `api` is `/api`-relative because `request()`
+     * adds the prefix; this function is a bare `fetch` and must carry its own. Getting it wrong
+     * is not a 404 — a dev server answers an unknown path with `index.html` at **200**, so the
+     * viewer is handed a few kilobytes of HTML to draw as a PNG and the only symptom is a
+     * picture that will not decode, with nothing in the console to say why.
+     */
+    setStoredTokens({ accessToken: "at", refreshToken: "rt" });
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => rawResponse("PNG"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.readRawFile("w1", "photo.png", "photo.png");
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(
+      `/api/workspaces/w1/files/raw?path=${encodeURIComponent("photo.png")}`
+    );
+    expect(headerOf(fetchMock as never, 0).get("Authorization")).toBe("Bearer at");
+  });
+
+  it("does the same for a conversation's own directory", async () => {
+    setStoredTokens({ accessToken: "at", refreshToken: "rt" });
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => rawResponse("PNG"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.readSessionRawFile("s1", "shot.png", "shot.png");
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(
+      `/api/sessions/s1/files/raw?path=${encodeURIComponent("shot.png")}`
+    );
+  });
+
+  it("builds the File's type from the name, not from the response", async () => {
+    // The route sends `application/octet-stream` for everything on purpose — these bytes are
+    // re-materialised into our own DOM by the office plugins — so the name is the only thing
+    // that can label them, and it is also what the viewer matches its plugins by.
+    setStoredTokens({ accessToken: "at", refreshToken: "rt" });
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, _init?: RequestInit) => rawResponse("PNG")));
+
+    const file = await api.readRawFile("w1", "photo.png", "photo.png");
+
+    expect(file.name).toBe("photo.png");
+    expect(file.type).toBe("image/png");
+    expect(file.size).toBe(3);
+  });
+
+  it("falls back to a type nothing will act on when the name is unfamiliar", async () => {
+    setStoredTokens({ accessToken: "at", refreshToken: "rt" });
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, _init?: RequestInit) => rawResponse("data")));
+
+    const file = await api.readRawFile("w1", "mystery.zzz", "mystery.zzz");
+
+    expect(file.type).toBe("application/octet-stream");
+  });
+});
+
+describe("uploaded files", () => {
+  it("describes a source through its own route, under /api", async () => {
+    const fetchMock = stubFetch(() =>
+      jsonResponse({
+        path: "doc.pdf",
+        name: "doc.pdf",
+        size: 8,
+        modifiedAt: "2026-01-01T00:00:00.000Z",
+        kind: "binary",
+        text: null,
+        truncated: false,
+      })
+    );
+
+    await api.readSourcePreview("s1");
+
+    // Addressed by the source rather than by a path: a source is outside every workspace, so
+    // there is no path for the file browser's routes to take.
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sources/s1/preview");
+  });
+
+  it("fetches a source's bytes as the same File a workspace file comes back as", async () => {
+    setStoredTokens({ accessToken: "at", refreshToken: "rt" });
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(["PNG"], { type: "application/octet-stream" }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = await api.readSourceRawFile("s1", "shot.png");
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("/api/sources/s1/raw");
+    expect(headerOf(fetchMock as never, 0).get("Authorization")).toBe("Bearer at");
+    // Indistinguishable from a workspace file's, which is what lets one viewer serve both.
+    expect(file.name).toBe("shot.png");
+    expect(file.type).toBe("image/png");
+  });
+});
+
 describe("the bearer token", () => {
   it("rides on every request once there is one", async () => {
     setStoredTokens({ accessToken: "at", refreshToken: "rt" });

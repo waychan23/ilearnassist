@@ -5,6 +5,7 @@ import { useAppStore } from "../../stores/app";
 import { formatBytes } from "../../utils/format";
 import { highlightFile, renderMarkdown } from "../../utils/markdown";
 import Icon from "../Icon.vue";
+import FileViewer from "../FileViewer.vue";
 import MermaidDiagram from "../MermaidDiagram.vue";
 import DiagramDialog from "./DiagramDialog.vue";
 
@@ -20,9 +21,9 @@ import DiagramDialog from "./DiagramDialog.vue";
  * The rendering is chosen by `kind` from the server rather than by the extension here: text is
  * syntax-highlighted into a `<pre>`, Markdown goes through the same renderer the messages use
  * (so `html: false` is what keeps a file from injecting markup), a diagram is drawn, and
- * anything else gets the file's name and size with a note that the format is not previewable
- * yet. The choice is the `view` computed's exhaustive `switch` — see its comment for why that
- * matters more than it looks.
+ * everything the server calls `binary` is handed to `FileViewer` — which decides for itself
+ * whether the format can be drawn, and says so plainly when it cannot. The choice is the `view`
+ * computed's exhaustive `switch` — see its comment for why that matters more than it looks.
  *
  * It reads **either root**: a workspace file, from the tree, or one of a conversation's own
  * files, from the diagram widget. `store.filePreviewRoot` is which, and it exists because the
@@ -78,12 +79,12 @@ function unhandled(kind: never): never {
 type FileView =
   | "loading"
   | "error"
-  | "unsupported"
   | "markdown"
   | "markdown-source"
   | "text"
   | "diagram"
-  | "diagram-source";
+  | "diagram-source"
+  | "binary";
 
 const view = computed<FileView>(() => {
   // Both precede the kind: a file whose read failed has no `kind` yet, and the failure has one
@@ -95,8 +96,6 @@ const view = computed<FileView>(() => {
   if (!loaded) return "loading";
 
   switch (loaded.kind) {
-    case "unsupported":
-      return "unsupported";
     case "markdown":
       return viewMode.value === "rendered" ? "markdown" : "markdown-source";
     case "text":
@@ -106,6 +105,13 @@ const view = computed<FileView>(() => {
       // wants the picture, and checking what was actually written — or copying it to paste
       // somewhere — wants the source.
       return viewMode.value === "rendered" ? "diagram" : "diagram-source";
+    case "binary":
+      // Naming the viewer's case rather than a concrete rendering: whether *anything* can be
+      // drawn is `FileViewer`'s to answer, from the file name and then from the library. Keeping
+      // it out of here is what lets `view` stay a pure function of `kind` — the alternative is a
+      // third input (an async support probe) and `unsupported` coming back into this union,
+      // which is the state the server used to guess at and no longer does.
+      return "binary";
     default:
       return unhandled(loaded.kind);
   }
@@ -228,7 +234,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           </button>
         </div>
 
-        <div class="modal-body file-body" data-testid="file-preview-body">
+        <div
+          class="modal-body file-body"
+          :class="{ 'file-body-filled': view === 'binary' }"
+          data-testid="file-preview-body"
+        >
           <p v-if="view === 'loading'" class="file-note" data-testid="file-preview-loading">
             {{ t("files.preview.loading") }}
           </p>
@@ -239,15 +249,17 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             {{ store.filePreviewError }}
           </p>
 
-          <div
-            v-else-if="view === 'unsupported'"
-            class="file-unsupported"
-            data-testid="file-preview-unsupported"
-          >
-            <Icon name="file" size="2em" />
-            <p>{{ t("files.preview.unsupported") }}</p>
-            <p class="hint">{{ t("files.preview.unsupportedHint") }}</p>
-          </div>
+          <!--
+            Everything the server calls `binary`, handed to the viewer. Whether anything can be
+            drawn — and the "this format is not previewable" panel when nothing can — is decided
+            in there, because the answer depends on a plugin registry that lives in a lazily
+            fetched chunk. The dialog has no opinion to offer and no chunk to consult.
+          -->
+          <FileViewer
+            v-else-if="view === 'binary'"
+            :file="store.filePreviewFile"
+            :name="content?.name ?? name"
+          />
 
           <div v-else-if="view === 'markdown'" class="markdown" v-html="rendered"></div>
 
@@ -329,6 +341,22 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
   overflow: auto;
   max-height: 70vh;
 }
+/*
+ * The viewer's case, and it is a different box rather than the same one with a tweak.
+ *
+ * The library measures its container, so a `height: auto` parent hands it zero and it draws
+ * nothing at all — silently, which is the failure this rule exists to prevent. A definite
+ * height is required, in a flex column, so the viewer's root can fill it.
+ *
+ * `overflow: hidden` for the same kind of reason: the viewer scrolls and zooms its own content,
+ * so the body's `auto` would wrap a second scrollbar around the first one.
+ */
+.file-body-filled {
+  display: flex;
+  flex-direction: column;
+  height: 70vh;
+  overflow: hidden;
+}
 /* The stage is `.diagram-stage` from the global sheet — global because the SVG arrives through
    `v-html` and a scoped rule would not reach it. Only the button under it is this dialog's. */
 .diagram-host {
@@ -379,21 +407,6 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
   margin-left: auto;
   margin-right: var(--space-4);
   flex-shrink: 0;
-}
-.file-unsupported {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-10) var(--space-8);
-  color: var(--text-3);
-  text-align: center;
-}
-.file-unsupported p {
-  margin: 0;
-}
-.file-unsupported .hint {
-  font-size: var(--fs-2);
 }
 .file-note {
   margin: 0;

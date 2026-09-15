@@ -1,12 +1,21 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
 import {
   FileAccessError,
   MAX_PREVIEW_BYTES,
   listDirectory,
   readFileContent,
+  readRawFile,
 } from "../src/files.js";
 
 /**
@@ -198,19 +207,23 @@ describe("readFileContent", () => {
     expect(content.text).toContain("echo hi");
   });
 
-  it("refuses a known binary without pretending to have read it", async () => {
-    writeFileSync(join(workspace, "a.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  it("classifies a known binary by its name, without reading it", async () => {
+    // Valid UTF-8 text, and deliberately so: a NUL byte or a bad decode would reach the same
+    // `binary` by the sniff, and then this would prove nothing about the name winning. Text in
+    // a `.png` can only come out `binary` if the extension was consulted first.
+    const text = "this is not really a png";
+    writeFileSync(join(workspace, "a.png"), text);
 
     const content = await readFileContent(workspace, "a.png");
-    expect(content.kind).toBe("unsupported");
+    expect(content.kind).toBe("binary");
     expect(content.text).toBeNull();
-    // The metadata still arrives, which is what the "no preview" message renders.
-    expect(content.size).toBe(4);
+    // The metadata still arrives, which is what the viewer's panels render.
+    expect(content.size).toBe(Buffer.byteLength(text));
   });
 
-  it("refuses a file whose bytes are not text", async () => {
+  it("classifies a file whose bytes are not text as binary", async () => {
     writeFileSync(join(workspace, "blob"), Buffer.from([0x00, 0x01, 0x02, 0xff]));
-    expect((await readFileContent(workspace, "blob")).kind).toBe("unsupported");
+    expect((await readFileContent(workspace, "blob")).kind).toBe("binary");
   });
 
   it("returns only the first cap of a long file, and flags it", async () => {
@@ -250,5 +263,72 @@ describe("readFileContent", () => {
     symlinkSync(join(outside, "secret.txt"), join(workspace, "link.txt"));
 
     expect(await codeOf(readFileContent(workspace, "link.txt"))).toBe("INVALID_FILE_PATH");
+  });
+});
+
+/**
+ * The byte route, which exists because the one above cannot carry a PDF: it decodes UTF-8 and
+ * stops at a quarter of a megabyte.
+ *
+ * The sandbox is the thing to re-prove here rather than assume. `readRawFile` shares
+ * `resolveReal` with every other read, but "it calls the same function" is not the same
+ * evidence as a symlink refused, and this is the route that hands out whole files.
+ */
+describe("readRawFile", () => {
+  it("returns the whole file, past the text preview cap", async () => {
+    // Larger than MAX_PREVIEW_BYTES on purpose: the entire reason this route exists is that
+    // the other one truncates, so a test under the cap would pass either way.
+    const bytes = Buffer.alloc(MAX_PREVIEW_BYTES + 1024, 0x41);
+    writeFileSync(join(workspace, "big.bin"), bytes);
+
+    const raw = await readRawFile(workspace, "big.bin");
+    expect(raw.bytes.length).toBe(bytes.length);
+    expect(raw.bytes.equals(bytes)).toBe(true);
+    expect(raw.size).toBe(bytes.length);
+    expect(raw.name).toBe("big.bin");
+  });
+
+  it("refuses a file past the preview limit, without reading it", async () => {
+    // Sparse rather than written: a 32 MB `writeFileSync` is a slow test, and truncating gives
+    // the same `stat`-visible size for nothing.
+    writeFileSync(join(workspace, "huge.bin"), "");
+    truncateSync(join(workspace, "huge.bin"), MAX_FILE_PREVIEW_BYTES + 1);
+
+    expect(await codeOf(readRawFile(workspace, "huge.bin"))).toBe("FILE_TOO_LARGE");
+  });
+
+  it("allows a file exactly at the limit", async () => {
+    // The boundary is inclusive, and it is worth pinning: an off-by-one here would refuse the
+    // largest file the constant promises to serve.
+    writeFileSync(join(workspace, "exact.bin"), "");
+    truncateSync(join(workspace, "exact.bin"), MAX_FILE_PREVIEW_BYTES);
+
+    expect((await readRawFile(workspace, "exact.bin")).size).toBe(MAX_FILE_PREVIEW_BYTES);
+  });
+
+  it("refuses to read a directory", async () => {
+    mkdirSync(join(workspace, "dir"));
+    expect(await codeOf(readRawFile(workspace, "dir"))).toBe("NOT_A_FILE");
+  });
+
+  it("requires a path", async () => {
+    expect(await codeOf(readRawFile(workspace, ""))).toBe("INVALID_FILE_PATH");
+  });
+
+  it("404s a file that is not there", async () => {
+    expect(await codeOf(readRawFile(workspace, "nope.pdf"))).toBe("FILE_NOT_FOUND");
+  });
+
+  it("rejects a path that climbs out of the workspace", async () => {
+    expect(await codeOf(readRawFile(workspace, "../outside.txt"))).toBe("INVALID_FILE_PATH");
+  });
+
+  it("rejects a symlink to a file outside the workspace", async () => {
+    writeFileSync(join(outside, "secret.pdf"), "not yours");
+    symlinkSync(join(outside, "secret.pdf"), join(workspace, "link.pdf"));
+
+    // The realpath check, and the reason it is repeated here rather than trusted to the read
+    // above: this is the route that hands a caller a whole file.
+    expect(await codeOf(readRawFile(workspace, "link.pdf"))).toBe("INVALID_FILE_PATH");
   });
 });

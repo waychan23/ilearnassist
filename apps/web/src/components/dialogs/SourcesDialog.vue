@@ -19,6 +19,10 @@ import Icon from "../Icon.vue";
  * Deleting is behind `confirm()` and the copy says what it costs, because it is the app's one
  * action that destroys something beyond recovery — a conversation can be recreated, a
  * workspace re-made, but bytes the user uploaded cannot.
+ *
+ * A row opens the file in the same preview dialog the file tree uses. That is the only place
+ * an upload's *contents* can be reached: a source is not in any workspace, so the file tree
+ * cannot list it, and until this existed the list offered nothing but a delete button.
  */
 
 const store = useAppStore();
@@ -26,11 +30,18 @@ const { t } = useI18n();
 
 const closeBtn = ref<HTMLButtonElement | null>(null);
 
+/**
+ * Escape closes this dialog — unless a preview is up over it.
+ *
+ * `FilePreviewDialog` listens on `window` for the same key, so without the guard one press
+ * closes both: the file the reader opened vanishes and the list that opened it slides away
+ * underneath. The same early return the drawer's handler makes, for the same reason.
+ */
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    close();
-  }
+  if (e.key !== "Escape") return;
+  if (store.filePreviewPath) return;
+  e.preventDefault();
+  close();
 }
 
 /**
@@ -142,13 +153,30 @@ async function remove(source: Source): Promise<void> {
               class="source"
               data-testid="source-row"
             >
-              <span class="source-icon"><Icon :name="source.kind === 'image' ? 'image' : 'file'" /></span>
-              <span class="source-meta">
-                <span class="source-name truncate" :title="source.name">{{ source.name }}</span>
-                <span class="source-detail" data-testid="source-detail">
-                  {{ [formatBytes(source.size), stateOf(source)].filter(Boolean).join(" · ") }}
+              <!--
+                The row's main area opens the file, and it is one button rather than a click
+                handler on the `<li>` so the delete button beside it stays a sibling — a button
+                inside a button is invalid, and browsers disagree about what it means. Same
+                shape as the workspace card's open control, minus the stretched pseudo-element:
+                this one fills the row already, so there is nothing to stretch over.
+              -->
+              <button
+                class="source-open"
+                data-testid="source-open"
+                :title="t('sources.preview', { name: source.name })"
+                :aria-label="t('sources.preview', { name: source.name })"
+                @click="store.openSourceFile(source)"
+              >
+                <span class="source-icon">
+                  <Icon :name="source.kind === 'image' ? 'image' : 'file'" />
                 </span>
-              </span>
+                <span class="source-meta">
+                  <span class="source-name truncate">{{ source.name }}</span>
+                  <span class="source-detail" data-testid="source-detail">
+                    {{ [formatBytes(source.size), stateOf(source)].filter(Boolean).join(" · ") }}
+                  </span>
+                </span>
+              </button>
               <button
                 class="icon-btn danger"
                 data-testid="source-delete"
@@ -207,6 +235,31 @@ async function remove(source: Source): Promise<void> {
   padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+/* The affordance, since the row is now something you can open — the workspace card's move. */
+.source:hover {
+  border-color: var(--accent);
+}
+/*
+ * The open control: a real button, reset to look like the row it fills. `font: inherit` and
+ * `color: inherit` are what keep it from reading as a control inside a list, and `min-width: 0`
+ * is what lets a long filename shrink instead of pushing delete off the row.
+ */
+.source-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
 }
 .source-icon {
   display: flex;

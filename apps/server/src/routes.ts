@@ -141,7 +141,13 @@ import {
 import type { UserRecord } from "./db.js";
 import { sessionDir, userLayout, type DataLayout, type UserLayout } from "./paths.js";
 import { createWorkspaceDir, uniqueSlug } from "./workspace.js";
-import { FileAccessError, listDirectory, readFileContent } from "./files.js";
+import {
+  FileAccessError,
+  listDirectory,
+  readFileContent,
+  readPreviewFile,
+  readRawFile,
+} from "./files.js";
 
 /**
  * The signed-in account, put on the request by the gate below.
@@ -231,13 +237,19 @@ function widgetError(code: "UNKNOWN_WIDGET" | "WIDGET_SCOPE_UNSUPPORTED"): ApiEr
  * rethrown, so Fastify answers with its own 500: a curated reply for a bug would tell the
  * user to read a friendly sentence about a file when what happened was the server breaking.
  */
-function fileErrorReply(err: unknown): { status: 400 | 404; body: ApiErrorBody } {
+function fileErrorReply(err: unknown): { status: 400 | 404 | 413; body: ApiErrorBody } {
   if (err instanceof FileAccessError) {
     // Only "there is nothing there" is a 404. Everything else — an escaping path, a
     // directory asked for as a file — is a bad request, and saying 404 would send the
     // client looking for a file that was never the problem.
+    //
+    // `FILE_TOO_LARGE` is the one that is neither, and it is a 413 rather than a 400 because
+    // it is the only failure here the caller could have avoided by asking differently — it is
+    // a real status, and no other path in this file produces it. The envelope carries the
+    // limit so the sentence can name it; see `MAX_FILE_PREVIEW_BYTES`.
     return {
-      status: err.code === "FILE_NOT_FOUND" ? 404 : 400,
+      status:
+        err.code === "FILE_NOT_FOUND" ? 404 : err.code === "FILE_TOO_LARGE" ? 413 : 400,
       body: apiError(err.code, err.message),
     };
   }
@@ -1139,6 +1151,50 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
   });
 
+  /**
+   * The bytes themselves, for the preview viewer.
+   *
+   * A second endpoint rather than a field on the one above, because the two carry different
+   * kinds of thing. `/files/content` answers *what this is*, in JSON, and stops at 256 KB;
+   * this answers *here are the bytes* and goes to `MAX_FILE_PREVIEW_BYTES`. A PDF cannot ride
+   * in the first, and a 40 MB one cannot ride in the second.
+   *
+   * The type is deliberately `application/octet-stream` with `Content-Disposition: attachment`
+   * rather than the file's own, which is a divergence from `/api/sources/:id/raw` — and that
+   * route should keep serving the real `mimeType`. It serves the account's own uploads to an
+   * `<img>`, where an SVG is inert. This one serves bytes the *agent* may have written into a
+   * sandbox, and the client hands them to a viewer that re-materialises some of them (a
+   * `.docx` becomes HTML), so handing them to a browser as a scriptable type is the wrong
+   * trade for no gain. The client re-labels the blob from the file name, which is also how the
+   * viewer matches its plugins.
+   *
+   * The bearer token is what actually protects this: a browser attaches no `Authorization`
+   * header to an `<img src>`, an `<iframe>` or a navigation, so the URL is unreachable except
+   * by our own `fetch`. The headers are the second line, not the first.
+   */
+  app.get("/api/workspaces/:workspaceId/files/raw", async (request, reply) => {
+    const userId = actor(request).id;
+    const { workspaceId } = request.params as { workspaceId: string };
+    const { path } = request.query as { path?: string | string[] };
+    const workspace = db.getWorkspaceForUser(workspaceId, userId);
+    if (!workspace) {
+      return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
+    }
+
+    try {
+      const { bytes } = await readRawFile(workspace.workdirPath, path);
+      return reply
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Disposition", "attachment")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Length", String(bytes.length))
+        .send(bytes);
+    } catch (err) {
+      const { status, body } = fileErrorReply(err);
+      return reply.code(status).send(body);
+    }
+  });
+
   /* --------------------------------- copilots --------------------------------- */
   /*
    * Copilots are owned, and *publishable* rather than tiered: a Copilot the operator wants every
@@ -1969,6 +2025,40 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
   });
 
+  /**
+   * A conversation's own files as bytes, for the preview viewer.
+   *
+   * The workspace route's twin, down to the headers and for the same reasons — see the
+   * docblock there rather than a second copy of the argument. What differs is only the root,
+   * which is why `readRawFile` takes one: `sessions/<sessionId>/` is where the diagrams and
+   * anything else a turn wrote live, and the browser that lists it is the same browser.
+   *
+   * No diagram summary is attached here, unlike `/files/content` above: a summary belongs to a
+   * `.mmd` the viewer draws itself, and this route is never the one that serves one.
+   */
+  app.get("/api/sessions/:id/files/raw", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const { path } = request.query as { path?: string | string[] };
+    const found = db.getSessionForUser(id, userId);
+    if (!found) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    try {
+      const { bytes } = await readRawFile(sessionDir(found.workspace.dirPath, found.session.id), path);
+      return reply
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Disposition", "attachment")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Length", String(bytes.length))
+        .send(bytes);
+    } catch (err) {
+      const { status, body } = fileErrorReply(err);
+      return reply.code(status).send(body);
+    }
+  });
+
   /* ---------------------------------- sources ---------------------------------- */
 
   /**
@@ -2187,6 +2277,42 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       .listSourcesForUser(userId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(toSource);
+  });
+
+  /**
+   * A source, described the way a workspace file is described.
+   *
+   * Uploaded files were the one place a preview could not reach: they live outside every
+   * workspace, at `sources/raw/<id>.<ext>`, so the file browser's two routes cannot address them
+   * and the sources dialog had nothing to open with. This is the same `FileContent` the browser
+   * hands its dialog, so one dialog serves both.
+   *
+   * It goes through `readPreviewFile`, which is also what `readFileContent` calls — the point
+   * being that a `.mmd` or a `.md` uploaded as a source is classified by the *same* tables as one
+   * in a workspace. The sandbox is the only thing that differs, and it differs where it should:
+   * `resolveInSources` here rather than `resolveReal`, because a source's path is a column that
+   * has travelled through backups.
+   *
+   * The bytes are not here, deliberately — `truncated` and `text` are for the text path, and a
+   * binary's bytes come from `/raw` beside this, under the cap the client checks first.
+   */
+  app.get("/api/sources/:id/preview", async (request, reply) => {
+    const user = actor(request);
+    const { id: sourceId } = request.params as { id: string };
+    const source = db.getSourceForUser(sourceId, user.id);
+    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+
+    const path = resolveInSources(treeFor(user), source.rawPath);
+    if (!path) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+
+    try {
+      // The *stored* name, not the path's: the name is the only part of the two that the user
+      // ever chose, and a source deduped onto an earlier upload would otherwise show a uuid.
+      return await readPreviewFile(path, source.name);
+    } catch (err) {
+      const { status, body } = fileErrorReply(err);
+      return reply.code(status).send(body);
+    }
   });
 
   /** Serve a source's bytes back, for a thumbnail or a download. */
