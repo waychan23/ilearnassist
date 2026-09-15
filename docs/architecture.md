@@ -1230,6 +1230,14 @@ would drop the moment the reader looked at the plan. The notes themselves are ro
 [`notes`](#notes), owner-scoped through the conversation and reached at
 `/api/sessions/:id/notes`.
 
+**One widget produces its data on demand, and it is the only one that does.** The insight panel
+(`id: "insight"`) shows typed observations from the [insight pass](#the-insight-pass-insightsts-agentinsightsts),
+which runs when the reader presses a button — no install hook, no load-time fetch of anything but
+the list, and no widget event to subscribe to, since every change to it is a decision the component
+itself made. Its row carries `adopted`, which is the only thing that survives the next pass. That
+is also why it is not in the `"study"` group: the group's rule is "live on install" and this one
+waits to be asked (see [widgets.md](widgets.md#an-on-demand-widget-with-no-tools-the-insight-widget)).
+
 A widget declares which levels it accepts — `workspace`, `session` — and only those two exist. A
 **Copilot is a third place to tick a box, not a third scope**: its selection is copied into the
 conversation it starts, so "copilot level" is session level reached through a template. Three

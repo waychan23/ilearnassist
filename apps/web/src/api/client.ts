@@ -18,11 +18,14 @@ import type {
   DocumentParsingConfig,
   DriverInfo,
   FileContent,
+  GenerateSessionInsightsResponse,
   GetPlanResponse,
   GetQuizQuestionsResponse,
   GetSessionDiagramsResponse,
+  GetSessionInsightsResponse,
   GetSessionNotesResponse,
   GetSessionThreadsResponse,
+  Insight,
   Message,
   Note,
   PlanSnapshot,
@@ -38,6 +41,7 @@ import type {
   UpdateCopilotInput,
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
+  UpdateInsightInput,
   UpdateNoteInput,
   UpdateProviderInput,
   UpdateSessionInput,
@@ -610,6 +614,31 @@ export const api = {
     }),
   deleteNote: (sessionId: string, noteId: string) =>
     request<{ ok: boolean }>(`/sessions/${sessionId}/notes/${noteId}`, { method: "DELETE" }),
+
+  /*
+   * Insights (the insight widget), about the conversation for the same reason.
+   *
+   * `generateInsights` is a long POST on purpose: it runs a whole-conversation model call and
+   * answers when the pass is done, so the panel disables its button and says it is working rather
+   * than polling for a background job. `status: "failed"` arrives as a **200** with the list
+   * unchanged — a pass that produced nothing usable is a fact about the call, not an error the
+   * panel should render as one.
+   */
+  listInsights: (sessionId: string) =>
+    request<GetSessionInsightsResponse>(`/sessions/${sessionId}/insights`),
+  generateInsights: (sessionId: string) =>
+    request<GenerateSessionInsightsResponse>(`/sessions/${sessionId}/insights/generate`, {
+      method: "POST",
+    }),
+  setInsightAdopted: (sessionId: string, insightId: string, input: UpdateInsightInput) =>
+    request<{ item: Insight }>(`/sessions/${sessionId}/insights/${insightId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  deleteInsight: (sessionId: string, insightId: string) =>
+    request<{ ok: boolean }>(`/sessions/${sessionId}/insights/${insightId}`, {
+      method: "DELETE",
+    }),
 
   /**
    * Stop the turn currently streaming for a session.

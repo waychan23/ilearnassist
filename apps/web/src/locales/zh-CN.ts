@@ -930,6 +930,40 @@ export default {
       /** The row exists but its file is gone. */
       missing: "文件已不存在",
     },
+    insight: {
+      name: "思考",
+      hint: "回顾这个会话的计划、测验、脉络、笔记与图表，总结出你的难点、疑问、可延伸的方向等条目。",
+      noSession: "打开一个会话后，这里可以回顾它的学习记录。",
+      /** The button that runs a pass. A button, because a pass costs a whole model call. */
+      generate: "生成思考",
+      generating: "生成中…",
+      generatingHint: "正在阅读这个会话的记录，可能需要一分钟。",
+      /** The pass ran and produced nothing usable. The list above it is unchanged. */
+      generateFailed: "这次总结没有得到可用的结果，上面的条目没有改动。",
+      empty: "还没有思考记录，点「生成思考」开始。",
+      /** The toggle: `adopted` is what survives the next pass, so the label says what it does. */
+      adopt: "采纳",
+      release: "取消采纳",
+      adoptedBadge: "已采纳",
+      /** Said once, under the list, because the rule is not guessable from the controls. */
+      keepNote: "只有「已采纳」的条目会在下次生成时保留，其余会被新的结果替换。",
+      /**
+       * The eight kinds. A dynamic key (`widgets.insight.types.<id>`) over the closed
+       * `INSIGHT_TYPES` union — the one narrow prefix this feature adds to `DYNAMIC_PREFIXES`,
+       * because eight literal keys would be eight chances to write one of them into the wrong
+       * branch of a switch that has no other job.
+       */
+      types: {
+        difficulty: "难点",
+        confusion: "不理解",
+        doubt: "存疑",
+        strength: "已掌握",
+        background: "背景知识",
+        reading: "拓展阅读",
+        advice: "学习建议",
+        habit: "学习习惯",
+      },
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */

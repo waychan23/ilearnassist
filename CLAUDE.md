@@ -238,6 +238,11 @@ apps/server/src/
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
+  agent/threads.ts        # the out-of-band topic classifier call
+  agent/insights.ts       # the out-of-band insight pass call
+  agent/reasoning.ts      # the `thinking` body field, capability-gated (both calls above)
+  modelJson.ts            # fence-and-bracket stripping for an out-of-band answer (pure)
+  modelLog.ts             # the append-only observation logs, one file per call kind
   documents/              # document → text: local extractors, cloud drivers, policy
   documents/local/        # pdfjs (PDF) + an OOXML/ODF reader over fflate
   documents/drivers/      # one file per wire protocol (sync / mineru / llamaparse)
@@ -248,9 +253,11 @@ apps/server/src/
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
   tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
+  tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   widgets.ts              # sumUsage + the widget-selection validator (pure)
   notes.ts                # the notes widget's records: what a body may become a note (pure)
+  insights.ts             # the insight pass: prompt, defensive parse, the wipe-then-insert write
 apps/web/src/
   stores/app.ts           # Pinia store (all state + actions)
   api/client.ts           # fetch helpers + SSE parser (normalizes errors → ApiError)
@@ -275,6 +282,7 @@ apps/web/src/
   widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
+  widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, AskUserCard, Composer,
@@ -1186,6 +1194,17 @@ Fuller map in `docs/reference.md`.
   whose file was never written is half the feature. The panel is a viewer: it lists the
   conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
   folder is the separate conversation-files dialog. See `docs/diagrams.md`.
+  **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
+  comes from an out-of-band model call a button triggers, so there is nothing to bind — and
+  binding would be wrong anyway, because a bound tool is something the *agent* can call and the
+  agent must not decide to spend a whole-conversation model call on a panel nobody may open. No
+  `onInstall` either: an install is not a request for a pass. It is deliberately **not in the
+  `"study"` group**, whose rule is "live on install" — the plan refreshes every turn, the quiz
+  poses questions mid-turn, the thread classifies after every turn, while this one shows an empty
+  panel and waits, and bundled it would install a tab that looks broken beside three working ones.
+  The component holds its own data and subscribes to no widget event, for the reason the widget
+  events bullet gives: every change to the list is a decision it made itself. See
+  `docs/widgets.md` → "An on-demand widget with no tools".
 - **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget, and `/sessions/:id/quizzes/:qid/answer` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: the make-up POST does a status-guarded UPDATE of the SAME row (never an insert, clearing stale grading), then the client drives an ordinary `/chat` turn quoting the UUID so the model grades it instead of posing a new quiz. An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in a system-prompt-only note (`renderMakeupKeyNote`, gated by `ChatInput.makeupQuizId` naming an owned **answered** row) for a make-up. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
 - **A note belongs to a conversation, and to a message only when something was annotated.** `notes.session_id` is `NOT NULL` and `message_id` is nullable, which is what makes a note the user typed from the panel the same kind of thing as one made by dragging over a sentence. `message_id` carries **no foreign key** on purpose: a regenerate or a tail delete soft-deletes a message, and the note is the user's own writing, so it survives with the quote it recorded — `messageMissing`, resolved by a `LEFT JOIN messages … AND m.deleted_at IS NULL` in the read that fetches the note, is how a read says so (never a client guess from a message list that only holds the conversation on screen). **An anchor is a text quote plus which occurrence of it**, counted over the message's **visible** text — never character offsets, which are offsets into rendered HTML and mean nothing after the next `v-html` assignment, and never a raw text walk, which sees every formula twice because KaTeX emits glyphs *and* hidden MathML. **The model reads notes and cannot write them.** No tool creates or edits one — that half of the original rule is the half that carries the product weight, since a turn must never rewrite what the learner wrote. The read arrives through the ordinary `ila_query(kind: "note")`, deliberately not through a tool bound to the notes widget: a bound tool is assembled only while its widget is installed, and nothing installs a widget by default, so binding the read would make the learner's own notes invisible in every conversation that had not opted into the panel. What the two sides gain: a plan, a quiz and an insight pass are all richer for knowing what the learner underlined, and a note that reads like an instruction is handed over as data about the learner, never as an instruction — the tool result says so in those words.
 - **A widget can own a capability of the host, and exactly one holds it at a time.** The message list implements marking-up (selection, the floating bar, `<mark>`, the window) and knows nothing about notes as records; the notes widget owns the records and knows nothing about `Range`. `composables/messageNotes.ts` is the whole of what they share: a **claim**, per *conversation* rather than per widget (the message list on screen belongs to one session while the widget is installed in a different set of them), with a refusal that names the holder. The host registers on mount and the widget claims from `WidgetModule.onActive`, in either order, because the host **reads** the claim rather than being told about it. `onActive` is not `onMount`: `WidgetPanel` mounts only the active tab, so a claim owned by the component would drop the moment the reader looked at the plan, taking every highlight with it. It is called by `composables/widgetActivation.ts` — an effect owned by `ChatView`'s setup, because the panel being rendered *is* the answer to "is a widget live", and leaving the view (the one transition no reactive input expresses) is reported by that scope stopping. It is deliberately not a store `watch`: a store's setup belongs to no lifetime, and in a test suite every abandoned store instance keeps watching module-level singletons.

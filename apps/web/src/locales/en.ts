@@ -799,6 +799,38 @@ const en: typeof MessageSchema = {
       /** The row exists but its file is gone. */
       missing: "The file is gone",
     },
+    insight: {
+      name: "Insights",
+      hint: "Reflect on this conversation's plan, quizzes, topics, notes and diagrams — what looks hard, what is unclear, what to read next.",
+      noSession: "Open a conversation and you can reflect on its study record here.",
+      /** The button that runs a pass. A button, because a pass costs a whole model call. */
+      generate: "Generate",
+      generating: "Generating…",
+      generatingHint: "Reading this conversation's record; this can take a minute.",
+      /** The pass ran and produced nothing usable. The list above it is unchanged. */
+      generateFailed: "That pass produced nothing usable. The list above is unchanged.",
+      empty: "Nothing here yet — press Generate to start.",
+      /** The toggle: `adopted` is what survives the next pass, so the label says what it does. */
+      adopt: "Keep",
+      release: "Stop keeping",
+      adoptedBadge: "Kept",
+      /** Said once, under the list, because the rule is not guessable from the controls. */
+      keepNote: "Only the items you keep survive the next pass; the rest are replaced by it.",
+      /**
+       * The eight kinds. A dynamic key (`widgets.insight.types.<id>`) over the closed
+       * `INSIGHT_TYPES` union — the one narrow prefix this feature adds to `DYNAMIC_PREFIXES`.
+       */
+      types: {
+        difficulty: "Hard",
+        confusion: "Unclear",
+        doubt: "Doubtful",
+        strength: "Mastered",
+        background: "Background",
+        reading: "Further reading",
+        advice: "Advice",
+        habit: "Study habits",
+      },
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */

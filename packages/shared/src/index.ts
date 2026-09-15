@@ -448,6 +448,7 @@ export const WIDGET_IDS = [
   "thread",
   "notes",
   "diagram",
+  "insight",
 ] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
@@ -507,6 +508,22 @@ export const WIDGETS: readonly WidgetDefinition[] = [
    * by hand appears in it exactly like one the model drew.
    */
   { id: "diagram", scopes: ["session"] },
+  /*
+   * The insight panel brings no tools either, and for a stronger reason than the diagram's: the
+   * pass it drives is an **out-of-band model call**, the `agent/title.ts` / `agent/threads.ts`
+   * shape, so there is no tool to bind.
+   *
+   * Even if there were, binding it would be the wrong move twice over. A bound tool is something
+   * the *agent* can call, and the agent must not decide to spend a whole-conversation model call
+   * on a panel nobody may open — it costs a full pass over every source, and the user pressing a
+   * button is what makes that cost acceptable. And a bound tool is assembled only while its
+   * widget is installed, which with an empty `DEFAULT_WIDGET_IDS` means the capability could be
+   * switched on only from the Copilot checklist that `isWidgetBoundTool` keeps it out of.
+   *
+   * `ila_query` is the agent's own way into the material this panel reflects on. Two doors to the
+   * same data on purpose: the agent reads it during a turn, the panel thinks about it when asked.
+   */
+  { id: "insight", scopes: ["session"] },
 ];
 
 /**
