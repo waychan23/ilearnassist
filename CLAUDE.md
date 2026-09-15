@@ -787,6 +787,24 @@ Fuller map in `docs/reference.md`.
   `packages/shared` for the same reason `ASK_USER_TOOL_NAME` does — the client writes the
   allow-list and the server filters by it, and the copies had already drifted: the client's list was
   missing `read_document`, which therefore could not be chosen at all.
+- **A tool's parameters schema must convert to a top-level `"type": "object"`, and a zod union does
+  not.** `ila_query` shipped as a `z.discriminatedUnion`, which is the better *type* — a field that
+  means nothing for a kind cannot be written for it, and `switch` exhaustiveness is free — and it
+  **cannot be sent**: the conversion gives `{"anyOf": […], "type": null}`, and a strict
+  OpenAI-compatible endpoint refuses it with `400 Invalid schema for function 'ila_query': schema
+  must be a JSON Schema of 'type: "object"', got 'type: null'`. That is a 400 on **every turn** in
+  any conversation where the tool is available, whether or not it is called. Nothing saw it: the
+  type system cannot see the conversion, the handler's tests call `invoke()` and never touch a
+  request, and the fake LLM accepts any schema because it validates none. So a tool needing a
+  discriminated set is **one flat object** with the discriminator as a `z.enum`, the per-kind field
+  contract in an `ALLOWED_FIELDS` table refused by a `checkFields` guard (zod strips unknown keys,
+  so without it `{kind: "plan", status: "answered"}` returns a plan and never says the `status`
+  went nowhere), and the completeness check moved from the `switch` to a `Record<QueryKind, …>`
+  handler table — a missing kind is still a `tsc` error. Each optional field's `describe` names the
+  kind it belongs to, because the schema can no longer express the association.
+  `test/tool-wire-schema.test.ts` is the guard, and it asserts the conversion for **every** tool a
+  real turn sends, plus the union's failure mode itself so the next person meets the trap in a test
+  rather than in production.
 - **A workspace has two directories, and they are not interchangeable.** `Workspace.dirPath`
   is the workspace's own — the parent of `workdir/` and `sessions/`, what `DELETE` removes,
   and what the home page's card names. `Workspace.workdirPath` is `dirPath/workdir`: the

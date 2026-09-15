@@ -436,6 +436,15 @@ selection behave as the widest.
 `web_search`, `web_fetch`, `read_document`, `ask_user` and `ila_query` survive
 `fileTools.enabled: false` because none of them touches the workspace.
 
+**A tool's parameters schema must arrive as a top-level object.** The one shape that does not is a
+zod union: it converts to `{"anyOf": […], "type": null}`, which a strict OpenAI-compatible endpoint
+refuses outright — `400 Invalid schema for function …: schema must be a JSON Schema of 'type:
+"object"', got 'type: null'` — on every turn where the tool is offered, called or not. So a
+discriminated set is **one flat object** with the discriminator as a `z.enum`, a table for which
+fields each value accepts, and a handler `Record` for the completeness a `switch` used to give
+(`tools/query.ts` is the worked example, and why it is shaped that way). `test/tool-wire-schema.test.ts`
+sends one real turn and asserts the conversion for every tool in it.
+
 **`ila_query` is the agent's read of the conversation's own record** (`tools/query.ts`): one
 tool with a `kind` discriminator over plan, quiz, thread, note and diagram, rather than five
 tools competing for the same slot in the model's attention and five allow-list boxes for one

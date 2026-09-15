@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
-import { QUERY_TOOL_NAME, planNodeNumbers, type PlanTreeNode } from "@ilearnassist/shared";
+import {
+  QUERY_KINDS,
+  QUERY_TOOL_NAME,
+  planNodeNumbers,
+  type PlanTreeNode,
+  type QueryKind,
+} from "@ilearnassist/shared";
 import type { AppDb } from "../db.js";
 import { diagramFileName, listDiagramViews } from "../diagrams.js";
 import { readCurrentPlan, renderReadResult } from "../plans.js";
@@ -171,70 +177,93 @@ const offsetSchema = z
   .describe("How many items to skip. Use it to page through a truncated answer.");
 
 /**
- * One branch per kind, so a field that means nothing for a kind cannot be sent for it.
+ * One flat object, and that is a **wire-format limit rather than a preference**.
  *
- * A single loose object with an optional `status` would push the enum checks into the handler,
- * where a typo becomes a `Tool error: ...` string the model has to interpret instead of a
- * schema refusal it can correct. The union's real payoff is in the handler: `switch (input.kind)`
- * is checked for exhaustiveness, so a sixth kind is a `tsc` error rather than a fall-through.
+ * The first shape was a `z.discriminatedUnion("kind", …)`, which is the better *type*: a field
+ * that means nothing for a kind cannot be written for it, and `switch` exhaustiveness came free.
+ * It cannot be sent. A discriminated union serialises to `{"anyOf": […]}` with **no top-level
+ * `type`**, and a strict OpenAI-compatible endpoint refuses a function schema that is not
+ * `type: "object"` — observed in use as:
  *
- * Each branch is `.strict()`, so a field belonging to a *different* kind is refused rather than
- * silently dropped. Zod strips unknown keys by default, which would make the union's promise —
- * "a field that means nothing for a kind cannot be sent for it" — false in exactly the case it
- * was written for: a model that sends `{kind: "plan", status: "answered"}` would get a plan back
- * and never learn that its `status` went nowhere.
+ *     400 Invalid schema for function 'ila_query': schema must be a JSON Schema of
+ *     'type: "object"', got 'type: null'.
+ *
+ * So the union is rebuilt out of three parts, which keeps all three of its properties — and each
+ * is now pinned by a test rather than by the shape of the schema:
+ *
+ * 1. `kind` and `status` are real enums, so an unknown kind or status is still a schema refusal.
+ * 2. `ALLOWED_FIELDS` is the per-kind table, so a field belonging to a *different* kind is
+ *    refused by `checkFields` before any read happens. Zod strips unknown keys by default, which
+ *    would make "a field that means nothing for a kind cannot be sent for it" false in exactly
+ *    the case it was written for: `{kind: "plan", status: "answered"}` would return a plan and
+ *    never say that the `status` went nowhere.
+ * 3. `HANDLERS` is a `Record<QueryKind, …>`, so a sixth kind with no branch is a `tsc` error —
+ *    the same completeness check the exhaustive `switch` was giving.
+ *
+ * Every optional field's `describe` names the kind it belongs to, because the schema can no longer
+ * express the association and the description is the only thing left that teaches it.
  */
-const inputSchema = z.discriminatedUnion("kind", [
-  z
-    .object({ kind: z.literal("plan").describe("The study plan, with every node's id and status.") })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("quiz").describe("The quiz questions this conversation asked."),
-      // Written out rather than read from `QUIZ_QUESTION_STATUSES`, following `planStatus` in
-      // plans.ts: `z.enum` takes a mutable tuple and the shared list is a readonly one. The two
-      // are pinned against each other by a test rather than by the type.
-      status: z
-        .enum(["pending", "answered", "skipped", "dismissed"])
-        .optional()
-        .describe("Only questions in this state. Omit for all of them."),
-      limit: limitSchema,
-      offset: offsetSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("thread").describe("How the conversation was split into topics."),
-      limit: limitSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("note").describe("The learner's own notes."),
-      query: z
-        .string()
-        .max(200)
-        .optional()
-        .describe("Only notes whose text or quoted passage contains this, case-insensitively."),
-      limit: limitSchema,
-      offset: offsetSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("diagram").describe("The diagrams this conversation drew."),
-      name: z
-        .string()
-        .max(200)
-        .optional()
-        .describe(
-          "One diagram's file name, with or without the .mmd extension. Give it to get that " +
-            "diagram's mermaid source; omit it to list the diagrams instead."
-        ),
-      limit: limitSchema,
-    })
-    .strict(),
-]);
+const inputSchema = z.object({
+  kind: z.enum(QUERY_KINDS).describe(
+    "What to look up. Each kind reads a different part of this conversation's record."
+  ),
+  status: z
+    .enum(["pending", "answered", "skipped", "dismissed"])
+    .optional()
+    .describe('kind: "quiz" only. Only questions in this state; omit for all of them.'),
+  query: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'kind: "note" only. Only notes whose text or quoted passage contains this, ' +
+        "case-insensitively."
+    ),
+  name: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'kind: "diagram" only. One diagram\'s file name, with or without the .mmd extension. ' +
+        "Give it to get that diagram's mermaid source; omit it to list the diagrams instead."
+    ),
+  limit: limitSchema,
+  offset: offsetSchema,
+});
+
+type QueryInput = z.infer<typeof inputSchema>;
+
+/**
+ * The optional fields each kind accepts, beyond `kind` itself.
+ *
+ * A table rather than five `if` chains in the handler: it is the one place the per-kind contract
+ * is written down now that the schema cannot carry it, and it stays readable as a table.
+ */
+const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = {
+  plan: [],
+  quiz: ["status", "limit", "offset"],
+  thread: ["limit"],
+  note: ["query", "limit", "offset"],
+  diagram: ["name", "limit"],
+};
+
+/**
+ * Refuse a field that belongs to another kind, naming it and listing what this one takes.
+ *
+ * A `Tool error: …` rather than a schema refusal, because the schema cannot say it — but the
+ * effect is the same one the union had: the model is told which field was wrong and can correct
+ * it, where a silent strip would leave it believing a filter had been applied.
+ */
+function checkFields(input: QueryInput): void {
+  const allowed = new Set<string>([...ALLOWED_FIELDS[input.kind], "kind"]);
+  const stray = Object.keys(input).filter((key) => !allowed.has(key));
+  if (stray.length === 0) return;
+  const takes = ALLOWED_FIELDS[input.kind];
+  throw new Error(
+    `"${input.kind}" does not take ${stray.map((f) => `"${f}"`).join(", ")}.` +
+      (takes.length > 0 ? ` It takes: ${takes.join(", ")}.` : " It takes no other fields.")
+  );
+}
 
 export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
   /** `kind: "plan"` — the same string `ila_read_plan` returns, from the same function. */
@@ -427,22 +456,28 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     });
   };
 
+  /**
+   * One handler per kind, as a table rather than a `switch`.
+   *
+   * This is where the completeness check lives now that the schema is one flat object: the record
+   * is keyed by the closed `QueryKind` union, so a sixth kind added to `QUERY_KINDS` with no
+   * branch here is a `tsc` error. A `switch` over a non-union `kind` would narrow to nothing and
+   * buy no such guarantee — it would compile with a missing case and fall off the end.
+   */
+  const HANDLERS: Record<QueryKind, (input: QueryInput) => Promise<string>> = {
+    plan: async () => plan(),
+    quiz: (input) => quiz(input),
+    thread: (input) => thread(input),
+    note: async (input) => note(input),
+    diagram: (input) => diagram(input),
+  };
+
   return tool(
-    async (input: z.infer<typeof inputSchema>): Promise<string> => {
-      // No `default:` arm on purpose — the union is closed, so a sixth kind is a compile
-      // error here rather than a runtime hole that silently returns undefined.
-      switch (input.kind) {
-        case "plan":
-          return plan();
-        case "quiz":
-          return quiz(input);
-        case "thread":
-          return thread(input);
-        case "note":
-          return note(input);
-        case "diagram":
-          return diagram(input);
-      }
+    async (input: QueryInput): Promise<string> => {
+      // Refused before any read — see `checkFields` for why this is a tool error rather than a
+      // schema one.
+      checkFields(input);
+      return HANDLERS[input.kind](input);
     },
     { name: QUERY_TOOL_NAME, description: DESCRIPTION, schema: inputSchema }
   );

@@ -12,6 +12,8 @@ import {
 import { registerDiagram } from "../../src/diagrams.js";
 import { forceMakePlan, readCurrentPlan, renderReadResult } from "../../src/plans.js";
 import { registerQuizQuestions } from "../../src/quizzes.js";
+import { toJsonSchema } from "@langchain/core/utils/json_schema";
+import { QUERY_KINDS } from "@ilearnassist/shared";
 import { buildQueryTool, QUERY_RESULT_MAX } from "../../src/tools/query.js";
 
 /**
@@ -336,13 +338,89 @@ describe("ila_query — ownership", () => {
 });
 
 describe("ila_query — the schema", () => {
+  /**
+   * The wire shape, converted exactly as `@langchain/openai` converts it before a request.
+   *
+   * This is the assertion that matters most in this file, and it is here because its absence
+   * shipped a broken tool: the schema was a `z.discriminatedUnion`, which converts to
+   * `{"anyOf": […], "type": null}` — and a strict OpenAI-compatible endpoint refuses a function
+   * schema that is not `type: "object"`. The symptom was a 400 on *every* turn in a conversation
+   * where the tool was available, not only when it was called:
+   *
+   *     400 Invalid schema for function 'ila_query': schema must be a JSON Schema of
+   *     'type: "object"', got 'type: null'.
+   *
+   * Nothing in the type system or in the handler's own tests could see that, which is why it is
+   * pinned on the conversion rather than on the zod object.
+   */
+  const jsonSchema = (): Record<string, unknown> =>
+    toJsonSchema(build().schema) as Record<string, unknown>;
+
+  it("converts to a top-level object, which every strict endpoint requires", () => {
+    const schema = jsonSchema();
+    expect(schema.type).toBe("object");
+    expect(schema).not.toHaveProperty("anyOf");
+  });
+
+  it("keeps the kinds as a real enum, and every kind in it", () => {
+    // The union used to refuse an unknown kind at the schema. The flat object has to do it with
+    // the enum, and it must list exactly `QUERY_KINDS` — the drift here would be a kind the tool
+    // documents and refuses.
+    const kind = (jsonSchema().properties as Record<string, { enum?: string[] }>).kind;
+    expect(kind?.enum).toEqual([...QUERY_KINDS]);
+  });
+
+  it("tells the model which kind each optional field belongs to", () => {
+    // The schema can no longer express the association, so the description is the only thing
+    // that teaches it — `checkFields` is the refusal, and this is how a model avoids needing it.
+    const properties = jsonSchema().properties as Record<string, { description?: string }>;
+    for (const [field, kind] of [
+      ["status", "quiz"],
+      ["query", "note"],
+      ["name", "diagram"],
+    ] as const) {
+      expect(properties[field]?.description, field).toContain(`kind: "${kind}"`);
+    }
+  });
+});
+
+describe("ila_query — refusals", () => {
   it("refuses a kind it does not have", async () => {
     await expect(build().invoke({ kind: "everything" })).rejects.toThrow();
   });
 
-  it("refuses a field that belongs to another kind", async () => {
-    // The point of the discriminated union: `status` means nothing for a plan, and a loose
-    // schema would push that check into the handler where it becomes a tool error string.
-    await expect(build().invoke({ kind: "plan", status: "answered" })).rejects.toThrow();
+  it("refuses an unknown status", async () => {
+    await expect(build().invoke({ kind: "quiz", status: "maybe" })).rejects.toThrow();
+  });
+
+  it("refuses a field that belongs to another kind, and names it", async () => {
+    /*
+     * What the union's `.strict()` used to give, rebuilt in `checkFields` because the wire format
+     * cannot carry a union. `status` means nothing for a plan, and zod strips unknown keys by
+     * default — so without this the model would get a plan back and never learn that its filter
+     * went nowhere.
+     */
+    await expect(build().invoke({ kind: "plan", status: "answered" })).rejects.toThrow(
+      /"plan" does not take "status"/
+    );
+    await expect(build().invoke({ kind: "thread", query: "x" })).rejects.toThrow(
+      /It takes: limit/
+    );
+    await expect(build().invoke({ kind: "diagram", offset: 1 })).rejects.toThrow(
+      /"diagram" does not take "offset"/
+    );
+  });
+
+  it("says so plainly when a kind takes no other fields at all", async () => {
+    await expect(build().invoke({ kind: "plan", limit: 5 })).rejects.toThrow(
+      /It takes no other fields/
+    );
+  });
+
+  it("accepts the fields a kind does take", async () => {
+    // The refusal must not be so eager that it rejects the documented calls.
+    await expect(build().invoke({ kind: "plan" })).resolves.toBeDefined();
+    await expect(build().invoke({ kind: "quiz", status: "skipped", limit: 5 })).resolves.toBeDefined();
+    await expect(build().invoke({ kind: "note", query: "x", offset: 1 })).resolves.toBeDefined();
   });
 });
