@@ -4,9 +4,10 @@ import { isCompact } from "./breakpoints";
 /**
  * Cross-component UI state for the few globals that more than one place needs to open.
  *
- * Settings is reachable from the sidebar footer *and* from the composer's model picker
- * ("管理模型…"). Rather than threading an event up through App and back down, the dialog
- * is mounted once in `App.vue` and anyone can ask for it here.
+ * The Copilot list is reachable from the sidebar footer *and* from the workspace home's header —
+ * the front door has no sidebar, and an account that has not entered a workspace yet must still
+ * be able to manage the Copilots it made. Rather than threading an event up through App and back
+ * down, the dialog is mounted once in `App.vue` and anyone can ask for it here.
  *
  * The drawer is the same shape, one step further: the button that opens it is in the topbar,
  * the thing that slides is the sidebar, and whether either exists is decided in `App.vue`.
@@ -47,14 +48,16 @@ export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
 export type AdminSection = "users" | "providers" | "documents";
 
 export const uiState = reactive({
-  settingsOpen: false,
+  /** The account's own Copilots, opened from the sidebar footer or the home page's header. */
+  copilotsOpen: false,
   /**
    * The uploaded-files dialog.
    *
-   * Its own flag rather than a tab of Settings, because the two answer different questions:
-   * Settings is how the app is configured, and this is what the account has stored. Opening
-   * it from the home page is also the only route to a file that no conversation references
-   * any more — which is exactly the file someone goes looking for here.
+   * Its own flag rather than a corner of another dialog, because the two answer different
+   * questions: the Copilot list is what this account has *made*, and this is what it has
+   * stored. Opening it from the home page is also the only route to a file that no
+   * conversation references any more — which is exactly the file someone goes looking for
+   * here.
    */
   sourcesOpen: false,
   /**
@@ -125,12 +128,12 @@ export const uiState = reactive({
   authReady: false,
 });
 
-export function openSettings(): void {
-  uiState.settingsOpen = true;
+export function openCopilots(): void {
+  uiState.copilotsOpen = true;
 }
 
-export function closeSettings(): void {
-  uiState.settingsOpen = false;
+export function closeCopilots(): void {
+  uiState.copilotsOpen = false;
 }
 
 export function openSources(): void {

@@ -26,7 +26,6 @@ const en: typeof MessageSchema = {
     close: "Close",
     edit: "Edit",
     rename: "Rename",
-    settings: "Settings",
     signOut: "Sign out",
     back: "Back",
     loading: "Loading…",
@@ -540,11 +539,56 @@ const en: typeof MessageSchema = {
     widgets: "Widgets to install",
     widgetsHint:
       "Starting a conversation from this Copilot installs the ticked widgets into it; they can be adjusted there afterwards, in session parameters.",
+    /* The list. It used to live under `settings.`, because the list and the editor were two
+       halves of one settings dialog; the list has a dialog of its own now, and the editor that
+       shares this namespace is what makes `copilot.*` its domain rather than the app's. */
+    countConfigured: "{count} Copilot configured | {count} Copilots configured",
+    add: "New Copilot",
+    inUse: "In use by this conversation",
+    empty: "No Copilots yet. Click “New Copilot” to create one.",
+    groupPublic: "Published Copilots",
+    groupMine: "My Copilots",
+    byAuthor: "published by {name}",
+    published: "published",
+    viewPrompt: "View its system prompt",
+    promptNone: "No system prompt written.",
+    copyToMine: "Copy to mine",
+    introBefore:
+      "A Copilot bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation",
+    introCopied: "copies the whole of it",
+    introAfter:
+      " into that conversation — later edits to the Copilot leave conversations already under way alone, and a conversation can change its own prompt independently.",
+    summarySteps: "up to {count} tool steps",
+    summaryHistory: "1 message of history | {count} messages of history",
+    summaryTools: "1 tool | {count} tools",
+    summaryAllTools: "all tools",
+    summaryNoTools: "no tools",
+    delete: {
+      title: "Delete Copilot",
+      message: "Delete the Copilot “{name}”?",
+      detail:
+        "Conversations already using it are unaffected — they keep the prompt and parameters copied in when they were created.",
+    },
   },
 
+  /**
+   * The Copilot list, as a noun: the dialog's own title and the two entry points that open it.
+   *
+   * Separate from `copilot.*` because that namespace is the *editor* — "New Copilot",
+   * "Description", "Available tools" — and a label for the thing the editor edits is not one of
+   * its fields. The same word as the Chinese catalog's, which is a product name rather than an
+   * untranslated string.
+   */
+  copilots: {
+    title: "Copilot",
+  },
 
   settings: {
-    title: "Settings",
+    /**
+     * This namespace has no dialog of its own any more: what is left of it is the console's
+     * sections and this one pointer, which the Copilot list shows. The key stays `settings.`
+     * because the installation's settings are still what it is about.
+     */
     installationMoved: "Model services and document parsing are configured in the platform console.",
     providers: {
       countConfigured: "{count} provider configured | {count} providers configured",
@@ -587,29 +631,6 @@ const en: typeof MessageSchema = {
       test: "Test connection",
       testOk: "Connection OK",
     },
-    copilot: {
-      countConfigured: "{count} Copilot configured | {count} Copilots configured",
-      add: "New Copilot",
-      inUse: "In use by this conversation",
-      empty: "No Copilots yet. Click “New Copilot” to create one.",
-      groupPublic: "Published Copilots",
-      groupMine: "My Copilots",
-      byAuthor: "published by {name}",
-      published: "published",
-      viewPrompt: "View its system prompt",
-      promptNone: "No system prompt written.",
-      copyToMine: "Copy to mine",
-      introBefore:
-        "A Copilot bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation",
-      introCopied: "copies the whole of it",
-      introAfter:
-        " into that conversation — later edits to the Copilot leave conversations already under way alone, and a conversation can change its own prompt independently.",
-      summarySteps: "up to {count} tool steps",
-      summaryHistory: "1 message of history | {count} messages of history",
-      summaryTools: "1 tool | {count} tools",
-      summaryAllTools: "all tools",
-      summaryNoTools: "no tools",
-    },
     defaults: {
       appSection: "Default model",
       provider: "Default provider",
@@ -637,12 +658,6 @@ const en: typeof MessageSchema = {
       message: "Delete “{name}”?",
       detail:
         "Documents already parsed are unaffected; parsing again will need another service selected.",
-    },
-    deleteCopilot: {
-      title: "Delete Copilot",
-      message: "Delete the Copilot “{name}”?",
-      detail:
-        "Conversations already using it are unaffected — they keep the prompt and parameters copied in when they were created.",
     },
     policy: {
       "local-only": { label: "Local only", hint: "Fully offline; no external service is called" },

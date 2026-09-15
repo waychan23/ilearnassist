@@ -384,11 +384,12 @@ re-firing an installed widget's `onInstall`.
 
 `e2e/widgets.spec.ts` is the feature's end-to-end coverage and doubles as a worked example:
 installing from a card, the two groups and the divider, switching and remembering the open tab,
-flipping the strip's orientation, dragging the width and its clamp, the overflow menu, the drawer on
-a phone, and the demo widgets counting again after a turn without a reload.
+a new conversation opening on its first tab rather than on one read elsewhere, flipping the strip's
+orientation, dragging the width and its clamp, the overflow menu, the drawer on a phone, and the
+demo widgets counting again after a turn without a reload.
 
 ```bash
-npx playwright test e2e/widgets.spec.ts   # the panel, end to end (14 flows)
+npx playwright test e2e/widgets.spec.ts   # the panel, end to end (16 flows)
 npx vitest run widget                     # the route + arithmetic tests and the three web units
 ```
 

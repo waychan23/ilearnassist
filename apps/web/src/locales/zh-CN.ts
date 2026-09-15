@@ -43,7 +43,6 @@ export default {
      * card's wording behind a key named after a component that no longer owns the idea.
      */
     rename: "重命名",
-    settings: "设置",
     signOut: "退出登录",
     back: "返回",
     loading: "加载中…",
@@ -655,16 +654,58 @@ export default {
     defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",
     widgets: "安装控件",
     widgetsHint: "用这个 Copilot 新建会话时，会把勾选的控件安装到那个会话里，之后可以在会话参数中单独调整。",
+    /* The list. It used to live under `settings.`, because the list and the editor were two
+       halves of one settings dialog; the list has a dialog of its own now, and the editor that
+       shares this namespace is what makes `copilot.*` its domain rather than the app's. */
+    countConfigured: "已配置 {count} 个 Copilot",
+    add: "新建 Copilot",
+    inUse: "当前会话使用中",
+    empty: "还没有 Copilot，点击「新建 Copilot」创建一个。",
+    groupPublic: "公开的 Copilot",
+    groupMine: "我的 Copilot",
+    byAuthor: "由 {name} 公开",
+    published: "已公开",
+    viewPrompt: "查看它的设定",
+    promptNone: "没有填写系统设定。",
+    copyToMine: "复制到我的",
+    introBefore:
+      "Copilot 定义一段系统设定（System Prompt）、可用工具与默认生成参数。新建会话时选择一个 Copilot，系统设定与默认参数会被",
+    introCopied: "整个复制",
+    introAfter: "到该对话中 —— 之后修改 Copilot 不会影响已开始的对话，对话里也能单独改自己的设定。",
+    summarySteps: "最多 {count} 轮工具",
+    summaryHistory: "历史 {count} 条",
+    summaryTools: "{count} 个工具",
+    summaryAllTools: "全部工具",
+    summaryNoTools: "不使用工具",
+    delete: {
+      title: "删除 Copilot",
+      message: "确定删除 Copilot「{name}」吗？",
+      detail: "已经使用它的会话不受影响，会保留创建时复制过去的系统设定与参数。",
+    },
+  },
+
+  /**
+   * The Copilot list, as a noun: the dialog's own title and the two entry points that open it.
+   *
+   * Separate from `copilot.*` because that namespace is the *editor* — "新建 Copilot", "描述",
+   * "可用工具" — and a label for the thing the editor edits is not one of its fields. `en` is
+   * the same word, which is a product name rather than an untranslated string.
+   */
+  copilots: {
+    title: "Copilot",
   },
 
 
   settings: {
-    title: "设置",
     /**
      * Where the installation's own settings went, shown only to an account that can reach them.
      * Nothing was removed — providers and models, parsers and the app defaults are the platform
      * console's screens now, because they are shared by every account and only an administrator
      * may write them.
+     *
+     * This namespace has no dialog of its own any more: what is left of it is the console's
+     * sections and this one pointer, which the Copilot list shows. The key stays `settings.`
+     * because the installation's settings are still what it is about.
      */
     installationMoved: "模型服务与文档解析由平台管理统一配置。",
     providers: {
@@ -707,28 +748,6 @@ export default {
       test: "测试连接",
       testOk: "连接正常",
     },
-    copilot: {
-      countConfigured: "已配置 {count} 个 Copilot",
-      add: "新建 Copilot",
-      inUse: "当前会话使用中",
-      empty: "还没有 Copilot，点击「新建 Copilot」创建一个。",
-      groupPublic: "公开的 Copilot",
-      groupMine: "我的 Copilot",
-      byAuthor: "由 {name} 公开",
-      published: "已公开",
-      viewPrompt: "查看它的设定",
-      promptNone: "没有填写系统设定。",
-      copyToMine: "复制到我的",
-      introBefore:
-        "Copilot 定义一段系统设定（System Prompt）、可用工具与默认生成参数。新建会话时选择一个 Copilot，系统设定与默认参数会被",
-      introCopied: "整个复制",
-      introAfter: "到该对话中 —— 之后修改 Copilot 不会影响已开始的对话，对话里也能单独改自己的设定。",
-      summarySteps: "最多 {count} 轮工具",
-      summaryHistory: "历史 {count} 条",
-      summaryTools: "{count} 个工具",
-      summaryAllTools: "全部工具",
-      summaryNoTools: "不使用工具",
-    },
     defaults: {
       appSection: "默认模型",
       provider: "默认 Provider",
@@ -754,11 +773,6 @@ export default {
       title: "删除解析服务",
       message: "确定删除「{name}」吗？",
       detail: "已经解析好的文档不受影响；重新解析时需要另选一个服务。",
-    },
-    deleteCopilot: {
-      title: "删除 Copilot",
-      message: "确定删除 Copilot「{name}」吗？",
-      detail: "已经使用它的会话不受影响，会保留创建时复制过去的系统设定与参数。",
     },
     policy: {
       "local-only": { label: "仅本地", hint: "完全离线，不调用任何外部服务" },

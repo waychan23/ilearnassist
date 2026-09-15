@@ -13,7 +13,7 @@ import { enterWorkspace } from "./workspaces";
  */
 
 /**
- * Create a Copilot through Settings → Copilots.
+ * Create a Copilot through the Copilot list.
  *
  * The field placeholders are the catalog's own strings, which the suite pins to `zh-CN`, so
  * they select the field rather than a test id — the same way the parser spec fills its form.
@@ -24,7 +24,7 @@ async function createCopilot(
   systemPrompt: string,
   { publish = false } = {}
 ): Promise<void> {
-  await page.getByTestId("open-settings").click();
+  await page.getByTestId("open-copilots").click();
   await page.getByTestId("new-copilot").click();
 
   await page.getByPlaceholder("例如：代码助手").fill(name);
@@ -44,7 +44,7 @@ test("a published Copilot is usable by another account, and not editable by it",
 
   await page.goto("/");
   await createCopilot(page, NAME, PROMPT, { publish: true });
-  await page.getByTestId("close-settings").click();
+  await page.getByTestId("close-copilots").click();
 
   /*
    * A second account, starting from no session at all.
@@ -61,7 +61,7 @@ test("a published Copilot is usable by another account, and not editable by it",
   await forgetSession(page);
   await signIn(page, "learner", password);
 
-  await page.getByTestId("open-settings").click();
+  await page.getByTestId("open-copilots").click();
 
   const published = page.getByTestId(`copilot-row-${NAME}`);
   await expect(published).toBeVisible();
@@ -92,7 +92,7 @@ test("a Copilot can be locked down to no tools, and it survives the round trip",
   const BOX = (name: string) => page.getByTestId(`tool-check-${name}`).locator("input");
 
   await page.goto("/");
-  await page.getByTestId("open-settings").click();
+  await page.getByTestId("open-copilots").click();
   await page.getByTestId("new-copilot").click();
   await page.getByPlaceholder("例如：代码助手").fill(NAME);
 
@@ -140,7 +140,7 @@ test("a conversation keeps the prompt it was started with when the Copilot chang
 
   await page.goto("/");
   await createCopilot(page, NAME, BEFORE);
-  await page.getByTestId("close-settings").click();
+  await page.getByTestId("close-copilots").click();
 
   // Start a conversation from it. The Copilot is chosen here and never again.
   await enterWorkspace(page);
@@ -153,14 +153,40 @@ test("a conversation keeps the prompt it was started with when the Copilot chang
 
   // Now change the Copilot it came from. Scoped to its own row, because the specs in this file
   // share one server and the earlier one left Copilots behind.
-  await page.getByTestId("open-settings").click();
+  await page.getByTestId("open-copilots").click();
   await page.getByTestId(`copilot-row-${NAME}`).getByTestId("edit-copilot").click();
   await page.getByPlaceholder("定义这个 Copilot 的角色、能力与行为约束…").fill(AFTER);
   await page.getByTestId("save-copilot").click();
-  await page.getByTestId("close-settings").click();
+  await page.getByTestId("close-copilots").click();
 
-  // The conversation is unmoved. This is the promise the settings copy makes in so many
-  // words, and the one a live-read prompt used to break while the copy said otherwise.
+  // The conversation is unmoved. This is the promise the Copilot dialog's copy makes in so
+  // many words, and the one a live-read prompt used to break while the copy said otherwise.
   await page.getByTestId("open-session-settings").click();
   await expect(page.getByTestId("session-prompt")).toHaveValue(BEFORE);
+});
+
+test("both entry points reach the Copilot list", async ({ page }) => {
+  /*
+   * Two doors to one dialog, and each is load-bearing rather than a convenience.
+   *
+   * The home page has no sidebar, so its header button is the only way to manage the Copilots
+   * you made *before* entering a workspace — which is the access this suite has guarded since
+   * the dialog lived behind a "settings" gear. The sidebar's footer row is the one you reach
+   * from inside a conversation. Neither can be dropped for the other, so both are asserted
+   * here rather than one being left to a comment.
+   */
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+
+  await page.getByTestId("open-copilots").click();
+  await expect(page.locator("body > .modal-overlay")).toBeVisible();
+  await expect(page.getByTestId("new-copilot")).toBeVisible();
+  await page.getByTestId("close-copilots").click();
+
+  // The footer row, on the other side of the front door. `enterWorkspace` takes the first card,
+  // which is where the suite's own earlier tests left one.
+  await enterWorkspace(page);
+  await page.getByTestId("open-copilots").click();
+  await expect(page.locator("body > .modal-overlay")).toBeVisible();
+  await expect(page.getByTestId("new-copilot")).toBeVisible();
 });

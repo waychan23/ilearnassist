@@ -940,11 +940,16 @@ Fuller map in `docs/reference.md`.
   everyone's because everyone was one person — that stopped being true when a second account
   existed. The rule for a new route is the console's: if it changes something every account
   shares, it is an administrator's.
-  **The console is where those screens live**, and `SettingsDialog` is not: it holds the
-  account's own Copilots and nothing else, because everything installation-wide it used to hold
-  answered 403 for an ordinary account and showed a URL the server fetches to everybody. The
-  test for whether a screen belongs in the console is whether it changes something every account
-  shares, or is an account itself; anything one account does for itself belongs in the app.
+  **The console is where those screens live**, and the dialog that holds the account's own
+  Copilots is not: everything installation-wide the old settings dialog held answered 403 for an
+  ordinary account and showed a URL the server fetches to everybody. There is no global settings
+  dialog at all now — the Copilots have one of their own (`CopilotsDialog.vue`, opened from the
+  sidebar footer *and* from the workspace home's header, because the front door has no sidebar),
+  and the sidebar's old 设置 row is 工作区设置 instead. The test for whether a screen belongs in
+  the console is whether it changes something every account shares, or is an account itself;
+  anything one account does for itself belongs in the app. A namespace outliving its dialog is
+  expected rather than a smell: `settings.*` is the console's sections plus the one pointer an
+  administrator sees in the Copilot list.
 - **Never coerce a request field into a role or a flag.** `disabled` must be a real boolean:
   `"false"` is truthy, so a coerced `PATCH { disabled: "false" }` would store `1` while
   `disabled === true` missed the self-guard — an administrator locking themselves out past the

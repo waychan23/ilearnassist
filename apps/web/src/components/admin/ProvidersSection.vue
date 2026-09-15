@@ -225,9 +225,9 @@ function onDefaultModelChange(e: Event): void {
 
 <style scoped>
 /*
- * The list styles moved here with the markup they belong to. They used to be scoped to
- * `SettingsDialog`, which is why the console would otherwise render an unstyled list — and
- * `style.test.ts` insists spacing comes from tokens rather than literals.
+ * The list styles moved here with the markup they belong to. They were scoped to the dialog
+ * that used to hold this section, which is why the console would otherwise render an unstyled
+ * list — and `style.test.ts` insists spacing comes from tokens rather than literals.
  */
 .list-head {
   display: flex;

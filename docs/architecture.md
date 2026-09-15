@@ -998,18 +998,20 @@ after that point, and rendering both would show the answer twice for as long as 
 ### The file tree
 
 `Sidebar` carries two panels behind a tab strip — conversations and files — with the action
-belonging to whichever is open (`+`, or refresh). The strip is the settings dialog's tier-2
-`.tabs`, not a second kind of tab; the panel below it is one `.side-scroll` either way, because
-the sidebar's pinned header and footer depend on there being exactly one.
+belonging to whichever is open (`+`, or refresh). The strip is the shared `.tabs` the ask_user
+and quiz cards also draw, not a second kind of tab; the panel below it is one `.side-scroll`
+either way, because the sidebar's pinned header and footer depend on there being exactly one.
 
-Below the panel sit the account-level rows — **Settings**, **Your account**, **Platform
+Below the panel sit the account-level rows — **工作区设置**, **Copilot**, **Your account**, **Platform
 console** (administrators only) and **Sign out** — and they share every style except the divider,
-which is above the group rather than between the rows: one footer group, not four entries of a
-list. Sign out takes no confirmation, because the session is restored by signing in again and a
-misclick costs only that. It lands on the sign-in screen even when the request fails, and the
-stored token is cleared either way — leaving someone looking signed in is the worse of the two
-outcomes. The same controls are on the workspace home, beside its settings gear, since that
-page is reachable with no sidebar.
+which is named on the first row rather than expressed as `:first-of-type`: that would match the
+header's back button, since it is the sidebar's first `<button>` and these are several siblings
+further down. One footer group, not five entries of a list. Sign out takes no confirmation,
+because the session is restored by signing in again and a misclick costs only that. It lands on
+the sign-in screen even when the request fails, and the stored token is cleared either way —
+leaving someone looking signed in is the worse of the two outcomes. The workspace home carries
+the same destination for the two rows that make sense without a workspace — Copilot and Your
+account — since that page is reachable with no sidebar at all.
 
 `FileTree.vue` renders `store.fileRows`, which is `flattenTree` from
 [`utils/fileTree.ts`](../apps/web/src/utils/fileTree.ts) computed over a flat map of
@@ -1064,14 +1066,26 @@ belongs next to the input.
 - **Session settings** (🎛) — temperature, context and tool-round limits for this
   conversation, plus the conversation's own system prompt (the persona it copied from
   its Copilot, editable afterwards), and the widgets installed in it.
-- **Workspace settings** — a dialog of its own, not a tab of the global one, because it
-  configures *a workspace* rather than the installation. Two ways in: the gear on a workspace
-  card, and the workspace name in the sidebar header (which is a button for that reason). The
-  card's is the one that matters — it does not require entering the workspace first, so widgets
-  can be installed before there is anything to look at.
-- **Global settings** — the sidebar footer. It is opened, not owned, by its callers:
-  `composables/ui.ts` holds `settingsOpen` and `App.vue` mounts the dialog once, so both
-  the sidebar button and the composer's "管理模型…" can reach it without prop drilling.
+- **Workspace settings** — a dialog of its own, not a tab of anything else, because it
+  configures *a workspace* rather than the installation. Four ways in, and each earns its place:
+  the gear on a workspace card (which does not require entering the workspace first, so widgets
+  can be installed before there is anything to look at), the workspace name in the sidebar header
+  (a button for that reason), and the 工作区设置 row in the sidebar footer — the labelled copy of
+  the header shortcut, for someone who does not already know the name opens it. Both sidebar
+  entries call the same function, so they cannot diverge in what they open.
+- **The Copilot list** — the sidebar footer, beside the workspace-settings row, and the workspace
+  home's header. Two doors, and the second is not a convenience: the home page has no sidebar, so
+  without it an account that has not entered a workspace yet could not manage the Copilots it
+  made. That is exactly the access the header button protected when it opened the settings dialog
+  it used to — the button outlived the dialog because the reason did. Like every other overlay it
+  is opened, not owned, by its callers: `composables/ui.ts` holds `copilotsOpen` and `App.vue`
+  mounts the dialog once, so neither entry point needs a prop chain.
+- **Nothing is a "global settings" dialog any more.** What that dialog held was either
+  installation-wide — providers and models, document parsers, the app defaults, all of which are
+  the platform console's screens, since they are shared by every account and only an administrator
+  may write them — or the account's own Copilots, which have the dialog above. What is left of the
+  `settings.*` catalog namespace is the console's sections plus one pointer the Copilot list shows
+  an administrator, which is why the namespace survives its dialog.
 - `ReasoningBlock.vue` — follows chatbox's reasoning row. Collapsed it previews one
   line: the **last** line while thinking (where the model is right now) and the
   **first** line once finished (a stable summary that stops the row looking alive).

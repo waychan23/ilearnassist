@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import {
-  openSettings,
+  openCopilots,
   openSources,
   openWorkspaceSettings,
   showAccount,
@@ -154,14 +154,24 @@ function activityLabel(workspace: Workspace): string {
       >
         <Icon name="folder" />
       </button>
+      <!--
+        The Copilot list, and this is the *front door* to it: the other entry point is the
+        sidebar's footer, which only exists inside a workspace. An account that has not entered
+        one yet must still be able to manage the Copilots it made, which is why this button
+        survived the settings dialog it used to open.
+
+        A gear here and a gear on each card, doing different things — this one is the account's
+        Copilots and the card's is that workspace's settings. It was the *icon* that had to
+        change rather than the button, since "settings" is the one thing it no longer opens.
+      -->
       <button
         class="icon-btn"
-        data-testid="open-settings"
-        :title="t('common.settings')"
-        :aria-label="t('common.settings')"
-        @click="openSettings"
+        data-testid="open-copilots"
+        :title="t('copilots.title')"
+        :aria-label="t('copilots.title')"
+        @click="openCopilots"
       >
-        <Icon name="gear" />
+        <Icon name="robot" />
       </button>
       <!--
         The platform console, for the accounts the server would let in. Drawn from the role the

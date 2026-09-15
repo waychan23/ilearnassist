@@ -388,15 +388,15 @@ test("an ordinary account is offered no way to configure models", async ({ page,
   await expect(page.getByTestId("open-admin")).toHaveCount(0);
   await expect(page.getByTestId("open-admin-sidebar")).toHaveCount(0);
 
-  // Settings still opens — Copilots are the account's own — but it points nowhere useful and
-  // the console pointer is for administrators only.
-  await page.getByTestId("open-settings").click();
+  // The Copilot list still opens — those are the account's own — but it points nowhere useful
+  // and the console pointer is for administrators only.
+  await page.getByTestId("open-copilots").click();
   await expect(page.getByTestId("new-copilot")).toBeVisible();
   await expect(page.getByTestId("settings-console-pointer")).toHaveCount(0);
 
   // And the composer offers the choice without offering the editing. This is the permission
   // model in one assertion: a user *selects from* what an administrator configured.
-  await page.getByTestId("close-settings").click();
+  await page.getByTestId("close-copilots").click();
   await enterWorkspace(page);
   await page.getByTestId("model-picker").click();
   await expect(page.getByTestId("model-picker-menu")).toContainText("fake-model");

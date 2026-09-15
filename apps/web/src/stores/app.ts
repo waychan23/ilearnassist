@@ -12,7 +12,7 @@ import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
 import {
-  closeSettings,
+  closeCopilots,
   closeSources,
   showLogin,
   showPasswordChange,
@@ -542,7 +542,7 @@ export const useAppStore = defineStore("app", () => {
     streaming.value = EMPTY_STREAMING();
     // Closes the open preview too, whichever root it read.
     resetFileTree();
-    closeSettings();
+    closeCopilots();
     closeSources();
   }
 

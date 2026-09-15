@@ -10,18 +10,18 @@ import CopilotDialog from "./CopilotDialog.vue";
 import Icon from "../Icon.vue";
 
 /**
- * The account's own settings: the Copilots it has made.
+ * The account's Copilots: the ones it made, and the ones others published.
  *
- * **Deliberately not the installation's settings**, and this is the permission model showing
- * through rather than a tidying-up. Providers and models, document parsers and the app defaults
- * used to be tabs here, and they were wrong twice over: an ordinary account cannot write any of
- * them, so the tabs were a screen of controls that answered 403 — and a provider's `baseURL` is
- * where every conversation's prompts go, so the account that *could* write them was deciding for
- * everybody. They live in the platform console now, which is reached only by an administrator.
+ * **Its own screen rather than a corner of a settings dialog**, and the move is the permission
+ * model showing through. What used to be here alongside them — providers and models, document
+ * parsers, the app defaults — was installation-wide, so an ordinary account could not write any
+ * of it (a screen of controls answering 403) while the account that could was deciding for
+ * everybody: a provider's `baseURL` is where every conversation's prompts go. Those live in the
+ * platform console now. What is left belongs to one account, and it is the same object whether it
+ * is reached from the sidebar's footer inside a workspace or from the header on the front door.
  *
- * What is left is what genuinely belongs to one account: the Copilots it owns, which it may
- * also publish for others to copy. Theme and language are not here either — they are in the
- * topbar, because a preference about the app should not be behind an icon labelled "settings".
+ * Theme and language are not here either — they are in the topbar, because a preference about the
+ * app should not be behind an icon labelled for the app's records.
  */
 
 const emit = defineEmits<{ close: [] }>();
@@ -52,9 +52,9 @@ async function onSaveCopilot(draft: CopilotDraft): Promise<void> {
 
 async function onDeleteCopilot(c: Copilot): Promise<void> {
   const ok = await confirm({
-    title: t("settings.deleteCopilot.title"),
-    message: t("settings.deleteCopilot.message", { name: c.name }),
-    detail: t("settings.deleteCopilot.detail"),
+    title: t("copilot.delete.title"),
+    message: t("copilot.delete.message", { name: c.name }),
+    detail: t("copilot.delete.detail"),
     confirmText: t("common.delete"),
     danger: true,
   });
@@ -95,25 +95,21 @@ function copilotSummary(c: Copilot): string {
   if (c.settings.modelId) bits.push(c.settings.modelId);
   if (c.settings.temperature != null) bits.push(`temperature ${c.settings.temperature}`);
   if (c.settings.maxSteps != null) {
-    bits.push(t("settings.copilot.summarySteps", { count: c.settings.maxSteps }));
+    bits.push(t("copilot.summarySteps", { count: c.settings.maxSteps }));
   }
   if (c.settings.maxContextMessages != null) {
     bits.push(
-      t(
-        "settings.copilot.summaryHistory",
-        { count: c.settings.maxContextMessages },
-        c.settings.maxContextMessages
-      )
+      t("copilot.summaryHistory", { count: c.settings.maxContextMessages }, c.settings.maxContextMessages)
     );
   }
   // Three states, and the empty list is now the narrowest rather than the widest — reporting it
   // as "all tools" would describe exactly the Copilot it is not.
   bits.push(
     c.allTools
-      ? t("settings.copilot.summaryAllTools")
+      ? t("copilot.summaryAllTools")
       : c.tools.length
-        ? t("settings.copilot.summaryTools", { count: c.tools.length }, c.tools.length)
-        : t("settings.copilot.summaryNoTools")
+        ? t("copilot.summaryTools", { count: c.tools.length }, c.tools.length)
+        : t("copilot.summaryNoTools")
   );
   return bits.join(" · ");
 }
@@ -131,10 +127,10 @@ function copilotSummary(c: Copilot): string {
     <div class="modal-overlay" @click.self="emit('close')">
       <div class="modal lg">
         <div class="modal-head">
-          <h3>{{ t("settings.title") }}</h3>
+          <h3>{{ t("copilots.title") }}</h3>
           <button
             class="icon-btn"
-            data-testid="close-settings"
+            data-testid="close-copilots"
             :title="t('common.close')"
             :aria-label="t('common.close')"
             @click="emit('close')"
@@ -145,26 +141,22 @@ function copilotSummary(c: Copilot): string {
 
         <div class="modal-body">
           <div class="config-tip">
-            {{ t("settings.copilot.introBefore") }}<strong>{{ t("settings.copilot.introCopied") }}</strong
-            >{{ t("settings.copilot.introAfter") }}
+            {{ t("copilot.introBefore") }}<strong>{{ t("copilot.introCopied") }}</strong
+            >{{ t("copilot.introAfter") }}
           </div>
 
           <div class="list-head">
             <span>{{
-              t("settings.copilot.countConfigured", { count: store.myCopilots.length }, store.myCopilots.length)
+              t("copilot.countConfigured", { count: store.myCopilots.length }, store.myCopilots.length)
             }}</span>
             <button class="btn small" data-testid="new-copilot" @click="openNewCopilot">
-              <Icon name="plus" /> {{ t("settings.copilot.add") }}
+              <Icon name="plus" /> {{ t("copilot.add") }}
             </button>
           </div>
 
           <template v-for="group in copilotGroups" :key="group.key">
             <div class="group-label">
-              {{
-                group.key === "public"
-                  ? t("settings.copilot.groupPublic")
-                  : t("settings.copilot.groupMine")
-              }}
+              {{ group.key === "public" ? t("copilot.groupPublic") : t("copilot.groupMine") }}
             </div>
 
             <div
@@ -178,13 +170,13 @@ function copilotSummary(c: Copilot): string {
                   <span class="status-dot"></span>
                   {{ c.name }}
                   <span v-if="c.ownerName && group.key === 'public'" class="badge muted">
-                    {{ t("settings.copilot.byAuthor", { name: c.ownerName }) }}
+                    {{ t("copilot.byAuthor", { name: c.ownerName }) }}
                   </span>
                   <span v-if="c.visibility === 'public'" class="badge">
-                    {{ t("settings.copilot.published") }}
+                    {{ t("copilot.published") }}
                   </span>
                   <span v-if="c.id === store.activeCopilotId" class="badge">
-                    {{ t("settings.copilot.inUse") }}
+                    {{ t("copilot.inUse") }}
                   </span>
                 </div>
                 <div v-if="c.description" class="desc">{{ c.description }}</div>
@@ -194,9 +186,9 @@ function copilotSummary(c: Copilot): string {
                      prompt is disclosed here rather than only inside an editor that refuses
                      to open for it. -->
                 <details v-if="group.key === 'public'" class="prompt-preview">
-                  <summary>{{ t("settings.copilot.viewPrompt") }}</summary>
+                  <summary>{{ t("copilot.viewPrompt") }}</summary>
                   <pre v-if="c.systemPrompt">{{ c.systemPrompt }}</pre>
-                  <div v-else class="hint">{{ t("settings.copilot.promptNone") }}</div>
+                  <div v-else class="hint">{{ t("copilot.promptNone") }}</div>
                 </details>
               </div>
 
@@ -219,20 +211,21 @@ function copilotSummary(c: Copilot): string {
                   :data-testid="`copy-copilot-${c.name}`"
                   @click="onCopyCopilot(c)"
                 >
-                  <Icon name="copy" /> {{ t("settings.copilot.copyToMine") }}
+                  <Icon name="copy" /> {{ t("copilot.copyToMine") }}
                 </button>
               </div>
             </div>
           </template>
 
           <div v-if="store.copilots.length === 0" class="empty">
-            {{ t("settings.copilot.empty") }}
+            {{ t("copilot.empty") }}
           </div>
 
           <!--
             Where the installation's settings went, said out loud — and only to an account that
             can reach them. An ordinary user does not need to be told about a screen they cannot
-            open; an administrator who came here looking for the provider list does.
+            open; an administrator who came here looking for the provider list does. The list is
+            where they would look now that the settings dialog holding them is gone.
           -->
           <p v-if="store.canAdmin" class="console-pointer" data-testid="settings-console-pointer">
             {{ t("settings.installationMoved") }}
