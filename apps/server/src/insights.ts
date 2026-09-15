@@ -324,7 +324,8 @@ export function parseInsightItems(raw: string): ParsedInsight[] | null {
 /* ----------------------------------- the pass -------------------------------- */
 
 export interface GenerateResult {
-  status: "ok" | "failed";
+  /** `"empty"` is the skip: nothing to reflect on, so no model was called. See the shared type. */
+  status: "ok" | "empty" | "failed";
   /** Items written by this pass. */
   generated: number;
   /** Items that survived because they were adopted. */
@@ -359,6 +360,28 @@ function gatherSources(db: AppDb, userId: string, sessionId: string): InsightPro
 }
 
 /**
+ * Whether there is anything to reflect on at all.
+ *
+ * The readable sources are all *derived* — a plan, answered questions, classified threads,
+ * notes, diagrams — so a conversation that has just been created has none of them, and one with
+ * a few turns of ordinary back-and-forth may still have none. The pass must not spend a model
+ * call on that, and it must not ask a model to observe a learner from an empty record: the honest
+ * answers are both nothing at all, so the prompt would be the literal string "".
+ *
+ * `kept` is deliberately **not** a source here. Adopted items are an instruction not to repeat
+ * something, and an instruction about nothing is not material.
+ */
+function hasMaterial(sources: InsightPromptInput): boolean {
+  return (
+    (sources.plan?.tree.length ?? 0) > 0 ||
+    sources.questions.length > 0 ||
+    sources.threads.threads.length > 0 ||
+    sources.notes.length > 0 ||
+    sources.diagrams.length > 0
+  );
+}
+
+/**
  * Run one pass and write what it produced.
  *
  * **The wipe happens only after a usable parse** — `replaceUnadoptedInsights` is called at the
@@ -384,6 +407,32 @@ export async function generateInsights(
   const prompt = buildInsightPrompt(sources);
   const kept = sources.kept.length;
 
+  /*
+   * Nothing to reflect on: no model call, and the list untouched. The `threads.ts` precedent —
+   * "a no-op when nothing is unassigned makes no model call" — for the same reason, plus one of
+   * its own: a pass over an empty record would spend a whole call to ask a model to observe a
+   * learner it was told nothing about, which is the one instruction the prompt cannot honour.
+   *
+   * The log still gets a block, because "the button did nothing" and "the pass ran and found
+   * nothing" look identical on screen and are not at all the same thing to a reader.
+   */
+  if (!hasMaterial(sources)) {
+    logPass({
+      sessionId,
+      model,
+      sources,
+      prompt,
+      raw: "",
+      parsed: null,
+      failure: "",
+      kept,
+      written: 0,
+      startedAt,
+      skipped: true,
+    });
+    return { status: "empty", generated: 0, kept, items: buildInsightViews(db, userId, sessionId) };
+  }
+
   let raw = "";
   let parsed: ParsedInsight[] | null = null;
   let failure = "";
@@ -395,30 +444,69 @@ export async function generateInsights(
     failure = err instanceof Error ? err.message : String(err);
   }
 
-  logPass(sessionId, model, sources, prompt, raw, parsed, failure, kept, startedAt);
-
+  let written = 0;
   if (parsed) {
-    const items: InsightInsert[] = parsed.map((item, index) => ({
-      id: newId(),
-      sessionId,
-      type: item.type,
-      title: item.title,
-      body: item.body,
-      ordinal: index,
-    }));
-    // After the parse, never before — see the docblock.
-    db.replaceUnadoptedInsights(sessionId, items);
-    return {
-      status: "ok",
-      generated: items.length,
-      kept,
-      items: buildInsightViews(db, userId, sessionId),
-    };
+    try {
+      // After the parse, never before — see the docblock.
+      db.replaceUnadoptedInsights(
+        sessionId,
+        parsed.map((item, index) => ({
+          id: newId(),
+          sessionId,
+          type: item.type,
+          title: item.title,
+          body: item.body,
+          ordinal: index,
+        }))
+      );
+      written = parsed.length;
+    } catch (err) {
+      // A write that failed wrote nothing, so this is the same answer as a failed pass — and the
+      // log says which of the two it was, because "the model was fine and the database was not"
+      // is a different thing to go and fix.
+      failure = err instanceof Error ? err.message : String(err);
+      parsed = null;
+    }
   }
 
-  // The rows are untouched: this is the whole point of the ordering above, and the caller
-  // reports "failed" rather than an empty list, because the two are different claims.
-  return { status: "failed", generated: 0, kept, items: buildInsightViews(db, userId, sessionId) };
+  /*
+   * Logged **after** the write, so the block reports what happened rather than what was about to.
+   * Ahead of it, the "wrote N items" line was a prediction: a transaction that threw left a log
+   * claiming a write nobody could find, which is worse than no log at all.
+   */
+  logPass({ sessionId, model, sources, prompt, raw, parsed, failure, kept, written, startedAt });
+
+  if (!parsed) {
+    // The rows are untouched: this is the whole point of the ordering above, and the caller
+    // reports "failed" rather than an empty list, because the two are different claims.
+    return { status: "failed", generated: 0, kept, items: buildInsightViews(db, userId, sessionId) };
+  }
+
+  return {
+    status: "ok",
+    generated: written,
+    kept,
+    items: buildInsightViews(db, userId, sessionId),
+  };
+}
+
+/** One pass's outcome, as the log needs it. Named fields rather than a long positional list. */
+interface PassLog {
+  sessionId: string;
+  model: string;
+  sources: InsightPromptInput;
+  prompt: string;
+  /** The model's raw answer. Empty when it was never called. */
+  raw: string;
+  /** Sanitised items, or `null` when there was nothing usable — including a skip. */
+  parsed: ParsedInsight[] | null;
+  failure: string;
+  kept: number;
+  /** What the transaction actually committed. */
+  written: number;
+  startedAt: number;
+  /** The model was never called, because there was nothing to reflect on. */
+  skipped?: boolean;
 }
 
 /**
@@ -427,40 +515,49 @@ export async function generateInsights(
  * The shape is `threads.ts`'s, for its reason: a 60-second call that returns nothing usable is
  * exactly what a log of this kind exists for, and the counts per source are what say whether the
  * prompt was empty (nothing to reflect on) or the model failed (something to fix).
+ *
+ * **Three outcomes look alike on screen and are different here**: a pass that was skipped, one
+ * whose call failed, and one the model answered unusably. The panel says "nothing to show" for
+ * the first two and "that pass produced nothing usable" for the last, and a reader looking at a
+ * button that seemed to do nothing needs to know which — so the block names it.
+ *
+ * Two things a pass cannot show on screen and this can: the **prompt's size and source counts**,
+ * and the model's **raw answer even when it is unusable** — "produced nothing usable" is the same
+ * sentence for a fence-wrapped object the parser should have accepted and for a refusal in prose,
+ * and only the raw text says which.
  */
-function logPass(
-  sessionId: string,
-  model: string,
-  sources: InsightPromptInput,
-  prompt: string,
-  raw: string,
-  parsed: ParsedInsight[] | null,
-  failure: string,
-  kept: number,
-  startedAt: number
-): void {
+function logPass(input: PassLog): void {
+  const { sources, parsed, skipped } = input;
   modelLog("insights", () =>
     [
-      `${logTimestamp()} 会话 ${sessionId} — 洞察总结`,
-      `模型：${model || "(未记录)"}`,
+      `${logTimestamp()} 会话 ${input.sessionId} — 洞察总结`,
+      `模型：${input.model || "(未记录)"}`,
       "素材：",
       `  计划：${sources.plan ? `${sources.plan.tree.length} 个根节点、状态 ${sources.plan.status}` : "无"}`,
       `  小测：${sources.questions.length} 题（已作答 ${sources.questions.filter((q) => q.status !== "pending").length}）`,
       `  脉络：${sources.threads.threads.length} 条（未分类消息 ${sources.threads.unassigned}）`,
       `  笔记：${sources.notes.length} 条`,
       `  图表：${sources.diagrams.length} 张`,
-      `  已采纳（已在提示中要求不要重复）：${kept} 条`,
-      `提示词：${prompt.length} 字符`,
-      ...(parsed
-        ? [
-            "模型原始返回：",
-            clip(raw.trim(), 2_000),
-            `解析结果：${parsed.length} 条`,
-            ...parsed.map((item, i) => `  ${i + 1}. [${item.type}] ${item.title}`),
-          ]
-        : ["✗ 模型调用失败或答案不可用", `原因：${failure}`, "模型原始返回：", clip(raw.trim(), 2_000)]),
-      `结果：${parsed ? `写入 ${parsed.length} 条，保留已采纳 ${kept} 条` : "未改动任何条目"}，耗时 ${
-        Date.now() - startedAt
+      `  已采纳（已在提示中要求不要重复）：${input.kept} 条`,
+      `提示词：${input.prompt.length} 字符`,
+      ...(skipped
+        ? ["⏭ 跳过：素材为空，没有调用模型"]
+        : parsed
+          ? [
+              "模型原始返回：",
+              clip(input.raw.trim(), 2_000),
+              `解析结果：${parsed.length} 条`,
+              ...parsed.map((item, i) => `  ${i + 1}. [${item.type}] ${item.title}`),
+            ]
+          : [
+              "✗ 本次未写入任何条目",
+              `原因：${input.failure}`,
+              "模型原始返回：",
+              clip(input.raw.trim(), 2_000),
+            ]),
+      // What the transaction committed, which is why this block is written after it.
+      `结果：${input.written > 0 ? `写入 ${input.written} 条，保留已采纳 ${input.kept} 条` : "未改动任何条目"}，耗时 ${
+        Date.now() - input.startedAt
       } ms`,
       "",
     ].join("\n") + "\n"

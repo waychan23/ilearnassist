@@ -291,12 +291,25 @@ Three properties are worth stating because each is load-bearing:
   `deleted_at` — derived data, like `session_threads`, and the one hard `DELETE` shape is
   reached from both the user's delete and the pass's wipe. The consequence is stated rather than
   hidden: a deleted observation can come back on the next pass. Delete is not suppression.
+- **A pass with nothing to read does not call the model.** The readable sources are all *derived*,
+  so a conversation that has just been created has none of them: `hasMaterial()` is the gate, and
+  the answer is `status: "empty"` — a third outcome beside `ok` and `failed`, because zero new
+  items is also what "the model looked and found nothing" returns and the two ask the reader for
+  opposite things ("go and have a conversation first" against "go and fix the provider").
 
 The prompt is bounded per source (see the caps in `insights.ts`) for the `threads.ts` reason: a
 reasoning model given too much input thinks for a hundred seconds and returns nothing. Adopted
 items from earlier passes are sent back under an instruction not to repeat them, which is the
-whole mechanism of a second pass being useful rather than a near-duplicate of the first. Each
-pass writes one block to `<dataRoot>/logs/insights.log`.
+whole mechanism of a second pass being useful rather than a near-duplicate of the first.
+
+**Each pass writes one block to `<dataRoot>/logs/insights.log`** (`modelLog.ts`, configured only
+in `index.ts`, so a test server writes nothing). It carries the two things a panel cannot show:
+the **source counts and the prompt's size**, which is how "nothing to reflect on" is told apart
+from "the model refused", and the **model's raw answer even when it was unusable** — the panel's
+"produced nothing usable" is the same sentence for a fence-wrapped object the parser should have
+accepted and for a refusal in prose. The block is written *after* the write, so its counts are
+what the transaction committed rather than what it was about to, and the three outcomes —
+skipped, failed, written — are named rather than left to be inferred from an identical empty list.
 
 ### Diagrams (`diagrams.ts`, `tools/diagram.ts`, `threads.ts`)
 

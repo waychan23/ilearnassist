@@ -809,6 +809,12 @@ const en: typeof MessageSchema = {
       generatingHint: "Reading this conversation's record; this can take a minute.",
       /** The pass ran and produced nothing usable. The list above it is unchanged. */
       generateFailed: "That pass produced nothing usable. The list above is unchanged.",
+      /**
+       * The other reason a press produced nothing, and the opposite instruction to the one
+       * above: nothing is broken, there is simply nothing to read yet.
+       */
+      nothingToReflect:
+        "This conversation has no record to reflect on yet — no plan, quizzes, topics, notes or diagrams. Come back after studying for a while.",
       empty: "Nothing here yet — press Generate to start.",
       /** The toggle: `adopted` is what survives the next pass, so the label says what it does. */
       adopt: "Keep",

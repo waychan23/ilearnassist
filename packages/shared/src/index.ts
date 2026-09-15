@@ -991,13 +991,23 @@ export interface GetSessionInsightsResponse {
 /**
  * `POST /api/sessions/:id/insights/generate`.
  *
- * `status` is the *pass's* outcome, not the list's state, and the distinction is the one thing
- * the panel must not conflate: `"failed"` means the model produced nothing usable and the rows
- * were left exactly as they were, which is a different claim from "it looked and found nothing"
- * (an `ok` answer with zero items).
+ * `status` is what the *request* did, not the list's state, and the three answers are three
+ * different claims — conflating any two of them is how the panel ends up saying something false:
+ *
+ * - `"ok"` — the pass ran and the list is its result. Zero items here means the model looked and
+ *   found nothing, which is a claim about the conversation.
+ * - `"empty"` — there was nothing to reflect on, so the model was **never called** and the list is
+ *   untouched. The readable sources are all derived, so a conversation that has just been created
+ *   reaches this: a call with an empty `<study_record>` would be paying for the one instruction the
+ *   prompt cannot honour, "say what you actually see".
+ * - `"failed"` — the call or the parse or the write did not produce a usable answer. The list is
+ *   untouched, and this is a claim about the *call* rather than about the conversation.
+ *
+ * `ok` and `empty` both leave zero new items, which is exactly why the panel cannot infer one from
+ * the other and the server has to say.
  */
 export interface GenerateSessionInsightsResponse extends GetSessionInsightsResponse {
-  status: "ok" | "failed";
+  status: "ok" | "empty" | "failed";
 }
 
 /** Body of the adopt/release PATCH. A toggle rather than two routes, like `disabled` on a user. */

@@ -48,10 +48,31 @@ beforeEach(() => {
  * the widget, the same reason `/notes` and `/threads` are not gated on theirs. A test that
  * installed the widget first would leave that unproven — and would not notice the day a route
  * acquired a dependency it should not have.
+ *
+ * **And with one note**, because a pass only runs when there is something to read: the readable
+ * sources are all derived, so a bare conversation answers `"empty"` without calling the model.
+ * Every case about the pass itself needs material, and without this they would all be asserting
+ * the skip. `bareSession()` is the one without, so that answer has a subject of its own.
  */
 async function insightSession(): Promise<Session> {
+  const session = await bareSession();
+  await addNote(session.id);
+  return session;
+}
+
+/** The same conversation with nothing derived in it yet. */
+async function bareSession(): Promise<Session> {
   const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
   return newSession(env, workspace.id);
+}
+
+async function addNote(sessionId: string): Promise<void> {
+  const res = await env.inject({
+    method: "POST",
+    url: `/api/sessions/${sessionId}/notes`,
+    payload: { type: "idea", content: "这里我还是不太懂", quote: "", occurrence: 0 },
+  });
+  expect(res.statusCode).toBe(201);
 }
 
 const list = async (sessionId: string): Promise<GetSessionInsightsResponse> => {
@@ -144,6 +165,33 @@ describe("the insight routes", () => {
     });
     expect(res.statusCode).toBe(200);
     expect((await list(session.id)).items.map((i) => i.title)).toEqual(["二"]);
+  });
+
+  it("answers a conversation with nothing to reflect on with 200 and a distinct status", async () => {
+    /*
+     * `"empty"` and `"failed"` both arrive with zero new items and mean opposite things to a
+     * reader — "go and have a conversation first" against "go and fix the provider" — so the
+     * server has to be the one that says which, and the panel cannot infer it.
+     *
+     * The model is scripted as if a pass ran, so an implementation that called it anyway would
+     * fill the list and fail here rather than passing quietly.
+     */
+    const session = await bareSession();
+    answer([{ title: "不该出现" }]);
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/insights/generate`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<GenerateSessionInsightsResponse>()).toMatchObject({
+      status: "empty",
+      generated: 0,
+      items: [],
+    });
+    expect((await list(session.id)).items).toEqual([]);
+    // No insight request reached the provider at all.
+    expect(llm.requests().filter((r) => JSON.stringify(r).includes("study_record"))).toHaveLength(0);
   });
 
   it("answers a failed pass with 200 and the list untouched", async () => {

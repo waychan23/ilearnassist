@@ -327,7 +327,9 @@ not the plan/quiz tool shape. The mechanics, and why:
   failure block when the call or its answer is unusable. No block is written for a no-op.
   One module for this log and the insight pass's, with the *kind* as a parameter: the shared
   part is the append helper, and a second copy of "mkdir, append, swallow the error" is exactly
-  what this repository does not keep.
+  what this repository does not keep. The insight pass writes
+  `<dataRoot>/logs/insights.log` through the same call — see the insight section below for what
+  its block carries.
 
 ### A viewer widget with no tools: the diagram widget
 
@@ -389,8 +391,11 @@ What that changes relative to the widgets above:
   neither does anything else in this app.
 - **A failed pass is a 200, and the panel says so above the list it did not touch.**
   `status: "failed"` means the model produced nothing usable and *every row is exactly as it was* —
-  which is a different claim from an `ok` answer with zero items, and `docs/architecture.md` has
-  the argument for why the two must not be conflated.
+  which is a different claim from an `ok` answer with zero items, and from `"empty"`, where the
+  pass declined to call the model because the conversation has produced nothing to read yet.
+  `docs/architecture.md` has the argument for why three outcomes arriving with the same empty
+  list must not be collapsed into one: a button whose press produces nothing visible is a control
+  that looks broken, and the panel has a sentence for each.
 - **Two writes are missing on purpose.** No `confirm()` on delete (one line of generated text,
   reproducible by a rerun, where a confirm per item turns tidying ten rows into a modal gauntlet)
   and no `store` state (one component reads it). Both are decisions with a stated trigger for
@@ -399,6 +404,15 @@ What that changes relative to the widgets above:
   `` t(`widgets.insight.types.${type}`) `` over the closed `INSIGHT_TYPES` union, so
   `catalog.test.ts`'s allowlist gains exactly `widgets.insight.types.` — five segments for eight
   kinds, where the alternative was a `switch` whose only job would be spelling eight strings.
+- **It logs to `<dataRoot>/logs/insights.log`**, one block per press. This is the widget to copy
+  the log from: a button that can produce three *different* nothings — declined, failed, answered
+  with no items — is exactly where a screen stops being enough. The block carries the source counts
+  and the prompt's size (how "nothing to reflect on" is told apart from "the model refused") and
+  the model's raw answer even when it was unusable (`produced nothing usable` is one sentence for a
+  fence the parser should have accepted and for a refusal in prose). It was worth writing on the
+  first real run: the line `原因：Provider has no API key.` diagnosed in one line what the panel had
+  only been able to call a failure, and `提示词：0 字符` is what surfaced the declined case at all.
+  See `docs/architecture.md` → the insight pass.
 
 ### Widget groups
 

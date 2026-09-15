@@ -709,9 +709,14 @@ Fuller map in `docs/reference.md`.
   `insight_items` therefore carries **no `deleted_at`** — derived data, like `session_threads`,
   and one hard `DELETE` shape reached from both the user's delete and the pass's wipe. The
   consequence is stated rather than hidden: **a deleted observation can come back on the next
-  pass**, because delete is not suppression. It has its own reasoning switch
-  (`ILA_INSIGHT_REASONING`, a second variable rather than a share of the classifier's) and its
-  own log (`<dataRoot>/logs/insights.log`, from the `modelLog.ts` both calls write through).
+  pass**, because delete is not suppression. A pass also **declines to call the model when there is
+  nothing to read** — every source is derived, so a fresh conversation has none — and answers
+  `status: "empty"`, a third outcome beside `ok` and `failed` because zero new items is equally
+  what "it looked and found nothing" returns and the two ask the reader for opposite things. It
+  has its own reasoning switch (`ILA_INSIGHT_REASONING`, a second variable rather than a share of
+  the classifier's) and its own log (`<dataRoot>/logs/insights.log`, from the `modelLog.ts` both
+  calls write through), whose block carries the source counts and prompt size — what tells "nothing
+  to reflect on" apart from "the model refused" — and the raw answer even when it was unusable.
 - **History must stay user/assistant balanced.** On a chat error, a `⚠️ …`
   assistant message is persisted so the next turn's history is well-formed. An
   assistant message's `tool_calls` are only replayed into history when the

@@ -1833,9 +1833,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * "running" state and a second way for the panel to learn it finished, invented to avoid an
    * await the user is already watching.
    *
-   * `status: "failed"` is a 200 with the list unchanged, not an error: a provider that returned
-   * nothing usable is a fact about the pass, and the panel says so in its own words above the
-   * observations it still has.
+   * Every non-`ok` answer is a **200 with the list unchanged**, never an error status: a provider
+   * that returned nothing usable, and a conversation with nothing to reflect on, are both facts
+   * about the request rather than failures of it, and the panel says so in its own words above
+   * the observations it still has. Distinguishing `"empty"` from `"failed"` matters because both
+   * arrive with zero new items and mean opposite things to a reader.
    */
   app.post("/api/sessions/:id/insights/generate", async (request, reply) => {
     const userId = actor(request).id;

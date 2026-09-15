@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "./fixtures";
+import { expect, test, type APIRequestContext, type Page } from "./fixtures";
 import { scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
 
@@ -40,6 +40,27 @@ async function insightSession(page: Page, name: string): Promise<void> {
   await expect(page.getByTestId("insight-empty")).toBeVisible();
 }
 
+/**
+ * Give the conversation something to reflect on.
+ *
+ * A pass reads only the conversation's *derived* records — a plan, answered questions, threads,
+ * notes, diagrams — so a conversation that has just been created has none of them and the pass
+ * deliberately declines to spend a model call on it (`status: "empty"`). A note is the smallest
+ * piece of material there is, and its route is not widget-gated, so one POST is enough.
+ *
+ * Through the API rather than the notes panel on purpose: what is being tested here is the pass,
+ * and driving a second widget's UI to set it up would make every failure below ambiguous between
+ * the two.
+ */
+async function addMaterial(page: Page, request: APIRequestContext): Promise<void> {
+  const sessionId = await page.getByTestId("session-item").first().getAttribute("data-session-id");
+  expect(sessionId, "the new conversation should be listed").toBeTruthy();
+  const res = await request.post(`/api/sessions/${sessionId}/notes`, {
+    data: { type: "idea", content: "这里我还是不太懂", quote: "", occurrence: 0 },
+  });
+  expect(res.ok()).toBe(true);
+}
+
 /** Run a pass and wait for it to finish — the button re-enables when it does. */
 async function generate(page: Page): Promise<void> {
   await page.getByTestId("insight-generate").click();
@@ -59,6 +80,7 @@ test.describe("the insight panel", () => {
       ],
     });
     await insightSession(page, name);
+    await addMaterial(page, request);
 
     await generate(page);
 
@@ -81,6 +103,7 @@ test.describe("the insight panel", () => {
     const name = unique("Adopt");
     await scriptLlm(request, { turns: [], matches: [answer([{ type: "advice", title: "条目" }])] });
     await insightSession(page, name);
+    await addMaterial(page, request);
     await generate(page);
 
     const row = page.getByTestId("insight-row").filter({ hasText: "条目" });
@@ -106,6 +129,7 @@ test.describe("the insight panel", () => {
       matches: [answer([{ type: "habit", title: "留着的" }, { type: "advice", title: "会被替换" }])],
     });
     await insightSession(page, name);
+    await addMaterial(page, request);
     await generate(page);
     await expect(page.getByTestId("insight-row")).toHaveCount(2);
 
@@ -131,6 +155,7 @@ test.describe("the insight panel", () => {
       matches: [answer([{ type: "advice", title: "第一条" }, { type: "advice", title: "第二条" }])],
     });
     await insightSession(page, name);
+    await addMaterial(page, request);
     await generate(page);
 
     await page
@@ -156,6 +181,7 @@ test.describe("the insight panel", () => {
     const name = unique("Failed");
     await scriptLlm(request, { turns: [], matches: [answer([{ type: "advice", title: "已有的" }])] });
     await insightSession(page, name);
+    await addMaterial(page, request);
     await generate(page);
     await expect(page.getByTestId("insight-row")).toHaveCount(1);
 
@@ -170,4 +196,32 @@ test.describe("the insight panel", () => {
     await expect(page.getByTestId("insight-row").filter({ hasText: "已有的" })).toBeVisible();
     await expect(page.getByTestId("insight-row")).toHaveCount(1);
   });
+});
+
+test("a conversation with nothing to reflect on says so instead of doing nothing", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The case the log surfaced on a real server: the pass reads only *derived* records, so a
+   * conversation that has just been created has none, and spending a model call to ask a model to
+   * observe a learner it was told nothing about is paying for the one instruction the prompt
+   * cannot honour.
+   *
+   * So the pass declines — and the panel has to say which kind of nothing this is. `failed` and
+   * `empty` both arrive with zero new items and ask the reader for opposite things (go and fix the
+   * provider / go and have a conversation first), and a button whose press produces nothing
+   * visible is the failure this test exists to prevent.
+   */
+  const name = unique("Nothing");
+  // Scripted as if a pass ran, so an implementation that called the model anyway would fill the
+  // panel and fail the assertion below rather than passing quietly.
+  await scriptLlm(request, { turns: [], matches: [answer([{ type: "advice", title: "不该出现" }])] });
+  await insightSession(page, name);
+
+  await generate(page);
+
+  await expect(page.getByTestId("insight-nothing")).toBeVisible();
+  await expect(page.getByTestId("insight-row")).toHaveCount(0);
+  await expect(page.getByTestId("insight-empty")).toBeVisible();
 });

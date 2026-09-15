@@ -940,6 +940,11 @@ export default {
       generatingHint: "正在阅读这个会话的记录，可能需要一分钟。",
       /** The pass ran and produced nothing usable. The list above it is unchanged. */
       generateFailed: "这次总结没有得到可用的结果，上面的条目没有改动。",
+      /**
+       * The other reason a press produced nothing, and the opposite instruction to the one
+       * above: nothing is broken, there is simply nothing to read yet.
+       */
+      nothingToReflect: "这个会话还没有可回顾的记录（计划、测验、脉络、笔记、图表）。先学习一会儿再回来。",
       empty: "还没有思考记录，点「生成思考」开始。",
       /** The toggle: `adopted` is what survives the next pass, so the label says what it does. */
       adopt: "采纳",

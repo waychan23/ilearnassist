@@ -40,6 +40,15 @@ const loadFailed = ref(false);
 const generating = ref(false);
 /** A *generate* failure: the list is whatever it was, and the reason is said above it. */
 const generateFailed = ref(false);
+/**
+ * The pass declined because there was nothing to reflect on.
+ *
+ * Its own flag rather than a share of `generateFailed`, because the two arrive with the same
+ * empty result and mean opposite things: one is "go and fix the provider", the other is "go and
+ * have a conversation first". A button whose press produces nothing visible is the failure this
+ * whole flag exists to avoid.
+ */
+const nothingToReflect = ref(false);
 
 async function load(): Promise<void> {
   const sessionId = store.activeSessionId;
@@ -76,14 +85,20 @@ async function generate(): Promise<void> {
   if (!sessionId || generating.value) return;
   generating.value = true;
   generateFailed.value = false;
+  nothingToReflect.value = false;
   try {
     const res = await api.generateInsights(sessionId);
     if (sessionId !== store.activeSessionId) return;
-    // A 200 with `status: "failed"`: the pass ran and produced nothing usable, and the rows are
-    // exactly what they were. Reported as its own thing rather than as an empty list, because
-    // "it found nothing" is a claim about the conversation and this is a claim about the call.
+    /*
+     * Three outcomes, all 200s, all leaving the list as the server returned it. They are told
+     * apart rather than collapsed because they ask the reader for different things: `"failed"` is
+     * a provider to go and fix, `"empty"` is a conversation that has not produced anything to
+     * reflect on yet. Collapsing either into an empty list would be the panel making a claim it
+     * cannot support.
+     */
+    items.value = res.items;
     if (res.status === "failed") generateFailed.value = true;
-    else items.value = res.items;
+    else if (res.status === "empty") nothingToReflect.value = true;
   } catch {
     if (sessionId !== store.activeSessionId) return;
     generateFailed.value = true;
@@ -179,6 +194,12 @@ function typeLabel(type: InsightType): string {
         {{ t("widgets.insight.generateFailed") }}
       </p>
 
+      <!-- The other reason a press produced nothing, and the opposite instruction to the one
+           above: nothing is broken, there is simply nothing to read yet. -->
+      <p v-else-if="nothingToReflect" class="insight-none" data-testid="insight-nothing">
+        {{ t("widgets.insight.nothingToReflect") }}
+      </p>
+
       <div v-if="items === null" class="widget-empty"></div>
 
       <div v-else-if="items.length === 0" class="widget-empty" data-testid="insight-empty">
@@ -254,6 +275,17 @@ function typeLabel(type: InsightType): string {
   border: 1px solid var(--warning-border);
   border-radius: var(--radius);
   background: var(--warning-bg);
+  color: var(--text-2);
+  font-size: var(--fs-2);
+}
+/* Not an error, so not the warning panel: the same shape at the ordinary muted weight, because a
+   pass with nothing to read is the panel working as designed. */
+.insight-none {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
   color: var(--text-2);
   font-size: var(--fs-2);
 }
