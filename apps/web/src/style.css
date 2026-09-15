@@ -93,6 +93,17 @@
   --bubble-bg: #2b3f6b;
   --bubble-fg: #eaf0ff;
   --accent-bg: rgba(76, 139, 245, 0.16);
+  /*
+   * Behind a passage a note is about. The highlighter's own colour, and a *surface*: it is
+   * laid under the text rather than being one, so the text on it keeps `--text` and the
+   * alpha is what makes it read as a mark rather than as a second message bubble.
+   *
+   * Amber shares a hue with `--warning`, which is the one colour in the palette it could be
+   * confused with. They do not appear in the same place — that one is spent as text and as a
+   * tint in banners and dialogs, this one only behind words in a message — and the alpha
+   * separates them on sight: 0.12 of a warning tint against 0.32 of a highlighter.
+   */
+  --note-bg: rgba(255, 190, 40, 0.32);
   --focus-ring: #7aa7ff;
 
   /* ---- spacing (2px base) — `padding`, `margin` and `gap` only ---- */
@@ -212,6 +223,10 @@
   --bubble-bg: #dbe7ff;
   --bubble-fg: #16233b;
   --accent-bg: rgba(47, 111, 235, 0.1);
+  /* A note's highlight — see the dark palette for why amber. Denser here than there for the
+     reason `--accent-bg` is: the same alpha over white is a lighter tint than over
+     near-black, and a highlight has to be legible as one on both. */
+  --note-bg: rgba(255, 172, 0, 0.3);
   --focus-ring: #2f6feb;
   /* Not the dark theme's 0.55: on white that composites the whole page to
      #737373, which erases the sidebar and topbar boundaries and reads as if the
@@ -251,6 +266,10 @@
     --bubble-bg: #dbe7ff;
     --bubble-fg: #16233b;
     --accent-bg: rgba(47, 111, 235, 0.1);
+    /* A note's highlight — see the dark palette for why amber. Denser here than there for
+       the reason `--accent-bg` is: the same alpha over white is a lighter tint than over
+       near-black, and a highlight has to be legible as one on both. */
+    --note-bg: rgba(255, 172, 0, 0.3);
     --focus-ring: #2f6feb;
     /* Not the dark theme's 0.55: on white that composites the whole page to
        #737373, which erases the sidebar and topbar boundaries and reads as if the
@@ -314,6 +333,14 @@ body {
     --dur-fast: 0.01ms;
     --dur-base: 0.01ms;
     --dur-slow: 0.01ms;
+  }
+  /*
+   * The locate flash stops blinking but does not disappear. It is not decoration: it is the
+   * only thing that says *which part* of a long message the note was about, so a version that
+   * honoured the preference by removing it would remove the answer along with the motion.
+   */
+  .note-flash {
+    animation: none;
   }
 }
 
@@ -1451,6 +1478,49 @@ body {
   word-break: break-word;
 }
 
+/*
+ * A note's mark, and the flash 定位 gives it.
+ *
+ * Global, and not in `MessageItem.vue` — the marks are wrapped around nodes that `v-html`
+ * wrote, which a scoped style cannot reach (`:deep()` appears nowhere in the app, and adding
+ * the first use of it for this would be a rule with one reader and no discoverability). It
+ * sits with `.markdown` because that is the content it colours.
+ *
+ * `--note-bg` rather than `--accent-bg`: a highlight is a different claim from a selection or
+ * a hover, and sharing the accent tint would make "this text is marked" and "this row is
+ * active" the same colour in the two places they appear side by side.
+ */
+.note-highlight {
+  background: var(--note-bg);
+  color: inherit;
+  /* No padding or radius: a mark can span elements, and those would show as gaps at every
+     boundary in the middle of one highlight. */
+  border-radius: 0;
+}
+
+/*
+ * The flash: how 定位 says *which* words, once it has scrolled to them.
+ *
+ * An `outline` rather than a second background, so it paints over the highlight instead of
+ * replacing it and has no colour to return to afterwards. Blinking, and for a few seconds
+ * rather than once, because a steady ring on text that is already tinted is easy to miss
+ * when the reader's eye is still travelling from the panel to the message.
+ */
+@keyframes note-flash {
+  0%,
+  100% {
+    outline-color: var(--accent);
+  }
+  50% {
+    outline-color: transparent;
+  }
+}
+.note-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  animation: note-flash 0.7s ease-in-out 3;
+}
+
 .markdown p {
   margin: 0 0 var(--space-5);
 }
@@ -2163,6 +2233,28 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * The same idea for a paragraph: keep the first few lines, ellipsis the rest.
+ *
+ * `-webkit-line-clamp` and not a character count, because the ellipsis has to land where the
+ * *line* ends — the same words are one line in a narrow panel and three in a wide one, and a
+ * string prefix cut by a character count would either overflow or leave the row short.
+ * `-webkit-box` is what the property requires; it is supported everywhere that matters and
+ * the alternative is a JS measurement per row per resize.
+ */
+.clamp-2,
+.clamp-4 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-2 {
+  -webkit-line-clamp: 2;
+}
+.clamp-4 {
+  -webkit-line-clamp: 4;
 }
 
 /*

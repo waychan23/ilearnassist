@@ -13,8 +13,21 @@ import {
   uiState,
 } from "../composables/ui";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
+import {
+  captureMessageNote,
+  noteClaim,
+  registerMessageNotesHost,
+  type NoteEditorRequest,
+  type NoteRevealTarget,
+  type NoteSaveInput,
+} from "../composables/messageNotes";
+import { useMessageSelection } from "../composables/messageSelection";
+import { useWidgetActivation } from "../composables/widgetActivation";
+import type { NoteHighlightMark } from "../utils/noteAnchor";
 import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
+import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
+import NoteEditor from "./NoteEditor.vue";
 import Composer from "./Composer.vue";
 import TopbarControls from "./TopbarControls.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
@@ -92,16 +105,35 @@ const minimapAnchors = computed(() => buildMinimapAnchors(store.messages));
 const showMinimap = computed(() => !isCompact.value && minimapAnchors.value.length > 0);
 
 /**
- * Scroll the list so the anchored turn sits at the top. Computed from rects rather than
- * `offsetTop`, which is measured against whichever ancestor happens to be positioned.
+ * Scroll the list so the target sits `offsetAbove` pixels down from the top of the pane.
+ * Computed from rects rather than `offsetTop`, which is measured against whichever ancestor
+ * happens to be positioned.
  */
-function scrollRectIntoView(container: HTMLElement, target: HTMLElement): void {
+function scrollRectIntoView(
+  container: HTMLElement,
+  target: HTMLElement,
+  offsetAbove = 8
+): void {
   const containerRect = container.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
   container.scrollTo({
-    top: container.scrollTop + (targetRect.top - containerRect.top) - 8,
+    top: container.scrollTop + (targetRect.top - containerRect.top) - offsetAbove,
     behavior: "smooth",
   });
+}
+
+/**
+ * How far down the pane a located mark should land: about five lines of its own text.
+ *
+ * Measured from the element rather than fixed, because "five lines" is a property of the
+ * text being pointed at — a heading is a different height from body copy, and a constant
+ * would put a one-line note near the top of the pane in one message and halfway down it in
+ * another. Pinning a mark to the very top instead reads as the message beginning there, which
+ * is the thing a note about the middle of a paragraph must not look like.
+ */
+function markLandingOffset(target: HTMLElement): number {
+  const lineHeight = parseFloat(getComputedStyle(target).lineHeight);
+  return (Number.isFinite(lineHeight) ? lineHeight : 24) * 5;
 }
 
 /** Scroll one persisted message to the top of the list. Shared by the minimap and widgets. */
@@ -189,6 +221,163 @@ watch(
   () => store.activeSessionId,
   () => scrollToBottom()
 );
+
+/**
+ * Tell the installed widgets they are live — `WidgetModule.onActive`.
+ *
+ * Here rather than in the store because this component is what renders the panel, so its
+ * lifetime *is* the answer to "is a widget on screen"; leaving the view is the one
+ * transition the effect inside cannot see, and this scope is what reports it.
+ */
+useWidgetActivation();
+
+/* ---------------------------------- notes ---------------------------------- */
+/*
+ * The message list's half of the notes capability. Everything here is about the DOM — which
+ * text is selected, where to draw a mark, where to scroll — and nothing about notes as
+ * records: what a capture turns into, and what a window's buttons do, are the widget's, and
+ * arrive through the bridge.
+ *
+ * This is the one place the reader can tell the capability is installed at all. The bridge's
+ * claim names the conversation the *widget* controls, and this view is that conversation's
+ * message list, so the two agreeing is what puts the toolbar on screen.
+ */
+const notesActive = computed(() => noteClaim.value?.sessionId === store.activeSessionId);
+const { selection, clear: clearSelection } = useMessageSelection(messagesEl, notesActive);
+
+/** The marks to draw, as the widget last reported them. */
+const noteMarks = ref<readonly NoteHighlightMark[]>([]);
+
+/** The open window, and where it floats. */
+const editorRequest = ref<NoteEditorRequest | null>(null);
+const editorAnchor = ref<{ x: number; y: number } | null>(null);
+const editorBusy = ref(false);
+/**
+ * Where the window should open, set by the toolbar just before the capture is routed.
+ *
+ * A ref rather than an argument because the window is opened *by the widget* — choosing 笔记
+ * hands the selection over and the answer comes back through `openEditor`, which is what
+ * keeps this view from having to know which intent produced it.
+ */
+const pendingAnchor = ref<{ x: number; y: number } | null>(null);
+
+function closeEditor(): void {
+  editorRequest.value = null;
+  editorAnchor.value = null;
+}
+
+/** How long the flash runs, in step with the animation in `style.css` (`0.7s × 3` + slack). */
+const NOTE_FLASH_MS = 2400;
+
+/**
+ * Which flash owns the class, so that locating twice in a row does not have the first
+ * timer strip the class off a second flash that is still running.
+ */
+let flashGeneration = 0;
+
+/**
+ * Scroll to a note's *words* and flash them.
+ *
+ * The mark rather than the message, which is the difference between "this note is somewhere
+ * in this reply" and "this note is about this phrase". The message is the fallback, and it is
+ * a real one rather than an error path: a quote stops resolving the moment the message it was
+ * taken from is rewritten or deleted, and 定位 must still visibly do something.
+ */
+function revealNote(target: NoteRevealTarget): void {
+  const container = messagesEl.value;
+  if (!container) return;
+
+  const marks = [...container.querySelectorAll<HTMLElement>(`mark[data-note-id="${target.noteId}"]`)];
+  const first = marks[0];
+  if (!first) {
+    scrollToMessage(target.messageId);
+    return;
+  }
+
+  scrollRectIntoView(container, first, markLandingOffset(first));
+
+  const generation = ++flashGeneration;
+  for (const mark of marks) mark.classList.add("note-flash");
+  setTimeout(() => {
+    // A later 定位 restarted the flash; that one's timer owns the class now.
+    if (generation !== flashGeneration) return;
+    for (const mark of marks) mark.classList.remove("note-flash");
+  }, NOTE_FLASH_MS);
+}
+
+function onToolbarPick(intent: "annotation" | "note"): void {
+  const current = selection.value;
+  const sessionId = store.activeSessionId;
+  if (!current || !sessionId) return;
+  pendingAnchor.value = { x: current.x, y: current.top };
+  captureMessageNote({
+    sessionId,
+    messageId: current.messageId,
+    quote: current.anchor.quote,
+    occurrence: current.anchor.occurrence,
+    intent,
+  });
+  clearSelection();
+}
+
+async function onEditorSave(input: NoteSaveInput): Promise<void> {
+  const request = editorRequest.value;
+  if (!request) return;
+  editorBusy.value = true;
+  try {
+    // Kept open on failure: the words are only in the window, and a failed save is exactly
+    // when throwing them away costs the most.
+    if (await request.save(input)) closeEditor();
+  } finally {
+    editorBusy.value = false;
+  }
+}
+
+async function onEditorRemove(): Promise<void> {
+  const request = editorRequest.value;
+  if (!request?.remove) return;
+  editorBusy.value = true;
+  try {
+    if (await request.remove()) closeEditor();
+  } finally {
+    editorBusy.value = false;
+  }
+}
+
+/** 定位 leaves the window open: the point of it is to read the note against its message. */
+function onEditorLocate(): void {
+  const request = editorRequest.value;
+  if (request?.locate) revealNote(request.locate);
+}
+
+/**
+ * Register the host while this view is up.
+ *
+ * Deregistering on unmount leaves the claim alone — the widget is still installed, and the
+ * messages it marks are still there; what is gone is the DOM to draw them in. A claim made
+ * while this view was unmounted is found when it comes back, because the host reads the
+ * claim rather than being told about it.
+ */
+let unregisterNotesHost: (() => void) | null = null;
+onMounted(() => {
+  unregisterNotesHost = registerMessageNotesHost({
+    setHighlights(marks) {
+      noteMarks.value = marks;
+    },
+    reveal: revealNote,
+    openEditor(request) {
+      editorRequest.value = request;
+      // The opener's own anchor wins: a window opened from the panel knows its row, and the
+      // selection anchor here is only ever the answer for a capture.
+      editorAnchor.value = request.anchor ?? pendingAnchor.value;
+      pendingAnchor.value = null;
+    },
+  });
+});
+onBeforeUnmount(() => {
+  unregisterNotesHost?.();
+  unregisterNotesHost = null;
+});
 </script>
 
 <template>
@@ -337,8 +526,11 @@ watch(
           v-for="(m, i) in store.messages"
           :key="m.id"
           :message="m"
+          :note-marks="noteMarks"
           :is-last="i === store.messages.length - 1"
         />
+        <!-- The streaming bubble gets no marks: an annotation needs a message row to be filed
+             against, and this one has none yet. It draws none for the same reason. -->
         <MessageItem v-if="store.streaming.active" :streaming="store.streaming" />
       </div>
       <MessageMinimapRail
@@ -366,6 +558,29 @@ watch(
     </div>
 
     <Composer />
+
+    <!--
+      The two marks of the notes capability, both teleported to `body` by the components
+      themselves: the toolbar follows a selection in the viewport, and the window floats near
+      whatever opened it. Inside `.messages-wrap` they would be clipped by the scroller and
+      carried away by its scroll.
+    -->
+    <MessageSelectionToolbar
+      v-if="selection"
+      :anchor="{ x: selection.x, top: selection.top }"
+      @pick="onToolbarPick"
+    />
+    <NoteEditor
+      v-if="editorRequest"
+      :draft="editorRequest.draft"
+      :locate="editorRequest.locate"
+      :anchor="editorAnchor"
+      :busy="editorBusy"
+      @save="onEditorSave"
+      @remove="onEditorRemove"
+      @locate="onEditorLocate"
+      @close="closeEditor"
+    />
 
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
   </main>

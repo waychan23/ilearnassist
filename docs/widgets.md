@@ -39,7 +39,8 @@ omissions — the "what fails if you skip it" column is the point of the table.
 | 5 | Write the component in `apps/web/src/widgets/` and import it in the registry | — |
 | 6 | If it needs server data, add a route **about the object** — see below | — |
 | 7 | Optional: `onInstall` / `onUninstall` | a widget with nothing to set up should omit both |
-| 8 | Add a `data-testid` to anything an e2e flow must select | the browser suite is the only test a `.vue` file gets |
+| 8 | Optional: `onActive`, if the widget needs the host's cooperation for as long as it is *installed* — see below | the hook never fires, and anything the widget claimed keeps working on the wrong object |
+| 9 | Add a `data-testid` to anything an e2e flow must select | the browser suite is the only test a `.vue` file gets |
 
 The steps that need a decision rather than a copy:
 
@@ -107,6 +108,7 @@ interface WidgetContext {
 
 onInstall?(ctx: WidgetContext): void | Promise<void>;
 onUninstall?(ctx: WidgetContext): void | Promise<void>;
+onActive?(ctx: WidgetContext | null): void;
 ```
 
 `onInstall` fires at **two** moments, because a level's widgets arrive two ways:
@@ -124,6 +126,56 @@ having been installed — "not installed" is where a fresh object starts.
 
 Repeated install/uninstall is supported and re-fires `onInstall` each time; there is deliberately no
 once-only guard, because re-initialising is what the hook is for.
+
+### `onActive` is not `onMount`
+
+`onActive` tells a widget **which object it is live on**: the context when it is installed on what
+is on screen, `null` when it is not. It is for a widget that needs the host's cooperation for as
+long as it is *installed* rather than for as long as it is *visible* — the notes widget claims the
+message list's annotation capability, and a claim owned by the component would drop the moment the
+reader looked at another tab, taking every highlight with it. `WidgetPanel` mounts only the active
+tab ([`WidgetPanel.vue`](../apps/web/src/components/WidgetPanel.vue), `:key="active"`), so a
+component lifecycle hook cannot answer this question for such a widget.
+
+It is called by [`useWidgetActivation`](../apps/web/src/composables/widgetActivation.ts), an effect
+owned by `ChatView`'s setup — the component that renders the panel, so its lifetime *is* the answer.
+Two consequences worth knowing before you reach for it:
+
+- **It is idempotent and synchronous**, and it fires for *every* widget on every change, most of
+  them with `null` and nothing to do. Do not put work in it that is not cheap.
+- **Leaving the view is reported by the effect stopping**, not by a reactive input changing: no
+  store field says "the panel is gone". A widget that claimed something must give it up on that
+  path, which is what the scope's disposal triggers.
+
+It is deliberately *not* a `watch` inside the store. The store's setup belongs to no lifetime: in
+the app that is invisible, but anywhere the store is constructed more than once — a test per case,
+with Pinia abandoning each instance and its effects still running — every abandoned store keeps
+watching module-level singletons like `uiState`, and a change in one test wakes the watchers of
+every store built before it.
+
+`ctx` is a single context rather than a list, which quietly assumes a widget is installed at one
+level at a time. True of everything in `WIDGETS` today; revisit it if one ever declares both
+scopes.
+
+### A widget may own a capability, and only one may hold it at a time
+
+The notes widget is the worked example of a widget that changes how a *host* component behaves
+rather than only drawing itself: the message list knows how to notice a selection, draw a mark and
+show a window, and nothing about notes as records; the widget knows about notes and nothing about
+`Range` or `<mark>`. They share
+[`composables/messageNotes.ts`](../apps/web/src/composables/messageNotes.ts) and nothing else, and
+that module holds a **claim** — one widget id per conversation, with a refusal that names the
+holder, so a second widget is told rather than left to draw over the first. (With one notes widget
+in the registry and `DEFAULT_WIDGET_IDS` empty, a second claimant cannot exist today; the rule is
+kept because the alternative is a silent race.)
+
+The claim is **per conversation**, not per widget: the message list on screen belongs to one
+session, while the same widget is installed in a different set of them. A claim that said only
+"notes controls this" would offer the toolbar in a conversation whose panel was never installed.
+
+Registration order does not matter. The host registers on mount and the widget claims from
+`onActive`, in whichever order those happen, because the host *reads* the claim — a reactive value
+— rather than being told about it.
 
 ## Invariants a widget must not break
 

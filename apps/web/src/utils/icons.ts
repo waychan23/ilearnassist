@@ -115,6 +115,17 @@ export const ICON_PATHS = {
     "M5.9 6.1V6.11",
   ],
 
+  /* The two actions a text selection offers: mark it, or write about it. A marker and a page
+   * with lines — the same "document with something written on it" idea in two states, which
+   * is what keeps them readable at 14px beside one another. */
+  marker: ["M9.75 2.75L13.25 6.25L7.25 12.25L3.75 8.75Z", "M3.75 8.75L2.75 13.25L7.25 12.25"],
+  note: [
+    "M3.5 2.5H9.5L12.5 5.5V13.5H3.5Z",
+    "M9.5 2.5V5.5H12.5",
+    "M5.75 8H10.25",
+    "M5.75 10.5H10.25",
+  ],
+
   bulb: [
     "M11.5 6.75a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0",
     "M6.4 10.4V11.9H9.6V10.4",

@@ -259,6 +259,31 @@ their labels are translated and the plan branch nests off the live plan tree on 
 widgets only in the install UI (`WIDGET_GROUPS`, client-side): one master button loops the
 ordinary per-widget writes; there is deliberately no group row or route.
 
+### Notes (`notes.ts`)
+
+What the learner marked and what they wrote about it, one row per note, reached at
+`/api/sessions/:id/notes`. **`session_id` is `NOT NULL` and `message_id` is nullable, and that
+asymmetry is the entity**: a note belongs to a conversation always and to a message only when
+something was annotated, which is what makes a note the user typed from the panel the same kind
+of thing as one made by dragging over a sentence. `message_id` deliberately carries **no foreign
+key** — a regenerate or a tail delete soft-deletes a message, and the note is the user's own
+writing, so it must survive with the quote it recorded. `messageMissing` is how a read says so:
+a `LEFT JOIN messages … AND m.deleted_at IS NULL` in the same query that fetches the note, rather
+than a guess from the client's message list, which only ever holds the conversation on screen.
+The row is soft-deleted like every other user-authored entity, and its bytes stay.
+
+**The anchor is a text quote plus which occurrence of it**, not a pair of character offsets,
+because the offsets a browser reports are offsets into rendered HTML and mean nothing after the
+next `v-html` assignment replaces every text node in the message. It is counted over the
+message's **visible** text: KaTeX emits each formula twice by default — glyph spans and hidden
+MathML — so a raw walk would see every formula double and could place a mark in the copy nobody
+can see (`utils/noteAnchor.ts`, and the cases pinned in `test/utils/noteAnchor.test.ts`). An
+anchor is validated against a real message of the named conversation and refused when it arrives
+half-formed, since a message with no quote has nothing to put back on screen.
+
+Notes bring **no tools**: the model neither reads them nor writes them. They are the learner's own
+writing, and nothing in a turn's context is built from them.
+
 ### The workspace file browser (`files.ts`)
 
 The sidebar's second panel: a read-only tree of the active workspace, expanded one level at a
@@ -1094,6 +1119,21 @@ silently stops scrolling.
 The conversation page has a third column of **widgets**: built-in panels, each a tab, installed
 per workspace or per conversation. See [`widget_instances`](#widgets-widget_instances) for the
 storage, and [widgets.md](widgets.md) for the authoring contract and the steps to add one.
+
+**A widget is a panel, with one exception so far.** The notes widget
+(`id: "notes"`) also *changes how the message list behaves*: while it is installed on the
+conversation on screen, selecting text in a message offers to mark it or write about it, and the
+marked passages are drawn back onto the messages. That is a **capability**, and
+[`composables/messageNotes.ts`](../apps/web/src/composables/messageNotes.ts) is the whole of what
+the two sides share — the message list knows how to notice a selection, draw a mark and show a
+window and nothing about notes as records; the widget knows about notes and nothing about `Range`
+or `<mark>`. The claim is per conversation and single-holder, and it follows the widget's install
+rather than the panel's visibility (`WidgetModule.onActive`, called by
+[`composables/widgetActivation.ts`](../apps/web/src/composables/widgetActivation.ts) from
+`ChatView`'s scope), because the panel mounts only the active tab — a claim owned by the component
+would drop the moment the reader looked at the plan. The notes themselves are rows in
+[`notes`](#notes), owner-scoped through the conversation and reached at
+`/api/sessions/:id/notes`.
 
 A widget declares which levels it accepts — `workspace`, `session` — and only those two exist. A
 **Copilot is a third place to tick a box, not a third scope**: its selection is copied into the

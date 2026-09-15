@@ -12,6 +12,8 @@ import type {
   Message,
   MessageUsage,
   ModelCapability,
+  Note,
+  NoteType,
   ParseErrorCode,
   ParseStatus,
   PlanNodeStatus,
@@ -228,6 +230,37 @@ export interface ThreadRecord {
   planNodeId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A note as stored, plus one column the reads add.
+ *
+ * `message_missing` is not in the table: the reads LEFT JOIN `messages`, so it answers "the
+ * message this points at is gone" in the same query that answers everything else. A note
+ * with no message at all is NOT missing — see `Note.messageMissing`.
+ */
+interface NoteRow {
+  id: string;
+  session_id: string;
+  message_id: string | null;
+  type: string;
+  quote: string;
+  occurrence: number;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  message_missing: number;
+}
+
+/** Input to `createNote`. The id is the caller's, as it is for every insert here. */
+export interface NoteInsert {
+  id: string;
+  sessionId: string;
+  messageId: string | null;
+  type: NoteType;
+  quote: string;
+  occurrence: number;
+  content: string;
 }
 
 /** A message as it joins into a thread for the widget's read model. */
@@ -661,6 +694,19 @@ const mapThread = (r: ThreadRow): ThreadRecord => ({
   branch: r.branch as ThreadBranch,
   title: r.title,
   planNodeId: r.plan_node_id,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const mapNote = (r: NoteRow): Note => ({
+  id: r.id,
+  sessionId: r.session_id,
+  messageId: r.message_id,
+  type: r.type as NoteType,
+  quote: r.quote,
+  occurrence: r.occurrence,
+  content: r.content,
+  messageMissing: r.message_missing !== 0,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -1338,6 +1384,36 @@ export interface AppDb {
    * one a concurrent sync already placed. Returns how many moved.
    */
   assignMessagesToThread(sessionId: string, messageIds: string[], threadId: string): number;
+
+  /*
+   * Notes (notes widget). User-authored, so unlike the plan/quiz/thread rows above these carry
+   * `deleted_at` and every read filters it.
+   *
+   * Both reads return `Note` — the same shape the wire carries, `messageMissing` included —
+   * because unlike a thread there is nothing to restructure: the row IS the record.
+   */
+  listNotesForUser(userId: string, sessionId: string): Note[];
+  /**
+   * One note, owner-scoped. `undefined` for "not yours" and for "does not exist" alike, the
+   * same answer the routes turn into one 404 — so a note id cannot be probed.
+   */
+  getNoteForUser(userId: string, sessionId: string, noteId: string): Note | undefined;
+  createNote(input: NoteInsert): Note;
+  /**
+   * A partial edit: an absent field keeps its stored value, so a body that mentions only the
+   * text cannot silently reset the type. `undefined` when the note is not this session's.
+   *
+   * Bare session id, like `assignMessagesToThread`: every caller has already resolved the
+   * session through a `ForUser` read, and the session scoping here is what keeps a note id
+   * from one conversation out of another's route.
+   */
+  updateNote(
+    sessionId: string,
+    noteId: string,
+    input: { type?: NoteType; content?: string }
+  ): Note | undefined;
+  /** Marks the note deleted. The row and its bytes stay; every read filters it out. */
+  softDeleteNote(sessionId: string, noteId: string): boolean;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
@@ -2148,6 +2224,51 @@ export function createDb(dbPath: string): AppDb {
           AND id IN (${messageIds.map(() => "?").join(",")})`
     );
 
+  /* --------------------------------- notes --------------------------------- */
+  /*
+   * One projection, two lookups. `messageMissing` is answered by the LEFT JOIN — with
+   * `deleted_at IS NULL` in the *join condition* rather than in a later filter, so a
+   * soft-deleted message reads as absent, which is exactly what the flag claims. Writing the
+   * expression once is the point: the list and the single lookup have to agree about it or a
+   * note the panel calls anchored would fail to scroll.
+   */
+  const NOTE_VIEW_SELECT = `SELECT n.*,
+      (n.message_id IS NOT NULL AND m.id IS NULL) AS message_missing
+     FROM notes n
+     LEFT JOIN messages m ON m.id = n.message_id AND m.deleted_at IS NULL`;
+  const stmtListNotesForUser = db.prepare(
+    `${NOTE_VIEW_SELECT}
+       JOIN sessions s ON s.id = n.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE n.session_id = @sessionId AND w.user_id = @userId
+        AND n.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY n.created_at DESC, n.rowid DESC`
+  );
+  const stmtGetNoteForUser = db.prepare(
+    `${NOTE_VIEW_SELECT}
+       JOIN sessions s ON s.id = n.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE n.id = @noteId AND n.session_id = @sessionId AND w.user_id = @userId
+        AND n.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
+  );
+  // Scoped by session rather than by owner: every caller has already resolved the session
+  // through a `ForUser` read, and the session scoping is what keeps a note id from one
+  // conversation out of another's route. The same shape as `stmtListQuizQuestionsForSession`.
+  const stmtGetNote = db.prepare(
+    `${NOTE_VIEW_SELECT} WHERE n.id = ? AND n.session_id = ? AND n.deleted_at IS NULL`
+  );
+  const stmtInsertNote = db.prepare(
+    `INSERT INTO notes (id, session_id, message_id, type, quote, occurrence, content, created_at, updated_at)
+     VALUES (@id, @sessionId, @messageId, @type, @quote, @occurrence, @content, @now, @now)`
+  );
+  const stmtUpdateNote = db.prepare(
+    `UPDATE notes SET type = @type, content = @content, updated_at = @now
+      WHERE id = @noteId AND session_id = @sessionId AND deleted_at IS NULL`
+  );
+  const stmtSoftDeleteNote = db.prepare(
+    "UPDATE notes SET deleted_at = ? WHERE id = ? AND session_id = ? AND deleted_at IS NULL"
+  );
+
   /*
    * Two narrow projections for the statistics: the role (so a count can tell the two apart if it
    * ever wants to) and the usage blob. `usage` is read whole and parsed in `widgets.ts` rather
@@ -2926,6 +3047,47 @@ export function createDb(dbPath: string): AppDb {
         sessionId,
         ...messageIds
       ).changes;
+    },
+
+    listNotesForUser(userId, sessionId) {
+      return (stmtListNotesForUser.all({ userId, sessionId }) as NoteRow[]).map(mapNote);
+    },
+
+    getNoteForUser(userId, sessionId, noteId) {
+      const row = stmtGetNoteForUser.get({ userId, sessionId, noteId }) as NoteRow | undefined;
+      return row ? mapNote(row) : undefined;
+    },
+
+    createNote(input) {
+      stmtInsertNote.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        messageId: input.messageId,
+        type: input.type,
+        quote: input.quote,
+        occurrence: input.occurrence,
+        content: input.content,
+        now: now(),
+      });
+      const row = stmtGetNote.get(input.id, input.sessionId) as NoteRow;
+      return mapNote(row);
+    },
+
+    updateNote(sessionId, noteId, input) {
+      const existing = stmtGetNote.get(noteId, sessionId) as NoteRow | undefined;
+      if (!existing) return undefined;
+      stmtUpdateNote.run({
+        noteId,
+        sessionId,
+        type: input.type ?? existing.type,
+        content: input.content ?? existing.content,
+        now: now(),
+      });
+      return mapNote(stmtGetNote.get(noteId, sessionId) as NoteRow);
+    },
+
+    softDeleteNote(sessionId, noteId) {
+      return stmtSoftDeleteNote.run(now(), noteId, sessionId).changes > 0;
     },
 
     statsForWorkspace(userId, workspaceId) {

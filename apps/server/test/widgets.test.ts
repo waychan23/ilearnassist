@@ -131,6 +131,7 @@ describe("resolveWidgetStates", () => {
       { id: "plan", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("plan") },
       { id: "quiz", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("quiz") },
       { id: "thread", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("thread") },
+      { id: "notes", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("notes") },
     ]);
   });
 
@@ -364,6 +365,7 @@ describe("over HTTP", () => {
         { id: "plan", scope: "session", enabled: false },
         { id: "quiz", scope: "session", enabled: false },
         { id: "thread", scope: "session", enabled: false },
+        { id: "notes", scope: "session", enabled: false },
       ],
     });
   });
@@ -378,6 +380,7 @@ describe("over HTTP", () => {
       { id: "plan", scope: "session", enabled: false },
       { id: "quiz", scope: "session", enabled: false },
       { id: "thread", scope: "session", enabled: false },
+      { id: "notes", scope: "session", enabled: false },
     ]);
   });
 
@@ -410,6 +413,7 @@ describe("over HTTP", () => {
       { id: "plan", scope: "session", enabled: false },
       { id: "quiz", scope: "session", enabled: false },
       { id: "thread", scope: "session", enabled: false },
+      { id: "notes", scope: "session", enabled: false },
     ]);
   });
 

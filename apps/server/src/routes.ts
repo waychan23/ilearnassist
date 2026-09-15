@@ -87,6 +87,7 @@ import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
+import { createNote, deleteNote, updateNote } from "./notes.js";
 import {
   dismissQuizQuestions,
   listQuizQuestionViews,
@@ -1704,6 +1705,63 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       );
     }
     return buildThreadViews(db, userId, id);
+  });
+
+  /* ----------------------------------- notes ----------------------------------- */
+
+  /*
+   * The notes widget's records, in the object-not-widget shape the plan/quiz/thread routes
+   * use above: a note is the user's own writing and outlives the widget that made it, so
+   * uninstalling the panel must not hide what was already written. Every route resolves the
+   * session through `getSessionForUser` first, which is what turns another account's id — and
+   * an id that never existed — into the same 404 rather than into someone else's data.
+   */
+  app.get("/api/sessions/:id/notes", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return { notes: db.listNotesForUser(userId, id) };
+  });
+
+  app.post("/api/sessions/:id/notes", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const result = createNote(db, userId, id, request.body);
+    if (!result.ok) {
+      return reply.code(result.status).send(apiError(result.code, "cannot save that note"));
+    }
+    return reply.code(201).send(result.note);
+  });
+
+  app.patch("/api/sessions/:id/notes/:noteId", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, noteId } = request.params as { id: string; noteId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const result = updateNote(db, userId, id, noteId, request.body);
+    if (!result.ok) {
+      return reply.code(result.status).send(apiError(result.code, "cannot save that note"));
+    }
+    return result.note;
+  });
+
+  app.delete("/api/sessions/:id/notes/:noteId", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, noteId } = request.params as { id: string; noteId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const result = deleteNote(db, userId, id, noteId);
+    if (!result.ok) {
+      return reply.code(result.status).send(apiError(result.code, "note not found"));
+    }
+    return { ok: true };
   });
 
   /* ---------------------------------- sources ---------------------------------- */

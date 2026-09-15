@@ -839,6 +839,118 @@ describe("schema versioning", () => {
     }
   });
 
+  it("gains the notes table on an existing file of the current version", () => {
+    // Twin of the threads test, with one difference worth asserting: notes is the only table
+    // added recently that carries `deleted_at`, because it is user-authored rather than
+    // derived. A table created without it would satisfy "the table is present" and then leak
+    // deleted notes out of every read, so the round-trip is what is asserted.
+    const path = join(root, "pre-notes.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    expect(tablesIn(path)).not.toContain("notes");
+
+    const opened = createDb(path);
+    try {
+      expect(tablesIn(path)).toContain("notes");
+      opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
+      opened.createWorkspace({
+        id: "w1",
+        userId: OWNER,
+        name: "W",
+        slug: "w",
+        dirPath: join(root, "w"),
+      });
+      opened.createSession({
+        id: "s1",
+        workspaceId: "w1",
+        copilotId: null,
+        copilotName: "",
+        systemPrompt: "",
+        allTools: true,
+        tools: [],
+        title: DEFAULT_SESSION_TITLE,
+      });
+      opened.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "hello" });
+
+      const note = opened.createNote({
+        id: "n1",
+        sessionId: "s1",
+        messageId: "m1",
+        type: "annotation",
+        quote: "hello",
+        occurrence: 0,
+        content: "",
+      });
+      expect(note).toMatchObject({ messageMissing: false, type: "annotation", quote: "hello" });
+      expect(opened.listNotesForUser(OWNER, "s1").map((n) => n.id)).toEqual(["n1"]);
+
+      // The two things the columns decide: deleting the message leaves the note readable but
+      // reports the place it came from as gone, and deleting the note hides it from the read.
+      expect(opened.softDeleteMessageForUser("s1", "m1", OWNER)).toBe(true);
+      expect(opened.getNoteForUser(OWNER, "s1", "n1")).toMatchObject({ messageMissing: true });
+
+      expect(opened.softDeleteNote("s1", "n1")).toBe(true);
+      expect(opened.listNotesForUser(OWNER, "s1")).toEqual([]);
+    } finally {
+      opened.raw.close();
+    }
+  });
+
+  it("gains the notes table on an existing file of the current version", () => {
+    // Twin of the threads test, with one difference worth asserting: notes is the only table
+    // added recently that carries `deleted_at`, because it is user-authored rather than
+    // derived. A table created without it would satisfy "the table is present" and then leak
+    // deleted notes out of every read, so the round-trip is what is asserted.
+    const path = join(root, "pre-notes.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    expect(tablesIn(path)).not.toContain("notes");
+
+    const opened = createDb(path);
+    try {
+      expect(tablesIn(path)).toContain("notes");
+      opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
+      opened.createWorkspace({
+        id: "w1",
+        userId: OWNER,
+        name: "W",
+        slug: "w",
+        dirPath: join(root, "w"),
+      });
+      opened.createSession({
+        id: "s1",
+        workspaceId: "w1",
+        copilotId: null,
+        copilotName: "",
+        systemPrompt: "",
+        allTools: true,
+        tools: [],
+        title: DEFAULT_SESSION_TITLE,
+      });
+      opened.createMessage({ id: "m1", sessionId: "s1", role: "user", content: "hello" });
+
+      const note = opened.createNote({
+        id: "n1",
+        sessionId: "s1",
+        messageId: "m1",
+        type: "annotation",
+        quote: "hello",
+        occurrence: 0,
+        content: "",
+      });
+      expect(note).toMatchObject({ messageMissing: false, type: "annotation", quote: "hello" });
+      expect(opened.listNotesForUser(OWNER, "s1").map((n) => n.id)).toEqual(["n1"]);
+
+      // The two things the columns decide: deleting the message leaves the note readable but
+      // reports the place it came from as gone, and deleting the note hides it from the read.
+      expect(opened.softDeleteMessageForUser("s1", "m1", OWNER)).toBe(true);
+      expect(opened.getNoteForUser(OWNER, "s1", "n1")).toMatchObject({ messageMissing: true });
+
+      expect(opened.softDeleteNote("s1", "n1")).toBe(true);
+      expect(opened.listNotesForUser(OWNER, "s1")).toEqual([]);
+    } finally {
+      opened.raw.close();
+    }
+  });
+
   it("adds a nullable widgets column Copilots had no way to have", () => {
     /*
      * `ensureColumn` rather than a version bump, because this *adds* a column instead of changing

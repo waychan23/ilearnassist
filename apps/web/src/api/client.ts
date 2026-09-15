@@ -9,6 +9,7 @@ import type {
   Copilot,
   CreateCopilotInput,
   CreateDocumentParserInput,
+  CreateNoteInput,
   CreateProviderInput,
   CreateSessionInput,
   CreateUserInput,
@@ -19,8 +20,10 @@ import type {
   FileContent,
   GetPlanResponse,
   GetQuizQuestionsResponse,
+  GetSessionNotesResponse,
   GetSessionThreadsResponse,
   Message,
+  Note,
   PlanSnapshot,
   PlanView,
   ProviderConfig,
@@ -34,6 +37,7 @@ import type {
   UpdateCopilotInput,
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
+  UpdateNoteInput,
   UpdateProviderInput,
   UpdateSessionInput,
   UpdateUserInput,
@@ -566,6 +570,25 @@ export const api = {
     request<GetSessionThreadsResponse>(`/sessions/${sessionId}/threads/sync`, {
       method: "POST",
     }),
+
+  /*
+   * Notes (the notes widget). About the conversation, not about the widget: a note is the
+   * learner's own writing and stays readable through the routes whether or not the panel is
+   * installed — which is what lets uninstalling it lose nothing but the panel.
+   */
+  listNotes: (sessionId: string) => request<GetSessionNotesResponse>(`/sessions/${sessionId}/notes`),
+  createNote: (sessionId: string, input: CreateNoteInput) =>
+    request<Note>(`/sessions/${sessionId}/notes`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateNote: (sessionId: string, noteId: string, input: UpdateNoteInput) =>
+    request<Note>(`/sessions/${sessionId}/notes/${noteId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  deleteNote: (sessionId: string, noteId: string) =>
+    request<{ ok: boolean }>(`/sessions/${sessionId}/notes/${noteId}`, { method: "DELETE" }),
 
   /**
    * Stop the turn currently streaming for a session.

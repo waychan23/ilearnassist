@@ -404,7 +404,14 @@ export type WidgetScope = (typeof WIDGET_SCOPES)[number];
  * `apps/web/src/widgets/registry.ts`. The last of those is typed by this list, so forgetting
  * it is a `vue-tsc` error rather than a blank tab.
  */
-export const WIDGET_IDS = ["workspace_stats", "session_stats", "plan", "quiz", "thread"] as const;
+export const WIDGET_IDS = [
+  "workspace_stats",
+  "session_stats",
+  "plan",
+  "quiz",
+  "thread",
+  "notes",
+] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
 
@@ -435,6 +442,10 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   // The thread widget brings no tools: its classification is an out-of-band model call,
   // like the auto-titler, not a tool the agent can call.
   { id: "thread", scopes: ["session"] },
+  // Notes are the learner's own writing, so they bring no tools either: the model neither
+  // reads them nor writes them. It is deliberately *not* in the "study" pack — that pack is
+  // material derived from the conversation, and this is what the learner made of it.
+  { id: "notes", scopes: ["session"] },
 ];
 
 /**
@@ -694,6 +705,99 @@ export interface GetSessionThreadsResponse {
   unassigned: number;
 }
 
+/* ------------------------------------ notes ------------------------------------ */
+
+/**
+ * What a note *is*, in the learner's own terms.
+ *
+ * Four values rather than "annotation" plus a separate kind: 标注 is the one-click quick
+ * action and the other three are what the window offers, but all four are the same thing to
+ * the store, the list and the filter — a note with a label. The quick action picks a
+ * *default type*; it does not create a second kind of row.
+ *
+ * Note this is not the `notes` field a `QuizAnswer` carries. That is one question's
+ * free-text remark, stored inside the answer; a `Note` below is a record of its own, with an
+ * id, a type and (usually) a place in a conversation.
+ */
+export const NOTE_TYPES = ["annotation", "idea", "question", "other"] as const;
+
+export type NoteType = (typeof NOTE_TYPES)[number];
+
+export function isNoteType(value: unknown): value is NoteType {
+  return typeof value === "string" && (NOTE_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Where inside a message an annotation points.
+ *
+ * A text-quote anchor rather than a pair of character offsets, because the offsets a browser
+ * reports are offsets into *rendered* HTML, and the note outlives any one rendering: `quote`
+ * is the selected text itself and `occurrence` says which match of it this was, counted over
+ * the message's **visible** text (a formula is skipped — KaTeX renders each one twice, once
+ * as glyphs and once as hidden MathML, so a raw walk sees every formula double).
+ *
+ * Nothing here is guaranteed to still resolve: the message may since have been peeled off by
+ * a regenerate, and the quote may simply not be found. Resolution is best-effort by design —
+ * the highlight is a convenience, while `quote` is the record, which is why it is stored
+ * rather than re-derived.
+ */
+export interface NoteAnchor {
+  quote: string;
+  occurrence: number;
+}
+
+/**
+ * Caps, exported as values rather than living in a validator alone, so the client can refuse
+ * a paste before it becomes a 400 and the tests read the same numbers.
+ *
+ * The quote is capped well above a sentence and well below a message: it is the annotated
+ * text, so it has to hold whatever the user dragged over, but a whole conversation pasted
+ * into a note is not an annotation.
+ */
+export const NOTE_QUOTE_MAX = 2000;
+/** Cap on the note body, for the reason `QUIZ_NOTES_MAX` gives: one note cannot dwarf anything. */
+export const NOTE_CONTENT_MAX = 4000;
+
+/**
+ * One note, as both sides hold it.
+ *
+ * `messageId` is nullable and `sessionId` is not, and that asymmetry is the entity's whole
+ * shape: a note belongs to a conversation always, and to a message only when something was
+ * annotated. A note the user typed from the list has no message to point at, and one whose
+ * message was since deleted keeps its id and gains `messageMissing`.
+ */
+export interface Note {
+  id: string;
+  sessionId: string;
+  /** The annotated message; null for a note added from the list with no annotation. */
+  messageId: string | null;
+  type: NoteType;
+  /** The annotated text, verbatim. Empty when there is no annotation. */
+  quote: string;
+  /** Which occurrence of `quote` this was, counted over the message's visible text. */
+  occurrence: number;
+  content: string;
+  /**
+   * The message this note points at is gone — soft-deleted by a regenerate or a tail delete.
+   *
+   * Resolved by the server on every read rather than guessed by the client, for the reason
+   * the widget states are: the client's message list holds only the conversation on screen,
+   * so it cannot answer this for a session it has not loaded. It is what turns "定位" from a
+   * button that silently does nothing into one that is not drawn.
+   *
+   * False when there is no message at all, which is a different fact from "there was one and
+   * it is gone" — an unanchored note never had a place to go back to.
+   */
+  messageMissing: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/sessions/:id/notes`. Newest first, which is the order the panel renders. */
+export interface GetSessionNotesResponse {
+  notes: Note[];
+}
+
 /* ------------------------------------ stats ------------------------------------ */
 
 /**
@@ -859,6 +963,12 @@ export const API_ERROR_CODES = [
   // request the caller assembled wrongly. The sentences differ, so the codes do.
   "UNKNOWN_WIDGET",
   "WIDGET_SCOPE_UNSUPPORTED",
+  // A note id that this conversation does not hold — unknown, another account's, another
+  // conversation's, or already soft-deleted. One code for the four, like MESSAGE_NOT_FOUND.
+  "NOTE_NOT_FOUND",
+  // A `type` outside NOTE_TYPES. Refused rather than defaulted, for the reason `INVALID_FIELD`
+  // gives: a note that silently became an annotation is a note the user did not write.
+  "NOTE_TYPE_INVALID",
   // A history version was asked for (…/plan/versions/:version) that never existed. No plan
   // at all is a 200 `{ plan: null }`, not this — that is the ordinary empty state.
   "PLAN_VERSION_NOT_FOUND",
@@ -1835,6 +1945,35 @@ export interface UpdateSessionInput {
   allTools?: boolean;
   /** Ignored when `allTools` is true. Empty with `allTools: false` means no tools. */
   tools?: string[];
+}
+
+/**
+ * Payload for `POST /api/sessions/:id/notes`.
+ *
+ * `quote` and `occurrence` travel together or not at all: a quote with no occurrence has no
+ * position to highlight, and an occurrence with no quote has nothing to search for. Sending
+ * neither is the ordinary case for a note added from the list.
+ */
+export interface CreateNoteInput {
+  /** The annotated message. Absent (or null) is a note with no annotation. */
+  messageId?: string | null;
+  /** Defaults to `annotation` — the quick action sends nothing but the selection. */
+  type?: NoteType;
+  quote?: string;
+  occurrence?: number;
+  content?: string;
+}
+
+/**
+ * Payload for `PATCH /api/sessions/:id/notes/:noteId`.
+ *
+ * Only these two, and deliberately: the anchor and the message are what a note *was*, and an
+ * edit that could re-point one at different text would be a different note wearing the same
+ * id. An absent field is left alone, the contract `apiKey` and the tool pair already carry.
+ */
+export interface UpdateNoteInput {
+  type?: NoteType;
+  content?: string;
 }
 
 /** Payload for `POST /api/sessions/:id/attachments` (base64 keeps us dependency-free). */
