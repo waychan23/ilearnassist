@@ -1878,17 +1878,31 @@ export interface DirectoryListing {
  * silently rendered as highlighted text — plausible-looking, and wrong. The chain was turned
  * into an exhaustive switch in the same change. A new kind is a compile error only once a
  * site says so; until then the fallthrough is what handles it.
+ *
+ * `binary` is the second, and it replaced a member rather than only adding one. The old
+ * `unsupported` claimed something the server cannot know: *whether anything can render this*.
+ * That answer lives in a plugin registry inside the browser bundle, so a server asserting it
+ * was asserting a fact about a table it cannot see — and the day a format gained support, the
+ * server would have gone on refusing it. `binary` claims only what `classify` actually
+ * established: **not text; the bytes are yours to hand to a viewer.** The client decides the
+ * rest, and `unsupported` survives as a *client* view state for a file no plugin matches.
+ *
+ * The rule from the paragraph above still holds, and this is where it applies: extensionless
+ * files, `Makefile` and `LICENSE` are decided by sniffing bytes, which is why *this* end of
+ * the question — text versus binary — stays on the server. Only the previewability half moved.
  */
-export const FILE_CONTENT_KINDS = ["text", "markdown", "diagram", "unsupported"] as const;
+export const FILE_CONTENT_KINDS = ["text", "markdown", "diagram", "binary"] as const;
 export type FileContentKind = (typeof FILE_CONTENT_KINDS)[number];
 
 /**
  * A file's metadata, plus its text when the server decided there was any to send.
  *
- * `text` is null for `unsupported` on purpose — the bytes are never read past the sniff in
- * that case, so there is nothing to send and no way for a caller to render a binary as
- * mojibake. `truncated` says the file is longer than the preview cap, which the UI states
- * outright rather than letting a file look like it ends there.
+ * `text` is null for `binary` on purpose — there is no text to send, so there is no way for a
+ * caller to render a binary as mojibake, and the bytes are deliberately not in this reply:
+ * they come from the raw route, which is the only place a preview may pull them from (see
+ * `MAX_FILE_PREVIEW_BYTES`). `truncated` says the file is longer than the preview cap, which
+ * the UI states outright rather than letting a file look like it ends there. It is always
+ * false for `binary`, where nothing was truncated because nothing was read.
  */
 export interface FileContent {
   path: string;
@@ -2397,6 +2411,25 @@ export type ChatStreamEvent =
 
 /** Uploads are capped at 10 MB per file (also enforced server-side). */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * How large a file may be and still be handed to the preview viewer whole.
+ *
+ * The viewer is given a `File`, so these bytes are resident in the tab — this is a memory
+ * bound, not a disk one. Deliberately larger than `MAX_ATTACHMENT_BYTES`: an attachment is
+ * inlined into a prompt, and a preview is not.
+ *
+ * Shared, because both sides check it and they are checking different things. The client
+ * checks it *before* the request, which is what keeps a 300 MB video from being requested at
+ * all; the server enforces it as its own limit, which is what makes that a rule rather than a
+ * screen. It is also why the refusal is `FILE_TOO_LARGE` with its own `limitMb` rather than a
+ * sentence about uploads.
+ *
+ * 32 MB fits a large PDF, a scanned document, a spreadsheet and a short video. A ten-minute
+ * 720p recording does not fit, and that is inherent in handing the viewer a whole `File` —
+ * stated here rather than discovered.
+ */
+export const MAX_FILE_PREVIEW_BYTES = 32 * 1024 * 1024;
 
 /**
  * Fallback context window when a model has none configured. Used only for the

@@ -1,7 +1,14 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
+import { MAX_ATTACHMENT_BYTES, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
 import { sourceRawPath } from "../src/attachments.js";
 import type {
   ApiErrorBody,
@@ -289,7 +296,7 @@ describe("workspace files", () => {
     expect(ts.json<FileContent>()).toMatchObject({ kind: "text", truncated: false });
   });
 
-  it("reports a file it will not render without sending its bytes", async () => {
+  it("calls a binary binary without sending its bytes", async () => {
     const workspace = await seededWorkspace();
     writeFileSync(join(workspace.workdirPath, "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
@@ -297,7 +304,61 @@ describe("workspace files", () => {
       method: "GET",
       url: `/api/workspaces/${workspace.id}/files/content?path=shot.png`,
     });
-    expect(res.json<FileContent>()).toMatchObject({ kind: "unsupported", text: null });
+    // The bytes come from `/files/raw`, never from here — whether anything can draw them is the
+    // client's question now, and this route's answer stops at "there is no text".
+    expect(res.json<FileContent>()).toMatchObject({ kind: "binary", text: null });
+  });
+
+  /*
+   * The byte route. Three things about it are load-bearing and none of them is visible from the
+   * reply: the type is deliberately not the file's own, the size limit is a real status rather
+   * than a 400, and the sandbox still applies. Asserted on headers rather than on bytes because
+   * "the bytes arrived" is what the happy path already proves.
+   */
+  it("serves a file's bytes as an unusable type", async () => {
+    const workspace = await seededWorkspace();
+    writeFileSync(join(workspace.workdirPath, "doc.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46]));
+
+    const res = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files/raw?path=doc.pdf`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    // Never `application/pdf`, and deliberately not the `mimeType` that `/api/sources/:id/raw`
+    // serves: these bytes are re-materialised into our own DOM by the office plugins.
+    expect(res.headers["content-type"]).toBe("application/octet-stream");
+    expect(res.headers["content-disposition"]).toBe("attachment");
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.rawPayload.length).toBe(4);
+  });
+
+  it("answers 413 for a file past the preview limit", async () => {
+    const workspace = await seededWorkspace();
+    writeFileSync(join(workspace.workdirPath, "huge.mp4"), "");
+    truncateSync(join(workspace.workdirPath, "huge.mp4"), MAX_FILE_PREVIEW_BYTES + 1);
+
+    const res = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files/raw?path=huge.mp4`,
+    });
+
+    // 413 rather than 400: it is the one failure on this route the caller could have avoided by
+    // asking differently, and the only status here that is not a bad request or a missing file.
+    expect(res.statusCode).toBe(413);
+    expect(res.json<ApiErrorBody>().error.code).toBe("FILE_TOO_LARGE");
+  });
+
+  it("refuses a raw path that escapes the workspace", async () => {
+    const workspace = await seededWorkspace();
+
+    const res = await inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/files/raw?path=${encodeURIComponent("../../etc/passwd")}`,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json<ApiErrorBody>().error.code).toBe("INVALID_FILE_PATH");
   });
 
   it("404s a workspace that does not exist", async () => {
@@ -844,6 +905,60 @@ describe("sources", () => {
 
   it("404s for an unknown source", async () => {
     expect((await inject({ method: "GET", url: "/api/sources/nope/raw" })).statusCode).toBe(404);
+    expect((await inject({ method: "GET", url: "/api/sources/nope/preview" })).statusCode).toBe(404);
+  });
+
+  /*
+   * A source's preview, which is what makes an uploaded file openable at all: it lives outside
+   * every workspace, so the file browser's routes cannot address it.
+   *
+   * The point of these assertions is that a source is described by the *same* classification a
+   * workspace file gets — the two call one function — so the same dialog renders both.
+   */
+  it("describes an uploaded file the way the file browser would", async () => {
+    /*
+     * The body is distinctive on purpose. Sources are deduped by content, so bytes another test
+     * already uploaded come back under *that* test's name — documented behaviour, and a fine way
+     * to write a test that fails for a reason about a neighbouring fixture. The e2e's `seedSource`
+     * carries the same warning.
+     */
+    const body = "%PDF-1.4 source-preview-classification";
+    const attachment = (
+      await upload({
+        name: "doc.pdf",
+        mimeType: "application/pdf",
+        data: Buffer.from(body).toString("base64"),
+      })
+    ).json<Attachment>();
+
+    const res = await inject({ method: "GET", url: `/api/sources/${attachment.id}/preview` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<FileContent>()).toMatchObject({
+      // The stored name, not the uuid the bytes sit under on disk.
+      name: "doc.pdf",
+      kind: "binary",
+      text: null,
+      truncated: false,
+      size: body.length,
+    });
+  });
+
+  it("sends an uploaded text file's contents", async () => {
+    // The half a viewer cannot do: a `.md` upload is text, so it renders through the same
+    // markdown path a workspace file does rather than being handed to a plugin registry.
+    const attachment = (
+      await upload({
+        name: "preview-notes.md",
+        mimeType: "text/markdown",
+        data: Buffer.from("# Source preview").toString("base64"),
+      })
+    ).json<Attachment>();
+
+    const res = await inject({ method: "GET", url: `/api/sources/${attachment.id}/preview` });
+    expect(res.json<FileContent>()).toMatchObject({
+      kind: "markdown",
+      text: "# Source preview",
+    });
   });
 
   it("never tells a client where a file lives, or who owns it", async () => {

@@ -11,6 +11,7 @@ import {
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
+import { fileViewerSupported } from "../utils/fileViewer";
 import {
   closeCopilots,
   closeSources,
@@ -127,14 +128,19 @@ export interface DocumentParserDraft {
 }
 
 /**
- * Which tree a file preview is reading.
+ * Where a file preview is reading from.
  *
- * Two roots with the same rules and the same routes' shape: the workspace's `workdir/`, which
- * the file tree browses, and a conversation's own `sessions/<id>/`, where the diagrams it draws
- * are written. `"workspace"` is the default so every existing caller of `openFile` reads the
- * same way it always did.
+ * Three, and the third is not a tree: the workspace's `workdir/`, which the file tree browses; a
+ * conversation's own `sessions/<id>/`, where the diagrams it draws are written; and an uploaded
+ * `source`, which lives outside every workspace and is addressed by id rather than by path.
+ * `"workspace"` is the default so every existing caller of `openFile` reads the same way it
+ * always did.
+ *
+ * It is kept only to answer one question — whether a *session switch* should close the preview —
+ * and `"source"` gives the right answer by not matching `"session"`. An upload belongs to the
+ * account, so the conversation in front of it is neither here nor there.
  */
-export type FileRoot = "workspace" | "session";
+export type FileRoot = "workspace" | "session" | "source";
 
 /** Whether an attachment is still queued or being read. */
 function isSettling(attachment: Attachment): boolean {
@@ -301,6 +307,19 @@ export const useAppStore = defineStore("app", () => {
   const fileContent = ref<FileContent | null>(null);
   const fileContentLoading = ref(false);
   const filePreviewError = ref<string | null>(null);
+  /**
+   * The bytes of a `binary` file, for the viewer.
+   *
+   * A second request rather than a field on `fileContent`, because the two carry different
+   * kinds of thing and have different ceilings — see `readRawFile`. Fetched **only** when the
+   * metadata says `binary` *and* `fileViewerSupported` says the viewer has a claim on the name,
+   * which is what keeps a `.bin` from costing a request at all rather than merely a render.
+   *
+   * Null is therefore ordinary and means two different things — a text file, which never needs
+   * bytes, and a binary nothing can draw. `fileViewerSupported` is what separates them, and the
+   * viewer is shown either way so it can say which.
+   */
+  const filePreviewFile = ref<File | null>(null);
   /**
    * Which root the open preview is reading.
    *
@@ -864,24 +883,72 @@ export const useAppStore = defineStore("app", () => {
     const workspaceId = activeWorkspaceId.value;
     const sessionId = activeSessionId.value;
     let load: (() => Promise<FileContent>) | null = null;
+    let loadBytes: ((name: string) => Promise<File>) | null = null;
     if (root === "session") {
-      if (sessionId) load = () => api.readSessionFileContent(sessionId, path);
+      if (sessionId) {
+        load = () => api.readSessionFileContent(sessionId, path);
+        loadBytes = (name) => api.readSessionRawFile(sessionId, path, name);
+      }
     } else if (workspaceId) {
       load = () => api.readFileContent(workspaceId, path);
+      loadBytes = (name) => api.readRawFile(workspaceId, path, name);
     }
-    if (!load) return;
+    if (!load || !loadBytes) return;
+    await runPreview(root, path, load, loadBytes);
+  }
 
+  /**
+   * An uploaded file, open in the same dialog as a workspace one.
+   *
+   * Its own entry point rather than a `root` argument to `openFile`, because a source is not
+   * reached by a path: the file tree hands over a path it just listed, while this is handed the
+   * row itself and addresses it by id. Everything after that is the same call.
+   */
+  async function openSourceFile(source: Source): Promise<void> {
+    await runPreview(
+      "source",
+      source.name,
+      () => api.readSourcePreview(source.id),
+      (name) => api.readSourceRawFile(source.id, name)
+    );
+  }
+
+  /**
+   * The one path a preview takes, whichever root it came from: describe the file, then fetch its
+   * bytes *only* if something can draw them.
+   *
+   * Both fetches are guarded by the same sequence number, which is what makes a close a
+   * cancellation rather than a reset — a reply that arrives late belongs to a file nobody is
+   * looking at any more, and writing it would overwrite whatever the next open has put up.
+   *
+   * The order is load-bearing in both directions. The metadata has to come back first because the
+   * decision to fetch bytes is made from `kind` and `name`; and asking `fileViewerSupported`
+   * *before* the request is what keeps a `.bin` — or a video past the cap — from costing a
+   * request whose only possible outcome is being discarded.
+   */
+  async function runPreview(
+    root: FileRoot,
+    path: string,
+    load: () => Promise<FileContent>,
+    loadBytes: (name: string) => Promise<File>
+  ): Promise<void> {
     const seq = ++filePreviewSeq;
     filePreviewRoot.value = root;
     filePreviewPath.value = path;
     fileContent.value = null;
+    filePreviewFile.value = null;
     filePreviewError.value = null;
     fileContentLoading.value = true;
     try {
       const content = await load();
-      // A later open owns the state by now; this reply is for a file nobody is looking at.
       if (seq !== filePreviewSeq) return;
       fileContent.value = content;
+
+      if (content.kind === "binary" && fileViewerSupported(content.name)) {
+        const file = await loadBytes(content.name);
+        if (seq !== filePreviewSeq) return;
+        filePreviewFile.value = file;
+      }
     } catch (e) {
       if (seq !== filePreviewSeq) return;
       filePreviewError.value = messageOf(e);
@@ -896,6 +963,7 @@ export const useAppStore = defineStore("app", () => {
     filePreviewSeq++;
     filePreviewPath.value = null;
     fileContent.value = null;
+    filePreviewFile.value = null;
     filePreviewError.value = null;
     fileContentLoading.value = false;
   }
@@ -2058,6 +2126,7 @@ export const useAppStore = defineStore("app", () => {
     filePreviewPath,
     filePreviewRoot,
     fileContent,
+    filePreviewFile,
     fileContentLoading,
     filePreviewError,
     // derived
@@ -2136,6 +2205,7 @@ export const useAppStore = defineStore("app", () => {
     toggleDirectory,
     refreshFileTree,
     openFile,
+    openSourceFile,
     closeFile,
     resetFileTree,
   };

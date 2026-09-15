@@ -15,8 +15,13 @@ export default defineConfig({
      * diagram appears — which in the browser suite is that spec's first assertion, and a cold
      * transform there is the difference between a pass and a timeout. In `pnpm dev` it is a
      * visible stall on the first diagram of the session.
+     *
+     * `@open-file-viewer/core` is here for exactly the same reason and it is the worse case of
+     * the two: one entry point over ~25 runtime dependencies, so a cold transform of it is a
+     * cold transform of every one of them. It is behind a dynamic import too, and the browser
+     * suite's first viewer assertion is where that would otherwise be paid.
      */
-    include: ["mermaid"],
+    include: ["mermaid", "@open-file-viewer/core"],
   },
   server: {
     // Pinned and strict only when the e2e asks for it: if that port is taken the run must

@@ -341,7 +341,10 @@ export default {
       /** The whole of what an unrenderable file gets: no bytes are fetched, so there is
        *  nothing to show but the name and the reason. */
       unsupported: "暂不支持预览这种格式",
-      unsupportedHint: "目前可以预览纯文本与 Markdown 文件。",
+      unsupportedHint: "可预览文本、Markdown、图表、图片、PDF 与 Office 文档。",
+      /** A file the viewer claimed but could not draw. The library's own error is shown below
+       *  it untranslated, the same treatment a provider's raw failure gets. */
+      viewerFailed: "无法预览该文件",
       /** Appended to the metadata line when the file was longer than the preview cap. */
       truncated: "仅显示前 {size}",
       size: "大小",
@@ -1204,6 +1207,9 @@ export default {
     parsedChars: "已解析 {count} 字",
     parsing: "解析中…",
     parseFailed: "解析失败",
+    /** The accessible name of a row's open control. The name is in it because the row's own
+     *  label is truncated, so this is also the only place a long filename is readable whole. */
+    preview: "预览 {name}",
     delete: {
       title: "删除文件",
       message: "确定要删除「{name}」吗？",

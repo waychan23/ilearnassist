@@ -1,11 +1,10 @@
-import { open, readdir, realpath, stat } from "node:fs/promises";
+import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { DIAGRAM_FILE_EXTENSIONS } from "@ilearnassist/shared";
+import { DIAGRAM_FILE_EXTENSIONS, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
 import type {
   ApiErrorCode,
   DirectoryListing,
   FileContent,
-  FileContentKind,
   FileEntry,
 } from "@ilearnassist/shared";
 import { resolveInWorkspace } from "./workspace.js";
@@ -44,11 +43,17 @@ export const MAX_LIST_ENTRIES = 2_000;
 export const MAX_PREVIEW_BYTES = 256 * 1024;
 
 /**
- * Extensions known to be binary. Checked *before* reading, so the common large binary is
- * refused on its name alone rather than after pulling a quarter-megabyte off disk.
+ * Extensions known to be binary, so a `.png` is answered on its name rather than after
+ * pulling a quarter-megabyte off disk to look at it.
  *
- * It is a denylist on top of a content sniff rather than a complete answer: the sniff is
- * what decides an unfamiliar extension, and this exists so a `.png` never gets that far.
+ * This is a **read-avoidance list, not a correctness list**, and that distinction decides who
+ * may edit it. Anything left off still reaches the same answer — the sniff below classifies
+ * it — so omitting an entry costs a read and never a wrong `kind`. Being incomplete is safe.
+ *
+ * That is also what makes the old version of this comment worth remembering: it said the list
+ * was "checked *before* reading", and it was not. `readFileContent` read the head first and
+ * classified afterwards, so a `.png` cost 256 KB of I/O to be refused on its name. The order
+ * is now the one the comment always described, which is the only reason the claim is here.
  */
 const BINARY_EXTENSIONS = new Set([
   "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "avif", "heic",
@@ -220,31 +225,23 @@ export async function listDirectory(
 }
 
 /**
- * Decide what can be done with a file's bytes.
+ * What a file's bytes say, for a name that did not settle the question.
  *
- * Extension first, content second. The name settles the two cases worth settling cheaply —
- * Markdown renders, and a known binary is refused without being read at all — and everything
- * else is decided by looking, which is what makes `Makefile`, `LICENSE` and `Dockerfile`
- * work despite having no extension to consult.
+ * The second half of a two-step decision — extension first, content second — and the half
+ * that makes `Makefile`, `LICENSE` and `Dockerfile` readable despite having no extension to
+ * consult.
+ *
+ * A NUL byte is what text files do not contain, and it is the check that needs no decoding:
+ * a UTF-16 file is full of them and is not something this can render either.
  */
-function classify(ext: string, bytes: Buffer): FileContentKind {
-  if (MARKDOWN_EXTENSIONS.has(ext)) return "markdown";
-  // Ahead of the sniff, like Markdown: a diagram is text by definition, and the client needs
-  // the source to draw it. A binary that happens to be named `.mmd` is therefore sent as
-  // text and decodes to replacement characters — a decision, not an oversight, and pinned by
-  // a test so it stays one.
-  if (DIAGRAM_EXTENSIONS.has(ext)) return "diagram";
-  if (BINARY_EXTENSIONS.has(ext)) return "unsupported";
-
-  // A NUL byte is what text files do not contain, and it is the check that needs no
-  // decoding: a UTF-16 file is full of them and is not something this can render either.
-  if (bytes.includes(0)) return "unsupported";
+function sniff(bytes: Buffer): Pick<FileContent, "kind" | "text"> {
+  if (bytes.includes(0)) return { kind: "binary", text: null };
   try {
     new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    return "unsupported";
+    return { kind: "binary", text: null };
   }
-  return "text";
+  return { kind: "text", text: new TextDecoder("utf-8").decode(bytes) };
 }
 
 /**
@@ -292,7 +289,23 @@ export async function readFileContent(
   }
 
   const abs = await resolveReal(root, rel);
-  const info = await stat(abs).catch((err) => {
+  return readPreviewFile(abs, rel);
+}
+
+/**
+ * Read one file for preview, given a path its caller has already proved safe.
+ *
+ * Split out of `readFileContent` when uploaded files gained a preview too. A workspace and a
+ * source are different sandboxes with different guards — `resolveReal` for one, `resolveInSources`
+ * for the other — but *what is this file* is one question, and it is the one that must not be
+ * answered twice: two copies of these extension tables is how a `.mmd` ends up drawn in one
+ * dialog and shown as code in the other.
+ *
+ * `rel` is whatever the caller calls the file — a workspace-relative path, or a source's name.
+ * It is carried through for `path` and for error messages; nothing here resolves it.
+ */
+export async function readPreviewFile(absPath: string, rel: string): Promise<FileContent> {
+  const info = await stat(absPath).catch((err) => {
     throw asFileError(err, rel);
   });
   if (info.isDirectory()) {
@@ -307,19 +320,77 @@ export async function readFileContent(
     modifiedAt: new Date(info.mtimeMs).toISOString(),
   };
 
-  const { bytes, truncated } = await readHead(abs, rel);
-  const kind = classify(extname(name).slice(1).toLowerCase(), bytes);
-  if (kind === "unsupported") {
-    return { ...base, kind, text: null, truncated: false };
+  const ext = extname(name).slice(1).toLowerCase();
+
+  // First, and with **no read at all**: a name that says "binary" is enough to answer, and
+  // answering here is what spares a `.png` the quarter-megabyte the head would cost.
+  if (BINARY_EXTENSIONS.has(ext)) {
+    return { ...base, kind: "binary", text: null, truncated: false };
+  }
+
+  const { bytes, truncated } = await readHead(absPath, rel);
+
+  // Markdown and diagram source are text by definition, and the client needs the *source* to
+  // render either. A binary that happens to be named `.mmd` is therefore still sent as text
+  // and decodes to replacement characters — a decision, not an oversight, and pinned by a
+  // test so it stays one.
+  if (MARKDOWN_EXTENSIONS.has(ext) || DIAGRAM_EXTENSIONS.has(ext)) {
+    return {
+      ...base,
+      kind: DIAGRAM_EXTENSIONS.has(ext) ? "diagram" : "markdown",
+      text: new TextDecoder("utf-8").decode(bytes),
+      truncated,
+    };
   }
 
   // A multi-byte character straddling the cap decodes to a replacement character rather
   // than throwing, which is what we want: the tail of a truncated preview is allowed to be
   // approximate, and the alternative is dropping the character before it too.
-  return {
-    ...base,
-    kind,
-    text: new TextDecoder("utf-8").decode(bytes),
-    truncated,
-  };
+  return { ...base, ...sniff(bytes), truncated };
+}
+
+/**
+ * A file's bytes, whole, for a viewer that renders them rather than a person who reads them.
+ *
+ * Separate from `readFileContent` because it answers a different question. That one says
+ * *what this is*, in JSON, capped at the preview size; this one says *here are the bytes*, and
+ * a scanned document is not a 256 KB question. The path is resolved exactly the same way —
+ * `resolveReal`, so the realpath check that catches a symlink leaving the root applies to both
+ * — and the cap is checked on the `stat` **before** anything is read, so an oversized file
+ * costs one metadata call rather than a 32 MB buffer.
+ *
+ * The bytes are returned whole rather than streamed, because the client hands them to the
+ * viewer as a `File` and that is the only shape it accepts. `MAX_FILE_PREVIEW_BYTES` is what
+ * bounds the buffer; there is no Range support here, and none is wanted — the viewer receives
+ * a whole file, so seeking is local and never re-requests.
+ */
+export async function readRawFile(
+  root: string,
+  relPath?: string | string[]
+): Promise<{ path: string; name: string; size: number; bytes: Buffer }> {
+  const rel = normalizeRel(relPath);
+  if (!rel) {
+    throw new FileAccessError("INVALID_FILE_PATH", "A file path is required.");
+  }
+
+  const abs = await resolveReal(root, rel);
+  const info = await stat(abs).catch((err) => {
+    throw asFileError(err, rel);
+  });
+  if (info.isDirectory()) {
+    throw new FileAccessError("NOT_A_FILE", `"${rel}" is a directory, not a file.`);
+  }
+  if (info.size > MAX_FILE_PREVIEW_BYTES) {
+    const limitMb = Math.round(MAX_FILE_PREVIEW_BYTES / 1024 / 1024);
+    throw new FileAccessError(
+      "FILE_TOO_LARGE",
+      `"${rel}" is larger than the ${limitMb} MB preview limit.`
+    );
+  }
+
+  const name = rel.slice(rel.lastIndexOf("/") + 1);
+  const bytes = await readFile(abs).catch((err) => {
+    throw asFileError(err, rel);
+  });
+  return { path: rel, name, size: info.size, bytes };
 }

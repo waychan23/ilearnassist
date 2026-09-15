@@ -275,6 +275,8 @@ apps/web/src/
   composables/widgetPanel.ts   # the panel's persisted preferences + width clamping
   utils/apiError.ts       # server code → user-facing message
   utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
+  utils/fileViewer.ts     # the preview viewer's gate + theme/locale mapping (no DOM, no chunk)
+  utils/openFileViewer.ts # the lazy viewer chunk + its vendor sheet — the only importer of it
   utils/locale.ts         # browser-language detection + the alias table
   utils/mermaid.ts        # the lazy mermaid chunk: theme variables, parse, render
   utils/noteAnchor.ts     # selection → quote + occurrence, and back (pure, DOM-only)
@@ -285,9 +287,10 @@ apps/web/src/
   widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
-                          #   ToolCallCard, DiagramCard, MermaidDiagram, AskUserCard, Composer,
-                          #   TopbarControls, FileTree, WidgetPanel, WidgetTabStrip,
-                          #   GenerationParams, NoteEditor, MessageSelectionToolbar,
+                          #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
+                          #   AskUserCard, Composer, TopbarControls, FileTree, WidgetPanel,
+                          #   WidgetTabStrip, GenerationParams, NoteEditor,
+                          #   MessageSelectionToolbar,
                           #   dialogs (Settings, WorkspaceSettings, Sources, SessionFiles,
                           #   FilePreview, Diagram, Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
@@ -338,8 +341,8 @@ Fuller map in `docs/reference.md`.
   contain `/`, `#`, `&` and CJK — and because `?path=a&path=b` parses to an *array*, which
   `files.ts` refuses rather than letting a string operation on it become a 500.
 - **A file's preview `kind` is the extension point.** `FileContent.kind` is a union
-  (`text` / `markdown` / `diagram` / `unsupported`), so the next format is a new member and a
-  branch in `FilePreviewDialog` — not a second endpoint. The server decides it, not the client:
+  (`text` / `markdown` / `diagram` / `binary`), so the next format is a new member and a
+  branch in `FilePreviewDialog` — not a second endpoint. The server decides it *as far as it can*:
   it is the side that can sniff the bytes, and an unfamiliar extension is decided by a NUL check
   and a UTF-8 decode rather than a table, which is what makes `Makefile` and `LICENSE` readable.
   Past the preview cap the reply is a 200 with `truncated: true`, never an error — a 2 GB log
@@ -351,6 +354,42 @@ Fuller map in `docs/reference.md`.
   `switch` with an `unhandled(kind: never)` arm in the same change, which is what makes the next
   member a `vue-tsc` error rather than a fallthrough. A new kind is only a compile error once a
   site says so; until then the fallthrough is what handles it.
+- **`binary` means "not text — hand the bytes to the viewer", and `unsupported` is now the
+  client's claim rather than the server's.** The rule above ("the server decides, not the
+  client") is about *text versus binary*, which is the question bytes are needed for. Whether
+  anything can **draw** a file is a different question whose answer lives in a plugin registry
+  inside a lazily fetched browser chunk, so the old `unsupported` had the server asserting a fact
+  about a table it could not see — and the day a format gained support it would have gone on
+  refusing it. `FileViewer.vue` owns both gates: our `fileViewerSupported` decides whether the
+  chunk is worth loading at all (a `.bin` fetches no bytes and no chunk), and the library's async
+  `isPreviewSupported` is the authority once it has. Preview bytes have their own route
+  (`…/files/raw`, both roots) because they cannot ride in the JSON reply, and they answer
+  `application/octet-stream` + `Content-Disposition: attachment` rather than the file's real
+  type — deliberately unlike `/api/sources/:id/raw`, which serves the account's own uploads to an
+  `<img>` where an SVG is inert. These are *agent-authored* bytes handed to a viewer that
+  re-materialises some of them as HTML. The cap is `MAX_FILE_PREVIEW_BYTES` (32 MB) and a file
+  past it is a **413**, not a 400.
+  **There are three sources of a file and one dialog.** A workspace file, a conversation's own
+  file, and an uploaded `source` — the last addressed by id rather than by a path, because a
+  source lives outside every workspace. All three end in `readPreviewFile`, which exists so that
+  *what is this file* is answered once: the sandboxes differ per root and must, but two copies of
+  the extension tables is how a `.mmd` gets drawn in one dialog and shown as code in another.
+  Uploads are reached from `SourcesDialog`, whose rows carry an open control — the only place an
+  upload's contents were ever reachable, since the file tree cannot list them.
+  **The viewer is a lazy chunk and must stay one.** `@open-file-viewer/core` is a single entry
+  point with no `sideEffects` field, so a static import anywhere on the eager path drags ~25
+  runtime dependencies into the initial bundle — `three`, `leaflet`, `xlsx`, a second `mermaid@11`
+  and its ELK layout engine. Only `utils/openFileViewer.ts` imports it, only through `import()`;
+  `utils/fileViewer.ts` is the DOM-free half and is safe to import eagerly, and a unit test fails
+  if the library is evaluated at import. Its stylesheet comes in `?inline` and is injected under
+  `@layer ofv`, for `@layer hljs`'s reason in `composables/theme.ts`; the token overrides live in
+  `style.css` rather than a new file, because `style.test.ts` globs `src/*.css` **shallowly** and a
+  subdirectory would escape every design-system guard. The library ships its own i18n, so the
+  toolbar is translated by passing `locale`, not by adding catalog keys. `fallbackPlugin()` must
+  never be passed: it is terminal, so it would make `isPreviewSupported` true for everything and a
+  `.bin` would render an empty box instead of the unsupported panel. `textPlugin` is omitted
+  (unreachable — every format it claims is already `text`/`markdown`), and the CAD peers are
+  omitted because `@mlightcad/libredwg-web` is GPL-3.0. See `docs/file-preview.md`.
 - **A conversation's own directory has exactly one writer, and a diagram is a file plus a
   row — each holding what the other cannot.** `sessions/<sessionId>/` is written by
   `ila_diagram` and read by the session-files routes; `write_file` cannot reach it. The `.mmd`

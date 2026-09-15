@@ -509,6 +509,40 @@ export const api = {
       `/sessions/${sessionId}/files/content?path=${encodeURIComponent(path)}`
     ),
   /**
+   * A file's bytes, as a `File` the preview viewer can be handed.
+   *
+   * A separate call from the two above rather than a field on their reply, because they carry
+   * different things: those answer *what this is* in JSON and stop at 256 KB, and this answers
+   * *here are the bytes* and goes to `MAX_FILE_PREVIEW_BYTES`. The caller has already read the
+   * metadata by the time it asks for these — it needs the `kind` to know whether to ask at all.
+   *
+   * `name` is the client's and is not optional, because the response carries no usable type
+   * (see the route's docblock) and the viewer matches its plugins by name. So this is the one
+   * place the name and the bytes are put back together.
+   */
+  readRawFile: (workspaceId: string, path: string, name: string) =>
+    fetchRawFile(`/api/workspaces/${workspaceId}/files/raw?path=${encodeURIComponent(path)}`, name),
+  readSessionRawFile: (sessionId: string, path: string, name: string) =>
+    fetchRawFile(`/api/sessions/${sessionId}/files/raw?path=${encodeURIComponent(path)}`, name),
+  /**
+   * An uploaded file, described the same way a workspace file is.
+   *
+   * Addressed by the *source* rather than by a path, because a source lives outside every
+   * workspace — `sources/raw/<id>.<ext>` — and belongs to the account. `kind` comes back in the
+   * same vocabulary, so the same dialog renders both.
+   */
+  readSourcePreview: (sourceId: string) =>
+    request<FileContent>(`/sources/${sourceId}/preview`),
+  /**
+   * An uploaded file's bytes. The same `File` the browser's own files come back as, so the
+   * viewer cannot tell the two apart — which is the point.
+   *
+   * No size cap on this one and none needed: uploads are already capped at
+   * `MAX_ATTACHMENT_BYTES` when they arrive, so a source is at most 10 MB.
+   */
+  readSourceRawFile: (sourceId: string, name: string) =>
+    fetchRawFile(`/api/sources/${sourceId}/raw`, name),
+  /**
    * The diagrams a conversation drew, as rows carrying the model's summary and their
    * thread. Distinct from `listSessionFiles`, which lists the whole folder, so a
    * hand-copied `.mmd` is not itself a diagram the agent drew.
@@ -748,6 +782,91 @@ export async function sourceImageUrl(sourceId: string): Promise<string> {
   }
   if (!res.ok) throw toApiError(await errorBody(res), res.status);
   return URL.createObjectURL(await res.blob());
+}
+
+/**
+ * A viewable file's extension → the type the viewer is told it is.
+ *
+ * A **hint, not a gate.** Some of the library's plugins sniff the bytes themselves, and the
+ * ones that read this use it to pick a renderer rather than to decide whether there is one —
+ * `isPreviewSupported` is what answers that, and it is the authority. Kept short for that
+ * reason: an entry missing costs a plugin that falls back to sniffing, and an entry wrong
+ * would be worse than an entry absent.
+ *
+ * Only the formats the *server* calls `binary` can arrive here. A `.svg` or a `.csv` is valid
+ * UTF-8 and classifies as `text`, so it never reaches the viewer at all and has no entry.
+ */
+const VIEWER_MIME_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  tiff: "image/tiff",
+  avif: "image/avif",
+  heic: "image/heic",
+  pdf: "application/pdf",
+  epub: "application/epub+zip",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  doc: "application/msword",
+  xls: "application/vnd.ms-excel",
+  ppt: "application/vnd.ms-powerpoint",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  odp: "application/vnd.oasis.opendocument.presentation",
+  rtf: "application/rtf",
+  zip: "application/zip",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+  eml: "message/rfc822",
+};
+
+/** The type to build a viewable file's `File` with; `octet-stream` when the name is unknown. */
+export function mimeForName(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return "application/octet-stream";
+  return VIEWER_MIME_TYPES[name.slice(dot + 1).toLowerCase()] ?? "application/octet-stream";
+}
+
+/**
+ * A file's bytes as a `File`, fetched with the bearer token.
+ *
+ * Fetched rather than pointed at, for `sourceImageUrl`'s reason: a bearer token cannot ride on
+ * a `<video src>`, so the raw route is not something a browser will load on the page's behalf.
+ *
+ * A `File` rather than an object URL, and that is the difference from `sourceImageUrl`: that
+ * one hands back a URL for an `<img src>` and makes the caller responsible for revoking it,
+ * while the viewer takes a `File` — which carries the name, the type and the bytes together
+ * and has no lifetime to manage. Nothing to revoke means nothing to leak.
+ *
+ * **The caller passes a URL with `/api` on it**, unlike every path in the `api` object above.
+ * Those are `/api`-relative because `request()` adds the prefix; this function is a bare
+ * `fetch`, so it has to carry its own. Getting that wrong is not a 404 — the dev server answers
+ * an unknown path with `index.html` at 200, so the viewer would be handed a few kilobytes of
+ * HTML to render as a PNG, and the only symptom is a picture that will not decode.
+ */
+async function fetchRawFile(url: string, name: string): Promise<File> {
+  // The same session-ended short-circuit and single refresh as `send`: a preview opened after
+  // a kick has ended must reach the login screen like any other request rather than failing
+  // behind it.
+  if (sessionEnded) throw sessionEndedError();
+  const fetchBytes = () => fetch(url, { headers: authHeaders() });
+  let res = await fetchBytes();
+  if (res.status === 401) {
+    const outcome = await recoverFrom401(true, true);
+    if (outcome === "refreshed") res = await fetchBytes();
+  }
+  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  return new File([await res.blob()], name, { type: mimeForName(name) });
 }
 
 /** Read a File as bare base64 (no `data:` prefix), matching `UploadAttachmentInput`. */

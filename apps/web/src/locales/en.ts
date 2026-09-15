@@ -270,8 +270,12 @@ const en: typeof MessageSchema = {
       rendered: "Preview",
       source: "Source",
       viewLabel: "View as",
-      unsupported: "No preview for this format yet",
-      unsupportedHint: "Plain text and Markdown files can be previewed today.",
+      unsupported: "No preview for this format",
+      unsupportedHint:
+        "Previewable: text, Markdown, diagrams, images, PDFs and Office documents.",
+      /** A file the viewer claimed but could not draw. The library's own error is shown below
+       *  it untranslated, the same treatment a provider's raw failure gets. */
+      viewerFailed: "This file could not be previewed",
       truncated: "Showing the first {size}",
       size: "Size",
     },
@@ -1058,6 +1062,9 @@ const en: typeof MessageSchema = {
     parsedChars: "{count} characters read",
     parsing: "Reading…",
     parseFailed: "Could not be read",
+    /** The accessible name of a row's open control. The name is in it because the row's own
+     *  label is truncated, so this is also the only place a long filename is readable whole. */
+    preview: "Preview {name}",
     delete: {
       title: "Delete file",
       message: 'Delete "{name}"?',
