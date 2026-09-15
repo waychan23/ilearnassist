@@ -8,6 +8,7 @@ import QuizWidget from "./QuizWidget.vue";
 import ThreadWidget from "./ThreadWidget.vue";
 import NotesWidget from "./NotesWidget.vue";
 import DiagramWidget from "./DiagramWidget.vue";
+import InsightWidget from "./InsightWidget.vue";
 import { claimNotes, releaseNotes } from "../composables/notes";
 
 /**
@@ -67,6 +68,8 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
       return t("widgets.notes.name");
     case "diagram":
       return t("widgets.diagram.name");
+    case "insight":
+      return t("widgets.insight.name");
   }
 }
 
@@ -87,6 +90,8 @@ export function widgetHint(id: WidgetId, t: Translate): string {
       return t("widgets.notes.hint");
     case "diagram":
       return t("widgets.diagram.hint");
+    case "insight":
+      return t("widgets.insight.hint");
   }
 }
 
@@ -189,4 +194,12 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
       void api.syncSessionThreads(scopeId).catch(() => {});
     },
   },
+  /*
+   * Nothing to set up and nothing to claim, so no hook at all — and the absence is the decision
+   * rather than an omission. Installing it does not start a pass: the pass costs a
+   * whole-conversation model call, and an install is not a request for one. The panel opens on
+   * its own list and waits to be asked, which is also what keeps this widget out of the "study"
+   * group (see `docs/widgets.md`).
+   */
+  insight: { component: InsightWidget },
 };

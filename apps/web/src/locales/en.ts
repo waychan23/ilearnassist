@@ -26,7 +26,6 @@ const en: typeof MessageSchema = {
     close: "Close",
     edit: "Edit",
     rename: "Rename",
-    settings: "Settings",
     signOut: "Sign out",
     back: "Back",
     loading: "Loading…",
@@ -360,6 +359,7 @@ const en: typeof MessageSchema = {
       ila_read_plan: "Read plan",
       ila_update_plan_progress: "Update plan progress",
       ila_diagram: "Diagram",
+      ila_query: "Query record",
     },
     done: "Done",
     running: "Running",
@@ -539,11 +539,56 @@ const en: typeof MessageSchema = {
     widgets: "Widgets to install",
     widgetsHint:
       "Starting a conversation from this Copilot installs the ticked widgets into it; they can be adjusted there afterwards, in session parameters.",
+    /* The list. It used to live under `settings.`, because the list and the editor were two
+       halves of one settings dialog; the list has a dialog of its own now, and the editor that
+       shares this namespace is what makes `copilot.*` its domain rather than the app's. */
+    countConfigured: "{count} Copilot configured | {count} Copilots configured",
+    add: "New Copilot",
+    inUse: "In use by this conversation",
+    empty: "No Copilots yet. Click “New Copilot” to create one.",
+    groupPublic: "Published Copilots",
+    groupMine: "My Copilots",
+    byAuthor: "published by {name}",
+    published: "published",
+    viewPrompt: "View its system prompt",
+    promptNone: "No system prompt written.",
+    copyToMine: "Copy to mine",
+    introBefore:
+      "A Copilot bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation",
+    introCopied: "copies the whole of it",
+    introAfter:
+      " into that conversation — later edits to the Copilot leave conversations already under way alone, and a conversation can change its own prompt independently.",
+    summarySteps: "up to {count} tool steps",
+    summaryHistory: "1 message of history | {count} messages of history",
+    summaryTools: "1 tool | {count} tools",
+    summaryAllTools: "all tools",
+    summaryNoTools: "no tools",
+    delete: {
+      title: "Delete Copilot",
+      message: "Delete the Copilot “{name}”?",
+      detail:
+        "Conversations already using it are unaffected — they keep the prompt and parameters copied in when they were created.",
+    },
   },
 
+  /**
+   * The Copilot list, as a noun: the dialog's own title and the two entry points that open it.
+   *
+   * Separate from `copilot.*` because that namespace is the *editor* — "New Copilot",
+   * "Description", "Available tools" — and a label for the thing the editor edits is not one of
+   * its fields. The same word as the Chinese catalog's, which is a product name rather than an
+   * untranslated string.
+   */
+  copilots: {
+    title: "Copilot",
+  },
 
   settings: {
-    title: "Settings",
+    /**
+     * This namespace has no dialog of its own any more: what is left of it is the console's
+     * sections and this one pointer, which the Copilot list shows. The key stays `settings.`
+     * because the installation's settings are still what it is about.
+     */
     installationMoved: "Model services and document parsing are configured in the platform console.",
     providers: {
       countConfigured: "{count} provider configured | {count} providers configured",
@@ -586,29 +631,6 @@ const en: typeof MessageSchema = {
       test: "Test connection",
       testOk: "Connection OK",
     },
-    copilot: {
-      countConfigured: "{count} Copilot configured | {count} Copilots configured",
-      add: "New Copilot",
-      inUse: "In use by this conversation",
-      empty: "No Copilots yet. Click “New Copilot” to create one.",
-      groupPublic: "Published Copilots",
-      groupMine: "My Copilots",
-      byAuthor: "published by {name}",
-      published: "published",
-      viewPrompt: "View its system prompt",
-      promptNone: "No system prompt written.",
-      copyToMine: "Copy to mine",
-      introBefore:
-        "A Copilot bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation",
-      introCopied: "copies the whole of it",
-      introAfter:
-        " into that conversation — later edits to the Copilot leave conversations already under way alone, and a conversation can change its own prompt independently.",
-      summarySteps: "up to {count} tool steps",
-      summaryHistory: "1 message of history | {count} messages of history",
-      summaryTools: "1 tool | {count} tools",
-      summaryAllTools: "all tools",
-      summaryNoTools: "no tools",
-    },
     defaults: {
       appSection: "Default model",
       provider: "Default provider",
@@ -636,12 +658,6 @@ const en: typeof MessageSchema = {
       message: "Delete “{name}”?",
       detail:
         "Documents already parsed are unaffected; parsing again will need another service selected.",
-    },
-    deleteCopilot: {
-      title: "Delete Copilot",
-      message: "Delete the Copilot “{name}”?",
-      detail:
-        "Conversations already using it are unaffected — they keep the prompt and parameters copied in when they were created.",
     },
     policy: {
       "local-only": { label: "Local only", hint: "Fully offline; no external service is called" },
@@ -782,6 +798,44 @@ const en: typeof MessageSchema = {
       inThread: "In: {title}",
       /** The row exists but its file is gone. */
       missing: "The file is gone",
+    },
+    insight: {
+      name: "Insights",
+      hint: "Reflect on this conversation's plan, quizzes, topics, notes and diagrams — what looks hard, what is unclear, what to read next.",
+      noSession: "Open a conversation and you can reflect on its study record here.",
+      /** The button that runs a pass. A button, because a pass costs a whole model call. */
+      generate: "Generate",
+      generating: "Generating…",
+      generatingHint: "Reading this conversation's record; this can take a minute.",
+      /** The pass ran and produced nothing usable. The list above it is unchanged. */
+      generateFailed: "That pass produced nothing usable. The list above is unchanged.",
+      /**
+       * The other reason a press produced nothing, and the opposite instruction to the one
+       * above: nothing is broken, there is simply nothing to read yet.
+       */
+      nothingToReflect:
+        "This conversation has no record to reflect on yet — no plan, quizzes, topics, notes or diagrams. Come back after studying for a while.",
+      empty: "Nothing here yet — press Generate to start.",
+      /** The toggle: `adopted` is what survives the next pass, so the label says what it does. */
+      adopt: "Keep",
+      release: "Stop keeping",
+      adoptedBadge: "Kept",
+      /** Said once, under the list, because the rule is not guessable from the controls. */
+      keepNote: "Only the items you keep survive the next pass; the rest are replaced by it.",
+      /**
+       * The eight kinds. A dynamic key (`widgets.insight.types.<id>`) over the closed
+       * `INSIGHT_TYPES` union — the one narrow prefix this feature adds to `DYNAMIC_PREFIXES`.
+       */
+      types: {
+        difficulty: "Hard",
+        confusion: "Unclear",
+        doubt: "Doubtful",
+        strength: "Mastered",
+        background: "Background",
+        reading: "Further reading",
+        advice: "Advice",
+        habit: "Study habits",
+      },
     },
   },
 
@@ -956,6 +1010,8 @@ const en: typeof MessageSchema = {
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
     NOTE_NOT_FOUND: "That note cannot be found — it may already have been deleted.",
     NOTE_TYPE_INVALID: "That kind of note does not exist.",
+    INSIGHT_NOT_FOUND:
+      "That observation cannot be found — a later pass may have replaced it.",
     MESSAGE_NOT_FOUND: "That message cannot be found — it may already have been deleted.",
     MESSAGE_NOT_LAST: "Only the last message can be deleted. Reload the page and try again.",
     NO_REPLY_TO_REGENERATE:

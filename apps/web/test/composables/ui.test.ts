@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   closeDrawer,
-  closeSettings,
+  closeCopilots,
   closeWidgetDrawer,
   closeWorkspaceSettings,
   openDrawer,
-  openSettings,
+  openCopilots,
   openWidgetDrawer,
   openWorkspaceSettings,
   showChat,
@@ -21,7 +21,7 @@ import {
  * declaration order.
  */
 beforeEach(() => {
-  uiState.settingsOpen = false;
+  uiState.copilotsOpen = false;
   uiState.drawerOpen = false;
   uiState.widgetDrawerOpen = false;
   uiState.workspaceSettingsId = null;
@@ -40,7 +40,7 @@ describe("uiState", () => {
     // the safe guess rather than the visible one, and the flag beside it is what keeps a
     // signed-in user from seeing it on a refresh.
     expect(uiState).toMatchObject({
-      settingsOpen: false,
+      copilotsOpen: false,
       drawerOpen: false,
       sidebarCollapsed: false,
       view: "login",
@@ -66,17 +66,17 @@ describe("uiState", () => {
     expect(uiState.drawerOpen).toBe(false);
   });
 
-  it("keeps the drawer and the settings dialog independent", () => {
-    // They are separate flags on purpose: the drawer closes *before* Settings opens, so a
+  it("keeps the drawer and the Copilot list independent", () => {
+    // They are separate flags on purpose: the drawer closes *before* the dialog opens, so a
     // dialog is never left sitting behind an open drawer.
     openDrawer();
-    openSettings();
+    openCopilots();
     closeDrawer();
 
-    expect(uiState).toMatchObject({ settingsOpen: true, drawerOpen: false });
+    expect(uiState).toMatchObject({ copilotsOpen: true, drawerOpen: false });
 
-    closeSettings();
-    expect(uiState.settingsOpen).toBe(false);
+    closeCopilots();
+    expect(uiState.copilotsOpen).toBe(false);
   });
 });
 

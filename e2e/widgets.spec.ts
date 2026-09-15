@@ -195,6 +195,31 @@ test.describe("the widget panel", () => {
     await expect(page.getByTestId("widget-session-stats")).toBeVisible();
   });
 
+  test("opens a new conversation on its first tab, not on one read elsewhere", async ({
+    page,
+  }) => {
+    const name = unique("FirstTab");
+    await createWorkspaceWith(page, name, ["workspace_stats"]);
+    await enterWorkspace(page, name);
+    await page.getByTestId("new-session").click();
+    await page.getByTestId("new-session-widget-check-session_stats").check();
+    await page.getByTestId("create-session").click();
+
+    // Read the *second* tab. The panel remembers the open tab in one global preference, so this
+    // is the value that used to decide what every later conversation opened on.
+    await page.getByTestId("widget-tab-session_stats").click();
+    await expect(page.getByTestId("widget-session-stats")).toBeVisible();
+
+    // A conversation made fresh has no last-read tab of its own, so it opens on the strip's
+    // first — the workspace group's — rather than on the tab just read in the one before it.
+    await page.getByTestId("new-session").click();
+    await page.getByTestId("new-session-widget-check-session_stats").check();
+    await page.getByTestId("create-session").click();
+
+    await expect(page.getByTestId("widget-workspace-stats")).toBeVisible();
+    await expect(page.getByTestId("widget-session-stats")).toHaveCount(0);
+  });
+
   test("uninstalling the open widget falls back rather than emptying the body", async ({
     page,
   }) => {
@@ -450,4 +475,29 @@ test.describe("the demo widgets", () => {
     await page.getByTestId("create-session").click();
     await expect(page.getByTestId("widget-session-row")).toHaveCount(2);
   });
+});
+
+test("the workspace settings have two entries, and that is deliberate", async ({ page }) => {
+  /*
+   * The sidebar's workspace *name* in the header and the 工作区设置 row in its footer both open
+   * the same dialog. That is a product decision rather than a duplicate to tidy away: the name
+   * is the shortcut for someone who already knows what it does, and the labelled row is for
+   * someone who does not — and a row labelled with where it goes is something the footer only
+   * has room for because an installation-wide settings dialog no longer competes with it.
+   *
+   * Both are asserted because "there is a second way in" is exactly the kind of claim that
+   * survives a refactor as a comment and stops being true in the code.
+   */
+  const name = unique("TwoDoors");
+  await createWorkspaceWith(page, name, ["workspace_stats"]);
+  await enterWorkspace(page, name);
+
+  await page.getByTestId("open-workspace-settings").click();
+  await expect(page.getByTestId("workspace-settings-done")).toBeVisible();
+  await page.getByTestId("workspace-settings-done").click();
+
+  // The header's name button, which is the other one. It must not be shadowed by the new row:
+  // a strict-mode locator matching both would fail every spec that uses it.
+  await page.getByTestId("workspace-settings-open").click();
+  await expect(page.getByTestId("workspace-settings-done")).toBeVisible();
 });

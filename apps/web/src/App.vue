@@ -11,14 +11,14 @@ import LoginView from "./components/LoginView.vue";
 import ChangePasswordView from "./components/ChangePasswordView.vue";
 import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
-import SettingsDialog from "./components/dialogs/SettingsDialog.vue";
+import CopilotsDialog from "./components/dialogs/CopilotsDialog.vue";
 import SourcesDialog from "./components/dialogs/SourcesDialog.vue";
 import SessionFilesDialog from "./components/dialogs/SessionFilesDialog.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
 import {
+  closeCopilots,
   closeDrawer,
-  closeSettings,
   closeWidgetDrawer,
   sidebarRail,
   uiState,
@@ -63,8 +63,8 @@ onMounted(() => {
  *
  * `ConfirmDialog` listens on `window` for the same key, so with a confirm prompt raised over
  * an open drawer a single press would close both: the prompt vanishes and the thing that
- * asked for it slides away underneath. The same applies to Settings, which the sidebar's own
- * footer opens, and to the file preview, which the sidebar opens too. Returning early while
+ * asked for it slides away underneath. The same applies to the Copilot list, which the sidebar's
+ * own footer opens, and to the file preview, which the sidebar opens too. Returning early while
  * any of them is up leaves the topmost layer to handle it.
  */
 function onKeydown(event: KeyboardEvent) {
@@ -72,7 +72,7 @@ function onKeydown(event: KeyboardEvent) {
   // The widget drawer is the same case as the left one, and the two can be open at once — so
   // each is handled by the same handler and neither falls through to the other.
   if (!uiState.drawerOpen && !uiState.widgetDrawerOpen) return;
-  if (confirmState.open || uiState.settingsOpen || store.filePreviewPath) return;
+  if (confirmState.open || uiState.copilotsOpen || store.filePreviewPath) return;
   closeDrawer();
   closeWidgetDrawer();
 }
@@ -136,8 +136,7 @@ watch(
     milliseconds is the only honest option.
 
     The overlays below sit outside the branch because the signed-in views all reach them —
-    Settings from the sidebar footer, from the composer's model picker *and* from the
-    workspace home.
+    the Copilot list from the sidebar footer *and* from the workspace home.
   -->
   <div
     class="app"
@@ -207,8 +206,10 @@ watch(
 
     <!-- Hosted once so every `confirm()` call from anywhere lands in the same prompt. -->
     <ConfirmDialog />
-    <!-- Reachable from the sidebar footer, the composer's model picker and the home page. -->
-    <SettingsDialog v-if="uiState.settingsOpen" @close="closeSettings" />
+    <!-- Reachable from the sidebar footer and from the workspace home's header — the front
+         door has no sidebar, and managing your own Copilots is not something entering a
+         workspace should be a precondition for. -->
+    <CopilotsDialog v-if="uiState.copilotsOpen" @close="closeCopilots" />
     <!-- Per workspace rather than per installation, so it is not a tab of the dialog above.
          Keyed on the id: opening it for a different workspace has to rebuild the list. -->
     <WorkspaceSettingsDialog

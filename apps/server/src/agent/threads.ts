@@ -1,8 +1,9 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { ProviderRecord } from "../db.js";
-import type { ThreadReasoningSetting } from "../config.js";
+import type { OutOfBandReasoningSetting } from "../config.js";
 import type { ThreadClassifier } from "../threads.js";
+import { reasoningModelKwargs } from "./reasoning.js";
 
 /**
  * Output budget. The answer is one tiny JSON object per turn, but a reasoning model spends
@@ -33,7 +34,7 @@ export interface ThreadModelInput {
    * V4), any other model is never sent the field. `on`/`off` force the switch on the wire as
    * `thinking.type` (the DeepSeek / Ark shape), capability-gated like the main loop's replay.
    */
-  reasoning?: ThreadReasoningSetting;
+  reasoning?: OutOfBandReasoningSetting;
 }
 
 function chunkText(chunk: { content: unknown }): string {
@@ -66,18 +67,10 @@ export function makeThreadClassifier(input: ThreadModelInput): ThreadClassifier 
     if (!model) throw new Error("No model configured.");
     if (!provider.apiKey) throw new Error("Provider has no API key.");
 
-    // The kill switch exists only for a model declared as a reasoning model, mirroring the
-    // gate `buildHistoryMessages` uses for replaying reasoning_content: a provider that never
-    // uses the field must never see it — an unknown `thinking` body field is a 400 on strict
-    // OpenAI-compatible endpoints. In `auto` nothing is sent either way, so the provider's own
-    // default stands (thinking ON for DeepSeek V4, absent everywhere else).
-    const reasoningModel = provider.models.some(
-      (m) => m.modelId === model && m.capabilities.includes("reasoning")
-    );
-    const modelKwargs =
-      reasoningModel && reasoning !== "auto"
-        ? { thinking: { type: reasoning === "off" ? "disabled" : "enabled" } }
-        : undefined;
+    // The capability gate lives in `reasoning.ts`, shared with the insight pass. In `auto`
+    // nothing is sent, so the provider's own default stands (thinking ON for DeepSeek V4,
+    // absent everywhere else) rather than this module holding a second opinion about it.
+    const modelKwargs = reasoningModelKwargs(provider, model, reasoning);
 
     const llm = new ChatOpenAI({
       model,

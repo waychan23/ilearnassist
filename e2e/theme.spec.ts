@@ -190,20 +190,20 @@ test("the dialog scrim dims less in the light theme than in the dark one", async
   };
 
   await page.goto("/");
-  // The preference only — see the note in the first test. This one needs `open-settings` on
-  // screen afterwards, so wiping the session would fail it on a missing button.
+  // The preference only — see the note in the first test. This one needs a dialog it can open
+  // on screen afterwards, so wiping the session would fail it on a missing button.
   await page.evaluate(() => localStorage.removeItem("gl-theme"));
   await page.reload();
 
   await show("dark");
-  await page.getByTestId("open-settings").click();
+  await page.getByTestId("open-copilots").click();
   await expect(page.locator(".modal-overlay")).toBeVisible();
   const dark = await alpha();
   await page.locator(".modal-overlay").click({ position: { x: 8, y: 8 } });
   await expect(page.locator(".modal-overlay")).toHaveCount(0);
 
   await show("light");
-  await page.getByTestId("open-settings").click();
+  await page.getByTestId("open-copilots").click();
   await expect(page.locator(".modal-overlay")).toBeVisible();
   const light = await alpha();
 

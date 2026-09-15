@@ -7,7 +7,7 @@ import { isCompact } from "../composables/breakpoints";
 import type { Session } from "../api/types";
 import {
   closeDrawer,
-  openSettings,
+  openCopilots,
   openWorkspaceSettings,
   showAccount,
   showAdmin,
@@ -39,14 +39,22 @@ function onSidebarToggle() {
   else toggleSidebar();
 }
 
-/**
- * Open the *workspace's* settings — not `openSettings`, which is the installation-wide dialog
- * the footer's gear opens. Named at length on purpose: the two are one word apart and do
- * entirely different things.
- */
+/** This workspace's settings. Shared by the header's name button and the footer's own row. */
 function openWorkspaceSettingsPanel(): void {
   const id = store.activeWorkspaceId;
   if (id) openWorkspaceSettings(id);
+}
+
+/** The footer's row: the same dialog, with the drawer closed first. */
+function openSidebarWorkspaceSettings(): void {
+  closeDrawer();
+  openWorkspaceSettingsPanel();
+}
+
+/** The account's Copilots, from the footer. The home page's header opens the same dialog. */
+function openSidebarCopilots(): void {
+  closeDrawer();
+  openCopilots();
 }
 
 /* ---------------------------------- panels ---------------------------------- */
@@ -102,11 +110,6 @@ function openNewSession() {
 function selectSession(id: string) {
   void store.selectSession(id);
   closeDrawer();
-}
-
-function openSidebarSettings() {
-  closeDrawer();
-  openSettings();
 }
 
 /* --------------------------------- rename ---------------------------------- */
@@ -239,8 +242,8 @@ async function onDeleteSession(session: Session) {
 
       The action is contextual — new conversation, or refresh the tree — because the strip and
       its button share one row and the sidebar's vertical budget on a phone is real. The plain
-      `.tab` buttons mirror the settings dialog's strip rather than inventing a second kind;
-      see `docs/design-system.md` on why a shared class is not re-declared locally.
+      `.tab` buttons are the shared class the card strips also use rather than a second kind of
+      tab; see `docs/design-system.md` on why a shared class is not re-declared locally.
     -->
     <div class="tabs side-tabs">
       <button
@@ -322,16 +325,49 @@ async function onDeleteSession(session: Session) {
       <FileTree />
     </div>
 
-    <!-- Global settings live at the foot of the sidebar, as in chatbox. -->
+    <!--
+      This workspace's settings, at the foot of the sidebar.
+
+      **The second of the two entries to that dialog**, the other being the workspace's name in
+      the header immediately above. That is deliberate rather than a duplicate to tidy away: the
+      name is the shortcut for someone who already knows it opens, and this is the labelled row
+      for someone who does not. Both call the same function, so the two cannot diverge in what
+      they open — only in how they are found.
+
+      It replaced a "settings" row pointing at an installation-wide dialog that no longer exists:
+      everything that dialog held was either the account's own Copilots (now the row below) or
+      installation-wide and reachable only by an administrator (the platform console, whose own
+      row is below too).
+    -->
     <button
-      class="menu-item side-settings"
-      :title="t('common.settings')"
-      data-testid="open-settings"
-      @click="openSidebarSettings"
+      class="menu-item side-menu-row side-menu-lead"
+      :title="t('widgets.workspaceSettings.title')"
+      data-testid="open-workspace-settings"
+      @click="openSidebarWorkspaceSettings"
     >
       <span class="gear"><Icon name="gear" /></span>
-      <span class="label">{{ t("common.settings") }}</span>
+      <span class="label">{{ t("widgets.workspaceSettings.title") }}</span>
       <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
+    </button>
+
+    <!--
+      The account's own Copilots.
+
+      Here as well as on the workspace home's header, and it is the front door that makes the
+      pair necessary: the home page has no sidebar, so an account that has not entered a
+      workspace yet would otherwise have no way to manage the Copilots it made.
+
+      No `sub`: there is no single value to show — a count is a sentence about a list, and it
+      belongs in the dialog that lists it rather than in a row that is one word wide.
+    -->
+    <button
+      class="menu-item side-menu-row"
+      :title="t('copilots.title')"
+      data-testid="open-copilots"
+      @click="openSidebarCopilots"
+    >
+      <span class="gear"><Icon name="robot" /></span>
+      <span class="label">{{ t("copilots.title") }}</span>
     </button>
 
     <!--
@@ -345,7 +381,7 @@ async function onDeleteSession(session: Session) {
       permission: the routes refuse everybody else regardless of what this rendered.
     -->
     <button
-      class="menu-item"
+      class="menu-item side-menu-row"
       :title="t('account.title')"
       data-testid="open-account-sidebar"
       @click="showAccount()"
@@ -357,7 +393,7 @@ async function onDeleteSession(session: Session) {
 
     <button
       v-if="store.canAdmin"
-      class="menu-item"
+      class="menu-item side-menu-row"
       :title="t('admin.title')"
       data-testid="open-admin-sidebar"
       @click="showAdmin()"
@@ -366,11 +402,11 @@ async function onDeleteSession(session: Session) {
       <span class="label">{{ t("admin.title") }}</span>
     </button>
 
-    <!-- Sign out sits beside Settings rather than on a menu of its own: it is one action and
-         one click costs nothing. No confirmation either — the session is restored by signing
-         in again, which is the only thing a misclick loses. -->
+    <!-- Sign out sits at the end of the footer rather than on a menu of its own: it is one
+         action and one click costs nothing. No confirmation either — the session is restored
+         by signing in again, which is the only thing a misclick loses. -->
     <button
-      class="menu-item side-signout"
+      class="menu-item side-menu-row side-signout"
       :title="t('common.signOut')"
       data-testid="sign-out"
       @click="store.signOut()"
@@ -397,30 +433,28 @@ async function onDeleteSession(session: Session) {
   font-size: var(--fs-3);
 }
 /* `.menu-item` gives the row its reset, spacing and hover. It is full-bleed at the foot of
-   the sidebar, so it takes a top border instead of the radius a floating row would have. */
-/* Settings and Sign out are two rows of one footer group, so they share everything except the
- * divider — which belongs above the pair, not between them. */
-.side-settings,
-.side-signout {
+   the sidebar, so it takes a top border instead of the radius a floating row would have.
+   Every row of the footer group shares this; only the *first* carries the divider, because a
+   rule between every row would draw four lines where one group's edge belongs. */
+.side-menu-row {
   gap: var(--space-5);
   padding: var(--space-5) var(--space-6);
   border-radius: 0;
   flex-shrink: 0;
 }
-.side-settings {
+/* Named rather than `:first-of-type`, which would match the header's back button — that is the
+   sidebar's first `<button>`, and the footer's rows are several siblings further down. */
+.side-menu-lead {
   border-top: 1px solid var(--border);
 }
-.side-settings .gear,
-.side-signout .gear {
+.side-menu-row .gear {
   font-size: var(--fs-4);
   flex-shrink: 0;
 }
-.side-settings .label,
-.side-signout .label {
+.side-menu-row .label {
   flex-shrink: 0;
 }
-.side-settings .sub,
-.side-signout .sub {
+.side-menu-row .sub {
   flex: 1;
   text-align: right;
   color: var(--text-3);

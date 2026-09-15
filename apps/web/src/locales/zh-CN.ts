@@ -43,7 +43,6 @@ export default {
      * card's wording behind a key named after a component that no longer owns the idea.
      */
     rename: "重命名",
-    settings: "设置",
     signOut: "退出登录",
     back: "返回",
     loading: "加载中…",
@@ -444,6 +443,7 @@ export default {
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
       ila_diagram: "图表",
+      ila_query: "查询学习记录",
     },
     done: "完成",
     running: "运行中",
@@ -654,16 +654,58 @@ export default {
     defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",
     widgets: "安装控件",
     widgetsHint: "用这个 Copilot 新建会话时，会把勾选的控件安装到那个会话里，之后可以在会话参数中单独调整。",
+    /* The list. It used to live under `settings.`, because the list and the editor were two
+       halves of one settings dialog; the list has a dialog of its own now, and the editor that
+       shares this namespace is what makes `copilot.*` its domain rather than the app's. */
+    countConfigured: "已配置 {count} 个 Copilot",
+    add: "新建 Copilot",
+    inUse: "当前会话使用中",
+    empty: "还没有 Copilot，点击「新建 Copilot」创建一个。",
+    groupPublic: "公开的 Copilot",
+    groupMine: "我的 Copilot",
+    byAuthor: "由 {name} 公开",
+    published: "已公开",
+    viewPrompt: "查看它的设定",
+    promptNone: "没有填写系统设定。",
+    copyToMine: "复制到我的",
+    introBefore:
+      "Copilot 定义一段系统设定（System Prompt）、可用工具与默认生成参数。新建会话时选择一个 Copilot，系统设定与默认参数会被",
+    introCopied: "整个复制",
+    introAfter: "到该对话中 —— 之后修改 Copilot 不会影响已开始的对话，对话里也能单独改自己的设定。",
+    summarySteps: "最多 {count} 轮工具",
+    summaryHistory: "历史 {count} 条",
+    summaryTools: "{count} 个工具",
+    summaryAllTools: "全部工具",
+    summaryNoTools: "不使用工具",
+    delete: {
+      title: "删除 Copilot",
+      message: "确定删除 Copilot「{name}」吗？",
+      detail: "已经使用它的会话不受影响，会保留创建时复制过去的系统设定与参数。",
+    },
+  },
+
+  /**
+   * The Copilot list, as a noun: the dialog's own title and the two entry points that open it.
+   *
+   * Separate from `copilot.*` because that namespace is the *editor* — "新建 Copilot", "描述",
+   * "可用工具" — and a label for the thing the editor edits is not one of its fields. `en` is
+   * the same word, which is a product name rather than an untranslated string.
+   */
+  copilots: {
+    title: "Copilot",
   },
 
 
   settings: {
-    title: "设置",
     /**
      * Where the installation's own settings went, shown only to an account that can reach them.
      * Nothing was removed — providers and models, parsers and the app defaults are the platform
      * console's screens now, because they are shared by every account and only an administrator
      * may write them.
+     *
+     * This namespace has no dialog of its own any more: what is left of it is the console's
+     * sections and this one pointer, which the Copilot list shows. The key stays `settings.`
+     * because the installation's settings are still what it is about.
      */
     installationMoved: "模型服务与文档解析由平台管理统一配置。",
     providers: {
@@ -706,28 +748,6 @@ export default {
       test: "测试连接",
       testOk: "连接正常",
     },
-    copilot: {
-      countConfigured: "已配置 {count} 个 Copilot",
-      add: "新建 Copilot",
-      inUse: "当前会话使用中",
-      empty: "还没有 Copilot，点击「新建 Copilot」创建一个。",
-      groupPublic: "公开的 Copilot",
-      groupMine: "我的 Copilot",
-      byAuthor: "由 {name} 公开",
-      published: "已公开",
-      viewPrompt: "查看它的设定",
-      promptNone: "没有填写系统设定。",
-      copyToMine: "复制到我的",
-      introBefore:
-        "Copilot 定义一段系统设定（System Prompt）、可用工具与默认生成参数。新建会话时选择一个 Copilot，系统设定与默认参数会被",
-      introCopied: "整个复制",
-      introAfter: "到该对话中 —— 之后修改 Copilot 不会影响已开始的对话，对话里也能单独改自己的设定。",
-      summarySteps: "最多 {count} 轮工具",
-      summaryHistory: "历史 {count} 条",
-      summaryTools: "{count} 个工具",
-      summaryAllTools: "全部工具",
-      summaryNoTools: "不使用工具",
-    },
     defaults: {
       appSection: "默认模型",
       provider: "默认 Provider",
@@ -753,11 +773,6 @@ export default {
       title: "删除解析服务",
       message: "确定删除「{name}」吗？",
       detail: "已经解析好的文档不受影响；重新解析时需要另选一个服务。",
-    },
-    deleteCopilot: {
-      title: "删除 Copilot",
-      message: "确定删除 Copilot「{name}」吗？",
-      detail: "已经使用它的会话不受影响，会保留创建时复制过去的系统设定与参数。",
     },
     policy: {
       "local-only": { label: "仅本地", hint: "完全离线，不调用任何外部服务" },
@@ -914,6 +929,45 @@ export default {
       inThread: "属于：{title}",
       /** The row exists but its file is gone. */
       missing: "文件已不存在",
+    },
+    insight: {
+      name: "思考",
+      hint: "回顾这个会话的计划、测验、脉络、笔记与图表，总结出你的难点、疑问、可延伸的方向等条目。",
+      noSession: "打开一个会话后，这里可以回顾它的学习记录。",
+      /** The button that runs a pass. A button, because a pass costs a whole model call. */
+      generate: "生成思考",
+      generating: "生成中…",
+      generatingHint: "正在阅读这个会话的记录，可能需要一分钟。",
+      /** The pass ran and produced nothing usable. The list above it is unchanged. */
+      generateFailed: "这次总结没有得到可用的结果，上面的条目没有改动。",
+      /**
+       * The other reason a press produced nothing, and the opposite instruction to the one
+       * above: nothing is broken, there is simply nothing to read yet.
+       */
+      nothingToReflect: "这个会话还没有可回顾的记录（计划、测验、脉络、笔记、图表）。先学习一会儿再回来。",
+      empty: "还没有思考记录，点「生成思考」开始。",
+      /** The toggle: `adopted` is what survives the next pass, so the label says what it does. */
+      adopt: "采纳",
+      release: "取消采纳",
+      adoptedBadge: "已采纳",
+      /** Said once, under the list, because the rule is not guessable from the controls. */
+      keepNote: "只有「已采纳」的条目会在下次生成时保留，其余会被新的结果替换。",
+      /**
+       * The eight kinds. A dynamic key (`widgets.insight.types.<id>`) over the closed
+       * `INSIGHT_TYPES` union — the one narrow prefix this feature adds to `DYNAMIC_PREFIXES`,
+       * because eight literal keys would be eight chances to write one of them into the wrong
+       * branch of a switch that has no other job.
+       */
+      types: {
+        difficulty: "难点",
+        confusion: "不理解",
+        doubt: "存疑",
+        strength: "已掌握",
+        background: "背景知识",
+        reading: "拓展阅读",
+        advice: "学习建议",
+        habit: "学习习惯",
+      },
     },
   },
 
@@ -1106,6 +1160,7 @@ export default {
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
+    INSIGHT_NOT_FOUND: "找不到这条洞察，可能已经被新一次总结替换了。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
     MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
     NO_REPLY_TO_REGENERATE: "没有可以重新生成的回复（最后一条不是助手回复，或者它正在等待你的回答）。",

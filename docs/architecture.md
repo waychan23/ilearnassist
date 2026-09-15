@@ -201,6 +201,12 @@ single switch and the tools are deliberately absent from the Copilot tool checkl
 context exists (`plan?: PlanToolContext`): an allow-list can never switch them on for a
 conversation without the widget. The first consumer is the **plan** widget.
 
+Binding is only right when the widget *is* the capability's home. There is a deliberate second
+form — a tool that reaches a widget's data without being bound to it — and `ila_query` is it: one
+ordinary allow-listable tool reading plan, quizzes, threads, notes and diagrams alike. Binding it
+would hide the conversation's own record from every conversation that had not installed the
+relevant panel, since a bound tool is assembled only when its widget is.
+
 ### The plan widget (`plans.ts`, `planTools.ts`)
 
 One versioned study plan per session, written only by the model and rendered by the
@@ -259,6 +265,52 @@ their labels are translated and the plan branch nests off the live plan tree on 
 widgets only in the install UI (`WIDGET_GROUPS`, client-side): one master button loops the
 ordinary per-widget writes; there is deliberately no group row or route.
 
+### The insight pass (`insights.ts`, `agent/insights.ts`)
+
+The reflection behind the insight panel: one out-of-band model call over the conversation's own
+record — the plan and its progress, the quiz questions with their verdicts, the topic threads,
+the learner's notes, and the diagrams it drew — answering with typed observations
+(`INSIGHT_TYPES`) about the learner rather than about the material.
+
+It is **not a tool**, and that is the design rather than an omission. `ila_query` is how the
+*agent* reads this material during a turn; a pass costs a full model call over the whole
+conversation, so it is a user pressing a button. A bound tool would also exist only while the
+widget was installed, which is the `ila_diagram` argument read the other way round.
+
+Three properties are worth stating because each is load-bearing:
+
+- **The wipe happens only after a usable parse.** `replaceUnadoptedInsights` is called at the
+  *end* of `generateInsights` and never at the start, so a provider outage, a timeout or an
+  unreadable answer leaves every row exactly as it was. The alternative — clearing first and
+  filling in after — is a user pressing a button, getting nothing, and losing the list they had.
+- **A failed pass is not an empty one.** The parser returns `null` for "nothing usable" and `[]`
+  for "the model genuinely said nothing", and the route reports them as `failed` and `ok`. The
+  panel says different things for each, because "it looked and found nothing" is a claim about
+  the conversation and a failure is a claim about the call.
+- **`adopted` is the only thing that survives a rerun.** `insight_items` therefore has no
+  `deleted_at` — derived data, like `session_threads`, and the one hard `DELETE` shape is
+  reached from both the user's delete and the pass's wipe. The consequence is stated rather than
+  hidden: a deleted observation can come back on the next pass. Delete is not suppression.
+- **A pass with nothing to read does not call the model.** The readable sources are all *derived*,
+  so a conversation that has just been created has none of them: `hasMaterial()` is the gate, and
+  the answer is `status: "empty"` — a third outcome beside `ok` and `failed`, because zero new
+  items is also what "the model looked and found nothing" returns and the two ask the reader for
+  opposite things ("go and have a conversation first" against "go and fix the provider").
+
+The prompt is bounded per source (see the caps in `insights.ts`) for the `threads.ts` reason: a
+reasoning model given too much input thinks for a hundred seconds and returns nothing. Adopted
+items from earlier passes are sent back under an instruction not to repeat them, which is the
+whole mechanism of a second pass being useful rather than a near-duplicate of the first.
+
+**Each pass writes one block to `<dataRoot>/logs/insights.log`** (`modelLog.ts`, configured only
+in `index.ts`, so a test server writes nothing). It carries the two things a panel cannot show:
+the **source counts and the prompt's size**, which is how "nothing to reflect on" is told apart
+from "the model refused", and the **model's raw answer even when it was unusable** — the panel's
+"produced nothing usable" is the same sentence for a fence-wrapped object the parser should have
+accepted and for a refusal in prose. The block is written *after* the write, so its counts are
+what the transaction committed rather than what it was about to, and the three outcomes —
+skipped, failed, written — are named rather than left to be inferred from an identical empty list.
+
 ### Diagrams (`diagrams.ts`, `tools/diagram.ts`, `threads.ts`)
 
 A diagram is a `.mmd` file in `sessions/<id>/` **plus** a `session_diagrams` row; each half holds
@@ -303,8 +355,14 @@ can see (`utils/noteAnchor.ts`, and the cases pinned in `test/utils/noteAnchor.t
 anchor is validated against a real message of the named conversation and refused when it arrives
 half-formed, since a message with no quote has nothing to put back on screen.
 
-Notes bring **no tools**: the model neither reads them nor writes them. They are the learner's own
-writing, and nothing in a turn's context is built from them.
+Notes bring **no tools of their own**: nothing creates, edits or deletes one, so a turn can never
+rewrite what the learner wrote. The model *reads* them through the ordinary `ila_query` —
+`kind: "note"`, in `tools/query.ts` — which was a deliberate reversal of the rule that used to
+stand here. The read is deliberately **not** bound to the notes widget: a bound tool is assembled
+only while its widget is installed, and nothing installs a widget by default, so binding it would
+hide the learner's own notes from every conversation that had not opted into the panel. The tool
+result frames them as data *about* the learner rather than instructions, because a note is
+free text the learner wrote for themselves.
 
 ### The workspace file browser (`files.ts`)
 
@@ -366,6 +424,7 @@ removes `dirPath`.
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
 | `read_document` | page through an uploaded file's extracted text | per-turn whitelist: the conversation's sources ∪ its workspace's |
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
+| `ila_query`     | read the conversation's own record (plan / quizzes / threads / notes / diagrams) | owner-scoped by the turn's account |
 
 `buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
 returns the active set for a run, honoring config switches and the conversation's own
@@ -374,8 +433,30 @@ tool allow-list (the snapshot copied from its Copilot at creation). `allowedName
 decides which, and an empty array is a real answer meaning "no tools", not a synonym for
 "unrestricted". The two readings were the same thing once, which made the narrowest possible
 selection behave as the widest.
-`web_search`, `web_fetch`, `read_document` and `ask_user` survive
+`web_search`, `web_fetch`, `read_document`, `ask_user` and `ila_query` survive
 `fileTools.enabled: false` because none of them touches the workspace.
+
+**A tool's parameters schema must arrive as a top-level object.** The one shape that does not is a
+zod union: it converts to `{"anyOf": […], "type": null}`, which a strict OpenAI-compatible endpoint
+refuses outright — `400 Invalid schema for function …: schema must be a JSON Schema of 'type:
+"object"', got 'type: null'` — on every turn where the tool is offered, called or not. So a
+discriminated set is **one flat object** with the discriminator as a `z.enum`, a table for which
+fields each value accepts, and a handler `Record` for the completeness a `switch` used to give
+(`tools/query.ts` is the worked example, and why it is shaped that way). `test/tool-wire-schema.test.ts`
+sends one real turn and asserts the conversion for every tool in it.
+
+**`ila_query` is the agent's read of the conversation's own record** (`tools/query.ts`): one
+tool with a `kind` discriminator over plan, quiz, thread, note and diagram, rather than five
+tools competing for the same slot in the model's attention and five allow-list boxes for one
+capability. It is **ordinary and allow-listable**, on the `ila_diagram` argument and for a
+stronger reason — a widget-bound read exists only while its widget is installed, and nothing
+installs a widget by default, so every kind delegates to the read its widget's route already
+uses and returns what that returns. `kind: "quiz"` is the load-bearing case: it reads through
+`listQuizQuestionViews`, so the answer key's secrecy is *inherited* from `toView` rather than
+re-implemented, and a second read would be a second chance to leak it. Only
+`kind: "diagram"` with a `name` returns file content — the conversation's own `.mmd`, which
+`read_file` structurally cannot reach. Answers carry `truncated` and shrink the page rather
+than the text, because a cut JSON string is not a smaller answer.
 
 **`read_document` is registered per turn and only when the turn has document
 attachments.** A model is never offered a tool with nothing to read. It is bound to a
@@ -972,18 +1053,20 @@ after that point, and rendering both would show the answer twice for as long as 
 ### The file tree
 
 `Sidebar` carries two panels behind a tab strip — conversations and files — with the action
-belonging to whichever is open (`+`, or refresh). The strip is the settings dialog's tier-2
-`.tabs`, not a second kind of tab; the panel below it is one `.side-scroll` either way, because
-the sidebar's pinned header and footer depend on there being exactly one.
+belonging to whichever is open (`+`, or refresh). The strip is the shared `.tabs` the ask_user
+and quiz cards also draw, not a second kind of tab; the panel below it is one `.side-scroll`
+either way, because the sidebar's pinned header and footer depend on there being exactly one.
 
-Below the panel sit the account-level rows — **Settings**, **Your account**, **Platform
+Below the panel sit the account-level rows — **工作区设置**, **Copilot**, **Your account**, **Platform
 console** (administrators only) and **Sign out** — and they share every style except the divider,
-which is above the group rather than between the rows: one footer group, not four entries of a
-list. Sign out takes no confirmation, because the session is restored by signing in again and a
-misclick costs only that. It lands on the sign-in screen even when the request fails, and the
-stored token is cleared either way — leaving someone looking signed in is the worse of the two
-outcomes. The same controls are on the workspace home, beside its settings gear, since that
-page is reachable with no sidebar.
+which is named on the first row rather than expressed as `:first-of-type`: that would match the
+header's back button, since it is the sidebar's first `<button>` and these are several siblings
+further down. One footer group, not five entries of a list. Sign out takes no confirmation,
+because the session is restored by signing in again and a misclick costs only that. It lands on
+the sign-in screen even when the request fails, and the stored token is cleared either way —
+leaving someone looking signed in is the worse of the two outcomes. The workspace home carries
+the same destination for the two rows that make sense without a workspace — Copilot and Your
+account — since that page is reachable with no sidebar at all.
 
 `FileTree.vue` renders `store.fileRows`, which is `flattenTree` from
 [`utils/fileTree.ts`](../apps/web/src/utils/fileTree.ts) computed over a flat map of
@@ -1038,14 +1121,26 @@ belongs next to the input.
 - **Session settings** (🎛) — temperature, context and tool-round limits for this
   conversation, plus the conversation's own system prompt (the persona it copied from
   its Copilot, editable afterwards), and the widgets installed in it.
-- **Workspace settings** — a dialog of its own, not a tab of the global one, because it
-  configures *a workspace* rather than the installation. Two ways in: the gear on a workspace
-  card, and the workspace name in the sidebar header (which is a button for that reason). The
-  card's is the one that matters — it does not require entering the workspace first, so widgets
-  can be installed before there is anything to look at.
-- **Global settings** — the sidebar footer. It is opened, not owned, by its callers:
-  `composables/ui.ts` holds `settingsOpen` and `App.vue` mounts the dialog once, so both
-  the sidebar button and the composer's "管理模型…" can reach it without prop drilling.
+- **Workspace settings** — a dialog of its own, not a tab of anything else, because it
+  configures *a workspace* rather than the installation. Four ways in, and each earns its place:
+  the gear on a workspace card (which does not require entering the workspace first, so widgets
+  can be installed before there is anything to look at), the workspace name in the sidebar header
+  (a button for that reason), and the 工作区设置 row in the sidebar footer — the labelled copy of
+  the header shortcut, for someone who does not already know the name opens it. Both sidebar
+  entries call the same function, so they cannot diverge in what they open.
+- **The Copilot list** — the sidebar footer, beside the workspace-settings row, and the workspace
+  home's header. Two doors, and the second is not a convenience: the home page has no sidebar, so
+  without it an account that has not entered a workspace yet could not manage the Copilots it
+  made. That is exactly the access the header button protected when it opened the settings dialog
+  it used to — the button outlived the dialog because the reason did. Like every other overlay it
+  is opened, not owned, by its callers: `composables/ui.ts` holds `copilotsOpen` and `App.vue`
+  mounts the dialog once, so neither entry point needs a prop chain.
+- **Nothing is a "global settings" dialog any more.** What that dialog held was either
+  installation-wide — providers and models, document parsers, the app defaults, all of which are
+  the platform console's screens, since they are shared by every account and only an administrator
+  may write them — or the account's own Copilots, which have the dialog above. What is left of the
+  `settings.*` catalog namespace is the console's sections plus one pointer the Copilot list shows
+  an administrator, which is why the namespace survives its dialog.
 - `ReasoningBlock.vue` — follows chatbox's reasoning row. Collapsed it previews one
   line: the **last** line while thinking (where the model is right now) and the
   **first** line once finished (a stable summary that stops the row looking alive).
@@ -1157,6 +1252,14 @@ would drop the moment the reader looked at the plan. The notes themselves are ro
 [`notes`](#notes), owner-scoped through the conversation and reached at
 `/api/sessions/:id/notes`.
 
+**One widget produces its data on demand, and it is the only one that does.** The insight panel
+(`id: "insight"`) shows typed observations from the [insight pass](#the-insight-pass-insightsts-agentinsightsts),
+which runs when the reader presses a button — no install hook, no load-time fetch of anything but
+the list, and no widget event to subscribe to, since every change to it is a decision the component
+itself made. Its row carries `adopted`, which is the only thing that survives the next pass. That
+is also why it is not in the `"study"` group: the group's rule is "live on install" and this one
+waits to be asked (see [widgets.md](widgets.md#an-on-demand-widget-with-no-tools-the-insight-widget)).
+
 A widget declares which levels it accepts — `workspace`, `session` — and only those two exist. A
 **Copilot is a third place to tick a box, not a third scope**: its selection is copied into the
 conversation it starts, so "copilot level" is session level reached through a template. Three
@@ -1194,6 +1297,16 @@ CSS length; and a synchronous read at first paint is what stops the panel jumpin
 The width is clamped on **read** as well as on write, because a value that was fine when it was
 set is not necessarily fine now. Collapse is deliberately not persisted, matching
 `uiState.sidebarCollapsed`.
+
+The open tab is **one global preference, and that is why a conversation's creation writes it.**
+The strip prefers the remembered id whenever it happens to be installed, so a tab read in one
+conversation would win over the panel's own `ids[0]` fallback in every later one — the reported
+"a new conversation opens on the wrong tab". `createSession` therefore ends by writing the strip's
+first tab (`activateFirstWidget`), which is the same expression the fallback computes, so the fix
+and the fallback cannot disagree. Selecting a conversation that already exists deliberately does
+**not** touch it: that is where coming back to the tab you last read is the point. The write is
+guarded (`activateWidget`) because an id the object does not have is a preference for a tab that
+does not exist — a stored id nothing can draw is a lie until the next click.
 
 **Events exist for what the store cannot see.** `composables/widgetEvents.ts` is a small typed bus
 so a widget learns about a change the *server* made — a turn ending moved the message counts and

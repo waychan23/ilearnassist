@@ -238,6 +238,11 @@ apps/server/src/
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
+  agent/threads.ts        # the out-of-band topic classifier call
+  agent/insights.ts       # the out-of-band insight pass call
+  agent/reasoning.ts      # the `thinking` body field, capability-gated (both calls above)
+  modelJson.ts            # fence-and-bracket stripping for an out-of-band answer (pure)
+  modelLog.ts             # the append-only observation logs, one file per call kind
   documents/              # document → text: local extractors, cloud drivers, policy
   documents/local/        # pdfjs (PDF) + an OOXML/ODF reader over fflate
   documents/drivers/      # one file per wire protocol (sync / mineru / llamaparse)
@@ -248,9 +253,11 @@ apps/server/src/
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
   tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
+  tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   widgets.ts              # sumUsage + the widget-selection validator (pure)
   notes.ts                # the notes widget's records: what a body may become a note (pure)
+  insights.ts             # the insight pass: prompt, defensive parse, the wipe-then-insert write
 apps/web/src/
   stores/app.ts           # Pinia store (all state + actions)
   api/client.ts           # fetch helpers + SSE parser (normalizes errors → ApiError)
@@ -275,6 +282,7 @@ apps/web/src/
   widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
+  widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, AskUserCard, Composer,
@@ -674,7 +682,7 @@ Fuller map in `docs/reference.md`.
   plan turn's diagrams land in that node's thread with no model call. The `计划`/`其他`
   headings are rendered client-side with translated labels, never stored. The classification
   process is observable through the
-  append-only `<dataRoot>/logs/threads.log` (`threadLog.ts`): one human-readable block per
+  append-only `<dataRoot>/logs/threads.log` (`modelLog.ts`): one human-readable block per
   real classification (context, turns, raw model answer, per-turn resolution, counts) and
   failure blocks, configured only in the process entry point so tests never write it.
   Whether this out-of-band call may think is the `ILA_THREAD_REASONING` env var
@@ -685,6 +693,30 @@ Fuller map in `docs/reference.md`.
   *only* to models declared with the `reasoning` capability, the same gate the main loop's
   reasoning replay uses; an unknown body field is a 400 on strict OpenAI-compatible
   endpoints. It changes this classifier call alone — never the conversation's own turns.
+- **The insight pass is a button, not a tool, and it wipes the list only after a usable parse.**
+  `insights.ts` + `agent/insights.ts` run one out-of-band call over the conversation's own record
+  — plan, graded quizzes, threads, notes, diagrams — and write typed observations about the
+  *learner* (`INSIGHT_TYPES`, with `strength` added to the seven asked for so the panel is not a
+  list of chores). It is deliberately **not** a tool: `ila_query` is how the agent reads the same
+  material, while a pass costs a whole-conversation model call and the agent must not decide to
+  spend that on a panel nobody may open. Three things are load-bearing and each has a test:
+  `replaceUnadoptedInsights` runs at the **end** of `generateInsights` and never at the start, so
+  a provider outage or an unreadable answer leaves every row exactly as it was — clearing first
+  is a user pressing a button, getting nothing, and losing the list they had; the parser returns
+  `null` for "nothing usable" and `[]` for "the model genuinely said nothing", and the route
+  reports those as `failed` and `ok`, because those are different claims about the conversation;
+  and `adopted` is the whole of the user's side, the only thing that survives a rerun.
+  `insight_items` therefore carries **no `deleted_at`** — derived data, like `session_threads`,
+  and one hard `DELETE` shape reached from both the user's delete and the pass's wipe. The
+  consequence is stated rather than hidden: **a deleted observation can come back on the next
+  pass**, because delete is not suppression. A pass also **declines to call the model when there is
+  nothing to read** — every source is derived, so a fresh conversation has none — and answers
+  `status: "empty"`, a third outcome beside `ok` and `failed` because zero new items is equally
+  what "it looked and found nothing" returns and the two ask the reader for opposite things. It
+  has its own reasoning switch (`ILA_INSIGHT_REASONING`, a second variable rather than a share of
+  the classifier's) and its own log (`<dataRoot>/logs/insights.log`, from the `modelLog.ts` both
+  calls write through), whose block carries the source counts and prompt size — what tells "nothing
+  to reflect on" apart from "the model refused" — and the raw answer even when it was unusable.
 - **History must stay user/assistant balanced.** On a chat error, a `⚠️ …`
   assistant message is persisted so the next turn's history is well-formed. An
   assistant message's `tool_calls` are only replayed into history when the
@@ -755,6 +787,24 @@ Fuller map in `docs/reference.md`.
   `packages/shared` for the same reason `ASK_USER_TOOL_NAME` does — the client writes the
   allow-list and the server filters by it, and the copies had already drifted: the client's list was
   missing `read_document`, which therefore could not be chosen at all.
+- **A tool's parameters schema must convert to a top-level `"type": "object"`, and a zod union does
+  not.** `ila_query` shipped as a `z.discriminatedUnion`, which is the better *type* — a field that
+  means nothing for a kind cannot be written for it, and `switch` exhaustiveness is free — and it
+  **cannot be sent**: the conversion gives `{"anyOf": […], "type": null}`, and a strict
+  OpenAI-compatible endpoint refuses it with `400 Invalid schema for function 'ila_query': schema
+  must be a JSON Schema of 'type: "object"', got 'type: null'`. That is a 400 on **every turn** in
+  any conversation where the tool is available, whether or not it is called. Nothing saw it: the
+  type system cannot see the conversion, the handler's tests call `invoke()` and never touch a
+  request, and the fake LLM accepts any schema because it validates none. So a tool needing a
+  discriminated set is **one flat object** with the discriminator as a `z.enum`, the per-kind field
+  contract in an `ALLOWED_FIELDS` table refused by a `checkFields` guard (zod strips unknown keys,
+  so without it `{kind: "plan", status: "answered"}` returns a plan and never says the `status`
+  went nowhere), and the completeness check moved from the `switch` to a `Record<QueryKind, …>`
+  handler table — a missing kind is still a `tsc` error. Each optional field's `describe` names the
+  kind it belongs to, because the schema can no longer express the association.
+  `test/tool-wire-schema.test.ts` is the guard, and it asserts the conversion for **every** tool a
+  real turn sends, plus the union's failure mode itself so the next person meets the trap in a test
+  rather than in production.
 - **A workspace has two directories, and they are not interchangeable.** `Workspace.dirPath`
   is the workspace's own — the parent of `workdir/` and `sessions/`, what `DELETE` removes,
   and what the home page's card names. `Workspace.workdirPath` is `dirPath/workdir`: the
@@ -940,11 +990,16 @@ Fuller map in `docs/reference.md`.
   everyone's because everyone was one person — that stopped being true when a second account
   existed. The rule for a new route is the console's: if it changes something every account
   shares, it is an administrator's.
-  **The console is where those screens live**, and `SettingsDialog` is not: it holds the
-  account's own Copilots and nothing else, because everything installation-wide it used to hold
-  answered 403 for an ordinary account and showed a URL the server fetches to everybody. The
-  test for whether a screen belongs in the console is whether it changes something every account
-  shares, or is an account itself; anything one account does for itself belongs in the app.
+  **The console is where those screens live**, and the dialog that holds the account's own
+  Copilots is not: everything installation-wide the old settings dialog held answered 403 for an
+  ordinary account and showed a URL the server fetches to everybody. There is no global settings
+  dialog at all now — the Copilots have one of their own (`CopilotsDialog.vue`, opened from the
+  sidebar footer *and* from the workspace home's header, because the front door has no sidebar),
+  and the sidebar's old 设置 row is 工作区设置 instead. The test for whether a screen belongs in
+  the console is whether it changes something every account shares, or is an account itself;
+  anything one account does for itself belongs in the app. A namespace outliving its dialog is
+  expected rather than a smell: `settings.*` is the console's sections plus the one pointer an
+  administrator sees in the Copilot list.
 - **Never coerce a request field into a role or a flag.** `disabled` must be a real boolean:
   `"false"` is truthy, so a coerced `PATCH { disabled: "false" }` would store `1` while
   `disabled === true` missed the self-guard — an administrator locking themselves out past the
@@ -1162,10 +1217,21 @@ Fuller map in `docs/reference.md`.
   whose file was never written is half the feature. The panel is a viewer: it lists the
   conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
   folder is the separate conversation-files dialog. See `docs/diagrams.md`.
+  **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
+  comes from an out-of-band model call a button triggers, so there is nothing to bind — and
+  binding would be wrong anyway, because a bound tool is something the *agent* can call and the
+  agent must not decide to spend a whole-conversation model call on a panel nobody may open. No
+  `onInstall` either: an install is not a request for a pass. It is deliberately **not in the
+  `"study"` group**, whose rule is "live on install" — the plan refreshes every turn, the quiz
+  poses questions mid-turn, the thread classifies after every turn, while this one shows an empty
+  panel and waits, and bundled it would install a tab that looks broken beside three working ones.
+  The component holds its own data and subscribes to no widget event, for the reason the widget
+  events bullet gives: every change to the list is a decision it made itself. See
+  `docs/widgets.md` → "An on-demand widget with no tools".
 - **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget, and `/sessions/:id/quizzes/:qid/answer` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: the make-up POST does a status-guarded UPDATE of the SAME row (never an insert, clearing stale grading), then the client drives an ordinary `/chat` turn quoting the UUID so the model grades it instead of posing a new quiz. An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in a system-prompt-only note (`renderMakeupKeyNote`, gated by `ChatInput.makeupQuizId` naming an owned **answered** row) for a make-up. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
-- **A note belongs to a conversation, and to a message only when something was annotated.** `notes.session_id` is `NOT NULL` and `message_id` is nullable, which is what makes a note the user typed from the panel the same kind of thing as one made by dragging over a sentence. `message_id` carries **no foreign key** on purpose: a regenerate or a tail delete soft-deletes a message, and the note is the user's own writing, so it survives with the quote it recorded — `messageMissing`, resolved by a `LEFT JOIN messages … AND m.deleted_at IS NULL` in the read that fetches the note, is how a read says so (never a client guess from a message list that only holds the conversation on screen). **An anchor is a text quote plus which occurrence of it**, counted over the message's **visible** text — never character offsets, which are offsets into rendered HTML and mean nothing after the next `v-html` assignment, and never a raw text walk, which sees every formula twice because KaTeX emits glyphs *and* hidden MathML. Notes bring no tools: the model neither reads them nor writes them.
+- **A note belongs to a conversation, and to a message only when something was annotated.** `notes.session_id` is `NOT NULL` and `message_id` is nullable, which is what makes a note the user typed from the panel the same kind of thing as one made by dragging over a sentence. `message_id` carries **no foreign key** on purpose: a regenerate or a tail delete soft-deletes a message, and the note is the user's own writing, so it survives with the quote it recorded — `messageMissing`, resolved by a `LEFT JOIN messages … AND m.deleted_at IS NULL` in the read that fetches the note, is how a read says so (never a client guess from a message list that only holds the conversation on screen). **An anchor is a text quote plus which occurrence of it**, counted over the message's **visible** text — never character offsets, which are offsets into rendered HTML and mean nothing after the next `v-html` assignment, and never a raw text walk, which sees every formula twice because KaTeX emits glyphs *and* hidden MathML. **The model reads notes and cannot write them.** No tool creates or edits one — that half of the original rule is the half that carries the product weight, since a turn must never rewrite what the learner wrote. The read arrives through the ordinary `ila_query(kind: "note")`, deliberately not through a tool bound to the notes widget: a bound tool is assembled only while its widget is installed, and nothing installs a widget by default, so binding the read would make the learner's own notes invisible in every conversation that had not opted into the panel. What the two sides gain: a plan, a quiz and an insight pass are all richer for knowing what the learner underlined, and a note that reads like an instruction is handed over as data about the learner, never as an instruction — the tool result says so in those words.
 - **A widget can own a capability of the host, and exactly one holds it at a time.** The message list implements marking-up (selection, the floating bar, `<mark>`, the window) and knows nothing about notes as records; the notes widget owns the records and knows nothing about `Range`. `composables/messageNotes.ts` is the whole of what they share: a **claim**, per *conversation* rather than per widget (the message list on screen belongs to one session while the widget is installed in a different set of them), with a refusal that names the holder. The host registers on mount and the widget claims from `WidgetModule.onActive`, in either order, because the host **reads** the claim rather than being told about it. `onActive` is not `onMount`: `WidgetPanel` mounts only the active tab, so a claim owned by the component would drop the moment the reader looked at the plan, taking every highlight with it. It is called by `composables/widgetActivation.ts` — an effect owned by `ChatView`'s setup, because the panel being rendered *is* the answer to "is a widget live", and leaving the view (the one transition no reactive input expresses) is reported by that scope stopping. It is deliberately not a store `watch`: a store's setup belongs to no lifetime, and in a test suite every abandoned store instance keeps watching module-level singletons.
-- **Plan versions are structural snapshots; progress lives on node identities.** `plan_versions.tree_json` holds id/title/children only — history is status-free and read-only; node status, the start-jump anchor and tombstones live once in `plan_nodes`, keyed by server-assigned UUIDs (never readable numbers or titles; the `1` / `1.1` a user sees is derived from sibling position by `planNodeNumbers`, and is display, not identity). A node dropped from an edit becomes a `deleted` tombstone: struck through in the current view, frozen in its last place, absent from that version's snapshot, still visible in older history; tombstone ids can't be reused and a progress update can't mark `deleted` (only an edit removes). The anchor is the node's **start**: the `in_progress` call placed before its content (`done_tool_call_id` column, widened without a rename), kept through completion, cleared when the node returns to not-started/skipped; a click scrolls the chat to that tool-call card. "Make a second plan" is the third suspending tool — its `SuspendingTool.commit` side-effect fork in `tools/suspending.ts` either overwrites as a new version or auto-creates a snapshot session (Copilot/settings/tools copied and the plan widget installed), writes V1 there and navigates via the `plan_session_created` SSE event. The store refreshes the panel mid-turn by emitting `plan.changed` from the existing `tool_end` arm — no extra SSE event for that. Two panel actions compose a user message and go through the ordinary `/chat` flow: the footer "adjust plan" composer, and "jump to chapter" (which first POSTs `/plan/nodes/:id/jump` — server-side skip of prior undone nodes plus open the target — then sends `调整进度，跳到章节…`). While the widget is installed the turn's system prompt also carries `PLAN_GUIDANCE` (mark a node before teaching it, stay on the plan, hand back after a detour).
+- **Plan versions are structural snapshots; progress lives on node identities.** `plan_versions.tree_json` holds id/title/children only — history is status-free and read-only; node status, the start-jump anchor and tombstones live once in `plan_nodes`, keyed by server-assigned UUIDs (never readable numbers or titles; the `1` / `1.1` a user sees is derived from sibling position by `planNodeNumbers`, and is display, not identity). A node dropped from an edit becomes a `deleted` tombstone: struck through in the current view, frozen in its last place, absent from that version's snapshot, still visible in older history; tombstone ids can't be reused and a progress update can't mark `deleted` (only an edit removes). The anchor is the node's **start**: the `in_progress` call placed before its content (`done_tool_call_id` column, widened without a rename), kept through completion, cleared when the node returns to not-started/skipped; a click scrolls the chat to that tool-call card. "Make a second plan" is the third suspending tool — its `SuspendingTool.commit` side-effect fork in `tools/suspending.ts` either overwrites as a new version or auto-creates a snapshot session (Copilot/settings/tools copied and the plan widget installed), writes V1 there and navigates via the `plan_session_created` SSE event. The store refreshes the panel mid-turn by emitting `plan.changed` from the existing `tool_end` arm — no extra SSE event for that — and **only `ila_make_plan` additionally opens the panel on the plan tab**, because it is the one of the three that creates or edits rather than reads or marks progress; narrowing the *event* instead would stop the tree moving on a progress update, which is the opposite of the point. The **edit** path cannot be caught at `tool_end` at all: a conflicting `ila_make_plan` suspends, and a suspended call emits no `tool_end` (the same absence that keeps a pending `ask_user` out of the model's context), so the store's own record of the user's `{choice: "edit"}` in `answerQuestion` is the only client-visible moment — a thing the client decided and holds, which is why it is not an event. The `new_session` fork's own conversation is surfaced by the `plan_session_created` tail, after the session switch. Two panel actions compose a user message and go through the ordinary `/chat` flow: the footer "adjust plan" composer, and "jump to chapter" (which first POSTs `/plan/nodes/:id/jump` — server-side skip of prior undone nodes plus open the target — then sends `调整进度，跳到章节…`). While the widget is installed the turn's system prompt also carries `PLAN_GUIDANCE` (mark a node before teaching it, stay on the plan, hand back after a detour).
 - **The widget panel is a third grid track, and `--widget-w` is always set when the class is.**
   `App.vue` withholds `with-widgets` on a compact viewport, where the panel is a fixed drawer, and
   below 900px it must be withheld — the class would add a track the drawer does not occupy. The
@@ -1184,6 +1250,16 @@ Fuller map in `docs/reference.md`.
   not an event, because two ways to learn one fact drift. `turn.finished` comes from `consume()`'s
   `finally`, the one point every turn ends at, unconditionally within the account-epoch guard since
   a failed turn still persisted a message.
+- **The panel's open tab is one global preference, and creating a conversation resets it.**
+  `widgetPanel.activeId` is persisted under `gl-widget-active` and shared by every conversation, and
+  the strip prefers it whenever it happens to be installed — so a tab read in one conversation used
+  to decide what every later one opened on. `createSession` therefore ends by writing the strip's
+  first tab, which is the same expression `WidgetPanel.active` falls back to, so the two cannot
+  disagree. Every write goes through `activateWidget(id)`, which refuses an id this object does not
+  have: a preference for a tab that does not exist is one the strip would silently override, so the
+  stored value would be a lie until the next click. Selecting an *existing* conversation
+  deliberately does not touch the tab at all — coming back to the one you last read is the point
+  there, and it is what `e2e/widgets.spec.ts` pins.
 - **A widget's catalog key is a literal at a call site, which is why the dynamic-prefix allowlist
   stays narrow.** `widgets/registry.ts` resolves names through a `switch` over the closed id union
   with a literal key per case, not through `t(\`widgets.${id}.name\`)` — that would have forced a

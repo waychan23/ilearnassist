@@ -56,10 +56,24 @@ export interface FakeTurn {
 }
 
 /**
+ * How the fake server tells the out-of-band calls apart from the conversation's own turns: one
+ * phrase from each call's system prompt. `setMatches` is consulted for these requests only —
+ * see the guard at its use site for why that matters.
+ *
+ * The coupling to prompt text is deliberate and pre-existing (`CLASSIFIER_MARKER` was the same
+ * idea with one entry): a marker is the only thing in the body that says *which* call this is,
+ * and a prompt phrase is stable in a way a request shape is not.
+ */
+const OUT_OF_BAND_MARKERS = [
+  "topic-classification function", // threads.ts — THREAD_SYSTEM_PROMPT
+  "reflective study coach", // insights.ts — INSIGHT_SYSTEM_PROMPT
+];
+
+/**
  * A body-keyed reply for non-streaming requests. First entry whose `includes` substring is
  * found in the raw request body wins; without a hit the plain `title` reply is used. This is
- * what lets one fake server answer two different out-of-band calls in one turn — the
- * auto-titler and the thread classifier both POST non-streaming completions.
+ * what lets one fake server answer several different out-of-band calls in one turn — the
+ * auto-titler, the thread classifier and the insight pass.
  */
 export interface FakeNonStreamingMatch {
   includes: string;
@@ -264,13 +278,17 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
       }
       seen.push(body);
 
-      // Body-keyed matches are for the thread CLASSIFIER only: its system prompt carries this
-      // marker, while the auto-titler and the main agent turn never do. The classifier runs
-      // once per turn, and its body accumulates earlier turns in its recent-tail, so take the
-      // LAST matching needle (the current turn's) rather than the first.
-      const CLASSIFIER_MARKER = "topic-classification function";
-      const isClassifier = raw.includes(CLASSIFIER_MARKER);
-      const classifierHit = isClassifier
+      /*
+       * Body-keyed matches are for the OUT-OF-BAND calls only, and a call is recognised by a
+       * phrase in its own system prompt. The guard is the point: without it a needle would be
+       * consulted for the main agent turn too, so a test's `includes` would silently become the
+       * model's reply to the user.
+       *
+       * A body can carry an earlier turn's material (the classifier's recent-tail), so take the
+       * LAST matching needle rather than the first — the current call's, not the previous one's.
+       */
+      const isOutOfBand = OUT_OF_BAND_MARKERS.some((marker) => raw.includes(marker));
+      const classifierHit = isOutOfBand
         ? [...matches].reverse().find((m) => raw.includes(m.includes))
         : undefined;
 

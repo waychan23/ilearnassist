@@ -214,9 +214,35 @@ A widget can bring tools: list them in its `WIDGETS` entry as `boundTools` (name
   SSE event. Read-only suspending tools keep `resolve`.
 - **Mid-turn refresh needs no new SSE event.** The store emits a `plan.changed` widget event from
   the existing `tool_end` arm, so the panel refetches the moment a bound tool commits.
+- **Surfacing a widget's tab is not a new SSE event either, and a suspended tool has no
+  `tool_end`.** `ila_make_plan` opening the plan tab is a second, additive effect in the same
+  `tool_end` arm — an event narrowed to the make tool would stop the panel moving on progress. The
+  *edit* path is the case that matters: a conflicting make suspends on the card, a suspended call
+  emits no `tool_end`, so the store's own record of the user's `{choice: "edit"}` in
+  `answerQuestion` is the only signal that a plan was committed. When a tool both suspends and can
+  end in more than one way, look for the client-held decision rather than reaching for a new event.
 
 The plan widget is session-scoped. A future "workspace-level default that auto-installs into new
 sessions" is a separate mechanism and is intentionally not built yet.
+
+### A widget's data reached *without* being bound: `ila_query`
+
+Binding is the right answer only when the widget is the capability's home — a quiz nobody can
+answer, a plan nobody can see. There is a second, deliberately unbound form, and `ila_query` is
+it: one ordinary allow-listable tool whose `kind` discriminator (`plan`, `quiz`, `thread`, `note`,
+`diagram`) reaches five widgets' data at once without being bound to any of them.
+
+The reason is the assembly rule above read backwards. A bound tool exists **only while its widget
+is installed**, and nothing installs a widget by default (`DEFAULT_WIDGET_IDS` is empty) — so
+binding "what has already happened in this conversation" would hide the app's own records from
+every ordinary conversation, which is the opposite of what a discovery tool is for. Each kind
+therefore delegates to the read its widget's route already uses and returns what that returns;
+`kind: "plan"` is byte-identical to `ila_read_plan`'s answer, from the same `renderReadResult`.
+Two *entry points* to one fact is the affordance (the bound one exists only where the widget does,
+the ordinary one everywhere); two *renderings* would be the footgun. `ila_query` is in
+`NON_FILE_TOOLS` and `ila_diagram` is not, and the contrast is the rule: the set asks "does this
+tool touch the workspace?", but it is asked on behalf of a switch meaning "this agent does not
+write files" — `ila_query` only reads, and a diagram is half a feature without its file.
 
 ### A bound suspending tool with persisted rows: the quiz widget
 
@@ -293,12 +319,17 @@ not the plan/quiz tool shape. The mechanics, and why:
 - The panel drives install-time backfill (loops `POST …/threads/sync` while `unassigned >
   0`); the registry's `onInstall` only kicks the first chunk. The post-turn hook is what
   keeps an installed conversation current whether or not the tab is open.
-- **Observation log.** `threadLog.ts` appends one human-readable block per real classification
+- **Observation log.** `modelLog.ts` appends one human-readable block per real classification
   to `<dataRoot>/logs/threads.log` (`threadLogPath`, configured only in `index.ts`, so the
   test server writes nothing): the plan state, existing threads, the recent tail, each turn's
   messages, the model's raw answer, the per-turn resolution (new/appended/continued, and the
   tool-call precedence overriding the model), the assigned counts and elapsed ms — plus a
   failure block when the call or its answer is unusable. No block is written for a no-op.
+  One module for this log and the insight pass's, with the *kind* as a parameter: the shared
+  part is the append helper, and a second copy of "mkdir, append, swallow the error" is exactly
+  what this repository does not keep. The insight pass writes
+  `<dataRoot>/logs/insights.log` through the same call — see the insight section below for what
+  its block carries.
 
 ### A viewer widget with no tools: the diagram widget
 
@@ -335,6 +366,54 @@ What that changes relative to the widgets above:
   it; `turn.finished` catches a later step and the arrival of the thread title after the
   post-turn classifier.
 
+### An on-demand widget with no tools: the insight widget
+
+The insight widget (`id: "insight"`, `InsightWidget.vue`) is the first widget whose data is
+produced **by the user pressing a button**, and the recipe above has no other entry for that shape.
+
+There is no tool at all here — not a bound one and not an ordinary one. The pass is an
+**out-of-band model call** (`insights.ts` + `agent/insights.ts`), the `agent/threads.ts` pattern, so
+`WIDGETS.insight` has no `boundTools` because there is nothing to bind. Binding would also be wrong
+twice over: a bound tool is something the *agent* can call, and the agent must not decide to spend a
+whole-conversation model call on a panel nobody may open.
+
+What that changes relative to the widgets above:
+
+- **Nothing runs on install, or on open.** There is no `onInstall` (the thread widget's install
+  kicks a backfill; this one deliberately does not), and the panel loads its list and waits. A pass
+  costs a full model call over every source, and an install is not a request for one. This is also
+  why it is **not a member of the `"study"` group**: that group's members are live the moment they
+  are installed, while this one shows an empty panel with a button — bundled, it would install a
+  tab that looks broken beside three live ones.
+- **The component holds its own data and subscribes to no widget event.** Every change to the list
+  is a decision made *here* (generate, adopt, delete), so a subscription would be a second way to
+  learn something the component already holds. A second tab does not live-refresh this list;
+  neither does anything else in this app.
+- **A failed pass is a 200, and the panel says so above the list it did not touch.**
+  `status: "failed"` means the model produced nothing usable and *every row is exactly as it was* —
+  which is a different claim from an `ok` answer with zero items, and from `"empty"`, where the
+  pass declined to call the model because the conversation has produced nothing to read yet.
+  `docs/architecture.md` has the argument for why three outcomes arriving with the same empty
+  list must not be collapsed into one: a button whose press produces nothing visible is a control
+  that looks broken, and the panel has a sentence for each.
+- **Two writes are missing on purpose.** No `confirm()` on delete (one line of generated text,
+  reproducible by a rerun, where a confirm per item turns tidying ten rows into a modal gauntlet)
+  and no `store` state (one component reads it). Both are decisions with a stated trigger for
+  revisiting them rather than omissions.
+- **Its type list is the one narrow dynamic prefix this feature adds.** `typeLabel` builds
+  `` t(`widgets.insight.types.${type}`) `` over the closed `INSIGHT_TYPES` union, so
+  `catalog.test.ts`'s allowlist gains exactly `widgets.insight.types.` — five segments for eight
+  kinds, where the alternative was a `switch` whose only job would be spelling eight strings.
+- **It logs to `<dataRoot>/logs/insights.log`**, one block per press. This is the widget to copy
+  the log from: a button that can produce three *different* nothings — declined, failed, answered
+  with no items — is exactly where a screen stops being enough. The block carries the source counts
+  and the prompt's size (how "nothing to reflect on" is told apart from "the model refused") and
+  the model's raw answer even when it was unusable (`produced nothing usable` is one sentence for a
+  fence the parser should have accepted and for a refusal in prose). It was worth writing on the
+  first real run: the line `原因：Provider has no API key.` diagnosed in one line what the panel had
+  only been able to call a failure, and `提示词：0 字符` is what surfaced the declined case at all.
+  See `docs/architecture.md` → the insight pass.
+
 ### Widget groups
 
 `WIDGET_GROUPS` in the shared package is a **client-side** bundling only (the study pack is
@@ -343,6 +422,14 @@ master row (`WidgetToggleList` → `@toggle-group`) that loops the group's membe
 ordinary `setWidgetEnabled` writes, so each widget still owns its row, route and lifecycle
 hook. A member already in the target state is skipped, which is what keeps install-all from
 re-firing an installed widget's `onInstall`.
+
+**Membership means "live on install", and that is the rule for adding one.** The study pack is
+three widgets that do something the moment they are installed — the plan refreshes every turn, the
+quiz poses questions mid-turn, the thread classifies after every turn. The insight widget is
+deliberately not a member: it shows an empty panel with a button and waits to be pressed, so
+bundling it would put what looks like a broken tab beside three working ones. A bundle is a claim
+that its members belong together; "three things that are live" and "a thing you must press" is not
+that claim. Cost of leaving it out: one checkbox.
 
 ## What is deliberately not supported
 
@@ -358,11 +445,18 @@ re-firing an installed widget's `onInstall`.
 
 `e2e/widgets.spec.ts` is the feature's end-to-end coverage and doubles as a worked example:
 installing from a card, the two groups and the divider, switching and remembering the open tab,
-flipping the strip's orientation, dragging the width and its clamp, the overflow menu, the drawer on
-a phone, and the demo widgets counting again after a turn without a reload.
+a new conversation opening on its first tab rather than on one read elsewhere, flipping the strip's
+orientation, dragging the width and its clamp, the overflow menu, the drawer on a phone, and the
+demo widgets counting again after a turn without a reload.
+
+Each widget that has a rule of its own has a spec of its own: `e2e/plan.spec.ts`,
+`e2e/quiz-widget.spec.ts`, `e2e/thread-widget.spec.ts`, `e2e/notes.spec.ts`,
+`e2e/diagram.spec.ts` and `e2e/insight.spec.ts` — the last scripting a pass over HTTP and then
+asserting what a person sees: an item you keep surviving the next pass while the rest are
+replaced, and a pass that produced nothing usable leaving the list exactly as it was.
 
 ```bash
-npx playwright test e2e/widgets.spec.ts   # the panel, end to end (14 flows)
+npx playwright test e2e/widgets.spec.ts   # the panel, end to end (16 flows)
 npx vitest run widget                     # the route + arithmetic tests and the three web units
 ```
 

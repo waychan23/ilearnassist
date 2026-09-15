@@ -13,7 +13,8 @@ import {
 } from "@ilearnassist/shared";
 import { readCurrentPlan } from "./plans.js";
 import { newId, type AppDb, type DiagramRecord, type ThreadRecord } from "./db.js";
-import { logTimestamp, threadLog } from "./threadLog.js";
+import { logTimestamp, modelLog } from "./modelLog.js";
+import { parseModelJson } from "./modelJson.js";
 
 /**
  * The thread widget's derived topic chains.
@@ -298,23 +299,13 @@ export type ThreadDecision =
   | { kind: "new"; branch: ThreadBranch; title: string; node?: string };
 
 /**
- * Pull the first balanced-enough JSON object out of a model reply: a ```json fence if it
- * wrapped one, otherwise the span from the first `{` to the last `}`. Null on any parse
- * failure. Shared by the two parsers, which disagree about how strict to be afterwards.
+ * The model's reply as an object, fence and surrounding prose stripped.
+ *
+ * Lives in `modelJson.ts` now that the insight pass needs the same treatment for an array: the
+ * fence-and-bracket search is the part that must not be written twice, while what counts as a
+ * *valid* answer stays here (the two parsers below disagree about how strict to be afterwards).
  */
-function extractJsonObject(raw: string): unknown | null {
-  let text = raw.trim();
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence?.[1]) text = fence[1].trim();
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-}
+const extractJsonObject = (raw: string): unknown | null => parseModelJson(raw, "object");
 
 /**
  * Parse the model's turn-decision array. Returns null on ANY malformed answer — including a
@@ -750,7 +741,7 @@ async function runSync(
 
   const unassigned = db.countPendingThreadMessages(sessionId);
   if (modelError) {
-    threadLog(() =>
+    modelLog("threads", () =>
       [
         ...header(),
         ...contextLines(),
@@ -765,7 +756,7 @@ async function runSync(
       ].join("\n") + "\n"
     );
   } else {
-    threadLog(() =>
+    modelLog("threads", () =>
       [
         ...header(),
         ...contextLines(),

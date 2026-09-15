@@ -1264,6 +1264,86 @@ describe("widgets", () => {
   });
 });
 
+describe("the panel's open tab", () => {
+  /**
+   * The install lists, split by scope the way the server resolves them. A local helper rather
+   * than the shared `widgetState`, which models only the two stats widgets — and widening that
+   * one would change what every other case in this file sees.
+   */
+  function installed(...ids: WidgetId[]) {
+    const scopeOf = (id: WidgetId) => (id === "workspace_stats" ? "workspace" : "session");
+    return {
+      workspace: ids
+        .filter((id) => scopeOf(id) === "workspace")
+        .map((id) => ({ id, scope: "workspace" as const, enabled: true })),
+      session: ids
+        .filter((id) => scopeOf(id) === "session")
+        .map((id) => ({ id, scope: "session" as const, enabled: true })),
+    };
+  }
+
+  beforeEach(async () => {
+    // `widgetPanel` is a module singleton over one `localStorage`, so a stored tab survives
+    // between cases and a test that did not clear it would pass or fail on the order it ran in.
+    localStorage.removeItem("gl-widget-active");
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    widgetPanel.reload();
+  });
+
+  it("opens a new conversation on its first tab", async () => {
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue(installed("plan", "diagram"));
+    mocks.api.createSession.mockResolvedValue(session({ id: "s2" }));
+
+    await store.createSession({ widgets: ["plan", "diagram"] });
+
+    expect(widgetPanel.activeId.value).toBe("plan");
+  });
+
+  it("counts the workspace group first, which is the order the strip draws", async () => {
+    // "First tab" is the first of the flattened groups, not the first session widget: a panel
+    // whose groups are drawn workspace-then-session opens on the workspace one.
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue(installed("workspace_stats", "session_stats"));
+    mocks.api.createSession.mockResolvedValue(session({ id: "s2" }));
+
+    await store.createSession({ widgets: ["workspace_stats", "session_stats"] });
+
+    expect(widgetPanel.activeId.value).toBe("workspace_stats");
+  });
+
+  it("writes nothing when the new conversation installed nothing", async () => {
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore();
+    widgetPanel.setActive("diagram");
+    mocks.api.listSessionWidgets.mockResolvedValue(installed());
+    mocks.api.createSession.mockResolvedValue(session({ id: "s2" }));
+
+    await store.createSession({ widgets: [] });
+
+    // There is no first tab to name, and an id written here would be a preference for a tab
+    // that does not exist.
+    expect(widgetPanel.activeId.value).toBe("diagram");
+  });
+
+  it("leaves the tab alone when an existing conversation is selected", async () => {
+    // What makes the fix narrow rather than a general reset: opening a conversation you were
+    // already reading still comes back to the tab you last read, which is the behaviour the
+    // panel is built on.
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore({ widgets: [] });
+    mocks.api.listSessionWidgets.mockResolvedValue(installed("plan", "diagram"));
+    await store.selectSession("s1");
+    widgetPanel.setActive("diagram");
+
+    await store.selectSession("s1");
+
+    expect(widgetPanel.activeId.value).toBe("diagram");
+  });
+});
+
 describe("widget events", () => {
   it("announces the end of a turn exactly once, at the point every turn ends", async () => {
     const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
@@ -1397,6 +1477,235 @@ describe("plan widgets", () => {
     expect(ok).toBe(true);
     expect(mocks.api.jumpPlanNode).toHaveBeenCalledWith("s1", "node-12");
     expect(mocks.streamChat).toHaveBeenCalled();
+  });
+});
+
+describe("the plan tab", () => {
+  /** An assistant message holding one live `ila_make_plan` conflict card. */
+  function conflict(): Message {
+    return message({
+      role: "assistant",
+      content: "这个计划要怎么处理？",
+      toolCalls: [
+        {
+          id: "call_plan",
+          name: "ila_make_plan",
+          input: JSON.stringify({ tree: [{ title: "A" }] }),
+          status: "awaiting",
+        },
+      ],
+    });
+  }
+
+  function answersTo(...events: ChatStreamEvent[]) {
+    mocks.streamAnswers.mockImplementation(async function* () {
+      for (const event of events) yield event;
+    });
+  }
+
+  const plan = (): WidgetState => ({ id: "plan", scope: "session", enabled: true });
+  const diagram = (): WidgetState => ({ id: "diagram", scope: "session", enabled: true });
+
+  /** A store whose active conversation has exactly these session widgets installed. */
+  async function withWidgets(...session: WidgetState[]) {
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session });
+    await store.selectSession("s1");
+    return store;
+  }
+
+  beforeEach(async () => {
+    localStorage.removeItem("gl-widget-active");
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    widgetPanel.reload();
+  });
+
+  const activeTab = async () =>
+    (await import("../../src/composables/widgetPanel.js")).widgetPanel.activeId.value;
+
+  it("surfaces the plan when the make tool commits", async () => {
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    streamOf(
+      {
+        type: "tool_end",
+        toolCall: { id: "p1", name: "ila_make_plan", input: "{}", output: "{}" },
+      },
+      { type: "done" }
+    );
+    const store = await withWidgets(plan(), diagram());
+    widgetPanel.setActive("diagram");
+
+    await store.sendMessage("make a plan");
+
+    expect(await activeTab()).toBe("plan");
+  });
+
+  it("leaves the tab alone on a progress update, and still refetches the panel", async () => {
+    /*
+     * The two halves are deliberately separate effects of one `tool_end` arm. Narrowing
+     * `plan.changed` to the make tool would have been the easy way to tell the three plan tools
+     * apart, and it would have stopped the tree moving while the model is still writing — so the
+     * event keeps covering all three and only the *activation* is narrowed.
+     */
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      streamOf(
+        {
+          type: "tool_end",
+          toolCall: {
+            id: "p1",
+            name: "ila_update_plan_progress",
+            input: "{}",
+            output: "{}",
+          },
+        },
+        { type: "done" }
+      );
+      const store = await withWidgets(plan(), diagram());
+      widgetPanel.setActive("diagram");
+
+      await store.sendMessage("mark chapter one done");
+
+      expect(seen).toContain("plan.changed");
+      expect(await activeTab()).toBe("diagram");
+    } finally {
+      off();
+    }
+  });
+
+  it("leaves the tab alone on a read, and still refetches the panel", async () => {
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      streamOf(
+        {
+          type: "tool_end",
+          toolCall: { id: "p1", name: "ila_read_plan", input: "{}", output: "{}" },
+        },
+        { type: "done" }
+      );
+      const store = await withWidgets(plan(), diagram());
+      widgetPanel.setActive("diagram");
+
+      await store.sendMessage("what does the plan say?");
+
+      expect(seen).toContain("plan.changed");
+      expect(await activeTab()).toBe("diagram");
+    } finally {
+      off();
+    }
+  });
+
+  it("writes nothing when the conversation has no plan widget", async () => {
+    // `activateWidget`'s guard. A stored id the strip cannot draw is a preference the panel
+    // silently overrides, so writing one would be a lie until the next click.
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    streamOf(
+      {
+        type: "tool_end",
+        toolCall: { id: "p1", name: "ila_make_plan", input: "{}", output: "{}" },
+      },
+      { type: "done" }
+    );
+    const store = await withWidgets(diagram());
+    widgetPanel.setActive("diagram");
+
+    await store.sendMessage("make a plan");
+
+    expect(await activeTab()).toBe("diagram");
+  });
+
+  it("surfaces the plan when the user chooses to edit at the conflict card", async () => {
+    /*
+     * This is the case a `tool_end` rule cannot see. `ila_make_plan` suspends on the conflict
+     * card and a suspended call emits no `tool_end` — so the client's own record of the *choice*
+     * is the only signal that a plan was committed here.
+     */
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await (async () => {
+      const s = await readyStore({ messages: [conflict()] });
+      mocks.api.listSessionWidgets.mockResolvedValue({
+        workspace: [],
+        session: [plan(), diagram()],
+      });
+      await s.selectSession("s1");
+      return s;
+    })();
+    answersTo({ type: "done" });
+    widgetPanel.setActive("diagram");
+
+    await store.answerQuestion("call_plan", {
+      action: "submit",
+      answers: { choice: "edit" },
+    });
+
+    expect(await activeTab()).toBe("plan");
+  });
+
+  it("does not surface this conversation's plan when the choice is a new conversation", async () => {
+    // `new_session` commits the plan *elsewhere*, so the tab here must not move — the fork's own
+    // conversation is handled by the `plan_session_created` tail instead.
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    const store = await readyStore({ messages: [conflict()] });
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [plan(), diagram()] });
+    await store.selectSession("s1");
+    answersTo({ type: "done" });
+    widgetPanel.setActive("diagram");
+
+    await store.answerQuestion("call_plan", {
+      action: "submit",
+      answers: { choice: "new_session", newSessionId: "s2" },
+    });
+
+    expect(await activeTab()).toBe("diagram");
+  });
+
+  it("surfaces the plan in the conversation the fork created", async () => {
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    streamOf(
+      { type: "plan_session_created", sessionId: "s2" },
+      {
+        type: "message_done",
+        message: message({ role: "assistant", content: "created elsewhere" }),
+      },
+      { type: "done" }
+    );
+    const store = await readyStore();
+    // The server installs the plan widget into the conversation it makes for the plan.
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [plan()] });
+    widgetPanel.setActive("diagram");
+
+    await store.sendMessage("make a different plan");
+
+    expect(store.activeSessionId).toBe("s2");
+    expect(await activeTab()).toBe("plan");
+  });
+
+  it("leaves the tab alone when the fork's conversation has no plan widget", async () => {
+    // The guard again, on the one write site that names a tab the server chose rather than one
+    // the user is looking at.
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    streamOf(
+      { type: "plan_session_created", sessionId: "s2" },
+      {
+        type: "message_done",
+        message: message({ role: "assistant", content: "created elsewhere" }),
+      },
+      { type: "done" }
+    );
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [] });
+    widgetPanel.setActive("diagram");
+
+    await store.sendMessage("make a different plan");
+
+    expect(store.activeSessionId).toBe("s2");
+    expect(await activeTab()).toBe("diagram");
   });
 });
 

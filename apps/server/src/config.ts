@@ -433,7 +433,18 @@ export function resolveDataRoot(env: NodeJS.ProcessEnv = process.env): string {
 export const THREAD_REASONING_ENV = "ILA_THREAD_REASONING";
 
 /**
- * Whether the thread classifier's out-of-band model call may run chain-of-thought.
+ * The environment variable that overrides the insight pass's reasoning mode.
+ *
+ * A **second switch rather than a reuse** of the classifier's, and the docblock on that one is
+ * the reason: it changes "this classifier call alone", by design. Overloading it would make
+ * tuning the topic classifier silently re-tune the reflection pass, and the two want different
+ * answers — the classifier judges, while an insight pass is the kind of thinking that benefits
+ * from time.
+ */
+export const INSIGHT_REASONING_ENV = "ILA_INSIGHT_REASONING";
+
+/**
+ * Whether an out-of-band model call may run chain-of-thought.
  *
  * - `auto` (unset): follow the model record — a model with the `reasoning` capability thinks
  *   (the provider's own default; nothing is sent), any other model never does.
@@ -441,9 +452,9 @@ export const THREAD_REASONING_ENV = "ILA_THREAD_REASONING";
  *   Ark shape). Still gated on the model's `reasoning` capability, so a provider that does
  *   not know the field is never sent it.
  */
-export type ThreadReasoningSetting = "auto" | "on" | "off";
+export type OutOfBandReasoningSetting = "auto" | "on" | "off";
 
-const THREAD_REASONING_ALIASES: Record<string, ThreadReasoningSetting> = {
+const THREAD_REASONING_ALIASES: Record<string, OutOfBandReasoningSetting> = {
   auto: "auto",
   on: "on",
   off: "off",
@@ -457,14 +468,23 @@ const THREAD_REASONING_ALIASES: Record<string, ThreadReasoningSetting> = {
   no: "off",
 };
 
-/** Parse `ILA_THREAD_REASONING`: blank/absent is `auto`, anything unrecognised throws. */
-export function parseThreadReasoning(raw: string | undefined | null): ThreadReasoningSetting {
+/**
+ * Parse a reasoning override: blank/absent is `auto`, anything unrecognised throws.
+ *
+ * `name` is the variable being read, so the error names the switch the operator actually set —
+ * there are two of them now, and "expected one of auto, on, off" under the wrong name is a
+ * message about a setting nobody touched.
+ */
+export function parseReasoning(
+  raw: string | undefined | null,
+  name: string
+): OutOfBandReasoningSetting {
   const value = raw?.trim().toLowerCase();
   if (!value) return "auto";
   const setting = THREAD_REASONING_ALIASES[value];
   if (!setting) {
     throw new Error(
-      `${THREAD_REASONING_ENV} has an invalid value ${JSON.stringify(value)}: ` +
+      `${name} has an invalid value ${JSON.stringify(value)}: ` +
         "expected one of auto, on, off (or true/false, 1/0, enabled/disabled)."
     );
   }
@@ -472,8 +492,17 @@ export function parseThreadReasoning(raw: string | undefined | null): ThreadReas
 }
 
 /** Read the thread-classifier reasoning override from the process environment. */
-export function threadReasoningSetting(env: NodeJS.ProcessEnv = process.env): ThreadReasoningSetting {
-  return parseThreadReasoning(env[THREAD_REASONING_ENV]);
+export function threadReasoningSetting(
+  env: NodeJS.ProcessEnv = process.env
+): OutOfBandReasoningSetting {
+  return parseReasoning(env[THREAD_REASONING_ENV], THREAD_REASONING_ENV);
+}
+
+/** Read the insight pass's reasoning override. Defaults to `auto`, like the classifier's. */
+export function insightReasoningSetting(
+  env: NodeJS.ProcessEnv = process.env
+): OutOfBandReasoningSetting {
+  return parseReasoning(env[INSIGHT_REASONING_ENV], INSIGHT_REASONING_ENV);
 }
 
 /**

@@ -133,6 +133,7 @@ describe("resolveWidgetStates", () => {
       { id: "thread", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("thread") },
       { id: "notes", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("notes") },
       { id: "diagram", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("diagram") },
+      { id: "insight", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("insight") },
     ]);
   });
 
@@ -368,6 +369,7 @@ describe("over HTTP", () => {
         { id: "thread", scope: "session", enabled: false },
         { id: "notes", scope: "session", enabled: false },
         { id: "diagram", scope: "session", enabled: false },
+        { id: "insight", scope: "session", enabled: false },
       ],
     });
   });
@@ -384,6 +386,7 @@ describe("over HTTP", () => {
       { id: "thread", scope: "session", enabled: false },
       { id: "notes", scope: "session", enabled: false },
         { id: "diagram", scope: "session", enabled: false },
+        { id: "insight", scope: "session", enabled: false },
     ]);
   });
 
@@ -418,6 +421,7 @@ describe("over HTTP", () => {
       { id: "thread", scope: "session", enabled: false },
       { id: "notes", scope: "session", enabled: false },
         { id: "diagram", scope: "session", enabled: false },
+        { id: "insight", scope: "session", enabled: false },
     ]);
   });
 

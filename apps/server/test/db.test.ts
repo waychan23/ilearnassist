@@ -789,6 +789,48 @@ describe("schema versioning", () => {
     }
   });
 
+  it("gains the insight_items table on an existing file of the current version", () => {
+    // The third of the same claim: a new *table* needs no `SCHEMA_VERSION` bump, because the
+    // DDL runs on every open and a missing table is created while an existing one is skipped.
+    // The round-trip is asserted rather than the table's presence alone — a table created with
+    // the wrong columns would satisfy that.
+    const path = join(root, "pre-insights.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    expect(tablesIn(path)).not.toContain("insight_items");
+
+    const opened = createDb(path);
+    try {
+      expect(tablesIn(path)).toContain("insight_items");
+      opened.createUser({ id: OWNER, username: "tester", slug: "tester" });
+      opened.createWorkspace({
+        id: "w1",
+        userId: OWNER,
+        name: "W",
+        slug: "w",
+        dirPath: join(root, "w"),
+      });
+      opened.createSession({
+        id: "s1",
+        workspaceId: "w1",
+        copilotId: null,
+        copilotName: "",
+        systemPrompt: "",
+        allTools: true,
+        tools: [],
+        title: DEFAULT_SESSION_TITLE,
+      });
+      // Adopt-then-read is the round trip that matters: `adopted` is the one column a pass
+      // reads back, and it is stored as 0/1 rather than a boolean.
+      opened.replaceUnadoptedInsights("s1", [
+        { id: "i1", sessionId: "s1", type: "advice", title: "T", body: "B", ordinal: 0 },
+      ]);
+      expect(opened.setInsightAdoptedForUser(OWNER, "s1", "i1", true)?.adopted).toBe(true);
+      expect(opened.listInsightsForUser(OWNER, "s1").map((i) => i.title)).toEqual(["T"]);
+    } finally {
+      opened.raw.close();
+    }
+  });
+
   it("gains the session_threads table and messages.thread_id on an existing file", () => {
     // Twin of the widget_instances test: derived data with its own table, so no
     // SCHEMA_VERSION bump — an old file simply gains the table and the nullable column.

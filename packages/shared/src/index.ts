@@ -45,9 +45,28 @@ export const ALL_TOOL_NAMES = [
   "ila_read_plan",
   "ila_update_plan_progress",
   "ila_diagram",
+  "ila_query",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
+
+/**
+ * The query tool's name: the agent's read of the conversation's own record.
+ *
+ * Shared because it is in `ALL_TOOL_NAMES` — the client writes the allow-list from that list,
+ * so a name only the server knew would be a tool nobody could choose.
+ */
+export const QUERY_TOOL_NAME = "ila_query";
+
+/**
+ * The things `ila_query` can be asked about, and therefore its discriminator.
+ *
+ * Deliberately **not** the widget ids: `workspace_stats` and `session_stats` have no records
+ * to read, and a thread is a thing this tool returns while never being a thing the model can
+ * name as a widget. The two lists answer different questions and are free to differ.
+ */
+export const QUERY_KINDS = ["plan", "quiz", "thread", "note", "diagram"] as const;
+export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
  * The diagram tool's name.
@@ -429,6 +448,7 @@ export const WIDGET_IDS = [
   "thread",
   "notes",
   "diagram",
+  "insight",
 ] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
@@ -460,9 +480,18 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   // The thread widget brings no tools: its classification is an out-of-band model call,
   // like the auto-titler, not a tool the agent can call.
   { id: "thread", scopes: ["session"] },
-  // Notes are the learner's own writing, so they bring no tools either: the model neither
-  // reads them nor writes them. It is deliberately *not* in the "study" pack — that pack is
-  // material derived from the conversation, and this is what the learner made of it.
+  /*
+   * Notes bring no **bound** tools, which is not the same as being unreachable.
+   *
+   * The model reads them through the ordinary `ila_query(kind: "note")` and still cannot write
+   * them — no tool creates or edits a note, so a turn can never rewrite what the learner wrote.
+   * Binding a read here would be exactly the wrong move: a bound tool exists only while this
+   * widget is installed, and nothing installs a widget by default, so the learner's own notes
+   * would be invisible in every conversation that had not opted into this panel.
+   *
+   * It is deliberately *not* in the "study" pack either — that pack is material derived from
+   * the conversation, and this is what the learner made of it.
+   */
   { id: "notes", scopes: ["session"] },
   /*
    * The diagram widget brings no tools, and that is its whole design rather than an omission.
@@ -479,6 +508,22 @@ export const WIDGETS: readonly WidgetDefinition[] = [
    * by hand appears in it exactly like one the model drew.
    */
   { id: "diagram", scopes: ["session"] },
+  /*
+   * The insight panel brings no tools either, and for a stronger reason than the diagram's: the
+   * pass it drives is an **out-of-band model call**, the `agent/title.ts` / `agent/threads.ts`
+   * shape, so there is no tool to bind.
+   *
+   * Even if there were, binding it would be the wrong move twice over. A bound tool is something
+   * the *agent* can call, and the agent must not decide to spend a whole-conversation model call
+   * on a panel nobody may open — it costs a full pass over every source, and the user pressing a
+   * button is what makes that cost acceptable. And a bound tool is assembled only while its
+   * widget is installed, which with an empty `DEFAULT_WIDGET_IDS` means the capability could be
+   * switched on only from the Copilot checklist that `isWidgetBoundTool` keeps it out of.
+   *
+   * `ila_query` is the agent's own way into the material this panel reflects on. Two doors to the
+   * same data on purpose: the agent reads it during a turn, the panel thinks about it when asked.
+   */
+  { id: "insight", scopes: ["session"] },
 ];
 
 /**
@@ -864,6 +909,112 @@ export interface GetSessionNotesResponse {
   notes: Note[];
 }
 
+/* ----------------------------------- insights ----------------------------------- */
+
+/**
+ * What an observation *is*, which is the question the panel answers differently for each.
+ *
+ * Typed rather than free text because the types are the point: a difficulty is something to
+ * re-teach, a doubt is something to verify, a gap is something to fill *before* going on, and a
+ * habit is a remark about the learner rather than about the material. One list of prose would
+ * lose exactly that, and "different follow-up per type" is what the feature is for.
+ *
+ * The first three are separated on purpose and it is worth keeping them apart:
+ * `difficulty` is a property of the **material** (this topic is hard), `confusion` is a property
+ * of the **learner's state** (they did not get it), and `doubt` is a claim being **pushed back
+ * on** — which wants verification, not a re-explanation.
+ */
+export const INSIGHT_TYPES = [
+  "difficulty",
+  "confusion",
+  "doubt",
+  "strength",
+  "background",
+  "reading",
+  "advice",
+  "habit",
+] as const;
+
+export type InsightType = (typeof INSIGHT_TYPES)[number];
+
+/**
+ * Whether a value is one of the types. Exported because the two sides ask it about different
+ * things: the server about a model's answer, the client about a JSON body it did not compose.
+ */
+export function isInsightType(value: unknown): value is InsightType {
+  return typeof value === "string" && (INSIGHT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Where an unrecognised type lands, and why it lands somewhere rather than being dropped.
+ *
+ * A model invents a ninth type sooner or later. Dropping the item discards work the user cannot
+ * see — and the whole purpose of the panel is that the model's observations become visible —
+ * so it is filed as `advice`, which is the vaguest of the eight and the only one that is never
+ * *wrong* about an item: advice about anything is still advice.
+ */
+export const INSIGHT_FALLBACK_TYPE: InsightType = "advice";
+
+/** A title is a line in a list; a body is a short paragraph. */
+export const INSIGHT_TITLE_MAX = 120;
+export const INSIGHT_BODY_MAX = 800;
+/** Per pass. Past this the answer is truncated rather than refused. */
+export const INSIGHT_MAX_ITEMS = 40;
+/**
+ * Adopted items shown back to the model so it does not re-propose them. Above
+ * `INSIGHT_MAX_ITEMS` because fewer passes would otherwise make the "do not repeat these"
+ * instruction start lying about what it was given.
+ */
+export const INSIGHT_MAX_KEPT_IN_PROMPT = 60;
+
+/**
+ * One observation, as the panel shows it.
+ *
+ * `adopted` is the whole of the user's side of the entity: it is what survives the next pass.
+ * Everything else is the model's, which is why the row is derived data and carries no
+ * `deleted_at` — see the `insight_items` comment in `schema.ts`.
+ */
+export interface Insight {
+  id: string;
+  type: InsightType;
+  title: string;
+  body: string;
+  adopted: boolean;
+  createdAt: string;
+}
+
+/** `GET /api/sessions/:id/insights`. Adopted first, then the current pass, in the model's order. */
+export interface GetSessionInsightsResponse {
+  items: Insight[];
+}
+
+/**
+ * `POST /api/sessions/:id/insights/generate`.
+ *
+ * `status` is what the *request* did, not the list's state, and the three answers are three
+ * different claims — conflating any two of them is how the panel ends up saying something false:
+ *
+ * - `"ok"` — the pass ran and the list is its result. Zero items here means the model looked and
+ *   found nothing, which is a claim about the conversation.
+ * - `"empty"` — there was nothing to reflect on, so the model was **never called** and the list is
+ *   untouched. The readable sources are all derived, so a conversation that has just been created
+ *   reaches this: a call with an empty `<study_record>` would be paying for the one instruction the
+ *   prompt cannot honour, "say what you actually see".
+ * - `"failed"` — the call or the parse or the write did not produce a usable answer. The list is
+ *   untouched, and this is a claim about the *call* rather than about the conversation.
+ *
+ * `ok` and `empty` both leave zero new items, which is exactly why the panel cannot infer one from
+ * the other and the server has to say.
+ */
+export interface GenerateSessionInsightsResponse extends GetSessionInsightsResponse {
+  status: "ok" | "empty" | "failed";
+}
+
+/** Body of the adopt/release PATCH. A toggle rather than two routes, like `disabled` on a user. */
+export interface UpdateInsightInput {
+  adopted: boolean;
+}
+
 /* ------------------------------------ stats ------------------------------------ */
 
 /**
@@ -1131,6 +1282,13 @@ export const API_ERROR_CODES = [
    * hand-written request must meet the same refusal as a click.
    */
   "SUPERADMIN_NOT_GRANTABLE",
+  /*
+   * One code for four cases: an insight id that is unknown, another account's, another
+   * conversation's, or already gone with the pass that replaced it. They answer the same way on
+   * purpose, like `NOTE_NOT_FOUND` and `MESSAGE_NOT_FOUND` — an id that can be probed by the
+   * shape of the refusal is an id that can be probed.
+   */
+  "INSIGHT_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

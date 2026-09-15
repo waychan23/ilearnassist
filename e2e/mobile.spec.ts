@@ -246,7 +246,7 @@ test("layout: a dialog opened from the drawer covers the whole screen", async ({
 
   await page.getByTestId("nav-toggle").tap();
   await expect(page.getByTestId("sidebar")).toBeVisible();
-  await page.getByTestId("open-settings").tap();
+  await page.getByTestId("open-copilots").tap();
 
   const dialog = page.locator("body > .modal-overlay");
   await expect(dialog).toBeVisible();
@@ -287,9 +287,9 @@ test("narrow: the composer keeps the whole row reachable", async ({ page, reques
 test("narrow: dialogs become bottom sheets", async ({ page, request }) => {
   await converse(page, request, "你好");
 
-  // Settings lives in the sidebar, which is a drawer at this width.
+  // The Copilot list lives in the sidebar's footer, which is a drawer at this width.
   await page.getByTestId("nav-toggle").tap();
-  await page.getByTestId("open-settings").tap();
+  await page.getByTestId("open-copilots").tap();
 
   const modal = page.locator("body > .modal-overlay .modal");
   await expect(modal).toBeVisible();

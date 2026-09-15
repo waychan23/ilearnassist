@@ -52,13 +52,14 @@ test("the app opens on the workspace list, not in a conversation", async ({ page
   await expect(page.getByTestId("sidebar")).toHaveCount(0);
 });
 
-test("global settings is reachable before any workspace is entered", async ({ page }) => {
+test("the Copilot list is reachable before any workspace is entered", async ({ page }) => {
   // The front door would otherwise be a dead end for someone who wants to manage the Copilots
-  // they made — and the controls for that live in Settings, which is otherwise reached from the
-  // sidebar inside a workspace they may not have entered yet.
+  // they made — and the entry point for that is otherwise the sidebar's footer, inside a
+  // workspace they may not have entered yet. The reason survived the settings dialog the button
+  // used to open, which is why the button did.
   await page.goto("/");
 
-  await page.getByTestId("open-settings").click();
+  await page.getByTestId("open-copilots").click();
 
   await expect(page.locator("body > .modal-overlay")).toBeVisible();
   await expect(page.getByTestId("new-copilot")).toBeVisible();

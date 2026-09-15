@@ -39,6 +39,11 @@ const DYNAMIC_PREFIXES = [
   "settings.policy.",
   /* `t(`admin.nav.${id}`)`, the console's left menu, over the closed section-id union. */
   "admin.nav.",
+  /* `t(`widgets.insight.types.${type}`)` in the insight panel, over the closed `INSIGHT_TYPES`
+     union. Five segments for eight kinds: the alternative is a `switch` with eight literal keys
+     whose only job would be to spell eight strings correctly, and this prefix cannot hide a typo
+     in any key outside the insight panel's type list. */
+  "widgets.insight.types.",
 ];
 
 const isDynamic = (key: string): boolean => DYNAMIC_PREFIXES.some((p) => key.startsWith(p));
