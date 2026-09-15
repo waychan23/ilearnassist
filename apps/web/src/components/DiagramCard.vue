@@ -38,9 +38,9 @@ const label = computed(() => {
 const done = computed(() => props.toolCall.output !== undefined);
 
 /** The call's arguments, parsed once. Malformed JSON renders as nothing rather than throwing. */
-const args = computed<{ name?: unknown; source?: unknown }>(() => {
+const args = computed<{ name?: unknown; source?: unknown; summary?: unknown }>(() => {
   try {
-    return JSON.parse(props.toolCall.input) as { name?: unknown; source?: unknown };
+    return JSON.parse(props.toolCall.input) as { name?: unknown; source?: unknown; summary?: unknown };
   } catch {
     return {};
   }
@@ -48,6 +48,10 @@ const args = computed<{ name?: unknown; source?: unknown }>(() => {
 
 const fileName = computed(() => (typeof args.value.name === "string" ? args.value.name : ""));
 const source = computed(() => (typeof args.value.source === "string" ? args.value.source : ""));
+// Free from the call's arguments: the card renders with no fetch, and a reload replays it.
+const summary = computed(() =>
+  typeof args.value.summary === "string" ? args.value.summary : ""
+);
 
 /**
  * Whether the call itself failed.
@@ -109,6 +113,7 @@ const viewing = ref(false);
       v-if="viewing"
       :source="source"
       :name="fileName"
+      :summary="summary"
       @close="viewing = false"
     />
   </div>

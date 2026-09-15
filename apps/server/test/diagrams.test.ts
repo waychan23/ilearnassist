@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { diagramFileName } from "@ilearnassist/shared";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDb, DEFAULT_SESSION_TITLE, type AppDb } from "../src/db.js";
+import { diagramFileName, registerDiagram } from "../src/diagrams.js";
 
 /**
- * The naming rule, tested from the server because this is where the diagram feature lives.
- * The function itself is in `packages/shared`: the client works out the same name when it
- * matches a tool call to the file it wrote.
+ * The naming rule lives beside the tool that writes the file: the canonical name is on the
+ * row now, so the client never derives one and the rule does not need to cross the wire.
  */
 describe("diagramFileName", () => {
   it("kebab-cases a name and gives it the diagram extension", () => {
@@ -61,5 +64,110 @@ describe("diagramFileName", () => {
     // rather than leaving two diagrams of one thing on screen.
     expect(diagramFileName("Auth Flow")).toBe(diagramFileName("auth flow"));
     expect(diagramFileName("  auth-flow  ")).toBe(diagramFileName("auth-flow"));
+  });
+});
+
+/*
+ * registerDiagram against a real database. The file is not involved here — the tool test
+ * covers file-then-row ordering; this is the upsert rule: one file, one row, revised in
+ * place, with the thread judgement reset for the new shape.
+ */
+describe("registerDiagram", () => {
+  let root: string;
+  let db: AppDb;
+  const SESSION = "s1";
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "gl-diagrams-db-"));
+    db = createDb(join(root, "test.sqlite"));
+    db.createUser({ id: "u1", username: "tester", slug: "tester" });
+    db.createWorkspace({ userId: "u1", id: "w1", name: "W", slug: "w1", dirPath: join(root, "w1") });
+    db.createSession({
+      id: SESSION,
+      workspaceId: "w1",
+      copilotId: null,
+      copilotName: "",
+      systemPrompt: "",
+      allTools: true,
+      tools: [],
+      title: DEFAULT_SESSION_TITLE,
+    });
+  });
+
+  afterEach(() => {
+    try {
+      db.raw.close();
+    } catch {
+      /* already closed */
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("creates one row with the canonical name, unjudged", () => {
+    const row = registerDiagram(db, SESSION, {
+      name: diagramFileName("Auth Flow"),
+      summary: "登录流程",
+      toolCallId: "c1",
+    });
+
+    expect(row).toMatchObject({
+      sessionId: SESSION,
+      name: "auth-flow.mmd",
+      summary: "登录流程",
+      toolCallId: "c1",
+      threadId: null,
+      threadTitle: null,
+    });
+    expect(db.listDiagramsBySession(SESSION)).toHaveLength(1);
+  });
+
+  it("revises one row in place: new summary and anchor, id and birth kept", () => {
+    const first = registerDiagram(db, SESSION, {
+      name: "flow.mmd",
+      summary: "一版",
+      toolCallId: "c1",
+    });
+    const second = registerDiagram(db, SESSION, {
+      name: "flow.mmd",
+      summary: "二版",
+      toolCallId: "c2",
+    });
+
+    const rows = db.listDiagramsBySession(SESSION);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(first.id);
+    expect(rows[0]?.summary).toBe("二版");
+    expect(rows[0]?.toolCallId).toBe("c2");
+    expect(rows[0]?.createdAt).toBe(first.createdAt);
+    // updated_at is set to now on the revise; two calls in one millisecond can timestamp
+    // equal, so this asserts "never moved backwards" rather than "always later" — the read
+    // order's same-ms tiebreak is rowid, not updated_at.
+    expect((rows[0]?.updatedAt ?? "") >= first.updatedAt).toBe(true);
+    expect(second.id).toBe(first.id);
+  });
+
+  it("clears a thread judgement when the drawing is revised", () => {
+    /*
+     * A revise can be a genuine topic change ("no — draw the deployment topology"), so
+     * keeping the old thread files the new drawing under the old chapter. The new shape
+     * must be judged again; the upsert clears it and the next thread sync reassigns it.
+     */
+    registerDiagram(db, SESSION, { name: "flow.mmd", summary: "一版", toolCallId: "c1" });
+    db.raw
+      .prepare("UPDATE session_diagrams SET thread_id = ? WHERE session_id = ?")
+      .run("t-old", SESSION);
+    expect(db.listDiagramsBySession(SESSION)[0]?.threadId).toBe("t-old");
+
+    registerDiagram(db, SESSION, { name: "flow.mmd", summary: "二版", toolCallId: "c2" });
+    expect(db.listDiagramsBySession(SESSION)[0]?.threadId).toBeNull();
+  });
+
+  it("keeps distinct names as distinct rows", () => {
+    registerDiagram(db, SESSION, { name: "one.mmd", summary: "一", toolCallId: "c1" });
+    registerDiagram(db, SESSION, { name: "two.mmd", summary: "二", toolCallId: "c2" });
+    expect(db.listDiagramsBySession(SESSION).map((d) => d.name).sort()).toEqual([
+      "one.mmd",
+      "two.mmd",
+    ]);
   });
 });

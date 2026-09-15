@@ -26,7 +26,7 @@ const webFetch: WebFetchConfig = { enabled: true, maxChars: 20_000 };
  * `beforeEach` and a module-scope `join(workspace, …)` would run against `undefined`.
  */
 function diagram(): DiagramToolContext {
-  return { sessionDir: join(workspace, "sessions", "s1") };
+  return { sessionDir: join(workspace, "sessions", "s1"), save: () => undefined };
 }
 
 /**

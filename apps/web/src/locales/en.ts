@@ -65,6 +65,7 @@ const en: typeof MessageSchema = {
     zoomOut: "Zoom out",
     fit: "Fit to width",
     source: "Source",
+    summary: "Summary",
   },
 
   app: {
@@ -773,11 +774,14 @@ const en: typeof MessageSchema = {
       noSession: "Open a conversation and the diagrams it has drawn are listed here.",
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       browse: "Conversation files",
-      /** A row the conversation has a tool call for — the button that scrolls back to it. A
-       *  diagram file nobody drew here has no such call, and so no button. */
+      /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "Go to the reply that drew it",
       empty: "This conversation has not drawn any diagrams yet.",
       failed: "Could not read the diagrams.",
+      /** The thread the classifier put this diagram in. */
+      inThread: "In: {title}",
+      /** The row exists but its file is gone. */
+      missing: "The file is gone",
     },
   },
 

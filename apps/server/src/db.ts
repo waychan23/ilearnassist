@@ -263,6 +263,48 @@ export interface NoteInsert {
   content: string;
 }
 
+/**
+ * A diagram as stored, plus the one column a read adds.
+ *
+ * `thread_title` is not in the table: a read that LEFT JOINs `session_threads` answers "which
+ * thread is this in and what is it called" in the same query. A read with no join simply leaves
+ * it undefined, which maps to null.
+ */
+interface DiagramRow {
+  id: string;
+  session_id: string;
+  thread_id: string | null;
+  name: string;
+  summary: string;
+  tool_call_id: string | null;
+  created_at: string;
+  updated_at: string;
+  thread_title?: string | null;
+}
+
+/** A diagram as the rest of the server reads it. The route adds `fileMissing`. */
+export interface DiagramRecord {
+  id: string;
+  sessionId: string;
+  threadId: string | null;
+  name: string;
+  summary: string;
+  toolCallId: string | null;
+  threadTitle: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Input to `upsertDiagram`, from the tool. The id is the caller's. */
+export interface DiagramUpsert {
+  id: string;
+  sessionId: string;
+  /** The canonical file name — `auth-flow.mmd`, not the model's "Auth Flow". */
+  name: string;
+  summary: string;
+  toolCallId: string | null;
+}
+
 /** A message as it joins into a thread for the widget's read model. */
 export interface ThreadMessageRow {
   threadId: string;
@@ -707,6 +749,18 @@ const mapNote = (r: NoteRow): Note => ({
   occurrence: r.occurrence,
   content: r.content,
   messageMissing: r.message_missing !== 0,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const mapDiagram = (r: DiagramRow): DiagramRecord => ({
+  id: r.id,
+  sessionId: r.session_id,
+  threadId: r.thread_id,
+  name: r.name,
+  summary: r.summary,
+  toolCallId: r.tool_call_id,
+  threadTitle: r.thread_title ?? null,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -1385,6 +1439,13 @@ export interface AppDb {
    */
   assignMessagesToThread(sessionId: string, messageIds: string[], threadId: string): number;
 
+  /**
+   * Attach one diagram to a thread. Bare session id like `assignMessagesToThread`: the
+   * thread sync is the only caller, and it has resolved ownership before it runs. Only an
+   * unassigned diagram moves (a revise cleared it), so a re-run never re-homes one.
+   */
+  assignDiagramToThread(sessionId: string, diagramId: string, threadId: string): number;
+
   /*
    * Notes (notes widget). User-authored, so unlike the plan/quiz/thread rows above these carry
    * `deleted_at` and every read filters it.
@@ -1414,6 +1475,31 @@ export interface AppDb {
   ): Note | undefined;
   /** Marks the note deleted. The row and its bytes stay; every read filters it out. */
   softDeleteNote(sessionId: string, noteId: string): boolean;
+
+  /**
+   * A conversation's diagrams, by session. Bare session id like `listThreadsBySession`: every
+   * caller has already resolved the session through a `ForUser` read, and the thread sync
+   * runs inside the server with no request. Ordered newest-first.
+   */
+  listDiagramsBySession(sessionId: string): DiagramRecord[];
+  /**
+   * Owner-scoped list. The route resolves the session through a `ForUser` read first (so a
+   * foreign id is a 404), and this puts the owner in the WHERE too — the rule is not the
+   * resolution. Used to build the API view.
+   */
+  listDiagramsForUser(userId: string, sessionId: string): DiagramRecord[];
+  /**
+   * One row by session and canonical file name, no owner. Bare session id like
+   * `getNote`: every caller has already resolved ownership, and the file-content read
+   * attaches a summary by the file it is serving.
+   */
+  getDiagramBySessionName(sessionId: string, name: string): DiagramRecord | undefined;
+  /**
+   * Insert, or revise in place when the conversation already has a diagram with this file name.
+   * A revise keeps the id and created_at, moves the tool-call anchor to the new call, and
+   * clears `thread_id` so the new shape is judged.
+   */
+  upsertDiagram(input: DiagramUpsert): DiagramRecord;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
@@ -2223,6 +2309,13 @@ export function createDb(dbPath: string): AppDb {
         WHERE session_id = ? AND deleted_at IS NULL AND thread_id IS NULL
           AND id IN (${messageIds.map(() => "?").join(",")})`
     );
+  // Classification is not a content change, so updated_at is deliberately untouched; and the
+  // `thread_id IS NULL` guard makes a re-run a no-op while still letting a revise be judged
+  // again (the diagram upsert clears it).
+  const stmtAssignDiagramToThread = db.prepare(
+    `UPDATE session_diagrams SET thread_id = ?
+       WHERE id = ? AND session_id = ? AND thread_id IS NULL`
+  );
 
   /* --------------------------------- notes --------------------------------- */
   /*
@@ -2267,6 +2360,53 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtSoftDeleteNote = db.prepare(
     "UPDATE notes SET deleted_at = ? WHERE id = ? AND session_id = ? AND deleted_at IS NULL"
+  );
+
+  /* ------------------------------ session diagrams --------------------------- */
+  /*
+   * Owner-less by session: the tool writes through this immediately after resolving the
+   * session in `turnContext`, the thread sync reads it to place the rows, and the
+   * owner-scoped list route does its own join (see stmtListDiagramsForUser). The LEFT JOIN
+   * is cheap here and lets the sync report where a diagram landed without a second query.
+   */
+  const stmtListDiagramsBySession = db.prepare(
+    `SELECT d.*, t.title AS thread_title
+       FROM session_diagrams d
+       LEFT JOIN session_threads t ON t.id = d.thread_id
+      WHERE d.session_id = ?
+      ORDER BY d.updated_at DESC, d.rowid DESC`
+  );
+  // Read back by the conflict key, because a revise keeps the original id.
+  const stmtGetDiagramBySessionName = db.prepare(
+    `SELECT d.*, t.title AS thread_title
+       FROM session_diagrams d
+       LEFT JOIN session_threads t ON t.id = d.thread_id
+      WHERE d.session_id = ? AND d.name = ?`
+  );
+  // Owner-scoped, the route's read: the owner is in the WHERE by joining to workspaces,
+  // because sessions reach their owner the same way messages do.
+  const stmtListDiagramsForUser = db.prepare(
+    `SELECT d.*, t.title AS thread_title
+       FROM session_diagrams d
+       JOIN sessions s   ON s.id = d.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+       LEFT JOIN session_threads t ON t.id = d.thread_id
+      WHERE d.session_id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY d.updated_at DESC, d.rowid DESC`
+  );
+  /*
+   * One row per file, by construction: the upsert keys on (session_id, name). A revise keeps
+   * the id and created_at and clears thread_id, because the new shape has to be judged again.
+   */
+  const stmtUpsertDiagram = db.prepare(
+    `INSERT INTO session_diagrams (id, session_id, thread_id, name, summary, tool_call_id, created_at, updated_at)
+     VALUES (@id, @sessionId, NULL, @name, @summary, @toolCallId, @now, @now)
+     ON CONFLICT(session_id, name) DO UPDATE SET
+       summary = @summary,
+       tool_call_id = @toolCallId,
+       thread_id = NULL,
+       updated_at = @now`
   );
 
   /*
@@ -3049,6 +3189,10 @@ export function createDb(dbPath: string): AppDb {
       ).changes;
     },
 
+    assignDiagramToThread(sessionId, diagramId, threadId) {
+      return stmtAssignDiagramToThread.run(threadId, diagramId, sessionId).changes;
+    },
+
     listNotesForUser(userId, sessionId) {
       return (stmtListNotesForUser.all({ userId, sessionId }) as NoteRow[]).map(mapNote);
     },
@@ -3088,6 +3232,35 @@ export function createDb(dbPath: string): AppDb {
 
     softDeleteNote(sessionId, noteId) {
       return stmtSoftDeleteNote.run(now(), noteId, sessionId).changes > 0;
+    },
+
+    listDiagramsBySession(sessionId) {
+      return (stmtListDiagramsBySession.all(sessionId) as DiagramRow[]).map(mapDiagram);
+    },
+
+    listDiagramsForUser(userId, sessionId) {
+      return (stmtListDiagramsForUser.all({ userId, sessionId }) as DiagramRow[]).map(
+        mapDiagram
+      );
+    },
+
+    getDiagramBySessionName(sessionId, name) {
+      const row = stmtGetDiagramBySessionName.get(sessionId, name) as DiagramRow | undefined;
+      return row ? mapDiagram(row) : undefined;
+    },
+
+    upsertDiagram(input) {
+      stmtUpsertDiagram.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        name: input.name,
+        summary: input.summary,
+        toolCallId: input.toolCallId,
+        now: now(),
+      });
+      // Read back by the conflict key rather than by id — a revise preserves the original id.
+      const row = stmtGetDiagramBySessionName.get(input.sessionId, input.name) as DiagramRow;
+      return mapDiagram(row);
     },
 
     statsForWorkspace(userId, workspaceId) {

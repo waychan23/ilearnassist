@@ -57,20 +57,29 @@ async function sessionIdFor(request: APIRequestContext, workspaceName: string): 
   return sessions[0].id;
 }
 
-/** A turn whose first step draws `source` under `name`, and whose second says it is done. */
+/**
+ * A turn whose first step draws `source` under `name`, and whose second says it is done.
+ * `summary` is required on the real tool, so each call carries one; a caller that does not
+ * care gets a deterministic stand-in.
+ */
 function scriptDiagram(
   request: APIRequestContext,
-  args: { name: string; source: string } | { name: string; source: string }[]
+  args: ({ name: string; source: string; summary?: string } | { name: string; source: string; summary?: string })[]
+    | { name: string; source: string; summary?: string }
 ): Promise<void> {
-  const calls = Array.isArray(args) ? args : [args];
+  const calls = (Array.isArray(args) ? args : [args]).map((call, i) => ({
+    name: call.name,
+    source: call.source,
+    summary: call.summary ?? `${call.name} 的示意图`,
+  }));
   return scriptLlm(request, {
     turns: [
       {
         content: "我画一张图。",
-        toolCalls: calls.map((args, i) => ({
+        toolCalls: calls.map((call, i) => ({
           id: `call_d${i + 1}`,
           name: "ila_diagram",
-          args,
+          args: call,
         })),
       },
       { content: "画好了。" },
@@ -197,25 +206,52 @@ test("the widget lists what the conversation has drawn, and locates it", async (
   page,
   request,
 }) => {
-  await diagramSession(page, unique("图表面板"));
+  const workspaceName = await diagramSession(page, unique("图表面板"));
   await expect(page.getByTestId("diagram-empty")).toBeVisible();
 
-  await scriptDiagram(request, { name: "panel flow", source: FLOW });
+  await scriptDiagram(request, {
+    name: "panel flow",
+    source: FLOW,
+    summary: "登录流程图：提交、校验、进入工作台",
+  });
   await send(page, "画一个流程图");
 
   // No reload: the row arrives off `diagram.changed`, emitted when the tool's `tool_end` lands.
-  // The change is a file on disk, which is the definition of something no local state knows.
   const row = page.getByTestId("diagram-row").first();
   await expect(row).toBeVisible({ timeout: 20_000 });
+  // The stem of the canonical file name, and the model's summary from the row.
   await expect(row).toContainText("panel-flow");
+  await expect(row).toContainText("登录流程图：提交、校验、进入工作台");
+
+  // The summary survives a reload — it is the persisted tool arguments and the row, neither
+  // of which is transient turn state. The app remembers neither the workspace nor the session
+  // across a reload, so walk back in (the `chat.spec.ts` idiom) before reading the panel.
+  await page.reload();
+  await enterWorkspace(page, workspaceName);
+  await page.getByTestId("session-item").first().click();
+  await page.getByTestId("widget-tab-diagram").click();
+  await expect(page.getByTestId("diagram-row").first()).toContainText(
+    "登录流程图：提交、校验、进入工作台"
+  );
 
   // 定位 scrolls the conversation to the call that drew it.
   await page.getByTestId("diagram-locate").first().click();
   await expect(card(page)).toBeInViewport();
 
-  // And the row opens the ordinary file preview, which draws the same file.
-  await row.click();
+  // The card's enlarged view carries the same summary.
+  await card(page).getByTestId("diagram-expand").click();
+  await expect(page.getByTestId("diagram-summary")).toContainText(
+    "登录流程图：提交、校验、进入工作台"
+  );
+  await page.getByTestId("diagram-viewer-close").click();
+
+  // And the row opens the ordinary file preview, which draws the same file and carries the
+  // summary the session-file route attaches from the row.
+  await page.getByTestId("diagram-row").first().click();
   await expect(page.getByTestId("file-preview")).toBeVisible();
+  await expect(page.getByTestId("file-preview-diagram-summary")).toContainText(
+    "登录流程图：提交、校验、进入工作台"
+  );
   await expect(
     page.getByTestId("file-preview-diagram").getByTestId("mermaid")
   ).toHaveAttribute("data-render-state", "ready", { timeout: 20_000 });

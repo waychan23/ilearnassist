@@ -20,6 +20,7 @@ import type {
   FileContent,
   GetPlanResponse,
   GetQuizQuestionsResponse,
+  GetSessionDiagramsResponse,
   GetSessionNotesResponse,
   GetSessionThreadsResponse,
   Message,
@@ -503,6 +504,13 @@ export const api = {
     request<FileContent>(
       `/sessions/${sessionId}/files/content?path=${encodeURIComponent(path)}`
     ),
+  /**
+   * The diagrams a conversation drew, as rows carrying the model's summary and their
+   * thread. Distinct from `listSessionFiles`, which lists the whole folder, so a
+   * hand-copied `.mmd` is not itself a diagram the agent drew.
+   */
+  listSessionDiagrams: (sessionId: string) =>
+    request<GetSessionDiagramsResponse>(`/sessions/${sessionId}/diagrams`),
 
   listSessions: (workspaceId: string) =>
     request<Session[]>(`/workspaces/${workspaceId}/sessions`),

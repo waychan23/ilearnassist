@@ -738,6 +738,39 @@ export interface GetSessionThreadsResponse {
   unassigned: number;
 }
 
+/* ---------------------------------- diagrams --------------------------------- */
+
+/**
+ * One diagram a conversation drew, as the API carries it.
+ *
+ * The source is deliberately not here: the `.mmd` file is the source, and the row is what the
+ * file cannot answer — the canonical name, the model's summary, the call that drew it, and the
+ * thread it belongs to. `threadTitle` is resolved server-side (the quiz view carries
+ * `nodeTitle` for the same reason) and is null exactly when `threadId` is.
+ */
+export interface Diagram {
+  id: string;
+  sessionId: string;
+  /** The thread the classifier put this diagram in; null until the turn it was drawn in is classified. */
+  threadId: string | null;
+  threadTitle: string | null;
+  /** The canonical file name inside the conversation's folder — `auth-flow.mmd`. */
+  name: string;
+  /** The model's one- or two-sentence description of what the diagram is about. */
+  summary: string;
+  /** The tool call that wrote, or last revised, it; null when none was stamped. */
+  toolCallId: string | null;
+  /** The row's file is not on disk. Resolved on read, like `Note.messageMissing`. */
+  fileMissing: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/sessions/:id/diagrams`. */
+export interface GetSessionDiagramsResponse {
+  diagrams: Diagram[];
+}
+
 /* ------------------------------------ notes ------------------------------------ */
 
 /**
@@ -1707,6 +1740,12 @@ export interface FileContent {
   kind: FileContentKind;
   text: string | null;
   truncated: boolean;
+  /**
+   * The model's one-line description of a diagram, set only on a **session-root** read of a
+   * file a `session_diagrams` row names. Absent in every other case — a workspace-root read,
+   * and a `.mmd` nobody drew here — so the client treats "not present" as "no summary".
+   */
+  summary?: string;
 }
 
 /**
@@ -1722,9 +1761,6 @@ export interface FileContent {
  * plain text so a `.mmd` from elsewhere reads as a diagram rather than as an unknown file.
  */
 export const DIAGRAM_FILE_EXTENSIONS = ["mmd", "mermaid"] as const;
-
-/** What `ila_diagram` writes, and the one extension the tool will produce. */
-export const DIAGRAM_EXTENSION = "mmd";
 
 /**
  * How much diagram source is worth writing, and worth rendering.
@@ -1746,62 +1782,6 @@ export function isDiagramFile(name: string): boolean {
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return false;
   return (DIAGRAM_FILE_EXTENSIONS as readonly string[]).includes(name.slice(dot + 1).toLowerCase());
-}
-
-/**
- * A filesystem-safe slug from a name.
- *
- * Letters and digits survive — Han included, deliberately, so `架构图` stays readable rather
- * than becoming a row of hyphens — and everything else collapses to `-`. `fallback` is what a
- * name made entirely of characters that do not survive becomes; it is required because the
- * caller is the only one who knows what the slug is *for*, and any default would be a quiet
- * lie about one of them.
- *
- * Lives here rather than on either side of the wire because both need the *same* answer: the
- * server names a directory or a file with it, and the client sometimes has to work out what
- * the server would have called something. Two copies would drift, and the drift would show up
- * as a lookup that silently misses.
- */
-export function slugify(name: string, fallback: string): string {
-  const base = name
-    .toLowerCase()
-    .trim()
-    // Keep CJK characters (and common scripts) so non-Latin names stay readable.
-    .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return base || fallback;
-}
-
-/**
- * The file a diagram with this name is written to, inside a conversation's own directory.
- *
- * Shared for the `slugify` reason above, and this is the case that needs it most: a tool call
- * records the name the *model* chose (`"Auth Flow"`), the directory holds what the server made
- * of it (`auth-flow.mmd`), and the client matches one to the other to put a "go to the reply
- * that drew it" button on the right row. A second slug on the web side would be a button on
- * the wrong row, or on none.
- *
- * **No uniqueness suffix.** The name *is* the identity: calling the tool again with the same
- * name overwrites the same file, which is how a model corrects a diagram it already drew. A
- * suffix would turn a correction into `auth-flow-1.mmd` and leave the wrong picture on screen
- * beside the right one.
- */
-export function diagramFileName(name: string): string {
-  // A model that passes "auth-flow.mmd" means the same diagram as one that passes
-  // "auth-flow"; slugifying the raw string would make `auth-flow-mmd.mmd` of it.
-  let base = name.trim();
-  for (const extension of DIAGRAM_FILE_EXTENSIONS) {
-    const suffix = `.${extension}`;
-    if (base.toLowerCase().endsWith(suffix)) {
-      base = base.slice(0, -suffix.length);
-      break;
-    }
-  }
-
-  // The fallback is a parameter rather than a shared default because "diagram" is what a
-  // diagram's file is for; nothing else should inherit it.
-  return `${slugify(base, "diagram")}.${DIAGRAM_EXTENSION}`;
 }
 
 /** What a model can do — drives vision handling and UI badges. */

@@ -259,6 +259,28 @@ their labels are translated and the plan branch nests off the live plan tree on 
 widgets only in the install UI (`WIDGET_GROUPS`, client-side): one master button loops the
 ordinary per-widget writes; there is deliberately no group row or route.
 
+### Diagrams (`diagrams.ts`, `tools/diagram.ts`, `threads.ts`)
+
+A diagram is a `.mmd` file in `sessions/<id>/` **plus** a `session_diagrams` row; each half holds
+what the other cannot. The file is the source of the bytes and is written first; the row
+(`name`, the model's `summary`, `tool_call_id`, `thread_id`) is upserted on
+`(session_id, name)` second, so a failed or refused call leaves the previous revision alone.
+The row carries no `source` (a second copy of the bytes is the one drift the split exists to
+prevent), no `source_path` (derivable from the session and the name), no `message_id` (the
+assistant message does not exist when the tool runs), and no `deleted_at` — it is derived data
+like `session_threads`, not the learner's writing. `GET /api/sessions/:id/diagrams` is the
+panel's read model and answers `fileMissing` by statting each file; the session-files content
+route attaches a diagram's `summary` by name on the session root only.
+
+`thread_id` is not set at write time. The classifier above is given each turn's diagrams — name
+and summary inside `<diagram>` blocks under the message that drew them — and answers a second,
+ref-keyed `diagrams` array alongside `decisions`. Only `continue` and an existing `eN` are valid
+(a diagram never starts a thread), a bad entry drops just that diagram, and both the dropped ones
+and the diagrams of a deterministically-forced turn inherit their turn's thread. That collapse is
+what makes a diagram's `thread_id` null iff its turn is unclassified, since the classifier's work
+list is pending messages and never revisits an assigned turn. A revise clears `thread_id`; the
+next sync re-judges the new shape.
+
 ### Notes (`notes.ts`)
 
 What the learner marked and what they wrote about it, one row per note, reached at

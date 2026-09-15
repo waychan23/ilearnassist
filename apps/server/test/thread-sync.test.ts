@@ -134,6 +134,76 @@ describe("post-turn classification", () => {
     expect(view.unassigned).toBe(2);
   });
 
+  async function getDiagrams(sessionId: string): Promise<{ id: string; threadId: string | null; threadTitle: string | null }[]> {
+    const res = await env.inject({ method: "GET", url: `/api/sessions/${sessionId}/diagrams` });
+    expect(res.statusCode).toBe(200);
+    return (res.json() as { diagrams: { id: string; threadId: string | null; threadTitle: string | null }[] })
+      .diagrams;
+  }
+
+  /** A turn that draws one diagram, queued for the next chat. */
+  function turnDrawingDiagram(name: string): void {
+    llm.setTurns([
+      {
+        content: "我画一张图。",
+        toolCalls: [
+          {
+            id: "call_d1",
+            name: "ila_diagram",
+            args: { name, source: "flowchart TD\n  A --> B", summary: "登录流程图" },
+          },
+        ],
+      },
+      { content: "画好了。" },
+    ]);
+  }
+
+  it("places a diagram drawn in the turn into its classified thread", async () => {
+    const session = await threadSession();
+    // The classifier names the turn and also the diagram; "continue" lands it in the new thread.
+    llm.setMatches([
+      {
+        includes: "<new_turns>",
+        content: JSON.stringify({
+          decisions: [{ thread: "new", branch: "other", title: "登录" }],
+          diagrams: [{ ref: "d1", thread: "continue" }],
+        }),
+      },
+    ]);
+    turnDrawingDiagram("auth flow");
+    await chat(session.id, "画个登录流程图");
+
+    await waitForClassified(session.id);
+    const diagrams = await getDiagrams(session.id);
+    expect(diagrams).toHaveLength(1);
+    expect(diagrams[0]).toMatchObject({ threadTitle: "登录" });
+    expect(diagrams[0]!.threadId).not.toBeNull();
+  });
+
+  it("still classifies the turn when a diagram decision is unusable, and the diagram collapses", async () => {
+    const session = await threadSession();
+    llm.setMatches([
+      {
+        includes: "<new_turns>",
+        // Valid turn decision; an unknown ref and "new" for the diagram are both dropped.
+        content: JSON.stringify({
+          decisions: [{ thread: "new", branch: "other", title: "登录" }],
+          diagrams: [
+            { ref: "d9", thread: "e7" },
+            { ref: "d1", thread: "new" },
+          ],
+        }),
+      },
+    ]);
+    turnDrawingDiagram("flow");
+    await chat(session.id, "画个流程图");
+
+    const view = await waitForClassified(session.id);
+    expect(view.threads.map((t) => t.title)).toEqual(["登录"]);
+    const diagrams = await getDiagrams(session.id);
+    expect(diagrams[0]!.threadTitle).toBe("登录");
+  });
+
   it("does not call the model again once nothing is unassigned", async () => {
     const session = await threadSession();
     classifierAnswer([{ thread: "new", branch: "other", title: "问候" }]);

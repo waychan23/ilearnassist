@@ -90,6 +90,8 @@ export default {
     fit: "适应窗口",
     /** The label on the card's disclosure, which shows the source rather than the drawing. */
     source: "源码",
+    /** The label before the model's description in the viewer and file preview. */
+    summary: "说明",
   },
 
   app: {
@@ -904,11 +906,14 @@ export default {
       noSession: "打开一个会话后，这里会显示它画过的图表。",
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       browse: "查看会话文件",
-      /** A row the conversation has a tool call for — the button that scrolls back to it. A
-       *  diagram file nobody drew here has no such call, and so no button. */
+      /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "定位到生成它的消息",
       empty: "这个会话还没有画过图表。",
       failed: "读取图表失败。",
+      /** The thread the classifier put this diagram in. */
+      inThread: "属于：{title}",
+      /** The row exists but its file is gone. */
+      missing: "文件已不存在",
     },
   },
 

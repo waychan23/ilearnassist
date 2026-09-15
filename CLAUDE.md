@@ -247,7 +247,8 @@ apps/server/src/
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
-  tools/diagram.ts        # ila_diagram — writes a mermaid source into the session's folder
+  tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
+  diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   widgets.ts              # sumUsage + the widget-selection validator (pure)
   notes.ts                # the notes widget's records: what a body may become a note (pure)
 apps/web/src/
@@ -266,7 +267,6 @@ apps/web/src/
   composables/widgetEvents.ts  # the widget event bus (no store import, so no cycle)
   composables/widgetPanel.ts   # the panel's persisted preferences + width clamping
   utils/apiError.ts       # server code → user-facing message
-  utils/diagramAnchors.ts # diagram file name → the tool call that wrote it (pure)
   utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
   utils/locale.ts         # browser-language detection + the alias table
   utils/mermaid.ts        # the lazy mermaid chunk: theme variables, parse, render
@@ -274,7 +274,7 @@ apps/web/src/
   utils/widgetTabs.ts     # the tab strip's fit arithmetic (pure)
   widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
-  widgets/DiagramWidget.vue # the diagram panel: the folder's diagrams, and a jump to each
+  widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, AskUserCard, Composer,
@@ -343,20 +343,32 @@ Fuller map in `docs/reference.md`.
   `switch` with an `unhandled(kind: never)` arm in the same change, which is what makes the next
   member a `vue-tsc` error rather than a fallthrough. A new kind is only a compile error once a
   site says so; until then the fallthrough is what handles it.
-- **A conversation's own directory has exactly one writer, and there is no table for what it
-  holds.** `sessions/<sessionId>/` is written by `ila_diagram` and read by the session-files
-  routes; `write_file` cannot reach it, so it holds nothing a typed tool did not write. The
-  `.mmd` **is** the record — a `session_diagrams` table would be a second copy of bytes that
-  already have a home, free to disagree with the file about its own content, and everything one
-  would provide comes from somewhere else: the title from mermaid front-matter (which mermaid
-  draws itself) or the file's name, the ordering from `FileEntry.modifiedAt`, the jump anchor
-  from `toolCall.id` found by scanning the message list. It inherits the existing asymmetry
-  rather than inventing a third: the tool resolves lexically like every agent tool, the routes
-  `realpath` like every browser read. See `docs/diagrams.md`.
-  The join between a call and its file is the one part that needs care — the call records the
-  name the *model* chose, the folder holds what the server made of it — which is why `slugify`
-  and `diagramFileName` live in `packages/shared`: the client matching them is `utils/diagramAnchors.ts`,
-  and a second slug rule on the web side would be a button on the wrong row, or on none.
+- **A conversation's own directory has exactly one writer, and a diagram is a file plus a
+  row — each holding what the other cannot.** `sessions/<sessionId>/` is written by
+  `ila_diagram` and read by the session-files routes; `write_file` cannot reach it. The `.mmd`
+  is the source of the bytes; `session_diagrams` holds only what the file cannot answer: the
+  canonical `name` (the join key, so the client never derives one), the model's `summary`, the
+  `tool_call_id` that wrote or last revised it, and the `thread_id` the classifier put it in.
+  The one drift still unrepresentable is two copies of the bytes disagreeing — the row holds no
+  source and no `source_path` (a pure function of the session and the name). Drift is bounded and
+  reported at both ends: a `.mmd` nobody drew has a file but no row (the conversation-files dialog
+  shows it, the diagram panel does not), a row whose file is gone reads `fileMissing`. The row
+  has no `deleted_at` (derived data, like `session_threads`) and no `message_id` (the assistant
+  message does not exist when the tool runs). A revise upserts on `(session_id, name)`: one file,
+  one row, new summary and call id, `thread_id` cleared so the new shape is judged again. The
+  naming rule (`diagramFileName`, `slugify`) is server-side in `diagrams.ts`/`workspace.ts` — it
+  used to be shared because the client derived a name to find the call, and the row retired that
+  derivation; only `isDiagramFile` and the size/tool-name constants stay shared. See
+  `docs/diagrams.md`.
+  **A diagram rides the turn classification.** The thread is assigned after the turn, so the tool
+  writes `thread_id = null` and `threads.ts` places each diagram inside the same transaction as
+  its turn's messages, shown to the classifier under the message whose call drew it (name and
+  summary, never the source). The per-diagram answer is a second, **ref-keyed** array, so a bad
+  entry can never shift a turn decision; the only valid values are `continue` (the turn's own
+  thread) and an existing `eN` — never `new`, because a diagram has no messages of its own — and
+  a missing/unusable answer, and any diagram in a deterministically-forced plan turn, collapses
+  to the turn's thread. The invariant is one sentence and testable: a diagram's `thread_id` is
+  null iff the turn owning its latest call has no thread yet.
 - **Mermaid renders in its own component, never through `renderMarkdown`.** `renderMarkdown` is a
   synchronous `string → string` on purpose — that is the reason KaTeX was chosen over MathJax —
   and mermaid's API is async, so a diagram cannot go through the markdown path, and making the
@@ -656,8 +668,12 @@ Fuller map in `docs/reference.md`.
   ambiguous turns are sent, at most five per call, and a bad/empty answer blocks just
   those while deterministic turns in the chunk still land and the same idempotent sync
   retries the rest. That is also what makes an install-time backfill the same code path
-  as keeping up. The `计划`/`其他` headings are rendered client-side with translated
-  labels, never stored. The classification process is observable through the
+  as keeping up. A diagram drawn in a turn rides the same pass: its `<diagram>` block (name
+  and the model's summary, never the source) is answered in a second ref-keyed array with
+  `continue`/`eN`, a bad entry collapses the diagram to its turn's thread, and a forced
+  plan turn's diagrams land in that node's thread with no model call. The `计划`/`其他`
+  headings are rendered client-side with translated labels, never stored. The classification
+  process is observable through the
   append-only `<dataRoot>/logs/threads.log` (`threadLog.ts`): one human-readable block per
   real classification (context, turns, raw model answer, per-turn resolution, counts) and
   failure blocks, configured only in the process entry point so tests never write it.
@@ -1144,7 +1160,8 @@ Fuller map in `docs/reference.md`.
   not even be switched on. It is an ordinary allow-listable tool, and it is deliberately **not** in
   `NON_FILE_TOOLS` either — so `fileTools.enabled: false` means no diagrams, because a diagram
   whose file was never written is half the feature. The panel is a viewer: it lists the
-  conversation's folder and draws the one you pick. See `docs/diagrams.md`.
+  conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
+  folder is the separate conversation-files dialog. See `docs/diagrams.md`.
 - **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget, and `/sessions/:id/quizzes/:qid/answer` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: the make-up POST does a status-guarded UPDATE of the SAME row (never an insert, clearing stale grading), then the client drives an ordinary `/chat` turn quoting the UUID so the model grades it instead of posing a new quiz. An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in a system-prompt-only note (`renderMakeupKeyNote`, gated by `ChatInput.makeupQuizId` naming an owned **answered** row) for a make-up. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
 - **A note belongs to a conversation, and to a message only when something was annotated.** `notes.session_id` is `NOT NULL` and `message_id` is nullable, which is what makes a note the user typed from the panel the same kind of thing as one made by dragging over a sentence. `message_id` carries **no foreign key** on purpose: a regenerate or a tail delete soft-deletes a message, and the note is the user's own writing, so it survives with the quote it recorded — `messageMissing`, resolved by a `LEFT JOIN messages … AND m.deleted_at IS NULL` in the read that fetches the note, is how a read says so (never a client guess from a message list that only holds the conversation on screen). **An anchor is a text quote plus which occurrence of it**, counted over the message's **visible** text — never character offsets, which are offsets into rendered HTML and mean nothing after the next `v-html` assignment, and never a raw text walk, which sees every formula twice because KaTeX emits glyphs *and* hidden MathML. Notes bring no tools: the model neither reads them nor writes them.
 - **A widget can own a capability of the host, and exactly one holds it at a time.** The message list implements marking-up (selection, the floating bar, `<mark>`, the window) and knows nothing about notes as records; the notes widget owns the records and knows nothing about `Range`. `composables/messageNotes.ts` is the whole of what they share: a **claim**, per *conversation* rather than per widget (the message list on screen belongs to one session while the widget is installed in a different set of them), with a refusal that names the holder. The host registers on mount and the widget claims from `WidgetModule.onActive`, in either order, because the host **reads** the claim rather than being told about it. `onActive` is not `onMount`: `WidgetPanel` mounts only the active tab, so a claim owned by the component would drop the moment the reader looked at the plan, taking every highlight with it. It is called by `composables/widgetActivation.ts` — an effect owned by `ChatView`'s setup, because the panel being rendered *is* the answer to "is a widget live", and leaving the view (the one transition no reactive input expresses) is reported by that scope stopping. It is deliberately not a store `watch`: a store's setup belongs to no lifetime, and in a test suite every abandoned store instance keeps watching module-level singletons.

@@ -88,6 +88,7 @@ import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
 import { createNote, deleteNote, updateNote } from "./notes.js";
+import { listDiagramViews, registerDiagram } from "./diagrams.js";
 import {
   dismissQuizQuestions,
   listQuizQuestionViews,
@@ -1717,6 +1718,30 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return buildThreadViews(db, userId, id);
   });
 
+  /* --------------------------------- diagrams --------------------------------- */
+
+  /*
+   * The conversation's diagrams, object-not-widget like the notes routes below: a diagram
+   * outlives the panel that lists it, and an empty list is a 200 rather than a missing
+   * object. The rows are the panel's data; the conversation-files dialog still reads the
+   * folder itself, so a hand-placed `.mmd` is reachable without a row.
+   */
+  app.get("/api/sessions/:id/diagrams", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const owned = db.getSessionForUser(id, userId);
+    if (!owned) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const diagrams = await listDiagramViews(
+      db,
+      userId,
+      id,
+      sessionDir(owned.workspace.dirPath, id)
+    );
+    return { diagrams };
+  });
+
   /* ----------------------------------- notes ----------------------------------- */
 
   /*
@@ -1838,7 +1863,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
 
     try {
-      return await readFileContent(sessionDir(found.workspace.dirPath, found.session.id), path);
+      const content = await readFileContent(
+        sessionDir(found.workspace.dirPath, found.session.id),
+        path
+      );
+      // A diagram carries the model's summary on its row; the file alone cannot answer it.
+      // Only a session-root read can attach one — a workspace `.mmd` is not the same thing.
+      if (content.kind === "diagram" && typeof path === "string") {
+        const row = db.getDiagramBySessionName(id, path);
+        if (row) content.summary = row.summary;
+      }
+      return content;
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -2556,8 +2591,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       plan: planInstalled ? { db, sessionId: session.id } : undefined,
       // The conversation's own directory — `dirPath`, not `workdirPath`. The workdir is the
       // agent's sandbox and the file browser's root; deriving from it would put a
-      // conversation's files inside the tree the model may already write into.
-      diagram: { sessionDir: sessionDir(workspace.dirPath, session.id) },
+      // conversation's files inside the tree the model may already write into. The row goes
+      // to the same session id as the file, in one callback, so the two cannot diverge on
+      // which conversation they belong to.
+      diagram: {
+        sessionDir: sessionDir(workspace.dirPath, session.id),
+        save: (input) => registerDiagram(db, session.id, input),
+      },
     });
 
     return {

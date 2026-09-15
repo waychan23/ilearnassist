@@ -252,6 +252,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           <div v-else-if="view === 'markdown'" class="markdown" v-html="rendered"></div>
 
           <div v-else-if="view === 'diagram'" class="diagram-host">
+            <p v-if="content?.summary" class="diagram-summary" data-testid="file-preview-diagram-summary">
+              <span class="diagram-summary-label">{{ t("diagram.summary") }}</span>
+              {{ content.summary }}
+            </p>
             <div class="diagram-stage" data-testid="file-preview-diagram">
               <MermaidDiagram :source="content?.text ?? ''" />
             </div>
@@ -272,6 +276,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             v-if="viewingDiagram && content?.text"
             :source="content.text"
             :name="name"
+            :summary="content.summary"
             @close="viewingDiagram = false"
           />
 
@@ -334,6 +339,17 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 }
 .diagram-host .diagram-stage {
   align-self: stretch;
+}
+.diagram-summary {
+  align-self: stretch;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-3);
+  line-height: 1.5;
+}
+.diagram-summary-label {
+  color: var(--text-3);
+  margin-right: var(--space-2);
 }
 /* Pre-formatted, and the one place a horizontal scrollbar is the right answer: wrapping code
    would renumber the lines the reader is looking at. */

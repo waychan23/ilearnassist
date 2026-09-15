@@ -1,65 +1,48 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
 import { openSessionFiles } from "../composables/ui";
 import { relativeTime } from "../composables/relativeTime";
 import { useAppStore } from "../stores/app";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
-import { isDiagramFile, type FileEntry } from "../api/types";
-import { diagramAnchors } from "../utils/diagramAnchors";
+import type { Diagram } from "../api/types";
 import Icon from "../components/Icon.vue";
 
 /**
- * The conversation's diagrams, as a list.
+ * The conversation's diagrams, as rows.
  *
- * A **viewer**, with no tools and no records of its own. What it lists is the conversation's
- * own directory on disk — the `.mmd` files `ila_diagram` writes — read one level through the
- * same route the session file browser uses. There is no diagram table: the file *is* the
- * record, so a `.mmd` somebody dropped in by hand appears here exactly like one the model
- * drew, and a diagram revised in place does not leave a second row behind.
+ * A **viewer** that brings no tools. Its data is the `session_diagrams` rows `ila_diagram`
+ * writes beside each file — name, the model's summary, the call that drew it, and the
+ * thread it belongs to. This is deliberately NOT the folder listing: the conversation-files
+ * dialog is that, and a `.mmd` copied into the folder by hand has no summary and no call, so
+ * it belongs there rather than on this list.
  *
- * Opening a row goes through the ordinary file preview, the same one the file tree and the
- * session file browser open. That is not a shortcut: the preview already renders a diagram,
- * already has the source toggle, already reports its own load failures, and already offers the
- * enlarged viewer. A dialog of this widget's own would be a fourth surface drawing the same
- * picture.
- *
- * The one thing the list adds over the folder is 定位 — the button that scrolls the
- * conversation back to the tool call that drew a diagram. It exists only where there *is* such
- * a call: the map is built from the conversation's own messages, so a file nobody drew here
- * simply has no button rather than one that goes nowhere.
+ * Opening a row goes through the ordinary file preview (the row's `name` is the canonical
+ * file name), the same one the file tree and the session-files dialog open — it already
+ * renders a diagram and offers the enlarged viewer. The one thing this panel adds is
+ * 定位, scrolling the conversation to the call; the row carries that id, so there is no
+ * client-side join.
  */
 
 const { t } = useI18n();
 const store = useAppStore();
 
-const entries = ref<FileEntry[]>([]);
+const rows = ref<Diagram[]>([]);
 const failed = ref(false);
-
-/**
- * Which files this conversation has a tool call for, and the id of the call. See
- * `utils/diagramAnchors.ts` for the join — it is derived from the messages on screen rather
- * than stored, so there is no third copy of a fact to keep in step.
- */
-const anchors = computed(() => diagramAnchors(store.messages));
 
 async function load(): Promise<void> {
   const sessionId = store.activeSessionId;
   if (!sessionId) {
-    entries.value = [];
+    rows.value = [];
     failed.value = false;
     return;
   }
   try {
-    const listing = await api.listSessionFiles(sessionId, "");
-    // A switch mid-request must not list one conversation's diagrams under another's name.
+    const res = await api.listSessionDiagrams(sessionId);
+    // A switch mid-request must not list one conversation's diagrams under another's.
     if (sessionId !== store.activeSessionId) return;
-    entries.value = listing.entries
-      .filter((entry) => entry.type === "file" && isDiagramFile(entry.name))
-      // Newest first: with no search and no sorting control, "what did it just draw" is the
-      // question this list is opened to answer.
-      .sort((a, b) => (b.modifiedAt ?? "").localeCompare(a.modifiedAt ?? ""));
+    rows.value = res.diagrams;
     failed.value = false;
   } catch {
     if (sessionId !== store.activeSessionId) return;
@@ -70,7 +53,7 @@ async function load(): Promise<void> {
 watch(
   () => store.activeSessionId,
   () => {
-    entries.value = [];
+    rows.value = [];
     failed.value = false;
     void load();
   },
@@ -80,8 +63,9 @@ watch(
 let unsubscribe: (() => void) | null = null;
 onMounted(() => {
   unsubscribe = subscribeWidgetEvents((event) => {
-    // The change is on disk, so nothing local knows what the directory now holds: `turn.finished`
-    // catches a diagram a later step drew, and `diagram.changed` the one this step did.
+    // The row is written by the tool mid-turn, so `diagram.changed` refreshes immediately;
+    // `turn.finished` catches a diagram a later step drew. Its thread title arrives with the
+    // best-effort classifier after that, and shows on the next load.
     if (event.type === "diagram.changed" || event.type === "turn.finished") {
       if (event.sessionId === store.activeSessionId) void load();
     }
@@ -113,44 +97,50 @@ function stem(name: string): string {
     </div>
 
     <template v-else>
-      <!-- The folder, not just the diagrams in it. The list above is the filtered view; this is
-           the way to everything else the conversation has written. -->
+      <!-- The whole folder, not just the rows: this is the filtered, model-drawn view. -->
       <div class="diagram-toolbar">
         <button class="btn small" data-testid="diagram-browse" @click="openSessionFiles">
           {{ t("widgets.diagram.browse") }}
         </button>
       </div>
 
-      <div v-if="entries.length === 0" class="widget-empty" data-testid="diagram-empty">
+      <div v-if="rows.length === 0" class="widget-empty" data-testid="diagram-empty">
         {{ t("widgets.diagram.empty") }}
       </div>
 
       <ul v-else class="diagram-list" data-testid="diagram-list">
-        <li v-for="entry in entries" :key="entry.path" class="diagram-row">
-          <!-- Two buttons in a row rather than one with a nested control: a button inside a
-               button is not markup a browser will honour, and the second action is not the
-               same action. -->
+        <li v-for="row in rows" :key="row.id" class="diagram-row">
           <button
             class="diagram-open"
+            :class="{ 'is-missing': row.fileMissing }"
             data-testid="diagram-row"
-            :title="entry.name"
-            @click="store.openFile(entry.path, 'session')"
+            type="button"
+            :disabled="row.fileMissing"
+            :title="row.name"
+            @click="store.openFile(row.name, 'session')"
           >
             <span class="diagram-icon"><Icon name="diagram" /></span>
             <span class="diagram-meta">
-              <span class="diagram-name truncate">{{ stem(entry.name) }}</span>
+              <span class="diagram-name truncate">{{ stem(row.name) }}</span>
+              <span class="diagram-summary">{{ row.summary }}</span>
               <span class="diagram-when">
-                {{ entry.modifiedAt ? relativeTime(entry.modifiedAt) : "" }}
+                <span>{{ relativeTime(row.updatedAt) }}</span>
+                <span v-if="row.threadTitle" class="diagram-thread">
+                  · {{ t("widgets.diagram.inThread", { title: row.threadTitle }) }}
+                </span>
+                <span v-if="row.fileMissing" class="diagram-missing">
+                  · {{ t("widgets.diagram.missing") }}
+                </span>
               </span>
             </span>
           </button>
           <button
-            v-if="anchors.get(entry.name)"
+            v-if="row.toolCallId"
             class="icon-btn diagram-locate"
             data-testid="diagram-locate"
             :title="t('widgets.diagram.locate')"
             :aria-label="t('widgets.diagram.locate')"
-            @click="emitWidgetEvent({ type: 'chat.jump', toolCallId: anchors.get(entry.name)! })"
+            @click="emitWidgetEvent({ type: 'chat.jump', toolCallId: row.toolCallId! })"
           >
             <Icon name="target" />
           </button>
@@ -174,7 +164,7 @@ function stem(name: string): string {
 .diagram-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -190,7 +180,7 @@ function stem(name: string): string {
 .diagram-open {
   display: flex;
   flex: 1;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-3);
   min-width: 0;
   padding: var(--space-2) var(--space-3);
@@ -200,14 +190,21 @@ function stem(name: string): string {
   color: inherit;
   font: inherit;
   text-align: left;
+}
+.diagram-open:disabled {
+  /* The "missing" text carries the disabled state; keep the row readable. */
+  opacity: 1;
+}
+.diagram-open:not(.is-missing) {
   cursor: pointer;
 }
-.diagram-open:hover {
+.diagram-open:not(.is-missing):hover {
   background: var(--panel-2);
 }
 .diagram-icon {
   display: flex;
   flex: none;
+  margin-top: 1px;
   color: var(--accent);
 }
 .diagram-meta {
@@ -219,9 +216,24 @@ function stem(name: string): string {
 .diagram-name {
   color: var(--text);
 }
+.diagram-summary {
+  color: var(--text-2);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .diagram-when {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
   color: var(--text-3);
   font-size: var(--fs-2);
+}
+.diagram-missing {
+  color: var(--danger-text);
 }
 .diagram-locate {
   flex: none;

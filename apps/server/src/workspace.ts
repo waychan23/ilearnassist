@@ -1,6 +1,5 @@
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { slugify } from "@ilearnassist/shared";
 import { workspaceSessionsDir, workspaceWorkdir } from "./paths.js";
 
 /**
@@ -76,18 +75,28 @@ export function resolveInWorkspace(
 }
 
 /**
- * The slug rule, re-exported from `shared`.
+ * A filesystem-safe slug from a name.
  *
- * It moved there when the client needed the same answer: the diagram widget has a tool call
- * carrying the name the model chose and a directory holding what the server made of it, and
- * matching the two is what puts "go to the reply that drew it" on the right row. A second
- * implementation on the web side would be a button on the wrong row, or on none.
+ * Letters and digits survive — Han included, deliberately, so `架构图` stays readable rather
+ * than becoming a row of hyphens — and everything else collapses to `-`. `fallback` is what a
+ * name made entirely of characters that do not survive becomes; it is required because the
+ * caller is the only one who knows what the slug is *for*, and any default would be a quiet
+ * lie about one of them.
  *
- * Re-exported rather than deleted so this module stays the one place the server's callers and
- * its tests reach for a directory name — see `uniqueSlug` and `uniqueUserSlug` below, which
- * are still this module's business because uniqueness is a filesystem and database question.
+ * Server-side: it names directories and the diagram files, and the client no longer derives
+ * either (the diagram row carries the canonical file name), so it does not need to cross the
+ * wire.
  */
-export { slugify };
+export function slugify(name: string, fallback: string): string {
+  const base = name
+    .toLowerCase()
+    .trim()
+    // Keep CJK characters (and common scripts) so non-Latin names stay readable.
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return base || fallback;
+}
 
 /**
  * A slug for a new workspace's directory, unique within its user's workspaces root.

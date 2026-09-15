@@ -32,6 +32,8 @@ const props = defineProps<{
   source: string;
   /** Shown in the header, so the dialog names what it is showing. */
   name?: string;
+  /** The model's one-line description, shown above the drawing. */
+  summary?: string;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
@@ -117,6 +119,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           </button>
         </div>
 
+        <p v-if="props.summary" class="viewer-summary" data-testid="diagram-summary">
+          <span class="viewer-summary-label">{{ t("diagram.summary") }}</span>
+          {{ props.summary }}
+        </p>
+
         <div class="modal-body viewer-body" data-testid="diagram-viewer-body">
           <!-- The scaled box is *inside* the scroll container, so zooming up gives the
                container something wider to scroll and zooming down gives it something narrower
@@ -136,6 +143,18 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 </template>
 
 <style scoped>
+.viewer-summary {
+  margin: 0;
+  padding: 0 var(--space-8) var(--space-4);
+  color: var(--text-2);
+  font-size: var(--fs-3);
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}
+.viewer-summary-label {
+  color: var(--text-3);
+  margin-right: var(--space-2);
+}
 .viewer-body {
   overflow: auto;
   max-height: 70vh;

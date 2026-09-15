@@ -11,21 +11,24 @@ This is the working reference. The rationale for the on-disk layout is in
 
 ```
 packages/shared/src/index.ts     DIAGRAM_TOOL_NAME, DIAGRAM_FILE_EXTENSIONS, isDiagramFile,
-                                 diagramFileName, slugify, FILE_CONTENT_KINDS += "diagram"
-apps/server/src/tools/diagram.ts buildDiagramTool            writes the file
+                                 FILE_CONTENT_KINDS += "diagram", Diagram / GetSessionDiagramsResponse
+apps/server/src/diagrams.ts      diagramFileName, registerDiagram, listDiagramViews
+apps/server/src/tools/diagram.ts buildDiagramTool            writes the file and the row
 apps/server/src/files.ts         classify()                  says a .mmd is a diagram
-apps/server/src/routes.ts        /api/sessions/:id/files     reads the folder back
+apps/server/src/threads.ts       places each diagram in a thread
+apps/server/src/db.ts            session_diagrams             the rows
+apps/server/src/routes.ts        /api/sessions/:id/diagrams   reads them; .../files the folder
 apps/web/src/utils/mermaid.ts    renderMermaid               lazily loads mermaid
 apps/web/src/components/         MermaidDiagram / DiagramCard / DiagramDialog
-apps/web/src/widgets/            DiagramWidget               the panel: a list of the folder
+apps/web/src/widgets/            DiagramWidget               the panel: a list of the rows
 ```
 
-There is **no diagram table**. The `.mmd` file in `sessions/<sessionId>/` is the record; see
-[Why there is no table](#why-there-is-no-table).
+The `.mmd` file holds the bytes; the `session_diagrams` row holds what the file cannot answer.
+See [What is a file and what is a row](#what-is-a-file-and-what-is-a-row).
 
 ## The tool
 
-`ila_diagram`, with `{ name, source }`. It is an **ordinary, allow-listable tool** — not
+`ila_diagram`, with `{ name, source, summary }`. It is an **ordinary, allow-listable tool** — not
 widget-bound, unlike the plan and quiz tools. A bound tool is assembled only when its widget is
 installed, and nothing installs a widget by default (`DEFAULT_WIDGET_IDS` is empty), so binding
 this one would mean the model has no way to draw a diagram in most conversations, which is the
@@ -44,6 +47,14 @@ has to survive a malformed diagram anyway (a model can be wrong in ways no schem
 a second validator would be a second opinion about what mermaid accepts, free to disagree with
 the mermaid that actually draws it. An empty source and one past `MAX_DIAGRAM_CHARS` are refused,
 because those are things the model can fix.
+
+`summary` is a required one- or two-sentence description of what the diagram is *about* (not its
+shape), in the conversation's language, capped at `DIAGRAM_SUMMARY_MAX`. It is the line the panel
+shows under each diagram and the enlarged view shows above the drawing; it is also the material
+the thread classifier is given to place the diagram. The size cap is server-local rather than
+shared: `MAX_DIAGRAM_CHARS` is enforced on both sides, but only the tool bounds the summary. The
+file is written first and the row second, so a refused call — or a failed write — leaves the
+previous revision entirely alone, including its thread placement.
 
 There is no `ila_read_diagram`. Within the conversation the model already has its own earlier
 call in context (a non-suspending tool's arguments are persisted verbatim and replayed), and past
@@ -80,26 +91,50 @@ because the plan widget's snapshot fork writes a session straight to the databas
 near the session route, so "this conversation has no files yet" must be an empty list rather than
 a 404.
 
-## Why there is no table
+## What is a file and what is a row
 
-A `session_diagrams` table would be a second copy of bytes that already have a home, free to
-disagree with the file about its own content. Everything a table would have provided comes from
-somewhere else:
+A diagram is a **file plus a row**, and each holds only what the other cannot answer. The
+argument that used to sit here — "a table would be a second copy of bytes" — is the reason for
+the split rather than against the table: the row deliberately holds none of the source.
 
-| A table would give | Where it comes from instead |
+| the row holds | because the file cannot |
 | --- | --- |
-| the diagram's content | the file |
-| a title | mermaid YAML front-matter, which mermaid draws itself; else the file's name |
-| ordering | `FileEntry.modifiedAt`, already on the wire |
-| a stable id | the file's path |
-| "which reply drew this" | `toolCall.id`, found by scanning the message list (`utils/diagramAnchors.ts`) |
-| delete semantics | the session's own soft delete — the bytes stay, like every other file |
+| `name`, canonical (`auth-flow.mmd`) | it *is* the file's name — the join key to `FileEntry.name`, so the client derives nothing of its own |
+| `summary` | the model's one-line description of the drawing; nothing else records it |
+| `tool_call_id` | "which reply drew this" without scanning the message list |
+| `thread_id` | which 脉络 node the classifier put it in — not derivable from the bytes at all |
 
-The join between a call and its file is the one piece that needs care: the call records the name
-the *model* chose (`"Auth Flow"`), the folder holds what the server made of it (`auth-flow.mmd`).
-`diagramFileName` lives in `packages/shared` for exactly that reason — a second slug rule on the
-web side would put the "go to the reply" button on the wrong row, or on none, and nothing would
-report it.
+What is **not** in the row is as deliberate. No `source` (the file is the source; a second copy
+is free to disagree), no `source_path` (a pure function of the session and the name), no
+`message_id` (the assistant message does not exist when the tool runs), and no `deleted_at` — the
+row is derived data like `session_threads`, nothing in the product deletes a diagram, and a
+soft-deleted session keeps its bytes anyway.
+
+Two things can drift between the halves, and both are *reported* rather than prevented:
+
+- a `.mmd` nobody drew has a file but no row. The conversation-files dialog shows it; the diagram
+  panel (which lists rows) does not.
+- a row whose file is gone reads `fileMissing` in `GET /diagrams`, the same way a note's read
+  reports `messageMissing`.
+
+The one drift still unrepresentable is two copies of the bytes disagreeing with each other.
+
+`diagramFileName` and `slugify` are server-side (`apps/server/src/diagrams.ts` /
+`workspace.ts`). They used to be shared so the client could derive a file name to join a call to
+it; the row now carries the canonical name, so the client does no deriving and there is nothing
+to keep in step.
+
+### The row follows the thread classification
+
+`thread_id` is not set when the tool writes the row — a thread is assigned to a *turn* only
+after the turn ends, by the best-effort classifier in `apps/server/src/threads.ts`. The
+classifier is given the turn's diagrams (name + summary, never the raw source) under the message
+that drew them, answers one placement per diagram, and writes it inside the same transaction as
+the turn's own thread. Its answer is an **override**: `"continue"` or an existing `eN`, never
+`"new"` (a diagram has no messages of its own, so a thread it started would hold nothing). A
+missing or unusable answer drops just that diagram, which then inherits its turn's thread — so a
+diagram's `thread_id` is null **iff** the turn owning its latest call has no thread yet. A revise
+clears it (the new shape may be a new topic) and the next sync judges it again.
 
 ## The renderer
 
@@ -160,20 +195,25 @@ linear in the input, and there is no diagram worth a frozen tab.
 This is the same decision as KaTeX's `throwOnError: false`, one renderer over: a message that
 half-renders is worse than one that renders with a visible complaint in it.
 
-## The two viewer surfaces
+## The three viewer surfaces
 
 - **The card**, inline under the tool call: the drawing in a bounded window, a click to open the
   viewer, and a disclosure for the source. `DiagramCard.vue` — and note it is dispatched in
   `ToolCallCard.vue` by its own predicate, **not** through `INTERACTIVE_TOOL_NAMES`, which means
   "suspends the turn": the server routes submitted answers by that list and `MessageItem` groups
-  calls by it to put questions below the reply.
-- **The widget**, in the right panel: a list of the conversation's diagrams with a jump to the
-  reply that drew each one. `DiagramWidget.vue`, a viewer with no tools — see
-  [widgets.md](widgets.md#a-viewer-widget-with-no-tools-the-diagram-widget).
+  calls by it to put questions below the reply. Its summary comes straight from the persisted
+  call arguments, so a reload needs no request.
+- **The widget**, in the right panel: the conversation's **rows** — name, the model's summary,
+  the thread each diagram belongs to, and a jump to the reply that drew it. `DiagramWidget.vue`,
+  a viewer with no tools — see [widgets.md](widgets.md#a-viewer-widget-with-no-tools-the-diagram-widget).
+- **The session-files dialog** lists the whole folder, including a `.mmd` nobody drew here.
 
-One viewer serves both, and the file preview as well: `DiagramDialog.vue` owns the zoom. Zoom is
-the CSS `zoom` property rather than `transform: scale`, because a transform does not change layout
-and a scroll container would not grow with the picture.
+One viewer serves all three, and the file preview as well: `DiagramDialog.vue` owns the zoom and
+shows the summary above the drawing. Zoom is the CSS `zoom` property rather than
+`transform: scale`, because a transform does not change layout and a scroll container would not
+grow with the picture. The file preview's diagram branch gets its summary from the server: the
+session-root `…/files/content` read attaches the row's summary by canonical file name — a
+workspace-root `.mmd` has none.
 
 ## The session file browser
 

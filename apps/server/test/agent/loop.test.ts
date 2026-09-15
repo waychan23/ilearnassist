@@ -403,13 +403,21 @@ describe("runAgentStream — history handling", () => {
      * this not being automatic: a redaction added here later would silently take away the
      * model's ability to correct its own diagram, and nothing else would fail.
      */
-    const diagram = buildDiagramTool({ sessionDir: join(scratch, "ws", "sessions", "s1") });
+    const diagram = buildDiagramTool({
+      sessionDir: join(scratch, "ws", "sessions", "s1"),
+      save: () => undefined,
+    });
     const source = "flowchart TD\n  A --> B";
+    const summary = "A flow from A to B";
 
     const first = await run({
       tools: [diagram],
       turns: [
-        { toolCalls: [{ id: "call_1", name: "ila_diagram", args: { name: "flow", source } }] },
+        {
+          toolCalls: [
+            { id: "call_1", name: "ila_diagram", args: { name: "flow", source, summary } },
+          ],
+        },
         { content: "Drawn." },
       ],
     });

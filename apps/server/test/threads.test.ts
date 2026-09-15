@@ -12,6 +12,7 @@ import { forceMakePlan, readCurrentPlan } from "../src/plans.js";
 import {
   buildThreadPrompt,
   buildThreadViews,
+  parseDiagramDecisions,
   parseThreadDecisions,
   progressNodeForTurn,
   segmentTurns,
@@ -113,6 +114,45 @@ describe("parseThreadDecisions", () => {
   });
 });
 
+describe("parseDiagramDecisions", () => {
+  const refs = new Set(["d1", "d2"]);
+
+  it("maps continue and existing refs", () => {
+    const out = parseDiagramDecisions(
+      '{"decisions":[],"diagrams":[{"ref":"d1","thread":"continue"},{"ref":"d2","thread":"e3"}]}',
+      refs
+    );
+    expect(out.get("d1")).toEqual({ kind: "continue" });
+    expect(out.get("d2")).toEqual({ kind: "existing", ref: "e3" });
+  });
+
+  it("drops an unknown, duplicated or 'new' ref entry by entry", () => {
+    const out = parseDiagramDecisions(
+      '{"decisions":[],"diagrams":[' +
+        '{"ref":"d9","thread":"continue"},' +
+        '{"ref":"d1","thread":"continue"},' +
+        '{"ref":"d1","thread":"e1"},' +
+        '{"ref":"d2","thread":"new"}]}',
+      refs
+    );
+    // d9 unknown dropped; the second d1 is a duplicate dropped; d2's "new" dropped → empty.
+    expect([...out.keys()]).toEqual(["d1"]);
+    expect(out.get("d1")).toEqual({ kind: "continue" });
+  });
+
+  it("is empty when the field, the array, or the whole JSON is missing", () => {
+    expect(parseDiagramDecisions('{"decisions":[]}', refs).size).toBe(0);
+    expect(parseDiagramDecisions('{"decisions":[],"diagrams":"x"}', refs).size).toBe(0);
+    expect(parseDiagramDecisions("not json", refs).size).toBe(0);
+  });
+
+  it("does not poison the turn decisions parse", () => {
+    // The strict parser still fails on a bad turn answer even though the diagram half is
+    // independently usable — the two never share a failure mode.
+    expect(parseThreadDecisions("not json", 1)).toBeNull();
+  });
+});
+
 describe("progressNodeForTurn", () => {
   function call(input: unknown): ToolCall {
     return { id: newId(), name: PLAN_PROGRESS_TOOL_NAME, input: JSON.stringify(input) };
@@ -174,6 +214,51 @@ describe("buildThreadPrompt", () => {
     expect(prompt).toContain("什么是可数集？");
     expect(prompt).toContain("<new_turns>");
   });
+
+  it("renders a diagram under the message whose call drew it", () => {
+    const prompt = buildThreadPrompt({
+      plan: undefined,
+      existing: [],
+      recent: [],
+      currentThreadRef: undefined,
+      turns: [
+        {
+          messages: [
+            { role: "user", content: "画个图" },
+            {
+              role: "assistant",
+              content: "好",
+              toolCalls: [{ id: "c1", name: "ila_diagram", input: "{}" }],
+            },
+          ] as Message[],
+        },
+      ],
+      diagrams: new Map([
+        ["c1", { ref: "d1", name: "flow.mmd", summary: "登录流程图" }],
+      ]),
+    });
+    expect(prompt).toContain('<diagram ref="d1" name="flow.mmd">');
+    expect(prompt).toContain("登录流程图");
+  });
+
+  it("is byte-identical when no diagram map is given", () => {
+    const base = {
+      plan: undefined,
+      existing: [],
+      recent: [],
+      currentThreadRef: undefined,
+      turns: [
+        {
+          messages: [
+            { role: "user", content: "x" },
+            { role: "assistant", content: "y", toolCalls: [{ id: "c1", name: "ila_diagram", input: "{}" }] },
+          ] as Message[],
+        },
+      ],
+    };
+    expect(buildThreadPrompt(base)).toBe(buildThreadPrompt({ ...base }));
+    expect(buildThreadPrompt(base)).not.toContain("<diagram");
+  });
 });
 
 describe("syncThreads", () => {
@@ -187,7 +272,7 @@ describe("syncThreads", () => {
       return "";
     });
     expect(called).toBe(0);
-    expect(result).toEqual({ turns: 0, messages: 0, unassigned: 0 });
+    expect(result).toEqual({ turns: 0, messages: 0, diagrams: 0, unassigned: 0 });
   });
 
   it("classifies turns into threads and assigns both messages of each", async () => {
@@ -235,6 +320,116 @@ describe("syncThreads", () => {
     const view = buildThreadViews(db, OWNER, SESSION);
     expect(view.threads).toHaveLength(1);
     expect(view.threads[0]!.messages).toHaveLength(4);
+  });
+
+  function seedDiagram(toolCallId: string, name = "flow.mmd", summary = "登录流程图"): void {
+    db.upsertDiagram({ id: newId(), sessionId: SESSION, name, summary, toolCallId });
+  }
+
+  /** A pending user/assistant exchange whose assistant drew one diagram. */
+  function diagramTurn(callId: string): { user: Message; assistant: Message } {
+    const user = userMessage("画个登录流程图");
+    const assistant = assistantMessage("画好了。", [
+      { id: callId, name: "ila_diagram", input: JSON.stringify({ name: "flow", summary: "登录流程图" }) },
+    ]);
+    seedDiagram(callId);
+    return { user, assistant };
+  }
+
+  it("rides its turn's thread when the classifier answers continue", async () => {
+    const callId = newId();
+    diagramTurn(callId);
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "登录" }],
+        diagrams: [{ ref: "d1", thread: "continue" }],
+      })
+    );
+
+    const diagram = db.listDiagramsBySession(SESSION)[0]!;
+    expect(diagram.threadId).not.toBeNull();
+    expect(diagram.threadTitle).toBe("登录");
+  });
+
+  it("can name an existing thread different from its turn's", async () => {
+    // Seed an already-classified first thread so e1 resolves and there is a tail.
+    userMessage("先讲讲考试");
+    assistantMessage("好");
+    await syncThreads(db, SESSION, async () => newOther("考试安排"));
+
+    const callId = newId();
+    diagramTurn(callId);
+    // The new turn starts a NEW topic, but the diagram returns to the existing one.
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "部署拓扑" }],
+        diagrams: [{ ref: "d1", thread: "e1" }],
+      })
+    );
+
+    const byTitle = (title: string) =>
+      db.listThreadsBySession(SESSION).find((t) => t.title === title)!;
+    const diagram = db.listDiagramsBySession(SESSION)[0]!;
+    expect(diagram.threadId).toBe(byTitle("考试安排").id);
+    expect(diagram.threadId).not.toBe(byTitle("部署拓扑").id);
+  });
+
+  it("collapses onto its turn's thread when it gives no diagram decision", async () => {
+    const callId = newId();
+    diagramTurn(callId);
+
+    await syncThreads(db, SESSION, async () =>
+      // Turn decided, diagrams array omitted entirely.
+      JSON.stringify({ decisions: [{ thread: "new", branch: "other", title: "登录" }] })
+    );
+
+    expect(db.listDiagramsBySession(SESSION)[0]?.threadTitle).toBe("登录");
+  });
+
+  it("a malformed diagram decision never blocks the turn, and the diagram collapses", async () => {
+    const callId = newId();
+    diagramTurn(callId);
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "登录" }],
+        diagrams: [{ ref: "d9", thread: "e7" }, { ref: "d1", thread: "new" }],
+      })
+    );
+
+    const view = buildThreadViews(db, OWNER, SESSION);
+    expect(view.unassigned).toBe(0);
+    expect(view.threads.map((t) => t.title)).toEqual(["登录"]);
+    expect(db.listDiagramsBySession(SESSION)[0]?.threadTitle).toBe("登录");
+  });
+
+  it("places a forced turn's diagram with no model call at all", async () => {
+    forceMakePlan(db, SESSION, { tree: [{ title: "第一章", children: [{ title: "可数集" }] }] });
+    const plan = readCurrentPlan(db, SESSION)!;
+    const leaf = plan.tree[0]!.children![0]!;
+
+    const callId = newId();
+    userMessage("开始学 1.1 并画图");
+    assistantMessage("", [
+      {
+        id: newId(),
+        name: PLAN_PROGRESS_TOOL_NAME,
+        input: JSON.stringify({ nodes: [{ id: leaf.id, status: "in_progress" }] }),
+      },
+    ]);
+    assistantMessage("图在这。", [
+      { id: callId, name: "ila_diagram", input: JSON.stringify({ name: "v" }) },
+    ]);
+    seedDiagram(callId, "venn.mmd", "韦恩图");
+
+    // A classifier invoked at all is a bug: the forced path makes no model call.
+    await syncThreads(db, SESSION, async () => {
+      throw new Error("the model must not be called for a forced turn");
+    });
+
+    const diagram = db.listDiagramsBySession(SESSION)[0]!;
+    expect(diagram.threadTitle).toBe("可数集");
   });
 
   it("forces a turn that moved the plan onto that node, whatever the model said", async () => {
