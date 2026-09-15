@@ -310,7 +310,9 @@ function onToolbarPick(intent: "annotation" | "note"): void {
   const current = selection.value;
   const sessionId = store.activeSessionId;
   if (!current || !sessionId) return;
-  pendingAnchor.value = { x: current.x, y: current.top };
+  // The window opens off the toolbar's own corner — the selection's bottom-right vertex, which is
+  // where the reader's eye already is — rather than off the middle of the selection.
+  pendingAnchor.value = { x: current.place.right, y: current.place.bottom };
   captureMessageNote({
     sessionId,
     messageId: current.messageId,
@@ -589,11 +591,7 @@ onBeforeUnmount(() => {
       whatever opened it. Inside `.messages-wrap` they would be clipped by the scroller and
       carried away by its scroll.
     -->
-    <MessageSelectionToolbar
-      v-if="selection"
-      :anchor="{ x: selection.x, top: selection.top }"
-      @pick="onToolbarPick"
-    />
+    <MessageSelectionToolbar v-if="selection" :anchor="selection.place" @pick="onToolbarPick" />
     <NoteEditor
       v-if="editorRequest"
       :draft="editorRequest.draft"

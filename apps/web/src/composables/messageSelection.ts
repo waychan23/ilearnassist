@@ -1,6 +1,7 @@
 import { onBeforeUnmount, ref, watch, type Ref } from "vue";
 import type { NoteAnchor } from "@ilearnassist/shared";
 import { anchorFromRange, NOTE_ROOT_ATTR } from "../utils/noteAnchor";
+import type { NoteToolbarAnchor } from "../utils/noteToolbar";
 
 /**
  * Noticing that the reader has selected part of a message.
@@ -22,15 +23,26 @@ import { anchorFromRange, NOTE_ROOT_ATTR } from "../utils/noteAnchor";
 export interface MessageSelection {
   messageId: string;
   anchor: NoteAnchor;
-  /** Where to float the toolbar: the selection's midpoint, and the top of its first line. */
-  x: number;
-  top: number;
+  /** Where to float the toolbar — consumed as-is by `noteToolbarPosition`. */
+  place: NoteToolbarAnchor;
 }
 
 /** The message's content element, or null when the node is not inside one. */
 function noteRootOf(node: Node | null): HTMLElement | null {
   const element = node?.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element | null);
   return element?.closest<HTMLElement>(`[${NOTE_ROOT_ATTR}]`) ?? null;
+}
+
+/**
+ * The message list's right edge, less its scrollbar.
+ *
+ * `clientWidth` rather than the bounding rect's `right`: the scroller's border box includes the
+ * scrollbar, so a card clamped to it would be drawn over the very strip it was dodging. The rect's
+ * `left` plus the client width is the padding box's right edge, which is the text's own edge.
+ */
+function contentRight(element: HTMLElement | null): number {
+  if (!element) return window.innerWidth;
+  return element.getBoundingClientRect().left + element.clientWidth;
 }
 
 /**
@@ -81,8 +93,15 @@ export function useMessageSelection(
     selection.value = {
       messageId,
       anchor,
-      x: rect.left + rect.width / 2,
-      top: rect.top,
+      place: {
+        // The vertex rather than the midpoint of the first line: the card hangs off the end of the
+        // selection instead of standing in the band above it. `top` travels along for the case the
+        // window ends before the card does.
+        right: rect.right,
+        bottom: rect.bottom,
+        top: rect.top,
+        containerRight: contentRight(container.value),
+      },
     };
   }
 
