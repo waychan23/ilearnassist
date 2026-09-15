@@ -892,6 +892,102 @@ export interface GetSessionNotesResponse {
   notes: Note[];
 }
 
+/* ----------------------------------- insights ----------------------------------- */
+
+/**
+ * What an observation *is*, which is the question the panel answers differently for each.
+ *
+ * Typed rather than free text because the types are the point: a difficulty is something to
+ * re-teach, a doubt is something to verify, a gap is something to fill *before* going on, and a
+ * habit is a remark about the learner rather than about the material. One list of prose would
+ * lose exactly that, and "different follow-up per type" is what the feature is for.
+ *
+ * The first three are separated on purpose and it is worth keeping them apart:
+ * `difficulty` is a property of the **material** (this topic is hard), `confusion` is a property
+ * of the **learner's state** (they did not get it), and `doubt` is a claim being **pushed back
+ * on** — which wants verification, not a re-explanation.
+ */
+export const INSIGHT_TYPES = [
+  "difficulty",
+  "confusion",
+  "doubt",
+  "strength",
+  "background",
+  "reading",
+  "advice",
+  "habit",
+] as const;
+
+export type InsightType = (typeof INSIGHT_TYPES)[number];
+
+/**
+ * Whether a value is one of the types. Exported because the two sides ask it about different
+ * things: the server about a model's answer, the client about a JSON body it did not compose.
+ */
+export function isInsightType(value: unknown): value is InsightType {
+  return typeof value === "string" && (INSIGHT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Where an unrecognised type lands, and why it lands somewhere rather than being dropped.
+ *
+ * A model invents a ninth type sooner or later. Dropping the item discards work the user cannot
+ * see — and the whole purpose of the panel is that the model's observations become visible —
+ * so it is filed as `advice`, which is the vaguest of the eight and the only one that is never
+ * *wrong* about an item: advice about anything is still advice.
+ */
+export const INSIGHT_FALLBACK_TYPE: InsightType = "advice";
+
+/** A title is a line in a list; a body is a short paragraph. */
+export const INSIGHT_TITLE_MAX = 120;
+export const INSIGHT_BODY_MAX = 800;
+/** Per pass. Past this the answer is truncated rather than refused. */
+export const INSIGHT_MAX_ITEMS = 40;
+/**
+ * Adopted items shown back to the model so it does not re-propose them. Above
+ * `INSIGHT_MAX_ITEMS` because fewer passes would otherwise make the "do not repeat these"
+ * instruction start lying about what it was given.
+ */
+export const INSIGHT_MAX_KEPT_IN_PROMPT = 60;
+
+/**
+ * One observation, as the panel shows it.
+ *
+ * `adopted` is the whole of the user's side of the entity: it is what survives the next pass.
+ * Everything else is the model's, which is why the row is derived data and carries no
+ * `deleted_at` — see the `insight_items` comment in `schema.ts`.
+ */
+export interface Insight {
+  id: string;
+  type: InsightType;
+  title: string;
+  body: string;
+  adopted: boolean;
+  createdAt: string;
+}
+
+/** `GET /api/sessions/:id/insights`. Adopted first, then the current pass, in the model's order. */
+export interface GetSessionInsightsResponse {
+  items: Insight[];
+}
+
+/**
+ * `POST /api/sessions/:id/insights/generate`.
+ *
+ * `status` is the *pass's* outcome, not the list's state, and the distinction is the one thing
+ * the panel must not conflate: `"failed"` means the model produced nothing usable and the rows
+ * were left exactly as they were, which is a different claim from "it looked and found nothing"
+ * (an `ok` answer with zero items).
+ */
+export interface GenerateSessionInsightsResponse extends GetSessionInsightsResponse {
+  status: "ok" | "failed";
+}
+
+/** Body of the adopt/release PATCH. A toggle rather than two routes, like `disabled` on a user. */
+export interface UpdateInsightInput {
+  adopted: boolean;
+}
+
 /* ------------------------------------ stats ------------------------------------ */
 
 /**
@@ -1159,6 +1255,13 @@ export const API_ERROR_CODES = [
    * hand-written request must meet the same refusal as a click.
    */
   "SUPERADMIN_NOT_GRANTABLE",
+  /*
+   * One code for four cases: an insight id that is unknown, another account's, another
+   * conversation's, or already gone with the pass that replaced it. They answer the same way on
+   * purpose, like `NOTE_NOT_FOUND` and `MESSAGE_NOT_FOUND` — an id that can be probed by the
+   * shape of the refusal is an id that can be probed.
+   */
+  "INSIGHT_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

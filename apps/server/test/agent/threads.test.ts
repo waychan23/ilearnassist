@@ -3,7 +3,7 @@ import type { ModelCapability, ProviderModel } from "@ilearnassist/shared";
 import { makeThreadClassifier } from "../../src/agent/threads.js";
 import { THREAD_SYSTEM_PROMPT } from "../../src/threads.js";
 import type { ProviderRecord } from "../../src/db.js";
-import type { ThreadReasoningSetting } from "../../src/config.js";
+import type { OutOfBandReasoningSetting } from "../../src/config.js";
 import { startFakeLlm, type FakeLlm } from "../helpers/fakeLlm.js";
 
 /**
@@ -53,7 +53,7 @@ describe("makeThreadClassifier", () => {
   async function classify(
     provider: ProviderRecord,
     modelId = "fake-reasoner",
-    reasoning?: ThreadReasoningSetting
+    reasoning?: OutOfBandReasoningSetting
   ): Promise<void> {
     await makeThreadClassifier({ provider, modelId, reasoning })(THREAD_SYSTEM_PROMPT, "1. user: hi");
   }

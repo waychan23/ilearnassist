@@ -6,7 +6,9 @@ import {
   PROJECT_PATHS,
   THREAD_REASONING_ENV,
   deepMerge,
-  parseThreadReasoning,
+  insightReasoningSetting,
+  INSIGHT_REASONING_ENV,
+  parseReasoning,
   resolveDataRoot,
   resolveEnv,
   threadReasoningSetting,
@@ -285,13 +287,16 @@ describe("resolveDataRoot", () => {
   });
 });
 
-describe("threadReasoningSetting", () => {
+describe("the out-of-band reasoning switches", () => {
+  const NAME = THREAD_REASONING_ENV;
+
   it("defaults to auto when the variable is absent or blank", () => {
-    expect(parseThreadReasoning(undefined)).toBe("auto");
-    expect(parseThreadReasoning(null)).toBe("auto");
-    expect(parseThreadReasoning("")).toBe("auto");
-    expect(parseThreadReasoning("   ")).toBe("auto");
+    expect(parseReasoning(undefined, NAME)).toBe("auto");
+    expect(parseReasoning(null, NAME)).toBe("auto");
+    expect(parseReasoning("", NAME)).toBe("auto");
+    expect(parseReasoning("   ", NAME)).toBe("auto");
     expect(threadReasoningSetting({})).toBe("auto");
+    expect(insightReasoningSetting({})).toBe("auto");
   });
 
   it.each([
@@ -308,23 +313,39 @@ describe("threadReasoningSetting", () => {
     ["no", "off"],
     ["auto", "auto"],
   ])("parses %j as %s", (raw, expected) => {
-    expect(parseThreadReasoning(raw)).toBe(expected);
+    expect(parseReasoning(raw, NAME)).toBe(expected);
   });
 
   it("throws on an unrecognised value, naming the variable and the accepted values", () => {
     // A typo silently falling back to auto would run an A/B experiment whose knob did not
     // move; the boot-time error is the whole point.
-    expect(() => parseThreadReasoning("oops")).toThrow(
-      new RegExp(`${THREAD_REASONING_ENV}.*auto, on, off`)
+    expect(() => parseReasoning("oops", NAME)).toThrow(new RegExp(`${NAME}.*auto, on, off`));
+  });
+
+  it("names the switch that was actually set, not whichever one is first", () => {
+    // Two switches now share the parser, and the error is the only thing that tells an operator
+    // which one they mistyped. A shared message naming the classifier's variable would send
+    // them to the wrong line of their `.env`.
+    expect(() => insightReasoningSetting({ [INSIGHT_REASONING_ENV]: "oops" })).toThrow(
+      new RegExp(`${INSIGHT_REASONING_ENV}.*auto, on, off`)
     );
   });
 
   it("reads the real environment by default", () => {
     vi.stubEnv(THREAD_REASONING_ENV, "off");
+    vi.stubEnv(INSIGHT_REASONING_ENV, "on");
     try {
       expect(threadReasoningSetting()).toBe("off");
+      expect(insightReasoningSetting()).toBe("on");
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("keeps the two switches independent", () => {
+    // The whole reason for a second variable: tuning the classifier must not silently re-tune
+    // the reflection pass, and vice versa.
+    expect(threadReasoningSetting({ [INSIGHT_REASONING_ENV]: "off" })).toBe("auto");
+    expect(insightReasoningSetting({ [THREAD_REASONING_ENV]: "off" })).toBe("auto");
   });
 });

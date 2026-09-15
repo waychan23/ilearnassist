@@ -61,7 +61,7 @@ import {
   SUPERADMIN_ROLE,
   USERNAME_MAX_LENGTH,
 } from "@ilearnassist/shared";
-import { threadReasoningSetting, type AppConfig } from "./config.js";
+import { insightReasoningSetting, threadReasoningSetting, type AppConfig } from "./config.js";
 import {
   DEFAULT_SESSION_TITLE,
   newId,
@@ -87,6 +87,8 @@ import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
+import { makeInsightGenerator } from "./agent/insights.js";
+import { buildInsightViews, generateInsights } from "./insights.js";
 import { createNote, deleteNote, updateNote } from "./notes.js";
 import { listDiagramViews, registerDiagram } from "./diagrams.js";
 import {
@@ -248,6 +250,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   // Read once at registration — the classifier call cannot differ between two turns of one
   // launch, and an unrecognised value names itself at boot instead of silently doing nothing.
   const threadReasoning = threadReasoningSetting();
+  // The insight pass's own switch, read at the same moment for the same reason. Two variables
+  // rather than one because each changes its own call alone, by design.
+  const insightReasoning = insightReasoningSetting();
 
   /**
    * The turn currently streaming for each session, so another request can stop it.
@@ -1795,6 +1800,88 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const result = deleteNote(db, userId, id, noteId);
     if (!result.ok) {
       return reply.code(result.status).send(apiError(result.code, "note not found"));
+    }
+    return { ok: true };
+  });
+
+  /* ---------------------------------- insights ---------------------------------- */
+
+  /*
+   * The insight panel's records, object-not-widget like the notes routes above: an observation
+   * outlives the panel that shows it, so uninstalling the widget must not hide what was already
+   * generated. Every route resolves the session through `getSessionForUser` first, which is what
+   * turns another account's id — and an id that never existed — into the same 404.
+   */
+  app.get("/api/sessions/:id/insights", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return { items: buildInsightViews(db, userId, id) };
+  });
+
+  /**
+   * Run one pass and answer with the new list.
+   *
+   * A **plain POST that returns when the pass completes**, not a stream, and the three conditions
+   * that make that honest are: the panel disables its button and shows a generating state while
+   * it waits, so the 30–60s is a state on screen rather than a frozen control; the reply is
+   * always the whole list, because the write is one transaction at the end; and nothing is
+   * `hijack()`ed, since the SSE machinery belongs to turns. `/threads/sync` is the sibling
+   * precedent. The alternative — a background pass the panel polls for — would need a stored
+   * "running" state and a second way for the panel to learn it finished, invented to avoid an
+   * await the user is already watching.
+   *
+   * `status: "failed"` is a 200 with the list unchanged, not an error: a provider that returned
+   * nothing usable is a fact about the pass, and the panel says so in its own words above the
+   * observations it still has.
+   */
+  app.post("/api/sessions/:id/insights/generate", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const owned = db.getSessionForUser(id, userId);
+    if (!owned) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const provider = db.getProvider(resolveProviderId(undefined, owned.session.settings));
+    const modelId = resolveModelId(provider, undefined, owned.session.settings);
+    return generateInsights(
+      db,
+      userId,
+      id,
+      makeInsightGenerator({ provider, modelId, reasoning: insightReasoning }),
+      modelId
+    );
+  });
+
+  app.patch("/api/sessions/:id/insights/:insightId", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, insightId } = request.params as { id: string; insightId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    // Not coerced: `"false"` is truthy, and a boolean field read as its string form is how a
+    // toggle ends up meaning the opposite of what was asked for.
+    const body = request.body as { adopted?: unknown } | undefined;
+    if (typeof body?.adopted !== "boolean") {
+      return reply.code(400).send(apiError("INVALID_FIELD", "adopted must be a boolean"));
+    }
+    const item = db.setInsightAdoptedForUser(userId, id, insightId, body.adopted);
+    if (!item) {
+      return reply.code(404).send(apiError("INSIGHT_NOT_FOUND", "insight not found"));
+    }
+    return { item };
+  });
+
+  app.delete("/api/sessions/:id/insights/:insightId", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, insightId } = request.params as { id: string; insightId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    if (!db.deleteInsightForUser(userId, id, insightId)) {
+      return reply.code(404).send(apiError("INSIGHT_NOT_FOUND", "insight not found"));
     }
     return { ok: true };
   });

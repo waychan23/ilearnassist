@@ -600,6 +600,51 @@ const DDL = `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_diagrams_session_name
     ON session_diagrams(session_id, name);
   CREATE INDEX IF NOT EXISTS idx_diagrams_call ON session_diagrams(tool_call_id);
+
+  -- The insight panel's observations: typed things a pass over the conversation noticed.
+  --
+  -- Derived data, and the FIRST derived table here with a delete control — which is why the
+  -- absence of deleted_at is argued rather than assumed. The line this file draws is
+  -- quiz_questions / session_threads / session_diagrams on one side, notes on the other, and
+  -- the test is whether a rerun can reproduce the row: a note cannot be recovered from the
+  -- conversation because it is the learner's own writing, and an insight can, because the same
+  -- kinds are regenerated from the same material. So it belongs on the derived side, and the
+  -- "delete" is not an application deletion at all — "drop this observation" is the same
+  -- statement the next pass's wipe makes, one item at a time. One hard DELETE shape, reached
+  -- from two places:
+  --
+  --   DELETE ... WHERE session_id = ? AND id = ?        -- the user dropping one
+  --   DELETE ... WHERE session_id = ? AND adopted = 0   -- a pass replacing the last one
+  --
+  -- A deleted_at column would be worse than useless here, not merely unnecessary: the wipe
+  -- hard-deletes unadopted rows INCLUDING soft-deleted ones, so the column would be written by
+  -- one path and swept by another. A filter that is not the read rule is exactly what makes a
+  -- soft-delete claim false. The consequence is stated out loud in docs: a deleted item can
+  -- come back on the next pass. Delete is not suppression; suppression would be a new column
+  -- and a new rule.
+  --
+  -- ordinal is the model's position within its own answer, so ordering never depends on two
+  -- created_at strings comparing equal — the whole pass is written in one transaction and
+  -- therefore shares a timestamp to the millisecond. adopted is 0/1 like
+  -- widget_instances.enabled, and it is the ONLY thing that survives a rerun.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS insight_items (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    adopted INTEGER NOT NULL DEFAULT 0,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  -- The read path and the wipe in one index: the list is by session, and the wipe is
+  -- session + adopted. Ordering is the read's own (adopted DESC, created_at, ordinal), which the
+  -- list is small enough for — one conversation's observations, tens of rows at most.
+  CREATE INDEX IF NOT EXISTS idx_insights_session
+    ON insight_items(session_id, adopted, created_at);
 `;
 
 /**

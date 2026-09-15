@@ -265,6 +265,39 @@ their labels are translated and the plan branch nests off the live plan tree on 
 widgets only in the install UI (`WIDGET_GROUPS`, client-side): one master button loops the
 ordinary per-widget writes; there is deliberately no group row or route.
 
+### The insight pass (`insights.ts`, `agent/insights.ts`)
+
+The reflection behind the insight panel: one out-of-band model call over the conversation's own
+record — the plan and its progress, the quiz questions with their verdicts, the topic threads,
+the learner's notes, and the diagrams it drew — answering with typed observations
+(`INSIGHT_TYPES`) about the learner rather than about the material.
+
+It is **not a tool**, and that is the design rather than an omission. `ila_query` is how the
+*agent* reads this material during a turn; a pass costs a full model call over the whole
+conversation, so it is a user pressing a button. A bound tool would also exist only while the
+widget was installed, which is the `ila_diagram` argument read the other way round.
+
+Three properties are worth stating because each is load-bearing:
+
+- **The wipe happens only after a usable parse.** `replaceUnadoptedInsights` is called at the
+  *end* of `generateInsights` and never at the start, so a provider outage, a timeout or an
+  unreadable answer leaves every row exactly as it was. The alternative — clearing first and
+  filling in after — is a user pressing a button, getting nothing, and losing the list they had.
+- **A failed pass is not an empty one.** The parser returns `null` for "nothing usable" and `[]`
+  for "the model genuinely said nothing", and the route reports them as `failed` and `ok`. The
+  panel says different things for each, because "it looked and found nothing" is a claim about
+  the conversation and a failure is a claim about the call.
+- **`adopted` is the only thing that survives a rerun.** `insight_items` therefore has no
+  `deleted_at` — derived data, like `session_threads`, and the one hard `DELETE` shape is
+  reached from both the user's delete and the pass's wipe. The consequence is stated rather than
+  hidden: a deleted observation can come back on the next pass. Delete is not suppression.
+
+The prompt is bounded per source (see the caps in `insights.ts`) for the `threads.ts` reason: a
+reasoning model given too much input thinks for a hundred seconds and returns nothing. Adopted
+items from earlier passes are sent back under an instruction not to repeat them, which is the
+whole mechanism of a second pass being useful rather than a near-duplicate of the first. Each
+pass writes one block to `<dataRoot>/logs/insights.log`.
+
 ### Diagrams (`diagrams.ts`, `tools/diagram.ts`, `threads.ts`)
 
 A diagram is a `.mmd` file in `sessions/<id>/` **plus** a `session_diagrams` row; each half holds

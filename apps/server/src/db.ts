@@ -9,6 +9,8 @@ import type {
   CopilotVisibility,
   DocumentParsePolicy,
   DocumentParserKind,
+  Insight,
+  InsightType,
   Message,
   MessageUsage,
   ModelCapability,
@@ -281,6 +283,44 @@ interface DiagramRow {
   updated_at: string;
   thread_title?: string | null;
 }
+
+interface InsightItemRow {
+  id: string;
+  session_id: string;
+  type: string;
+  title: string;
+  body: string;
+  adopted: number;
+  ordinal: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One insight to write, from a pass.
+ *
+ * `ordinal` rather than a timestamp for ordering: a pass writes all its rows in one
+ * transaction, so they share a `created_at` to the millisecond and the model's own order would
+ * be lost without it.
+ */
+export interface InsightInsert {
+  id: string;
+  sessionId: string;
+  type: InsightType;
+  title: string;
+  body: string;
+  ordinal: number;
+}
+
+/**
+ * The row as the rest of the server reads it.
+ *
+ * No `deleted_at` and no `sessionId`: the row is derived data (the DDL comment argues it), and
+ * the only read is already scoped to one conversation, so a field repeating that would be a
+ * second copy of what the WHERE already says. This is the shared `Insight` — nothing is added
+ * on the way out, unlike `Diagram`, whose route adds `fileMissing` from a `stat`.
+ */
+export type InsightRecord = Insight;
 
 /** A diagram as the rest of the server reads it. The route adds `fileMissing`. */
 export interface DiagramRecord {
@@ -751,6 +791,15 @@ const mapNote = (r: NoteRow): Note => ({
   messageMissing: r.message_missing !== 0,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
+});
+
+const mapInsight = (r: InsightItemRow): InsightRecord => ({
+  id: r.id,
+  type: r.type as InsightType,
+  title: r.title,
+  body: r.body,
+  adopted: r.adopted !== 0,
+  createdAt: r.created_at,
 });
 
 const mapDiagram = (r: DiagramRow): DiagramRecord => ({
@@ -1475,6 +1524,40 @@ export interface AppDb {
   ): Note | undefined;
   /** Marks the note deleted. The row and its bytes stay; every read filters it out. */
   softDeleteNote(sessionId: string, noteId: string): boolean;
+
+  /**
+   * A conversation's insight observations, in the order the panel renders them: adopted first,
+   * then the current pass in the model's own order. Owner-scoped, the route's read.
+   */
+  listInsightsForUser(userId: string, sessionId: string): InsightRecord[];
+  /**
+   * One observation, owner-scoped. `undefined` for "not yours" and for "does not exist" alike —
+   * and for one the last pass replaced, which is the same answer by design.
+   */
+  getInsightForUser(userId: string, sessionId: string, insightId: string): InsightRecord | undefined;
+  /**
+   * Replace everything a pass did not keep, in **one transaction**: the wipe and the insert
+   * cannot be separated, because a crash between them would leave the panel empty with the
+   * model's answer already discarded. Called only AFTER a usable parse — a failed pass must
+   * leave every row exactly as it was.
+   *
+   * Bare session id like `skipAwaitingToolCalls`: every caller has resolved the session through
+   * a `ForUser` read, and the wipe's scoping by session is what keeps one conversation's pass
+   * from clearing another's.
+   */
+  replaceUnadoptedInsights(sessionId: string, items: InsightInsert[]): void;
+  /** Adopt or release one observation. `undefined` when the id is not this session's. */
+  setInsightAdoptedForUser(
+    userId: string,
+    sessionId: string,
+    insightId: string,
+    adopted: boolean
+  ): InsightRecord | undefined;
+  /**
+   * Drop one observation. A real DELETE rather than a soft one — the DDL comment on
+   * `insight_items` carries the argument for why derived data is the exception.
+   */
+  deleteInsightForUser(userId: string, sessionId: string, insightId: string): boolean;
 
   /**
    * A conversation's diagrams, by session. Bare session id like `listThreadsBySession`: every
@@ -2383,6 +2466,55 @@ export function createDb(dbPath: string): AppDb {
        LEFT JOIN session_threads t ON t.id = d.thread_id
       WHERE d.session_id = ? AND d.name = ?`
   );
+
+  /*
+   * The insight panel's reads. Owner-scoped through workspaces, the same join every other
+   * session-owned read uses — `insight_items` carries no user_id because its session does, and
+   * a second copy of the owner is a second thing to keep in agreement.
+   *
+   * The order is the render order: adopted items first (they are the ones the reader chose to
+   * keep), then the current pass in the model's own sequence. The panel never re-sorts.
+   */
+  const stmtListInsightsForUser = db.prepare(
+    `SELECT i.*
+       FROM insight_items i
+       JOIN sessions s   ON s.id = i.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE i.session_id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY i.adopted DESC, i.created_at ASC, i.ordinal ASC`
+  );
+  const stmtGetInsightForUser = db.prepare(
+    `SELECT i.*
+       FROM insight_items i
+       JOIN sessions s   ON s.id = i.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE i.session_id = @sessionId AND i.id = @insightId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
+  );
+  /*
+   * The wipe. One statement, and it is also what a user's delete reduces to (with an id
+   * added) — see the DDL comment on why this table has no deleted_at.
+   */
+  const stmtDeleteUnadoptedInsights = db.prepare(
+    `DELETE FROM insight_items WHERE session_id = ? AND adopted = 0`
+  );
+  const stmtInsertInsight = db.prepare(
+    `INSERT INTO insight_items (id, session_id, type, title, body, adopted, ordinal, created_at, updated_at)
+     VALUES (@id, @sessionId, @type, @title, @body, 0, @ordinal, @now, @now)`
+  );
+  /*
+   * Both writes take a bare session id, like `updateNote`: the `ForUser` read above is what
+   * answered "is this yours", and repeating the join here would be a second copy of that answer
+   * — the one the next reader has to keep in agreement with the first.
+   */
+  const stmtSetInsightAdopted = db.prepare(
+    `UPDATE insight_items SET adopted = @adopted, updated_at = @now
+      WHERE session_id = @sessionId AND id = @insightId`
+  );
+  const stmtDeleteInsight = db.prepare(
+    `DELETE FROM insight_items WHERE session_id = @sessionId AND id = @insightId`
+  );
   // Owner-scoped, the route's read: the owner is in the WHERE by joining to workspaces,
   // because sessions reach their owner the same way messages do.
   const stmtListDiagramsForUser = db.prepare(
@@ -3247,6 +3379,57 @@ export function createDb(dbPath: string): AppDb {
     getDiagramBySessionName(sessionId, name) {
       const row = stmtGetDiagramBySessionName.get(sessionId, name) as DiagramRow | undefined;
       return row ? mapDiagram(row) : undefined;
+    },
+
+    listInsightsForUser(userId, sessionId) {
+      return (
+        stmtListInsightsForUser.all({ userId, sessionId }) as InsightItemRow[]
+      ).map(mapInsight);
+    },
+
+    getInsightForUser(userId, sessionId, insightId) {
+      const row = stmtGetInsightForUser.get({ userId, sessionId, insightId }) as
+        | InsightItemRow
+        | undefined;
+      return row ? mapInsight(row) : undefined;
+    },
+
+    replaceUnadoptedInsights(sessionId, items) {
+      const now = new Date().toISOString();
+      const writes = (): void => {
+        stmtDeleteUnadoptedInsights.run(sessionId);
+        for (const item of items) {
+          stmtInsertInsight.run({
+            id: item.id,
+            sessionId: item.sessionId,
+            type: item.type,
+            title: item.title,
+            body: item.body,
+            ordinal: item.ordinal,
+            now,
+          });
+        }
+      };
+      db.transaction(writes)();
+    },
+
+    setInsightAdoptedForUser(userId, sessionId, insightId, adopted) {
+      // The `ForUser` read is the ownership check; the UPDATE below then needs only the session
+      // and the id. Reading first also means a foreign id is `undefined` rather than a silent
+      // no-op UPDATE, which is the difference between a 404 and a 200 that changed nothing.
+      if (!this.getInsightForUser(userId, sessionId, insightId)) return undefined;
+      stmtSetInsightAdopted.run({
+        sessionId,
+        insightId,
+        adopted: adopted ? 1 : 0,
+        now: new Date().toISOString(),
+      });
+      return this.getInsightForUser(userId, sessionId, insightId);
+    },
+
+    deleteInsightForUser(userId, sessionId, insightId) {
+      if (!this.getInsightForUser(userId, sessionId, insightId)) return false;
+      return stmtDeleteInsight.run({ sessionId, insightId }).changes > 0;
     },
 
     upsertDiagram(input) {

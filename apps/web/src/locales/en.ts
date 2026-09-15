@@ -972,6 +972,8 @@ const en: typeof MessageSchema = {
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
     NOTE_NOT_FOUND: "That note cannot be found — it may already have been deleted.",
     NOTE_TYPE_INVALID: "That kind of note does not exist.",
+    INSIGHT_NOT_FOUND:
+      "That observation cannot be found — a later pass may have replaced it.",
     MESSAGE_NOT_FOUND: "That message cannot be found — it may already have been deleted.",
     MESSAGE_NOT_LAST: "Only the last message can be deleted. Reload the page and try again.",
     NO_REPLY_TO_REGENERATE:

@@ -1121,6 +1121,7 @@ export default {
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
+    INSIGHT_NOT_FOUND: "找不到这条洞察，可能已经被新一次总结替换了。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
     MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
     NO_REPLY_TO_REGENERATE: "没有可以重新生成的回复（最后一条不是助手回复，或者它正在等待你的回答）。",

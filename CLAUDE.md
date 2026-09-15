@@ -674,7 +674,7 @@ Fuller map in `docs/reference.md`.
   plan turn's diagrams land in that node's thread with no model call. The `计划`/`其他`
   headings are rendered client-side with translated labels, never stored. The classification
   process is observable through the
-  append-only `<dataRoot>/logs/threads.log` (`threadLog.ts`): one human-readable block per
+  append-only `<dataRoot>/logs/threads.log` (`modelLog.ts`): one human-readable block per
   real classification (context, turns, raw model answer, per-turn resolution, counts) and
   failure blocks, configured only in the process entry point so tests never write it.
   Whether this out-of-band call may think is the `ILA_THREAD_REASONING` env var
@@ -685,6 +685,25 @@ Fuller map in `docs/reference.md`.
   *only* to models declared with the `reasoning` capability, the same gate the main loop's
   reasoning replay uses; an unknown body field is a 400 on strict OpenAI-compatible
   endpoints. It changes this classifier call alone — never the conversation's own turns.
+- **The insight pass is a button, not a tool, and it wipes the list only after a usable parse.**
+  `insights.ts` + `agent/insights.ts` run one out-of-band call over the conversation's own record
+  — plan, graded quizzes, threads, notes, diagrams — and write typed observations about the
+  *learner* (`INSIGHT_TYPES`, with `strength` added to the seven asked for so the panel is not a
+  list of chores). It is deliberately **not** a tool: `ila_query` is how the agent reads the same
+  material, while a pass costs a whole-conversation model call and the agent must not decide to
+  spend that on a panel nobody may open. Three things are load-bearing and each has a test:
+  `replaceUnadoptedInsights` runs at the **end** of `generateInsights` and never at the start, so
+  a provider outage or an unreadable answer leaves every row exactly as it was — clearing first
+  is a user pressing a button, getting nothing, and losing the list they had; the parser returns
+  `null` for "nothing usable" and `[]` for "the model genuinely said nothing", and the route
+  reports those as `failed` and `ok`, because those are different claims about the conversation;
+  and `adopted` is the whole of the user's side, the only thing that survives a rerun.
+  `insight_items` therefore carries **no `deleted_at`** — derived data, like `session_threads`,
+  and one hard `DELETE` shape reached from both the user's delete and the pass's wipe. The
+  consequence is stated rather than hidden: **a deleted observation can come back on the next
+  pass**, because delete is not suppression. It has its own reasoning switch
+  (`ILA_INSIGHT_REASONING`, a second variable rather than a share of the classifier's) and its
+  own log (`<dataRoot>/logs/insights.log`, from the `modelLog.ts` both calls write through).
 - **History must stay user/assistant balanced.** On a chat error, a `⚠️ …`
   assistant message is persisted so the next turn's history is well-formed. An
   assistant message's `tool_calls` are only replayed into history when the

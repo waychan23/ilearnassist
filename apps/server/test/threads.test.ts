@@ -20,7 +20,7 @@ import {
   type ThreadTurn,
 } from "../src/threads.js";
 import { planNodeNumbers } from "@ilearnassist/shared";
-import { configureThreadLog } from "../src/threadLog.js";
+import { configureModelLog } from "../src/modelLog.js";
 
 let root: string;
 let db: AppDb;
@@ -45,7 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  configureThreadLog(null);
+  configureModelLog({ threads: null, insights: null });
   try {
     db.raw.close();
   } catch {
@@ -583,7 +583,7 @@ describe("the observation log", () => {
     // No file unless the process (here, the test) configured one.
     expect(existsSync(logFile())).toBe(false);
 
-    configureThreadLog(logFile());
+    configureModelLog({ threads: logFile() });
     userMessage("考试什么时候？");
     assistantMessage("周五。");
     await syncThreads(
@@ -608,7 +608,7 @@ describe("the observation log", () => {
   it("records the deterministic tool-call precedence and an unusable answer", async () => {
     forceMakePlan(db, SESSION, { tree: [{ title: "第一章" }] });
     const nodeId = readCurrentPlan(db, SESSION)!.tree[0]!.id;
-    configureThreadLog(logFile());
+    configureModelLog({ threads: logFile() });
 
     userMessage("学第一章");
     assistantMessage("", [

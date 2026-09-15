@@ -319,12 +319,15 @@ not the plan/quiz tool shape. The mechanics, and why:
 - The panel drives install-time backfill (loops `POST …/threads/sync` while `unassigned >
   0`); the registry's `onInstall` only kicks the first chunk. The post-turn hook is what
   keeps an installed conversation current whether or not the tab is open.
-- **Observation log.** `threadLog.ts` appends one human-readable block per real classification
+- **Observation log.** `modelLog.ts` appends one human-readable block per real classification
   to `<dataRoot>/logs/threads.log` (`threadLogPath`, configured only in `index.ts`, so the
   test server writes nothing): the plan state, existing threads, the recent tail, each turn's
   messages, the model's raw answer, the per-turn resolution (new/appended/continued, and the
   tool-call precedence overriding the model), the assigned counts and elapsed ms — plus a
   failure block when the call or its answer is unusable. No block is written for a no-op.
+  One module for this log and the insight pass's, with the *kind* as a parameter: the shared
+  part is the append helper, and a second copy of "mkdir, append, swallow the error" is exactly
+  what this repository does not keep.
 
 ### A viewer widget with no tools: the diagram widget
 

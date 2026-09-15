@@ -1,8 +1,8 @@
 import { assertHasAdministrator, NoAdministratorError } from "./adminCli.js";
 import { loadConfig, PROJECT_PATHS, resolveDataRoot } from "./config.js";
 import { buildServer } from "./server.js";
-import { threadLogPath } from "./paths.js";
-import { configureThreadLog } from "./threadLog.js";
+import { insightLogPath, threadLogPath } from "./paths.js";
+import { configureModelLog } from "./modelLog.js";
 
 /**
  * Process entry point. All the wiring lives in `buildServer`; this module only resolves
@@ -15,10 +15,13 @@ async function main(): Promise<void> {
   // and a non-zero exit rather than a stack trace from a module that every test imports.
   const dataRoot = resolveDataRoot();
 
-  // The thread widget's observation log (<dataRoot>/logs/threads.log), created lazily on the
-  // first classification. Configured in the process entry only, so the test server (which
+  // The out-of-band calls' observation logs (<dataRoot>/logs/{threads,insights}.log), created
+  // lazily on the first block. Configured in the process entry only, so the test server (which
   // calls buildServer directly) stays silent.
-  configureThreadLog(threadLogPath(dataRoot));
+  configureModelLog({
+    threads: threadLogPath(dataRoot),
+    insights: insightLogPath(dataRoot),
+  });
 
   const config = loadConfig();
   const { app, db } = await buildServer({

@@ -64,6 +64,18 @@ export function threadLogPath(dataRoot: string): string {
   return join(dataRoot, "logs", "threads.log");
 }
 
+/**
+ * The insight pass's log, the same shape for the same reason.
+ *
+ * Its own file rather than a section of `threads.log`: the two calls are unrelated, run at
+ * different times (one per turn, one per button press), and a reader watching one should not
+ * have to skip past the other. The `洞察` prefix on each block is what makes a tail of both
+ * still readable, but they are not meant to be read together.
+ */
+export function insightLogPath(dataRoot: string): string {
+  return join(dataRoot, "logs", "insights.log");
+}
+
 /** One user's tree. `userSlug` is `users.slug`, which a rename does not change. */
 export interface UserLayout {
   userRoot: string;
