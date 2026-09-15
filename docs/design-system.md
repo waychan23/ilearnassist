@@ -68,7 +68,7 @@ being a colour.
 | `--warning`, `--warning-bg`, `--warning-border` | Caution states. Darkened in the light theme rather than reused — the dark tone is 1.7:1 on a light panel |
 | `--success` | Confirmation and healthy status |
 | `--bubble-bg`, `--bubble-fg` | The user's message bubble. A **pair**: a rule that paints the background must state the foreground, because an inherited `--text` flips independently of the surface it lands on |
-| `--note-bg` | Behind a passage a note is about. The palette's only violet, and deliberately neither `--accent-bg` (a mark and a selection are two different claims about the same words) nor `--warning`'s amber (an annotation is not a warning). It colours text, so it has no foreground of its own — the text on it keeps `--text` |
+| `--note-bg` | Behind a passage a note is about: the highlighter's own amber, and a **surface** laid under the text rather than a colour the text is — so it has no foreground of its own and the words on it keep `--text`. Not `--accent-bg`, because a mark and a selection are two different claims about the same words. It shares a hue with `--warning` and is separated from it by *place* (a message versus a banner or dialog) and by alpha (0.3 against 0.12) |
 | `--code-bg`, `--code-fg`, `--code-fg-2` | Code surfaces, also a paired triple. Each theme's `--code-fg` matches the colour its highlight.js sheet uses for untokenised code, so the two agree instead of differing by a shade |
 | `--scrollbar`, `--scrollbar-hover` | Webkit scrollbar thumb |
 

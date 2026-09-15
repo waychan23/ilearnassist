@@ -20,9 +20,15 @@ const unique = (prefix: string): string => `${prefix} ${Date.now()}`;
  *
  * The repeat is the case that breaks a naive implementation: it highlights the first match of
  * the quote, so "ATP" alone would look right whether or not the occurrence was recorded.
+ *
+ * Long enough to overflow the pane, which is what makes 定位's *landing* assertable at all —
+ * a reply that fits on screen has nothing to scroll, and the mark would sit wherever it
+ * happened to be rather than five lines down from the top.
  */
 const REPLY =
-  "光合作用发生在叶绿体中，其中光反应阶段产生 ATP，暗反应固定二氧化碳。生成的 ATP 用于后续的合成反应。";
+  "光合作用发生在叶绿体中，其中光反应阶段产生 ATP，暗反应固定二氧化碳。生成的 ATP 用于后续的合成反应。".repeat(
+    14
+  );
 
 const FIRST_PHRASE = "光反应阶段";
 const SECOND_PHRASE = "暗反应";
@@ -52,6 +58,24 @@ async function send(page: Page, text: string): Promise<void> {
 /** The assistant's rendered content — where a selection is made. */
 function replyContent(page: Page) {
   return page.getByTestId("message-content").last();
+}
+
+/**
+ * Where the flashed mark sits, in lines below the top of the message pane.
+ *
+ * Measured in lines rather than pixels because that is what the placement promises — "about
+ * five lines of its own text above it" — and because the value is derived from the mark's own
+ * computed `line-height`, which is what the implementation measures too.
+ */
+async function flashOffsetInLines(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const container = document.querySelector('[data-testid="messages"]') as HTMLElement;
+    const mark = container.querySelector("mark.note-flash") as HTMLElement;
+    const lineHeight = parseFloat(getComputedStyle(mark).lineHeight) || 24;
+    return (
+      (mark.getBoundingClientRect().top - container.getBoundingClientRect().top) / lineHeight
+    );
+  });
 }
 
 test.describe("the notes widget", () => {
@@ -167,12 +191,46 @@ test.describe("the notes widget", () => {
     const card = (await page.getByTestId("note-editor").boundingBox())!;
     expect(card.x + card.width).toBeLessThanOrEqual(rowBox.x);
 
+    // The three actions, in the order the reader meets them: delete furthest from the two that
+    // keep what is written, with a button's worth of nothing between it and the one beside it.
+    const remove = (await page.getByTestId("note-editor-remove").boundingBox())!;
+    const locateBox = (await locate.boundingBox())!;
+    const save = (await page.getByTestId("note-editor-save").boundingBox())!;
+    expect(remove.x).toBeLessThan(locateBox.x);
+    expect(locateBox.x).toBeLessThan(save.x);
+    expect(locateBox.x - (remove.x + remove.width)).toBeGreaterThan(save.width);
+
     await locate.click();
 
     // Locating flashes the mark rather than opening anything, and leaves the window up so the
     // note can be read against the passage.
     await expect(page.getByTestId("note-editor")).toBeVisible();
-    await expect(replyContent(page).locator("mark.note-flash")).toHaveText(FIRST_PHRASE);
+    const flashed = replyContent(page).locator("mark.note-flash");
+    await expect(flashed).toHaveText(FIRST_PHRASE);
+
+    // The scroll is smooth, so wait for it to stop before measuring where it stopped: two
+    // readings in a row that agree. Asserting the offset outright would pass on the first
+    // frame of a scroll that has not moved yet.
+    let previous = NaN;
+    await expect
+      .poll(
+        async () => {
+          const now = await flashOffsetInLines(page);
+          const settled = Math.abs(now - previous) < 0.5;
+          previous = now;
+          return settled;
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true);
+
+    // About five lines down rather than pinned to the top — which is the whole difference
+    // between "this note is in this message" and "this note is about these words". Measured at
+    // 5.0 against a 1.6 line-height; the band is a line either side, which is what "about"
+    // means and gives a device-pixel difference somewhere to land.
+    const lines = await flashOffsetInLines(page);
+    expect(lines).toBeGreaterThan(4);
+    expect(lines).toBeLessThan(6);
   });
 
   test("keeps the notes across a reload, and gives the markup up on uninstall", async ({

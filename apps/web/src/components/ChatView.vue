@@ -105,16 +105,35 @@ const minimapAnchors = computed(() => buildMinimapAnchors(store.messages));
 const showMinimap = computed(() => !isCompact.value && minimapAnchors.value.length > 0);
 
 /**
- * Scroll the list so the anchored turn sits at the top. Computed from rects rather than
- * `offsetTop`, which is measured against whichever ancestor happens to be positioned.
+ * Scroll the list so the target sits `offsetAbove` pixels down from the top of the pane.
+ * Computed from rects rather than `offsetTop`, which is measured against whichever ancestor
+ * happens to be positioned.
  */
-function scrollRectIntoView(container: HTMLElement, target: HTMLElement): void {
+function scrollRectIntoView(
+  container: HTMLElement,
+  target: HTMLElement,
+  offsetAbove = 8
+): void {
   const containerRect = container.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
   container.scrollTo({
-    top: container.scrollTop + (targetRect.top - containerRect.top) - 8,
+    top: container.scrollTop + (targetRect.top - containerRect.top) - offsetAbove,
     behavior: "smooth",
   });
+}
+
+/**
+ * How far down the pane a located mark should land: about five lines of its own text.
+ *
+ * Measured from the element rather than fixed, because "five lines" is a property of the
+ * text being pointed at — a heading is a different height from body copy, and a constant
+ * would put a one-line note near the top of the pane in one message and halfway down it in
+ * another. Pinning a mark to the very top instead reads as the message beginning there, which
+ * is the thing a note about the middle of a paragraph must not look like.
+ */
+function markLandingOffset(target: HTMLElement): number {
+  const lineHeight = parseFloat(getComputedStyle(target).lineHeight);
+  return (Number.isFinite(lineHeight) ? lineHeight : 24) * 5;
 }
 
 /** Scroll one persisted message to the top of the list. Shared by the minimap and widgets. */
@@ -247,23 +266,43 @@ function closeEditor(): void {
   editorAnchor.value = null;
 }
 
+/** How long the flash runs, in step with the animation in `style.css` (`0.7s × 3` + slack). */
+const NOTE_FLASH_MS = 2400;
+
 /**
- * Scroll to a note's message and flash its mark.
+ * Which flash owns the class, so that locating twice in a row does not have the first
+ * timer strip the class off a second flash that is still running.
+ */
+let flashGeneration = 0;
+
+/**
+ * Scroll to a note's *words* and flash them.
  *
- * The flash is what makes 定位 worth having: the message may be a screenful tall, and landing
- * at its top without a sign of *which words* leaves the reader to re-read it. A mark that is
- * not on screen at all — a note whose quote no longer resolves — scrolls anyway, so the
- * button always visibly does something.
+ * The mark rather than the message, which is the difference between "this note is somewhere
+ * in this reply" and "this note is about this phrase". The message is the fallback, and it is
+ * a real one rather than an error path: a quote stops resolving the moment the message it was
+ * taken from is rewritten or deleted, and 定位 must still visibly do something.
  */
 function revealNote(target: NoteRevealTarget): void {
-  scrollToMessage(target.messageId);
   const container = messagesEl.value;
   if (!container) return;
-  const marks = container.querySelectorAll(`mark[data-note-id="${target.noteId}"]`);
+
+  const marks = [...container.querySelectorAll<HTMLElement>(`mark[data-note-id="${target.noteId}"]`)];
+  const first = marks[0];
+  if (!first) {
+    scrollToMessage(target.messageId);
+    return;
+  }
+
+  scrollRectIntoView(container, first, markLandingOffset(first));
+
+  const generation = ++flashGeneration;
   for (const mark of marks) mark.classList.add("note-flash");
   setTimeout(() => {
+    // A later 定位 restarted the flash; that one's timer owns the class now.
+    if (generation !== flashGeneration) return;
     for (const mark of marks) mark.classList.remove("note-flash");
-  }, 1200);
+  }, NOTE_FLASH_MS);
 }
 
 function onToolbarPick(intent: "annotation" | "note"): void {

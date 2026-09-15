@@ -209,6 +209,26 @@ function typeLabel(candidate: NoteType): string {
         </button>
       </div>
 
+      <!-- Kind first: it is the one answer the window wants before the words, and the quote
+           and the body below it are both about *this* note, so the label that names what kind
+           of note it is belongs above them rather than between them. -->
+      <div class="field">
+        <label>{{ t("notes.editor.typeLabel") }}</label>
+        <div class="segmented" role="group" :aria-label="t('notes.editor.typeLabel')">
+          <button
+            v-for="candidate in NOTE_TYPES"
+            :key="candidate"
+            type="button"
+            class="segment"
+            :aria-pressed="type === candidate"
+            :data-testid="`note-type-${candidate}`"
+            @click="type = candidate"
+          >
+            {{ typeLabel(candidate) }}
+          </button>
+        </div>
+      </div>
+
       <!-- Only when something was annotated: a note the user typed has no original. -->
       <div v-if="draft.quote" class="field">
         <label>{{ t("notes.editor.quoteLabel") }}</label>
@@ -227,33 +247,24 @@ function typeLabel(candidate: NoteType): string {
         ></textarea>
       </div>
 
-      <div class="field">
-        <label>{{ t("notes.editor.typeLabel") }}</label>
-        <div class="segmented" role="group" :aria-label="t('notes.editor.typeLabel')">
-          <button
-            v-for="candidate in NOTE_TYPES"
-            :key="candidate"
-            type="button"
-            class="segment"
-            :aria-pressed="type === candidate"
-            :data-testid="`note-type-${candidate}`"
-            @click="type = candidate"
-          >
-            {{ typeLabel(candidate) }}
-          </button>
-        </div>
-      </div>
-
+      <!--
+        Delete furthest from the two that keep what is written. The order is what puts the
+        destructive control at the far left of a right-aligned row, and the gap after it is
+        what makes it not the next thing under the pointer when someone aims at the locate
+        button — a mis-click on a dialog that does not close is cheap, and one on delete
+        is not.
+      -->
       <div class="note-editor-actions">
         <button
+          v-if="existing"
           type="button"
-          class="btn primary"
-          data-testid="note-editor-save"
-          :disabled="busy"
-          @click="submit"
+          class="btn danger"
+          data-testid="note-editor-remove"
+          @click="remove"
         >
-          {{ busy ? t("notes.editor.saving") : t("notes.editor.save") }}
+          <Icon name="trash" />
         </button>
+        <span v-if="existing && locate" class="between-danger" aria-hidden="true"></span>
         <button
           v-if="locate"
           type="button"
@@ -264,13 +275,13 @@ function typeLabel(candidate: NoteType): string {
           <Icon name="target" /> {{ t("notes.editor.locate") }}
         </button>
         <button
-          v-if="existing"
           type="button"
-          class="btn danger"
-          data-testid="note-editor-remove"
-          @click="remove"
+          class="btn primary"
+          data-testid="note-editor-save"
+          :disabled="busy"
+          @click="submit"
         >
-          <Icon name="trash" />
+          {{ busy ? t("notes.editor.saving") : t("notes.editor.save") }}
         </button>
       </div>
     </div>
@@ -329,9 +340,16 @@ function typeLabel(candidate: NoteType): string {
 .note-editor-actions {
   display: flex;
   align-items: center;
+  /* Right-aligned, so the primary action sits where the eye ends and the destructive one is
+     as far from it as the row allows. */
+  justify-content: flex-end;
   gap: var(--space-4);
 }
-.note-editor-actions .btn.danger {
-  margin-left: auto;
+/* A button's worth of nothing between delete and locate. Its width is the two labelled
+   buttons beside it (an icon plus a two-character label at `--fs-3`, plus a button's own
+   padding) rounded to the spacing scale, rather than a measured value that would go stale the
+   moment a label is translated. */
+.note-editor-actions .between-danger {
+  width: calc(var(--space-10) * 2);
 }
 </style>
