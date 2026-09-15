@@ -444,6 +444,7 @@ export default {
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
       ila_diagram: "图表",
+      ila_query: "查询学习记录",
     },
     done: "完成",
     running: "运行中",

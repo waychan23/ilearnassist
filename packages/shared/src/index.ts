@@ -45,9 +45,28 @@ export const ALL_TOOL_NAMES = [
   "ila_read_plan",
   "ila_update_plan_progress",
   "ila_diagram",
+  "ila_query",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
+
+/**
+ * The query tool's name: the agent's read of the conversation's own record.
+ *
+ * Shared because it is in `ALL_TOOL_NAMES` — the client writes the allow-list from that list,
+ * so a name only the server knew would be a tool nobody could choose.
+ */
+export const QUERY_TOOL_NAME = "ila_query";
+
+/**
+ * The things `ila_query` can be asked about, and therefore its discriminator.
+ *
+ * Deliberately **not** the widget ids: `workspace_stats` and `session_stats` have no records
+ * to read, and a thread is a thing this tool returns while never being a thing the model can
+ * name as a widget. The two lists answer different questions and are free to differ.
+ */
+export const QUERY_KINDS = ["plan", "quiz", "thread", "note", "diagram"] as const;
+export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
  * The diagram tool's name.
@@ -460,9 +479,18 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   // The thread widget brings no tools: its classification is an out-of-band model call,
   // like the auto-titler, not a tool the agent can call.
   { id: "thread", scopes: ["session"] },
-  // Notes are the learner's own writing, so they bring no tools either: the model neither
-  // reads them nor writes them. It is deliberately *not* in the "study" pack — that pack is
-  // material derived from the conversation, and this is what the learner made of it.
+  /*
+   * Notes bring no **bound** tools, which is not the same as being unreachable.
+   *
+   * The model reads them through the ordinary `ila_query(kind: "note")` and still cannot write
+   * them — no tool creates or edits a note, so a turn can never rewrite what the learner wrote.
+   * Binding a read here would be exactly the wrong move: a bound tool exists only while this
+   * widget is installed, and nothing installs a widget by default, so the learner's own notes
+   * would be invisible in every conversation that had not opted into this panel.
+   *
+   * It is deliberately *not* in the "study" pack either — that pack is material derived from
+   * the conversation, and this is what the learner made of it.
+   */
   { id: "notes", scopes: ["session"] },
   /*
    * The diagram widget brings no tools, and that is its whole design rather than an omission.

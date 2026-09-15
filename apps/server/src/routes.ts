@@ -2564,6 +2564,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       (QUIZ_TOOL_NAMES as readonly string[]).includes(name)
     );
 
+    // The conversation's own directory — `dirPath`, not `workdirPath`. The workdir is the
+    // agent's sandbox and the file browser's root; deriving from it would put a
+    // conversation's files inside the tree the model may already write into. One expression
+    // with two consumers: `ila_diagram` writes here, and `ila_query` reads a `.mmd` back out
+    // of here — computed once so "the conversation's own directory" has one definition.
+    const ownDir = sessionDir(workspace.dirPath, session.id);
+
     const tools = buildTools({
       workspaceDir: workspace.workdirPath,
       webSearch: config.tools.webSearch,
@@ -2589,15 +2596,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         : undefined,
       quizReview: quizInstalled ? { db, sessionId: session.id } : undefined,
       plan: planInstalled ? { db, sessionId: session.id } : undefined,
-      // The conversation's own directory — `dirPath`, not `workdirPath`. The workdir is the
-      // agent's sandbox and the file browser's root; deriving from it would put a
-      // conversation's files inside the tree the model may already write into. The row goes
-      // to the same session id as the file, in one callback, so the two cannot diverge on
-      // which conversation they belong to.
+      // The row goes to the same session id as the file, in one callback, so the two cannot
+      // diverge on which conversation they belong to. `ownDir` is the definition above.
       diagram: {
-        sessionDir: sessionDir(workspace.dirPath, session.id),
+        sessionDir: ownDir,
         save: (input) => registerDiagram(db, session.id, input),
       },
+      // Not gated on anything: the conversation's own record exists from the moment the
+      // conversation does, whether or not any widget is installed to show it.
+      query: { db, userId: input.userId, sessionId: session.id, sessionDirPath: ownDir },
     });
 
     return {

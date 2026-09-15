@@ -360,6 +360,7 @@ const en: typeof MessageSchema = {
       ila_read_plan: "Read plan",
       ila_update_plan_progress: "Update plan progress",
       ila_diagram: "Diagram",
+      ila_query: "Query record",
     },
     done: "Done",
     running: "Running",

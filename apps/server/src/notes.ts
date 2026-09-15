@@ -19,8 +19,14 @@ import { newId, type AppDb } from "./db.js";
  * and `content` are what the user is still saying. Hence a create that validates an anchor
  * against a real message, and an update that cannot mention one at all.
  *
- * Nothing here reads the model's conversation. A note is the learner's own writing: it is
- * never part of a turn's context and no tool can reach it.
+ * Nothing here reads the model's conversation, and nothing here writes on the model's behalf:
+ * every function is reached from a route the learner's own click triggered. A note is the
+ * learner's own writing, so no turn may ever rewrite one.
+ *
+ * It is *readable* by the model since `ila_query` — `kind: "note"` — which was a deliberate
+ * reversal of the rule that used to stand here ("no tool can reach it"). The read is ordinary
+ * rather than bound to the notes widget, so a conversation that never installed the panel
+ * still has its notes visible to the agent that is helping with them.
  */
 
 /** A refusal the route turns straight into `reply.code(status).send(apiError(code, …))`. */

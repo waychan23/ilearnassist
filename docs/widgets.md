@@ -218,6 +218,25 @@ A widget can bring tools: list them in its `WIDGETS` entry as `boundTools` (name
 The plan widget is session-scoped. A future "workspace-level default that auto-installs into new
 sessions" is a separate mechanism and is intentionally not built yet.
 
+### A widget's data reached *without* being bound: `ila_query`
+
+Binding is the right answer only when the widget is the capability's home — a quiz nobody can
+answer, a plan nobody can see. There is a second, deliberately unbound form, and `ila_query` is
+it: one ordinary allow-listable tool whose `kind` discriminator (`plan`, `quiz`, `thread`, `note`,
+`diagram`) reaches five widgets' data at once without being bound to any of them.
+
+The reason is the assembly rule above read backwards. A bound tool exists **only while its widget
+is installed**, and nothing installs a widget by default (`DEFAULT_WIDGET_IDS` is empty) — so
+binding "what has already happened in this conversation" would hide the app's own records from
+every ordinary conversation, which is the opposite of what a discovery tool is for. Each kind
+therefore delegates to the read its widget's route already uses and returns what that returns;
+`kind: "plan"` is byte-identical to `ila_read_plan`'s answer, from the same `renderReadResult`.
+Two *entry points* to one fact is the affordance (the bound one exists only where the widget does,
+the ordinary one everywhere); two *renderings* would be the footgun. `ila_query` is in
+`NON_FILE_TOOLS` and `ila_diagram` is not, and the contrast is the rule: the set asks "does this
+tool touch the workspace?", but it is asked on behalf of a switch meaning "this agent does not
+write files" — `ila_query` only reads, and a diagram is half a feature without its file.
+
 ### A bound suspending tool with persisted rows: the quiz widget
 
 The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and the normal

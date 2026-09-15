@@ -10,6 +10,7 @@ import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildFileTools } from "./fileTools.js";
 import { buildPlanTools, type PlanToolContext } from "./planTools.js";
+import { buildQueryTool, type QueryToolContext } from "./query.js";
 import { buildWebFetchTool } from "./webFetch.js";
 import { buildWebSearchTool } from "./webSearch.js";
 import { buildQuizTool, type QuizToolContext } from "./quiz.js";
@@ -31,6 +32,11 @@ import { buildQuizReviewTool, type QuizReviewToolContext } from "./quizReview.js
  * does not write files" — and a diagram whose file was never written is not the feature,
  * it is half of it. So `fileTools.enabled: false` means no diagrams, and the test in
  * `test/tools/index.test.ts` pins that rather than leaving it to be discovered.
+ *
+ * `ila_query` **is** here, and the contrast with the line above is the point: it reads the
+ * database and the conversation's own directory and writes nothing at all, so a switch about
+ * writing files has no bearing on it. The pair is worth keeping in view — "outside the
+ * workspace" is not the test, because one of these reads and one of these writes.
  */
 const NON_FILE_TOOLS = new Set<string>([
   "web_search",
@@ -42,6 +48,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "ila_make_plan",
   "ila_read_plan",
   "ila_update_plan_progress",
+  "ila_query",
 ]);
 
 export interface BuildToolsInput {
@@ -95,6 +102,16 @@ export interface BuildToolsInput {
    * bound tools of its own.
    */
   diagram?: DiagramToolContext;
+  /**
+   * Present whenever a session context exists — always, in practice; the field is optional so
+   * a test can pin what its absence assembles (nothing).
+   *
+   * **Ordinary, not widget-bound**, on the `ila_diagram` argument and for a stronger reason: a
+   * bound tool is assembled only when its widget is installed, and nothing installs a widget by
+   * default, so binding the agent's read of the conversation's own plan, quizzes, threads,
+   * notes and diagrams would hide all of it from every ordinary conversation.
+   */
+  query?: QueryToolContext;
 }
 
 /**
@@ -133,6 +150,9 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   // Ordinary, allow-listable, and gated by `fileToolsEnabled` like the file tools — see
   // `NON_FILE_TOOLS` above for why that is the decision rather than an oversight.
   if (input.diagram) all.push(buildDiagramTool(input.diagram));
+  // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
+  // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
+  if (input.query) all.push(buildQueryTool(input.query));
 
   // Absent means "no restriction"; an empty array means "no tools". The two used to be the same
   // thing — `length > 0` was the test — which made a Copilot with no tools checked silently

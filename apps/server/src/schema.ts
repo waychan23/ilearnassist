@@ -514,7 +514,9 @@ const DDL = `
   --
   -- Unlike quiz_questions and session_threads above, this one DOES carry deleted_at: a note
   -- is not derived from the conversation, it is the user's own writing, which puts it on the
-  -- same side as messages rather than on the same side as a classification. Its bytes are
+  -- same side as messages rather than on the same side as a classification. (Being the user's
+  -- own writing is also why no tool may write one: the model reads notes through ila_query's
+  -- "note" kind and has no way to create, edit or delete one.) Its bytes are
   -- kept for the same reason a deleted message's are — a delete costs no disk, and a future
   -- restore has something to restore.
   --

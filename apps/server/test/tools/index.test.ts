@@ -10,6 +10,7 @@ import type { QuizToolContext } from "../../src/tools/quiz.js";
 import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
 import type { DiagramToolContext } from "../../src/tools/diagram.js";
+import type { QueryToolContext } from "../../src/tools/query.js";
 
 let workspace: string;
 
@@ -30,6 +31,21 @@ function diagram(): DiagramToolContext {
 }
 
 /**
+ * Like the diagram context, `ila_query` is not gated on a widget: `turnContext` always supplies
+ * one, because a conversation's own record exists from the moment it is created. Present by
+ * default for the same reason — an assembly case that started without it would be describing an
+ * installation that cannot happen. Nothing is invoked here, so the stubs suffice.
+ */
+function query(): QueryToolContext {
+  return {
+    db: {} as never,
+    userId: "u1",
+    sessionId: "s1",
+    sessionDirPath: join(workspace, "sessions", "s1"),
+  };
+}
+
+/**
  * `quiz` numbers and registers its questions through callbacks the route supplies; stubs
  * keep these assembly cases off a database. Nothing here is about the numbering itself.
  */
@@ -43,15 +59,17 @@ const quizReview = { db: {}, sessionId: "s1" } as unknown as QuizReviewToolConte
 
 function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] {
   // No quiz context by default: the quiz tools are widget-bound, so the absence itself is
-  // under test. Cases that want them spread `{ quiz, quizReview }`. The diagram context is
-  // present because the route always passes one — pass `{ diagram: undefined }` to test the
-  // other half. Spread last, so a case can override either.
+  // under test. Cases that want them spread `{ quiz, quizReview }`. The diagram and query
+  // contexts are present because the route always passes both — pass
+  // `{ diagram: undefined }` or `{ query: undefined }` to test the other half. Spread last,
+  // so a case can override either.
   return buildTools({
     workspaceDir: workspace,
     webSearch,
     webFetch,
     fileToolsEnabled: true,
     diagram: diagram(),
+    query: query(),
     ...input,
   }).map((t) => t.name);
 }
@@ -103,6 +121,21 @@ describe("buildTools", () => {
     expect(names({ documents: { ...documents, sources: [] } })).not.toContain("read_document");
   });
 
+  it("omits ila_query when there is no conversation to query", () => {
+    // The context is what carries the session and the owner, so its absence is the only thing
+    // that can switch the tool off. In a real turn it is always there — see `query()` above.
+    expect(names({ query: undefined })).not.toContain("ila_query");
+  });
+
+  it("lets a Copilot allow-list choose ila_query like any other tool", () => {
+    // It is ordinary, not widget-bound: a bound tool bypasses the allow-list in all three of
+    // its states, and this one must be excluded by a list that does not name it.
+    expect(names({ allowedNames: ["read_file", "ila_query"] }).sort()).toEqual([
+      "ila_query",
+      "read_file",
+    ]);
+  });
+
   it("adds read_document even when this turn attached nothing", () => {
     // The gate is the whitelist, not the turn's attachments: a conversation with a PDF from
     // last week can still page through it on a turn that attaches nothing. Getting this
@@ -113,9 +146,13 @@ describe("buildTools", () => {
   it("keeps the non-workspace tools but drops the file tools when fileTools is disabled", () => {
     // `ask_user` is here with the web tools because it reads nothing at all — switching
     // off the workspace sandbox is a statement about file access, not about talking to the
-    // user. The quiz tools are widget-bound, so they stay absent here.
+    // user. The quiz tools are widget-bound, so they stay absent here. `ila_query` stays for
+    // `ask_user`'s reason and one more: it reads the conversation's own record and writes
+    // nothing, so a switch about writing files has no bearing on it — which is exactly where
+    // it differs from `ila_diagram`, absent from this list on purpose.
     expect(names({ fileToolsEnabled: false }).sort()).toEqual([
       "ask_user",
+      "ila_query",
       "web_fetch",
       "web_search",
     ]);

@@ -201,6 +201,12 @@ single switch and the tools are deliberately absent from the Copilot tool checkl
 context exists (`plan?: PlanToolContext`): an allow-list can never switch them on for a
 conversation without the widget. The first consumer is the **plan** widget.
 
+Binding is only right when the widget *is* the capability's home. There is a deliberate second
+form — a tool that reaches a widget's data without being bound to it — and `ila_query` is it: one
+ordinary allow-listable tool reading plan, quizzes, threads, notes and diagrams alike. Binding it
+would hide the conversation's own record from every conversation that had not installed the
+relevant panel, since a bound tool is assembled only when its widget is.
+
 ### The plan widget (`plans.ts`, `planTools.ts`)
 
 One versioned study plan per session, written only by the model and rendered by the
@@ -303,8 +309,14 @@ can see (`utils/noteAnchor.ts`, and the cases pinned in `test/utils/noteAnchor.t
 anchor is validated against a real message of the named conversation and refused when it arrives
 half-formed, since a message with no quote has nothing to put back on screen.
 
-Notes bring **no tools**: the model neither reads them nor writes them. They are the learner's own
-writing, and nothing in a turn's context is built from them.
+Notes bring **no tools of their own**: nothing creates, edits or deletes one, so a turn can never
+rewrite what the learner wrote. The model *reads* them through the ordinary `ila_query` —
+`kind: "note"`, in `tools/query.ts` — which was a deliberate reversal of the rule that used to
+stand here. The read is deliberately **not** bound to the notes widget: a bound tool is assembled
+only while its widget is installed, and nothing installs a widget by default, so binding it would
+hide the learner's own notes from every conversation that had not opted into the panel. The tool
+result frames them as data *about* the learner rather than instructions, because a note is
+free text the learner wrote for themselves.
 
 ### The workspace file browser (`files.ts`)
 
@@ -366,6 +378,7 @@ removes `dirPath`.
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
 | `read_document` | page through an uploaded file's extracted text | per-turn whitelist: the conversation's sources ∪ its workspace's |
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
+| `ila_query`     | read the conversation's own record (plan / quizzes / threads / notes / diagrams) | owner-scoped by the turn's account |
 
 `buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
 returns the active set for a run, honoring config switches and the conversation's own
@@ -374,8 +387,21 @@ tool allow-list (the snapshot copied from its Copilot at creation). `allowedName
 decides which, and an empty array is a real answer meaning "no tools", not a synonym for
 "unrestricted". The two readings were the same thing once, which made the narrowest possible
 selection behave as the widest.
-`web_search`, `web_fetch`, `read_document` and `ask_user` survive
+`web_search`, `web_fetch`, `read_document`, `ask_user` and `ila_query` survive
 `fileTools.enabled: false` because none of them touches the workspace.
+
+**`ila_query` is the agent's read of the conversation's own record** (`tools/query.ts`): one
+tool with a `kind` discriminator over plan, quiz, thread, note and diagram, rather than five
+tools competing for the same slot in the model's attention and five allow-list boxes for one
+capability. It is **ordinary and allow-listable**, on the `ila_diagram` argument and for a
+stronger reason — a widget-bound read exists only while its widget is installed, and nothing
+installs a widget by default, so every kind delegates to the read its widget's route already
+uses and returns what that returns. `kind: "quiz"` is the load-bearing case: it reads through
+`listQuizQuestionViews`, so the answer key's secrecy is *inherited* from `toView` rather than
+re-implemented, and a second read would be a second chance to leak it. Only
+`kind: "diagram"` with a `name` returns file content — the conversation's own `.mmd`, which
+`read_file` structurally cannot reach. Answers carry `truncated` and shrink the page rather
+than the text, because a cut JSON string is not a smaller answer.
 
 **`read_document` is registered per turn and only when the turn has document
 attachments.** A model is never offered a tool with nothing to read. It is bound to a
