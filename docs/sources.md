@@ -168,7 +168,7 @@ same exported function — a second implementation would be a second chance to g
 wrong), stores the HTML at `<user>/sources/web/<id>.html`, extracts the text into the one
 `parsed/` tree, and writes a `page` source with the URL and the model's one-line summary.
 
-Two properties are worth knowing:
+Three properties are worth knowing:
 
 - **A page's identity is its reading, not its bytes.** The hash is over the URL *and the
   extracted text*, so a page whose masthead changed since yesterday is the same source, while one
@@ -177,6 +177,12 @@ Two properties are worth knowing:
 - **A turn's fetches are cached.** `web_fetch` records what it fetched and `ila_collect_page`
   reuses it, so keeping a page the model just read costs no second request. The cache is built by
   `buildTools` and lives exactly one turn.
+- **The tool is on by default, so the prompt has to say when to use it.** `COLLECT_PAGE_GUIDANCE`
+  (`tools/collectPage.ts`) is appended to the system prompt on any turn where the tool survived
+  assembly — `routes.ts` asks the assembled array rather than the config, so a Copilot whose
+  allow-list excludes it is never told about a call it cannot make. Without it the model sees only
+  the tool's own description, which is phrased as a *restriction* and reads as "usually do not":
+  the tool was built, wired and tested for a while before anyone noticed it never ran.
 
 ## Referencing with `@`
 

@@ -1288,6 +1288,16 @@ Fuller map in `docs/reference.md`.
   that changed since yesterday is the same source, an article that changed is a new one. A turn's
   fetches are cached by `buildTools`, so keeping a page the model just read costs no second
   request.
+  **It also needs `COLLECT_PAGE_GUIDANCE`, and that is not decoration.** The tool is on by
+  default — `webFetch.enabled` is the only switch — so a conversation gets it whether or not
+  anyone thought about it, and its own description is a *restriction* ("do this only for pages
+  this conversation is actually about"): a model that was never told to keep anything reads that
+  as "usually do not". For a while the tool was assembled, wired, stored and tested and still did
+  nothing in use, for exactly this reason. The guidance goes in the system prompt on any turn
+  where the tool *survived assembly* — `routes.ts` asks the assembled array, never the config, so
+  a Copilot whose allow-list excludes the tool is never given guidance for a call it cannot make.
+  Its absence is the shape the requirement is about: `web_fetch` stays a pure read, and the
+  decision to keep is the model's, made deliberately once per page worth keeping.
 - **A referenced source is *linked*, not copied.** `ChatInput.sources` names ids; the server
   links each to the conversation (`session_sources`) and records the snapshot in
   **`messages.sources`**, a column of its own beside `attachments`. The link is what lets a later
