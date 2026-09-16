@@ -1,5 +1,7 @@
 import { computed, reactive } from "vue";
 import { isCompact } from "./breakpoints";
+// No cycle: `sessionLeave` imports the api client and nothing else of ours.
+import { reportLeave } from "./sessionLeave";
 
 /**
  * Cross-component UI state for the few globals that more than one place needs to open.
@@ -290,6 +292,17 @@ export function showWorkspaceHome(): void {
   // no conversation to show on the way out. Workspace settings deliberately stay: that one is
   // opened *from* a card on this page.
   closeSessionSettings();
+  /*
+   * …and the conversation being left is reported, here rather than at the five call sites that
+   * reach this function. It is the one leave that `activeSessionId` does not move for — the app
+   * deliberately does not remember which workspace you were in, so the id survives the transition
+   * and the store's own "the conversation changed" hook sees nothing to report.
+   *
+   * No handler: there is no session list on this page, and entering a workspace re-reads it — so
+   * a title that lands a few seconds after the reader got here is simply there when they next
+   * open the conversation. `composables/sessionLeave.ts` is where the whole of that lives.
+   */
+  reportLeave();
 }
 
 /** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */

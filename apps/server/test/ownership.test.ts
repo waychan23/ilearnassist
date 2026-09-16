@@ -155,7 +155,7 @@ describe("sessions", () => {
   });
 
   it("does not auto-title another account's conversation", () => {
-    expect(db.setAutoTitleForUser(`s-${BOB}`, ADA, "stolen")).toBeUndefined();
+    expect(db.setAutoTitleForUser(`s-${BOB}`, ADA, "stolen", "model")).toBeUndefined();
     expect(db.getSessionForUser(`s-${BOB}`, BOB)?.session.title).toBe("T");
   });
 

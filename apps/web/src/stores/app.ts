@@ -30,6 +30,7 @@ import {
   uiState,
 } from "../composables/ui";
 import { emitWidgetEvent } from "../composables/widgetEvents";
+import { forgetSession, noteSession, onRetitled } from "../composables/sessionLeave";
 import { widgetPanel } from "../composables/widgetPanel";
 import { WIDGET_MODULES, type WidgetContext } from "../widgets/registry";
 import type {
@@ -570,6 +571,10 @@ export const useAppStore = defineStore("app", () => {
    */
   function forgetAccount(): void {
     accountEpoch += 1;
+    // Forgotten rather than reported, and the reason is the token: signing out revokes it, so a
+    // report scheduled here would fire a few seconds later and be refused. The conversation keeps
+    // whatever name it had, and the next reader to open it is a leave of its own.
+    forgetSession();
     account.value = null;
     config.value = null;
     sources.value = [];
@@ -745,6 +750,8 @@ export const useAppStore = defineStore("app", () => {
   async function selectWorkspace(id: string): Promise<void> {
     activeWorkspaceId.value = id;
     activeSessionId.value = null;
+    // The conversation goes with the workspace, and so does the report about leaving it.
+    noteSession(null);
     activeCopilotId.value = null;
     draftSettings.value = {};
     messages.value = [];
@@ -1130,6 +1137,10 @@ export const useAppStore = defineStore("app", () => {
     if (activeWorkspaceId.value === id) {
       activeWorkspaceId.value = workspaces.value[0]?.id ?? null;
       activeSessionId.value = null;
+      // The whole workspace went, so the conversation did too — and so does the report about
+      // leaving it. Nothing is skipped here: the workspace may hold nothing else, so this is not
+      // `deleteSession`'s case.
+      noteSession(null);
       messages.value = [];
       sessionWidgets.value = [];
       await loadSessions();
@@ -1154,6 +1165,12 @@ export const useAppStore = defineStore("app", () => {
     if (filePreviewRoot.value === "session") closeFile();
 
     activeSessionId.value = id;
+    /*
+     * …and the conversation being left is reported, which is what makes "the reader has gone" a
+     * fact this side can see. Told what is on screen rather than what is leaving, so there is one
+     * obligation to remember instead of two — see `composables/sessionLeave.ts`.
+     */
+    noteSession(activeSession.value);
     activeCopilotId.value = activeSession.value?.copilotId ?? null;
     /*
      * The export state belongs to the conversation being left, so it is cleared rather than kept —
@@ -1245,6 +1262,25 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /* --------------------------------- widgets --------------------------------- */
+
+  /**
+   * A title the server settled on while the reader was leaving.
+   *
+   * Patched rather than re-read: the request that produced it is not part of any list request, and
+   * the reader has already gone somewhere else — so a full `loadSessions()` for one string would
+   * be a round trip about a conversation that is not on screen. `titleState` moves with it, which
+   * is what stops the next leave reporting the same conversation again.
+   */
+  function applyRetitle(sessionId: string, title: string): void {
+    const session = sessions.value.find((s) => s.id === sessionId);
+    if (!session) return;
+    session.title = title;
+    session.titleState = "model";
+  }
+
+  // Registered once per store, and an assignment rather than a subscription — see
+  // `composables/sessionLeave.ts` for why that is the shape with no lifetime to get wrong.
+  onRetitled(applyRetitle);
 
   async function loadWorkspaceWidgets(): Promise<void> {
     const workspaceId = activeWorkspaceId.value;
@@ -1488,6 +1524,9 @@ export const useAppStore = defineStore("app", () => {
     await api.deleteSession(id);
     sessions.value = sessions.value.filter((s) => s.id !== id);
     if (activeSessionId.value === id) {
+      // Forgotten rather than reported: a deleted conversation has nowhere to keep a new title,
+      // and the report would be a request whose answer is a 404 by construction.
+      forgetSession();
       activeSessionId.value = null;
       activeCopilotId.value = null;
       messages.value = [];

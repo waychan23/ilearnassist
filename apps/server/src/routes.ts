@@ -33,6 +33,8 @@ import type {
   SourceOrigin,
   SourceOwner,
   SourceStorage,
+  TitleRetryResult,
+  TitleState,
   ToolCall,
   TurnRequestMeta,
   UpdateCopilotInput,
@@ -2176,6 +2178,117 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return buildThreadViews(db, userId, id);
   });
 
+  /** One re-titling attempt per conversation, joined rather than duplicated. */
+  const titleRetries = new Map<string, Promise<TitleRetryResult>>();
+
+  /**
+   * The first thing the user said and the first thing the assistant said back — the same pair the
+   * first turn's titler was given.
+   *
+   * Rebuilt from the persisted messages rather than remembered, because the attempt happens long
+   * after the turn that would have held them. The assistant side takes the first message with
+   * *content*: a turn that only called tools has an assistant message with nothing in it, and
+   * naming a conversation after that pair is exactly the case this route exists to retry.
+   */
+  function firstExchangeOf(
+    sessionId: string,
+    userId: string
+  ): { user: string; assistant: string } | undefined {
+    const messages = db.listMessagesForUser(sessionId, userId);
+    const user = messages.find((m) => m.role === "user" && m.content.trim());
+    if (!user) return undefined;
+    const assistant = messages.find(
+      (m) => m.role === "assistant" && m.createdAt >= user.createdAt && m.content.trim()
+    );
+    if (!assistant) return undefined;
+    return { user: user.content, assistant: assistant.content };
+  }
+
+  /**
+   * The reader has left this conversation — try again at the title it did not get.
+   *
+   * The titler runs **once**, on the first turn, and `finishTurn` only reaches it when that turn
+   * produced text. So a conversation whose first reply was stopped, or whose titling call failed
+   * (no key, a rate limit, a reasoning model that spent its whole budget thinking), keeps the
+   * placeholder or the user's own clipped words for good — there was no second attempt and no way
+   * to ask for one. This is the way to ask.
+   *
+   * **The trigger is the client's**, which is why this is an event API rather than a timer: only
+   * the browser knows the reader has gone, and the server-side hook that would otherwise look for
+   * this has nothing to hook — a turn ending is not a reader leaving.
+   *
+   * Three things it deliberately is not:
+   *
+   * - **Not awaited by the caller.** The client reports and forgets, and the answer arrives on
+   *   this response rather than on an SSE stream that no longer exists. A request that is left
+   *   hanging while the model answers costs nothing, because nobody is waiting for it.
+   * - **Not able to fail a leave.** Every failure is a response, not an error: the client has
+   *   already navigated away, and a red toast about a conversation the reader has left is worse
+   *   than the placeholder it is about. `skipped` and `failed` are both 200.
+   * - **Not the fallback path.** `autoTitle` falls back to the user's own words so a first turn is
+   *   never left nameless; repeating that here would write the same string again and mark the row
+   *   as attempted. Only a model title is a success.
+   *
+   * One in-flight attempt per conversation, joined rather than duplicated: the client debounces,
+   * but two tabs can still ask at once, and this is a model call.
+   */
+  app.post("/api/sessions/:id/leave", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const owned = db.getSessionForUser(id, userId);
+    if (!owned) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const { session } = owned;
+
+    /*
+     * Eligible when the title is still the titler's to set and it has not already succeeded. The
+     * client gates on the same pair before reporting at all, and the check is repeated here
+     * because that gate is two fields it may be holding from an hour ago.
+     */
+    if (session.titleSource !== "auto" || session.titleState === "model") {
+      return { status: "skipped" as const };
+    }
+
+    const exchange = firstExchangeOf(session.id, userId);
+    // Nothing to name: the conversation has not been answered yet, so there is no exchange to
+    // read and the next leave is the one that will have something to work with.
+    if (!exchange) return { status: "skipped" as const };
+
+    const inFlight = titleRetries.get(id);
+    if (inFlight) return inFlight;
+
+    const attempt = (async (): Promise<TitleRetryResult> => {
+      const provider = db.getProvider(resolveProviderId(undefined, session.settings));
+      const modelId = resolveModelId(provider, undefined, session.settings);
+      try {
+        const generated = await generateTitle({
+          provider,
+          modelId,
+          userMessage: exchange.user,
+          assistantMessage: exchange.assistant,
+        });
+        const unique = uniqueTitleIn(session.workspaceId, userId, generated, id);
+        // The write can lose a race with a rename, and then there is no new title to report.
+        if (!db.setAutoTitleForUser(id, userId, unique, "model")) {
+          return { status: "skipped" as const };
+        }
+        return { status: "titled" as const, title: unique };
+      } catch (err) {
+        app.log.warn(
+          { err: err instanceof Error ? err.message : String(err), sessionId: id },
+          "re-title on leave failed; the conversation keeps its name"
+        );
+        return { status: "failed" as const };
+      } finally {
+        titleRetries.delete(id);
+      }
+    })();
+
+    titleRetries.set(id, attempt);
+    return attempt;
+  });
+
   /**
    * Run one unit of classification (the oldest ≤8 unassigned turns, one model call), then
    * return the fresh view. Idempotent: a second call with nothing unassigned makes no model
@@ -3388,20 +3501,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
   }
 
+  /**
+   * A title for a new conversation, and **how it was arrived at**.
+   *
+   * The second half is new and it is the whole reason the retry can exist: this used to return a
+   * bare string, so a model-written title and the user's own clipped words were the same value to
+   * every caller — both leave `titleSource: "auto"` with a non-empty title, and nothing anywhere
+   * could tell a named conversation from one that had merely failed to be named.
+   */
   async function autoTitle(input: {
     provider: ProviderRecord | undefined;
     modelId: string;
     userMessage: string;
     assistantMessage: string;
-  }): Promise<string | undefined> {
+  }): Promise<{ title: string; state: TitleState } | undefined> {
     try {
-      return await generateTitle(input);
+      return { title: await generateTitle(input), state: "model" };
     } catch (err) {
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
         "auto-title fell back to the user's own words"
       );
-      return fallbackTitle(input.userMessage, input.assistantMessage) || undefined;
+      const title = fallbackTitle(input.userMessage, input.assistantMessage);
+      return title ? { title, state: "fallback" } : undefined;
     }
   }
 
@@ -3896,22 +4018,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       opts.userMessage !== null &&
       result.content.trim()
     ) {
-      const title = await autoTitle({
+      const titled = await autoTitle({
         provider: ctx.provider,
         modelId: ctx.modelId,
         userMessage: opts.userMessage,
         assistantMessage: result.content,
       });
-      if (title) {
+      if (titled) {
         /*
          * Numbered against its siblings, itself excluded — the titler is guessing at a name and
          * has no idea what else is in the list, so two conversations that open the same way
          * would otherwise both be called `什么是递归`. The number is what the SSE event
          * carries, so the sidebar shows the same string the database now holds.
          */
-        const unique = uniqueTitleIn(session.workspaceId, userId, title, id);
-        db.setAutoTitleForUser(id, userId, unique);
-        sse.send({ type: "title", sessionId: id, title: unique });
+        const unique = uniqueTitleIn(session.workspaceId, userId, titled.title, id);
+        /*
+         * The write decides whether there is anything to announce: it refuses when the title is
+         * no longer the titler's to set, which the user can make true by renaming mid-turn. The
+         * event used to be sent regardless, so the sidebar would show a name the database had
+         * just declined to hold.
+         */
+        if (db.setAutoTitleForUser(id, userId, unique, titled.state)) {
+          sse.send({ type: "title", sessionId: id, title: unique });
+        }
       }
     }
 

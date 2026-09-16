@@ -737,6 +737,26 @@ produces a usable name. Either way the title is saved and a `title` event is emi
 between `message_done` and `done`, and neither path can turn a successful chat turn into
 an error.
 
+**Which of the two paths it took is recorded**, in `sessions.title_state` (`'model'` /
+`'fallback'`, absent for never attempted). That is a third question beside `title_source`;
+without it a model-written title and the user's own clipped words were the same value to every
+reader, so nothing could tell a named conversation from one that had merely failed to be named.
+The write is guarded — `title_source = 'auto'` is in the statement's own `WHERE`, not in its
+callers' checks — because a rename landing between the read and the write is otherwise an
+automatic title overwriting the name a person chose; `changes === 0` is how the caller learns it
+lost that race, and the SSE event is sent only when the write landed.
+
+**A failed or never-attempted title gets a second chance when the reader leaves**, through
+`POST /api/sessions/:id/leave`. The trigger is the client's, because only the browser knows the
+reader has gone and the server's own hook (`finishTurn`) is a turn ending rather than a reader
+leaving; the answer comes back on that response rather than on an SSE stream that no longer
+exists. Three things it deliberately is not: it never blocks the leave (the client reports and
+forgets), it cannot fail one (every failure is a 200, and the client says nothing), and it does
+**not** write the fallback — repeating that string would be a no-op that also marked the row as
+attempted. One in-flight attempt per conversation is joined rather than duplicated, and the
+client gates on the same predicate *before* reporting, so a conversation the model already named
+costs no request at all. `composables/sessionLeave.ts` holds the debounce.
+
 The name is then run through `uniqueSessionTitle` (`sessionTitles.ts`) against its siblings in
 the workspace, which is why the answer that is *stored* may carry a `(2)` the model never
 wrote — and why the `title` event carries the numbered one, so the sidebar and the database
@@ -1039,6 +1059,7 @@ attachments, providers and app defaults.
 | `POST /api/sessions/:id/chat` | the SSE chat stream |
 | `POST /api/sessions/:id/answers` | answer a suspended `ask_user` call, and stream the resumed turn |
 | `POST /api/sessions/:id/stop` | interrupt the turn streaming for this session; `{ ok }` says whether one was running |
+| `POST /api/sessions/:id/leave` | the reader has gone — try the titler again; `{ status: "titled" \| "skipped" \| "failed", title? }`, always 200 |
 
 Provider responses **never** include `apiKey` — only `hasApiKey: boolean`. `PUT`
 treats an absent `apiKey` field as "leave unchanged" (an empty string clears it),

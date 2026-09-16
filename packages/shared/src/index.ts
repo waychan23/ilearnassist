@@ -2553,6 +2553,36 @@ export interface Copilot {
 export type TitleSource = "auto" | "user";
 
 /**
+ * How the automatic titler last left a conversation — absent when it has never run.
+ *
+ * A different question from `TitleSource` beside it, and the difference is the whole reason this
+ * exists: that one says *who owns* the title, and this says **how the automatic pass fared**.
+ *
+ * - `"model"` — the model wrote the title. Nothing left to do.
+ * - `"fallback"` — the call failed, and what is showing is the user's own clipped words. This is
+ *   the state the retry exists for, and it used to be indistinguishable from the one above: both
+ *   leave `titleSource: "auto"` and a non-empty title, so nothing could tell a titled conversation
+ *   from one that had merely failed to be.
+ * - absent — never attempted, because the turn produced no text to name. The title is still the
+ *   create-time placeholder, which is equally worth another try.
+ */
+export type TitleState = "model" | "fallback";
+
+/**
+ * What `POST /api/sessions/:id/leave` answers.
+ *
+ * Three outcomes rather than a boolean, because the client does something different with each:
+ * `titled` carries a title to show, `skipped` means nothing was wrong and nothing needed doing,
+ * and `failed` means the model call did not work — which the reader is told nothing about, since
+ * they have already left and the next leave will try again.
+ */
+export interface TitleRetryResult {
+  status: "titled" | "skipped" | "failed";
+  /** Present only with `titled`. */
+  title?: string;
+}
+
+/**
  * A conversation.
  *
  * The Copilot fields are a **snapshot, not a reference**. `copilotId` is the only link back,
@@ -2584,6 +2614,14 @@ export interface Session {
   tools: string[];
   title: string;
   titleSource: TitleSource;
+  /**
+   * How the automatic titler last left this conversation — see `TitleState`.
+   *
+   * On the wire because the *client* is the one that decides whether to ask for a retry: it
+   * reports a leave, and asking the server to re-title a conversation the model already named
+   * would be a model call per conversation the reader walks away from.
+   */
+  titleState?: TitleState;
   settings: SessionSettings;
   /**
    * What this conversation is about, in the user's own words. Empty means nobody wrote one.

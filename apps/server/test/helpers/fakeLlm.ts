@@ -68,6 +68,16 @@ const OUT_OF_BAND_MARKERS = [
   "topic-classification function", // threads.ts — THREAD_SYSTEM_PROMPT
   "reflective study coach", // insights.ts — INSIGHT_SYSTEM_PROMPT
   "short summary of a study conversation", // notesExport.ts — NOTE_SUMMARY_SYSTEM_PROMPT
+  /*
+   * `agent/title.ts` — TITLE_SYSTEM_PROMPT. In the list because a spec needs to make the titler
+   * **fail**, and there is no other body-borne way to say so: the sticky `title` cannot be set to
+   * something unusable, because `/__script` ignores an empty one (`if (body.title)`) and a
+   * whitespace one would be indistinguishable from a title nobody scripted.
+   *
+   * A marker is not a behaviour change on its own: without a matching `includes` the lookup
+   * returns nothing and the sticky title answers, which is what every existing case relies on.
+   */
+  "titling function",
 ];
 
 /**

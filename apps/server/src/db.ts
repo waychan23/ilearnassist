@@ -35,6 +35,7 @@ import type {
   SourceOwner,
   SourceStorage,
   ThreadBranch,
+  TitleState,
   ToolCall,
   User,
   UserRole,
@@ -542,6 +543,7 @@ interface SessionRow {
   tools: string | null;
   title: string;
   title_source: string | null;
+  title_state: string | null;
   settings: string | null;
   /** The user's own note about this conversation. Always written; empty means none. */
   description: string;
@@ -871,6 +873,10 @@ const mapSession = (r: SessionRow): Session => ({
   tools: safeParseArray<string>(r.tools),
   title: r.title,
   titleSource: r.title_source === "user" ? "user" : "auto",
+  // A value nothing recognises reads as "never attempted" rather than as a title that landed —
+  // which is the safe direction, since the only thing the answer decides is whether a retry is
+  // worth making.
+  titleState: r.title_state === "model" || r.title_state === "fallback" ? r.title_state : undefined,
   settings: safeParseObject<SessionSettings>(r.settings),
   description: r.description ?? "",
   createdAt: r.created_at,
@@ -1493,8 +1499,22 @@ export interface AppDb {
       tools?: string[];
     }
   ): Session | undefined;
-  /** Replace the title on behalf of the auto-titler, keeping `titleSource: "auto"`. */
-  setAutoTitleForUser(id: string, userId: string, title: string): Session | undefined;
+  /**
+   * Replace the title on behalf of the auto-titler, keeping `titleSource: "auto"`, and record how
+   * the pass fared (`titleState`).
+   *
+   * Returns `undefined` when nothing was written, and the interesting half of that is a **lost
+   * race**: the statement carries `title_source = 'auto'` in its own `WHERE`, so a rename landing
+   * between the caller's read and this write refuses the automatic title rather than overwriting
+   * the name a person chose. A caller must therefore treat `undefined` as "do not report a new
+   * title", not as "the session is gone".
+   */
+  setAutoTitleForUser(
+    id: string,
+    userId: string,
+    title: string,
+    titleState: TitleState
+  ): Session | undefined;
   /**
    * Marks the conversation deleted. Returns false when no live session existed, or it belonged
    * to someone else. Its messages, links, plans and quiz rows all stay, as does the reserved
@@ -2124,6 +2144,18 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "sessions", "summary", "summary TEXT");
 
     /*
+     * How the auto-titler last left the row: `'model'`, `'fallback'`, or `NULL` for never
+     * attempted.
+     *
+     * `title_source` beside it says *who owns* the title, which is a different question — and the
+     * one this answers is the retry's: a conversation whose title came out as the user's own
+     * clipped words had a model call that failed, and nothing else recorded that. The two values
+     * are a closed set the readers compare exactly, so an unknown one (a downgrade) reads as "no
+     * attempt" and is offered a retry rather than trusted.
+     */
+    ensureColumn(db, "sessions", "title_state", "title_state TEXT");
+
+    /*
      * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
      * that gives Copilots an owner.
      *
@@ -2614,9 +2646,19 @@ export function createDb(dbPath: string): AppDb {
       WHERE id = @id AND deleted_at IS NULL
         AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = @userId AND deleted_at IS NULL)`
   );
+  /*
+   * The auto-titler's write, and `title_source = 'auto'` is part of the statement rather than of
+   * its callers' checks.
+   *
+   * Both callers read the session first and then call this, which is a window the user can rename
+   * in — and a rename is permanent by design, so an automatic title landing after one would
+   * overwrite the name a person chose. Reading first and writing second is a check somebody has to
+   * remember on the next call site; in the `WHERE` it is the write's own answer, and `changes === 0`
+   * is how the caller learns it lost the race.
+   */
   const stmtSetAutoTitleForUser = db.prepare(
-    `UPDATE sessions SET title = ?, updated_at = ?
-      WHERE id = ? AND deleted_at IS NULL
+    `UPDATE sessions SET title = ?, title_state = ?, updated_at = ?
+      WHERE id = ? AND deleted_at IS NULL AND title_source = 'auto'
         AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
   );
   const stmtSoftDeleteSessionForUser = db.prepare(
@@ -3575,8 +3617,8 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);
     },
-    setAutoTitleForUser(id, userId, title) {
-      const { changes } = stmtSetAutoTitleForUser.run(title, now(), id, userId);
+    setAutoTitleForUser(id, userId, title, titleState) {
+      const { changes } = stmtSetAutoTitleForUser.run(title, titleState, now(), id, userId);
       if (changes === 0) return undefined;
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);

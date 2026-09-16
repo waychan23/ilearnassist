@@ -40,6 +40,7 @@ import type {
   SessionWidgets,
   Source,
   StartNoteSyncInput,
+  TitleRetryResult,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
@@ -631,6 +632,15 @@ export const api = {
     }),
   updateSession: (id: string, input: UpdateSessionInput) =>
     request<Session>(`/sessions/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  /**
+   * The reader has left this conversation. An event rather than a data change: the answer is
+   * usually `skipped`, and the call exists because only the browser knows the reader has gone —
+   * see `composables/sessionLeave.ts` for the whole of the reasoning.
+   *
+   * A `POST` that can take the titler's 20 seconds, which is why nothing ever awaits it.
+   */
+  reportSessionLeave: (sessionId: string) =>
+    request<TitleRetryResult>(`/sessions/${sessionId}/leave`, { method: "POST" }),
   deleteSession: (id: string) =>
     request<{ ok: boolean }>(`/sessions/${id}`, { method: "DELETE" }),
 

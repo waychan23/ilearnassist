@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     createSession: vi.fn(),
     updateSession: vi.fn(),
     deleteSession: vi.fn(),
+    reportSessionLeave: vi.fn().mockResolvedValue({ status: "skipped" }),
     listMessages: vi.fn(),
     listWorkspaceWidgets: vi.fn(),
     setWorkspaceWidget: vi.fn(),
@@ -1481,6 +1482,80 @@ describe("the panel's open tab", () => {
     await store.selectSession("s1");
 
     expect(widgetPanel.activeId.value).toBe("diagram");
+  });
+});
+
+describe("leaving a conversation", () => {
+  /*
+   * The store's half of the leave report: which transitions count as leaving, and what the late
+   * title does to its own copy of the list. `composables/sessionLeave.test.ts` owns the debounce
+   * and the gate; this is where "the store tells it what is on screen" is pinned.
+   */
+
+  /*
+   * The composable is a module singleton, so the conversation it thinks is on screen and any
+   * pending timer both outlive a test — and a leftover timer fires during the *next* case's
+   * `sweep`, which reads as a report from nowhere. `forgetSession` is the production reset (the
+   * store calls it on delete and sign-out), so this is the same call the app makes rather than a
+   * test-only back door.
+   */
+  beforeEach(async () => {
+    const { forgetSession } = await import("../../src/composables/sessionLeave.js");
+    forgetSession();
+    vi.clearAllTimers();
+  });
+
+  const sweep = () => vi.advanceTimersByTimeAsync(3_000);
+
+  it("reports the conversation a switch leaves behind", async () => {
+    const store = await readyStore({ sessions: [session({ id: "s1" }), session({ id: "s2" })] });
+
+    await store.selectSession("s2");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).toHaveBeenCalledWith("s1");
+  });
+
+  it("reports the conversation a workspace switch leaves behind", async () => {
+    const store = await readyStore();
+    await store.selectWorkspace("w2");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).toHaveBeenCalledWith("s1");
+  });
+
+  it("says nothing for a conversation the model already named", async () => {
+    const store = await readyStore({ sessions: [session({ id: "s1", titleState: "model" })] });
+    await store.selectWorkspace("w2");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).not.toHaveBeenCalled();
+  });
+
+  it("patches its own copy when a title arrives late", async () => {
+    /*
+     * The reader has gone somewhere else, so there is no list request to carry this — the patch is
+     * what makes the sidebar show the name without a reload. `titleState` moves with it, which is
+     * what stops the next leave reporting the same conversation again.
+     */
+    mocks.api.reportSessionLeave.mockResolvedValue({ status: "titled", title: "递归入门" });
+    const store = await readyStore({ sessions: [session({ id: "s1" }), session({ id: "s2" })] });
+
+    await store.selectSession("s2");
+    await sweep();
+
+    expect(store.sessions.find((s) => s.id === "s1")?.title).toBe("递归入门");
+    expect(store.sessions.find((s) => s.id === "s1")?.titleState).toBe("model");
+  });
+
+  it("says nothing about a conversation it deletes", async () => {
+    // Deleting is not leaving: there is nowhere to keep a new title, and the report would be a
+    // request whose answer is a 404 by construction.
+    const store = await readyStore();
+    await store.deleteSession("s1");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).not.toHaveBeenCalled();
   });
 });
 

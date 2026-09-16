@@ -297,13 +297,39 @@ describe("sessions", () => {
 
   it("lets the auto-titler rename without taking ownership", () => {
     addSession("s1");
-    const titled = db.setAutoTitleForUser("s1", OWNER, "Model Chose This");
+    const titled = db.setAutoTitleForUser("s1", OWNER, "Model Chose This", "model");
     expect(titled!.title).toBe("Model Chose This");
     expect(titled!.titleSource).toBe("auto");
+    // And how it was arrived at, which is what tells a retry whether there is anything to do.
+    expect(titled!.titleState).toBe("model");
+  });
+
+  it("records a fallback title as such, so it can be retried", () => {
+    // The distinction the retry is built on: both states leave `titleSource: "auto"` with a
+    // non-empty title, so without this a conversation named by the user's own clipped words is
+    // indistinguishable from one the model named.
+    addSession("s1");
+    const titled = db.setAutoTitleForUser("s1", OWNER, "用户自己的话", "fallback");
+    expect(titled!.titleState).toBe("fallback");
+  });
+
+  it("refuses to auto-title a conversation the user has renamed", () => {
+    /*
+     * The guard is in the statement rather than in its callers' checks, because both callers read
+     * the session and then write — a window the user can rename in, and a rename is permanent by
+     * design. `undefined` is how the caller learns it lost that race, and it is the same answer a
+     * missing session gives.
+     */
+    addSession("s1");
+    db.updateSessionForUser("s1", OWNER, { title: "Mine" });
+
+    expect(db.setAutoTitleForUser("s1", OWNER, "Machine", "model")).toBeUndefined();
+    expect(db.getSessionForUser("s1", OWNER)?.session.title).toBe("Mine");
+    expect(db.getSessionForUser("s1", OWNER)?.session.titleSource).toBe("user");
   });
 
   it("returns undefined from setAutoTitle for a missing session", () => {
-    expect(db.setAutoTitleForUser("nope", OWNER, "x")).toBeUndefined();
+    expect(db.setAutoTitleForUser("nope", OWNER, "x", "model")).toBeUndefined();
   });
 
   it("returns undefined from updateSession for a missing session", () => {
