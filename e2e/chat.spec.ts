@@ -316,9 +316,14 @@ test("the canned replies appear once there is something to reply to", async ({ p
 
   const quick = page.getByTestId("composer-quick");
   await expect(quick).toBeVisible();
+  await expect(quick.getByTestId("composer-quick-label")).toHaveText("快捷回复");
   await expect(quick.getByTestId("quick-continue")).toHaveText("继续");
   await expect(quick.getByTestId("quick-yes")).toHaveText("是的");
   await expect(quick.getByTestId("quick-ok")).toHaveText("可以");
+
+  // The label names the row rather than joining it: a fourth thing shaped like a chip would be
+  // a fourth thing to click, and clicking this one would have to do nothing.
+  await expect(quick.locator("button")).toHaveCount(3);
 
   /*
    * Centred, which is a layout claim and so only a browser can answer it. Asserted as

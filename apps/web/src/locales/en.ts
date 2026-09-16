@@ -230,8 +230,11 @@ const en: typeof MessageSchema = {
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — so they are kept short and conversational rather than being
      * names for intents. "OK" rather than "Okay" to match the Chinese in length on screen.
+     *
+     * `label` names the row rather than being sent.
      */
     quick: {
+      label: "Quick replies",
       continue: "Continue",
       yes: "Yes",
       ok: "OK",

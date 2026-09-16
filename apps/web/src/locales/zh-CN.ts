@@ -292,8 +292,12 @@ export default {
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — which is why they are short enough to read as one and why the
      * component sends the rendered label rather than a separate string that could drift from it.
+     *
+     * `label` names the row rather than being sent: it says what the three chips are, for
+     * someone who has not seen them answer anything yet.
      */
     quick: {
+      label: "快捷回复",
       continue: "继续",
       yes: "是的",
       ok: "可以",

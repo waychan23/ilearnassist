@@ -229,6 +229,16 @@ function onInput() {
         against it and the status lines stay where they were.
       -->
       <div v-if="showQuickReplies" class="quick-row" data-testid="composer-quick">
+        <!--
+          A name for the row rather than a fourth chip: it is not something the user can send,
+          and it is drawn in the muted text colour so it does not read as one. First in the DOM
+          rather than `aria-label` on the row, so a screen reader announces it in the same breath
+          as the chips — and so the words are on screen, where a reader who has never seen the
+          chips answer anything can read what they are for.
+        -->
+        <span class="quick-label" data-testid="composer-quick-label">
+          {{ t("composer.quick.label") }}
+        </span>
         <button
           v-for="reply in quickReplies"
           :key="reply.id"
@@ -395,9 +405,14 @@ function onInput() {
  * The canned replies. Centred rather than stretched: three short answers are a set of choices,
  * and a row that filled the width would read as a segmented control the user has to pick from
  * rather than as three things they may say.
+ *
+ * The label is *inside* the row and the row is what centres, so the group stays on the
+ * composer's axis with the chips a little right of it — the alternative, a label hung outside
+ * a centred row, puts the whole group off-centre instead.
  */
 .quick-row {
   display: flex;
+  align-items: center;
   justify-content: center;
   flex-wrap: wrap;
   gap: var(--space-4);
@@ -408,6 +423,15 @@ function onInput() {
    * with the notices.
    */
   margin-bottom: calc(-1 * var(--space-2));
+}
+/*
+ * The row's name. Muted and unboxed, which is the whole of how it says "not a chip": it carries
+ * the same size as the chips so the row reads as one line, and none of their affordances — no
+ * border, no fill, no cursor — so nothing about it invites a click.
+ */
+.quick-label {
+  font-size: var(--fs-2);
+  color: var(--text-3);
 }
 /*
  * `.pill` in the stylesheet gives the shape — the border and the radius. What a *clickable* pill
