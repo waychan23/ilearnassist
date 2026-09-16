@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { DEFAULT_WIDGET_IDS, widgetsForScope, type WidgetId } from "../../api/types";
+import { defaultWidgetIdsForScope, widgetsForScope, type WidgetId } from "../../api/types";
 import { useAppStore } from "../../stores/app";
 import { widgetLabel } from "../../widgets/registry";
 import Icon from "../Icon.vue";
@@ -21,8 +21,14 @@ const saving = ref(false);
  * is a choice made in advance and the whole set lands in one write. That is the same distinction
  * as the Copilot editor's — and why the *editing* dialog, where each click takes effect
  * immediately, is a list of switches instead.
+ *
+ * **Seeded through `defaultWidgetIdsForScope`, not from `DEFAULT_WIDGET_IDS` directly.** A
+ * misplaced id is *refused* rather than filtered, so sending a session-scope default here does
+ * not install the wrong widgets — the create request answers `WIDGET_SCOPE_UNSUPPORTED` and the
+ * workspace is never made at all. With an empty default list the two expressions were
+ * indistinguishable, which is what made this a trap rather than a formality.
  */
-const widgets = ref<WidgetId[]>([...DEFAULT_WIDGET_IDS]);
+const widgets = ref<WidgetId[]>(defaultWidgetIdsForScope("workspace"));
 const available = widgetsForScope("workspace");
 
 function toggleWidget(id: WidgetId) {

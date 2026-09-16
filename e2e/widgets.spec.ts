@@ -150,14 +150,19 @@ test.describe("the widget panel", () => {
     await page.getByTestId("new-session-widget-check-session_stats").check();
     await page.getByTestId("create-session").click();
 
-    // Both tabs, in the order the levels are declared — which is the order of the strip.
+    /*
+     * The workspace level first and every session-level tab after it — which is what the divider
+     * separates. Asserted as an *order* rather than at fixed positions, because how many widgets
+     * a fresh conversation starts with is not this case's claim: it begins with the notes and
+     * sources panels, so the session group is three tabs wide before this case's own one is added.
+     */
     await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
     await expect(page.getByTestId("widget-tab-session_stats")).toBeVisible();
     await expect(page.getByTestId("widget-tabs-divider")).toBeVisible();
 
-    const tabs = await page.locator(".widget-tab").all();
-    expect(await tabs[0]!.textContent()).toContain("工作区统计");
-    expect(await tabs[1]!.textContent()).toContain("会话统计");
+    const labels = (await page.locator(".widget-tab").allInnerTexts()).map((s) => s.trim());
+    expect(labels[0]).toContain("工作区统计");
+    expect(labels.findIndex((l) => l.includes("会话统计"))).toBeGreaterThan(0);
 
     // The divider sits between them rather than at either end.
     const divider = (await page.getByTestId("widget-tabs-divider").boundingBox())!;
@@ -302,10 +307,14 @@ test.describe("the widget panel", () => {
 
   test("moves tabs that no longer fit into the more menu", async ({ page }) => {
     /*
-     * Two tabs and a 320px panel fit, so the overflow is reached the way a user reaches it: by
-     * dragging the panel narrow. This is the only coverage of the menu's *wiring* — the fit
-     * arithmetic has unit tests, but that the button opens a menu, that the menu lists what is
-     * missing, and that picking from it switches the panel is a browser question.
+     * This is the only coverage of the menu's *wiring* — the fit arithmetic has unit tests, but
+     * that the button opens a menu, that the menu lists what is missing, and that picking from it
+     * switches the panel is a browser question.
+     *
+     * The strip starts with four tabs, because a conversation installs the notes and sources
+     * panels by default, and `widgetsForScope` walks the registry — so the session group is
+     * `session_stats, notes, sources` and it is the **last** of those that is the tail. The drag
+     * is still the case's subject: it is what guarantees the tail rather than hoping for it.
      */
     const name = unique("Overflow");
     await createWorkspaceWith(page, name, ["workspace_stats"]);
@@ -314,9 +323,7 @@ test.describe("the widget panel", () => {
     await page.getByTestId("new-session-widget-check-session_stats").check();
     await page.getByTestId("create-session").click();
 
-    await expect(page.getByTestId("widget-more")).toHaveCount(0);
-
-    // Drag the panel to its narrowest, which is where two tabs stop fitting.
+    // Drag the panel to its narrowest, which is well past where four tabs stop fitting.
     const handle = (await page.getByTestId("widget-resize").boundingBox())!;
     await page.mouse.move(handle.x + 2, handle.y + handle.height / 2);
     await page.mouse.down();
@@ -335,7 +342,7 @@ test.describe("the widget panel", () => {
      * goes is therefore never a state with an unreadable strip.
      */
     await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
-    await expect(page.getByTestId("widget-tab-session_stats")).toBeHidden();
+    await expect(page.getByTestId("widget-tab-sources")).toBeHidden();
 
     // Open it: the menu lists what is missing, and it anchors *under* the button rather than above
     // it — which is the shared `.overlay-popover` surface's own direction, and where a stray `top`
@@ -360,10 +367,10 @@ test.describe("the widget panel", () => {
     expect(menuBox.x).toBeGreaterThanOrEqual(panelBox.x);
     expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);
 
-    await expect(page.getByTestId("widget-more-item-session_stats")).toBeVisible();
+    await expect(page.getByTestId("widget-more-item-sources")).toBeVisible();
 
-    await page.getByTestId("widget-more-item-session_stats").click();
-    await expect(page.getByTestId("widget-session-stats")).toBeVisible();
+    await page.getByTestId("widget-more-item-sources").click();
+    await expect(page.getByTestId("widget-sources")).toBeVisible();
   });
 
   test("collapses to a rail, with the control still there to undo it", async ({ page }) => {

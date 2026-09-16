@@ -53,7 +53,10 @@ async function sourcesSession(page: Page, name: string): Promise<void> {
   await page.getByTestId("new-session-widget-check-sources").check();
   await page.getByTestId("create-session").click();
 
-  // The only widget installed, so it is the strip's first tab and already on screen.
+  // Opened rather than assumed to be already on screen: it used to be the strip's first tab
+  // because it was the only widget installed, and a conversation now starts with the notes panel
+  // too. Which tab a fresh conversation opens on is `widgets.spec.ts`'s business, not this one's.
+  await page.getByTestId("widget-tab-sources").click();
   await expect(page.getByTestId("widget-sources")).toBeVisible();
 }
 

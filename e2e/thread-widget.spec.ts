@@ -100,7 +100,16 @@ test.describe("the thread widget", () => {
     await enterWorkspace(page, name);
     await page.getByTestId("new-session").click();
     await page.getByTestId("create-session").click();
-    await expect(page.getByTestId("widget-panel")).toHaveCount(0);
+    /*
+     * Asserted on the three tabs rather than on the panel, which the pack's members happen to be
+     * the only occupants of *only* until `DEFAULT_WIDGET_IDS` stopped being empty: a conversation
+     * now starts with the notes and sources panels, so the panel is on screen throughout and
+     * "is it there" says nothing about this pack. `newSessionDialogArmed` below is the other half
+     * of that — it pins what a fresh conversation actually installs.
+     */
+    await expect(page.getByTestId("widget-tab-plan")).toHaveCount(0);
+    await expect(page.getByTestId("widget-tab-quiz")).toHaveCount(0);
+    await expect(page.getByTestId("widget-tab-thread")).toHaveCount(0);
 
     // The group row installs every member in one click.
     await page.getByTestId("open-session-settings").click();
@@ -115,6 +124,8 @@ test.describe("the thread widget", () => {
     await page.getByTestId("open-session-settings").click();
     await page.getByTestId("session-widget-group-study").click();
     await page.getByTestId("session-settings-save").click();
-    await expect(page.getByTestId("widget-panel")).toHaveCount(0);
+    await expect(page.getByTestId("widget-tab-plan")).toHaveCount(0);
+    await expect(page.getByTestId("widget-tab-quiz")).toHaveCount(0);
+    await expect(page.getByTestId("widget-tab-thread")).toHaveCount(0);
   });
 });

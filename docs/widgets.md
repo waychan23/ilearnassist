@@ -175,8 +175,8 @@ show a window, and nothing about notes as records; the widget knows about notes 
 [`composables/messageNotes.ts`](../apps/web/src/composables/messageNotes.ts) and nothing else, and
 that module holds a **claim** — one widget id per conversation, with a refusal that names the
 holder, so a second widget is told rather than left to draw over the first. (With one notes widget
-in the registry and `DEFAULT_WIDGET_IDS` empty, a second claimant cannot exist today; the rule is
-kept because the alternative is a silent race.)
+in the registry a second claimant cannot exist today; the rule is kept because the alternative is a
+silent race.)
 
 The claim is **per conversation**, not per widget: the message list on screen belongs to one
 session, while the same widget is installed in a different set of them. A claim that said only
@@ -197,7 +197,10 @@ Registration order does not matter. The host registers on mount and the widget c
   `WIDGET_SCOPE_UNSUPPORTED`; a filtered id is a selection that looks like it worked.
 - **Absent and empty are different.** In a request body, an omitted `widgets` falls through to the
   next tier (a Copilot's selection, then `DEFAULT_WIDGET_IDS`) while `[]` means none and stops the
-  fall-through.
+  fall-through. A named list is honoured **literally** — `["diagram"]` gets that and nothing else,
+  not that plus the defaults — which is why the three create dialogs seed their checkboxes from
+  `DEFAULT_WIDGET_IDS`: they always send what they hold, so an empty start would have made a
+  non-empty default invisible in every object created through the UI.
 - **Every route is owner-scoped in the `WHERE`.** A session reaches its owner through its workspace
   by join. A widget never needs its own ownership check — and must not add one that replaces the
   scoped read.
@@ -279,8 +282,13 @@ anything into could never make a plan, and the panel could never introduce itsel
 
 Both scopes are session-level for every widget that brings tools today. A "workspace-level default
 that auto-installs into new sessions" is still a separate mechanism and is still not built; what
-`DEFAULT_WIDGET_IDS` provides is a per-level default, and a Copilot's selection is copied into the
-conversation it starts.
+`DEFAULT_WIDGET_IDS` provides is a **per-level** default, and a Copilot's selection is copied into
+the conversation it starts — which is how "install this in every conversation" is expressed for a
+session-scope widget. Today the default names `notes` and `sources`: both are *views over what the
+conversation already holds*, so a panel for either is useful before anybody asks, while a plan, a
+quiz, a diagram and an insight pass are things a conversation **produces** — a panel for one of
+those is meaningful only once there is something in it, and `plan` and `diagram` install themselves
+when their tool runs.
 
 ### A widget's data reached *without* naming a tool: `ila_query`
 

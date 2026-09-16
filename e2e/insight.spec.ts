@@ -35,7 +35,13 @@ async function insightSession(page: Page, name: string): Promise<void> {
   await page.getByTestId("new-session-widget-check-insight").check();
   await page.getByTestId("create-session").click();
 
-  // The first tab of a brand-new conversation, and the only widget installed.
+  /*
+   * The insight tab is opened rather than assumed. It used to be the first tab because it was the
+   * only widget installed, and a conversation now starts with the notes and sources panels too —
+   * so "the panel opened on insight" would be a test of the widget order, which is not what this
+   * helper is for.
+   */
+  await page.getByTestId("widget-tab-insight").click();
   await expect(page.getByTestId("widget-insight")).toBeVisible();
   await expect(page.getByTestId("insight-empty")).toBeVisible();
 }

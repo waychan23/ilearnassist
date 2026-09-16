@@ -179,6 +179,14 @@ JSON array (including `[]`) is an explicit selection. A `NOT NULL DEFAULT '[]'` 
 every Copilot written before the column existed that it installs nothing, a decision its owner
 never made; `mapCopilot` resolves `NULL` to `DEFAULT_WIDGET_IDS` instead.
 
+The default is **not empty**: `DEFAULT_WIDGET_IDS` names `notes` and `sources`, the two panels that
+are views over what a conversation already holds — what the learner wrote, and what the
+conversation is working from. Both are useful before anybody asks, which is what separates them
+from the ones that report something a conversation has *produced*. The consequence to keep in mind
+is that this is a decision about **absence**, so it reaches every object nobody has answered for
+rather than only future ones, and it is why the create dialogs seed their checkboxes from the same
+list: they always send what they hold, and a named list is honoured literally.
+
 Reads iterate the **registry** rather than the rows, so one entry comes back per widget this build
 knows at that level and a stored row is indistinguishable from a defaulted one. A row naming an id
 a downgrade removed is dropped rather than handed to a client that cannot render it — the same

@@ -702,14 +702,28 @@ export function autoInstallWidgetForTool(name: string): WidgetId | undefined {
 }
 
 /**
- * What a brand-new object starts with — deliberately **empty**, so the panel is opt-in and the
- * create dialogs are where the choice is presented.
+ * What a brand-new conversation starts with: the two panels that are *views over what the
+ * conversation already holds*.
  *
- * This is a product decision about what every *future* object starts with, and it never
- * retroactively changes an existing one: a row exists for anything that has been decided (see
- * `WidgetState`), so changing this list cannot reach an object that has already answered.
+ * `notes` is what the learner wrote and `sources` is what the conversation is working from.
+ * Both are useful before anybody asks for them, and neither needs setting up — which is what
+ * separates them from the rest. A plan, a quiz, a diagram and an insight pass are all things a
+ * conversation *produces*, so a panel for one of those is meaningful only once there is
+ * something in it, and `plan` and `diagram` install themselves when their tool runs.
+ *
+ * This is a product decision about what every *unanswered* object starts with, and the word
+ * matters: a row exists for anything that has been **decided** (installed or uninstalled, see
+ * `WidgetState`), and this is the answer for everything else. Two consequences are load-bearing
+ * rather than incidental:
+ *
+ * - Changing this list reaches every object nobody has answered for — including ones that
+ *   already exist, which is why it is a decision about *absence* rather than about the future.
+ *   The three create dialogs prefill this list so the choice is visible before the object is
+ *   made; a caller that sends `[]` still means "none", and that stops the fall-through.
+ * - An uninstall writes `enabled = 0` rather than deleting the row, which is what keeps a
+ *   widget removed from *this* list from coming back the moment the list changes again.
  */
-export const DEFAULT_WIDGET_IDS: readonly WidgetId[] = [];
+export const DEFAULT_WIDGET_IDS: readonly WidgetId[] = ["notes", "sources"];
 
 export function isWidgetId(value: unknown): value is WidgetId {
   return typeof value === "string" && (WIDGET_IDS as readonly string[]).includes(value);
@@ -733,11 +747,29 @@ export function defaultWidgetEnabled(id: WidgetId): boolean {
 }
 
 /**
+ * The default widgets that accept `scope` — what a create dialog should actually prefill, and
+ * what a server fallback at one level should actually write.
+ *
+ * `DEFAULT_WIDGET_IDS` is one list, and a level can only install what it accepts. That is not a
+ * matter of installing too much: `parseWidgetIds` **refuses** a misplaced id with
+ * `WIDGET_SCOPE_UNSUPPORTED` rather than filtering it, so a create request carrying a
+ * session-scope default at workspace scope does not install the wrong widgets — it fails, and the
+ * object is never created. The defaults are session-scope today and every scope's answer is the
+ * same empty-relative-to-it list, which is exactly why the mistake is easy to make and worth a
+ * function rather than a `filter` at each of the five call sites.
+ */
+export function defaultWidgetIdsForScope(scope: WidgetScope): WidgetId[] {
+  return widgetsForScope(scope)
+    .filter((w) => defaultWidgetEnabled(w.id))
+    .map((w) => w.id);
+}
+
+/**
  * One widget's state on one object — what the install lists show and the tab strip renders.
  *
- * This is the **resolved** record, not the stored one: an object nothing has ever decided
- * about answers `enabled: false` here, which is why a call site cannot tell a stored row from
- * a defaulted one. Storing the difference would be a second source of truth for the same fact.
+ * This is the **resolved** record, not the stored one: an object nothing has ever decided about
+ * answers `defaultWidgetEnabled(id)`, which is why a call site cannot tell a stored row from a
+ * defaulted one. Storing the difference would be a second source of truth for the same fact.
  */
 export interface WidgetState {
   id: WidgetId;

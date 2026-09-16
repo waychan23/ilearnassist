@@ -42,16 +42,22 @@ export const WIDGET_ACTIVE_KEY = "gl-widget-active";
  * Two constraints, and they pull in opposite directions — which is what fixes the number:
  *
  * - **At least one tab must stay visible.** A strip showing nothing but its "more" button is a
- *   panel that cannot say which widget it is showing. The widest label comes to ~143px and the
- *   header's own controls take ~74px, so anything below ~217 breaks that.
- * - **The narrow end must still be narrow enough to overflow.** Both tabs need ~270px of strip, so
+ *   panel that cannot say which widget it is showing. The widest label comes to ~143px, the "more"
+ *   button to ~26px and their gap to ~4px — and **the button has to be counted**, because it is on
+ *   screen in exactly the state this constraint is about: the strip is overflowing, or there would
+ *   be no button. The header's own controls (the layout toggle, the collapse button, the padding)
+ *   take another ~75px, so the floor is ~248.
+ * - **The narrow end must still be narrow enough to overflow.** Two tabs need ~276px of strip, so
  *   the tail has to move into the menu somewhere below that — which is what keeps the overflow
  *   path a state a user can actually reach instead of machinery nobody ever triggers.
  *
- * 230 sits between the two with a little slack on the first, so a slightly longer label does not
- * quietly push both tabs into the menu.
+ * 260 sits between the two with ~13px of slack, so a slightly longer label does not quietly push
+ * every tab into the menu. **230 was that number with the "more" button left out**, which made
+ * `fitWidgetTabs` return an empty `visible` at the panel's own minimum width — the one state the
+ * floor exists to prevent. It took a conversation with four tabs to reach, because two of them
+ * together overflowed before the button was ever measured against a budget that excluded it.
  */
-export const WIDGET_MIN_WIDTH = 230;
+export const WIDGET_MIN_WIDTH = 260;
 export const WIDGET_MAX_WIDTH = 720;
 
 /**

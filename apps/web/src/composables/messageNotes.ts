@@ -14,7 +14,7 @@ import type { NoteHighlightMark } from "../utils/noteAnchor";
  * would put a second Pinia store in the middle of an import cycle that already exists.
  *
  * **Only one widget controls the message list at a time.** That is a rule rather than a
- * present constraint — with one notes widget in the registry and `DEFAULT_WIDGET_IDS` empty,
+ * present constraint — with one notes widget in the registry,
  * two claimants cannot exist today — and it is kept as a claim with a refusal so that a
  * second one gets told, rather than the two of them racing to draw over each other.
  *

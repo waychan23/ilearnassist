@@ -47,7 +47,7 @@ import type {
 } from "@ilearnassist/shared";
 import {
   DEFAULT_USER_ROLES,
-  DEFAULT_WIDGET_IDS,
+  defaultWidgetIdsForScope,
   isEnabledSuperadmin,
   isUserRole,
   isWidgetId,
@@ -847,9 +847,14 @@ const mapCopilot = (r: CopilotRow): Copilot => ({
   // `null` is "never set" and resolves to the defaults; an array (including `[]`) is a decision.
   // An id this build does not know is dropped rather than handed on, because a reader derives
   // from the registry — the same move `all_tools` makes against a stale `tools` list.
+  //
+  // The session-scope defaults specifically, not the raw list: a Copilot installs into a session,
+  // and its selection is replayed through `widgetRowsForSelection("session", …)` on create. A
+  // workspace-scope id reaching there would not be filtered — it would be refused, and the
+  // conversation would fail to start.
   widgets:
     r.widgets === null
-      ? [...DEFAULT_WIDGET_IDS]
+      ? defaultWidgetIdsForScope("session")
       : safeParseArray<string>(r.widgets).filter(isWidgetId),
   visibility: r.visibility === "public" ? "public" : "private",
   createdAt: r.created_at,

@@ -54,8 +54,8 @@ import type {
 import {
   boundToolNamesForWidgetIds,
   DEFAULT_USER_ROLES,
+  defaultWidgetIdsForScope,
   isEnabledSuperadmin,
-  DEFAULT_WIDGET_IDS,
   isPlatformAdmin,
   isUserRole,
   MAX_ATTACHMENT_BYTES,
@@ -1172,8 +1172,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * The widget selection lands here, in one go, because a workspace does not exist when its
      * boxes are ticked — which is what makes `installed` a moment per widget rather than a
      * sequence of flips. Only the *differences* from the default are written, so an object whose
-     * state equals the defaults needs no rows at all; with an empty default set that is one row
-     * per ticked widget and nothing else.
+     * state equals the defaults needs no rows at all.
      *
      * No failure path from here on: the workspace exists, and a write that threw would leave it
      * unusable rather than uncreated.
@@ -1622,7 +1621,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       allTools: body.allTools !== false,
       tools: body.tools ?? [],
       settings: body.settings ?? {},
-      widgets: widgets.ids ?? [...DEFAULT_WIDGET_IDS],
+      // The session-scope defaults, because a Copilot installs into a session: an id of another
+      // scope would be refused by `widgetRowsForSelection("session", …)` when a conversation is
+      // created from this Copilot, not filtered here.
+      widgets: widgets.ids ?? defaultWidgetIdsForScope("session"),
       // Private unless asked otherwise: publishing puts a persona in front of every account,
       // so it is something the owner opts into rather than a default they discover later.
       visibility: body.visibility === "public" ? "public" : "private",

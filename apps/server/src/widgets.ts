@@ -142,8 +142,10 @@ export function parseWidgetIds(value: unknown, scope: WidgetScope): WidgetSelect
  *
  * A difference is the minimal record of a decision: an object whose state equals the defaults
  * needs no rows at all, and every decision that *does* differ is written — including an
- * uninstall of something the default would have installed, which is what keeps it off. With an
- * empty `DEFAULT_WIDGET_IDS` that is one row per installed widget and nothing else.
+ * uninstall of something the default would have installed, which is what keeps it off. With the
+ * two-view default that is one row per widget somebody actually turned on or off, and nothing
+ * for the rest — so an install of a defaulted widget writes no row either, and the object stays
+ * silent about a state it never disagreed with.
  */
 export function widgetRowsForSelection(
   scope: WidgetScope,
