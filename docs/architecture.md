@@ -1274,6 +1274,17 @@ itself made. Its row carries `adopted`, which is the only thing that survives th
 is also why it is not in the `"study"` group: the group's rule is "live on install" and this one
 waits to be asked (see [widgets.md](widgets.md#an-on-demand-widget-with-no-tools-the-insight-widget)).
 
+**A panel over the source registry shows the conversation's material, not the model's whitelist.**
+The sources panel (`id: "sources"`) reads `GET /api/sources?sessionId=…` — held by this
+conversation *or* linked into it — rather than `GET /api/sessions/:id/sources`, which is the
+session ∪ workspace union and is exactly what `read_document` is bound to. The two are one route
+apart and answer different questions: what a panel should show is what the conversation is
+working from, and the whitelist would put a workspace's whole corpus beside the three files it is
+about. It filters by category **client-side**, from the rows it already has, because one
+conversation's list is small and the option list is the one thing the server cannot answer in the
+same request — see [sources.md](sources.md) and
+[widgets.md](widgets.md#a-viewer-over-the-registry-the-sources-widget).
+
 A widget declares which levels it accepts — `workspace`, `session` — and only those two exist. A
 **Copilot is a third place to tick a box, not a third scope**: its selection is copied into the
 conversation it starts, so "copilot level" is session level reached through a template. Three

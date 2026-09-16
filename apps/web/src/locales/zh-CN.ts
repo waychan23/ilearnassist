@@ -1034,6 +1034,16 @@ export default {
         habit: "学习习惯",
       },
     },
+    sources: {
+      name: "参考资料",
+      hint: "这个会话引用和产出的资料 —— 上传的文件、收藏的网页、写入的文件，可按内容类型筛选。",
+      noSession: "打开一个会话后，这里会列出它的参考资料。",
+      empty: "这个会话还没有参考资料。上传文件、引用资料或让助理写一个文件，都会出现在这里。",
+      /** A filter rather than an empty conversation: the rows exist, the selection hides them. */
+      noMatch: "没有符合筛选条件的资料。",
+      missing: "已丢失",
+      failed: "读取参考资料失败。",
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */

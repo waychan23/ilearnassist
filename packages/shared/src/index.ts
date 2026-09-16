@@ -450,6 +450,7 @@ export const WIDGET_IDS = [
   "notes",
   "diagram",
   "insight",
+  "sources",
 ] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
@@ -525,6 +526,20 @@ export const WIDGETS: readonly WidgetDefinition[] = [
    * same data on purpose: the agent reads it during a turn, the panel thinks about it when asked.
    */
   { id: "insight", scopes: ["session"] },
+  /*
+   * The sources panel brings no tools, for the diagram widget's reason: there is nothing to
+   * bind that the agent does not already have.
+   *
+   * `read_document` and `ila_query` are how a *turn* reaches this material, and both exist
+   * whether or not a panel is installed — `read_document` is gated on the conversation's
+   * whitelist being non-empty, not on a widget. Binding something here would mean the model
+   * could only find what the user happened to be looking at, which is backwards: the panel is a
+   * *view* of what the conversation holds, and a conversation holds it either way.
+   *
+   * Session-scoped, because the question it answers is "what is this conversation working
+   * from" — a workspace's own listing is the library dialog, which the chat header opens.
+   */
+  { id: "sources", scopes: ["session"] },
 ];
 
 /**

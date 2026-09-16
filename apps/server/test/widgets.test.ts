@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WIDGET_IDS,
+  widgetsForScope,
   type MessageUsage,
   type SessionStats,
   type Workspace,
@@ -126,15 +127,16 @@ describe("widgetRowsForSelection", () => {
 
 describe("resolveWidgetStates", () => {
   it("answers one entry per known widget, defaulting the ones nothing decided", () => {
-    expect(resolveWidgetStates("session", [])).toEqual([
-      { id: "session_stats", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("session_stats") },
-      { id: "plan", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("plan") },
-      { id: "quiz", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("quiz") },
-      { id: "thread", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("thread") },
-      { id: "notes", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("notes") },
-      { id: "diagram", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("diagram") },
-      { id: "insight", scope: "session", enabled: DEFAULT_WIDGET_IDS.includes("insight") },
-    ]);
+    // Derived from the registry, because that is the claim: *every* widget at this level comes
+    // back, in registry order, each falling back to the default. A hand-written list would turn
+    // adding a widget into an edit here without changing what is being asserted.
+    expect(resolveWidgetStates("session", [])).toEqual(
+      widgetsForScope("session").map((w) => ({
+        id: w.id,
+        scope: "session",
+        enabled: DEFAULT_WIDGET_IDS.includes(w.id),
+      }))
+    );
   });
 
   it("lets a stored row override the default, in both directions", () => {
@@ -229,6 +231,21 @@ describe("over HTTP", () => {
     if (res.statusCode !== 200) throw new Error(`read failed: ${res.statusCode} ${res.body}`);
     return res.json<{ session: { id: string; enabled: boolean }[] }>().session;
   }
+
+  /**
+   * Every widget this level installs, with the named one on and the rest off.
+   *
+   * Derived from the registry rather than written out, which is what these assertions are
+   * actually about — "every session widget is listed, and exactly this one is enabled". A
+   * hand-written array turns adding a widget into a test edit in four places and, worse, reads
+   * as though the list itself were the claim.
+   */
+  const everySessionWidget = (enabledId: string | null) =>
+    widgetsForScope("session").map((w) => ({
+      id: w.id,
+      scope: "session",
+      enabled: w.id === enabledId,
+    }));
 
   async function seedCopilot(widgets: unknown): Promise<string> {
     const res = await env.inject({
@@ -362,15 +379,7 @@ describe("over HTTP", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       workspace: [{ id: "workspace_stats", scope: "workspace", enabled: true }],
-      session: [
-        { id: "session_stats", scope: "session", enabled: true },
-        { id: "plan", scope: "session", enabled: false },
-        { id: "quiz", scope: "session", enabled: false },
-        { id: "thread", scope: "session", enabled: false },
-        { id: "notes", scope: "session", enabled: false },
-        { id: "diagram", scope: "session", enabled: false },
-        { id: "insight", scope: "session", enabled: false },
-      ],
+      session: everySessionWidget("session_stats"),
     });
   });
 
@@ -380,13 +389,7 @@ describe("over HTTP", () => {
 
     const session = await newSession(env, ws.id, { copilotId });
     expect(await sessionWidgetsOf(session.id)).toEqual([
-      { id: "session_stats", scope: "session", enabled: true },
-      { id: "plan", scope: "session", enabled: false },
-      { id: "quiz", scope: "session", enabled: false },
-      { id: "thread", scope: "session", enabled: false },
-      { id: "notes", scope: "session", enabled: false },
-        { id: "diagram", scope: "session", enabled: false },
-        { id: "insight", scope: "session", enabled: false },
+      ...everySessionWidget("session_stats"),
     ]);
   });
 
@@ -415,13 +418,7 @@ describe("over HTTP", () => {
     expect(edited.statusCode).toBe(200);
 
     expect(await sessionWidgetsOf(session.id)).toEqual([
-      { id: "session_stats", scope: "session", enabled: true },
-      { id: "plan", scope: "session", enabled: false },
-      { id: "quiz", scope: "session", enabled: false },
-      { id: "thread", scope: "session", enabled: false },
-      { id: "notes", scope: "session", enabled: false },
-        { id: "diagram", scope: "session", enabled: false },
-        { id: "insight", scope: "session", enabled: false },
+      ...everySessionWidget("session_stats"),
     ]);
   });
 

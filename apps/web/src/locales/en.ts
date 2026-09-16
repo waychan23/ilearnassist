@@ -864,6 +864,17 @@ const en: typeof MessageSchema = {
         habit: "Study habits",
       },
     },
+    sources: {
+      name: "Sources",
+      hint: "What this conversation references and produces — uploaded files, saved pages, written files — filterable by content type.",
+      noSession: "Open a conversation and its sources are listed here.",
+      empty:
+        "This conversation has no sources yet. Uploading a file, referencing one, or having the Assistant write one puts it here.",
+      /** A filter rather than an empty conversation: the rows exist, the selection hides them. */
+      noMatch: "No sources match the filter.",
+      missing: "Missing",
+      failed: "Could not load this conversation's sources.",
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */
