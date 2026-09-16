@@ -330,6 +330,9 @@ const en: typeof MessageSchema = {
       viewerFailed: "This file could not be previewed",
       truncated: "Showing the first {size}",
       size: "Size",
+      /** Filling the viewport, and going back — see `zh-CN` for why the label names the action. */
+      maximize: "Maximise",
+      restore: "Restore window",
     },
     /**
      * A conversation's own directory — where the diagrams it draws are written.

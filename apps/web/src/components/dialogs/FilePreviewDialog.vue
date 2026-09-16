@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+import { isNarrow } from "../../composables/breakpoints";
 import { codeCopyClick } from "../../composables/codeCopy";
 import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
@@ -138,6 +139,26 @@ function openPage(): void {
   if (pageUrl.value) void openExternal(pageUrl.value);
 }
 
+/**
+ * Whether the dialog is filling the viewport.
+ *
+ * Local state rather than a store field or a persisted preference: it is a property of *this*
+ * look at *this* file, and the watcher above clears it on both halves of a change of file. What
+ * warrants it is that a preview is often the thing you actually came for — a PDF, a large image,
+ * a wide table — and the default `--modal-lg` is 720px of a 1600px screen.
+ */
+const maximized = ref(false);
+
+/**
+ * Whether the control is offered at all.
+ *
+ * Hidden under the `narrow` breakpoint, where `.modal` is already a full-width bottom sheet sized
+ * to `92dvh` — so the control could only be a no-op, and a control that renders but does nothing
+ * is worse than no control. `isNarrow` rather than a local media query: the sheet spells the same
+ * breakpoint in CSS, and `utils/breakpoints` is where the two are held in step.
+ */
+const canMaximize = computed(() => !isNarrow.value);
+
 /** The words `renderMarkdown` bakes into a code block's copy control. */
 const markdownLabels = computed(() => ({
   copy: t("common.copy"),
@@ -184,6 +205,12 @@ watch(
     // The viewer belongs to the diagram that opened it, so it goes on both halves of a
     // change of file — opening the next one, and closing this one.
     viewingDiagram.value = false;
+    /*
+     * And so does the *size*. The dialog is always mounted (`App.vue` has no `v-if` on it), so a
+     * `maximized` left true would open the next file full-screen — a mode nobody asked for, in a
+     * dialog that only looks like it was reopened.
+     */
+    maximized.value = false;
     if (open) {
       // Each file starts rendered: the view is a property of what is on screen, not a
       // preference, and carrying "source" onto the next Markdown file would be a mode the
@@ -207,7 +234,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
       data-testid="file-preview"
       @click.self="store.closeFile()"
     >
-      <div class="modal lg">
+      <div class="modal lg" :class="{ maximized }">
         <div class="modal-head">
           <div class="file-title">
             <h3 class="truncate" :title="store.filePreviewPath">{{ name }}</h3>
@@ -260,6 +287,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             :hint="content.truncated ? t('sources.copyFilePartial') : t('sources.copyFile')"
             testid="file-preview-copy"
           />
+
+          <!-- The window control, beside the close button rather than among the file's own
+               controls: it is about the box, not about the bytes in it. -->
+          <button
+            v-if="canMaximize"
+            class="icon-btn"
+            data-testid="file-preview-maximize"
+            :aria-pressed="maximized"
+            :title="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
+            :aria-label="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
+            @click="maximized = !maximized"
+          >
+            <Icon :name="maximized ? 'collapse' : 'expand'" />
+          </button>
 
           <button
             v-if="pageUrl"
@@ -403,6 +444,38 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 .file-body {
   overflow: auto;
   max-height: 70vh;
+}
+/*
+ * Maximised: the dialog fills the viewport, and the body takes the room that is left.
+ *
+ * `.modal.lg.maximized` rather than `.modal.maximized`: the global sheet's `.modal.lg` sets the
+ * width and has the same specificity as two classes, so this has to *outrank* it rather than
+ * depend on which stylesheet the bundler put last. `border-radius: 0` because a rounded box that
+ * touches all four edges reads as a mistake.
+ */
+.modal.lg.maximized {
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+}
+.modal.lg.maximized .file-body {
+  max-height: none;
+  flex: 1;
+  /* A flex child will not shrink below its content without this, which would push the body out
+   * of the dialog rather than scrolling inside it. */
+  min-height: 0;
+}
+/*
+ * And the viewer's box, which asks for a *definite* height. `auto` here would hand the library a
+ * zero-height container and it would draw nothing at all — silently, which is the failure
+ * `.file-body-filled`'s own comment exists to prevent. `flex: 1` resolves to a used height, so
+ * the viewer still measures something.
+ */
+.modal.lg.maximized .file-body-filled {
+  height: auto;
+  flex: 1;
 }
 /*
  * The viewer's case, and it is a different box rather than the same one with a tweak.

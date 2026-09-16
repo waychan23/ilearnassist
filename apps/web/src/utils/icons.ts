@@ -128,6 +128,19 @@ export const ICON_PATHS = {
     "M9.5 13.5H13.5V9.5",
     "M13.5 13.5L9.5 9.5",
   ],
+  /* `expand` mirrored: the arrows point inward and the brackets sit inside the corners, so the
+   * two read as one control in two states rather than as two unrelated marks. The only other
+   * pair shaped like this is the theme trio, which is three. */
+  collapse: [
+    "M2.5 6.5H6.5V2.5",
+    "M6.5 6.5L2.5 2.5",
+    "M13.5 6.5H9.5V2.5",
+    "M9.5 6.5L13.5 2.5",
+    "M2.5 9.5H6.5V13.5",
+    "M6.5 9.5L2.5 13.5",
+    "M13.5 9.5H9.5V13.5",
+    "M9.5 9.5L13.5 13.5",
+  ],
 
   /* The viewer's zoom pair: the same magnifier, one with a plus and one without, so the two
    * read as one control rather than as two unrelated marks. */

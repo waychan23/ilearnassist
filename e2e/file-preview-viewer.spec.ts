@@ -223,3 +223,61 @@ test("an unpreviewable binary reaches the panel without fetching a byte", async 
   await expect(page.getByTestId("file-viewer")).toHaveAttribute("data-render-state", "ready");
   expect(rawCalls).toBeGreaterThan(0);
 });
+
+test("the preview can be maximised, and a new file opens at its normal size", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The control exists because a preview is often the thing you came for — a PDF, a large image —
+   * and the default width is 720px of a 1600px screen. Measured rather than asserted on a class:
+   * "is it bigger" is the whole claim, and a class that nothing paints would satisfy the cheaper
+   * check.
+   */
+  await seedWorkspace(request, "预览最大化");
+  await page.goto("/");
+  await enterWorkspace(page, "预览最大化");
+  await openFilesTab(page);
+
+  await openFile(page, "doc.pdf");
+  await expect(page.getByTestId("file-viewer")).toHaveAttribute("data-render-state", "ready");
+
+  const dialog = page.locator(".modal");
+  const viewport = page.viewportSize()!;
+  const before = (await dialog.boundingBox())!;
+  expect(before.width).toBeLessThan(viewport.width);
+
+  const maximize = page.getByTestId("file-preview-maximize");
+  await expect(maximize).toHaveAttribute("aria-pressed", "false");
+  await maximize.click();
+
+  await expect(maximize).toHaveAttribute("aria-pressed", "true");
+  const after = (await dialog.boundingBox())!;
+  expect(after.width).toBeGreaterThan(before.width);
+  expect(after.height).toBeGreaterThan(before.height);
+  // Filling the viewport, less nothing: a maximised window with a margin is a bigger window.
+  expect(Math.round(after.width)).toBe(viewport.width);
+  expect(Math.round(after.height)).toBe(viewport.height);
+
+  // The viewer still draws at the new size — the library measures its container, so a body that
+  // failed to grow would leave the file half-rendered rather than obviously broken.
+  await expect(page.getByTestId("file-viewer")).toHaveAttribute("data-render-state", "ready");
+
+  // Pressing it again gives the window back.
+  await maximize.click();
+  await expect(maximize).toHaveAttribute("aria-pressed", "false");
+  expect(Math.round((await dialog.boundingBox())!.width)).toBe(Math.round(before.width));
+
+  /*
+   * And a *different* file opens at the normal size. The dialog is always mounted — `App.vue` has
+   * no `v-if` on it — so a state left behind here would open the next file full-screen, in a
+   * dialog that only looks like it was reopened.
+   */
+  await maximize.click();
+  await page.getByTestId("file-preview-close").click();
+  await openFile(page, "photo.png");
+  await expect(page.getByTestId("file-preview-maximize")).toHaveAttribute("aria-pressed", "false");
+  expect(Math.round((await page.locator(".modal").boundingBox())!.width)).toBe(
+    Math.round(before.width)
+  );
+});

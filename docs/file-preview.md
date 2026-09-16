@@ -234,3 +234,33 @@ and treat `ready` as the thing to wait for first. The first version of the image
 - **Files past 32 MB** are refused rather than streamed.
 - **No preview in the message list** — this is the file browser, the source browser and the
   diagram widget.
+
+## Maximising, and copying a text file
+
+Two controls on the dialog itself, and both are about the file rather than about the box.
+
+**The window can be maximised.** `--modal-lg` is 720px, which on a wide screen is a third of it —
+and a preview is often the thing you actually came for (a PDF, a large image, a wide table), so
+`.modal.lg.maximized` fills the viewport and the body takes the room that is left. The class is
+three-deep on purpose: the global sheet's `.modal.lg` sets the width at the same specificity as
+two classes, so this has to *outrank* it rather than depend on which stylesheet the bundler put
+last. `.file-body-filled` — the viewer's box, which needs a **definite** height or the library
+measures zero and draws nothing — gets `flex: 1` rather than `height: auto` for that reason.
+
+The state is local, and cleared on both halves of a change of file: the dialog is always mounted
+(`App.vue` has no `v-if` on it), so a `maximized` left true would open the *next* file full-screen.
+The control is hidden under the `narrow` breakpoint, where the dialog is already a full-width
+sheet sized to `92dvh` — there it could only be a no-op, and `composables/breakpoints.ts` is where
+the two spellings of that breakpoint are held in step.
+
+**A text file is copied whole**, from the header, with `CopyButton`. The header rather than the
+body because the body is three renderings of the same bytes — highlighted text, rendered Markdown,
+a diagram source — and "copy this file" means the same thing in all three. Past the preview cap the
+server sends the head of the file and says so under the text; the button's tooltip says it too,
+because the button is what travels to the clipboard and a control reading only 复制 would let
+somebody take a quarter of a log away believing it was all of it. That is `CopyButton`'s optional
+`hint`.
+
+A **code block** inside a message or a rendered Markdown file has its own control, which is a
+different mechanism for a different reason — see `docs/sources.md`'s neighbour in
+`utils/markdown.ts`, and the note there on why the button carries no text.

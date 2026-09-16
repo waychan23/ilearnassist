@@ -416,6 +416,10 @@ export default {
       /** Appended to the metadata line when the file was longer than the preview cap. */
       truncated: "仅显示前 {size}",
       size: "大小",
+      /** Filling the viewport, and going back — one control in two states, so the label says
+       *  what pressing it will do rather than what the dialog currently is. */
+      maximize: "最大化",
+      restore: "还原窗口",
     },
     /**
      * A conversation's own directory — where the diagrams it draws are written.
