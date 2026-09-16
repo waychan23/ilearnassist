@@ -2942,7 +2942,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     try {
       // The *stored* name, not the path's: the name is the only part of the two that the user
       // ever chose, and a source deduped onto an earlier upload would otherwise show a uuid.
-      return await readPreviewFile(path, source.name);
+      const content = await readPreviewFile(path, source.name);
+      /*
+       * …and the page it came from, when it is one. Carried here rather than fetched by the
+       * client, because this route is the only one that knows *both* the bytes and the row: a
+       * client holding the preview would otherwise need a second request to learn whether there is
+       * somewhere to go, and the dialog's "open in browser" control is gated on exactly that.
+       */
+      return { ...content, url: source.url ?? undefined };
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);

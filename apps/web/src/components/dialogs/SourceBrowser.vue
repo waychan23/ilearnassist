@@ -7,6 +7,7 @@ import { useAppStore } from "../../stores/app";
 import { uiState } from "../../composables/ui";
 import { confirm } from "../../composables/confirm";
 import { translateParseError } from "../../utils/apiError";
+import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
 import { allGroupKeys, flattenSourceTree, groupSources } from "../../utils/sourceTree";
 import AddSourceDialog from "./AddSourceDialog.vue";
@@ -262,6 +263,31 @@ function detailOf(source: Source): string {
  */
 function canDelete(source: Source): boolean {
   return source.storage !== "session";
+}
+
+/**
+ * Whether this row can be followed to the page it was fetched from.
+ *
+ * Only a page has a URL, and only the two schemes a page can have been fetched over count — see
+ * `utils/externalLink.ts` for why that is checked at the point of use rather than trusted from
+ * the column. Gating on presence alone is what the row renders on, so the only other way to offer
+ * this control would be to offer it on a row with nowhere to go.
+ */
+function canOpenInBrowser(source: Source): boolean {
+  return isOpenableUrl(source.url);
+}
+
+/**
+ * Confirm, then leave for the third-party page.
+ *
+ * The confirmation, the scheme check and the `noopener` all live in `openExternal` — the row only
+ * decides whether to offer the control and where the URL comes from. The `void` is the same
+ * deliberate silence the function documents: a popup the browser blocked is the user's own setting
+ * answering, and nothing the app can add to that is worth a sentence.
+ */
+function openInBrowser(source: Source): void {
+  if (!source.url) return;
+  void openExternal(source.url);
 }
 
 async function remove(source: Source): Promise<void> {
@@ -629,6 +655,18 @@ function expandAll(): void {
                 <span class="source-origin truncate" data-testid="source-origin">
                   {{ originLabel(source) }}
                 </span>
+                <!-- A sibling of the row's own control, never a child of it: a button inside a
+                     button is invalid, which is why the delete control is one too. -->
+                <button
+                  v-if="canOpenInBrowser(source)"
+                  class="icon-btn"
+                  :title="t('sources.openInBrowser')"
+                  :aria-label="t('sources.openInBrowser')"
+                  data-testid="source-open-browser"
+                  @click="openInBrowser(source)"
+                >
+                  <Icon name="link" />
+                </button>
                 <button
                   v-if="canDelete(source)"
                   class="icon-btn danger"
@@ -676,6 +714,16 @@ function expandAll(): void {
                   <span class="source-detail truncate" data-testid="source-detail">
                     {{ detailOf(line.source!) }}
                   </span>
+                  <button
+                    v-if="canOpenInBrowser(line.source!)"
+                    class="icon-btn"
+                    :title="t('sources.openInBrowser')"
+                    :aria-label="t('sources.openInBrowser')"
+                    data-testid="source-open-browser"
+                    @click="openInBrowser(line.source!)"
+                  >
+                    <Icon name="link" />
+                  </button>
                   <button
                     v-if="canDelete(line.source!)"
                     class="icon-btn danger"

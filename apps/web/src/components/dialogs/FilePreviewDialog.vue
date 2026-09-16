@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
 import { highlightFile, renderMarkdown } from "../../utils/markdown";
 import Icon from "../Icon.vue";
@@ -120,6 +121,21 @@ const view = computed<FileView>(() => {
 /** Whether this kind has a rendered view and a source view to choose between. */
 const hasTwoViews = computed(() => view.value.startsWith("markdown") || view.value.startsWith("diagram"));
 
+/**
+ * Whether what is on screen is a *page* — and so whether there is an original to go and look at.
+ *
+ * The preview of a page source shows the app's stored copy of the reading. Somebody who wants the
+ * page itself is standing in exactly this dialog, which is why the control belongs in its header
+ * as well as on the two lists: the lists are where a page is *found*, and this is where it is
+ * *open*. Gated on the URL the route attaches, so every other file has no control at all rather
+ * than a disabled one.
+ */
+const pageUrl = computed(() => (isOpenableUrl(content.value?.url) ? content.value!.url! : null));
+
+function openPage(): void {
+  if (pageUrl.value) void openExternal(pageUrl.value);
+}
+
 const rendered = computed(() =>
   content.value?.kind === "markdown" && content.value.text !== null
     ? renderMarkdown(content.value.text)
@@ -222,6 +238,17 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
               {{ t("files.preview.source") }}
             </button>
           </div>
+
+          <button
+            v-if="pageUrl"
+            class="icon-btn"
+            data-testid="file-preview-browser"
+            :title="t('sources.openInBrowser')"
+            :aria-label="t('sources.openInBrowser')"
+            @click="openPage"
+          >
+            <Icon name="link" />
+          </button>
 
           <button
             class="icon-btn"

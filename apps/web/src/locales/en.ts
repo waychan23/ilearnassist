@@ -1210,6 +1210,14 @@ const en: typeof MessageSchema = {
       detail: "The file, its extracted text and every reference to it are removed, and this cannot be undone. Messages already sent keep showing the attachment, but it will not open.",
       action: "Delete file",
     },
+    /** Leaving the app for the page a web source came from. See `zh-CN` for why it is its own
+     *  verb rather than a second reading of `preview`. */
+    openInBrowser: "Open in browser",
+    openExternal: {
+      title: "Opening a third-party site",
+      message: "This link goes to an outside site, and following it leaves this app.",
+      confirm: "Continue",
+    },
   },
 
   parseErrors: {

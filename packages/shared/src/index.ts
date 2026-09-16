@@ -2339,6 +2339,16 @@ export interface FileContent {
    * and a `.mmd` nobody drew here — so the client treats "not present" as "no summary".
    */
   summary?: string;
+  /**
+   * The page these bytes came from, set only on a `page` source's preview.
+   *
+   * The preview of a page source is the app's *stored copy* of the reading — extracted HTML, shown
+   * as source. Offering "open in browser" there means the dialog has to know where the reading came
+   * from, and the alternative was a second request for a field the route already has in hand
+   * (`Source.url`). Absent for every other file, which is the same "no page, nowhere to go" the
+   * listing rows render on.
+   */
+  url?: string;
 }
 
 /**

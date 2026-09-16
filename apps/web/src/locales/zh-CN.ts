@@ -1426,6 +1426,17 @@ export default {
       detail: "文件本身、已解析的文本，以及在所有对话里的引用都会被删除，无法恢复。这些对话里已发出的消息仍会显示附件，但打不开了。",
       action: "删除文件",
     },
+    /**
+     * Leaving the app for the page a web source was fetched from. Its own verb rather than a
+     * second reading of `preview`: the row opens the app's *stored copy* of the page, and this
+     * opens the page itself — which is a different destination and somebody else's website.
+     */
+    openInBrowser: "在浏览器中打开",
+    openExternal: {
+      title: "即将打开第三方网址",
+      message: "这个链接指向站外，打开后会离开本应用。",
+      confirm: "继续打开",
+    },
   },
 
   /**

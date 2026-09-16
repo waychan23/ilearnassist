@@ -40,6 +40,12 @@ of the extension tables is how a `.mmd` gets drawn in one dialog and shown as co
 `.md` uploaded to a conversation therefore renders exactly like a `.md` in a workspace, and a PDF
 behaves like a PDF either way.
 
+A **page source's** preview also carries where the page came from — `FileContent.url`, attached by
+`GET /api/sources/:id/preview` from the row — which is what puts "open in browser" in this dialog's
+header. The dialog shows the app's stored copy of the reading, so a reader who wants the page
+itself is standing here, and the route is the only place that holds both the bytes and the row.
+`docs/sources.md` has the rest of that control.
+
 `SourcesDialog` is where an upload is reachable at all: a source lives outside every workspace, so
 the file tree cannot list it, and until its rows gained an open control the list offered nothing but
 a delete button. The row's main area is one `<button>` and delete is its sibling, rather than a

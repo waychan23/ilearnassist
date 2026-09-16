@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
 import { useAppStore } from "../stores/app";
 import { subscribeWidgetEvents } from "../composables/widgetEvents";
+import { isOpenableUrl, openExternal } from "../utils/externalLink";
 import type { Source, SourceCategory } from "../api/types";
 import Icon from "../components/Icon.vue";
 
@@ -137,6 +138,17 @@ function iconFor(source: Source): "image" | "diagram" | "file" {
   if (source.kind === "image") return "image";
   return source.category === "diagram" ? "diagram" : "file";
 }
+
+/**
+ * Follow a page to where it came from — the same control the library dialog's rows carry, and
+ * deliberately the same helper: the confirmation, the scheme check and the `noopener` are
+ * `utils/externalLink.ts`'s, so the two surfaces cannot drift into asking different questions
+ * before leaving for the same kind of destination.
+ */
+function openBrowser(source: Source): void {
+  if (!source.url) return;
+  void openExternal(source.url);
+}
 </script>
 
 <template>
@@ -196,6 +208,19 @@ function iconFor(source: Source): "image" | "diagram" | "file" {
             <span v-if="row.missing" class="badge danger">{{ t("widgets.sources.missing") }}</span>
             <span v-else class="badge muted">{{ t(`sources.category.${row.category}`) }}</span>
           </button>
+          <!-- A sibling of the row's own control, never a child of it: a button inside a button
+               is invalid. Only a page has somewhere to go. -->
+          <button
+            v-if="isOpenableUrl(row.url)"
+            class="icon-btn"
+            type="button"
+            :title="t('sources.openInBrowser')"
+            :aria-label="t('sources.openInBrowser')"
+            data-testid="source-open-browser"
+            @click="openBrowser(row)"
+          >
+            <Icon name="link" />
+          </button>
         </li>
       </ul>
     </template>
@@ -235,9 +260,20 @@ function iconFor(source: Source): "image" | "diagram" | "file" {
   min-height: 0;
   overflow-y: auto;
 }
+/*
+ * The row is a flex line rather than the open control alone, because a second control sits beside
+ * it — and the open control takes the room that is left rather than a fixed `100%`, which would
+ * push its sibling out of the row.
+ */
+.sources-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
 .sources-open {
   display: flex;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
