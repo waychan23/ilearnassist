@@ -70,10 +70,10 @@ const en: typeof MessageSchema = {
 
   app: {
     /**
-     * The product name. Shown when there is no session and no workspace to name the topbar
-     * after, and on the login screen — which is the one page with nothing else to call itself.
+     * The displayed product name. See the note in the zh-CN catalog for the boundary between it
+     * and the identifiers, which keep `ilearnassist`.
      */
-    title: "ilearnassist",
+    title: "Interactive Learning Assistant",
     configBanner: {
       before: "No API key is configured yet. Click",
       action: "Settings → Providers",
@@ -206,7 +206,7 @@ const en: typeof MessageSchema = {
     start: "Start a conversation",
     startHint: "Type a message below; the agent will call tools as it needs them.",
     backToWorkspaces: "Back to workspaces",
-    startAction: "New conversation (choose a Copilot)",
+    startAction: "New conversation (choose an Assistant)",
     jumpToLatest: "Jump to latest",
   },
 
@@ -264,7 +264,7 @@ const en: typeof MessageSchema = {
   },
 
   files: {
-    tab: "Files",
+    tab: "Workspace files",
     refresh: "Refresh the file list",
     empty: "This workspace has no files yet",
     truncated: "Too many entries — showing the first {count}",
@@ -305,13 +305,6 @@ const en: typeof MessageSchema = {
      * same directory the file tools write into. The lead says where they are, since "why is
      * this not in the file tree" is the first question the list raises.
      */
-    session: {
-      title: "Conversation files",
-      lead: "Files this conversation made for itself. They live in the conversation's own folder rather than in the workspace, so the file tree does not show them.",
-      empty: "This conversation has not made any files yet.",
-      failed: "Could not read this conversation's files.",
-      open: "Preview this file",
-    },
   },
 
   session: {
@@ -320,11 +313,11 @@ const en: typeof MessageSchema = {
       title: "New conversation",
       titleLabel: "Title (optional)",
       titlePlaceholder: "Leave blank for “{fallback}”",
-      noCopilot: "No Copilot",
+      noCopilot: "No Assistant",
       noCopilotDesc: "Uses the built-in general-purpose assistant and default parameters.",
-      noCopilots: "No Copilots yet. Create one under Settings → Copilots.",
-      groupPublic: "Published Copilots",
-      groupMine: "My Copilots",
+      noCopilots: "No Assistants yet. Create one from the Assistants row in the sidebar.",
+      groupPublic: "Published Assistants",
+      groupMine: "My Assistants",
       byAuthor: "published by {name}",
       advanced: "Other parameters (set here at creation, adjustable afterwards in session parameters)",
     },
@@ -337,6 +330,8 @@ const en: typeof MessageSchema = {
   },
 
   workspace: {
+    // See the note in the zh-CN catalog: a name written once, not a translation.
+    defaultName: "Default Workspace",
     new: {
       title: "New workspace",
       namePlaceholder: "e.g. My Project",
@@ -540,55 +535,55 @@ const en: typeof MessageSchema = {
   },
 
   copilot: {
-    edit: "Edit Copilot",
-    create: "New Copilot",
+    edit: "Edit Assistant",
+    create: "New Assistant",
     namePlaceholder: "e.g. Code assistant",
     description: "Description",
     descriptionPlaceholder: "One line on what it is for",
     systemPrompt: "System prompt",
-    systemPromptPlaceholder: "Define this Copilot's role, abilities and behavioural constraints…",
+    systemPromptPlaceholder: "Define this Assistant's role, abilities and behavioural constraints…",
     systemPromptHint: "Leave blank to use the built-in general-purpose assistant.",
     tools: "Available tools",
     allTools: "All tools available",
     allToolsHint:
-      "This Copilot may use every tool, including any added later.",
+      "This Assistant may use every tool, including any added later.",
     toolsHint: "Only the ticked tools are available; none ticked means no tools at all.",
     boundToolsHint:
       "Some tools come with a widget (the Plan widget's make/read/update plan tools): they switch on automatically when the widget is installed, and are deliberately not listed here.",
-    public: "Publish this Copilot",
+    public: "Publish this Assistant",
     publicHint:
       "Every account can then see and use it, but only you can edit or delete it.",
     defaults: "Defaults (copied into a new conversation; adjustable there afterwards)",
     widgets: "Widgets to install",
     widgetsHint:
-      "Starting a conversation from this Copilot installs the ticked widgets into it; they can be adjusted there afterwards, in session parameters.",
+      "Starting a conversation from this Assistant installs the ticked widgets into it; they can be adjusted there afterwards, in session parameters.",
     /* The list. It used to live under `settings.`, because the list and the editor were two
        halves of one settings dialog; the list has a dialog of its own now, and the editor that
        shares this namespace is what makes `copilot.*` its domain rather than the app's. */
-    countConfigured: "{count} Copilot configured | {count} Copilots configured",
-    add: "New Copilot",
+    countConfigured: "{count} Assistant configured | {count} Assistants configured",
+    add: "New Assistant",
     inUse: "In use by this conversation",
-    empty: "No Copilots yet. Click “New Copilot” to create one.",
-    groupPublic: "Published Copilots",
-    groupMine: "My Copilots",
+    empty: "No Assistants yet. Click “New Assistant” to create one.",
+    groupPublic: "Published Assistants",
+    groupMine: "My Assistants",
     byAuthor: "published by {name}",
     published: "published",
     viewPrompt: "View its system prompt",
     promptNone: "No system prompt written.",
     copyToMine: "Copy to mine",
     introBefore:
-      "A Copilot bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation",
+      "An Assistant bundles a system prompt, a set of available tools and default generation parameters. Picking one for a new conversation",
     introCopied: "copies the whole of it",
     introAfter:
-      " into that conversation — later edits to the Copilot leave conversations already under way alone, and a conversation can change its own prompt independently.",
+      " into that conversation — later edits to the Assistant leave conversations already under way alone, and a conversation can change its own prompt independently.",
     summarySteps: "up to {count} tool steps",
     summaryHistory: "1 message of history | {count} messages of history",
     summaryTools: "1 tool | {count} tools",
     summaryAllTools: "all tools",
     summaryNoTools: "no tools",
     delete: {
-      title: "Delete Copilot",
-      message: "Delete the Copilot “{name}”?",
+      title: "Delete Assistant",
+      message: "Delete the Assistant “{name}”?",
       detail:
         "Conversations already using it are unaffected — they keep the prompt and parameters copied in when they were created.",
     },
@@ -603,7 +598,7 @@ const en: typeof MessageSchema = {
    * untranslated string.
    */
   copilots: {
-    title: "Copilot",
+    title: "Assistant",
   },
 
   /* The installation's own settings — see the note in the Chinese catalog. */
@@ -815,7 +810,6 @@ const en: typeof MessageSchema = {
       hint: "The diagrams this conversation has drawn — open one to look at it, or jump back to the reply it was drawn in.",
       noSession: "Open a conversation and the diagrams it has drawn are listed here.",
       /** The panel's own link to the whole folder, which holds more than diagrams. */
-      browse: "Conversation files",
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "Go to the reply that drew it",
       empty: "This conversation has not drawn any diagrams yet.",
@@ -988,14 +982,14 @@ const en: typeof MessageSchema = {
     systemPrompt: "System prompt",
     systemPromptPlaceholder: "What should this conversation be?",
     systemPromptHint:
-      "This conversation's own. A new conversation copies one in from its Copilot and the two are independent afterwards — editing it here does not change that Copilot.",
+      "This conversation's own. A new conversation copies one in from its Assistant and the two are independent afterwards — editing it here does not change that Copilot.",
     reset: "Reset",
   },
 
   errors: {
     NAME_REQUIRED: "A name is required.",
     WORKSPACE_NOT_FOUND: "That workspace no longer exists.",
-    COPILOT_NOT_FOUND: "That Copilot no longer exists.",
+    COPILOT_NOT_FOUND: "That Assistant no longer exists.",
     SESSION_NOT_FOUND: "That conversation no longer exists.",
     TITLE_EMPTY: "The title cannot be empty.",
     UNSUPPORTED_FILE_TYPE: "Unsupported file type: {mimeType}",
@@ -1078,7 +1072,6 @@ const en: typeof MessageSchema = {
    */
   sources: {
     title: "Sources",
-    open: "Uploaded files",
     loading: "Loading…",
     empty: "Nothing matches these filters.",
     parsed: "Parsed",
@@ -1103,8 +1096,16 @@ const en: typeof MessageSchema = {
     expandAll: "Expand all",
     collapseAll: "Collapse all",
     add: "Add a source",
-    addLink: "Add a link",
     addLinkLabel: "Web address",
+    /* The add dialog: one door, a tab per kind. */
+    addKind: "Kind of source",
+    tabFile: "File",
+    tabLink: "Web link",
+    addDir: "Folder",
+    addDirHint: "Leave empty for the workspace root",
+    addFiles: "Files",
+    pickFiles: "Choose files",
+    addLinkHint: "The server fetches the page and keeps it, so a conversation can reference it later.",
     viewLabel: "View",
     /** The chat topbar's entry point: the browser, already narrowed to this workspace. */
     workspaceScope: "This workspace's sources",

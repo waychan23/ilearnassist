@@ -1027,16 +1027,20 @@ after that point, and rendering both would show the answer twice for as long as 
   effective-value computeds mirror the server's resolution order exactly.
   `sendMessage()` is optimistic: push a user bubble, then iterate the SSE stream
   and update a transient assistant entry until `message_done`.
-- `components/` — `Sidebar` (workspace + session nav, inline rename, guarded deletes,
-  and the **设置** button at its foot), `ChatView` (topbar with inline title editing +
-  messages), `MessageItem` (markdown, tool cards, attachments, reasoning, per-turn
-  token line, copy action), `ReasoningBlock`, `MessageMinimapRail` (one anchor per
-  turn), `ToolCallCard` (collapsible args/result), `Composer` (paperclip/paste uploads,
-  session-params button, token popover, model picker), `ModelSelector`,
-  `AttachmentChips`, `TokenCountPopover`, and the dialogs: `ConfirmDialog`,
-  `SettingsDialog` (the account's own Copilots), `ProviderDialog`, `CopilotDialog`,
-  `NewSessionDialog`, `SessionSettingsDialog`, `CreateWorkspaceDialog`. `AdminConsole` and
-  its `admin/ProvidersSection` and `admin/DocumentsSection` hold the installation-wide
+- `components/` — `WorkspaceHome` (the front door: a card per workspace, and a rail whose
+  foot is the account's menu), `Sidebar` (workspace + session nav, inline rename, guarded
+  deletes, and that same menu at its foot), `AppMenu` (the account's two groups of rows — what it
+  can reach, and who is signed in — drawn by *both* rails, so the two cannot drift), `ChatView` (topbar
+  with inline title editing + messages), `MessageItem` (markdown, tool cards, attachments,
+  reasoning, per-turn token line, copy action), `ReasoningBlock`, `MessageMinimapRail` (one
+  anchor per turn), `ToolCallCard` (collapsible args/result), `Composer` (paperclip/paste
+  uploads, session-params button, token popover, model picker), `ModelSelector`,
+  `AttachmentChips`, `TokenCountPopover`, `SourceBrowser` (every source the account holds,
+  filterable, with one add entry), and the dialogs: `ConfirmDialog`, `CopilotsDialog` (the
+  account's own Copilots) with `CopilotDialog` as its editor, `AddSourceDialog` (a tab per
+  kind of source), `ProviderDialog`, `NewSessionDialog`, `SessionSettingsDialog`,
+  `WorkspaceSettingsDialog`, `CreateWorkspaceDialog`, `FilePreviewDialog`. `AdminConsole`
+  and its `admin/ProvidersSection` and `admin/DocumentsSection` hold the installation-wide
   screens — the ones that are nobody's alone.
 - `composables/` — the few pieces of state that are not domain state and not component-local.
   `theme.ts` and `locale.ts` own the two persisted preferences; `ui.ts` holds the booleans
@@ -1122,16 +1126,18 @@ belongs next to the input.
   conversation, plus the conversation's own system prompt (the persona it copied from
   its Copilot, editable afterwards), and the widgets installed in it.
 - **Workspace settings** — a dialog of its own, not a tab of anything else, because it
-  configures *a workspace* rather than the installation. Four ways in, and each earns its place:
+  configures *a workspace* rather than the installation. Three ways in, and each earns its place:
   the gear on a workspace card (which does not require entering the workspace first, so widgets
   can be installed before there is anything to look at), the workspace name in the sidebar header
-  (a button for that reason), and the 工作区设置 row in the sidebar footer — the labelled copy of
-  the header shortcut, for someone who does not already know the name opens it. Both sidebar
-  entries call the same function, so they cannot diverge in what they open.
-- **The Copilot list** — the sidebar footer, beside the workspace-settings row, and the workspace
-  home's header. Two doors, and the second is not a convenience: the home page has no sidebar, so
-  without it an account that has not entered a workspace yet could not manage the Copilots it
-  made. That is exactly the access the header button protected when it opened the settings dialog
+  (a button for that reason), and the 工作区设置 row at the foot of the sidebar — the labelled copy
+  of the header shortcut, for someone who does not already know the name opens it. Both sidebar
+  entries call the same function, so they cannot diverge in what they open. The row is the one
+  entry the workspace home's rail does *not* draw: that page is about the list of workspaces and
+  has no workspace in hand, so its entry is the gear on the card, which knows which one it means.
+- **The 助理 list** — the row both rails draw, at the foot of a conversation's sidebar and at the
+  foot of the workspace home's rail. Two surfaces, one component (`AppMenu.vue`), and the second is
+  not a convenience: the home page has no sidebar, so without it an account that has not entered a
+  workspace yet could not manage the assistants it made. That is exactly the access the header button protected when it opened the settings dialog
   it used to — the button outlived the dialog because the reason did. Like every other overlay it
   is opened, not owned, by its callers: `composables/ui.ts` holds `copilotsOpen` and `App.vue`
   mounts the dialog once, so neither entry point needs a prop chain.

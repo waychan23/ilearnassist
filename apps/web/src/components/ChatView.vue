@@ -8,7 +8,6 @@ import { subscribeWidgetEvents } from "../composables/widgetEvents";
 import {
   closeWidgetDrawer,
   openDrawer,
-  openSessionFiles,
   openSources,
   openWidgetDrawer,
   showWorkspaceHome,
@@ -422,32 +421,10 @@ onBeforeUnmount(() => {
       </button>
 
       <!--
-        This conversation's own folder: the files it made for itself, which is where the
-        diagrams it draws are written. In the header rather than behind the diagram widget,
-        because nothing installs a widget by default — a browser reachable only through a panel
-        nobody has installed is not a browser. The widget offers the same dialog filtered to
-        diagrams; this is the folder.
-
-        On the *left*, with the way out and the drawer toggle rather than with the display
-        controls on the right: it is a control about where you are, not about how the app
-        looks. It also keeps the free space — and with it the middle of the bar — in the title
-        block, where a tap means nothing; a control in the middle of a 412px bar is one a
-        dismiss-by-tapping-away gesture can hit by accident.
-      -->
-      <button
-        class="icon-btn"
-        data-testid="open-session-files"
-        :title="t('files.session.title')"
-        :aria-label="t('files.session.title')"
-        @click="openSessionFiles"
-      >
-        <Icon name="folder" />
-      </button>
-      <!--
-        The workspace's material, from here: the source browser pre-filtered to this
-        workspace, which is the second front door the requirement asks for. Distinct from the
-        folder beside it — that one is *this conversation's* files, this one is everything the
-        workspace holds, including what it inherited from its other conversations.
+        This workspace's material: the source browser pre-filtered to it, which is the second
+        front door the requirement asks for. It is the only file control in this bar, and it is
+        the one that reaches everything — the conversation's own files are among its rows,
+        reached by filtering rather than by a second dialog that showed the same folder.
       -->
       <button
         class="icon-btn"

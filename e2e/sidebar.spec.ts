@@ -44,6 +44,11 @@ test("the header toggle narrows the sidebar to a rail, and back again", async ({
   // from becoming a second, cramped copy of the sidebar.
   await expect(page.getByTestId("all-workspaces")).toBeHidden();
   await expect(page.getByTestId("workspace-name")).toBeHidden();
+  // The account's menu too, whole. It used to be hidden a row at a time and three of its five
+  // rows were never on that list, so the rail showed clipped icons between its toggle and the
+  // bottom of the column.
+  await expect(page.getByTestId("open-copilots")).toBeHidden();
+  await expect(page.getByTestId("sign-out")).toBeHidden();
 
   // And the control that collapsed it is still on screen to undo it — the whole reason the
   // sidebar narrows rather than disappearing the way the drawer does.
@@ -53,6 +58,26 @@ test("the header toggle narrows the sidebar to a rail, and back again", async ({
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(OPEN_WIDTH, 0);
   await expect(page.getByTestId("session-list")).toBeVisible();
   await expect(page.getByTestId("workspace-name")).toBeVisible();
+});
+
+test("the foot of the sidebar is the account's menu, and no longer the workspaces root", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await enterWorkspace(page);
+
+  // Both groups, together: this sidebar's own content is what belongs at the top, so there is no
+  // second end for them to spread to here — the split is the home page's rail.
+  await expect(page.getByTestId("menu-group-app")).toBeVisible();
+  await expect(page.getByTestId("menu-group-account")).toBeVisible();
+  // The workspace's own settings, which only a page inside a workspace can name.
+  await expect(page.getByTestId("open-workspace-settings")).toBeVisible();
+
+  const config = (await (await request.get("/api/config")).json()) as {
+    workspacesRootDir: string;
+  };
+  await expect(page.getByTestId("sidebar")).not.toContainText(config.workspacesRootDir);
 });
 
 test("the toggle is named for the direction it goes", async ({ page }) => {

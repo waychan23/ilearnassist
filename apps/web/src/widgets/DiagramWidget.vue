@@ -2,7 +2,6 @@
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
-import { openSessionFiles } from "../composables/ui";
 import { relativeTime } from "../composables/relativeTime";
 import { useAppStore } from "../stores/app";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
@@ -19,10 +18,13 @@ import Icon from "../components/Icon.vue";
  * it belongs there rather than on this list.
  *
  * Opening a row goes through the ordinary file preview (the row's `name` is the canonical
- * file name), the same one the file tree and the session-files dialog open — it already
- * renders a diagram and offers the enlarged viewer. The one thing this panel adds is
- * 定位, scrolling the conversation to the call; the row carries that id, so there is no
- * client-side join.
+ * file name), the same one the file tree opens — it already renders a diagram and offers the
+ * enlarged viewer. The one thing this panel adds is 定位, scrolling the conversation to the
+ * call; the row carries that id, so there is no client-side join.
+ *
+ * There is deliberately no "browse the whole folder" control here. This panel is the *filtered,
+ * model-drawn* view, and the workspace's material is one control away in the chat header — a
+ * second entry point to the same files, from a panel, was a duplicate rather than a shortcut.
  */
 
 const { t } = useI18n();
@@ -97,13 +99,6 @@ function stem(name: string): string {
     </div>
 
     <template v-else>
-      <!-- The whole folder, not just the rows: this is the filtered, model-drawn view. -->
-      <div class="diagram-toolbar">
-        <button class="btn small" data-testid="diagram-browse" @click="openSessionFiles">
-          {{ t("widgets.diagram.browse") }}
-        </button>
-      </div>
-
       <div v-if="rows.length === 0" class="widget-empty" data-testid="diagram-empty">
         {{ t("widgets.diagram.empty") }}
       </div>
@@ -155,11 +150,6 @@ function stem(name: string): string {
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-.diagram-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  padding-bottom: var(--space-3);
 }
 .diagram-list {
   display: flex;

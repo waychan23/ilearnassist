@@ -630,7 +630,10 @@ export const useAppStore = defineStore("app", () => {
     config.value = await api.getConfig();
     workspaces.value = await api.listWorkspaces();
     if (workspaces.value.length === 0) {
-      await createWorkspace("Default");
+      // Named in the language the account is reading, because this is the one workspace nobody
+      // chose a name for — and the name is data from here on, so a later language switch leaves it
+      // exactly where it was.
+      await createWorkspace(i18n.global.t("workspace.defaultName"));
     }
     copilots.value = await api.listCopilots();
     if (!activeWorkspaceId.value) activeWorkspaceId.value = workspaces.value[0]!.id;

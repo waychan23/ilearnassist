@@ -130,7 +130,8 @@ nobody can safely clean.
 
 The cost of that choice, stated rather than hidden: **the sidebar's file tab browses `workdir/`**,
 so with this default most new files do not appear there — they appear under the conversation that
-made them. That is what the conversation-files dialog and the source browser are for.
+made them, which is what the browser's conversation filter is for, and why the browser is the
+surface a conversation's own files are reached through.
 
 ### What the model is told
 
@@ -236,8 +237,8 @@ Three bounds on the cost, each deliberate:
 
 ## The browser
 
-`SourceBrowser.vue` is one component with two front doors: the workspace home opens it over the
-whole account, and a conversation opens it pre-filtered to its workspace. The caller says which
+`SourceBrowser.vue` is one component with two front doors: the workspace home's rail opens it
+over the whole account, and a conversation opens it pre-filtered to its workspace. The caller says which
 with two props — `initial` (the filter set) and `hidden` (the option groups that front door has no
 business offering, e.g. a workspace picker inside that workspace). Data rather than a mode flag: a
 `mode` would have to enumerate the combinations, and a third front door would be a third mode.
@@ -248,12 +249,21 @@ options exist* — the MIME types present, the categories in use — so a second
 fills the option lists. It is re-issued when the scope changes and never when a filter does:
 narrowing the list must not delete the option you narrowed by.
 
-**Two ways to add**, because a source is two things: **上传资料** takes a file and **添加链接**
-takes a URL, and both land in the workspace the picker names — never a conversation, which is
-material that happened inside one. A pasted link is fetched server-side through `web_fetch`'s own
-guard, so a URL resolving to a private address is refused with the guard's sentence; a hand-added
-page carries **no summary**, because a summary is a reading of a page by something that understood
-it, and nothing has read this one yet.
+**One door, and a tab per kind.** The footer holds a single 添加资料 button, and the dialog it
+opens (`AddSourceDialog.vue`) asks *what kind* before it asks anything else — a 文件 tab and a
+网页链接 tab. Two toolbar buttons said the same thing twice: the operation is "put material in"
+and the kind is one field of it, which is how the pair had already drifted (only one of them
+offered a folder, and neither said where the result would land).
+
+The tabs share **where it goes** — the workspace, plus the directory for a file — and nothing
+else, which is why they are tabs of one dialog rather than two. A **conversation is never
+offered**: a conversation's own folder is written by the agent and by uploads made inside it, so a
+picker here would place a file somewhere no conversation created it. The file tab takes several
+files and lists them as picked rows, each removable, and submits **one request per file** so a
+partial failure names the file it failed on. The link tab's URL is fetched server-side through
+`web_fetch`'s own guard, so a URL resolving to a private address is refused with the guard's
+sentence, and the page carries **no summary** — a summary is a reading of a page by something that
+understood it, and nothing has read this one yet.
 
 The tree view groups by workspace, then by the conversation that holds a row, then by its path.
 That shape is not decoration: two conversations may each hold `notes/a.md`, and a tree that

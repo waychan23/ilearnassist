@@ -188,7 +188,7 @@ test("the sidebar reaches the console from inside a conversation", async ({ page
   await page.goto("/");
   await enterWorkspace(page);
 
-  await page.getByTestId("open-admin-sidebar").click();
+  await page.getByTestId("open-admin").click();
   await expect(page.getByTestId("admin-console")).toBeVisible();
   await page.getByTestId("admin-back").click();
   await expect(page.getByTestId("workspace-home")).toBeVisible();
@@ -386,7 +386,7 @@ test("an ordinary account is offered no way to configure models", async ({ page,
 
   // No console, at either of the two entry points, and therefore no model-services screen.
   await expect(page.getByTestId("open-admin")).toHaveCount(0);
-  await expect(page.getByTestId("open-admin-sidebar")).toHaveCount(0);
+  await expect(page.getByTestId("open-admin")).toHaveCount(0);
 
   // The Copilot list still opens — those are the account's own — and points at nothing else:
   // the console pointer it used to draw for administrators is gone from the dialog entirely.

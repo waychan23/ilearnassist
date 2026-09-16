@@ -188,6 +188,17 @@
    * component happens to sit in `App.vue`.
    */
   --z-confirm: 110;
+  /*
+   * The file preview, above the dialogs that open it and below a confirm raised over it.
+   *
+   * The same lesson as `--z-confirm`, from the other side. A dialog that is *teleported into
+   * existence when it opens* lands after every always-mounted overlay in `body`, so it paints
+   * over them at an equal z-index — and the preview, opened from the source browser, ended up
+   * underneath it with its close button visible and unclickable. The preview is the layer that
+   * is opened *from* things (the file tree, the browser, a diagram row), so it is the one that
+   * needs saying: above `--z-overlay`, whatever order they happen to mount in.
+   */
+  --z-preview: 105;
   --z-toast: 200;
 
   color-scheme: dark;
@@ -768,24 +779,6 @@ body {
   min-height: 0;
 }
 
-.side-footer {
-  border-top: 1px solid var(--border);
-  padding: var(--space-4) var(--space-6);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  color: var(--text-3);
-  font-size: var(--fs-2);
-  flex-shrink: 0;
-}
-
-/* The workspace path is long; let it truncate rather than shove the button out. */
-.side-footer > :first-child {
-  flex: 1;
-  min-width: 0;
-}
-
 /*
  * The sidebar's header: the way out of the workspace on the left, the workspace's name in
  * the middle, the rail's toggle on the right.
@@ -836,15 +829,17 @@ body {
  * for the same thing because it also has to be there to slide.
  *
  * Listing what a rail hides, rather than wrapping the content in one element to hide, is
- * what keeps the sidebar's flex structure as it is: one pinned header, one scroller, two
- * footer rows. The un-hiding is the class's absence, so there is no second list of the same
+ * what keeps the sidebar's flex structure as it is: one pinned header, one scroller, the
+ * account's menu. The un-hiding is the class's absence, so there is no second list of the same
  * selectors to keep in step.
+ *
+ * The menu is hidden as **one element**, which is the point of `AppMenu.vue`: hidden a row at a
+ * time, three of its five rows were never on this list and a collapsed rail showed their icons
+ * clipped at 52px. A rule per row is a rule that goes stale the moment a row is added.
  */
 .sidebar.collapsed .side-tabs,
 .sidebar.collapsed .side-scroll,
-.sidebar.collapsed .side-settings,
-.sidebar.collapsed .side-signout,
-.sidebar.collapsed .side-footer,
+.sidebar.collapsed .app-menu,
 .sidebar.collapsed .workspace-back,
 .sidebar.collapsed .workspace-name {
   display: none;

@@ -17,6 +17,14 @@ agent loop with tool calling. Three apps share a types package:
   the server as a child process; reimplements none of it. See `docs/desktop.md`.
 - `packages/shared` — dependency-free API/domain types used by both sides.
 
+The name the product **displays** is 交互式学习助理 / Interactive Learning Assistant
+(`app.title` in the two catalogs; the browser tab is set from it by `composables/locale.ts`). Every
+*identifier* keeps `ilearnassist`: the package names, `app.setName`, the
+`~/Library/Application Support/ilearnassist` userData directory, `ilearnassist.sqlite`, and the
+`[ilearnassist] listening on` line the desktop panel parses to know the server is up. That split is
+deliberate and load bearing — two of those decide where a user's data already lives — so renaming
+the display name is one value in two catalogs, while renaming the *product* is a migration.
+
 Everything a person makes lives in a **data root they choose at launch**, not next to the
 code — so uninstalling the app leaves it behind. `apps/server/src/paths.ts` is the one
 description of that tree:
@@ -309,12 +317,11 @@ apps/web/src/
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
                           #   AskUserCard, Composer, SourceMentionPicker, WriteLocationField,
-                          #   FileTree, WidgetPanel,
+                          #   FileTree, WidgetPanel, AppMenu,
                           #   WidgetTabStrip, GenerationParams, NoteEditor,
                           #   MessageSelectionToolbar,
-                          #   dialogs (Settings, WorkspaceSettings, SourceBrowser, FilePath,
-                          #   SessionFiles,
-                          #   FilePreview, Diagram, Confirm, WidgetToggleList)
+                          #   dialogs (Settings, WorkspaceSettings, SourceBrowser, AddSource,
+                          #   FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -439,8 +446,8 @@ Fuller map in `docs/reference.md`.
   `tool_call_id` that wrote or last revised it, and the `thread_id` the classifier put it in.
   The one drift still unrepresentable is two copies of the bytes disagreeing — the row holds no
   source and no `source_path` (a pure function of the session and the name). Drift is bounded and
-  reported at both ends: a `.mmd` nobody drew has a file but no row (the conversation-files dialog
-  shows it, the diagram panel does not), a row whose file is gone reads `fileMissing`. The row
+  reported at both ends: a `.mmd` nobody drew has a file but no row (the source
+  browser shows it, the diagram panel does not), a row whose file is gone reads `fileMissing`. The row
   has no `deleted_at` (derived data, like `session_threads`) and no `message_id` (the assistant
   message does not exist when the tool runs). A revise upserts on `(session_id, name)`: one file,
   one row, new summary and call id, `thread_id` cleared so the new shape is judged again. The
@@ -626,6 +633,15 @@ Fuller map in `docs/reference.md`.
   no mark. The server's `⚠️ ` on a failed turn is persisted into history and replayed to
   the model — content, not chrome, on the same boundary as the untranslated tool strings.
   `apps/web/test/icons.test.ts` enforces all of this.
+- **A product name is copy, so 助理 replaced Copilot in the catalogs' *values* and nowhere else.**
+  What the user reads changed; the `copilots` table, the `/api/copilots` routes, `CopilotDefaults`,
+  `openCopilots`, `COPILOT_NOT_FOUND` and the catalog **keys** (`copilots.title`, not
+  `assistants.title`) all keep the word. The schema and the wire are the expensive rename — a
+  migration and a breaking change for a word no user ever sees — and a key rename buys nothing,
+  since a key's only job is to stand one lookup away from its value. Which is also the trap: a bulk
+  edit of a catalog must match on values, because a script that rewrote keys turned `noCopilot`
+  into `no助理`. The English values are "Assistant"/"Assistants", capitalised as a name rather
+  than as a common noun.
 - **`en` plural messages use `|`; `zh-CN` ones do not.** Both catalogs take the
   same call shape — `t(key, named, plural)` — so no component branches on the
   locale. A message containing a literal `|` must escape it as `{'|'}` or it
@@ -979,6 +995,35 @@ Fuller map in `docs/reference.md`.
   not the feature. Navigation goes through `showLogin()` / `showWorkspaceHome()` /
   `showChat()`, never a component-local flag. `e2e/workspaces.ts` is the same rule for the
   specs; a spec that skips it fails on a composer that never renders.
+
+- **Both rails draw the same menu, from one component, and the home page now keeps only what is a
+  property of the browser.** `AppMenu.vue` holds the account's rows in **two groups**, and the
+  split is about the rows rather than about the layout: the upper group is everything the account
+  can *reach* (the workspace's own settings when there is one, the library, the assistants, the
+  console for the accounts that have it), and the lower group is *who is signed in* (the account
+  page and sign out). The page that draws them places them: `WorkspaceHome.vue`'s rail has nothing
+  else in it, so the groups are its two ends — upper under the brand, lower at the foot — while
+  `Sidebar.vue` keeps both together at its foot, because its own content is already at the top and
+  there is no second end to spread to. That is also why the **divider is the caller's**: a rule
+  separates the menu from whatever is above it, and only the page knows what that is (the sidebar
+  puts one above the menu, the rail on the second group, whose upper edge has only empty space
+  above it). The footer's **workspaces-root path is gone from both rails** — it was a sentence
+  nobody could act on, and the console's providers section still names the directory where that
+  matters. Two rows are conditional rather than shared, each for a stated reason — `workspaceRow`
+  (a page *about the list of workspaces* has no workspace to configure) and `sourcesRow` (the chat
+  header already carries the library button, and the home page has no header to put one in). What
+  the home page *does* keep in its header is the language and the theme: those are properties of
+  this browser rather than of the account, and they have nowhere else to live.
+  The rail is a 272px column on a wide viewport and a strip across the top below 900px — the admin
+  console's rule for the same shape of menu, a handful of rows that are the page's only navigation,
+  where hiding them would put the account's own menu out of reach on a phone. Two consequences of
+  one component: the *rows* had to come out of `Sidebar.vue`'s scoped block (Vue attaches a
+  parent's scope id to a child's root element and to nothing inside it, so a rule left there would
+  have stopped applying the moment the home page drew the same row, silently), and a **collapsed**
+  sidebar hides `.app-menu` as one element — it used to name one row at a time (`.side-signout`,
+  and a `.side-settings` that had long since stopped existing), so three of the five rows were on
+  none of those lists and the rail showed clipped icons between its toggle and the bottom of the
+  column.
 - **The platform console is laid out like a management back end: a menu down the left, one
   section on the right.** `AdminConsole.vue` replaced its tab strip with that shell when it grew
   a second section, and the reason is structural rather than cosmetic — a tab strip is a strip
@@ -990,9 +1035,10 @@ Fuller map in `docs/reference.md`.
   The narrow viewport turns the menu into a strip across the top rather than hiding it: there are
   a handful of sections and they are the page's only navigation.
 - **The console's entry points all ask `store.canAdmin`, never `roles.includes("superadmin")`.**
-  Two tiers means the check is a *set* question, and three call sites (the home page's header,
-  the sidebar's menu, the account page) written as a one-role comparison is how an ordinary
-  administrator ends up with a console reachable from two buttons and not the third. It is still
+  Two tiers means the check is a *set* question, and the call sites (the rail menu, which both
+  the home page and a conversation draw, and the account page) written as a one-role comparison
+  is how an ordinary administrator ends up with a console reachable from two buttons and not the
+  third. It is still
   not a permission: it decides whether a button is drawn, and the routes answer 403 regardless.
 - **Nothing is painted until `uiState.authReady`.** Whether anyone is signed in is the
   *server's* fact — the token may be expired, revoked or absent — so the right view is
@@ -1097,7 +1143,8 @@ Fuller map in `docs/reference.md`.
   Copilots is not: everything installation-wide the old settings dialog held answered 403 for an
   ordinary account and showed a URL the server fetches to everybody. There is no global settings
   dialog at all now — the Copilots have one of their own (`CopilotsDialog.vue`, opened from the
-  sidebar footer *and* from the workspace home's header, because the front door has no sidebar),
+  助理 row of either rail — the front door has no sidebar, so the menu it does have is what
+  carries it),
   and the sidebar's old 设置 row is 工作区设置 instead. The test for whether a screen belongs in
   the console is whether it changes something every account shares, or is an account itself;
   anything one account does for itself belongs in the app. A namespace outliving its dialog is
@@ -1189,6 +1236,19 @@ Fuller map in `docs/reference.md`.
   so the older reply used to overwrite the newer and the list settled on the *unfiltered* answer
   while the controls said otherwise. `loadRows`/`loadScope` drop a reply that is not the latest —
   the same shape as `runPreview`'s `filePreviewSeq` in `stores/app.ts`.
+
+- **Adding material is one door with a tab per kind, not one button per kind.** The browser's footer
+  used to hold 上传资料 and 添加链接 side by side: two idioms for one *operation*, one of which fired
+  a file picker the instant it was pressed, and neither of which said where the result would land.
+  `AddSourceDialog` asks what is being added first, draws that kind's fields, and sends nothing
+  until it is submitted — which is what a knowledge base does, and what makes "a workspace and a
+  folder" expressible at all. The tabs share **where it goes** (the workspace, plus the directory
+  for a file) and nothing else, which is why they are tabs of one dialog rather than two; `TABS` is
+  data, so a third kind is an entry plus a branch in the body rather than a second dialog. A
+  **conversation is never offered** as a target, on the rule the browser is built on: a
+  conversation's own folder is written by the agent and by uploads made inside it. The file tab
+  takes several files and sends **one request each**, so a partial failure names the file it failed
+  on and a retry resends only what is left.
 - **A `<select>` bound to `undefined` paints blank, not its placeholder option.** The browser's
   filters open from `?workspaceId=`-style props, which are absent rather than empty, and every
   control rendered as an empty box — so `asFilters` gives every key the empty string, spelled out
@@ -1387,7 +1447,8 @@ Fuller map in `docs/reference.md`.
   `NON_FILE_TOOLS` either — so `fileTools.enabled: false` means no diagrams, because a diagram
   whose file was never written is half the feature. The panel is a viewer: it lists the
   conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
-  folder is the separate conversation-files dialog. See `docs/diagrams.md`.
+  folder is the source browser, which the chat header opens pre-filtered to this workspace — see
+  `docs/diagrams.md`.
   **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
   comes from an out-of-band model call a button triggers, so there is nothing to bind — and
   binding would be wrong anyway, because a bound tool is something the *agent* can call and the

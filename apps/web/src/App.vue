@@ -13,7 +13,6 @@ import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import CopilotsDialog from "./components/dialogs/CopilotsDialog.vue";
 import SourceBrowser from "./components/dialogs/SourceBrowser.vue";
-import SessionFilesDialog from "./components/dialogs/SessionFilesDialog.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
 import {
@@ -228,10 +227,6 @@ watch(
       :hidden="uiState.sourcesScope?.workspaceId ? ['workspace'] : []"
       @close="closeSources"
     />
-    <!-- A conversation's own folder — the diagrams it drew. Read from `activeSessionId`, so it
-         is mounted beside the sources dialog rather than inside the chat pane, which unmounts
-         on the way back to the workspace home. -->
-    <SessionFilesDialog />
     <!-- Mounted for its lifetime rather than behind a `v-if` on the file: it renders nothing
          until one is opened, and the Sidebar — which would be the natural host — unmounts on
          the way back to the workspace home. -->

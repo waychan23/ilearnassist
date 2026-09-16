@@ -336,7 +336,7 @@ describe("init", () => {
     // The widget list is **omitted**, not sent empty, and that is the distinction the API is
     // built on: this workspace was created by the app rather than by the dialog, so nobody made a
     // choice about it and it takes the server's default rather than asserting "none".
-    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Default", undefined);
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("默认工作区", undefined);
     expect(store.workspaces).toHaveLength(1);
   });
 

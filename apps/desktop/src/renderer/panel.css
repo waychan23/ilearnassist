@@ -167,11 +167,20 @@ body.is-mac {
   gap: var(--space-5);
 }
 
+/*
+ * The product name, which is long enough to matter: at the panel's narrowest width it and the
+ * language control share one line, and the control is the one that has to stay whole — this side
+ * gives way (truncated) rather than pushing it off the drag region.
+ */
 .wordmark {
   margin: 0;
   font-size: var(--fs-7);
   font-weight: 600;
   letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /*
@@ -183,6 +192,7 @@ body.is-mac {
  */
 .locale {
   -webkit-app-region: no-drag;
+  flex-shrink: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);

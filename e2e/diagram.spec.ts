@@ -269,21 +269,26 @@ test("the conversation's folder is browsable from the chat header", async ({ pag
   await send(page, "画一个流程图");
   await expect(page.getByTestId("diagram-row").first()).toBeVisible({ timeout: 20_000 });
 
-  // Opened from the header rather than from the panel: the folder is the conversation's, and
-  // it is reachable without installing anything.
-  await page.getByTestId("open-session-files").click();
-  const dialog = page.getByTestId("session-files");
+  /*
+   * Opened from the chat header's source browser rather than from the panel: a diagram is a
+   * source like any other, so the one control that lists the workspace's material lists it too
+   * — by name, with the panel staying the *filtered* view for rows the model drew.
+   */
+  await page.getByTestId("open-workspace-sources").click();
+  const dialog = page.getByTestId("sources-dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByTestId("session-file-row").first()).toContainText("browsable.mmd");
 
-  await dialog.getByTestId("session-file-row").first().click();
+  const row = dialog.getByTestId("source-row").filter({ hasText: "browsable.mmd" });
+  await expect(row).toBeVisible();
+  await row.getByTestId("source-open").click();
+
   await expect(page.getByTestId("file-preview-diagram").getByTestId("mermaid")).toHaveAttribute(
     "data-render-state",
     "ready",
     { timeout: 20_000 }
   );
   await page.getByTestId("file-preview-close").click();
-  await dialog.getByTestId("session-files-done").click();
+  await dialog.getByTestId("sources-done").click();
   await expect(dialog).toBeHidden();
 });
 

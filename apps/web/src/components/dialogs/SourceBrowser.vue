@@ -9,7 +9,7 @@ import { confirm } from "../../composables/confirm";
 import { translateParseError } from "../../utils/apiError";
 import { formatBytes } from "../../utils/format";
 import { allGroupKeys, flattenSourceTree, groupSources } from "../../utils/sourceTree";
-import FilePathDialog from "./FilePathDialog.vue";
+import AddSourceDialog from "./AddSourceDialog.vue";
 import Icon from "../Icon.vue";
 
 /**
@@ -100,12 +100,10 @@ const error = ref<string | null>(null);
 
 const view = ref<"flat" | "tree">("flat");
 const expanded = ref<string[]>([]);
-/** Whether the "add a link" prompt is open. */
-const addLinkOpen = ref(false);
+/** Whether the add dialog is open. */
+const addOpen = ref(false);
 
 const sessions = ref<Session[]>([]);
-const uploadInput = ref<HTMLInputElement | null>(null);
-const addTarget = ref<string>("");
 
 const shows = (option: string): boolean => !props.hidden?.includes(option as never);
 
@@ -294,65 +292,76 @@ async function remove(source: Source): Promise<void> {
 }
 
 /**
- * Add a file to a workspace.
+ * The directories this workspace is known to have, for the add dialog's suggestions.
  *
- * The browser is where a person starts from "I have material", so the upload lives here — and
- * it lands at a workspace's **root**, which is what the requirement means by "add a source:
- * choose a workspace". Filing it deeper is the file manager's job, where the destination is
- * something you can see.
- *
- * Only workspaces are offered, never a conversation: a conversation's own directory is written
- * by the agent and by the conversation's own uploads, and a picker here would be a way to put a
- * file somewhere no conversation created it.
+ * Derived from the sources already listed rather than from a directory walk: the walk is one
+ * request per level, and a suggestion list is not worth that. Free text is what actually
+ * decides, and an unknown path is created by the upload — so a stale or short list costs a
+ * suggestion, never a mistake.
  */
-/**
- * Add a page by URL.
- *
- * The fetch happens server-side through the same guard `web_fetch` uses, so a URL that
- * resolves to a private address is refused there and reported here — with the guard's own
- * sentence, which names the reason and says more than anything invented at this end.
- */
-async function addLink(url: string): Promise<void> {
-  addLinkOpen.value = false;
-  if (!addTarget.value) return;
-  try {
-    await api.addWebSource({ url, workspaceId: addTarget.value });
-    await Promise.all([loadScope(), loadRows()]);
-  } catch (e) {
-    error.value = message(e);
+const knownDirectories = computed(() => {
+  const dirs = new Set<string>();
+  for (const row of scopeRows.value) {
+    const rel = row.relPath;
+    if (!rel) continue;
+    const cut = rel.lastIndexOf("/");
+    if (cut > 0) dirs.add(rel.slice(0, cut));
   }
-}
+  return [...dirs].sort();
+});
 
-async function onPickFile(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  const workspaceId = addTarget.value;
-  if (!file || !workspaceId) return;
-
-  try {
-    await api.uploadWorkspaceFile(workspaceId, {
-      dir: "",
-      name: file.name,
-      mimeType: file.type || undefined,
-      data: await fileToBase64(file),
-    });
-    await Promise.all([loadScope(), loadRows()]);
-  } catch (e) {
-    error.value = message(e);
-  }
+/** A source was added: re-read both lists, so the new row is there and the facets see it too. */
+async function onAdded(): Promise<void> {
+  await Promise.all([loadScope(), loadRows()]);
 }
 
 /* --------------------------------- lifecycle -------------------------------- */
 
 /**
- * Load on *open*, not on mount.
+ * What is on screen, and what it was read for.
  *
- * The component is always mounted (the app has no `v-if` on its dialogs), so `onMounted` fires
- * once at start-up and would leave the list as it was at boot — the bug the uploads dialog this replaced already
- * had and fixed. `immediate` is not wanted here: the dialog is closed at start-up, and loading
- * then would be a request nobody asked for.
+ * Both watchers below are gated on the *values* rather than on the event that changed them, and
+ * that is not tidiness. Opening the dialog writes `filters` from the props, which is a change to
+ * the very fields those watchers watch — so a fresh open read everything **twice**: once because
+ * it opened, and once because the scope "changed" to what the props already said. Seven requests
+ * where three belong, and each listing makes the server reconcile a filesystem.
+ *
+ * A flag held up while hydrating would fix that one pair and depend on which flush runs first.
+ * A key does not depend on anything: the list on screen belongs to a filter set, and a read is
+ * worth making exactly when the set in hand is not the one it holds.
  */
+let loadedFilters: string | null = null;
+let loadedScope: string | null = null;
+
+/**
+ * The filter set as a string, for comparison.
+ *
+ * JSON rather than a join: the search box is free text, and any separator it could contain would
+ * let two different sets compare equal — which here would mean a search that never re-read.
+ */
+function filterKey(): string {
+  const f = filters.value;
+  return JSON.stringify([f.name, f.workspaceId, f.sessionId, f.category, f.origin, f.mime, f.storage]);
+}
+
+/** The scope half of it — the part whose change invalidates the option lists and the sessions. */
+function scopeKey(): string {
+  return JSON.stringify([filters.value.workspaceId ?? "", filters.value.sessionId ?? ""]);
+}
+
+/** Record that what is on screen is this, and read it whole. */
+async function readAll(): Promise<void> {
+  loadedFilters = filterKey();
+  loadedScope = scopeKey();
+  await Promise.all([loadScope(), loadRows(), loadSessions()]);
+}
+
+/** Record it and read the rows alone — for a change the facets do not depend on. */
+async function readRows(): Promise<void> {
+  loadedFilters = filterKey();
+  await loadRows();
+}
+
 const closeButton = ref<HTMLButtonElement | null>(null);
 
 /**
@@ -368,6 +377,14 @@ function onKeydown(event: KeyboardEvent): void {
   emit("close");
 }
 
+/**
+ * Load on *open*, not on mount.
+ *
+ * The component is always mounted (the app has no `v-if` on its dialogs), so `onMounted` fires
+ * once at start-up and would leave the list as it was at boot — the bug the uploads dialog this
+ * replaced already had and fixed. `immediate` is wanted for the *removal* of the listener rather
+ * than for a load: at start-up the flag is false, and `readAll` is not reached.
+ */
 watch(
   () => uiState.sourcesOpen,
   async (open) => {
@@ -381,9 +398,8 @@ watch(
     // inherit what the first one was narrowed to.
     filters.value = asFilters(props.initial);
     view.value = "flat";
-    await Promise.all([loadScope(), loadRows(), loadSessions()]);
+    await readAll();
     expanded.value = [];
-    addTarget.value = store.workspaces[0]?.id ?? "";
     // Focus the close control, which gives the dialog a focus trap of one: Tab from here walks
     // its own controls, and Escape never has to reach past the composer behind it.
     await nextTick();
@@ -392,25 +408,25 @@ watch(
   { immediate: true }
 );
 
-/** A scope change re-reads everything: the option lists are *of* the new scope. */
-watch(
-  () => [filters.value.workspaceId, filters.value.sessionId],
-  async () => {
-    if (!uiState.sourcesOpen) return;
-    // A session belongs to the workspace that was just changed away from.
-    if (!filters.value.workspaceId) filters.value.sessionId = undefined;
-    await Promise.all([loadScope(), loadRows(), loadSessions()]);
+/**
+ * A filter change re-reads — and *what* it re-reads depends on which half of the key moved.
+ *
+ * One watcher rather than two, because the two halves overlap: the scope is a pair of the fields
+ * this watches, so a second watcher on them would fire for the same change and read the rows a
+ * second time. The key is what makes "the dialog just opened and wrote the props it was opened
+ * with" not a change at all — see the note above `loadedFilters`.
+ */
+watch(filterKey, async () => {
+  if (!uiState.sourcesOpen) return;
+  // A session belongs to the workspace that was just changed away from.
+  if (!filters.value.workspaceId) filters.value.sessionId = undefined;
+  if (filterKey() === loadedFilters) return;
+  if (scopeKey() === loadedScope) {
+    await readRows();
+    return;
   }
-);
-
-/** Any other filter change re-reads the list only. */
-watch(
-  () => [filters.value.category, filters.value.origin, filters.value.mime, filters.value.name, filters.value.storage],
-  () => {
-    if (!uiState.sourcesOpen) return;
-    void loadRows();
-  }
-);
+  await readAll();
+});
 
 function expandAll(): void {
   expanded.value = allCollapsed.value ? allGroupKeys(groups.value) : [];
@@ -679,43 +695,14 @@ function expandAll(): void {
         <div class="modal-foot">
           <template v-if="shows('add')">
             <!--
-              Adding is workspace-only, and the picker says so by its options: a conversation is
-              never chosen by hand, because its own directory is written by the agent and by the
-              uploads made inside it.
+              One door for both kinds. The dialog that opens asks *what* is being added — a file
+              or a link — which is the question a knowledge base asks, and then collects
+              everything before anything is sent. See `AddSourceDialog`.
             -->
-            <select v-model="addTarget" class="input add-workspace" data-testid="sources-add-workspace">
-              <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
-            </select>
-            <button
-              class="btn"
-              :disabled="!addTarget"
-              data-testid="sources-add"
-              @click="uploadInput?.click()"
-            >
-              <Icon name="upload" />
+            <button class="btn" data-testid="sources-add" @click="addOpen = true">
+              <Icon name="plus" />
               {{ t("sources.add") }}
             </button>
-            <!--
-              The other half of "add a source": a link, not a file. The requirement lists both —
-              "a web page or an uploaded file, added to a workspace from outside a conversation"
-              — and this dialog could only do the second.
-            -->
-            <button
-              class="btn"
-              :disabled="!addTarget"
-              data-testid="sources-add-link"
-              @click="addLinkOpen = true"
-            >
-              <Icon name="link" />
-              {{ t("sources.addLink") }}
-            </button>
-            <input
-              ref="uploadInput"
-              type="file"
-              class="hidden-input"
-              data-testid="sources-add-input"
-              @change="onPickFile"
-            />
           </template>
           <button class="btn primary" data-testid="sources-done" @click="emit('close')">
             {{ t("common.close") }}
@@ -725,18 +712,15 @@ function expandAll(): void {
     </div>
 
     <!--
-      The link prompt, reusing the one-field dialog the file manager already has: "which
-      address" and "what should this be called" are the same shape of question, and a second
-      component for one input would be a second copy of the same styles.
+      Adding, as one dialog with a tab per kind. It is told the scope when this browser was
+      opened already scoped, and shows no picker then.
     -->
-    <FilePathDialog
-      v-if="addLinkOpen"
-      :title="t('sources.addLink')"
-      :label="t('sources.addLinkLabel')"
-      initial=""
-      :confirm-label="t('common.add')"
-      @close="addLinkOpen = false"
-      @submit="addLink"
+    <AddSourceDialog
+      v-if="addOpen"
+      :locked-workspace-id="props.initial?.workspaceId"
+      :directories="knownDirectories"
+      @close="addOpen = false"
+      @added="onAdded"
     />
   </Teleport>
 </template>

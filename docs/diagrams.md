@@ -227,7 +227,10 @@ half-renders is worse than one that renders with a visible complaint in it.
 - **The widget**, in the right panel: the conversation's **rows** — name, the model's summary,
   the thread each diagram belongs to, and a jump to the reply that drew it. `DiagramWidget.vue`,
   a viewer with no tools — see [widgets.md](widgets.md#a-viewer-widget-with-no-tools-the-diagram-widget).
-- **The session-files dialog** lists the whole folder, including a `.mmd` nobody drew here.
+- **The source browser** lists the whole folder as sources — a conversation's own file is a
+  `storage='session'` row like any other, and one of the browser's filters is the conversation. It
+  is where a `.mmd` nobody drew stays reachable, because the folder carries the file and the
+  diagram row does not.
 
 One viewer serves all three, and the file preview as well: `DiagramDialog.vue` owns the zoom and
 shows the summary above the drawing. Zoom is the CSS `zoom` property rather than
@@ -236,13 +239,21 @@ grow with the picture. The file preview's diagram branch gets its summary from t
 session-root `…/files/content` read attaches the row's summary by canonical file name — a
 workspace-root `.mmd` has none.
 
-## The session file browser
+## The session file routes
 
-`GET /api/sessions/:id/files` and `…/files/content` mirror the workspace pair, and are the same
-two functions in `files.ts` with a different root — a second *caller*, never a second browser.
-`SessionFilesDialog.vue` lists the whole folder (not only diagrams; the widget is the filtered
-view) and is opened from the chat header. Every row opens the ordinary file preview, which renders
-a diagram because `kind: "diagram"` is a member of `FILE_CONTENT_KINDS`.
+`GET /api/sessions/:id/files`, `…/files/content` and `…/files/raw` mirror the workspace trio, and
+are the same functions in `files.ts` with a different root — a second *caller*, never a second
+browser. Every row opens the ordinary file preview, which renders a diagram because
+`kind: "diagram"` is a member of `FILE_CONTENT_KINDS`.
+
+**They no longer have a browser of their own.** The dialog that listed the whole folder is gone:
+every entry to it was a second way to see a folder the source browser already lists by scope, and
+two surfaces for one folder are two places to keep in step. The folder view that remains is that
+browser with the conversation as its filter. The *routes* stay, and are not vestigial — the
+diagram widget opens one of its rows through `…/files/content` + `…/files/raw` (a `.mmd` is
+previewed where it is written rather than copied into a preview), and `e2e/diagram.spec.ts` reads
+the listing to assert the tool wrote a file, which is a different claim from a widget having drawn
+something.
 
 There is no write endpoint. Both writers are tools, and a browser for it is a read.
 
@@ -263,6 +274,7 @@ pnpm dev:restart
 ```
 
 Ask for a diagram ("画一个登录流程的流程图"), and check: the card draws it, the head names it, the
-expand button opens the viewer, zoom works, and the file appears in 会话文件. Then flip the theme —
+expand button opens the viewer, zoom works, and the source browser (the header's library button,
+with this conversation as the scope) lists the `.mmd` under it. Then flip the theme —
 the diagram redraws. A malformed request ("画一张坏掉的图") should leave the reply standing with the
 complaint in place of the drawing.

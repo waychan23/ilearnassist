@@ -348,7 +348,7 @@ What that changes relative to the widgets above:
 - **Its data is rows, written by the tool.** It calls `GET /api/sessions/:id/diagrams`, the
   `session_diagrams` rows the tool upserts beside each `.mmd`. The row carries the canonical file
   name, the model's `summary`, the call id, and the thread the classifier placed it in — what the
-  file alone cannot answer. The whole-folder view is the separate session-files dialog, so a
+  file alone cannot answer. The whole-folder view is the source browser, so a
   `.mmd` copied in by hand is still reachable but is not listed as something the agent drew.
 - **Opening a row goes through the ordinary file preview**, not a dialog of its own: that dialog
   already renders a diagram, already has the source toggle, already reports its own load failures,

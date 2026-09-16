@@ -416,7 +416,10 @@ async function openAppWindow(): Promise<void> {
     height: 880,
     minWidth: 720,
     minHeight: 520,
-    title: "ilearnassist",
+    // The product name, from the catalog rather than the literal `app.setName` holds: this is the
+    // title bar for the milliseconds before the web app's own `<title>` arrives, and it should
+    // read as the product rather than as the identifier.
+    title: t("app.name"),
     backgroundColor: chromeColour(),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });

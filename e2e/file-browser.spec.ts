@@ -299,9 +299,13 @@ test("an unqualified write goes to the conversation, not the workspace tree", as
   await openFilesTab(page);
   await expect(page.getByTestId("file-row").filter({ hasText: "mine.txt" })).toHaveCount(0);
 
-  // …but there, in the conversation's own folder.
-  await page.getByTestId("open-session-files").click();
-  await expect(
-    page.getByTestId("session-files").getByTestId("session-file-row").filter({ hasText: "mine.txt" })
-  ).toBeVisible();
+  // …but there, in the conversation's own folder — which the source browser is now the way to
+  // see: it lists the row, and the row's byline says which folder wrote it.
+  await page.getByTestId("open-workspace-sources").click();
+  const browser = page.getByTestId("sources-dialog");
+  await expect(browser).toBeVisible();
+
+  const row = browser.getByTestId("source-row").filter({ hasText: "mine.txt" });
+  await expect(row).toBeVisible();
+  await expect(row.getByTestId("source-origin")).toContainText("助理写入会话");
 });

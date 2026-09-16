@@ -145,19 +145,29 @@ test("adds a file to a workspace from the browser", async ({ page, request }) =>
   const workspaceId = await seedWorkspace(request, name, "seed.md");
 
   await openBrowser(page);
-  await page.getByTestId("sources-add-workspace").selectOption({ label: name });
-  await page.getByTestId("sources-add-input").setInputFiles({
+  await page.getByTestId("sources-add").click();
+
+  // One door, a tab per kind: the file tab is the one showing, and everything is collected
+  // before anything is sent.
+  const dialog = page.getByTestId("add-source-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByTestId("add-source-workspace").selectOption({ label: name });
+  await dialog.getByTestId("add-source-dir").fill("reading");
+  await dialog.getByTestId("add-source-input").setInputFiles({
     name: "added.txt",
     mimeType: "text/plain",
     buffer: Buffer.from("added"),
   });
+  await expect(dialog.getByTestId("add-source-picked")).toContainText("added.txt");
+  await dialog.getByTestId("add-source-submit").click();
+  await expect(dialog).toHaveCount(0);
 
   await page.getByTestId("sources-filter-workspace").selectOption({ label: name });
   await expect(page.getByTestId("source-row").filter({ hasText: "added.txt" })).toBeVisible();
 
-  // And it is really in the workspace, not only in the list.
+  // And it is really in the folder that was typed, not only in the list.
   const listed = await request
-    .get(`/api/workspaces/${workspaceId}/files?path=`)
+    .get(`/api/workspaces/${workspaceId}/files?path=reading`)
     .then((r) => r.json());
   expect(listed.entries.map((e: { name: string }) => e.name)).toContain("added.txt");
 });
@@ -211,6 +221,49 @@ test("keeps the controls to a strip and gives the rest to the list", async ({ pa
   expect(toolbarBox.height).toBeLessThan(90);
 });
 
+/*
+ * One open, one read of each list.
+ *
+ * A regression guard rather than a nicety. Opening the dialog writes `filters` from the props, and
+ * for two rounds that write was itself a *change* to the fields the filter watchers watch — so
+ * every open read the rows and the facets twice, seven requests where two belong, and each listing
+ * makes the server reconcile a filesystem before it answers. Nothing about the *result* was wrong
+ * at any point, which is exactly why only a count can hold this in place.
+ */
+test("reads each list once per open, and only the rows when a filter changes", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+
+  // Attached between the app starting and the dialog opening, so the count is the open's alone.
+  const seen: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname === "/api/sources") seen.push(r.url());
+  });
+
+  await page.getByTestId("open-sources").click();
+  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await settle(page);
+
+  /*
+   * Two, and one of them is the *scope* read the option lists are drawn from. They are two
+   * questions that happen to share a URL here — with nothing filtered, "everything in scope" and
+   * "everything matching the filters" are the same list — and a third would be the session list,
+   * which no workspace is in scope to ask for.
+   */
+  expect(seen).toHaveLength(2);
+
+  /*
+   * A filter change is not a scope change, so it re-reads the rows *only*: the option lists are
+   * drawn from the scope, and re-reading them would both waste a listing and delete the option
+   * the reader narrowed by.
+   */
+  seen.length = 0;
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/sources");
+  await page.getByTestId("sources-filter-search").fill("no-such-source-anywhere");
+  await answered;
+  expect(seen).toHaveLength(1);
+});
+
 test("adds a web link, and says why one that cannot be reached was not kept", async ({
   page,
   request,
@@ -227,14 +280,15 @@ test("adds a web link, and says why one that cannot be reached was not kept", as
   await seedWorkspace(request, name, "seed.md");
 
   await openBrowser(page);
-  await page.getByTestId("sources-add-workspace").selectOption({ label: name });
-  await page.getByTestId("sources-add-link").click();
+  await page.getByTestId("sources-add").click();
 
-  await expect(page.getByTestId("file-path-dialog")).toBeVisible();
-  await page.getByTestId("file-path-input").fill("http://127.0.0.1:9/nope");
-  await page.getByTestId("file-path-submit").click();
+  const dialog = page.getByTestId("add-source-dialog");
+  await dialog.getByTestId("add-source-workspace").selectOption({ label: name });
+  await dialog.getByTestId("add-source-tab-link").click();
+  await dialog.getByTestId("add-source-url").fill("http://127.0.0.1:9/nope");
+  await dialog.getByTestId("add-source-submit").click();
 
-  // Refused, in the panel the action was taken in, and the sentence names the reason.
-  await expect(page.getByTestId("sources-error")).toBeVisible();
-  await expect(page.getByTestId("sources-error")).toContainText("127.0.0.1");
+  // Refused, in the dialog the action was taken in, and the sentence names the reason.
+  await expect(dialog.getByTestId("add-source-error")).toBeVisible();
+  await expect(dialog.getByTestId("add-source-error")).toContainText("127.0.0.1");
 });
