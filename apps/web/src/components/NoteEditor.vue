@@ -10,12 +10,19 @@ import Icon from "./Icon.vue";
 /**
  * The note window: one annotation, one body, and the actions on them.
  *
- * Not a modal, deliberately. A dialog with a scrim would take the conversation away to ask
- * about a sentence in it — the annotated text is the context for what is being written, so it
- * has to stay readable and the message list behind stays live. It floats near whatever it was
- * opened from (the selection, or the row in the panel) and is clamped to the viewport rather
- * than centred, which is what makes "near the thing you pointed at" survive a card that is
- * taller than the space below it.
+ * **A floating card by default, and a modal only when asked.** Not a dialog, deliberately: one
+ * with a scrim would take the conversation away to ask about a sentence in it — the annotated
+ * text is the context for what is being written, so it has to stay readable and the message list
+ * behind stays live. It floats near whatever it was opened from (the selection, or the row in the
+ * panel) and is clamped to the viewport rather than centred, which is what makes "near the thing
+ * you pointed at" survive a card that is taller than the space below it.
+ *
+ * The second size is the reader's own choice and is the one case where it *does* cover the page:
+ * a note can be long, 340px is a cramped place to write several paragraphs, and a window you
+ * deliberately grew is one you asked to give your attention to. So it is the same card in two
+ * sizes rather than two components — the type selector, the quote, the body and the actions are
+ * identical in both, and a second component would be a second place for all of it to be spelled
+ * differently.
  *
  * It owns no data and knows nothing about notes as records: `save` and `remove` are handed in
  * with the draft. That is what lets the message list render it without knowing that a notes
@@ -66,6 +73,21 @@ const dirty = computed(
 const position = ref<{ left: number; top: number } | null>(null);
 
 /**
+ * Whether the window has been grown to fill the screen.
+ *
+ * The card is a floating popover by default, and that is the right default — the annotated text is
+ * the context for what is being written, so it stays readable behind the card. But a note can be
+ * long, and 340px is a cramped place to write several paragraphs. So the same window has a second
+ * size, and this is it: centred, over a scrim, at the **source browser's own width**, because that
+ * is the box this app already uses for "a window you read or write a lot in".
+ *
+ * Not a separate modal component: the two are one window in two sizes, and the type selector, the
+ * quote, the body and the actions are identical in both. A second component would be a second
+ * place for all of that to be spelled differently.
+ */
+const maximized = ref(false);
+
+/**
  * Float near the anchor, or dock to the corner.
  *
  * Measured rather than assumed: the card's height depends on how long the quote and the body
@@ -106,8 +128,23 @@ watch(
 );
 
 function onResize(): void {
+  // Nothing to re-place while it is centred: a viewport change moves a maximised window not at
+  // all, and `place()` would derive coordinates from the grown box and overwrite the ones the
+  // restore is supposed to put back.
+  if (maximized.value) return;
   place();
 }
+
+/**
+ * Restoring re-places rather than merely un-clipping.
+ *
+ * The coordinates are remembered, so "back where it was" is the default — but the note may have
+ * grown while it was large, and a card that no longer fits below its anchor has to flip above it,
+ * which is the whole job `place()` does and the reason it measures instead of assuming.
+ */
+watch(maximized, (on) => {
+  if (!on) void nextTick(place);
+});
 
 onMounted(() => {
   window.addEventListener("resize", onResize);
@@ -164,6 +201,16 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.key !== "Escape") return;
   if (!card.value?.contains(document.activeElement)) return;
   event.stopPropagation();
+  /*
+   * Escape backs out one level, which is what it does to anything that has a full-screen state:
+   * a maximised note is still being written, and losing the paragraph to a discard prompt because
+   * the reader wanted their screen back is the wrong reading of the same key. A second press —
+   * now that it is small again — closes.
+   */
+  if (maximized.value) {
+    maximized.value = false;
+    return;
+  }
   void close();
 }
 
@@ -176,6 +223,8 @@ function typeLabel(candidate: NoteType): string {
       return t("notes.types.idea");
     case "question":
       return t("notes.types.question");
+    case "opinion":
+      return t("notes.types.opinion");
     case "other":
       return t("notes.types.other");
   }
@@ -184,29 +233,64 @@ function typeLabel(candidate: NoteType): string {
 
 <template>
   <Teleport to="body">
+    <!--
+      The scrim exists only while the window is grown, and it is a *sibling* rather than a parent
+      so the card is one element in both sizes: a parent would have to be added and removed around
+      it, which re-creates the card and takes the caret with it.
+
+      Clicking it backs out one level, the same reading of the same gesture Escape gets.
+    -->
+    <div
+      v-if="maximized"
+      class="note-editor-scrim"
+      data-testid="note-editor-scrim"
+      aria-hidden="true"
+      @click="maximized = false"
+    />
+
     <div
       ref="card"
       class="note-editor"
+      :class="{ maximized }"
       data-testid="note-editor"
       role="group"
       :aria-label="t('notes.editor.title')"
-      :style="position ? { left: `${position.left}px`, top: `${position.top}px` } : undefined"
+      :aria-modal="maximized || undefined"
+      :style="
+        !maximized && position
+          ? { left: `${position.left}px`, top: `${position.top}px` }
+          : undefined
+      "
       @keydown="onKeydown"
     >
       <div class="note-editor-head">
         <span class="note-editor-title" data-testid="note-editor-title">
           {{ existing ? t("notes.editor.editTitle") : t("notes.editor.newTitle") }}
         </span>
-        <button
-          type="button"
-          class="icon-btn"
-          data-testid="note-editor-close"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="close"
-        >
-          <Icon name="close" />
-        </button>
+        <!-- The window's pair, in the order the file preview's uses: grow, then dismiss. -->
+        <div class="note-editor-window">
+          <button
+            type="button"
+            class="icon-btn"
+            data-testid="note-editor-maximize"
+            :aria-pressed="maximized"
+            :title="maximized ? t('notes.editor.restore') : t('notes.editor.maximize')"
+            :aria-label="maximized ? t('notes.editor.restore') : t('notes.editor.maximize')"
+            @click="maximized = !maximized"
+          >
+            <Icon :name="maximized ? 'collapse' : 'expand'" />
+          </button>
+          <button
+            type="button"
+            class="icon-btn"
+            data-testid="note-editor-close"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="close"
+          >
+            <Icon name="close" />
+          </button>
+        </div>
       </div>
 
       <!-- Kind first: it is the one answer the window wants before the words, and the quote
@@ -235,7 +319,9 @@ function typeLabel(candidate: NoteType): string {
         <p class="note-quote clamp-4" data-testid="note-editor-quote">{{ draft.quote }}</p>
       </div>
 
-      <div class="field">
+      <!-- `field-grow` is what takes the room a maximised window adds: the field is the flex
+           item, so growing the textarea inside it would do nothing on its own. -->
+      <div class="field field-grow">
         <label for="note-editor-content">{{ t("notes.editor.contentLabel") }}</label>
         <textarea
           id="note-editor-content"
@@ -317,6 +403,70 @@ function typeLabel(candidate: NoteType): string {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+}
+/* The window's own two, as a pair set apart from the title — the file preview's `.window-actions`
+   shape, which is where this app already puts maximise and close. */
+.note-editor-window {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/*
+ * Grown: the source browser's own box, which is the width this app already uses for a window you
+ * read or write a lot in. Centred by the `left/top` + `translate` recipe rather than by the modal
+ * overlays' flex centring, because this element is a floating card in its other size and the
+ * inline `left`/`top` that positions *it* has to be dropped for a class rule to take over — which
+ * is why the binding above goes to `undefined` while maximised.
+ *
+ * `transform` on a body-teleported element is safe here: the caveat in CLAUDE.md is about giving
+ * it to `.app`, which would become the containing block for every `position: fixed` descendant.
+ */
+.note-editor.maximized {
+  width: min(880px, calc(100vw - 2 * var(--space-6)));
+  /*
+   * A *definite* height, not a `max-height`. The card is a content-sized column, so a maximum
+   * gives the body field nothing to grow into — `flex: 1` below has no free space to claim, and
+   * the "grown" window comes out the same height it was, with a five-line box in it. This is the
+   * source browser's own height for the same reason it uses one.
+   */
+  height: min(660px, calc(100dvh - 120px));
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  /*
+   * Above the mobile drawer (80) so a grown window is not covered by a rail the reader opened
+   * before it, and below `--z-confirm` (110) — which is the one that matters, because this
+   * window's own Delete button raises a confirmation over it.
+   */
+  z-index: var(--z-overlay);
+}
+/*
+ * The body gets the room: a grown note is written in a grown box, not in a five-line one with a
+ * band of nothing under it.
+ *
+ * Both halves are needed. The field is the flex *item* of the card's column, so it is the one
+ * that has to claim the free space — `flex: 1` on the textarea alone leaves the space collecting
+ * after the actions row, because its parent stayed content-sized. `min-height: 0` is the standard
+ * companion: without it a flex item refuses to shrink below its content and the note would push
+ * the actions off the bottom instead of scrolling.
+ */
+.note-editor.maximized .field-grow {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.note-editor.maximized .field-grow .note-body {
+  flex: 1;
+}
+.note-editor-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  /* One below the grown card, and above the page — the drawer backdrop's own pairing. */
+  z-index: var(--z-backdrop);
 }
 .note-editor-title {
   font-size: var(--fs-3);

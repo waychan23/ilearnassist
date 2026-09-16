@@ -44,6 +44,24 @@ export const ICON_PATHS = {
 
   retry: ["M14 8a6 6 0 1 1-6-6c1.68 0 3.29.67 4.49 1.83L14 5.33", "M14 2v3.33h-3.33"],
 
+  /*
+   * Two arrows chasing each other round a circle: sending this conversation's notes *into* the
+   * library. The two halves are one circle's two semicircles, each with its own head, which is
+   * the mark "sync" is read by everywhere else.
+   *
+   * Deliberately **not** `upload`, which is what it replaces: an arrow leaving a tray says "send
+   * this away", and nothing is being sent away — the notes stay where they are and a copy joins
+   * the library. It is also not a cloud in the middle, which the requirement offered as an
+   * alternative: at the 12px this is drawn at, a cloud inside a 9px circle is a smudge, and the
+   * two heads already say "round trip" without it.
+   */
+  sync: [
+    "M3.5 8A4.5 4.5 0 0 1 12.5 8",
+    "M11.1 6.5L12.5 8L13.9 6.5",
+    "M12.5 8A4.5 4.5 0 0 1 3.5 8",
+    "M2.1 9.5L3.5 8L4.9 9.5",
+  ],
+
   edit: ["M11.25 2.75L13.25 4.75L5.75 12.25L2.75 13.25L3.75 10.25Z", "M10.25 3.75L12.25 5.75"],
 
   "caret-down": ["M4 6.5L8 10.5L12 6.5"],

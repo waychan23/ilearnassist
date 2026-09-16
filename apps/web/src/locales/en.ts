@@ -945,6 +945,7 @@ const en: typeof MessageSchema = {
       annotation: "Marked",
       idea: "Idea",
       question: "Question",
+      opinion: "Viewpoint",
       other: "Other",
     },
     count: "{count} note | {count} notes",
@@ -966,6 +967,9 @@ const en: typeof MessageSchema = {
       contentLabel: "Your note",
       contentPlaceholder: "What are you thinking?",
       typeLabel: "Kind of note",
+      /** Growing the window to write in, and putting it back. See `zh-CN`. */
+      maximize: "Expand window",
+      restore: "Shrink window",
       save: "Save",
       saving: "Saving…",
       locate: "Go to it",

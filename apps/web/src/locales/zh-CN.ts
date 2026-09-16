@@ -1119,6 +1119,7 @@ export default {
       annotation: "标注",
       idea: "灵感",
       question: "疑问",
+      opinion: "观点",
       other: "其他",
     },
     /** `count` is a plural: `en` carries both branches, `zh-CN` the one. */
@@ -1143,6 +1144,10 @@ export default {
       contentLabel: "笔记内容",
       contentPlaceholder: "写下你的想法…",
       typeLabel: "笔记类型",
+      /** Growing the window to write in, and putting it back where it was. One control in two
+       *  states, so the label names what pressing it will do. */
+      maximize: "放大窗口",
+      restore: "缩小窗口",
       save: "保存",
       saving: "保存中…",
       locate: "定位",

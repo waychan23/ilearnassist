@@ -969,16 +969,22 @@ export interface GetSessionDiagramsResponse {
 /**
  * What a note *is*, in the learner's own terms.
  *
- * Four values rather than "annotation" plus a separate kind: 标注 is the one-click quick
- * action and the other three are what the window offers, but all four are the same thing to
- * the store, the list and the filter — a note with a label. The quick action picks a
- * *default type*; it does not create a second kind of row.
+ * One list rather than "annotation" plus a separate kind: 标注 is the one-click quick action
+ * and the rest are what the window offers, but all of them are the same thing to the store, the
+ * list and the filter — a note with a label. The quick action picks a *default type*; it does not
+ * create a second kind of row.
+ *
+ * The middle three are three stances a learner takes on the material, and they are angles rather
+ * than kinds: 灵感 is something the reading prompted, 疑问 is something it left open, and 观点 is
+ * something the reader now holds a position on. That last one is the reason the list is not
+ * "question and idea" alone — a note that disagrees with the material, or agrees with it more
+ * firmly than the material does, had nowhere to go before it existed.
  *
  * Note this is not the `notes` field a `QuizAnswer` carries. That is one question's
  * free-text remark, stored inside the answer; a `Note` below is a record of its own, with an
  * id, a type and (usually) a place in a conversation.
  */
-export const NOTE_TYPES = ["annotation", "idea", "question", "other"] as const;
+export const NOTE_TYPES = ["annotation", "idea", "question", "opinion", "other"] as const;
 
 export type NoteType = (typeof NOTE_TYPES)[number];
 

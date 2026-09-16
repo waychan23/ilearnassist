@@ -316,4 +316,100 @@ test.describe("the notes widget", () => {
     await expect(page.getByTestId("note-toolbar")).toBeHidden();
     await expect(replyContent(page).locator("mark.note-highlight")).toHaveCount(0);
   });
+
+  test("grows the window to write in, and puts it back where it was", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("Notes");
+    await scriptLlm(request, { turns: [{ content: REPLY }], title: "光合作用" });
+    await notesSession(page, name);
+    await send(page, "讲讲光合作用");
+
+    await annotate(page, replyContent(page), SECOND_PHRASE, "note");
+    const editor = page.getByTestId("note-editor");
+    await expect(editor).toBeVisible();
+
+    const small = (await editor.boundingBox())!;
+    const bodyHeight = (await page.getByTestId("note-editor-content").boundingBox())!.height;
+    const viewport = page.viewportSize()!;
+    /*
+     * Small on purpose, and the scrim is the difference that matters: this is a floating card
+     * beside the text it is annotating, and the text stays readable behind it. Growing it is a
+     * deliberate act with its own control.
+     */
+    expect(small.width).toBeLessThan(400);
+    await expect(page.getByTestId("note-editor-scrim")).toHaveCount(0);
+    await expect(page.getByTestId("note-editor-maximize")).toHaveAttribute("aria-pressed", "false");
+
+    await page.getByTestId("note-editor-maximize").click();
+
+    /*
+     * Grown: the source browser's own box, centred, over a scrim. Asserted as a *relationship* to
+     * the viewport rather than as a pixel width, so the two stay matched if that box moves.
+     */
+    await expect(page.getByTestId("note-editor-scrim")).toBeVisible();
+    await expect(page.getByTestId("note-editor-maximize")).toHaveAttribute("aria-pressed", "true");
+
+    const big = (await editor.boundingBox())!;
+    expect(big.width).toBeGreaterThan(small.width);
+    expect(big.height).toBeGreaterThan(small.height);
+    // Centred: equal room on both sides, within a pixel of rounding.
+    expect(Math.abs(big.x - (viewport.width - big.x - big.width))).toBeLessThanOrEqual(1);
+    expect(Math.abs(big.y - (viewport.height - big.y - big.height))).toBeLessThanOrEqual(1);
+    /*
+     * And it is not the whole viewport. The file preview's maximise fills the screen; this one is
+     * a *window* of a fixed, comfortable width — which is the difference between the two controls
+     * even though they share a mark.
+     */
+    expect(big.width).toBeLessThan(viewport.width);
+
+    /*
+     * And the room goes *into the writing box*, which is the point of the taller window. A card
+     * that grew with a five-line textarea still in it — the space collecting under the actions —
+     * satisfies every measurement above and is not what was asked for.
+     */
+    const box = page.getByTestId("note-editor-content");
+    expect((await box.boundingBox())!.height).toBeGreaterThan(bodyHeight);
+
+    // The note is still being written: growing the window does not disturb the draft.
+    await page.getByTestId("note-editor-content").fill("这是一段很长的笔记。");
+
+    // Back, and back *exactly*: the same size, and the same place.
+    await page.getByTestId("note-editor-maximize").click();
+    await expect(page.getByTestId("note-editor-scrim")).toHaveCount(0);
+    const restored = (await editor.boundingBox())!;
+    expect(Math.round(restored.width)).toBe(Math.round(small.width));
+    expect(Math.round(restored.x)).toBe(Math.round(small.x));
+    expect(Math.round(restored.y)).toBe(Math.round(small.y));
+    await expect(page.getByTestId("note-editor-content")).toHaveValue("这是一段很长的笔记。");
+  });
+
+  test("backs out of the grown window with Escape before it closes", async ({ page, request }) => {
+    /*
+     * Escape means "out of the full-screen state" to everything that has one, and a note being
+     * written is the last thing that should be discarded because the reader wanted their screen
+     * back. A second press — now that it is small again — closes.
+     */
+    const name = unique("Notes");
+    await scriptLlm(request, { turns: [{ content: REPLY }], title: "光合作用" });
+    await notesSession(page, name);
+    await send(page, "讲讲光合作用");
+
+    await annotate(page, replyContent(page), SECOND_PHRASE, "note");
+    await expect(page.getByTestId("note-editor")).toBeVisible();
+
+    // Maximise, then type — so the second Escape has something to ask about.
+    await page.getByTestId("note-editor-maximize").click();
+    await expect(page.getByTestId("note-editor-scrim")).toBeVisible();
+    await page.getByTestId("note-editor-content").fill("写了一半。");
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("note-editor-scrim")).toHaveCount(0);
+    await expect(page.getByTestId("note-editor")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    // The discard prompt, because the body is dirty — the confirm that protects a stray close.
+    await expect(page.getByTestId("confirm-accept")).toBeVisible();
+  });
 });

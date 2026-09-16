@@ -67,7 +67,13 @@ const status = computed(() => {
       :aria-label="action"
       @click="store.syncNotesToLibrary(forcing)"
     >
-      <Icon :name="running ? 'retry' : 'upload'" :class="{ run: running }" />
+      <!--
+        One icon in both states, so a press does not swap the mark out from under the pointer: it
+        starts turning instead. `sync` rather than `upload` because nothing is being sent anywhere
+        — the notes stay in the conversation and a copy joins the library — and `retry` would read
+        as "that failed, try again", which is a different button on a different day.
+      -->
+      <Icon name="sync" :class="{ run: running }" />
     </button>
 
     <!--

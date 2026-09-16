@@ -62,6 +62,8 @@ function typeLabel(type: NoteType): string {
       return t("notes.types.idea");
     case "question":
       return t("notes.types.question");
+    case "opinion":
+      return t("notes.types.opinion");
     case "other":
       return t("notes.types.other");
   }
