@@ -61,6 +61,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
+  EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   PLATFORM_ADMIN_ROLES,
   QUIZ_TOOL_NAME,
@@ -120,6 +121,7 @@ import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { COLLECT_PAGE_GUIDANCE } from "./tools/collectPage.js";
+import { exploreGuidance } from "./tools/explore.js";
 import { PLAN_GUIDANCE } from "./tools/planTools.js";
 import { QUIZ_GUIDANCE } from "./tools/quizReview.js";
 import { SUSPENDING_TOOLS } from "./tools/suspending.js";
@@ -143,6 +145,12 @@ import {
 } from "./sources.js";
 import { createDirectory, deletePath, movePath, writeFileAt } from "./fileOps.js";
 import { resolveWriteLocation } from "./writeLocation.js";
+import {
+  normalizeWorkspaceScope,
+  resolveWorkspaceScope,
+  scopeIsEmpty,
+  scopeQuery,
+} from "./workspaceScope.js";
 import { captureWebPage } from "./webCapture.js";
 import { isSourceCategory, isSourceOrigin, isSourceStorage } from "@ilearnassist/shared";
 import {
@@ -258,6 +266,32 @@ function widgetError(code: "UNKNOWN_WIDGET" | "WIDGET_SCOPE_UNSUPPORTED"): ApiEr
   return code === "UNKNOWN_WIDGET"
     ? apiError(code, "no such widget")
     : apiError(code, "that widget cannot be installed at this level");
+}
+
+/**
+ * Check the one settings field the server reads as a grant, and leave the rest alone.
+ *
+ * `settings` is otherwise passed straight through on both write routes — it is a JSON blob the
+ * client owns, and the merge in `updateSessionForUser` is what makes a partial write work. But
+ * `workspaceScope` is *not* an ordinary preference: it decides what a model may read, so a
+ * malformed one is refused by name rather than stored and left to resolve to something nobody
+ * chose. `"true"` for `all` is the case this exists for — it is truthy, so a coerced value
+ * would be a grant the caller never asked for.
+ *
+ * **Ownership is not checked here**, deliberately: a workspace can be deleted between the chip
+ * being drawn and the save landing, and failing the save for that would be failing it for
+ * something that is not the user's fault. An id the account does not own is stored and resolves
+ * to nothing at turn time — see `resolveWorkspaceScope`, which is the one place that decides.
+ */
+function withValidatedScope(
+  settings: SessionSettings | undefined
+): { ok: true; settings: SessionSettings | undefined } | { ok: false; message: string } {
+  if (!settings || !("workspaceScope" in settings)) return { ok: true, settings };
+  const normalized = normalizeWorkspaceScope(
+    (settings as { workspaceScope?: unknown }).workspaceScope
+  );
+  if (!normalized.ok) return { ok: false, message: normalized.message };
+  return { ok: true, settings: { ...settings, workspaceScope: normalized.value } };
 }
 
 /**
@@ -1654,6 +1688,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const widgets = parseWidgetIds(body?.widgets, "session");
     if (!widgets.ok) return reply.code(400).send(widgetError(widgets.code));
 
+    // Before the merge below, so a malformed grant cannot be one of the three levels laid down.
+    const settings = withValidatedScope(body?.settings);
+    if (!settings.ok) return reply.code(400).send(apiError("INVALID_FIELD", settings.message));
+
     const session = db.createSession({
       id: newId(),
       workspaceId,
@@ -1694,7 +1732,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       settings: {
         ...(workspace.settings ?? {}),
         ...(copilot?.settings ?? {}),
-        ...(body?.settings ?? {}),
+        ...(settings.settings ?? {}),
       },
     });
 
@@ -1746,6 +1784,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (body?.title !== undefined && !body.title.trim()) {
       return reply.code(400).send(apiError("TITLE_EMPTY", "title must not be empty"));
     }
+    const settings = withValidatedScope(body?.settings);
+    if (!settings.ok) return reply.code(400).send(apiError("INVALID_FIELD", settings.message));
     return db.updateSessionForUser(id, userId, {
       /*
        * Numbered against its siblings, excluding itself — re-saving under the name it already
@@ -1758,7 +1798,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         ? uniqueTitleIn(existing.session.workspaceId, userId, body.title.trim(), id)
         : undefined,
       description: body?.description,
-      settings: body?.settings,
+      settings: settings.settings,
       systemPrompt: body?.systemPrompt,
       allTools: body?.allTools,
       tools: body?.tools,
@@ -2666,7 +2706,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const { id } = request.params as { id: string };
     const found = db.getSessionForUser(id, userId);
     if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    return db.listReadableSources(userId, id, found.workspace.id).map(toSource);
+    // The grant is part of the whitelist, so it is part of this answer — the docblock above is
+    // the reason, and the cost is real: this route is polled while something is parsing, and an
+    // `@所有工作区` grant makes it an account-wide read. It is paid only while a parse is in
+    // flight, and the alternative is the model and the chips disagreeing.
+    const scope = scopeQuery(resolveWorkspaceScope(db, userId, found.session));
+    return db.listReadableSources(userId, id, found.workspace.id, scope).map(toSource);
   });
 
   /**
@@ -3361,6 +3406,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * Not a widget — this one is on by default, which is exactly why it needed the guidance.
      */
     collectPageGuidance?: string;
+    /**
+     * Present when the conversation holds an `@` grant **and** `ila_explore` survived assembly.
+     * Its presence is what flips the workspace note's read prohibition — see `buildSystemPrompt`.
+     */
+    exploreGuidance?: string;
   }
 
   /**
@@ -3386,15 +3436,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       userId: string;
       /** Whose sources tree `read_document` reads from. */
       user: UserLayout;
-      /**
-       * Every source this conversation can read, resolved per turn.
-       *
-       * A whitelist rather than "whatever ids the model names": a guessed id fails a `Map`
-       * lookup before any path is touched, which is what makes wandering into another
-       * conversation's uploads unrepresentable rather than merely forbidden. It is wider than
-       * the turn's own attachments on purpose — see `read_document`'s note.
-       */
-      sources: Source[];
       /**
        * The IANA zone the browser reported, or absent when it reported none.
        *
@@ -3449,6 +3490,33 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       workspace: workspace.settings,
     });
 
+    /*
+     * What this conversation may read, and the two things that decide it — resolved **here**,
+     * once, rather than by each of the three turn routes and handed in.
+     *
+     * The placement is the point. Three call sites computing this would be three chances to
+     * forget, in a function whose whole docblock is about the three turn routes not disagreeing;
+     * with it here, a fourth route that builds its tools some other way also loses
+     * `read_document` entirely and fails loudly rather than quietly under-granting.
+     */
+    const scope = resolveWorkspaceScope(db, input.userId, session);
+    /*
+     * The read whitelist: the conversation's own sources, its workspace's, and — when the user
+     * has `@`-referenced other workspaces — those too.
+     *
+     * A whitelist rather than "whatever ids the model names": a guessed id fails a `Map`
+     * lookup before any path is touched, which is what makes wandering into another
+     * conversation's uploads unrepresentable rather than merely forbidden. It is wider than
+     * the turn's own attachments on purpose — see `read_document`'s note — and the grant is
+     * what makes it wider still.
+     */
+    const sources = db.listReadableSources(
+      input.userId,
+      session.id,
+      workspace.id,
+      scopeQuery(scope)
+    );
+
     const tools = buildTools({
       fileTools: {
         workdir: workspace.workdirPath,
@@ -3475,8 +3543,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // is available and the list otherwise, even when empty ("no tools" is representable).
       allowedNames: session.allTools ? undefined : session.tools,
       documents: {
+        db,
+        userId: input.userId,
         user: input.user,
-        sources: input.sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
+        sources: sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
       // `ila_quiz` and its grading companion are widget-bound: both contexts exist only
@@ -3531,6 +3601,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         userId: input.userId,
         sessionId: session.id,
         workspaceId: workspace.id,
+        scope: scopeQuery(scope),
         sessionDirPath: ownDir,
       },
       /*
@@ -3548,6 +3619,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
             workspaceId: workspace.id,
           }
         : undefined,
+      /*
+       * Present only when the conversation has been opened to other workspaces — the gate is
+       * the grant, so an ordinary conversation carries no tool for reading across them, and the
+       * model is never offered one that could only refuse.
+       */
+      explore: scopeIsEmpty(scope) ? undefined : { db, userId: input.userId, scope },
     });
 
     return {
@@ -3570,6 +3647,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        */
       collectPageGuidance: tools.some((t) => t.name === "ila_collect_page")
         ? COLLECT_PAGE_GUIDANCE
+        : undefined,
+      // The same form of the question as the line above: a Copilot whose allow-list excludes
+      // `ila_explore` gets no guidance for a call it cannot make, while the grant itself is
+      // already expressed by `scopeIsEmpty` at assembly.
+      exploreGuidance: tools.some((t) => t.name === EXPLORE_TOOL_NAME)
+        ? exploreGuidance(scope)
         : undefined,
     };
   }
@@ -3743,8 +3826,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * failed to parse would reach the model as "still parsing" and it would answer about a
      * file it was told was coming.
      */
+    // The same whitelist `turnContext` builds, and it is built twice on this route rather than
+    // shared because the two are needed at different points in it: this Map validates what the
+    // client claimed *before* the user message is persisted, and the whitelist itself is
+    // assembled inside `turnContext` so that no call site can hand it a narrower one.
     const readable = new Map(
-      db.listReadableSources(userId, id, workspace.id).map((s) => [s.id, s])
+      db
+        .listReadableSources(
+          userId,
+          id,
+          workspace.id,
+          scopeQuery(resolveWorkspaceScope(db, userId, session))
+        )
+        .map((s) => [s.id, s])
     );
     const storedAttachments = attachments
       .map((a) => (readable.has(a.id) ? toAttachment(readable.get(a.id)!, a.name) : undefined))
@@ -3823,7 +3917,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       model: body.model,
       userId,
       user: treeFor(actor(request)),
-      sources: db.listReadableSources(userId, id, workspace.id),
       timezone: body.timezone,
     });
 
@@ -3879,6 +3972,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        exploreGuidance: ctx.exploreGuidance,
         clock: ctx.clock,
         quizMakeupNote,
         signal: turn.signal,
@@ -3986,7 +4080,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const ctx = turnContext(session, workspace, {
       userId,
       user: treeFor(actor(request)),
-      sources: db.listReadableSources(userId, id, workspace.id),
       timezone: body.timezone,
     });
 
@@ -4028,6 +4121,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        exploreGuidance: ctx.exploreGuidance,
         clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
@@ -4118,7 +4212,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const ctx = turnContext(session, workspace, {
       userId,
       user: treeFor(actor(request)),
-      sources: db.listReadableSources(userId, id, workspace.id),
       // A regenerate is a turn like any other and gets the clock like any other: the client
       // posts a body for this one field alone.
       timezone: (request.body as TurnRequestMeta | undefined)?.timezone,
@@ -4158,6 +4251,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        exploreGuidance: ctx.exploreGuidance,
         clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),

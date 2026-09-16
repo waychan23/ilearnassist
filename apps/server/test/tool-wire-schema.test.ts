@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import type { ProviderDef } from "../src/config.js";
-import { QUERY_KINDS } from "@ilearnassist/shared";
+import { EXPLORE_KINDS, QUERY_KINDS } from "@ilearnassist/shared";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
@@ -57,10 +57,30 @@ beforeEach(() => {
  * Selected by `tools` rather than taken as the last one: the auto-titler also POSTs, right after
  * the turn, and its request is a plain completion with no tools at all. `at(-1)` silently returns
  * that one — which is how this file's first version asserted nothing about any tool.
+ *
+ * It is also scoped to *this* turn by the request count before it. A plain `find` returns the
+ * file's first tool-carrying request, so a case that sends two turns and compares them would be
+ * handed the same list twice and pass while asserting nothing — which is what made the two-turn
+ * case below read as a failure.
+ *
+ * `workspaceScope`, when given, is stored on the conversation before the turn. That is the only
+ * way `ila_explore` is assembled at all, so without it the tool would get *no* wire coverage —
+ * which is precisely the hole this file exists to close.
  */
-async function sendOneTurn(): Promise<Record<string, unknown>> {
+async function sendOneTurn(workspaceScope?: unknown): Promise<Record<string, unknown>> {
   const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
   const session = await newSession(env, workspace.id);
+
+  if (workspaceScope !== undefined) {
+    const patched = await env.inject({
+      method: "PATCH",
+      url: `/api/sessions/${session.id}`,
+      payload: { settings: { workspaceScope } },
+    });
+    expect(patched.statusCode).toBe(200);
+  }
+
+  const before = llm.requests().length;
   const res = await env.inject({
     method: "POST",
     url: `/api/sessions/${session.id}/chat`,
@@ -68,7 +88,7 @@ async function sendOneTurn(): Promise<Record<string, unknown>> {
   });
   expect(res.statusCode).toBe(200);
 
-  const request = llm.requests().find((r) => Array.isArray(r.tools));
+  const request = llm.requests().slice(before).find((r) => Array.isArray(r.tools));
   expect(request, "a turn should have sent a tool list").toBeDefined();
   return request!;
 }
@@ -127,6 +147,35 @@ describe("the tools a provider is sent", () => {
     expect(tools.every((t) => typeof t.function?.name === "string" && t.function.name.length > 0)).toBe(
       true
     );
+  });
+
+  it("offers ila_explore only once the conversation holds an `@` grant", async () => {
+    // The gate is the grant, the `read_document` rule: a tool that could only refuse is one the
+    // model wastes a step discovering. Asserted in both directions, because "never assembled"
+    // would pass a one-sided test and is the same failure.
+    const bare = sentTools(await sendOneTurn()).map((t) => t.function?.name);
+    expect(bare).not.toContain("ila_explore");
+
+    const scoped = sentTools(await sendOneTurn({ all: true })).map((t) => t.function?.name);
+    expect(scoped).toContain("ila_explore");
+  });
+
+  it("sends the object-typed schema for ila_explore in particular", async () => {
+    // The tool most at risk of the `ila_query` trap by shape: five kinds over one flat object.
+    // The case above covers it generically; this names it, the way `ila_query`'s does.
+    const tool = sentTools(await sendOneTurn({ all: true })).find(
+      (t) => t.function?.name === "ila_explore"
+    );
+    expect(tool, "ila_explore should be offered once a grant exists").toBeDefined();
+
+    const parameters = tool!.function!.parameters!;
+    expect(parameters.type).toBe("object");
+    expect(parameters).not.toHaveProperty("anyOf");
+    const properties = parameters.properties as Record<string, { enum?: string[] }>;
+    // Read from the shared list rather than restated: the point is that the discriminator
+    // survives as an enum, not that it has five members today.
+    expect(properties.kind?.enum).toEqual([...EXPLORE_KINDS]);
+    expect(parameters.required).toEqual(["kind"]);
   });
 });
 

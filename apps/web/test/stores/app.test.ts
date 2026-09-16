@@ -1067,6 +1067,95 @@ describe("sessions", () => {
   });
 });
 
+/**
+ * The `@` grant, as the store's side of it.
+ *
+ * A **session setting**, not a field on the turn — and that is the design rather than an
+ * implementation detail: the grant persists, survives a reload, and is in force for turns nobody
+ * typed an `@` in. So what these cases pin is that picking writes the setting (and, before a
+ * conversation exists, stages it), and that taking the last one back writes `null` rather than an
+ * empty object — a stored `{all: false, workspaceIds: []}` reads exactly like a grant that grants
+ * something.
+ */
+describe("the workspace scope", () => {
+  it("stages a pick before a conversation exists", async () => {
+    // The welcome screen's composer has no session to write to, so the pick rides `draftSettings`
+    // and `createSession` folds it in — the same path the provider and model already take.
+    const store = await readyStore();
+    store.activeSessionId = null;
+
+    await store.referenceScope({ kind: "scope", all: false, workspaceId: "w2", name: "Other" });
+
+    expect(mocks.api.updateSession).not.toHaveBeenCalled();
+    expect(store.workspaceScope).toEqual({ all: false, workspaceIds: ["w2"] });
+  });
+
+  it("writes the grant to the conversation once there is one", async () => {
+    const store = await readyStore();
+    await store.referenceScope({ kind: "scope", all: false, workspaceId: "w2", name: "Other" });
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", {
+      settings: { workspaceScope: { all: false, workspaceIds: ["w2"] } },
+    });
+    expect(store.scopedWorkspaceIds).toEqual(["w2"]);
+    expect(store.scopeIsAll).toBe(false);
+  });
+
+  it("writes `all` as a flag, with no list under it", async () => {
+    const store = await readyStore();
+    await store.referenceScope({ kind: "scope", all: true, name: "所有工作区" });
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", {
+      settings: { workspaceScope: { all: true } },
+    });
+    expect(store.scopeIsAll).toBe(true);
+    // No chips for named workspaces: `all` already covers every one, and a list underneath
+    // would be state nobody can see or remove.
+    expect(store.scopedWorkspaceIds).toEqual([]);
+  });
+
+  it("writes null when the last workspace is taken back", async () => {
+    const store = await readyStore();
+    await store.referenceScope({ kind: "scope", all: false, workspaceId: "w2", name: "Other" });
+    mocks.api.updateSession.mockClear();
+
+    await store.removeScopeWorkspace("w2");
+
+    // `null`, never `{all: false, workspaceIds: []}` — and never `undefined`, which disappears
+    // in JSON and would leave the grant unremovable.
+    expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", {
+      settings: { workspaceScope: null },
+    });
+    expect(store.workspaceScope).toBeNull();
+  });
+
+  it("keeps the others when one of several is taken back", async () => {
+    const store = await readyStore();
+    await store.referenceScope({ kind: "scope", all: false, workspaceId: "w2", name: "Other" });
+    await store.referenceScope({ kind: "scope", all: false, workspaceId: "w3", name: "Third" });
+    mocks.api.updateSession.mockClear();
+
+    await store.removeScopeWorkspace("w2");
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", {
+      settings: { workspaceScope: { all: false, workspaceIds: ["w3"] } },
+    });
+  });
+
+  it("closes every workspace at once, which is how the `all` chip comes off", async () => {
+    const store = await readyStore();
+    await store.referenceScope({ kind: "scope", all: true, name: "所有工作区" });
+    mocks.api.updateSession.mockClear();
+
+    await store.clearWorkspaceScope();
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", {
+      settings: { workspaceScope: null },
+    });
+    expect(store.scopeIsAll).toBe(false);
+  });
+});
+
 describe("widgets", () => {
   it("loads both groups when a conversation is selected", async () => {
     const store = await readyStore({ widgets: ["workspace_stats", "session_stats"] });

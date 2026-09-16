@@ -53,6 +53,7 @@ import {
 } from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
 import { migrateIfNeeded } from "./migrations.js";
+import type { ScopeQuery } from "./workspaceScope.js";
 import { applySchema } from "./schema.js";
 import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
 
@@ -472,6 +473,11 @@ export interface SessionLabelRow {
   title: string;
   workspace_id: string;
   workspace_name: string;
+}
+
+/** The same, with the ordering field a reader of the whole list wants. */
+export interface SessionOverviewRow extends SessionLabelRow {
+  updated_at: string;
 }
 
 interface SessionRow {
@@ -1116,6 +1122,15 @@ export interface AppDb {
    * conversation would be a request per workspace.
    */
   listSessionLabels(userId: string): SessionLabelRow[];
+  /**
+   * The same rows with `updatedAt`, newest first — the account's conversations as a *list*.
+   *
+   * The difference from `listSessionLabels` is what the reader is doing: that one answers "what
+   * is this conversation called" for a row it already has, while this one answers "what is in
+   * this account", where an order is the point. Live rows only, owner-scoped, and narrowed to
+   * an `@` grant by the caller.
+   */
+  listSessionOverviews(userId: string): SessionOverviewRow[];
 
   listSourcesForUser(userId: string, filter?: SourceFilter): SourceRecord[];
   createSource(input: {
@@ -1228,8 +1243,18 @@ export interface AppDb {
    * shared sandbox (every session in it can `read_file` the same tree), so a document there
    * is not more privileged than a file there; this rests on a workspace never being shared
    * between accounts, which the scoping here is what enforces.
+   *
+   * `scope` is the conversation's `@` grant — the workspaces the user pointed at — and it is
+   * **required** rather than optional so that the compiler names every call site and no future
+   * caller can forget it into existence. A caller with no grant passes `NO_SCOPE`, which is the
+   * statement's pre-grant behaviour exactly.
    */
-  listReadableSources(userId: string, sessionId: string, workspaceId: string): SourceRecord[];
+  listReadableSources(
+    userId: string,
+    sessionId: string,
+    workspaceId: string,
+    scope: ScopeQuery
+  ): SourceRecord[];
 
   /**
    * Workspaces — and the pattern every user-owned accessor below follows.
@@ -2116,6 +2141,23 @@ export function createDb(dbPath: string): AppDb {
        JOIN workspaces w ON w.id = s.workspace_id
       WHERE w.user_id = ? AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
   );
+  /*
+   * The same rows with the two things a *reader* of the list needs and a labeller does not: when
+   * each conversation was last touched, and an order. `listSessionLabels` answers "what is this
+   * conversation called" for one source row and has no use for either; a model asking what is in
+   * a workspace is asking "what has been worked on", which is the ordering.
+   *
+   * Scoping to the grant is left to the caller: the set is one account's conversations, which is
+   * bounded and small, and filtering it in JS keeps the `@所有工作区` case from needing a second
+   * `json_each` arm for a set no turn reads more than once.
+   */
+  const stmtListSessionOverviews = db.prepare(
+    `SELECT s.id, s.title, s.updated_at, w.id AS workspace_id, w.name AS workspace_name
+       FROM sessions s
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE w.user_id = ? AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY s.updated_at DESC, s.id DESC`
+  );
   const stmtGetSourceForUser = db.prepare(
     "SELECT * FROM sources WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   );
@@ -2273,6 +2315,28 @@ export function createDb(dbPath: string): AppDb {
    * union was never what made a source appear once; the id was. Collapsing on it and keeping
    * the earliest link is what the ordering always meant, and it is the only version of this
    * that cannot return one file twice.
+   *
+   * **Arm 2 and arm 3 are what a workspace grant opens**, and they are two arms rather than one
+   * because a workspace holds two kinds of material that only the link tables know about:
+   *
+   * - Arm 2 is the workspace's *own* material — its uploads and the pages kept into it, which
+   *   the upload route and `webCapture` link to `workspace_sources`. Arm 1 covers the current
+   *   workspace only, so a granted one needs its own clause.
+   * - Arm 3 is the material its *conversations* hold, which lives in `session_sources` and
+   *   nowhere else. `registerFileSource` writes a `sources` row and **no link row at all**, so
+   *   without this arm the sources a conversation inside a granted workspace merely pointed at
+   *   with `@` would be invisible — and `ila_explore`'s `messages` would return messages whose
+   *   `sources[]` snapshots name ids that resolve to nothing, which reads as a broken tool.
+   *
+   * Arm 3 deliberately has **no `@workspaceId` clause**. Adding one would quietly widen the
+   * *ungranted* case to a conversation's siblings, which is a behaviour change nobody asked
+   * for; with `@scopeAll = 0` and an empty id list, this statement returns exactly what it
+   * returned before the grant existed. `apps/server/test/readable-sources.test.ts` pins that.
+   *
+   * The ids reach `json_each` as a JSON array built by `scopeIdsJson`, which is the only place
+   * that value is built — `json_each('')` raises, and a raise here is a 500 on every turn.
+   * `w2.deleted_at IS NULL` is new on arm 2: it was implicit while the caller resolved a live
+   * workspace, and it stops being implicit once the ids come out of a settings blob.
    */
   const stmtListReadableSources = db.prepare(
     `SELECT src.*, arm.linked_at FROM (
@@ -2284,7 +2348,16 @@ export function createDb(dbPath: string): AppDb {
          UNION ALL
          SELECT ws.source_id AS source_id, ws.created_at AS linked_at FROM workspace_sources ws
            JOIN workspaces w2 ON w2.id = ws.workspace_id
-          WHERE ws.workspace_id = @workspaceId AND w2.user_id = @userId
+          WHERE w2.user_id = @userId AND w2.deleted_at IS NULL
+            AND (@scopeAll = 1 OR ws.workspace_id = @workspaceId
+                 OR ws.workspace_id IN (SELECT value FROM json_each(@scopeIds)))
+         UNION ALL
+         SELECT ss2.source_id AS source_id, ss2.created_at AS linked_at FROM session_sources ss2
+           JOIN sessions s2 ON s2.id = ss2.session_id
+           JOIN workspaces w3 ON w3.id = s2.workspace_id
+          WHERE w3.user_id = @userId AND s2.deleted_at IS NULL AND w3.deleted_at IS NULL
+            AND (@scopeAll = 1
+                 OR s2.workspace_id IN (SELECT value FROM json_each(@scopeIds)))
        ) GROUP BY source_id
      ) arm
      JOIN sources src ON src.id = arm.source_id
@@ -3116,6 +3189,9 @@ export function createDb(dbPath: string): AppDb {
     listSessionLabels(userId) {
       return stmtListSessionLabels.all(userId) as SessionLabelRow[];
     },
+    listSessionOverviews(userId) {
+      return stmtListSessionOverviews.all(userId) as SessionOverviewRow[];
+    },
     getSourceByPlace(userId, owner, relPath) {
       const r = stmtGetSourceByPlace.get({
         userId,
@@ -3187,9 +3263,18 @@ export function createDb(dbPath: string): AppDb {
     listSessionSources(userId, sessionId) {
       return (stmtListSessionSources.all(sessionId, userId) as SourceRow[]).map(mapSource);
     },
-    listReadableSources(userId, sessionId, workspaceId) {
+    listReadableSources(userId, sessionId, workspaceId, scope) {
       return (
-        stmtListReadableSources.all({ userId, sessionId, workspaceId }) as SourceRow[]
+        stmtListReadableSources.all({
+          userId,
+          sessionId,
+          workspaceId,
+          // `1`/`0` and never a boolean: SQLite has no boolean type, and the statement tests it
+          // with `= 1`. `idsJson` is the JSON array `scopeIdsJson` builds — see that function
+          // for why nothing else may be bound here.
+          scopeAll: scope.all ? 1 : 0,
+          scopeIds: scope.idsJson,
+        }) as SourceRow[]
       ).map(mapSource);
     },
 

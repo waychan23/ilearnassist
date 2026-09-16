@@ -5,6 +5,7 @@ import { useAppStore } from "../stores/app";
 import AttachmentChips from "./AttachmentChips.vue";
 import SourceMentionPicker from "./SourceMentionPicker.vue";
 import { activeMention, insertMention, type ActiveMention } from "../utils/mention";
+import type { ReferenceChoice } from "../utils/referencePicker";
 import type { Source } from "../api/types";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
@@ -29,6 +30,18 @@ const canSend = computed(
 );
 
 /**
+ * The workspaces this conversation has been opened to, as the chips draw them.
+ *
+ * Resolved through `store.workspaces` rather than kept as its own list, because the grant stores
+ * **ids** and a chip has to show a name: a workspace renamed since it was opened would otherwise
+ * be a chip carrying what it used to be called. A granted workspace that no longer exists simply
+ * has no chip — it is already excluded from what the server resolves.
+ */
+const scopeChips = computed(() =>
+  store.workspaces.filter((w) => store.scopedWorkspaceIds.includes(w.id))
+);
+
+/**
  * The `@` the caret is inside, if any — what opens the source picker.
  *
  * Read from the text and the caret rather than tracked in a flag, because the caret moves for
@@ -42,16 +55,36 @@ function refreshMention(): void {
   mention.value = el ? activeMention(text.value, el.selectionStart ?? 0) : null;
 }
 
-/** Put the chosen source's name where the mention was, and put the caret after it. */
-function onPickSource(source: Source): void {
+/**
+ * Put the chosen thing's name where the mention was, and put the caret after it.
+ *
+ * `insertMention` runs for all three kinds, because the `@` is how something is *picked* and not
+ * what it means: the name goes into the sentence so it reads naturally, and what the reference
+ * *means* is the chip beside the composer. A workspace's name is inserted the same way a file's
+ * is, and what follows differs.
+ *
+ * The `switch` is exhaustive over `ReferenceChoice`, so a fourth kind of reference is a
+ * `vue-tsc` error here rather than a row that inserts a name and does nothing else.
+ */
+function onPickReference(choice: ReferenceChoice): void {
   const el = textarea.value;
   const current = mention.value;
   if (!el || !current) return;
 
-  const result = insertMention(text.value, current, source.name);
+  const name = choice.kind === "source" ? choice.source.name : choice.name;
+  const result = insertMention(text.value, current, name);
   text.value = result.text;
   mention.value = null;
-  void store.referenceSource(source);
+
+  switch (choice.kind) {
+    case "source":
+      void store.referenceSource(choice.source);
+      break;
+    case "scope":
+      void store.referenceScope(choice);
+      break;
+  }
+
   // After Vue has written the new value: setting `selectionStart` before the DOM updates
   // would place the caret in the old text.
   void nextTick(() => {
@@ -254,7 +287,7 @@ function onInput() {
       <!-- One surface owns the input, the attachments and the toolbar (chatbox's
            InputBox layout), so the composer reads as a single control. -->
       <div class="surface">
-        <SourceMentionPicker ref="picker" :mention="mention" @pick="onPickSource" />
+        <SourceMentionPicker ref="picker" :mention="mention" @pick="onPickReference" />
         <div class="input-row">
           <textarea
             ref="textarea"
@@ -322,6 +355,44 @@ function onInput() {
             @remove="store.removePendingSource"
             @reparse="(source) => store.referenceSource(source as Source)"
           />
+        </div>
+
+        <!--
+          The workspaces this conversation has been opened to. A row of its own rather than
+          `AttachmentChips`, and the reason is that a scope is not an `Attachment`: it has no
+          size, no parse state and no bytes, so forcing it into that shape would be a lie the
+          chip component would then have to render around.
+
+          It is a *grant made visible*, which is the whole point of putting it here: a
+          conversation that reads every workspace without saying so is the failure this row
+          exists to prevent.
+        -->
+        <div v-if="scopeChips.length || store.scopeIsAll" class="scope-chips" data-testid="composer-scope">
+          <button
+            v-if="store.scopeIsAll"
+            class="scope-chip"
+            type="button"
+            data-testid="scope-chip-all"
+            :title="t('composer.scopeRemove', { name: t('composer.allWorkspaces') })"
+            @click="store.clearWorkspaceScope()"
+          >
+            <Icon name="list-tree" />
+            <span class="truncate">{{ t("composer.allWorkspaces") }}</span>
+            <Icon name="close" />
+          </button>
+          <button
+            v-for="workspace in scopeChips"
+            :key="workspace.id"
+            class="scope-chip"
+            type="button"
+            data-testid="scope-chip"
+            :title="t('composer.scopeRemove', { name: workspace.name })"
+            @click="store.removeScopeWorkspace(workspace.id)"
+          >
+            <Icon name="folder" />
+            <span class="truncate">{{ workspace.name }}</span>
+            <Icon name="close" />
+          </button>
         </div>
 
         <div class="toolbar">
@@ -461,5 +532,36 @@ function onInput() {
   min-width: 0;
   flex: 0 1 auto;
   max-width: 240px;
+}
+
+/*
+ * What this conversation may read across, as chips.
+ *
+ * Accent-tinted rather than neutral, and that is the point of the row: a grant is not material
+ * being sent, it is access being held, and it should read as a standing decision rather than as
+ * one more thing attached to this turn. The whole chip is the button, because removing is the
+ * only thing it does.
+ */
+.scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.scope-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 240px;
+  padding: var(--space-1) var(--space-4);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  cursor: pointer;
+}
+.scope-chip:hover {
+  color: var(--text-2);
 }
 </style>

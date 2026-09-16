@@ -11,6 +11,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
 import { sourceRawPath } from "../src/sourcePaths.js";
 import { DEFAULT_SESSION_TITLE } from "../src/db.js";
+import { NO_SCOPE, resolveWorkspaceScope } from "../src/workspaceScope.js";
 import type {
   ApiErrorBody,
   Attachment,
@@ -725,6 +726,59 @@ describe("sessions", () => {
     expect(updated.settings).toMatchObject({ maxSteps: 3 });
   });
 
+  it("stores an `@` grant, and refuses a malformed one by name", async () => {
+    /*
+     * `settings` is otherwise passed straight through — it is a JSON blob the client owns. A
+     * grant is the exception, because it decides what a model may read: a malformed one is
+     * refused rather than stored and left to resolve to something nobody chose.
+     *
+     * `"true"` is the case worth naming. It is truthy, so a coerced value would store a grant
+     * the caller never asked for, on the one field where that means reading somebody's material.
+     * Same discipline as refusing an unknown role rather than guessing it.
+     */
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+
+    const bad = await inject({
+      method: "PATCH",
+      url: `/api/sessions/${session.id}`,
+      payload: { settings: { workspaceScope: { all: "true" } } },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+    // Nothing landed, including the fields around it.
+    expect(env.server.db.getSessionForUser(session.id, env.user.id)?.session.settings).not.toMatchObject(
+      { workspaceScope: { all: "true" } }
+    );
+
+    const ok = await inject({
+      method: "PATCH",
+      url: `/api/sessions/${session.id}`,
+      payload: { settings: { workspaceScope: { all: true } } },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json<Session>().settings).toMatchObject({ workspaceScope: { all: true } });
+  });
+
+  it("stores a grant naming a workspace the caller does not own, and resolves it to nothing", async () => {
+    // Ownership is checked where the grant is *read*, not where it is written, and that is
+    // deliberate: a workspace can be deleted between the chip being drawn and the save landing,
+    // and failing the save for that would fail it for something that is not the user's fault.
+    // An id that is not theirs is stored and then resolves to nothing.
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+
+    const res = await inject({
+      method: "PATCH",
+      url: `/api/sessions/${session.id}`,
+      payload: { settings: { workspaceScope: { workspaceIds: ["not-a-workspace"] } } },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const stored = env.server.db.getSessionForUser(session.id, env.user.id)!;
+    expect(resolveWorkspaceScope(env.server.db, env.user.id, stored.session).workspaces).toEqual([]);
+  });
+
   it("404s message listing for an unknown session", async () => {
     expect((await inject({ method: "GET", url: "/api/sessions/nope/messages" })).statusCode).toBe(404);
   });
@@ -1024,7 +1078,12 @@ describe("sources", () => {
     });
     const sibling = await newSession(env, workspace.id);
 
-    const readable = env.server.db.listReadableSources(env.user.id, sibling.id, workspace.id);
+    const readable = env.server.db.listReadableSources(
+      env.user.id,
+      sibling.id,
+      workspace.id,
+      NO_SCOPE
+    );
     expect(readable.map((s) => s.id)).toContain(attachment.id);
   });
 

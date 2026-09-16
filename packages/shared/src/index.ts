@@ -47,6 +47,7 @@ export const ALL_TOOL_NAMES = [
   "ila_update_plan_progress",
   "ila_diagram",
   "ila_query",
+  "ila_explore",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
@@ -58,6 +59,29 @@ export type ToolName = (typeof ALL_TOOL_NAMES)[number];
  * so a name only the server knew would be a tool nobody could choose.
  */
 export const QUERY_TOOL_NAME = "ila_query";
+
+/**
+ * The explore tool's name: the agent's read of the workspaces the user granted with `@`.
+ *
+ * Shared for the `QUERY_TOOL_NAME` reason, and it is assembled only when the conversation holds
+ * a grant — see `WorkspaceScope` below. A conversation nobody has pointed anywhere is never
+ * offered it, the same gating `read_document` uses.
+ */
+export const EXPLORE_TOOL_NAME = "ila_explore";
+
+/**
+ * What `ila_explore` can be asked for, and therefore its discriminator.
+ *
+ * Shared because it is an enum on the wire: `tool-wire-schema.test.ts` asserts the converted
+ * schema names exactly these, and the constant is the thing that must not drift between the
+ * server that builds the schema and the test that reads it.
+ *
+ * `workspaces` is the index rather than a convenience: the other four kinds are addressed by
+ * **id**, and the grant cannot be enumerated in the prompt when it is "every workspace" — that
+ * flag covers workspaces which do not exist yet.
+ */
+export const EXPLORE_KINDS = ["workspaces", "sessions", "messages", "files", "file"] as const;
+export type ExploreKind = (typeof EXPLORE_KINDS)[number];
 
 /**
  * The things `ila_query` can be asked about, and therefore its discriminator.
@@ -2221,6 +2245,40 @@ export interface SessionSettings {
    * copied onto the session at creation, which is why nothing reads a Copilot at turn time.
    */
   writeLocation?: FileLocation | null;
+  /**
+   * The workspaces this conversation may read *across*, granted by `@`-referencing them.
+   *
+   * `null`/absent means no grant, which is what every conversation created before this existed
+   * reads as — nothing widens by default.
+   *
+   * It is a **session setting rather than a turn field**, and that is the load-bearing choice:
+   * a reference persists (`session_sources` is the precedent — pointing at something once makes
+   * it readable on every later turn), and all three turn routes must resolve the same grant, so
+   * `/answers` and `/regenerate` cannot resume a turn with a narrower one than the turn that
+   * asked the question. A request field could not give either.
+   */
+  workspaceScope?: WorkspaceScope | null;
+}
+
+/**
+ * The workspaces a conversation may read across, as the user granted them with `@`.
+ *
+ * These are **read** grants and nothing else: no write, no delete, and no widening of the file
+ * tools' own sandboxes, which keep their two roots. What a grant opens is `read_document` (the
+ * granted workspaces' uploads and kept pages), `ila_explore` (their files and conversations),
+ * and `ila_query`'s index of what may be read.
+ *
+ * `all` is a **flag, not a snapshot**: it means every workspace the account holds, including
+ * ones created after the grant. Storing the ids it implied would answer the question the user
+ * asked ("everything I have") with the answer to a different one ("everything I had on
+ * Tuesday"). The two halves are never both meaningful — picking `@所有工作区` drops
+ * `workspaceIds` rather than leaving a list nobody can see underneath a flag that covers it.
+ */
+export interface WorkspaceScope {
+  /** Every workspace this account holds — including ones created after this was set. */
+  all?: boolean;
+  /** Named workspaces. Never the conversation's own: `@`-ing the workspace you are in grants nothing. */
+  workspaceIds?: string[];
 }
 
 /** A Copilot's default settings, copied onto a session at creation time. */
@@ -2232,6 +2290,12 @@ export type CopilotDefaults = SessionSettings;
  * Deliberately the same *shape* as `SessionSettings` rather than a type of its own, so that
  * creating a conversation is one spread in the order the requirement asks for and no level
  * needs its own reading of the field.
+ *
+ * It carries `writeLocation` and deliberately **not** `workspaceScope`, and the difference is
+ * not an oversight. The shared shape is about the spread at creation being one thing, not about
+ * every field propagating: a workspace default that handed read access to all the other
+ * workspaces to every conversation started in it is a grant made by nobody, from a screen that
+ * is about a directory. The `@` grant is made per conversation, by the person in it.
  */
 export interface WorkspaceSettings {
   writeLocation?: FileLocation | null;

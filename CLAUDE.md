@@ -281,6 +281,9 @@ apps/server/src/
   tools/collectPage.ts    # ila_collect_page — keeps a fetched page as a source
   tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
   tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
+  tools/explore.ts        # ila_explore — the agent reads the `@`-granted workspaces: files, messages
+  tools/resultPage.ts     # the paging engine ila_query and ila_explore share: clip, renderPage
+  workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   widgets.ts              # sumUsage + the widget-selection validator (pure)
   notes.ts                # the notes widget's records: what a body may become a note (pure)
@@ -315,6 +318,8 @@ apps/web/src/
   widgets/SourcesWidget.vue # the sources panel: what this conversation holds, filtered by category
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   utils/mention.ts        # the `@`-mention: is the caret in one, and where the name goes
+  utils/referencePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
+  utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
   utils/sourceTree.ts     # the source browser's tree: group by origin, flatten by open set
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
@@ -919,6 +924,15 @@ Fuller map in `docs/reference.md`.
   `test/tool-wire-schema.test.ts` is the guard, and it asserts the conversion for **every** tool a
   real turn sends, plus the union's failure mode itself so the next person meets the trap in a test
   rather than in production.
+  **Two corollaries that trap has already produced.** A tool whose per-kind fields are
+  *selector-shaped* — several optional fields that only mean something together, where one of them
+  chooses what the others address — needs **its own kind**, not a two-mode field pair: that is what
+  the `ALLOWED_FIELDS` table is for, and a `{kind, path?}` where `path` absent means "list instead"
+  is exactly the union the flat object was built to replace. And the guard only covers tools a
+  **real turn actually offers**, so a tool assembled only under a condition gets **zero** wire
+  coverage until a case sets that condition up — `sendOneTurn(workspaceScope?)` takes the grant for
+  this reason, and a new context-gated tool needs the same treatment or it is back to being
+  invisible.
 - **A workspace has two directories, and they are not interchangeable.** `Workspace.dirPath`
   is the workspace's own — the parent of `workdir/` and `sessions/`, what `DELETE` removes,
   and what the home page's card names. `Workspace.workdirPath` is `dirPath/workdir`: the
@@ -1360,6 +1374,38 @@ Fuller map in `docs/reference.md`.
   `position: relative` — without a positioning context the menu renders off-screen, visible to
   the DOM and not to the person typing. Its query is debounced, and not only for the bandwidth:
   a fetch per keystroke replaces the rows, so a click aimed at one lands on a detached node.
+- **The picker holds two kinds of reference, and the list's arithmetic is `utils/referencePicker.ts`.**
+  A tab strip (`全部` | `工作区` | `资料`) filters by kind and doubles as the group headings, and a row
+  of type pills (`图片` | `文本` | `代码` | `网页链接` | `其他文件`) filters the sources. Three rules are
+  load-bearing rather than cosmetic. The pills are a **coarse grouping over the eight categories**,
+  mapped in one `Record` so a new category is a compile error — and they filter **client-side**,
+  because the picker fetches the account's whole match set and caps *per group*, so a server-side
+  filter would cap before filtering and show fewer matches than exist. Selecting any pill **drops
+  the workspace group**, and the pill row is **hidden** on the 工作区 tab rather than disabled: a
+  workspace has no source type, and a control that provably cannot change the list is a lie.
+  **Enter belongs to the picker while it is open, rows or not** — the frame is drawn before the
+  debounced fetch lands, and the composer's Enter *sends*, so a guard on "are there rows" puts a
+  half-typed `@repo` into the conversation. `Tab` is the exception and is taken only when there is
+  a row, because it cannot send anything.
+- **A workspace is the other thing `@` picks, and the grant is a setting rather than a turn field.**
+  `@{工作区}` / `@所有工作区` write `SessionSettings.workspaceScope` — because a grant *persists*,
+  survives a reload, and must be in force for turns nobody typed an `@` in. `all` is a **flag, not
+  a snapshot** ("everything I have", not "everything I had on Tuesday"), and the two halves are
+  never both meaningful. `apps/server/src/workspaceScope.ts` is the whole of its authority and the
+  only reader of the stored value: it re-derives against the account's live workspaces on every
+  turn, so a stored id is a *request*, not an access — a foreign or deleted one resolves to
+  nothing. `turnContext()` calls it once and is the only caller of `listReadableSources`, so a
+  fourth turn route that built its tools some other way loses `read_document` loudly rather than
+  under-granting quietly. The write path validates **shape only** and deliberately not ownership:
+  a workspace can be deleted between the chip being drawn and the save landing.
+  What it opens is three things, and each needs its own mechanism — a granted workspace's linked
+  uploads and pages (the `workspace_sources` arm), the material its *conversations* hold (a third
+  arm, because `registerFileSource` writes a row and **no link row**), and its **files**
+  (`ila_explore`, because a file is a path and `read_document` addresses ids). Read-only
+  throughout: `ila_explore` contains no write call, and it is the one place that **`realpath`s
+  every path** — `resolveInWorkspace` is lexical on purpose, justified by "the model has no tool
+  that makes a symlink", and that argument does not survive a symlink in a granted workspace
+  becoming a read path out of somebody else's conversation.
 - **The server serves the built frontend, and only when one exists.** `webApp.ts`
   registers `@fastify/static` at `/` *after* the API routes, conditional on an
   `index.html` being present. `buildServer` takes `webDir` and **tests never pass it** —

@@ -186,8 +186,8 @@ Three properties are worth knowing:
 
 ## Referencing with `@`
 
-Typing `@` in the composer opens a picker over the account's sources — the only interactive part
-of referencing, and the part with the rules worth stating:
+Typing `@` in the composer opens a picker over what this conversation can point at — the only
+interactive part of referencing, and the part with the rules worth stating:
 
 - **The `@` must not be glued to a word.** An address (`ada@example.com`) is not a mention, and a
   picker that appeared in the middle of one would make the feature feel broken. Punctuation is
@@ -196,8 +196,12 @@ of referencing, and the part with the rules worth stating:
 - **`utils/mention.ts` owns both rules**, as arithmetic on a string and a caret, because the
   questions ("is the caret inside a mention", "where does the name go") have one right answer each
   and are testable without a DOM.
+- **Enter belongs to the picker while it is open**, including while it is still fetching. The
+  composer's Enter *sends*, and the frame is drawn before the rows arrive — so a guard on "are
+  there rows" would put a half-typed `@repo` into the conversation. `Tab` is the exception and is
+  only taken when there is a row, because it cannot send anything.
 
-Picking a source does two things, and they are separate on purpose. The **name** goes into the
+Picking **a source** does two things, and they are separate on purpose. The **name** goes into the
 sentence, so it reads naturally — and the **reference** becomes a chip beside the composer. The
 `@` is how it is picked; the chip is what it means. A reference that is already a chip survives
 the text being edited or deleted, which is why nothing downstream parses the message for
@@ -219,6 +223,83 @@ Sending a turn with references:
 An unparsed document referenced this way is extracted first — the requirement is exact that a
 model may only read a source that has been parsed, so pointing at one *makes* it readable rather
 than handing the model a name.
+
+### The picker is a selector, and a workspace is the other thing it picks
+
+The list holds **two kinds of reference**, grouped with a divider and filtered by a tab strip —
+`全部` | `工作区` | `资料` — because a bare `@` is how somebody browses, and being made to choose a
+kind before seeing what exists is a question they cannot yet answer. Workspaces come first: they
+are the coarser thing, and the sources below are refinements of them.
+
+`资料` rows carry a second, horizontal filter of **type pills** — 图片 | 文本 | 代码 | 网页链接 |
+其他文件. Those five are a deliberate **coarse grouping over the eight categories the registry
+stores** (`文本` is text *and* markdown, `代码` is code *and* a diagram), mapped in one `Record` in
+`utils/referencePicker.ts` so a new category is a compile error rather than a file no pill can
+reach. The pills filter **client-side**, over the rows the server already returned, and that is a
+correctness point rather than a shortcut: the picker fetches the account's whole match set and
+caps *per group* in `buildOptions`, so filtering server-side would mean asking `/api/sources` for a
+list of categories it does not take (its `category` is a single value) and capping before the
+filter, which shows fewer matches than exist.
+
+Selecting any pill **drops the workspace group**. A workspace has no source type, so a list still
+showing workspaces after you asked for images reads as a filter that did not work. The pill row is
+**hidden** on the 工作区 tab rather than disabled, for the same reason.
+
+## Reading across workspaces
+
+`@{指定工作区}` and `@所有工作区` **open a workspace to the conversation**. That is a different
+kind of thing from referencing a file, and the difference is where it is stored: a source
+reference travels with the turn and is linked to the conversation, while a workspace grant is a
+**`SessionSettings.workspaceScope`** — because it has to persist, survive a reload, and be in force
+for turns nobody typed an `@` in.
+
+```ts
+interface WorkspaceScope {
+  all?: boolean;         // every workspace the account holds, including later ones
+  workspaceIds?: string[];
+}
+```
+
+`all` is a **flag, not a snapshot**: storing the ids it implied would answer "everything I have"
+with "everything I had on Tuesday". The two halves are never both meaningful, so picking
+`@所有工作区` drops `workspaceIds` rather than leaving a list nobody can see underneath.
+
+`apps/server/src/workspaceScope.ts` is the **whole of the grant's authority**. It re-derives the
+scope from the account's live workspaces on **every turn**, dropping anything the caller does not
+own and any workspace deleted since, so a stored id is a request rather than an access — the same
+posture `resolveSourceBytes` takes toward a database row. `resolveWorkspaceScope` is the only
+reader of the setting; the write path checks shape alone and deliberately **not** ownership,
+because a workspace can be deleted between the chip being drawn and the save landing.
+
+`turnContext()` calls it once and is the only caller of `listReadableSources`. That placement is
+load-bearing: three routes computing the whitelist would be three chances to forget, and a fourth
+route that built its tools some other way would lose `read_document` entirely and fail loudly
+rather than quietly under-granting.
+
+What a grant opens, and each half is needed:
+
+| | How | Why it needs its own mechanism |
+| --- | --- | --- |
+| the granted workspace's **uploads and kept pages** | the `workspace_sources` arm of `listReadableSources` | `read_document` reads `parsed/<id>.txt`, and only a linked source has been extracted |
+| the material its **conversations** hold | a third arm on `session_sources` | `registerFileSource` writes a `sources` row and **no link row**, so a source a conversation inside it merely `@`-referenced lives in `session_sources` alone |
+| its **files** | `ila_explore`'s `files`/`file` kinds | a workspace file is a path, and paths are not ids: `read_document` cannot address one |
+
+`ila_explore` is assembled **only when the grant is non-empty**, the `read_document` rule — a tool
+that could only refuse is a step the model wastes discovering that. Its `messages` kind strips
+tool-call `output` and `reasoning` rather than clipping them, because both are unbounded and
+neither is what a reader came for. And it does one thing the file tools deliberately do not: it
+**`realpath`s every path**. `resolveInWorkspace` is lexical, justified by "the model has no tool
+that makes a symlink, so one can only be there because the user put it there" — an argument about
+the user's own machine, which does not survive a symlink in workspace B becoming a read path out
+of a conversation in workspace A.
+
+**Read-only, end to end.** No path in this feature writes, and the file tools keep their two roots,
+their write rules and their "exists in both roots" delete refusal untouched.
+
+One thing is deliberately **not** reachable: files the agent wrote into another conversation's
+`sessions/<id>/`. `registerFileSource` writes no link row for them, so there is no index, and
+reaching them would mean resolving arbitrary session directories. The material is nearly always a
+diagram, which `ila_query kind:"diagram"` covers in its own conversation.
 
 ## Images
 
@@ -299,13 +380,21 @@ reason.
 
 `sources` is a **catalog**: what material exists. It is not what the model may read.
 
-`read_document`'s whitelist stays `session_sources ∪ workspace_sources` — the uploads and pages
-linked to the conversation and its workspace. Files inside a sandbox are deliberately not folded
-into it: they are already readable *by path* through the file tools, and a workspace with a
-`node_modules` would otherwise put thousands of rows into the whitelist as named sources.
+`read_document`'s whitelist is `session_sources ∪ workspace_sources` — the uploads and pages
+linked to the conversation and its workspace — **plus, when the user has opened other workspaces
+with `@`, those workspaces' `workspace_sources` and their conversations' `session_sources`**. See
+"Reading across workspaces" above for why that second half is two arms rather than one.
 
-Cross-workspace referencing therefore rides `session_sources`: a link is created when a user
-actually references something, not for every file that happens to exist.
+The rule the paragraph used to state as an absolute still holds where it matters, and the
+qualification is exact: **files inside a sandbox are still not folded in**, because they are
+already readable *by path* through the file tools, and a workspace with a `node_modules` would
+otherwise put thousands of rows into the whitelist as named sources. A granted workspace's *files*
+are reached the same way — by path, through `ila_explore` — for the same reason.
+
+So a link is still created when a user actually references something, and not for every file that
+happens to exist. What changed is that a user can now reference a **workspace**, which is a
+standing grant rather than a link, and that is why it is a setting with a resolver rather than a
+row in a join table.
 
 ## Reconciliation runs before a listing, not at boot
 

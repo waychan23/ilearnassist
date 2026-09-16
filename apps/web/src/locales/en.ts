@@ -220,6 +220,27 @@ const en: typeof MessageSchema = {
     /** The `@` picker: nothing matched what has been typed, and nothing exists to match. */
     noSourceMatch: "No source matches that.",
     noSources: "Nothing to reference yet.",
+    /* The picker's tabs, which double as its group headings. */
+    tabAll: "All",
+    tabWorkspace: "Workspaces",
+    tabSource: "Sources",
+    /* The type filter's five pills. Coarser than the eight categories a source really has. */
+    pillImage: "Images",
+    pillText: "Text",
+    pillCode: "Code",
+    pillPage: "Web pages",
+    pillOther: "Other files",
+    /*
+     * The row that opens every workspace at once. Its Chinese label is what it is called in the
+     * product; this one is the translation, and the picker also matches the literal `all` so the
+     * difference between the two spellings never strands somebody mid-word.
+     */
+    allWorkspaces: "{'@'}All workspaces",
+    /** Said when more rows matched than the list shows. */
+    moreHidden: "{count} more not shown",
+    noWorkspaceMatch: "No workspace matches that.",
+    /** Removing one workspace from what this conversation may read. */
+    scopeRemove: "Stop referencing “{name}”",
     thinking: "The agent is thinking…",
     parsingShort: "Parsing attachments…",
     send: "Send (Enter)",
@@ -392,6 +413,7 @@ const en: typeof MessageSchema = {
       ila_update_plan_progress: "Update plan progress",
       ila_diagram: "Diagram",
       ila_query: "Query record",
+      ila_explore: "Explore other workspaces",
     },
     done: "Done",
     running: "Running",

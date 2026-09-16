@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebFetchConfig, WebSearchConfig } from "../../src/config.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
-import { DIAGRAM_TOOL_NAME, PLAN_TOOL_NAMES, QUIZ_TOOL_NAMES } from "@ilearnassist/shared";
+import {
+  DIAGRAM_TOOL_NAME,
+  EXPLORE_TOOL_NAME,
+  PLAN_TOOL_NAMES,
+  QUIZ_TOOL_NAMES,
+} from "@ilearnassist/shared";
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
 import type { QuizToolContext } from "../../src/tools/quiz.js";
 import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
@@ -13,6 +18,8 @@ import type { DiagramToolContext } from "../../src/tools/diagram.js";
 import type { CollectPageContext } from "../../src/tools/collectPage.js";
 import type { QueryToolContext } from "../../src/tools/query.js";
 import { fileToolsFor } from "../helpers/fileTools.js";
+import { NO_SCOPE } from "../../src/workspaceScope.js";
+import type { ExploreToolContext } from "../../src/tools/explore.js";
 
 let workspace: string;
 
@@ -61,6 +68,7 @@ function query(): QueryToolContext {
     userId: "u1",
     sessionId: "s1",
     workspaceId: "w1",
+    scope: NO_SCOPE,
     sessionDirPath: join(workspace, "sessions", "s1"),
   };
 }
@@ -106,17 +114,33 @@ afterEach(() => {
 const user = userLayout(dataLayout("/tmp/ila-tools"), "tester");
 
 const documents = {
+  db: {} as never,
+  userId: "u1",
   user,
   sources: [{ id: "att-1", name: "lecture.pdf", mimeType: "application/pdf" }],
 };
 
 /**
+ * The `@` grant's context, present only when the conversation holds one — so it is *not* in the
+ * defaults below, and every case that wants it names it.
+ */
+function explore(): ExploreToolContext {
+  return {
+    db: {} as never,
+    userId: "u1",
+    scope: { all: false, workspaces: [{ id: "w2", name: "Other", workdirPath: "/tmp/w2" }] },
+  };
+}
+
+/**
  * Tools assembled only when their per-turn preconditions hold: `read_document` needs a
- * readable document, the plan tools an installed plan widget. They live in ALL_TOOL_NAMES
- * (what may be allow-listed) but are absent from a turn with neither.
+ * readable document, the plan tools an installed plan widget, `ila_explore` an `@` grant. They
+ * live in ALL_TOOL_NAMES (what may be allow-listed) but are absent from a turn with none of
+ * those.
  */
 const CONTEXT_ASSEMBLED = [
   "read_document",
+  EXPLORE_TOOL_NAME,
   ...PLAN_TOOL_NAMES,
   ...QUIZ_TOOL_NAMES,
 ] as const;
@@ -179,6 +203,35 @@ describe("buildTools", () => {
     ]);
   });
 
+  /* ------------------------------ ila_explore (the `@` grant) ------------------------------ */
+
+  it("assembles no ila_explore without a grant", () => {
+    // The gate is the grant, like `read_document`'s gate is the whitelist: an ordinary
+    // conversation carries no tool for reading across workspaces, and the model is never
+    // offered one that could only refuse.
+    expect(names()).not.toContain("ila_explore");
+  });
+
+  it("adds ila_explore when the conversation has been opened to another workspace", () => {
+    expect(names({ explore: explore() })).toContain("ila_explore");
+  });
+
+  it("keeps ila_explore when the file tools are disabled", () => {
+    // It writes nothing at all — its module contains no write call — so a switch about writing
+    // files has no bearing on it. Switching it off would silently gut a user's explicit
+    // `@工作区`, which is the "control that renders but does nothing" failure.
+    expect(names({ fileToolsEnabled: false, explore: explore() })).toContain("ila_explore");
+  });
+
+  it("lets a Copilot allow-list choose ila_explore like any other tool", () => {
+    // Ordinary, not widget-bound: a list that does not name it must exclude it. Asserting
+    // `explore: undefined` switches it off is not enough — the allow-list is a second gate.
+    expect(names({ explore: explore(), allowedNames: ["read_file", "ila_explore"] }).sort()).toEqual([
+      "ila_explore",
+      "read_file",
+    ]);
+  });
+
   it("keeps read_document when the file tools are disabled", () => {
     // It reads attachments from the uploads tree, not the workspace, so the workspace
     // sandbox switch has no bearing on it.
@@ -196,8 +249,12 @@ describe("buildTools", () => {
   it("treats an absent allow-list as 'no restriction'", () => {
     // What a Copilot with `allTools: true` produces — the flag becomes an absent list, not an
     // empty one, precisely so that this case and the next one stay distinguishable.
-    expect(names({ documents })).toHaveLength(
-      ALL_TOOL_NAMES.length - PLAN_TOOL_NAMES.length - QUIZ_TOOL_NAMES.length
+    //
+    // Stated as "the same set as naming every tool" rather than as a count, because a count has
+    // to be re-derived every time a context-assembled tool is added, and the two assertions the
+    // count was making — nothing is dropped, nothing appears — are what this says directly.
+    expect(names({ documents }).sort()).toEqual(
+      names({ documents, allowedNames: [...ALL_TOOL_NAMES] }).sort()
     );
   });
 
