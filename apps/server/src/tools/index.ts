@@ -8,6 +8,7 @@ import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
+import { buildExploreTool, type ExploreToolContext } from "./explore.js";
 import { buildFileTools, type FileToolContext } from "./fileTools.js";
 import { buildPlanTools, type PlanToolContext } from "./planTools.js";
 import { buildQueryTool, type QueryToolContext } from "./query.js";
@@ -38,6 +39,15 @@ import { buildQuizReviewTool, type QuizReviewToolContext } from "./quizReview.js
  * database and the conversation's own directory and writes nothing at all, so a switch about
  * writing files has no bearing on it. The pair is worth keeping in view — "outside the
  * workspace" is not the test, because one of these reads and one of these writes.
+ *
+ * `ila_explore` is here on `ila_query`'s argument, and it is the stronger case of the two: it
+ * reads granted workspaces' shared folders, and it writes nothing — the module contains no
+ * write call at all. Leaving it out would mean a `fileTools.enabled: false` installation
+ * silently gutting a user's explicit `@工作区`, which is the "control that renders but does
+ * nothing" failure this list's own docblock is written against. The honest counter-argument is
+ * that it reads arbitrary workdirs, which is more than `ila_query` reads; gating only its two
+ * filesystem kinds at assembly would be worse, since then the tool's *available kinds* would
+ * vary between installations and no description could state them.
  */
 const NON_FILE_TOOLS = new Set<string>([
   "web_search",
@@ -50,6 +60,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "ila_read_plan",
   "ila_update_plan_progress",
   "ila_query",
+  "ila_explore",
 ]);
 
 export interface BuildToolsInput {
@@ -130,6 +141,13 @@ export interface BuildToolsInput {
    * notes and diagrams would hide all of it from every ordinary conversation.
    */
   query?: QueryToolContext;
+  /**
+   * Present only when this conversation holds an `@` grant — the user has opened other
+   * workspaces to it. The absent case is the ordinary conversation, which is most of them, and
+   * it assembles no tool: `read_document`'s rule, because a tool that could only refuse is a
+   * step the model wastes discovering that.
+   */
+  explore?: ExploreToolContext;
 }
 
 /**
@@ -183,6 +201,9 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
   // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
   if (input.query) all.push(buildQueryTool(input.query));
+  // Kept when the file tools are switched off, like `ila_query` and for the same reason: it
+  // reads and writes nothing at all. See `NON_FILE_TOOLS`.
+  if (input.explore) all.push(buildExploreTool(input.explore));
 
   // Absent means "no restriction"; an empty array means "no tools". The two used to be the same
   // thing — `length > 0` was the test — which made a Copilot with no tools checked silently

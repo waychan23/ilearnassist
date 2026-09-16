@@ -11,6 +11,14 @@ import {
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
+import {
+  addAll,
+  addWorkspace,
+  isAll,
+  removeWorkspace,
+  scopeChipIds,
+} from "../utils/workspaceScope";
+import type { ReferenceChoice } from "../utils/referencePicker";
 import type { SourceFilterQuery } from "../api/client";
 import { fileViewerSupported } from "../utils/fileViewer";
 import {
@@ -54,6 +62,7 @@ import type {
   WidgetScope,
   WidgetState,
   Workspace,
+  WorkspaceScope,
 } from "../api/types";
 import {
   DIAGRAM_TOOL_NAME,
@@ -1843,6 +1852,70 @@ export const useAppStore = defineStore("app", () => {
     pendingSources.value = [];
   }
 
+  /**
+   * The workspaces this conversation has been opened to, or `null` for none.
+   *
+   * Read the same way the provider and model are — the conversation's own settings, falling back
+   * to what is staged before one exists — so a grant picked on the welcome screen is still on
+   * screen after the conversation is created, and a reload shows the same chips.
+   */
+  const workspaceScope = computed<WorkspaceScope | null>(() => {
+    const settings = activeSession.value?.settings ?? draftSettings.value;
+    return settings.workspaceScope ?? null;
+  });
+
+  /** The workspaces already readable, for a picker row that would otherwise look unpicked. */
+  const scopedWorkspaceIds = computed(() => scopeChipIds(workspaceScope.value));
+  const scopeIsAll = computed(() => isAll(workspaceScope.value));
+
+  /**
+   * Open a workspace — or all of them — to this conversation.
+   *
+   * A **session setting** rather than something sent with the turn, and that is the whole design:
+   * the grant persists (`session_sources` is the precedent — pointing at something once makes it
+   * readable on every later turn), it survives a reload, and it is in force for turns nobody
+   * typed an `@` in. The `@` is how it is *made*; the setting is what it means.
+   */
+  async function referenceScope(choice: ReferenceChoice & { kind: "scope" }): Promise<void> {
+    const next: WorkspaceScope = choice.all
+      ? addAll()
+      : addWorkspace(workspaceScope.value, choice.workspaceId);
+    await writeScope(next);
+  }
+
+  /**
+   * Take one workspace back out.
+   *
+   * `null` rather than an empty object when the last one goes — see `removeWorkspace`, which is
+   * where that rule and its reason live. The server merges settings, so this is a partial write;
+   * `undefined` would vanish in JSON and leave the grant unremovable.
+   */
+  async function removeScopeWorkspace(id: string): Promise<void> {
+    await writeScope(removeWorkspace(workspaceScope.value, id));
+  }
+
+  /** Close every workspace — the all-workspaces chip's removal, and the last named one's. */
+  async function clearWorkspaceScope(): Promise<void> {
+    await writeScope(null);
+  }
+
+  /**
+   * Write the grant, and **say so when it does not land**.
+   *
+   * The one place in this store where a swallowed failure is worse than a noisy one: a grant the
+   * user believes they made and did not is a conversation that will not read a workspace, and
+   * nothing on screen afterwards would explain it. Reported through the toast, which is where
+   * `referenceSource` reports a parse it could not start — the composer's own failures have no
+   * pane of their own to land in.
+   */
+  async function writeScope(next: WorkspaceScope | null): Promise<void> {
+    try {
+      await updateSettings({ workspaceScope: next });
+    } catch (e) {
+      setError(messageOf(e));
+    }
+  }
+
   /** Whether this source is one a model can only read after extraction. */
   function needsExtraction(source: Source): boolean {
     return source.category === "document" || source.category === "image";
@@ -2435,6 +2508,12 @@ export const useAppStore = defineStore("app", () => {
     referenceSource,
     removePendingSource,
     clearPendingSources,
+    workspaceScope,
+    scopedWorkspaceIds,
+    scopeIsAll,
+    referenceScope,
+    removeScopeWorkspace,
+    clearWorkspaceScope,
     reparseAttachment,
     removePendingAttachment,
     clearPendingAttachments,

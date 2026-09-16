@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb } from "../src/db.js";
+import { NO_SCOPE } from "../src/workspaceScope.js";
 import { canMigrate, MIGRATIONS, migrateIfNeeded, openRefusal, pendingUpgrade } from "../src/migrations.js";
 import { SCHEMA_VERSION, schemaProblem } from "../src/schema.js";
 
@@ -128,7 +129,7 @@ describe("migrateV2ToV3", () => {
     expect(rows(db.raw, "SELECT * FROM workspace_sources").length).toBe(3);
     // `srcC` is absent because it is soft-deleted, which is the whitelist doing its job —
     // a link survives a delete, and every read filters the marker.
-    expect(db.listReadableSources("u1", "s1", "w1").map((s) => s.id).sort()).toEqual([
+    expect(db.listReadableSources("u1", "s1", "w1", NO_SCOPE).map((s) => s.id).sort()).toEqual([
       "srcA",
       "srcB",
     ]);

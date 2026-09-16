@@ -282,6 +282,31 @@ export default {
     /** The `@` picker: nothing matched what has been typed, and nothing exists to match. */
     noSourceMatch: "没有匹配的资料。",
     noSources: "还没有可引用的资料。",
+    /*
+     * The picker's tabs, which double as its group headings — a filter that names the group it
+     * keeps is one control rather than two that have to agree.
+     */
+    tabAll: "全部",
+    tabWorkspace: "工作区",
+    tabSource: "资料",
+    /* The type filter's five pills. Coarser than the eight categories a source really has:
+     * 文本 is text and markdown, 代码 is code and a diagram. */
+    pillImage: "图片",
+    pillText: "文本",
+    pillCode: "代码",
+    pillPage: "网页链接",
+    pillOther: "其他文件",
+    /*
+     * The row that opens every workspace at once, `{'@'}`-escaped for the reason above. What it
+     * makes readable is deliberately in the sentence: a grant that says only "all" is one nobody
+     * can tell the size of.
+     */
+    allWorkspaces: "{'@'}所有工作区",
+    /** Said when more rows matched than the list shows. */
+    moreHidden: "还有 {count} 项未显示",
+    noWorkspaceMatch: "没有匹配的工作区。",
+    /** Removing one workspace from what this conversation may read. */
+    scopeRemove: "不再引用「{name}」",
     thinking: "Agent 正在思考…",
     parsingShort: "附件解析中…",
     send: "发送 (Enter)",
@@ -501,6 +526,7 @@ export default {
       ila_update_plan_progress: "更新计划进度",
       ila_diagram: "图表",
       ila_query: "查询学习记录",
+      ila_explore: "浏览其他工作区",
     },
     done: "完成",
     running: "运行中",

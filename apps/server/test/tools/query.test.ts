@@ -15,6 +15,7 @@ import { registerQuizQuestions } from "../../src/quizzes.js";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import { QUERY_KINDS } from "@ilearnassist/shared";
 import { buildQueryTool, QUERY_RESULT_MAX } from "../../src/tools/query.js";
+import { NO_SCOPE } from "../../src/workspaceScope.js";
 
 /**
  * `ila_query` is the one tool that reaches the conversation's own record, so what these cases
@@ -79,6 +80,7 @@ function build(options: { userId?: string; sessionId?: string } = {}) {
     userId: options.userId ?? OWNER,
     sessionId: options.sessionId ?? SESSION,
     workspaceId: WORKSPACE,
+    scope: NO_SCOPE,
     sessionDirPath,
   });
 }

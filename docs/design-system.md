@@ -221,6 +221,14 @@ and the state the sheet paints are then the same fact, so they cannot drift — 
 invisible to whoever is not in the affected audience. A `.active` class would be a second copy
 of it.
 
+**`.segment` is one choice among a few, and that is not the same control as a row of toggles.**
+`SourceMentionPicker`'s type filter is multi-valued — each pill is its own on/off, and clicking
+the active one clears it — so it is a scoped `.mention-pill` rather than a `.segment`, and drawn
+lighter and rounder so the two controls sitting side by side in one strip are not mistaken for
+each other. What it *keeps* from `.segment` is the part that is not a preference: the state rides
+`aria-pressed` and the paint hangs off `[aria-pressed="true"]`, so announced and painted cannot
+drift. A scoped class is right here because there is exactly one copy; a third would promote it.
+
 Tier 2, in `style.css`, for structures several components need:
 
 | Class | Modifiers | Use |

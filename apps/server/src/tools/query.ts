@@ -14,6 +14,16 @@ import { diagramFileName, listDiagramViews } from "../diagrams.js";
 import { readCurrentPlan, renderReadResult } from "../plans.js";
 import { listQuizQuestionViews } from "../quizzes.js";
 import { buildThreadViews } from "../threads.js";
+import type { ScopeQuery } from "../workspaceScope.js";
+import {
+  RESULT_DEFAULT_LIMIT,
+  RESULT_MAX,
+  RESULT_MAX_LIMIT,
+  RESULT_TEXT_MAX,
+  clip,
+  renderPage,
+  text,
+} from "./resultPage.js";
 
 /**
  * `ila_query` — the conversation's own record, read by the agent.
@@ -43,23 +53,15 @@ import { buildThreadViews } from "../threads.js";
  * leak it.
  */
 
-/**
- * How much of one field the model is shown. Generous enough for a whole quiz question or a
- * note body, short enough that twenty of them cannot dwarf the context.
+/*
+ * The paging engine is shared with `ila_explore` and lives in `resultPage.ts`; these names are
+ * kept because the tests and the schema descriptions below read them, and because a constant
+ * called `QUERY_RESULT_MAX` is what a reader of *this* tool is looking for.
  */
-export const QUERY_TEXT_MAX = 400;
-
-/**
- * The whole result's ceiling, in characters of serialised JSON. The page shrinks to fit
- * rather than the text being cut: a truncated JSON string is not a smaller answer, it is an
- * unparseable one, and the `FileContent.truncated` precedent (a result with a flag, never an
- * error) only works if what comes back is still the thing it claims to be.
- */
-export const QUERY_RESULT_MAX = 12_000;
-
-/** Items per kind when the model does not say. `QUERY_MAX_LIMIT` is what it may ask for. */
-export const QUERY_DEFAULT_LIMIT = 20;
-export const QUERY_MAX_LIMIT = 50;
+export const QUERY_TEXT_MAX = RESULT_TEXT_MAX;
+export const QUERY_RESULT_MAX = RESULT_MAX;
+export const QUERY_DEFAULT_LIMIT = RESULT_DEFAULT_LIMIT;
+export const QUERY_MAX_LIMIT = RESULT_MAX_LIMIT;
 
 /** The mermaid source a `kind: "diagram"` answer may carry, per diagram. */
 export const QUERY_DIAGRAM_SOURCE_MAX = 4_000;
@@ -79,6 +81,17 @@ export interface QueryToolContext {
    */
   workspaceId: string;
   /**
+   * The `@` grant, resolved for this turn.
+   *
+   * `kind: "source"` is why this is here rather than left to `turnContext`: it is the model's
+   * only index of what it may read, and it must agree with what `read_document` will accept. A
+   * whitelist widened by a grant that this read could not see would leave the model with
+   * material it cannot enumerate and whose only remaining discovery path is guessing ids —
+   * which is the wandering the whitelist exists to prevent, reachable by a model that is now
+   * *allowed* to wander.
+   */
+  scope: ScopeQuery;
+  /**
    * This conversation's own directory — where the `.mmd` sources live. Passed rather than
    * derived, for the reason `DiagramToolContext.sessionDir` gives: deriving it needs the
    * workspace, and this tool must not reach for one.
@@ -86,65 +99,9 @@ export interface QueryToolContext {
   sessionDirPath: string;
 }
 
-/** A field as the model reads it: one line, clipped, never a wall of text. */
-function clip(text: string, max = QUERY_TEXT_MAX): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? flat.slice(0, max).trimEnd() + "…" : flat;
-}
-
-function text(value: string | null, max = QUERY_TEXT_MAX): string | null {
-  return value === null ? null : clip(value, max);
-}
-
-/**
- * Serialise an answer, keeping as many items as fit under `QUERY_RESULT_MAX`.
- *
- * Built by adding items one at a time, so the reply is always valid JSON and the counts
- * always describe what is actually in it. `truncated` is what tells the model to narrow with
- * `limit`/`offset`/`query` rather than assume it has seen everything — the same "a result
- * with a flag, never an error" shape the file preview uses.
- */
-function renderPage(input: {
-  kind: string;
-  note: string;
-  items: unknown[];
-  total: number;
-  offset: number;
-  extra?: Record<string, unknown>;
-}): string {
-  /**
-   * The full reply as it will be sent — measured *after* the indicator, the counts and the
-   * pretty-printing, because those are part of the bytes the model reads. Measuring the items
-   * alone is how a "12 000 character" cap produces a 12 311 character reply.
-   */
-  const render = (items: unknown[], truncated: boolean): string =>
-    JSON.stringify(
-      {
-        kind: input.kind,
-        ...(input.extra ?? {}),
-        total: input.total,
-        offset: input.offset,
-        returned: items.length,
-        truncated,
-        items,
-        note: truncated
-          ? `${input.note} Only ${items.length} of the ${input.total - input.offset} items ` +
-            "from this offset fit in one reply. Call ila_query again with a larger offset, or " +
-            "narrow with a filter, rather than treating this as the whole set."
-          : input.note,
-      },
-      null,
-      2
-    );
-
-  const kept: unknown[] = [];
-  for (const item of input.items) {
-    // Each candidate is measured in the truncated shape, which carries the longer note, so the
-    // reply that is actually returned can only be shorter than the one that was checked.
-    if (render([...kept, item], true).length > QUERY_RESULT_MAX) break;
-    kept.push(item);
-  }
-  return render(kept, kept.length < input.items.length);
+/** Every answer goes through the shared engine, named so its truncation note points back here. */
+function page(input: Omit<Parameters<typeof renderPage>[0], "tool">): string {
+  return renderPage({ ...input, tool: QUERY_TOOL_NAME });
 }
 
 /** The numbering and titles of the live plan, for resolving a thread's node. */
@@ -312,7 +269,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
       feedback: text(q.feedback),
       askedAt: q.createdAt,
     }));
-    return renderPage({
+    return page({
       kind: "quiz",
       items,
       total: all.length,
@@ -341,7 +298,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
       messageCount: t.messages.length,
       messages: t.messages.slice(-2).map((m) => ({ role: m.role, preview: clip(m.preview, 200) })),
     }));
-    return renderPage({
+    return page({
       kind: "thread",
       items: all,
       total: response.threads.length,
@@ -375,7 +332,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
       annotatedMessageMissing: n.messageMissing,
       createdAt: n.createdAt,
     }));
-    return renderPage({
+    return page({
       kind: "note",
       items,
       total: all.length,
@@ -454,7 +411,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
       threadTitle: d.threadTitle,
       fileMissing: d.fileMissing,
     }));
-    return renderPage({
+    return page({
       kind: "diagram",
       items,
       total: all.length,
@@ -492,7 +449,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     const needle = input.query?.trim().toLowerCase();
 
     const all = ctx.db
-      .listReadableSources(ctx.userId, ctx.sessionId, ctx.workspaceId)
+      .listReadableSources(ctx.userId, ctx.sessionId, ctx.workspaceId, ctx.scope)
       .filter((s) => !needle || s.name.toLowerCase().includes(needle));
 
     const items = all.slice(offset, offset + limit).map((s) => ({
@@ -508,7 +465,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
       readable: s.parseStatus === "ready" || s.parseStatus === "none",
     }));
 
-    return renderPage({
+    return page({
       kind: "source",
       items,
       total: all.length,

@@ -100,6 +100,12 @@ export interface RunAgentInput {
    */
   collectPageGuidance?: string;
   /**
+   * What the user opened to this conversation with `@`, on turns where `ila_explore` is
+   * assembled. Absent on every ordinary conversation, and it does more than add a paragraph —
+   * see `SystemPromptInput.exploreGuidance`.
+   */
+  exploreGuidance?: string;
+  /**
    * The quiz make-up turn's grading key, appended to THIS turn's system prompt only: the
    * question's reference answer and explanation, which never travel to the client. Absent
    * on every ordinary turn.
@@ -261,6 +267,16 @@ export interface SystemPromptInput {
   planGuidance?: string;
   quizGuidance?: string;
   collectPageGuidance?: string;
+  /**
+   * What the user has opened to this conversation with `@`.
+   *
+   * Its **presence** is the switch, the `collectPageGuidance` rule: the route asks the assembled
+   * tool array, so a Copilot whose allow-list excludes the tool is never told about a call it
+   * cannot make. It also changes one sentence of the workspace note below, because a model told
+   * to read across workspaces while being told to never read outside two folders has been given
+   * two instructions and will follow the louder one.
+   */
+  exploreGuidance?: string;
   quizMakeupNote?: string;
 }
 
@@ -321,8 +337,19 @@ function buildSystemPrompt(input: SystemPromptInput): string {
     }. Pass location:"workspace" or location:"session" to choose deliberately, and follow an ` +
     `explicit instruction from the user over this default. When a file belongs beside another ` +
     `file the user referred to, write it into that file's folder. If you cannot tell which ` +
-    `folder a file belongs in, ask with ask_user rather than guessing. Never attempt to access ` +
-    `files outside these two folders.`;
+    `folder a file belongs in, ask with ask_user rather than guessing. ` +
+    /*
+     * The last sentence changes when the user has opened other workspaces, and it changes by
+     * *half*: the read prohibition stops being true, the write one does not. A sentence that
+     * simply vanished would read as "the sandbox is gone", and one left alone would have the
+     * model refusing a tool it was just handed — so the pair is stated together and explicitly,
+     * which is the only form that cannot be read as either.
+     */
+    (input.exploreGuidance !== undefined
+      ? `Reading outside them is allowed only inside the workspaces named below, and only ` +
+        `through the tool that reads them. Never **write** or delete outside these two folders, ` +
+        `and never read outside them by any other route.`
+      : `Never attempt to access files outside these two folders.`);
 
   // Present while the plan widget is installed, whether or not a plan exists yet — the
   // rhythm starts the moment one is made.
@@ -332,10 +359,16 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   // Not a widget this time — the switch is whether the tool itself was assembled, which is
   // what "an installation with web fetching off" looks like from here.
   const collectNote = input.collectPageGuidance ? `\n\n${input.collectPageGuidance}` : "";
+  // The same switch again: assembled, so the conversation holds an `@` grant. It sits after the
+  // workspace note it qualifies, and before the make-up key, which is the most specific
+  // instruction in the prompt and belongs last.
+  const exploreNote = input.exploreGuidance ? `\n\n${input.exploreGuidance}` : "";
   // One make-up turn's answer key, last: it is the most specific instruction in the prompt.
   const makeupNote = input.quizMakeupNote ? `\n\n${input.quizMakeupNote}` : "";
 
-  return base + timeNote + workspaceNote + planNote + quizNote + collectNote + makeupNote;
+  return (
+    base + timeNote + workspaceNote + planNote + quizNote + collectNote + exploreNote + makeupNote
+  );
 }
 
 /**
@@ -498,6 +531,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
         collectPageGuidance: input.collectPageGuidance,
+        exploreGuidance: input.exploreGuidance,
         quizMakeupNote: input.quizMakeupNote,
       })
     ),

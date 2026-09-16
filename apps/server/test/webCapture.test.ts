@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type AppDb } from "../src/db.js";
+import { NO_SCOPE } from "../src/workspaceScope.js";
 import { captureWebPage, type PageCache } from "../src/webCapture.js";
 import { listSourceViewsForUser } from "../src/sources.js";
 import { resolveSourceBytes, resolveSourceParsed } from "../src/sourcePaths.js";
@@ -83,7 +84,7 @@ describe("a workspace page — the user pasted a link", () => {
 
     // The link — the half that makes it *readable*. A page with a row and no link is material
     // the browser lists and the model cannot open.
-    expect(db.listReadableSources("u1", "s1", "w1").some((s) => s.id === row.id)).toBe(true);
+    expect(db.listReadableSources("u1", "s1", "w1", NO_SCOPE).some((s) => s.id === row.id)).toBe(true);
   });
 
   it("links a page kept in a conversation to the conversation too", async () => {
@@ -103,7 +104,7 @@ describe("a workspace page — the user pasted a link", () => {
     // Both links: the conversation it was kept in, and the workspace it belongs to — which is
     // how a page kept in one conversation is readable from another, exactly as an upload is.
     expect(db.listSessionSources("u1", "s1").some((s) => s.id === row.id)).toBe(true);
-    expect(db.listReadableSources("u1", "s2-nonexistent", "w1").some((s) => s.id === row.id)).toBe(
+    expect(db.listReadableSources("u1", "s2-nonexistent", "w1", NO_SCOPE).some((s) => s.id === row.id)).toBe(
       true
     );
   });
