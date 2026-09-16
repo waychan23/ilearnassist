@@ -31,10 +31,13 @@ const toolLabel = (name: string): string => {
 };
 
 /**
- * Widget-bound tools are not checkable: a Copilot allow-list can neither enable them (the
+ * `required`-mode tools are not checkable: a Copilot allow-list can neither enable them (the
  * widget install does) nor remove them (they bypass the list in all three states), so a box
- * here would be a control that did nothing. They still live in `ALL_TOOL_NAMES` so a stale
- * allow-list naming one never errors.
+ * here would be a control that did nothing. Today that is the quiz pair and nothing else — the
+ * plan and diagram tools are `auto-install`, which means they are ordinary tools a Copilot may
+ * switch like any other. The `isWidgetBoundTool` predicate is what draws that line.
+ *
+ * They still live in `ALL_TOOL_NAMES` so a stale allow-list naming one never errors.
  */
 const pickableTools = computed(() => ALL_TOOL_NAMES.filter((name) => !isWidgetBoundTool(name)));
 

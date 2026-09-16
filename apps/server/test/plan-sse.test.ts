@@ -13,9 +13,10 @@ import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
 /**
- * The plan widget end to end with only the model faked: widget install assembles the bound
- * tools (bypassing the tool allow-list), the tools commit versioned plans, the conflict call
- * suspends and the answers route commits either fork, and the GET routes read it back.
+ * The plan widget end to end with only the model faked: the `auto-install` plan tools are
+ * offered in every conversation and a call installs the widget, the tools commit versioned
+ * plans, the conflict call suspends and the answers route commits either fork, and the GET
+ * routes read it back.
  */
 
 let llm: FakeLlm;
@@ -107,9 +108,14 @@ async function awaitingMakeCall(sessionId: string): Promise<ToolCall> {
   throw new Error("no pending ila_make_plan call was persisted");
 }
 
-describe("widget-bound plan tools", () => {
-  it("assembles the tools only when the plan widget is installed", async () => {
-    // Without the widget the tool name is unknown to the loop, and no plan exists.
+describe("auto-install plan tools", () => {
+  it("makes a plan where no widget was installed, and installs it", async () => {
+    /*
+     * The mode's whole premise, end to end. The plan tools used to be `required`, so this
+     * conversation could not have made a plan at all: the call would have come back `Unknown
+     * tool` and the panel that shows a plan could never have introduced itself. Now the call
+     * commits V1 *and* installs the widget that displays it.
+     */
     const workspace = await newWorkspace(env, "no-widget");
     const plain = await newSession(env, workspace.id);
     llm.setTurns([
@@ -118,10 +124,21 @@ describe("widget-bound plan tools", () => {
     ]);
     const { events } = await chat(plain.id);
     const end = events.find((e) => e.type === "tool_end");
-    expect(end?.type === "tool_end" && end.toolCall.output).toContain("Unknown tool");
-    expect(await getPlan(plain.id)).toBeNull();
+    expect(end?.type === "tool_end" && end.toolCall.output).toContain('"version": 1');
 
-    // With the widget the same call commits V1.
+    const madeWithoutWidget = await getPlan(plain.id);
+    expect(madeWithoutWidget?.version).toBe(1);
+
+    // And the conversation can now show it: read through the route the panel uses, so the
+    // assertion is about what a client sees rather than about the row.
+    const widgets = await env.inject({
+      method: "GET",
+      url: `/api/sessions/${plain.id}/widgets`,
+    });
+    const sessionWidgets = widgets.json<{ session: { id: string; enabled: boolean }[] }>().session;
+    expect(sessionWidgets.find((w) => w.id === "plan")?.enabled).toBe(true);
+
+    // With the widget the same call commits V1 too — the install is not what makes it work.
     const session = await planSession();
     llm.setTurns([
       { content: "好的。", toolCalls: [{ id: "call_plan", name: "ila_make_plan", args: { tree: TREE } }] },

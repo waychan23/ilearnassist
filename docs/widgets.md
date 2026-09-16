@@ -32,7 +32,7 @@ omissions — the "what fails if you skip it" column is the point of the table.
 
 | # | Do this | Skipping it |
 | --- | --- | --- |
-| 1 | Add the id to `WIDGET_IDS` and its levels to `WIDGETS` in [packages/shared/src/index.ts](../packages/shared/src/index.ts). If the widget brings tools, list them in the entry's **`boundTools`** | `WIDGET_MODULES` is now missing a key, so `vue-tsc` fails — in step 2's file |
+| 1 | Add the id to `WIDGET_IDS` and its levels to `WIDGETS` in [packages/shared/src/index.ts](../packages/shared/src/index.ts). If the widget brings tools, declare them in the entry's **`tools: { names, mode }`** and pick the mode — see below | `WIDGET_MODULES` is now missing a key, so `vue-tsc` fails — in step 2's file |
 | 2 | Add an entry to `WIDGET_MODULES` in [apps/web/src/widgets/registry.ts](../apps/web/src/widgets/registry.ts) | `Record<WidgetId, WidgetModule>` makes a missing entry a compile error |
 | 3 | Add its `case` to `widgetLabel` **and** `widgetHint` in that file | the switch is exhaustive over the id union, so a missing arm is a compile error |
 | 4 | Add `widgets.<id>.name` and `widgets.<id>.hint` to **both** catalogs | `catalog.test.ts` fails on key asymmetry; the key would also resolve to nothing at runtime |
@@ -201,28 +201,74 @@ Registration order does not matter. The host registers on mount and the widget c
 - **Every route is owner-scoped in the `WHERE`.** A session reaches its owner through its workspace
   by join. A widget never needs its own ownership check — and must not add one that replaces the
   scoped read.
-- **Bound tools are switched by the install, nothing else.** A widget-bound tool is assembled iff
-  the widget is installed, bypasses the tool allow-list in all three of its states, and never
-  appears in the Copilot tool checklist.
+- **A `required` tool is switched by the install and nothing else.** It is assembled iff the
+  widget is installed, bypasses the tool allow-list in all three of its states, and never appears
+  in the Copilot tool checklist.
+- **An `auto-install` tool is switched by the allow-list, and installs the widget.** The install
+  is a *consequence* of the call, never a precondition for it, and it never overwrites a stored
+  `enabled = 0` — a decision sticks.
 
-## Widget-bound tools
+## Widget tools, and the two logics they can follow
 
-A widget can bring tools: list them in its `WIDGETS` entry as `boundTools` (names from
-`ALL_TOOL_NAMES`). The mechanics:
+A widget can bring tools: names from `ALL_TOOL_NAMES`, declared in its `WIDGETS` entry as
+`tools: { names, mode }`. **The widget picks the mode**, and the two are right for different
+widgets rather than being a global preference.
 
-- **Assembled iff the widget is installed.** `turnContext()` reads the session's enabled widgets
-  fresh per turn, derives their bound names (`boundToolNamesForWidgetIds`), and hands the tools'
-  per-turn context to `buildTools` (the plan tools get `{ db, sessionId }`; that context doubles
-  as the assembly gate, like `read_document`'s whitelist).
-- **They bypass the tool allow-list in all three of its states** — every tool, a named list, and
-  the empty "no tools" list. The widget install is the one switch, so the Copilot checklist
-  filters them out (`isWidgetBoundTool`); a box can neither enable nor remove them.
+| | `required` | `auto-install` |
+| --- | --- | --- |
+| assembled | iff the widget is installed | whenever its own preconditions hold |
+| the tool allow-list | bypassed in all three of its states | governs it, like any tool |
+| Copilot checklist | hidden (`isWidgetBoundTool`) | shown and pickable |
+| calling it | nothing beyond the call | **installs the widget in that conversation** |
+
+Today: `quiz` is `required`; `plan` and `diagram` are `auto-install`.
+
+`required` is the shape for a widget that is the capability's *home* — a quiz exists to be
+answered, so its questions come from a card and its panel is where the answers live. `ila_quiz`
+suspends the turn on the card, which settles it: the tool cannot be what installs the panel, because
+the panel has to be there to receive the answer.
+
+`auto-install` is the shape for a widget whose data the tool *produces* — a plan, a diagram. Here
+the mode is not a convenience but the only way the capability can exist at all: with `required`, the
+tool would be assembled only where the panel already was, so a conversation nobody had installed
+anything into could never make a plan, and the panel could never introduce itself.
+
+### The mechanics
+
+- **Assembly.** `turnContext()` reads the session's enabled widgets fresh per turn and derives the
+  `required` names (`boundToolNamesForWidgetIds`). Those names are what make an absent tool context
+  assemble nothing, which is why the quiz's context is gated the way `read_document`'s whitelist is.
+  An `auto-install` context is passed **unconditionally** — its presence is not a switch, so this
+  read no longer decides it.
+- **The install runs in the loop.** `RunAgentInput.onToolUsed` is called with the tool's name once
+  a call resolves without throwing, **before** its `tool_end` event: a client that reacts to
+  `tool_end` by re-reading the conversation's widgets must find the write already there. The route
+  supplies the closure, so the loop knows which tool ran and the closure knows whose conversation
+  it ran in. A call that threw reports nothing — a suspension and a validation error both land in
+  the catch arms, and neither is a call that committed anything.
+- **The install installs from silence.** `installWidgetForToolUse` writes only where the
+  conversation has never answered for the widget, and **never over a stored `enabled = 0`**: a
+  panel somebody closed stays closed, which is the same invariant that makes an uninstall write a
+  row rather than delete one. That read is `getSessionWidgetDecisionForUser` rather than
+  `listSessionWidgetsForUser`, because the resolved list deliberately cannot tell "no row" from "a
+  row saying disabled". Cost: asking for a plan where the plan panel was removed gives a plan and
+  no panel.
+- **The client mirrors it, with no new SSE event.** `autoInstallWidgetForTool` is the one lookup
+  both sides read, so the client knows which tool names install. The store's `tool_end` arm
+  refetches `GET /api/sessions/:id/widgets` when the name maps to a widget it does not have
+  locally, then activates the tab. A refetch rather than an event, because the route already
+  answers the question and `widgetEvents.ts`'s rule is that an event exists for what the store
+  cannot see. It is fire-and-forget: `applyEvent` is synchronous, and awaiting a round trip there
+  would stall every subsequent text delta.
 - **Suspending is orthogonal.** The plan's create-vs-existing fork is the third suspending tool,
   and it needs a side effect, so its `SuspendingTool.commit` (rather than `resolve`) writes the
   chosen fork before the resumed turn and may navigate the client via the `plan_session_created`
-  SSE event. Read-only suspending tools keep `resolve`.
+  SSE event. Read-only suspending tools keep `resolve`. A conflicting `ila_make_plan` throws before
+  its call resolves, so it installs nothing — correct, because a plan can only already exist in a
+  conversation that has answered for the panel, and the `new_session` fork installs into the
+  session it creates explicitly.
 - **Mid-turn refresh needs no new SSE event.** The store emits a `plan.changed` widget event from
-  the existing `tool_end` arm, so the panel refetches the moment a bound tool commits.
+  the existing `tool_end` arm, so the panel refetches the moment a plan tool commits.
 - **Surfacing a widget's tab is not a new SSE event either, and a suspended tool has no
   `tool_end`.** `ila_make_plan` opening the plan tab is a second, additive effect in the same
   `tool_end` arm — an event narrowed to the make tool would stop the panel moving on progress. The
@@ -231,20 +277,23 @@ A widget can bring tools: list them in its `WIDGETS` entry as `boundTools` (name
   `answerQuestion` is the only signal that a plan was committed. When a tool both suspends and can
   end in more than one way, look for the client-held decision rather than reaching for a new event.
 
-The plan widget is session-scoped. A future "workspace-level default that auto-installs into new
-sessions" is a separate mechanism and is intentionally not built yet.
+Both scopes are session-level for every widget that brings tools today. A "workspace-level default
+that auto-installs into new sessions" is still a separate mechanism and is still not built; what
+`DEFAULT_WIDGET_IDS` provides is a per-level default, and a Copilot's selection is copied into the
+conversation it starts.
 
-### A widget's data reached *without* being bound: `ila_query`
+### A widget's data reached *without* naming a tool: `ila_query`
 
-Binding is the right answer only when the widget is the capability's home — a quiz nobody can
-answer, a plan nobody can see. There is a second, deliberately unbound form, and `ila_query` is
-it: one ordinary allow-listable tool whose `kind` discriminator (`plan`, `quiz`, `thread`, `note`,
-`diagram`) reaches five widgets' data at once without being bound to any of them.
+Naming a tool is the right answer only when one widget is the capability's home. There is a second,
+deliberately unbound form, and `ila_query` is it: one ordinary allow-listable tool whose `kind`
+discriminator (`plan`, `quiz`, `thread`, `note`, `diagram`) reaches five widgets' data at once
+without belonging to any of them.
 
-The reason is the assembly rule above read backwards. A bound tool exists **only while its widget
-is installed**, and nothing installs a widget by default (`DEFAULT_WIDGET_IDS` is empty) — so
-binding "what has already happened in this conversation" would hide the app's own records from
-every ordinary conversation, which is the opposite of what a discovery tool is for. Each kind
+The reason is the assembly rule above read backwards. A `required` tool exists **only while its
+widget is installed** — so binding "what has already happened in this conversation" would hide the
+app's own records from every ordinary conversation, which is the opposite of what a discovery tool
+is for — and `auto-install` has no single widget to name, because the five kinds answer for five
+different panels. Each kind
 therefore delegates to the read its widget's route already uses and returns what that returns;
 `kind: "plan"` is byte-identical to `ila_read_plan`'s answer, from the same `renderReadResult`.
 Two *entry points* to one fact is the affordance (the bound one exists only where the widget does,
@@ -267,7 +316,7 @@ The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and
   `/answers` route; skipped when the user walks away (`skipAwaitingToolCalls` now returns
   the retired calls so the `/chat` route can retire their rows). A GET reconciles crash
   orphans (pending rows whose call is no longer awaiting) to skipped.
-- **Grading is a normal bound tool**, not a suspending one: the model calls
+- **Grading is a normal `required` tool**, not a suspending one: the model calls
   `ila_review_quiz` with exact `quiz_id`s after judging (instructed by the tool description
   and `QUIZ_GUIDANCE`); its `tool_end` emits `quiz.changed` for mid-turn panel refresh.
 - **Make-up answers are POST-then-chat, never a second quiz.** An unanswered question —
@@ -340,17 +389,18 @@ not the plan/quiz tool shape. The mechanics, and why:
   `<dataRoot>/logs/insights.log` through the same call — see the insight section below for what
   its block carries.
 
-### A viewer widget with no tools: the diagram widget
+### A viewer widget: the diagram widget
 
-The diagram widget (`id: "diagram"`, `DiagramWidget.vue`) is the other way a widget can relate to a
+The diagram widget (`id: "diagram"`, `DiagramWidget.vue`) is the third way a widget can relate to a
 tool, and the one to reach for when the tool must exist **without** the widget.
 
-`ila_diagram` is an ordinary allow-listable tool, so `WIDGETS.diagram` has **no `boundTools`** —
-the absence is the design, not an oversight. Binding it would assemble the tool only when this
-widget is installed, and nothing installs a widget by default, so the model would have no way to
-draw a diagram in an ordinary conversation; `isWidgetBoundTool` would also keep the name out of a
-Copilot's tool checklist, so it could not be switched on there either. The panel is a *viewer*: it
-lists the conversation's diagrams and opens the one you pick.
+`ila_diagram` is `auto-install`: ordinary, allow-listable, pickable in a Copilot — and drawing one
+installs this panel. What it is *not* is `required`. That would assemble the tool only where the
+panel already was, so the model would have no way to draw a diagram in an ordinary conversation, and
+`isWidgetBoundTool` would keep the name out of a Copilot's tool checklist so it could not be
+switched on there either. The panel is a *viewer*: it lists the conversation's diagrams and opens
+the one you pick, and the two are independent — a `.mmd` copied in by hand reaches the library and
+the file tree with no panel involved.
 
 What that changes relative to the widgets above:
 
@@ -380,11 +430,12 @@ What that changes relative to the widgets above:
 The insight widget (`id: "insight"`, `InsightWidget.vue`) is the first widget whose data is
 produced **by the user pressing a button**, and the recipe above has no other entry for that shape.
 
-There is no tool at all here — not a bound one and not an ordinary one. The pass is an
+There is no tool at all here — not a `required` one and not an `auto-install` one. The pass is an
 **out-of-band model call** (`insights.ts` + `agent/insights.ts`), the `agent/threads.ts` pattern, so
-`WIDGETS.insight` has no `boundTools` because there is nothing to bind. Binding would also be wrong
-twice over: a bound tool is something the *agent* can call, and the agent must not decide to spend a
-whole-conversation model call on a panel nobody may open.
+`WIDGETS.insight` names no tools because there are none. Naming one would also be wrong twice over:
+the tool would be something the *agent* can call, and the agent must not decide to spend a
+whole-conversation model call on a panel nobody may open. `auto-install` fails in the other
+direction — an install is not a request for a pass, so the panel would arrive empty and look broken.
 
 What that changes relative to the widgets above:
 

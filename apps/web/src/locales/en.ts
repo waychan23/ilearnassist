@@ -590,7 +590,7 @@ const en: typeof MessageSchema = {
       "This Assistant may use every tool, including any added later.",
     toolsHint: "Only the ticked tools are available; none ticked means no tools at all.",
     boundToolsHint:
-      "Some tools come with a widget (the Plan widget's make/read/update plan tools): they switch on automatically when the widget is installed, and are deliberately not listed here.",
+      "A few tools come with a widget and are deliberately not listed here (today only the Quiz widget's ask and grade tools): they switch on automatically when that widget is installed. Tools like the plan and diagram ones are ordinary and can be ticked.",
     public: "Publish this Assistant",
     publicHint:
       "Every account can then see and use it, but only you can edit or delete it.",

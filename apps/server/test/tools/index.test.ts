@@ -317,7 +317,7 @@ describe("buildTools", () => {
     ]);
   });
 
-  /* ------------------------------ plan (widget-bound) ------------------------------ */
+  /* -------------------- plan (auto-install, allow-listable) -------------------- */
 
   it("assembles no plan tools without a plan context", () => {
     const built = names();
@@ -329,13 +329,16 @@ describe("buildTools", () => {
     for (const name of PLAN_TOOL_NAMES) expect(built).toContain(name);
   });
 
-  it("lets widget-bound plan tools bypass the allow-list in every state", () => {
-    // Named list: not in it, still there.
-    expect(names({ plan, allowedNames: ["read_file"] }).sort()).toEqual(
-      [...PLAN_TOOL_NAMES, "read_file"].sort()
-    );
-    // Empty list ("no tools"): the bound tools survive, and nothing else does.
-    expect(names({ plan, allowedNames: [] }).sort()).toEqual([...PLAN_TOOL_NAMES].sort());
+  it("treats the plan tools as allow-listable in all three states", () => {
+    /*
+     * The `auto-install` half of the mode split, and the mirror of the diagram case below. The
+     * plan tools used to bypass the allow-list, because they were assembled solely by the widget
+     * install and a ticked box could neither enable nor remove them. They are ordinary now — the
+     * allow-list governs them — and what the widget gets in exchange is the install on call.
+     */
+    expect(names({ plan, allowedNames: ["read_file"] })).toEqual(["read_file"]);
+    // "No tools" really does mean no tools, these included.
+    expect(names({ plan, allowedNames: [] })).toEqual([]);
     // Absent list: the default set plus the plan tools. Said that way rather than as a count,
     // so a new tool has to be added to nothing — and `read_document`'s absence (this fixture
     // has no sources) is not silently part of a number.
@@ -347,9 +350,9 @@ describe("buildTools", () => {
     for (const name of PLAN_TOOL_NAMES) expect(built).toContain(name);
   });
 
-  /* ----------------------- diagram (ordinary, allow-listable) ----------------------- */
+  /* --------------------------- diagram (auto-install) --------------------------- */
 
-  it("assembles ila_diagram by default, unlike the widget-bound tools", () => {
+  it("assembles ila_diagram by default, like the plan tools", () => {
     // The route always supplies the directory, so a turn that can run at all can draw.
     expect(names()).toContain(DIAGRAM_TOOL_NAME);
   });
@@ -360,10 +363,10 @@ describe("buildTools", () => {
 
   it("treats the diagram tool as allow-listable in all three states", () => {
     /*
-     * The reason it is not widget-bound. A bound tool is the widget's to switch, and nothing
-     * installs a widget by default — so binding this one would leave the model with no way to
-     * draw a diagram in the ordinary conversation, which is the complaint the tool answers.
-     * Here a Copilot can turn diagrams off without turning the panel off, and vice versa.
+     * The reason it is `auto-install` rather than `required`. A `required` tool is the widget's
+     * to switch, so it would not exist in the ordinary conversation — which is the complaint this
+     * tool answers. Here a Copilot can turn diagrams off without turning the panel off, and vice
+     * versa; what the mode adds is that drawing one installs the panel that lists it.
      */
     expect(names({ allowedNames: [DIAGRAM_TOOL_NAME] })).toEqual([DIAGRAM_TOOL_NAME]);
     expect(names({ allowedNames: ["read_file"] })).not.toContain(DIAGRAM_TOOL_NAME);
@@ -374,7 +377,7 @@ describe("buildTools", () => {
   it("drops the diagram tool when the file tools are disabled", () => {
     /*
      * Deliberate, and the one place this tool behaves like a file tool rather than like the
-     * widget-bound ones above. `fileTools.enabled: false` is an operator saying "this
+     * `auto-install` plan tools above. `fileTools.enabled: false` is an operator saying "this
      * installation's agent does not write files" — and a diagram whose file was never
      * written is half the feature, since the file is what the browser half exists to open.
      */

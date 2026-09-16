@@ -1595,6 +1595,25 @@ export interface AppDb {
   listWorkspaceWidgetsForUser(userId: string, workspaceId: string): WidgetState[];
   listSessionWidgetsForUser(userId: string, sessionId: string): WidgetState[];
   /**
+   * Whether this conversation has *answered* for this widget, and what it said: `true` /
+   * `false`, or `undefined` when nothing has ever decided.
+   *
+   * The question the resolved lists above cannot answer, and they cannot **on purpose** — they
+   * iterate the registry so a stored row and a defaulted one are indistinguishable, which is
+   * what makes them the only thing a reader may derive "what is installed" from. This is the
+   * narrower question, and it exists for exactly one caller: `installWidgetForToolUse`, which
+   * installs a widget the conversation has never been asked about and must never touch one that
+   * has said no.
+   *
+   * It is deliberately **not** a second source of truth for `enabled` — the existence of a
+   * decision is what `widgetRowsForSelection` already writes, and that is all this reports.
+   */
+  getSessionWidgetDecisionForUser(
+    userId: string,
+    sessionId: string,
+    widgetId: WidgetId
+  ): boolean | undefined;
+  /**
    * Record a decision, upserting. Returns false when the object is not the caller's — a foreign
    * id inserts nothing, which is the same answer a missing one gives.
    *
@@ -2691,6 +2710,18 @@ export function createDb(dbPath: string): AppDb {
       WHERE wi.scope = 'session' AND wi.scope_id = @scopeId AND w.user_id = @userId`
   );
   /*
+   * One widget's *decision* on one conversation — the existence question, not the state one.
+   * Narrower than `stmtSessionWidgetRowsForUser` on purpose: it answers one pair, so the caller
+   * that needs "has anybody decided" cannot be reusing a read meant for "what is installed".
+   */
+  const stmtSessionWidgetDecisionForUser = db.prepare(
+    `SELECT wi.enabled FROM widget_instances wi
+       JOIN sessions s ON s.id = @scopeId
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE wi.scope = 'session' AND wi.scope_id = @scopeId
+        AND wi.widget_id = @widgetId AND w.user_id = @userId`
+  );
+  /*
    * An upsert, so install / uninstall / install on the same pair is one row rather than a
    * duplicate-key error, and so `created_at` keeps the first decision's timestamp while
    * `updated_at` moves. `SELECT … FROM <owner>` is what makes the owner part of the write: a
@@ -3650,6 +3681,16 @@ export function createDb(dbPath: string): AppDb {
         scopeId: sessionId,
       }) as WidgetRow[];
       return resolveWidgetStates("session", rows);
+    },
+    getSessionWidgetDecisionForUser(userId, sessionId, widgetId) {
+      const row = stmtSessionWidgetDecisionForUser.get({
+        userId,
+        scopeId: sessionId,
+        widgetId,
+      }) as { enabled: number } | undefined;
+      // `undefined` is "no row", and it must stay distinguishable from `false` — a foreign
+      // session id and an untouched one both reach here, and both mean *undecided*.
+      return row ? row.enabled !== 0 : undefined;
     },
     setWorkspaceWidgetForUser(userId, workspaceId, widgetId, enabled) {
       return (

@@ -107,16 +107,18 @@ export interface BuildToolsInput {
    * How `ila_quiz` numbers and registers its questions, and the grading tool's context.
    *
    * Present only when the conversation has the quiz widget installed: both quiz tools are
-   * widget-bound, so — like `plan` — the absence assembles neither tool (regardless of the
-   * allow-list). Both pieces are co-present: the one widget switches both tools.
+   * `required` mode, so the absence assembles neither tool (regardless of the allow-list). Both
+   * pieces are co-present: the one widget switches both tools.
    */
   quiz?: QuizToolContext;
   quizReview?: QuizReviewToolContext;
   /**
-   * Present only when the conversation has the plan widget installed: its bound tools are
-   * then assembled regardless of the session's tool allow-list — the widget install is the
-   * single switch, in all three of the allow-list's states (every tool / a named list /
-   * none). Like `documents`, the absence carries no tool at all.
+   * The plan tools, in every conversation whose allow-list lets them through.
+   *
+   * They are `auto-install` mode, so this context is **not** an assembly switch — the allow-list
+   * is — and it is passed unconditionally. That is what lets the model make a plan where no panel
+   * was ever installed, and `installWidgetForToolUse` is what puts the panel there when it does.
+   * The field stays optional so a test can pin what its absence assembles (nothing).
    */
   plan?: PlanToolContext;
   /**
@@ -124,21 +126,21 @@ export interface BuildToolsInput {
    * can be resolved — always, in practice; the field is optional so a test can pin what its
    * absence assembles (nothing).
    *
-   * **Not widget-bound**, unlike `plan` and `quiz` above. A bound tool is assembled only when
-   * its widget is installed, and nothing installs a widget by default, so binding this one
-   * would leave the model with no way to draw a diagram in every ordinary conversation —
-   * which is the complaint the tool exists to answer. The diagram widget is a viewer with no
-   * bound tools of its own.
+   * `ila_diagram` is `auto-install` mode like the plan tools: ordinary and allow-listable, with a
+   * call installing the panel that lists what it drew. It is deliberately **not** in
+   * `NON_FILE_TOOLS` — a diagram whose file was never written is half the feature — so switching
+   * the file tools off switches diagrams off too.
    */
   diagram?: DiagramToolContext;
   /**
    * Present whenever a session context exists — always, in practice; the field is optional so
    * a test can pin what its absence assembles (nothing).
    *
-   * **Ordinary, not widget-bound**, on the `ila_diagram` argument and for a stronger reason: a
-   * bound tool is assembled only when its widget is installed, and nothing installs a widget by
-   * default, so binding the agent's read of the conversation's own plan, quizzes, threads,
-   * notes and diagrams would hide all of it from every ordinary conversation.
+   * **Not bound to any widget, in either mode**, and deliberately so: a `required` read would
+   * exist only where its panel does, and an `auto-install` one has no widget to install — the
+   * five kinds answer for five different panels. Binding it at all would hide the agent's read of
+   * the conversation's own plan, quizzes, threads, notes and diagrams from the conversations that
+   * need it most, which is the opposite of what a discovery tool is for.
    */
   query?: QueryToolContext;
   /**
@@ -169,7 +171,7 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   ];
 
   // `ask_user` depends on no config and reads nothing, so it is assembled like a file tool
-  // rather than behind a feature switch. The quiz tools are widget-bound: see `input.quiz`.
+  // rather than behind a feature switch. The quiz tools are `required` mode: see `input.quiz`.
   const all: StructuredToolInterface[] = [
     ...fileTools,
     buildWebSearchTool(input.webSearch),
@@ -188,15 +190,19 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   if (input.documents && input.documents.sources.length > 0) {
     all.push(buildDocumentTool(input.documents));
   }
-  // Widget-bound tools: assembled only when their widget is installed, which is exactly when
+  // `required`-mode tools: assembled only when their widget is installed, which is exactly when
   // this context is present — nothing else gates them.
   if (input.quiz) {
     all.push(buildQuizTool(input.quiz));
     if (input.quizReview) all.push(buildQuizReviewTool(input.quizReview));
   }
+  // `auto-install` mode, and the difference from the pair above is the whole point of the mode:
+  // these are ordinary tools the allow-list below governs, and calling one installs its widget.
+  // No install check here, because there is nothing to check — the context is present whenever
+  // the turn could make a plan or draw a diagram at all.
   if (input.plan) all.push(...buildPlanTools(input.plan));
-  // Ordinary, allow-listable, and gated by `fileToolsEnabled` like the file tools — see
-  // `NON_FILE_TOOLS` above for why that is the decision rather than an oversight.
+  // Gated by `fileToolsEnabled` like the file tools — see `NON_FILE_TOOLS` above for why that is
+  // the decision rather than an oversight.
   if (input.diagram) all.push(buildDiagramTool(input.diagram));
   // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
   // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
@@ -212,9 +218,10 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
 
   return all.filter((t) => {
     if (!input.fileToolsEnabled && !NON_FILE_TOOLS.has(t.name)) return false;
-    // A widget-bound tool bypasses the allow-list in all three of its states: it is assembled
+    // A `required`-mode tool bypasses the allow-list in all three of its states: it is assembled
     // solely because its widget is installed, and a ticked/unticked box must neither enable nor
-    // remove it (it is not shown in the checklist for that reason).
+    // remove it (it is not shown in the checklist for that reason). An `auto-install` tool is not
+    // in that set — the allow-list governs it like any other tool.
     if (allowed && !allowed.has(t.name) && !isWidgetBoundTool(t.name)) return false;
     return true;
   });

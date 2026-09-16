@@ -191,22 +191,39 @@ The new table needed **no `SCHEMA_VERSION` bump** — the DDL runs on every open
 created before it simply gains it (the `counters` precedent, pinned by a test). `copilots.widgets`
 came in through `ensureColumn` for the same reason.
 
-#### Widget-bound tools
+#### Widget tools, and the two modes
 
-A widget may declare `boundTools` in `WIDGETS`: tools that are assembled for a turn **iff the
-widget is installed on the session**, read fresh per turn from `widget_instances` in
-`turnContext()`. They bypass the session's tool allow-list in all three of its states —
-"every tool", a named list, and the empty "no tools" list — because the widget install is the
-single switch and the tools are deliberately absent from the Copilot tool checklist
-(`isWidgetBoundTool`). Like `read_document`, they are still only assembled when their per-turn
-context exists (`plan?: PlanToolContext`): an allow-list can never switch them on for a
-conversation without the widget. The first consumer is the **plan** widget.
+A widget may declare `tools: { names, mode }` in `WIDGETS`, and the mode is the widget's own
+decision about how its tools relate to its install.
 
-Binding is only right when the widget *is* the capability's home. There is a deliberate second
-form — a tool that reaches a widget's data without being bound to it — and `ila_query` is it: one
-ordinary allow-listable tool reading plan, quizzes, threads, notes and diagrams alike. Binding it
-would hide the conversation's own record from every conversation that had not installed the
-relevant panel, since a bound tool is assembled only when its widget is.
+**`required`** — assembled for a turn **iff the widget is installed on the session**, read fresh
+per turn from `widget_instances` in `turnContext()`. They bypass the session's tool allow-list in
+all three of its states — "every tool", a named list, and the empty "no tools" list — because the
+widget install is the single switch, and they are deliberately absent from the Copilot tool
+checklist (`isWidgetBoundTool`). Like `read_document`, they are still only assembled when their
+per-turn context exists: an allow-list can never switch them on for a conversation without the
+widget. The **quiz** widget is `required`.
+
+**`auto-install`** — ordinary tools, governed by the allow-list and pickable in a Copilot, whose
+call **installs the widget** in that conversation. `turnContext()` therefore passes their context
+unconditionally rather than using it as a switch, and `RunAgentInput.onToolUsed` reports a call
+that resolved so the route's closure can write the install before the turn's `tool_end` goes out.
+The **plan** and **diagram** widgets are `auto-install`.
+
+The mode exists because the two answers are both right for different widgets. A quiz is a
+capability whose *home* is its panel — its questions come from a card and its answers live in the
+list — and `ila_quiz` suspends the turn, so it could not be what installs the panel. A plan or a
+diagram is a capability whose data the tool *produces*: with `required`, the tool would exist only
+where the panel already was, so a conversation nobody had installed anything into could neither
+make a plan nor ever come to have the panel. `auto-install` is what lets the capability introduce
+itself, and it installs from silence only — never over a stored `enabled = 0`, so a panel somebody
+closed stays closed.
+
+There is a deliberate third form — a tool that reaches a widget's data while belonging to no widget
+at all — and `ila_query` is it: one ordinary allow-listable tool reading plan, quizzes, threads,
+notes and diagrams alike. A `required` binding would hide the conversation's own record from every
+conversation that had not installed the relevant panel, and `auto-install` has no single panel to
+name, because the five kinds answer for five of them.
 
 ### The plan widget (`plans.ts`, `planTools.ts`)
 
@@ -275,8 +292,9 @@ the learner's notes, and the diagrams it drew — answering with typed observati
 
 It is **not a tool**, and that is the design rather than an omission. `ila_query` is how the
 *agent* reads this material during a turn; a pass costs a full model call over the whole
-conversation, so it is a user pressing a button. A bound tool would also exist only while the
-widget was installed, which is the `ila_diagram` argument read the other way round.
+conversation, so it is a user pressing a button. Nor would either tool mode fit: a `required` one
+would exist only while the widget was installed, and an `auto-install` one would put the panel
+there without a pass, so it would arrive empty and read as broken.
 
 Three properties are worth stating because each is load-bearing:
 
@@ -359,11 +377,11 @@ half-formed, since a message with no quote has nothing to put back on screen.
 Notes bring **no tools of their own**: nothing creates, edits or deletes one, so a turn can never
 rewrite what the learner wrote. The model *reads* them through the ordinary `ila_query` —
 `kind: "note"`, in `tools/query.ts` — which was a deliberate reversal of the rule that used to
-stand here. The read is deliberately **not** bound to the notes widget: a bound tool is assembled
-only while its widget is installed, and nothing installs a widget by default, so binding it would
-hide the learner's own notes from every conversation that had not opted into the panel. The tool
-result frames them as data *about* the learner rather than instructions, because a note is
-free text the learner wrote for themselves.
+stand here. The read names no widget, in either mode: a `required` one would be assembled only
+while the notes panel is installed, hiding the learner's own notes from every conversation that had
+not opted in, and `auto-install` has nothing to install — the notes already exist, because the
+learner wrote them. The tool result frames them as data *about* the learner rather than
+instructions, because a note is free text the learner wrote for themselves.
 
 ### The workspace file browser (`files.ts`)
 
@@ -460,10 +478,11 @@ sends one real turn and asserts the conversion for every tool in it.
 **`ila_query` is the agent's read of the conversation's own record** (`tools/query.ts`): one
 tool with a `kind` discriminator over plan, quiz, thread, note and diagram, rather than five
 tools competing for the same slot in the model's attention and five allow-list boxes for one
-capability. It is **ordinary and allow-listable**, on the `ila_diagram` argument and for a
-stronger reason — a widget-bound read exists only while its widget is installed, and nothing
-installs a widget by default, so every kind delegates to the read its widget's route already
-uses and returns what that returns. `kind: "quiz"` is the load-bearing case: it reads through
+capability. It is **ordinary and allow-listable, and belongs to no widget**, on the
+`ila_diagram` argument and for a stronger reason — a `required` read exists only while its widget
+is installed, and one tool cannot `auto-install` five panels — so every kind delegates to the read
+its widget's route already uses and returns what that returns. `kind: "quiz"` is the load-bearing
+case: it reads through
 `listQuizQuestionViews`, so the answer key's secrecy is *inherited* from `toView` rather than
 re-implemented, and a second read would be a second chance to leak it. Only
 `kind: "diagram"` with a `name` returns file content — the conversation's own `.mmd`, which

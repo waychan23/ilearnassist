@@ -97,6 +97,7 @@ import {
   parseErrorDetail,
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
+import { installWidgetForToolUse } from "./widgetInstall.js";
 import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
@@ -3486,10 +3487,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * browser's own zone appears.
      */
     clock: TurnClock;
-    /** Present when the plan widget is installed; appended to the turn's system prompt. */
+    /** Present when the plan tools survived assembly; appended to the turn's system prompt. */
     planGuidance?: string;
     /** Present when the quiz widget is installed; appended to the turn's system prompt. */
     quizGuidance?: string;
+    /**
+     * A tool call the model made resolved without throwing, handed the tool's name.
+     *
+     * This is where an `auto-install` widget's install happens: see `installWidgetForToolUse`.
+     * Bound to this turn's user and conversation so a call site cannot name either — the same
+     * closure form `collectPage` and `diagram` take.
+     */
+    onToolUsed?: (toolName: string) => void;
     /**
      * Present when `ila_collect_page` survived assembly; appended to the turn's system prompt.
      * Not a widget — this one is on by default, which is exactly why it needed the guidance.
@@ -3546,18 +3555,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const provider = db.getProvider(providerId);
     const modelId = resolveModelId(provider, input.model, session.settings);
 
-    // Widget-bound tools. Read fresh per turn from the installed session widgets (a widget
-    // can be installed mid-conversation), then derive the bound tool names: if a widget's
-    // tools are bound, that tool context is present and `buildTools` assembles them
-    // regardless of the allow-list. One read decides both widgets.
+    /*
+     * Widget-switched tools. Read fresh per turn from the installed session widgets (a widget
+     * can be installed mid-conversation), then derive the `required`-mode tool names: a name
+     * here means its context is present and `buildTools` assembles it regardless of the
+     * allow-list.
+     *
+     * Only the quiz tools can be in this set now. The plan and diagram tools became
+     * `auto-install` — assembled on their own merits, with the allow-list governing them and a
+     * call installing the widget — so their contexts are passed unconditionally below and this
+     * read no longer decides them. `WidgetToolMode`'s two arms are what keeps that from being a
+     * surprise at the call site.
+     */
     const boundNames = boundToolNamesForWidgetIds(
       db
         .listSessionWidgetsForUser(input.userId, session.id)
         .filter((w) => w.enabled)
         .map((w) => w.id)
-    );
-    const planInstalled = boundNames.some((name) =>
-      (PLAN_TOOL_NAMES as readonly string[]).includes(name)
     );
     const quizInstalled = boundNames.some((name) =>
       (QUIZ_TOOL_NAMES as readonly string[]).includes(name)
@@ -3638,9 +3652,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         sources: sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
-      // `ila_quiz` and its grading companion are widget-bound: both contexts exist only
-      // when the quiz widget is installed. The counter and the question rows are scoped to
-      // this conversation.
+      // `ila_quiz` and its grading companion are `required` mode: both contexts exist only when
+      // the quiz widget is installed, and their absence is what assembles neither tool. The
+      // counter and the question rows are scoped to this conversation.
       quiz: quizInstalled
         ? {
             reserveQuestionNumbers: (count) =>
@@ -3649,7 +3663,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           }
         : undefined,
       quizReview: quizInstalled ? { db, sessionId: session.id } : undefined,
-      plan: planInstalled ? { db, sessionId: session.id } : undefined,
+      // The plan tools are `auto-install`, so this context is not an assembly switch — the
+      // allow-list is. Passing it in every conversation is what lets the model make a plan where
+      // no panel was ever installed, and `installWidgetForToolUse` below is what puts the panel
+      // there when it does.
+      plan: { db, sessionId: session.id },
       /*
        * The rows go to the same session id as the file, in one callback, so the three cannot
        * diverge on which conversation they belong to. `ownDir` is the definition above.
@@ -3725,7 +3743,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       sessionDirPath: ownDir,
       writeLocation,
       clock,
-      planGuidance: planInstalled ? PLAN_GUIDANCE : undefined,
+      /*
+       * Read off the assembled set, like `collectPageGuidance` below and for the same reason:
+       * with the plan tools `auto-install`, "is the widget installed" stopped being the question.
+       * Whether the model can actually call them is, and only the array knows. The three are
+       * assembled as a unit, so naming one would do — naming all three is what keeps that from
+       * being an assumption.
+       */
+      planGuidance: tools.some((t) => (PLAN_TOOL_NAMES as readonly string[]).includes(t.name))
+        ? PLAN_GUIDANCE
+        : undefined,
+      /*
+       * Still gated on the install, and the difference from the line above is the mode: the quiz
+       * tools are `required`, so they bypass the allow-list and the widget install *is* the whole
+       * question. Asking the array here would answer yes whenever the widget is installed and
+       * no otherwise, which is the same answer by a longer route.
+       */
       quizGuidance: quizInstalled ? QUIZ_GUIDANCE : undefined,
       /*
        * Read off the assembled set rather than off the config, and that is the whole of the
@@ -3743,6 +3776,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       exploreGuidance: tools.some((t) => t.name === EXPLORE_TOOL_NAME)
         ? exploreGuidance(scope)
         : undefined,
+      /*
+       * The `auto-install` side effect, and the only reason the loop takes a callback for it: the
+       * loop knows which tool ran, and this closure knows whose conversation it ran in. It
+       * installs from *silence* — a widget this conversation has never been asked about — and
+       * never over a stored "no", so a panel somebody closed stays closed.
+       */
+      onToolUsed: (toolName: string) => {
+        installWidgetForToolUse({ db, userId: input.userId, sessionId: session.id, toolName });
+      },
     };
   }
 
@@ -4062,6 +4104,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         quizMakeupNote,
         signal: turn.signal,
@@ -4211,6 +4254,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
@@ -4341,6 +4385,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
