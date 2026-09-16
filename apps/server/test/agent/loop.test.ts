@@ -16,6 +16,7 @@ import {
   type ModelCapability,
   type SessionSettings,
 } from "@ilearnassist/shared";
+import type { TurnClock } from "../../src/agent/clock.js";
 import { runAgentStream } from "../../src/agent/loop.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
 import { buildAskUserTool } from "../../src/tools/askUser.js";
@@ -91,7 +92,20 @@ interface RunOptions {
   signal?: AbortSignal;
   /** Overridden to point the provider at something that cannot answer. */
   baseURL?: string;
+  /** The turn's clock. Fixed by default so a prompt assertion does not depend on today. */
+  clock?: TurnClock;
 }
+
+/**
+ * A clock no test has to think about, and one they can still assert on.
+ *
+ * Fixed rather than `new Date()`: the prompt states the date, so a test reading the system
+ * message back would otherwise be asserting on whatever day the suite happens to run.
+ */
+const TEST_CLOCK: TurnClock = {
+  local: "Wednesday, 2026-09-16 14:32",
+  zone: "Asia/Shanghai, UTC+08:00",
+};
 
 async function run(options: RunOptions) {
   llm.setTurns(options.turns);
@@ -113,6 +127,7 @@ async function run(options: RunOptions) {
     // The session's own prompt, as the routes now pass it — the loop never sees a Copilot.
     systemPrompt: options.systemPrompt ?? "",
     settings: options.settings ?? {},
+    clock: options.clock ?? TEST_CLOCK,
     // The whole user tree, not just the sources directory: `buildUserContent` derives a
     // source's path from the layout, so it needs the root it belongs to.
     user: userLayout(dataLayout(scratch), "tester"),
@@ -177,6 +192,48 @@ describe("runAgentStream — plain conversation", () => {
 
     expect(result.usage).toEqual({});
     expect(events.some((e) => e.type === "usage")).toBe(false);
+  });
+
+  it("states the current date, time and zone to the model on every turn", async () => {
+    /*
+     * Without this the model answers "what is today" from the most recent date in its training
+     * data — confidently, and with nothing in the reply to say it is wrong. So the date is
+     * *given*, unconditionally: not only on turns that mention time, since the failure is a
+     * model that does not know it should have looked.
+     */
+    await run({ turns: [{ content: "hi" }] });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    const system = String(sent.messages[0]!.content);
+    expect(system).toContain(TEST_CLOCK.local);
+    expect(system).toContain(TEST_CLOCK.zone);
+  });
+
+  it("states the turn's clock, not the process's", async () => {
+    // The prompt is built per turn from what it is handed, which is what makes a conversation
+    // left open overnight answer tomorrow's question with tomorrow's date.
+    const later: TurnClock = {
+      local: "Thursday, 2026-09-17 09:05",
+      zone: "Asia/Shanghai, UTC+08:00",
+    };
+    await run({ turns: [{ content: "hi" }], clock: later });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    expect(String(sent.messages[0]!.content)).toContain(later.local);
+  });
+
+  it("puts the clock ahead of the folder note and behind the persona", async () => {
+    /*
+     * Order is not cosmetic here. The persona is what the conversation is; the clock is a fact
+     * about the world the answer is written in; the folders are about where files go. A session
+     * with its own persona must not have it displaced by either.
+     */
+    await run({ turns: [{ content: "hi" }], systemPrompt: "You are a terse tutor." });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    const system = String(sent.messages[0]!.content);
+    expect(system.indexOf("You are a terse tutor.")).toBeLessThan(system.indexOf(TEST_CLOCK.local));
+    expect(system.indexOf(TEST_CLOCK.local)).toBeLessThan(system.indexOf("Two folders are writable"));
   });
 });
 

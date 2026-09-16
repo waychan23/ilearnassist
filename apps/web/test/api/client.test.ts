@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatStreamEvent } from "@ilearnassist/shared";
+import type { ChatInput, ChatStreamEvent } from "@ilearnassist/shared";
 import {
   api,
   fileToBase64,
@@ -38,9 +38,13 @@ function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
   return mock;
 }
 
-async function collect(sessionId = "s1"): Promise<ChatStreamEvent[]> {
+async function collect(
+  sessionId = "s1",
+  input: Partial<ChatInput> = {}
+): Promise<ChatStreamEvent[]> {
   const events: ChatStreamEvent[] = [];
-  for await (const event of streamChat(sessionId, { message: "hi" })) events.push(event);
+  const chatInput: ChatInput = { message: "hi", ...input };
+  for await (const event of streamChat(sessionId, chatInput)) events.push(event);
   return events;
 }
 
@@ -707,13 +711,38 @@ describe("fileToBase64", () => {
 });
 
 describe("streamChat", () => {
+  /**
+   * The zone this environment reports, which is what the client is supposed to send.
+   *
+   * Read rather than written out: the value comes from the host, so a literal would make these
+   * tests pass only on the machine they were written on — and it is the *presence* of the right
+   * value that is worth asserting, not which zone the suite happens to run in.
+   */
+  const hostZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
   it("posts the chat input", async () => {
     const fetchMock = stubFetch(() => sseResponse(["event: done\ndata: {\"type\":\"done\"}\n\n"]));
     await collect("s7");
 
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s7/chat");
     expect(fetchMock.mock.calls[0]![1]!.method).toBe("POST");
-    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ message: "hi" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({
+      message: "hi",
+      timezone: hostZone,
+    });
+  });
+
+  it("states the browser's own zone, not one a caller passed", async () => {
+    /*
+     * The field is a fact about the browser rather than an input, which is why the client's own
+     * value wins rather than the caller's. The server's turn prompt says what time it is *where
+     * the user is*, and a call site with an opinion about that is a call site that can make the
+     * model state an hour the user is not living in.
+     */
+    const fetchMock = stubFetch(() => sseResponse(["event: done\ndata: {\"type\":\"done\"}\n\n"]));
+    await collect("s7", { timezone: "America/New_York" });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body)).timezone).toBe(hostZone);
   });
 
   it("throws the server's error on a non-OK response", async () => {
@@ -756,6 +785,8 @@ describe("streamChat", () => {
         toolCallId: "call_1",
         action: "submit",
         answers: { "0": { selected: ["OAuth"] } },
+        // A resumed turn is a turn: its system prompt states the time too.
+        timezone: hostZone,
       });
     });
 

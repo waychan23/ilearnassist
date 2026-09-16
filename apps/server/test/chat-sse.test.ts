@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Attachment, ChatStreamEvent, Message, Session, Workspace } from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
+import { serverTimeZone } from "../src/agent/clock.js";
 import { eventTypes, parseSse } from "./helpers/sse.js";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
@@ -651,6 +652,35 @@ describe("POST /api/sessions/:id/chat", () => {
     const turn = streamedTurn();
     expect(turn.tools).toEqual(["read_file"]);
     expect(turn.system).not.toContain("ila_collect_page");
+  });
+
+  it("states the time in the zone the browser reported", async () => {
+    /*
+     * End to end, which is the only place this can be asserted: the zone travels from the
+     * request body through `turnContext` into the prompt, and the *string* is built from it.
+     * `Asia/Shanghai` because it has had no daylight saving since 1991 — a zone with DST would
+     * make the expected offset depend on which month the suite runs in.
+     */
+    const { session } = await freshSession();
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi", timezone: "Asia/Shanghai" });
+
+    expect(streamedTurn().system).toContain("Asia/Shanghai, UTC+08:00");
+  });
+
+  it("falls back to the server's own zone for one it does not recognise", async () => {
+    // A body field is not a trust boundary, and `Intl` throws a RangeError on a zone it cannot
+    // resolve — which would fail the turn. An unusable name is dropped to the same answer as
+    // sending none, rather than being refused.
+    const { session } = await freshSession();
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi", timezone: "Mars/Olympus_Mons" });
+
+    const system = streamedTurn().system;
+    expect(system).not.toContain("Mars/Olympus_Mons");
+    expect(system).toContain(serverTimeZone()!);
   });
 
   it("answers with the Copilot's prompt as it was at creation, not as it is now", async () => {

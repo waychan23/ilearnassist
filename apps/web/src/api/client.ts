@@ -1066,9 +1066,26 @@ async function* streamPost(
   yield* sseEvents(res);
 }
 
+/**
+ * The browser's own IANA timezone, for a turn whose system prompt states what time it is.
+ *
+ * Read here rather than threaded from the store because it is a property of *this browser*
+ * rather than of the caller: every turn wants it, no caller has an opinion about it, and the
+ * server may be on a desk while the user is on a phone in another timezone. `undefined` for an
+ * environment that cannot say — the server then falls back to its own zone, which is the right
+ * answer for the desktop app and a better guess than refusing the turn.
+ */
+function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Stream the agent's chat response for a session. */
 export function streamChat(sessionId: string, input: ChatInput): AsyncGenerator<ChatStreamEvent> {
-  return streamPost(`/sessions/${sessionId}/chat`, input);
+  return streamPost(`/sessions/${sessionId}/chat`, { ...input, timezone: browserTimeZone() });
 }
 
 /**
@@ -1081,7 +1098,9 @@ export function streamAnswers(
   sessionId: string,
   input: AnswerToolCallInput
 ): AsyncGenerator<ChatStreamEvent> {
-  return streamPost(`/sessions/${sessionId}/answers`, input);
+  // The zone goes on a resumed turn for the same reason it goes on a fresh one: it is a turn,
+  // and its system prompt states the time too.
+  return streamPost(`/sessions/${sessionId}/answers`, { ...input, timezone: browserTimeZone() });
 }
 
 /**
@@ -1093,5 +1112,6 @@ export function streamAnswers(
  * `message_removed`, naming the reply the server just dropped.
  */
 export function streamRegenerate(sessionId: string): AsyncGenerator<ChatStreamEvent> {
-  return streamPost(`/sessions/${sessionId}/regenerate`, {});
+  // The only body field: a regenerate is a turn, so it states the time like one.
+  return streamPost(`/sessions/${sessionId}/regenerate`, { timezone: browserTimeZone() });
 }

@@ -288,6 +288,16 @@ export default {
     stop: "停止生成",
     stopping: "正在停止…",
     attach: "添加图片或文件",
+    /*
+     * The canned replies above the input. Each label is also the message that gets sent — the
+     * chip *is* the sentence — which is why they are short enough to read as one and why the
+     * component sends the rendered label rather than a separate string that could drift from it.
+     */
+    quick: {
+      continue: "继续",
+      yes: "是的",
+      ok: "可以",
+    },
     /* The session-parameters button's label lives under `sessionSettings.open`: three places
        open that dialog, and it is the dialog that owns the words. */
   },
