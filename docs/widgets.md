@@ -414,6 +414,46 @@ What that changes relative to the widgets above:
   only been able to call a failure, and `提示词：0 字符` is what surfaced the declined case at all.
   See `docs/architecture.md` → the insight pass.
 
+### A viewer over the registry: the sources widget
+
+The sources widget (`id: "sources"`, `SourcesWidget.vue`) is the diagram widget's shape applied to
+the source registry, and it settles one question that the others leave open: **which of a
+conversation's material a panel shows**，because there are two defensible lists and they are
+different.
+
+- It reads `GET /api/sources?sessionId=…`, whose predicate is "held by this conversation **or**
+  linked into it" — its own files plus every upload, page and `@`-reference the conversation has
+  taken in.
+- It deliberately does **not** read `GET /api/sessions/:id/sources`, which is the union with the
+  workspace. That route is the model's *whitelist*, verbatim — what `read_document` may open — and
+  a panel built on it would list a workspace's whole corpus beside the three files the
+  conversation is actually about. "What may be read" and "what this is working from" are not the
+  same question, and the app now asks both in different places.
+
+The consequences that are decisions rather than details:
+
+- **The category filter is client-side**, and its option list is derived from the rows already
+  fetched. Both halves are the opposite of the source browser's, and both are about scope: the
+  browser cannot answer "which categories exist" in the same request (so it makes a second,
+  scope-only one) and must filter on the server (a workspace can hold tens of thousands of rows),
+  while this list is one conversation's. Filtering here also keeps the server's bounded
+  `reconcileFilesystem` walk, which runs at the top of every `GET /api/sources`, off a control the
+  user may press repeatedly.
+- **No folders, no rename, no move, no delete.** A conversation's material is written by the agent
+  and by what the user references; the place it gets organised is the library dialog the chat
+  header opens. A tree here would be a second, weaker file manager for a directory nobody laid
+  out — the requirement behind this panel says as much.
+- **`turn.finished` is the only event it subscribes to.** A turn is what links a `@`-reference and
+  what a tool writes a file through, so it is the one moment the list can have changed. There is
+  no `source.added` event and there should not be: the client is what asked for every addition, so
+  the store already knows, and an event would be a second way to learn one fact.
+- **A row opens the ordinary file preview**, through `store.openSourceFile` — the same dialog the
+  file tree and the diagram panel reach, addressed by source id rather than by path. That path is
+  why `readPreviewFile` exists at all (`docs/file-preview.md`).
+- Its category labels are **not** new keys: `sources.category.*` is already a catalog key per
+  value and already an allowed dynamic prefix, so the filter spells a category the same way every
+  other surface does. Its own strings are under `widgets.sources.*`.
+
 ### Widget groups
 
 `WIDGET_GROUPS` in the shared package is a **client-side** bundling only (the study pack is
@@ -451,9 +491,12 @@ demo widgets counting again after a turn without a reload.
 
 Each widget that has a rule of its own has a spec of its own: `e2e/plan.spec.ts`,
 `e2e/quiz-widget.spec.ts`, `e2e/thread-widget.spec.ts`, `e2e/notes.spec.ts`,
-`e2e/diagram.spec.ts` and `e2e/insight.spec.ts` — the last scripting a pass over HTTP and then
+`e2e/diagram.spec.ts`, `e2e/insight.spec.ts` — the last scripting a pass over HTTP and then
 asserting what a person sees: an item you keep surviving the next pass while the rest are
-replaced, and a pass that produced nothing usable leaving the list exactly as it was.
+replaced, and a pass that produced nothing usable leaving the list exactly as it was — and
+`e2e/sources-widget.spec.ts`, which makes its material the two ways a conversation really gets
+some (an upload through the composer, a file a scripted tool call wrote) because "those two land
+in one list" is the registry's claim rather than the panel's.
 
 ```bash
 npx playwright test e2e/widgets.spec.ts   # the panel, end to end (16 flows)

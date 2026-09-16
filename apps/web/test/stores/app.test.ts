@@ -129,6 +129,7 @@ const WORKSPACE: Workspace = {
   slug: "notes",
   dirPath: "/tmp/notes",
   workdirPath: "/tmp/notes/workdir",
+  description: "",
   createdAt: "2026-01-01T00:00:00.000Z",
   sessionCount: 0,
   lastActivityAt: null,
@@ -176,9 +177,10 @@ function session(overrides: Partial<Session> = {}): Session {
     systemPrompt: "",
     allTools: true,
     tools: [],
-    title: "New conversation",
+    title: "(Untitled) Session",
     titleSource: "auto",
     settings: {},
+    description: "",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -939,6 +941,39 @@ describe("sessions", () => {
     // And nothing is patched afterwards, which is the half that makes it one write.
     expect(mocks.api.updateSession).not.toHaveBeenCalled();
     expect(store.draftSettings).toEqual({});
+  });
+
+  it("names a new session with the placeholder, in the language being read", async () => {
+    /*
+     * The name is written by the client rather than left to the server's constant, because a
+     * placeholder has to be in a language and the server has no reader to ask. It is sent with
+     * `titleSource: "auto"`, which is what makes it a placeholder — the auto-titler still
+     * replaces it after the first turn.
+     *
+     * The locale is pinned, per the rule the i18n guards state: jsdom's `en-US` navigator would
+     * otherwise let this pass against the English catalog.
+     */
+    const store = await readyStore();
+    store.activeSessionId = null;
+
+    await store.createSession();
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.objectContaining({ title: "（未命名）会话" })
+    );
+  });
+
+  it("lets a caller name the session instead of using the placeholder", async () => {
+    const store = await readyStore();
+    store.activeSessionId = null;
+
+    await store.createSession({ title: "第三章复习" });
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.objectContaining({ title: "第三章复习" })
+    );
   });
 
   it("omits settings entirely when nothing was staged", async () => {

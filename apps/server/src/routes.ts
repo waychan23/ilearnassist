@@ -111,6 +111,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { classifyProviderError } from "./agent/providerErrors.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
+import { uniqueSessionTitle } from "./sessionTitles.js";
 import { writeParsedText } from "./documents/store.js";
 import { needsSummary, summarizeImage } from "./agent/mediaSummary.js";
 import { createSseWriter } from "./stream.js";
@@ -971,6 +972,32 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   const providerExists = (id: string | null | undefined): id is string =>
     !!id && db.getProvider(id) !== undefined;
 
+  /**
+   * `title`, or the next free numbered form of it within one workspace.
+   *
+   * Every path that names a conversation comes through here — creation, a rename, and the
+   * auto-titler's own suggestion — because a name is only unique *relative to its siblings*, and
+   * this is the one place that reads them. `listSessionsForUser` already filters out deleted
+   * sessions and deleted workspaces, which is exactly the set a reader sees in the sidebar.
+   *
+   * `excludeId` is the session being renamed: without it, re-saving a conversation under the
+   * name it already has would find itself taken and hand back `X (2)`.
+   */
+  function uniqueTitleIn(
+    workspaceId: string,
+    userId: string,
+    title: string,
+    excludeId?: string
+  ): string {
+    const taken = new Set(
+      db
+        .listSessionsForUser(workspaceId, userId)
+        .filter((s) => s.id !== excludeId)
+        .map((s) => s.title)
+    );
+    return uniqueSessionTitle(title, (t) => taken.has(t));
+  }
+
   function resolveDefaultProviderId(): string {
     const stored = db.getSetting(SETTING_DEFAULT_PROVIDER);
     if (providerExists(stored)) return stored;
@@ -1111,18 +1138,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Rename. The directory keeps its original slug — see `renameWorkspaceForUser` in
-   * `db.ts` — so this is a display-name change and nothing on disk moves underneath a
-   * running agent.
-   */
-  /**
-   * Rename a workspace, change its defaults, or both.
+   * Rename a workspace, describe it, change its defaults, or any combination.
    *
-   * The two are one route because they are one resource's `PATCH`, and each is **optional and
-   * independent**: a rename sends a name, a settings control sends settings, and a request that
-   * sends both does both. The alternative — a name that must be present to reach the settings,
-   * or a settings write that silently renamed the workspace to `undefined` — is the shape a
-   * single-field route grows into when it gains a second field.
+   * All three are one route because they are one resource's `PATCH`, and each is **optional and
+   * independent**: a rename sends a name, the settings form sends a settings object and a
+   * description, and a request that sends several does all of them. The alternative — a name
+   * that must be present to reach the settings, or a settings write that silently renamed the
+   * workspace to `undefined` — is the shape a single-field route grows into as it gains fields.
+   *
+   * The name and the description go in one statement (`patchWorkspaceForUser`); `settings` is
+   * separate because it is a whole-object write, not a column.
+   *
+   * Renaming is display-only. The directory keeps its original slug — see
+   * `patchWorkspaceForUser` in `db.ts` — so nothing on disk moves underneath a running agent.
    */
   app.patch("/api/workspaces/:id", async (request, reply) => {
     const userId = actor(request).id;
@@ -1137,7 +1165,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
     }
 
-    let workspace = name ? db.renameWorkspaceForUser(id, userId, name) : undefined;
+    let workspace = db.patchWorkspaceForUser(id, userId, {
+      // Omitted and empty mean different things here too: `undefined` leaves the stored name
+      // alone, and an empty one never reaches the statement because it was refused above.
+      ...(name !== undefined ? { name } : {}),
+      ...(body?.description !== undefined ? { description: body.description } : {}),
+    });
     if (body?.settings !== undefined) {
       workspace = db.setWorkspaceSettingsForUser(id, userId, body.settings);
     }
@@ -1632,7 +1665,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // meaningful alongside `allTools: false`, which is what a restricting Copilot carries.
       allTools: copilot?.allTools ?? true,
       tools: copilot ? [...copilot.tools] : [],
-      title: body?.title?.trim() || DEFAULT_SESSION_TITLE,
+      /*
+       * A caller that names nothing gets the placeholder, and then the sibling check numbers it
+       * — so three conversations created in a row read `(未命名) 会话`, `(未命名) 会话 (2)` and
+       * `(未命名) 会话 (3)` rather than sharing one label until each has been talked to.
+       *
+       * The web client sends the placeholder itself, in the language being read; this constant
+       * is what a script or the CLI gets. Both go through the same numbering, because a title
+       * the client chose is no more entitled to a collision than one it did not.
+       */
+      title: uniqueTitleIn(workspaceId, userId, body?.title?.trim() || DEFAULT_SESSION_TITLE),
       /*
        * The parameters are merged here rather than patched in afterwards, which is what the
        * client used to do: create, then `PATCH /api/sessions/:id`. Two writes leave a window in
@@ -1694,14 +1736,25 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const body = request.body as UpdateSessionInput;
-    if (!db.getSessionForUser(id, userId)) {
+    const existing = db.getSessionForUser(id, userId);
+    if (!existing) {
       return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     }
     if (body?.title !== undefined && !body.title.trim()) {
       return reply.code(400).send(apiError("TITLE_EMPTY", "title must not be empty"));
     }
     return db.updateSessionForUser(id, userId, {
-      title: body?.title,
+      /*
+       * Numbered against its siblings, excluding itself — re-saving under the name it already
+       * has must not turn it into `X (2)`. A rename is deliberately **suffixed rather than
+       * refused**: two conversations called the same thing is exactly the list this avoids, and
+       * refusing would mean losing the edit the user had already made. `TITLE_EMPTY` above is
+       * the one title this route rejects, because there is no name to number.
+       */
+      title: body?.title?.trim()
+        ? uniqueTitleIn(existing.session.workspaceId, userId, body.title.trim(), id)
+        : undefined,
+      description: body?.description,
       settings: body?.settings,
       systemPrompt: body?.systemPrompt,
       allTools: body?.allTools,
@@ -3586,8 +3639,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         assistantMessage: result.content,
       });
       if (title) {
-        db.setAutoTitleForUser(id, userId, title);
-        sse.send({ type: "title", sessionId: id, title });
+        /*
+         * Numbered against its siblings, itself excluded — the titler is guessing at a name and
+         * has no idea what else is in the list, so two conversations that open the same way
+         * would otherwise both be called `什么是递归`. The number is what the SSE event
+         * carries, so the sidebar shows the same string the database now holds.
+         */
+        const unique = uniqueTitleIn(session.workspaceId, userId, title, id);
+        db.setAutoTitleForUser(id, userId, unique);
+        sse.send({ type: "title", sessionId: id, title: unique });
       }
     }
 

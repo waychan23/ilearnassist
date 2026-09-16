@@ -126,7 +126,7 @@ describe("workspaces", () => {
     addWorkspace("w1");
     addSession("s1", { title: "a" });
 
-    const renamed = db.renameWorkspaceForUser("w1", OWNER, "Renamed")!;
+    const renamed = db.patchWorkspaceForUser("w1", OWNER, { name: "Renamed" })!;
 
     expect(renamed.name).toBe("Renamed");
     // Not an identity change: the directory is where the agent's files already live.
@@ -140,7 +140,7 @@ describe("workspaces", () => {
   });
 
   it("returns undefined when renaming a workspace that is not there", () => {
-    expect(db.renameWorkspaceForUser("nope", OWNER, "x")).toBeUndefined();
+    expect(db.patchWorkspaceForUser("nope", OWNER, { name: "x" })).toBeUndefined();
   });
 
   it("does not hand back a bare row from createWorkspace or getWorkspace", () => {
@@ -765,6 +765,55 @@ describe("schema versioning", () => {
         opened.raw.prepare("PRAGMA table_info(workspaces)").all() as { name: string }[]
       ).map((c) => c.name);
       expect(columns).toContain("settings");
+    } finally {
+      opened.raw.close();
+    }
+  });
+
+  it("gains both description columns, and reads an old row as empty", () => {
+    /*
+     * `ensureColumn`, not a version bump — an added column is additive, which is the rule the
+     * `pre-settings` case above states. What this one adds is a second half: the column arrives
+     * `NOT NULL DEFAULT ''`, so a row written before it existed has to read as "nobody wrote
+     * one" rather than as NULL or as a crash. Both tables are here because they are one feature
+     * and a single-file check of the pair is what makes that visible.
+     */
+    const path = join(root, "pre-description.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    const raw = new Database(path);
+    raw.exec(
+      "CREATE TABLE workspaces (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, slug TEXT NOT NULL, dir_path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)"
+    );
+    raw.exec(
+      `CREATE TABLE sessions (
+         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, copilot_id TEXT, copilot_name TEXT NOT NULL DEFAULT '',
+         system_prompt TEXT NOT NULL DEFAULT '', all_tools INTEGER NOT NULL DEFAULT 1, tools TEXT NOT NULL DEFAULT '[]',
+         title TEXT NOT NULL, title_source TEXT NOT NULL DEFAULT 'auto', settings TEXT NOT NULL DEFAULT '{}',
+         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+       )`
+    );
+    raw
+      .prepare("INSERT INTO workspaces VALUES ('w1', 'u1', 'Old', 'old', '/tmp/old', '2024-01-01')")
+      .run();
+    raw
+      .prepare(
+        "INSERT INTO sessions VALUES ('s1', 'w1', NULL, '', '', 1, '[]', 'Old Talk', 'auto', '{}', '2024-01-01', '2024-01-01', NULL)"
+      )
+      .run();
+    raw.close();
+
+    const opened = createDb(path);
+    try {
+      const columnsOf = (table: string): string[] =>
+        (opened.raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+          (c) => c.name
+        );
+      expect(columnsOf("workspaces")).toContain("description");
+      expect(columnsOf("sessions")).toContain("description");
+
+      // The rows that predate the column, read through the ordinary accessors.
+      expect(opened.getWorkspaceForUser("w1", "u1")?.description).toBe("");
+      expect(opened.getSessionForUser("s1", "u1")?.session.description).toBe("");
     } finally {
       opened.raw.close();
     }

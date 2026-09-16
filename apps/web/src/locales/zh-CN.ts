@@ -289,7 +289,8 @@ export default {
     stop: "停止生成",
     stopping: "正在停止…",
     attach: "添加图片或文件",
-    settings: "会话参数（Temperature、上下文长度、工具轮数…）",
+    /* The session-parameters button's label lives under `sessionSettings.open`: three places
+       open that dialog, and it is the dialog that owns the words. */
   },
 
   attachments: {
@@ -389,8 +390,16 @@ export default {
   },
 
   session: {
-    /** Shown in place of a title before the auto-titler has produced one. */
-    fallbackTitle: "新会话",
+    /**
+     * What a conversation is called before it has a name of its own.
+     *
+     * Two roles, one string: the store **writes** this as the title at creation — in the
+     * language being read, which is why it is a catalog key rather than the server's constant —
+     * and it is still the fallback a list renders for a title that is somehow empty. It is a
+     * placeholder either way: `titleSource` stays `auto`, so the auto-titler replaces it after
+     * the first turn.
+     */
+    fallbackTitle: "（未命名）会话",
     new: {
       title: "新建会话",
       titleLabel: "标题（可选）",
@@ -935,6 +944,16 @@ export default {
     workspaceSettings: {
       title: "工作区设置",
       liveHint: "改动会立刻反映在右侧栏上。",
+      /*
+       * The workspace's own name and description, above the settings it hands down. Both are
+       * display-only — the description reaches no prompt, and changing the name moves no
+       * directory (the slug is fixed at creation).
+       */
+      name: "工作区名称",
+      namePlaceholder: "例如：线性代数",
+      description: "工作区描述",
+      descriptionPlaceholder: "这个工作区用来做什么？",
+      descriptionHint: "仅供你自己参考，不会发送给模型。",
     },
     sessionStats: {
       name: "会话统计（Demo）",
@@ -1014,6 +1033,16 @@ export default {
         advice: "学习建议",
         habit: "学习习惯",
       },
+    },
+    sources: {
+      name: "参考资料",
+      hint: "这个会话引用和产出的资料 —— 上传的文件、收藏的网页、写入的文件，可按内容类型筛选。",
+      noSession: "打开一个会话后，这里会列出它的参考资料。",
+      empty: "这个会话还没有参考资料。上传文件、引用资料或让助理写一个文件，都会出现在这里。",
+      /** A filter rather than an empty conversation: the rows exist, the selection hides them. */
+      noMatch: "没有符合筛选条件的资料。",
+      missing: "已丢失",
+      failed: "读取参考资料失败。",
     },
   },
 
@@ -1153,9 +1182,21 @@ export default {
 
   sessionSettings: {
     title: "会话参数",
+    /** The button that opens this dialog — a title/aria-label, drawn as an icon alone. */
+    open: "会话参数（温度、上下文长度、工具轮数…）",
     scopeExisting: "这些参数只作用于当前会话。",
     scopeNew: "还没有会话，参数会应用于即将创建的新会话。",
     scopeSuffix: " 留空表示退回到全局默认值。",
+    /*
+     * The conversation's name and its description. Both are stored, and both are display-only
+     * in the sense that matters — neither reaches the model. The name is the one that has a
+     * consequence: giving one stops the auto-titler from renaming the conversation later.
+     */
+    name: "会话名称",
+    namePlaceholder: "例如：第三章复习",
+    description: "会话描述",
+    descriptionPlaceholder: "这个会话是关于什么的？",
+    descriptionHint: "仅供你自己参考，不会发送给模型。",
     systemPrompt: "系统设定（System Prompt）",
     systemPromptPlaceholder: "这个对话要扮演什么角色…",
     systemPromptHint:

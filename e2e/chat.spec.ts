@@ -250,3 +250,45 @@ test("an attached file reaches the model's prompt and survives a reload", async 
   await page.getByTestId("session-item").first().click();
   await expect(page.getByTestId("attachment-chip")).toContainText("notes.txt");
 });
+
+test("the title's two controls are icon-only, and both do what they say", async ({ page }) => {
+  /*
+   * The topbar used to carry a labelled "编辑标题" button and nothing else; both controls are
+   * icon-only now, which is only observable in a browser — `vue-tsc` cannot see whether a span
+   * was left in the markup, and the accessible name is what a screen reader gets when the
+   * visible one goes.
+   *
+   * The second control's real content is that it opens the *same* dialog the composer's button
+   * does. Two entries to one dialog is a claim about identity, so the assertion is on the same
+   * field the composer's route reaches.
+   */
+  await page.goto("/");
+  await enterWorkspace(page);
+
+  // The welcome screen has no conversation, and both controls belong to one — the topbar shows
+  // neither until there is something to name.
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
+
+  const edit = page.getByTestId("edit-session-title");
+  await expect(edit).toHaveAttribute("aria-label", "编辑标题");
+  // The glyph, not the word: the label is gone from the element's text.
+  await expect(edit).toHaveText("");
+
+  await edit.click();
+  // The label and the title swap for an input — the control really is the edit.
+  await expect(page.getByTestId("chat-title-input")).toBeVisible();
+  await page.getByTestId("chat-title-input").press("Escape");
+  await expect(page.getByTestId("session-title")).toBeVisible();
+
+  await page.getByTestId("chat-session-settings").click();
+  // The conversation's own fields — the ones only this dialog has.
+  await expect(page.getByTestId("session-name")).toBeVisible();
+  await expect(page.getByTestId("session-description")).toBeVisible();
+
+  // And the composer's button opens the same dialog, which is the identity being claimed.
+  await page.getByTestId("session-settings-close").click();
+  await page.getByTestId("open-session-settings").click();
+  await expect(page.getByTestId("session-name")).toBeVisible();
+});

@@ -674,6 +674,21 @@ body {
   border-radius: var(--radius-md);
 }
 
+/*
+ * The account's own note about the workspace, when there is one. Brighter than the path below
+ * it and in the prose font rather than the monospace: the path is machine output, this is what
+ * a person wrote, and the card should read the second before the first.
+ */
+.ws-card-desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-2);
+}
+
+.ws-card-desc + .ws-card-path {
+  margin-top: var(--space-1);
+}
+
 .ws-card-path {
   margin: 0;
   color: var(--text-3);
@@ -2672,11 +2687,8 @@ body {
     display: none;
   }
 
-  /* Same reasoning for the edit button: the glyph is the affordance and the tooltip says
-     the rest, so the label is what the topbar spends first. */
-  .topbar .title-edit-btn .label {
-    display: none;
-  }
+  /* The title's two controls need no rule of their own any more: they are icon-only at every
+     width, which is what this used to do here — see the note in `ChatView.vue`. */
 }
 
 /*

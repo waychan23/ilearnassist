@@ -114,7 +114,7 @@ describe("workspaces", () => {
   });
 
   it("does not rename another account's workspace", () => {
-    expect(db.renameWorkspaceForUser(`w-${BOB}`, ADA, "stolen")).toBeUndefined();
+    expect(db.patchWorkspaceForUser(`w-${BOB}`, ADA, { name: "stolen" })).toBeUndefined();
     // Unchanged, which is the half that actually matters — a refused write that still wrote
     // would pass an assertion on the return value alone.
     expect(db.getWorkspaceForUser(`w-${BOB}`, BOB)?.name).toBe("W");

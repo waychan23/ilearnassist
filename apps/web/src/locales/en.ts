@@ -227,7 +227,8 @@ const en: typeof MessageSchema = {
     stop: "Stop generating",
     stopping: "Stopping…",
     attach: "Add an image or file",
-    settings: "Session parameters (temperature, context length, tool steps…)",
+    /* The session-parameters button's label lives under `sessionSettings.open`: three places
+       open that dialog, and it is the dialog that owns the words. */
   },
 
   attachments: {
@@ -308,7 +309,8 @@ const en: typeof MessageSchema = {
   },
 
   session: {
-    fallbackTitle: "New conversation",
+    /** What a conversation is called before it has a name of its own. See the Chinese catalog. */
+    fallbackTitle: "(Untitled) Session",
     new: {
       title: "New conversation",
       titleLabel: "Title (optional)",
@@ -778,6 +780,11 @@ const en: typeof MessageSchema = {
     workspaceSettings: {
       title: "Workspace settings",
       liveHint: "Changes show up in the right sidebar immediately.",
+      name: "Workspace name",
+      namePlaceholder: "For example: Linear algebra",
+      description: "Workspace description",
+      descriptionPlaceholder: "What is this workspace for?",
+      descriptionHint: "For your own reference; never sent to the model.",
     },
     sessionStats: {
       name: "Conversation stats (Demo)",
@@ -856,6 +863,17 @@ const en: typeof MessageSchema = {
         advice: "Advice",
         habit: "Study habits",
       },
+    },
+    sources: {
+      name: "Sources",
+      hint: "What this conversation references and produces — uploaded files, saved pages, written files — filterable by content type.",
+      noSession: "Open a conversation and its sources are listed here.",
+      empty:
+        "This conversation has no sources yet. Uploading a file, referencing one, or having the Assistant write one puts it here.",
+      /** A filter rather than an empty conversation: the rows exist, the selection hides them. */
+      noMatch: "No sources match the filter.",
+      missing: "Missing",
+      failed: "Could not load this conversation's sources.",
     },
   },
 
@@ -976,9 +994,16 @@ const en: typeof MessageSchema = {
 
   sessionSettings: {
     title: "Session parameters",
+    /** The button that opens this dialog — a title/aria-label, drawn as an icon alone. */
+    open: "Session parameters (temperature, context length, tool steps…)",
     scopeExisting: "These parameters apply to this conversation only.",
     scopeNew: "No conversation yet, so these apply to the one about to be created.",
     scopeSuffix: " Left blank, each falls back to the global default.",
+    name: "Session name",
+    namePlaceholder: "For example: Chapter 3 review",
+    description: "Session description",
+    descriptionPlaceholder: "What is this conversation about?",
+    descriptionHint: "For your own reference; never sent to the model.",
     systemPrompt: "System prompt",
     systemPromptPlaceholder: "What should this conversation be?",
     systemPromptHint:

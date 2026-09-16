@@ -63,6 +63,19 @@ export const uiState = reactive({
    */
   sourcesOpen: false,
   /**
+   * The session-parameters dialog.
+   *
+   * Three places open it and they are not in a parent-child relation: the composer's `sliders`
+   * button, the topbar's, and the settings button on a row in the conversation list. The last
+   * two are siblings under `ChatView`, so there is no ancestor to thread an event through —
+   * which is the case this module exists for, exactly as it is for the Copilot list.
+   *
+   * A **flag**, unlike `workspaceSettingsId`: the dialog is about the conversation on screen
+   * (`store.activeSession`), so there is no second object to name. The sidebar row's button
+   * selects that conversation first, which is what makes them the same object.
+   */
+  sessionSettingsOpen: false,
+  /**
    * Which slice the source browser opens on, when it opens.
    *
    * The browser has two front doors and one component: the workspace home opens it as the
@@ -151,6 +164,18 @@ export function closeSources(): void {
 }
 
 /**
+ * The conversation's parameters — the dialog the composer, the topbar and a sidebar row all
+ * open. Nothing is passed: it reads whichever conversation is on screen.
+ */
+export function openSessionSettings(): void {
+  uiState.sessionSettingsOpen = true;
+}
+
+export function closeSessionSettings(): void {
+  uiState.sessionSettingsOpen = false;
+}
+
+/**
  * The sidebar drawer, on a compact viewport. Not persisted and not the same flag as
  * `sidebarCollapsed`: one is "the panel covers the pane right now", the other is a preference.
  */
@@ -229,10 +254,11 @@ export const sidebarRail = computed(
 export function showLogin(): void {
   uiState.view = "login";
   closeDrawer();
-  // Both drawers belong to the pane being torn down, and all three dialogs to an account that
-  // is leaving, so all five go with them.
+  // Both drawers and both of the dialogs that belong to a *pane* go with the pane being torn
+  // down. Leaving one open would paint it over the sign-in screen.
   closeWidgetDrawer();
   closeWorkspaceSettings();
+  closeSessionSettings();
 }
 
 /**
@@ -248,6 +274,7 @@ export function showPasswordChange(): void {
   closeDrawer();
   closeWidgetDrawer();
   closeWorkspaceSettings();
+  closeSessionSettings();
 }
 
 /**
@@ -259,6 +286,10 @@ export function showWorkspaceHome(): void {
   uiState.view = "home";
   closeDrawer();
   closeWidgetDrawer();
+  // The session parameters are a property of the conversation being left, and the dialog has
+  // no conversation to show on the way out. Workspace settings deliberately stay: that one is
+  // opened *from* a card on this page.
+  closeSessionSettings();
 }
 
 /** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */
@@ -278,6 +309,7 @@ export function showAccount(): void {
   uiState.view = "account";
   closeDrawer();
   closeWidgetDrawer();
+  closeSessionSettings();
 }
 
 /**
@@ -295,4 +327,5 @@ export function showAdmin(section: AdminSection = "users"): void {
   uiState.view = "admin";
   closeDrawer();
   closeWidgetDrawer();
+  closeSessionSettings();
 }

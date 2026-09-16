@@ -79,13 +79,14 @@ seeded", or every boot would resurrect entries the user deliberately deleted.
 snake_case, mapped to camelCase objects in code:
 
 - `users` — id, username (unique, `COLLATE NOCASE`), slug (unique), created_at
-- `workspaces` — id, user_id (FK, CASCADE), name, slug, dir_path, created_at;
-  `UNIQUE (user_id, slug)` — the slug is only unique among one account's workspaces
+- `workspaces` — id, user_id (FK, CASCADE), name, slug, dir_path, settings (JSON),
+  description, created_at; `UNIQUE (user_id, slug)` — the slug is only unique among one
+  account's workspaces
 - `copilots` — id, user_id (FK, CASCADE, **nullable**), name, description,
   system_prompt, tools (JSON), settings (JSON), visibility (`private` | `public`),
   timestamps
 - `sessions` — id, workspace_id, copilot_id (FK, `SET NULL`, nullable), copilot_name,
-  system_prompt, tools (JSON), title, title_source, settings (JSON), timestamps
+  system_prompt, tools (JSON), title, title_source, settings (JSON), description, timestamps
 - `messages` — id, session_id, role, content, reasoning, tool_calls (JSON),
   attachments (JSON), usage (JSON), created_at
 - `providers` — id, name, base_url, api_key, sort_order, timestamps
@@ -633,6 +634,12 @@ produces a usable name. Either way the title is saved and a `title` event is emi
 between `message_done` and `done`, and neither path can turn a successful chat turn into
 an error.
 
+The name is then run through `uniqueSessionTitle` (`sessionTitles.ts`) against its siblings in
+the workspace, which is why the answer that is *stored* may carry a `(2)` the model never
+wrote — and why the `title` event carries the numbered one, so the sidebar and the database
+never disagree. Creation and `PATCH /api/sessions/:id` go through the same call; see
+`docs/configuration.md` → Conversation titles for the rule.
+
 The titler does not rely on chain-of-thought at all, streaming or not.
 
 **History replay.** `buildHistoryMessages()` rebuilds prior turns, re-attaching
@@ -913,10 +920,11 @@ attachments, providers and app defaults.
 | `POST /api/providers/:id/models`, `DELETE /api/providers/:providerId/models/:modelId` | model CRUD |
 | `GET /api/copilots` | this account's Copilots plus every public one |
 | `POST /api/copilots`, `PUT/DELETE /api/copilots/:id` | Copilot CRUD — owner-only; `visibility` on create and update, and 404 for someone else's |
-| `POST /api/workspaces/:workspaceId/sessions` | create a conversation (copies the Copilot's whole definition in) |
+| `POST /api/workspaces/:workspaceId/sessions` | create a conversation (copies the Copilot's whole definition in); the title is numbered against its siblings |
+| `PATCH /api/workspaces/:id` | rename, describe, and/or replace the workspace's own defaults — each field independent |
 | `GET /api/workspaces/:id/files?path=` | one directory level of the workspace, for the sidebar's file tree |
 | `GET /api/workspaces/:id/files/content?path=` | a file's metadata, and its text when it is text |
-| `PATCH /api/sessions/:id` | rename, update per-conversation settings, or re-persona it (`systemPrompt`, `tools`); a title also flips `titleSource` to `user` |
+| `PATCH /api/sessions/:id` | rename (numbered against its siblings), describe, update per-conversation settings, or re-persona it (`systemPrompt`, `tools`); a title also flips `titleSource` to `user` |
 | `POST /api/sessions/:id/sources` | upload (base64 JSON); schedules parsing |
 | `GET /api/sessions/:id/sources` | what this conversation can read, with parse state |
 | `GET /api/sessions/:sessionId/attachments/:attachmentId` | serve the bytes back |
@@ -1265,6 +1273,17 @@ the list, and no widget event to subscribe to, since every change to it is a dec
 itself made. Its row carries `adopted`, which is the only thing that survives the next pass. That
 is also why it is not in the `"study"` group: the group's rule is "live on install" and this one
 waits to be asked (see [widgets.md](widgets.md#an-on-demand-widget-with-no-tools-the-insight-widget)).
+
+**A panel over the source registry shows the conversation's material, not the model's whitelist.**
+The sources panel (`id: "sources"`) reads `GET /api/sources?sessionId=…` — held by this
+conversation *or* linked into it — rather than `GET /api/sessions/:id/sources`, which is the
+session ∪ workspace union and is exactly what `read_document` is bound to. The two are one route
+apart and answer different questions: what a panel should show is what the conversation is
+working from, and the whitelist would put a workspace's whole corpus beside the three files it is
+about. It filters by category **client-side**, from the rows it already has, because one
+conversation's list is small and the option list is the one thing the server cannot answer in the
+same request — see [sources.md](sources.md) and
+[widgets.md](widgets.md#a-viewer-over-the-registry-the-sources-widget).
 
 A widget declares which levels it accepts — `workspace`, `session` — and only those two exist. A
 **Copilot is a third place to tick a box, not a third scope**: its selection is copied into the

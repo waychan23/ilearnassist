@@ -214,3 +214,52 @@ test("deleting a workspace asks first, and cancelling changes nothing", async ({
   await page.getByTestId("confirm-accept").click();
   await expect(card).toHaveCount(0);
 });
+
+test("a workspace's name and description are edited in its settings dialog", async ({ page }) => {
+  /*
+   * The second door to the name. The card's inline rename is still the shortcut for someone
+   * looking at the list; this is where someone who opened the settings expects to find it, and
+   * the description has no other home at all.
+   *
+   * Committed on blur rather than behind a Save button, because this dialog has no Save — its
+   * write location applies on change and its widget toggles apply on click. The assertion after
+   * the reload is what makes that a claim about the server.
+   *
+   * **Two overlapping commits, deliberately.** Pressing Enter on the name and then typing the
+   * description is the ordinary way to fill this form in, and it puts two writes in flight at
+   * once — the second blurring the first. Their replies are whole rows, so the older one lands
+   * carrying a description that predates what was typed, and writing it back wipes the field.
+   * The sequence is what this test is really for; both asserts failed against a version that
+   * assigned a reply's fields unconditionally.
+   */
+  await page.goto("/");
+  const name = uniqueName("Described");
+  const id = await createWorkspace(page, name);
+  const card = cardById(page, id);
+  const renamed = `${name} (v2)`;
+
+  await card.getByTestId("workspace-settings-open").click();
+  const dialog = page.locator("body > .modal-overlay");
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByTestId("workspace-name").fill(renamed);
+  await dialog.getByTestId("workspace-name").press("Enter");
+  // Losing focus is what commits it — the dialog has no Save button to press.
+  await dialog.getByTestId("workspace-description").fill("线性代数的习题与讲义");
+  await dialog.getByTestId("workspace-description").blur();
+  await page.getByTestId("workspace-settings-done").click();
+
+  // The card behind the dialog already carries the new name, and the description is on it —
+  // a field nobody can see is a field nobody writes.
+  await expect(card.getByTestId("workspace-open")).toHaveText(renamed);
+  await expect(card.getByTestId("workspace-description-text")).toHaveText("线性代数的习题与讲义");
+
+  await page.reload();
+  await expect(card.getByTestId("workspace-open")).toHaveText(renamed);
+  await expect(card.getByTestId("workspace-description-text")).toHaveText("线性代数的习题与讲义");
+
+  // Reopening shows the stored values, not the ones the form was opened with.
+  await card.getByTestId("workspace-settings-open").click();
+  await expect(dialog.getByTestId("workspace-name")).toHaveValue(renamed);
+  await expect(dialog.getByTestId("workspace-description")).toHaveValue("线性代数的习题与讲义");
+});

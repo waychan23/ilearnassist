@@ -8,8 +8,7 @@ import { activeMention, insertMention, type ActiveMention } from "../utils/menti
 import type { Source } from "../api/types";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
-import SessionSettingsDialog from "./dialogs/SessionSettingsDialog.vue";
-import { showAdmin } from "../composables/ui";
+import { openSessionSettings, showAdmin } from "../composables/ui";
 import { autosizeTextarea } from "../utils/autosize";
 import Icon from "./Icon.vue";
 
@@ -19,7 +18,6 @@ const text = ref("");
 const uploading = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 const textarea = ref<HTMLTextAreaElement | null>(null);
-const showSessionSettings = ref(false);
 
 const canSend = computed(
   () =>
@@ -270,9 +268,9 @@ function onInput() {
             <button
               class="icon-btn params-btn"
               data-testid="open-session-settings"
-              :title="t('composer.settings')"
-              :aria-label="t('composer.settings')"
-              @click="showSessionSettings = true"
+              :title="t('sessionSettings.open')"
+              :aria-label="t('sessionSettings.open')"
+              @click="openSessionSettings()"
             >
               <Icon name="sliders" />
             </button>
@@ -305,8 +303,6 @@ function onInput() {
         />
       </div>
     </div>
-
-    <SessionSettingsDialog v-if="showSessionSettings" @close="showSessionSettings = false" />
   </div>
 </template>
 

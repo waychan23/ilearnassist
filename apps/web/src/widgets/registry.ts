@@ -9,6 +9,7 @@ import ThreadWidget from "./ThreadWidget.vue";
 import NotesWidget from "./NotesWidget.vue";
 import DiagramWidget from "./DiagramWidget.vue";
 import InsightWidget from "./InsightWidget.vue";
+import SourcesWidget from "./SourcesWidget.vue";
 import { claimNotes, releaseNotes } from "../composables/notes";
 
 /**
@@ -70,6 +71,8 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
       return t("widgets.diagram.name");
     case "insight":
       return t("widgets.insight.name");
+    case "sources":
+      return t("widgets.sources.name");
   }
 }
 
@@ -92,6 +95,8 @@ export function widgetHint(id: WidgetId, t: Translate): string {
       return t("widgets.diagram.hint");
     case "insight":
       return t("widgets.insight.hint");
+    case "sources":
+      return t("widgets.sources.hint");
   }
 }
 
@@ -202,4 +207,11 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
    * group (see `docs/widgets.md`).
    */
   insight: { component: InsightWidget },
+  /*
+   * A viewer like the diagram panel, and the same two absences for the same two reasons: no
+   * `onActive` (it claims no host capability and needs no cooperation for as long as it is
+   * installed), and no install hook (there is nothing to set up beyond the listing it loads
+   * anyway — and loading it is not a decision the install makes for the user).
+   */
+  sources: { component: SourcesWidget },
 };

@@ -15,9 +15,11 @@ import CopilotsDialog from "./components/dialogs/CopilotsDialog.vue";
 import SourceBrowser from "./components/dialogs/SourceBrowser.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
+import SessionSettingsDialog from "./components/dialogs/SessionSettingsDialog.vue";
 import {
   closeCopilots,
   closeDrawer,
+  closeSessionSettings,
   closeSources,
   closeWidgetDrawer,
   sidebarRail,
@@ -216,6 +218,13 @@ watch(
       v-if="uiState.workspaceSettingsId"
       :key="uiState.workspaceSettingsId"
     />
+    <!--
+      The conversation's parameters, hosted here rather than in the composer that used to own
+      them: three controls open it now — the composer's button, the topbar's, and the settings
+      button on a row of the conversation list — and the last two are siblings with no common
+      ancestor to pass an event through.
+    -->
+    <SessionSettingsDialog v-if="uiState.sessionSettingsOpen" @close="closeSessionSettings" />
     <!--
       The source browser, from either front door. `uiState.sourcesScope` is what the caller
       decided: the home page opens it over the whole account, a conversation opens it already

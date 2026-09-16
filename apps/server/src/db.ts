@@ -131,6 +131,8 @@ interface WorkspaceRow {
   dir_path: string;
   /** The workspace's own settings as stored JSON, or null for "never set". */
   settings: string | null;
+  /** The account's own note about this workspace. Always written; empty means none. */
+  description: string;
   created_at: string;
   /**
    * Present only on rows that came back from the stats query. `getWorkspace` and
@@ -483,6 +485,8 @@ interface SessionRow {
   title: string;
   title_source: string | null;
   settings: string | null;
+  /** The user's own note about this conversation. Always written; empty means none. */
+  description: string;
   created_at: string;
   updated_at: string;
 }
@@ -583,11 +587,15 @@ export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
 /**
  * The title a conversation gets at creation, before the auto-titler replaces it.
  *
- * A constant because two places have to agree on it: the create route, which writes it, and
- * anything asking whether a title is still the placeholder rather than something a person
- * typed. Spelled twice, the two would drift and a rename would start looking like a default.
+ * **A fallback, not the name a user sees.** The web client sends `session.fallbackTitle` — the
+ * same placeholder, in the language the account is reading — and this is what a caller that
+ * names nothing gets: the CLI, a script, a client of another language. It stays English for the
+ * reason every server-side string does, which is that the server has no reader to ask.
+ *
+ * A constant rather than a literal in the route because the tests and the route have to agree
+ * on it; a title spelled twice would drift into a rename that looks like a default.
  */
-export const DEFAULT_SESSION_TITLE = "New conversation";
+export const DEFAULT_SESSION_TITLE = "(Untitled) Session";
 
 /**
  * Which lifetime a row in `auth_tokens` was issued for.
@@ -734,6 +742,9 @@ const mapWorkspace = (r: WorkspaceRow): Workspace => ({
   // meanings without the column having to say which one it now holds.
   workdirPath: workspaceWorkdir(r.dir_path),
   settings: r.settings ? safeParseObject<WorkspaceSettings>(r.settings) : undefined,
+  // `?? ""` for a row read before the column existed, which is the same claim an empty one
+  // makes — see the `ensureColumn` comment for why this field is not nullable.
+  description: r.description ?? "",
   createdAt: r.created_at,
   sessionCount: r.session_count ?? 0,
   lastActivityAt: r.last_activity_at ?? null,
@@ -798,6 +809,7 @@ const mapSession = (r: SessionRow): Session => ({
   title: r.title,
   titleSource: r.title_source === "user" ? "user" : "auto",
   settings: safeParseObject<SessionSettings>(r.settings),
+  description: r.description ?? "",
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -1240,10 +1252,23 @@ export interface AppDb {
     dirPath: string;
   }): Workspace;
   /**
-   * Rename only. The directory on disk keeps the slug it was created with — a rename that
-   * moved files would break every path the agent has already written into a conversation.
+   * The two text fields a workspace carries, either or both.
+   *
+   * One statement for a rename and a description because they are one resource's `PATCH`, and
+   * because they are the same kind of write: a `COALESCE` per column, where a field the caller
+   * did not mention keeps the row's own value and an empty string is a value. Splitting them
+   * into a `rename…` and a `set…Description` would put the "which one did I send" question at
+   * the route, which is exactly the shape this avoids.
+   *
+   * Renaming is display-only. The directory on disk keeps the slug it was created with — a
+   * rename that moved files would break every path the agent has already written into a
+   * conversation — and the description was never a path at all.
    */
-  renameWorkspaceForUser(id: string, userId: string, name: string): Workspace | undefined;
+  patchWorkspaceForUser(
+    id: string,
+    userId: string,
+    patch: { name?: string; description?: string }
+  ): Workspace | undefined;
   /**
    * Replace the workspace's settings.
    *
@@ -1370,12 +1395,16 @@ export interface AppDb {
    * independently of the Copilot it was copied from — that is the point of snapshotting rather
    * than referencing. Absent `allTools` leaves the stored flag alone; present, it wins over
    * `tools` and clears the stored list.
+   *
+   * A `description` is neither of those things: it changes no behaviour, so it is a plain
+   * assignment with an empty string meaning "cleared" and `undefined` meaning "not mentioned".
    */
   updateSessionForUser(
     id: string,
     userId: string,
     input: {
       title?: string;
+      description?: string;
       settings?: SessionSettings;
       systemPrompt?: string;
       allTools?: boolean;
@@ -1942,6 +1971,18 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "workspaces", "settings", "settings TEXT");
 
     /*
+     * The two descriptions, added together because they are one feature: a workspace and a
+     * conversation each gained a note the account writes for itself.
+     *
+     * `NOT NULL DEFAULT ''` rather than nullable, unlike `settings` right above — and the
+     * difference is what the column means. "Nobody chose" and "chose nothing" are genuinely
+     * different claims about a *setting*, which changes behaviour; a description changes no
+     * behaviour, so an empty one and an absent one would be two spellings of the same fact.
+     */
+    ensureColumn(db, "workspaces", "description", "description TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "sessions", "description", "description TEXT NOT NULL DEFAULT ''");
+
+    /*
      * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
      * that gives Copilots an owner.
      *
@@ -2289,8 +2330,15 @@ export function createDb(dbPath: string): AppDb {
     `INSERT INTO workspaces (id, user_id, name, slug, dir_path, created_at)
      VALUES (@id, @userId, @name, @slug, @dirPath, @createdAt)`
   );
-  const stmtRenameWorkspaceForUser = db.prepare(
-    "UPDATE workspaces SET name = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  /*
+   * `COALESCE`, so "not mentioned" and "set to the empty string" stay different answers — the
+   * `stmtUpdateSourcePlace` shape, and the reason the route can send either field or both.
+   */
+  const stmtPatchWorkspaceForUser = db.prepare(
+    `UPDATE workspaces
+        SET name = COALESCE(@name, name),
+            description = COALESCE(@description, description)
+      WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
   );
   const stmtSetWorkspaceSettingsForUser = db.prepare(
     "UPDATE workspaces SET settings = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
@@ -2373,7 +2421,7 @@ export function createDb(dbPath: string): AppDb {
   const stmtUpdateSessionForUser = db.prepare(
     `UPDATE sessions SET title = @title, title_source = @titleSource, settings = @settings,
        system_prompt = @systemPrompt, all_tools = @allTools, tools = @tools,
-       updated_at = @updatedAt
+       description = @description, updated_at = @updatedAt
       WHERE id = @id AND deleted_at IS NULL
         AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = @userId AND deleted_at IS NULL)`
   );
@@ -3156,8 +3204,13 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetWorkspaceForUser.get(input.id, input.userId) as WorkspaceRow;
       return mapWorkspace(r);
     },
-    renameWorkspaceForUser(id, userId, name) {
-      stmtRenameWorkspaceForUser.run(name, id, userId);
+    patchWorkspaceForUser(id, userId, patch) {
+      stmtPatchWorkspaceForUser.run({
+        id,
+        userId,
+        name: patch.name ?? null,
+        description: patch.description ?? null,
+      });
       const r = stmtGetWorkspaceWithStatsForUser.get(id, userId) as WorkspaceRow | undefined;
       return r ? mapWorkspace(r) : undefined;
     },
@@ -3275,6 +3328,9 @@ export function createDb(dbPath: string): AppDb {
         titleSource: renamed ? "user" : existing.title_source ?? "auto",
         settings: JSON.stringify(settings),
         systemPrompt: input.systemPrompt ?? existing.system_prompt ?? "",
+        // `?? ""` on the fallback rather than on the input: a row written before the column
+        // existed has none, and `??` here would also swallow a deliberate empty string.
+        description: input.description ?? existing.description ?? "",
         ...stored,
         updatedAt: now(),
       });

@@ -39,6 +39,91 @@ const error = ref<string | null>(null);
  */
 const settings = ref<WorkspaceSettings | undefined>(undefined);
 
+/**
+ * The workspace's name and description, fetched with the settings above and for the same reason.
+ *
+ * Committed as each loses focus rather than behind a Save button, because this dialog has no
+ * Save button: its write location applies on change and its widgets apply on click, so a text
+ * field that waited for a button would be the only control here that did. The session-parameters
+ * dialog does the opposite and is right to — it *does* have a Save — which is the whole of why
+ * the two differ.
+ */
+const name = ref("");
+const description = ref("");
+
+/**
+ * The newest commit's sequence number — see `commitIdentity` for what goes wrong without it.
+ *
+ * The codebase's usual shape for "two of these can be in flight at once" (`filePreviewSeq` in
+ * the store, `loadRows`/`loadScope` in the source browser). It is not defensive here; the two
+ * writes overlap on an ordinary path.
+ */
+let identitySeq = 0;
+
+async function commitIdentity(): Promise<void> {
+  const id = uiState.workspaceSettingsId;
+  if (!id) return;
+  const stored = store.workspaces.find((w) => w.id === id);
+  const nextName = name.value.trim();
+  const patch: { name?: string; description?: string } = {};
+  // A blank name is put back rather than sent: the route refuses it with `NAME_REQUIRED`, and a
+  // workspace with no name is not a state this dialog should be able to leave behind.
+  if (nextName && nextName !== stored?.name) patch.name = nextName;
+  if (description.value !== stored?.description) patch.description = description.value;
+  if (!("name" in patch) && !("description" in patch)) {
+    name.value = stored?.name ?? name.value;
+    return;
+  }
+
+  /*
+   * Two fields, one write each, and they overlap by construction: pressing Enter commits the
+   * name, and clicking into the description blurs the name field and commits it *again*. Each
+   * reply replaces the store's whole row, so without this the older reply can land last and put
+   * the values it knew about back — a description that reads as saved and is not.
+   *
+   * Only the newest reply is applied. That is the right one to keep rather than merely the last
+   * to arrive: it was computed from the newest state of the two fields, and the server has by
+   * then applied every write before it.
+   */
+  // What the fields held when this write went out, so the reply can be told apart from an edit
+  // made while it was in flight — see the write-back below.
+  const sentName = patch.name ?? null;
+  const sentDescription = "description" in patch ? description.value : null;
+
+  const seq = ++identitySeq;
+  try {
+    const updated = await api.updateWorkspace(id, patch);
+    if (seq !== identitySeq) return;
+    const at = store.workspaces.findIndex((w) => w.id === id);
+    if (at !== -1) store.workspaces[at] = updated;
+    /*
+     * Written back only where the field still holds what was sent.
+     *
+     * The reply describes the row as the server saw it at the moment of *this* write, and
+     * `commitIdentity` is called on every blur — so a name committed on one blur and a
+     * description typed before the reply arrives is exactly the ordinary path. Assigning
+     * `updated.description` unconditionally is what wipes the typed text: the reply was
+     * computed before it existed. The same mistake as seeding these fields from a late
+     * fetch, one layer down, and it is why both are guarded rather than assigned.
+     */
+    if (sentName !== null && name.value.trim() === sentName) name.value = updated.name;
+    if (sentDescription !== null && description.value === sentDescription) {
+      description.value = updated.description;
+    }
+    error.value = null;
+  } catch (e) {
+    if (seq !== identitySeq) return;
+    // Put the editor back on the stored values, on the same narrowing: leaving a rejected name
+    // on screen reads as one that was saved, but only the field that was actually sent is this
+    // dialog's to put back.
+    if (sentName !== null && name.value.trim() === sentName) name.value = stored?.name ?? "";
+    if (sentDescription !== null && description.value === sentDescription) {
+      description.value = stored?.description ?? "";
+    }
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 async function load(): Promise<void> {
   const id = uiState.workspaceSettingsId;
   if (!id) return;
@@ -50,6 +135,22 @@ async function load(): Promise<void> {
     error.value = e instanceof Error ? e.message : String(e);
   }
 }
+
+/**
+ * Seed the two text fields **synchronously**, before `load()`'s first round trip.
+ *
+ * From `store.workspaces` rather than from the fetch `load()` makes, and the ordering is the
+ * point rather than a shortcut: a field written when an off-screen reply lands overwrites
+ * whatever was typed in the meantime, so a dialog whose edit box refills itself with the old
+ * name is exactly what fetching these would produce. The store's rows are the same ones that
+ * fetch returns — they are what the card behind this dialog renders — so the fetch has nothing
+ * to add and a race to lose.
+ */
+onMounted(() => {
+  const found = store.workspaces.find((w) => w.id === uiState.workspaceSettingsId);
+  name.value = found?.name ?? "";
+  description.value = found?.description ?? "";
+});
 
 onMounted(load);
 
@@ -140,6 +241,36 @@ function isActiveWorkspace(): boolean {
 
           <div v-if="error" class="widget-error">
             <span>{{ error }}</span>
+          </div>
+
+          <!--
+            What the workspace is called and what it is about, above the settings it hands down.
+            The name is the same one the card on the home page renames inline — two doors to one
+            value, which is right here: the card is the shortcut for someone looking at the list,
+            and this is where someone who opened the settings expects to find it.
+          -->
+          <div class="field">
+            <label>{{ t("widgets.workspaceSettings.name") }}</label>
+            <input
+              v-model="name"
+              class="input"
+              data-testid="workspace-name"
+              :placeholder="t('widgets.workspaceSettings.namePlaceholder')"
+              @keydown.enter.prevent="commitIdentity"
+              @blur="commitIdentity"
+            />
+          </div>
+
+          <div class="field">
+            <label>{{ t("widgets.workspaceSettings.description") }}</label>
+            <textarea
+              v-model="description"
+              class="textarea"
+              data-testid="workspace-description"
+              :placeholder="t('widgets.workspaceSettings.descriptionPlaceholder')"
+              @blur="commitIdentity"
+            ></textarea>
+            <div class="hint">{{ t("widgets.workspaceSettings.descriptionHint") }}</div>
           </div>
 
           <!--

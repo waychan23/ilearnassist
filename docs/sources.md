@@ -265,6 +265,15 @@ partial failure names the file it failed on. The link tab's URL is fetched serve
 sentence, and the page carries **no summary** — a summary is a reading of a page by something that
 understood it, and nothing has read this one yet.
 
+**The panel is the same registry, narrowed to one conversation.** `SourcesWidget.vue` reads
+`GET /api/sources?sessionId=…` — held by the conversation or linked into it — and is deliberately
+*not* built on `/api/sessions/:id/sources`, which is the session ∪ workspace union and is the
+model's readable whitelist rather than a description of what the conversation is working from. It
+filters by category client-side, because one conversation's list is small enough that the option
+list can come from the rows already fetched, and because that keeps the bounded
+`reconcileFilesystem` walk off a control the user may press repeatedly. It is a viewer: no
+folders, no rename, no delete. See `docs/widgets.md`.
+
 The tree view groups by workspace, then by the conversation that holds a row, then by its path.
 That shape is not decoration: two conversations may each hold `notes/a.md`, and a tree that
 grouped by path alone would show one line for two different files. `utils/sourceTree.ts` holds the

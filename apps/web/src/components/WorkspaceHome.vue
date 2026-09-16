@@ -201,6 +201,20 @@ function activityLabel(workspace: Workspace): string {
               {{ w.name }}
             </button>
 
+            <!--
+              The description, when there is one, above the path. The path is the card's least
+              interesting line and the only one that is always there, so the description earns
+              the row above it rather than another line below.
+            -->
+            <p
+              v-if="w.description"
+              class="ws-card-desc truncate"
+              data-testid="workspace-description-text"
+              :title="w.description"
+            >
+              {{ w.description }}
+            </p>
+
             <p class="ws-card-path truncate" :title="w.dirPath">{{ w.dirPath }}</p>
 
             <div class="ws-card-foot">
