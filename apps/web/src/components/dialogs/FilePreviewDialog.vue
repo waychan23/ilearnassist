@@ -245,83 +245,102 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
               <template v-if="meta"><span> · </span><span>{{ t("files.preview.size") }} {{ meta }}</span></template>
             </span>
           </div>
-          <!-- Markdown and diagrams: the two formats with something to look at *and*
-               something that was written. A segmented control rather than two buttons,
-               because it is one choice — see `.segmented` in
-               the sheet for why the shared track is the whole point. `aria-pressed` is both
-               what a reader announces and what the sheet paints the selected segment from. -->
-          <div
-            v-if="hasTwoViews"
-            class="segmented"
-            role="group"
-            :aria-label="t('files.preview.viewLabel')"
-          >
-            <button
-              class="segment"
-              data-testid="file-preview-rendered"
-              :aria-pressed="viewMode === 'rendered'"
-              @click="viewMode = 'rendered'"
+          <!--
+            Two groups at the right-hand end, and the *split* is the point.
+
+            The head is a plain `space-between` row, so six siblings would have spread themselves
+            evenly across it — the file's name, then five controls at no particular distances from
+            each other. Grouping them is what makes the row read as the convention it is: the name
+            on the left, and everything you can *do* to the right of it.
+
+            What the two groups separate is **what they act on**. The first is the file — what you
+            are looking at, and what you can take out of it; the second is the box holding it,
+            which is what a window's controls have always been. That is why the maximize button
+            belongs with the close button rather than with the copy button: they are both about
+            the dialog, and only one of them is about the document.
+          -->
+          <div class="file-actions">
+            <!-- Markdown and diagrams: the two formats with something to look at *and*
+                 something that was written. A segmented control rather than two buttons,
+                 because it is one choice — see `.segmented` in
+                 the sheet for why the shared track is the whole point. `aria-pressed` is both
+                 what a reader announces and what the sheet paints the selected segment from. -->
+            <div
+              v-if="hasTwoViews"
+              class="segmented"
+              role="group"
+              :aria-label="t('files.preview.viewLabel')"
             >
-              {{ t("files.preview.rendered") }}
-            </button>
+              <button
+                class="segment"
+                data-testid="file-preview-rendered"
+                :aria-pressed="viewMode === 'rendered'"
+                @click="viewMode = 'rendered'"
+              >
+                {{ t("files.preview.rendered") }}
+              </button>
+              <button
+                class="segment"
+                data-testid="file-preview-source"
+                :aria-pressed="viewMode === 'source'"
+                @click="viewMode = 'source'"
+              >
+                {{ t("files.preview.source") }}
+              </button>
+            </div>
+
+            <!--
+              The whole file, in one press. Only for the kinds that *are* text: a PDF's bytes are
+              not something the clipboard should receive, and the viewer for those has its own
+              controls. The tooltip changes when the server sent only the head of the file, which
+              is the one case where "copy" would otherwise overstate what was copied — the note
+              under the text says it too, but the button is what travels to the clipboard.
+            -->
+            <CopyButton
+              v-if="content?.text !== null && content?.text !== undefined"
+              :value="content.text"
+              :hint="content.truncated ? t('sources.copyFilePartial') : t('sources.copyFile')"
+              testid="file-preview-copy"
+            />
+
             <button
-              class="segment"
-              data-testid="file-preview-source"
-              :aria-pressed="viewMode === 'source'"
-              @click="viewMode = 'source'"
+              v-if="pageUrl"
+              class="icon-btn"
+              data-testid="file-preview-browser"
+              :title="t('sources.openInBrowser')"
+              :aria-label="t('sources.openInBrowser')"
+              @click="openPage"
             >
-              {{ t("files.preview.source") }}
+              <Icon name="link" />
             </button>
           </div>
 
-          <!--
-            The whole file, in one press. Only for the kinds that *are* text: a PDF's bytes are
-            not something the clipboard should receive, and the viewer for those has its own
-            controls. The tooltip changes when the server sent only the head of the file, which
-            is the one case where "copy" would otherwise overstate what was copied — the note
-            under the text says it too, but the button is what travels to the clipboard.
-          -->
-          <CopyButton
-            v-if="content?.text !== null && content?.text !== undefined"
-            :value="content.text"
-            :hint="content.truncated ? t('sources.copyFilePartial') : t('sources.copyFile')"
-            testid="file-preview-copy"
-          />
+          <!-- The window's own two: growing the box, and closing it. Maximise first, close
+               last — the order a window's controls have had for forty years, and the one that
+               keeps the dismiss control in the corner where the pointer already is. -->
+          <div class="window-actions">
+            <button
+              v-if="canMaximize"
+              class="icon-btn"
+              data-testid="file-preview-maximize"
+              :aria-pressed="maximized"
+              :title="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
+              :aria-label="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
+              @click="maximized = !maximized"
+            >
+              <Icon :name="maximized ? 'collapse' : 'expand'" />
+            </button>
 
-          <!-- The window control, beside the close button rather than among the file's own
-               controls: it is about the box, not about the bytes in it. -->
-          <button
-            v-if="canMaximize"
-            class="icon-btn"
-            data-testid="file-preview-maximize"
-            :aria-pressed="maximized"
-            :title="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
-            :aria-label="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
-            @click="maximized = !maximized"
-          >
-            <Icon :name="maximized ? 'collapse' : 'expand'" />
-          </button>
-
-          <button
-            v-if="pageUrl"
-            class="icon-btn"
-            data-testid="file-preview-browser"
-            :title="t('sources.openInBrowser')"
-            :aria-label="t('sources.openInBrowser')"
-            @click="openPage"
-          >
-            <Icon name="link" />
-          </button>
-
-          <button
-            class="icon-btn"
-            data-testid="file-preview-close"
-            :title="t('common.close')"
-            :aria-label="t('common.close')"
-            @click="store.closeFile()"
-          >
-            <Icon name="close" />
-          </button>
+            <button
+              class="icon-btn"
+              data-testid="file-preview-close"
+              :title="t('common.close')"
+              :aria-label="t('common.close')"
+              @click="store.closeFile()"
+            >
+              <Icon name="close" />
+            </button>
+          </div>
         </div>
 
         <div
@@ -435,6 +454,39 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 .file-title h3 {
   margin: 0;
 }
+/*
+ * The two groups of controls, at the right-hand end.
+ *
+ * `margin-left: auto` on the first rather than relying on the head's `justify-content:
+ * space-between`: that rule is the global sheet's and is shared by every dialog, and it would
+ * spread three children evenly — title, then a group in the middle, then another at the right.
+ * Pinning the first group here rather than loosening the shared rule is also what keeps every
+ * other dialog's head untouched.
+ *
+ * `flex: none` so neither group gives up room: the title is the part that can afford to be
+ * truncated (`min-width: 0` and `.truncate` above), and a squeezed copy button would lose its
+ * label before the file's name lost a character.
+ */
+.file-actions,
+.window-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.file-actions {
+  gap: var(--space-4);
+  margin-left: auto;
+}
+/*
+ * The window's pair, set apart from the file's controls by more than any gap inside either —
+ * which is the whole of what makes them read as two groups rather than one row of five. The
+ * buttons themselves sit closer together than the file's do, because they are a pair in the way
+ * a window's maximise and close have always been.
+ */
+.window-actions {
+  gap: var(--space-2);
+  margin-left: var(--space-8);
+}
 .file-meta {
   display: block;
   color: var(--text-3);
@@ -537,12 +589,18 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
   border: none;
   padding: 0;
 }
-/* Pushed to the end of the dialog's head, beside the close button — a layout nudge that
-   belongs to this dialog, so the shared control stays free of where it happens to sit. */
-.segmented {
-  margin-left: auto;
-  margin-right: var(--space-4);
-  flex-shrink: 0;
+/*
+ * And the children of both hold theirs, for the reason one level up again — a constricted flex
+ * line would clip the segmented control's labels and the copy button's icon before it would touch
+ * the title, and the title is the part that can afford to truncate.
+ *
+ * This replaced a `margin-left: auto; margin-right: var(--space-4)` nudge on `.segmented` alone —
+ * its job was pinning that one control to the right-hand end, which the groups now do for all of
+ * them, and its margin was the odd 16px gap in an otherwise even row.
+ */
+.file-actions > *,
+.window-actions > * {
+  flex: none;
 }
 .file-note {
   margin: 0;

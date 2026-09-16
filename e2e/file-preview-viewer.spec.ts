@@ -39,6 +39,9 @@ async function seedWorkspace(request: APIRequestContext, name: string): Promise<
   // are already known to be a PDF that pdfjs will parse.
   writeFileSync(join(workdirPath, "doc.pdf"), buildPdf(["Viewer fixture"]));
   writeFileSync(join(workdirPath, "data.bin"), Buffer.from([0x00, 0x01, 0x02, 0x89, 0x50]));
+  // The richest header: a Markdown file is the only kind that carries the view switch *and* a
+  // copy button, so it is the one the layout case below wants.
+  writeFileSync(join(workdirPath, "notes.md"), "# 标题\n\n正文\n");
 }
 
 async function openFilesTab(page: Page): Promise<void> {
@@ -280,4 +283,88 @@ test("the preview can be maximised, and a new file opens at its normal size", as
   expect(Math.round((await page.locator(".modal").boundingBox())!.width)).toBe(
     Math.round(before.width)
   );
+});
+
+test("the preview header is a title, the file's controls, and the window's", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The header is a plain `space-between` row, so its shape is a property of how many children it
+   * has: with one control per child they spread themselves evenly across it and nothing reads as
+   * belonging together. The requirement is the convention — the file's name on the left, then two
+   * groups at the right: the controls that act on the **file**, and the two that act on the
+   * **box** holding it, with close last.
+   *
+   * Asserted on measured boxes rather than on the markup, because "grouped" is a distance: three
+   * elements in three `div`s that the stylesheet has not spaced are separate in the DOM and one
+   * even row on screen. The measurement that carries it is that the separation *between* the
+   * groups is larger than any gap within either.
+   */
+  await seedWorkspace(request, "预览头部");
+  await page.goto("/");
+  await enterWorkspace(page, "预览头部");
+  await openFilesTab(page);
+  await openFile(page, "notes.md");
+  // Waits for the content, not just the dialog: the view switch and the copy button are both
+  // conditional on the file having been read.
+  await expect(page.getByTestId("file-preview-rendered")).toBeVisible();
+
+  const boxes = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const el = document.querySelector(selector) as HTMLElement | null;
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { left: Math.round(r.left), right: Math.round(r.right) };
+    };
+    const fileControls = [".segmented", '[data-testid="file-preview-copy"]'];
+    const windowControls = [
+      '[data-testid="file-preview-maximize"]',
+      '[data-testid="file-preview-close"]',
+    ];
+    return {
+      title: rect(".file-title"),
+      fileGroup: rect(".file-actions"),
+      windowGroup: rect(".window-actions"),
+      fileControls: fileControls.map(rect),
+      windowControls: windowControls.map(rect),
+      headChildren: (document.querySelector(".modal-head") as HTMLElement).children.length,
+    };
+  });
+
+  const title = boxes.title!;
+  const fileGroup = boxes.fileGroup!;
+  const windowGroup = boxes.windowGroup!;
+  const fileControls = boxes.fileControls.map((c) => c!);
+  const windowControls = boxes.windowControls.map((c) => c!);
+
+  // Three children — the title, and the two groups — is the structure the rest follows from.
+  expect(boxes.headChildren).toBe(3);
+
+  // Both groups are right of the title, the file's group holds the file's controls, and the
+  // window's holds the window's.
+  expect(fileGroup.left).toBeGreaterThan(title.right);
+  expect(fileGroup.left).toBe(fileControls[0]!.left);
+  expect(fileGroup.right).toBe(fileControls[fileControls.length - 1]!.right);
+  expect(windowGroup.left).toBe(windowControls[0]!.left);
+  expect(windowGroup.right).toBe(windowControls[windowControls.length - 1]!.right);
+
+  // Maximise is left of close, and close is the right-most control of all — the corner a window's
+  // dismiss control belongs in.
+  expect(windowControls[0]!.right).toBeLessThanOrEqual(windowControls[1]!.left);
+  expect(Math.max(fileGroup.right, windowGroup.right)).toBe(windowGroup.right);
+
+  /*
+   * And the separation that makes two groups rather than one row: the gap between them is wider
+   * than every gap inside either. `>` rather than a factor, so the exact tokens are the
+   * stylesheet's business and this only holds it to the *ordering* of distances.
+   */
+  const betweenGroups = windowGroup.left - fileGroup.right;
+  const withinFile = fileControls[1]!.left - fileControls[0]!.right;
+  const withinWindow = windowControls[1]!.left - windowControls[0]!.right;
+  expect(betweenGroups).toBeGreaterThan(withinFile);
+  expect(betweenGroups).toBeGreaterThan(withinWindow);
+
+  // The title is nowhere near any of it, which is what keeps the row reading as two things.
+  expect(fileGroup.left - title.right).toBeGreaterThan(betweenGroups);
 });
