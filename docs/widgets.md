@@ -310,7 +310,7 @@ the ordinary one everywhere); two *renderings* would be the footgun. `ila_query`
 tool touch the workspace?", but it is asked on behalf of a switch meaning "this agent does not
 write files" — `ila_query` only reads, and a diagram is half a feature without its file.
 
-### A bound suspending tool with persisted rows: the quiz widget
+### A `required` suspending tool with persisted rows: the quiz widget
 
 The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and the normal
 `ila_review_quiz` — and is the template for a widget whose panel shows data the tools produce:
@@ -342,7 +342,7 @@ for the panel's pure tree/filter builder.
 
 ### An out-of-band post-turn widget: the thread widget
 
-The thread widget (`id: "thread"`) brings **no `boundTools`**: it derives its data with a
+The thread widget (`id: "thread"`) names **no tools at all**: it derives its data with a
 second, small out-of-band model call after every finished turn — the `agent/title.ts` shape,
 not the plan/quiz tool shape. The mechanics, and why:
 
