@@ -72,6 +72,7 @@ import {
   isPlatformAdmin,
   PLAN_MAKE_TOOL_NAME,
   PLAN_TOOL_NAMES,
+  autoInstallWidgetForTool,
   QUIZ_REVIEW_TOOL_NAME,
   widgetGroupsForScope,
   type InteractiveAnswer,
@@ -1255,6 +1256,70 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Re-read the conversation's own widget list — the narrower half of what `selectSession` reads
+   * alongside the messages.
+   *
+   * **The reply is dropped unless the conversation is still the active one**, and that guard is
+   * part of the read rather than of any caller because the failure it prevents is silent: two
+   * reloads of this list can be in flight at once (a tool call's refetch, and the reader opening
+   * another conversation), responses do not arrive in order, and an unguarded assignment would
+   * settle the widget list on the *previous* conversation's answer while `activeSessionId` said
+   * otherwise. The same shape as `filePreviewSeq` and the source browser's `loadRows`.
+   */
+  async function loadSessionWidgets(): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) {
+      sessionWidgets.value = [];
+      return;
+    }
+    const widgets = await api.listSessionWidgets(sessionId);
+    if (activeSessionId.value !== sessionId) return;
+    sessionWidgets.value = widgets.session;
+  }
+
+  /**
+   * An `auto-install` widget's tool was called, so the *server* may have installed that widget in
+   * this conversation — a fact this store cannot see, because the write happened inside the turn.
+   * That is `widgetEvents.ts`'s own definition of when an event is warranted, and the answer here
+   * is a refetch rather than an event: the route that answers "what is installed here" already
+   * exists, and an event would be a second way to learn one fact.
+   *
+   * **Fire-and-forget, and the activation is in the continuation.** Both on purpose. `applyEvent`
+   * is synchronous, so awaiting a round trip inside the `tool_end` arm would stall every
+   * subsequent text delta; and the arm's own `activateWidget` reads `enabledWidgetIds`, which is
+   * precisely the list that is stale until this resolves — so the tab is opened after the fetch,
+   * not before it.
+   *
+   * `open` is the caller's decision rather than this function's, because which of an auto-install
+   * widget's tools should pull the reader's tab out from under them is a per-tool question with an
+   * existing answer: only `ila_make_plan` does. See the `tool_end` arm.
+   */
+  function syncAutoInstalledWidget(toolName: string, options: { open: boolean }): void {
+    const widgetId = autoInstallWidgetForTool(toolName);
+    if (!widgetId) return;
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return;
+
+    // Already here: the install is old news, and the activation can happen now.
+    if (enabledWidgetIds.value.includes(widgetId)) {
+      if (options.open) activateWidget(widgetId);
+      return;
+    }
+
+    void loadSessionWidgets()
+      .then(() => {
+        // The reader may have moved to another conversation during the round trip.
+        if (activeSessionId.value !== sessionId) return;
+        if (options.open && enabledWidgetIds.value.includes(widgetId)) activateWidget(widgetId);
+      })
+      .catch(() => {
+        // A list that could not be re-read is a tab that has not appeared yet. The server holds
+        // the install either way, so the next `selectSession` — or a reload — picks it up, and
+        // the panel's own data already reported any failure of its own.
+      });
+  }
+
+  /**
    * Install or uninstall one widget, then run its lifecycle hook, and answer the new state.
    *
    * The hook runs **after** the write: by the time it is called the user's action has already done
@@ -2113,6 +2178,21 @@ export const useAppStore = defineStore("app", () => {
       case "tool_end": {
         const tc = streaming.value.toolCalls.find((t) => t.id === ev.toolCall.id);
         if (tc) tc.output = ev.toolCall.output;
+        /*
+         * A tool of an `auto-install` widget ran, so the conversation may now hold a widget this
+         * client has not seen — the server wrote the install during the call. Fired for every
+         * `tool_end` and a no-op for an ordinary tool; see `syncAutoInstalledWidget` for why it
+         * is a refetch and why the fetch is not awaited.
+         *
+         * `open` names exactly one tool, and the reason is the same one the plan arm has always
+         * given: `ila_make_plan` covers both a first creation and a later edit, so it should put
+         * the reader on the plan. A read and a progress update are neither, and a diagram is
+         * already visible inline as its own card, so none of those should pull the reader's tab
+         * out from under them.
+         */
+        syncAutoInstalledWidget(ev.toolCall.name, {
+          open: ev.toolCall.name === PLAN_MAKE_TOOL_NAME,
+        });
         // A plan tool commits inside the turn; its widget refetches now rather than at
         // turn end, so the tree moves while the model is still writing its reply. The event
         // deliberately covers all three plan tools — narrowing it to the make tool would stop
@@ -2122,13 +2202,6 @@ export const useAppStore = defineStore("app", () => {
             type: "plan.changed",
             sessionId: activeSessionId.value ?? "",
           });
-          // …and exactly one of the three *opens* the panel on it. `ila_make_plan` covers both
-          // a first creation and a later edit (`PLAN_TOOL_NAMES`' own docblock says so); a read
-          // and a progress update are neither, so neither should pull the reader's tab out from
-          // under them. Distinguished here rather than with a new event, because the name is
-          // already in hand and a second event carrying the same fact would be two ways to
-          // learn one thing.
-          if (ev.toolCall.name === PLAN_MAKE_TOOL_NAME) activateWidget("plan");
         }
         // A grading call commits verdicts mid-turn; the quiz widget refetches now rather
         // than waiting for turn end. `ila_quiz` itself never emits tool_end (it suspends).

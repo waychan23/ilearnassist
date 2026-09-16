@@ -1484,6 +1484,129 @@ describe("the panel's open tab", () => {
   });
 });
 
+describe("auto-install widgets", () => {
+  beforeEach(async () => {
+    localStorage.removeItem("gl-widget-active");
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    widgetPanel.reload();
+  });
+
+  const activeTab = async () =>
+    (await import("../../src/composables/widgetPanel.js")).widgetPanel.activeId.value;
+
+  const state = (id: string, enabled: boolean): WidgetState => ({
+    id: id as WidgetState["id"],
+    scope: "session",
+    enabled,
+  });
+
+  const plan = () => state("plan", true);
+  const diagram = () => state("diagram", true);
+
+  /** A store whose active conversation has exactly these session widgets installed. */
+  async function withWidgets(...session: WidgetState[]) {
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session });
+    await store.selectSession("s1");
+    return store;
+  }
+
+  function toolEnd(name: string) {
+    return {
+      type: "tool_end" as const,
+      toolCall: { id: "c1", name, input: "{}", output: "{}" },
+    };
+  }
+
+  it("picks up the plan the server installed when the tool ran", async () => {
+    /*
+     * The install is a *server* fact — the write happens during the call — so this store cannot
+     * see it without asking. Re-reading the route is the whole mechanism: the tool ran in a
+     * conversation with no plan panel, and afterwards there is one.
+     */
+    streamOf(toolEnd("ila_make_plan"), { type: "done" });
+    const store = await withWidgets();
+    // The first read is `selectSession`'s; the second is the one the tool call triggers.
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [plan()] });
+
+    await store.sendMessage("make a plan");
+
+    expect(store.sessionWidgetIds).toContain("plan");
+    expect(await activeTab()).toBe("plan");
+  });
+
+  it("does not re-read the list when the widget is already installed", async () => {
+    // The cost guard, and it matters because the plan tools fire on every progress update: a
+    // conversation with the panel open must not pay a request per call.
+    streamOf(toolEnd("ila_update_plan_progress"), { type: "done" });
+    const store = await withWidgets(plan());
+    vi.mocked(mocks.api.listSessionWidgets).mockClear();
+
+    await store.sendMessage("next chapter");
+
+    expect(mocks.api.listSessionWidgets).not.toHaveBeenCalled();
+  });
+
+  it("does not re-read the list for a tool that belongs to no widget", async () => {
+    streamOf(toolEnd("read_file"), { type: "done" });
+    const store = await withWidgets();
+    vi.mocked(mocks.api.listSessionWidgets).mockClear();
+
+    await store.sendMessage("read it");
+
+    expect(mocks.api.listSessionWidgets).not.toHaveBeenCalled();
+  });
+
+  it("installs the diagram panel without pulling the reader onto it", async () => {
+    /*
+     * A diagram is already visible inline as its own card in the message list, so opening the
+     * panel would move the reader away from the thing they can see. Installing is the whole
+     * requirement; `open` is narrowed to `ila_make_plan` for this reason.
+     */
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    streamOf(toolEnd("ila_diagram"), { type: "done" });
+    const store = await withWidgets(state("notes", true));
+    widgetPanel.setActive("notes");
+    mocks.api.listSessionWidgets.mockResolvedValue({
+      workspace: [],
+      session: [state("notes", true), diagram()],
+    });
+
+    await store.sendMessage("draw it");
+
+    expect(store.sessionWidgetIds).toContain("diagram");
+    expect(await activeTab()).toBe("notes");
+  });
+
+  it("shows no panel when the reader has moved on while the refetch was in flight", async () => {
+    /*
+     * The refetch is fire-and-forget, so its continuation can land after the reader has opened
+     * another conversation — at which point the list it just replaced belongs to the one they
+     * left, and a tab opening for it would be a panel about somebody else's conversation.
+     */
+    const store = await withWidgets();
+    let release!: () => void;
+    // Held open so the reader can leave in the middle of the read; every later read (the
+    // `selectSession` below) answers immediately.
+    mocks.api.listSessionWidgets.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ workspace: [], session: [plan()] });
+        })
+    );
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [] });
+    streamOf(toolEnd("ila_make_plan"), { type: "done" });
+
+    await store.sendMessage("make a plan");
+    await store.selectSession("s2");
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.sessionWidgetIds).not.toContain("plan");
+  });
+});
+
 describe("widget events", () => {
   it("announces the end of a turn exactly once, at the point every turn ends", async () => {
     const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");

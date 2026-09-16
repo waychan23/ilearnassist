@@ -372,3 +372,35 @@ test("a theme change redraws the diagram", async ({ page, request }) => {
     .poll(nodeFill, { timeout: 20_000, message: "the diagram should be redrawn for dark" })
     .not.toBe(before);
 });
+
+test("the diagram panel installs itself when a diagram is drawn without one", async ({
+  page,
+  request,
+}) => {
+  /*
+   * `auto-install`, and the conversation is drawn into a session that installs nothing — so the
+   * panel is not merely on another tab, it is not rendered at all until the tool call puts it
+   * there. The diagram itself is visible either way, inline as its own card, which is why the
+   * assertion is about the *tab* rather than about the drawing.
+   */
+  const name = unique("图表自动安装");
+  await page.goto("/");
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(name);
+  await page.getByTestId("workspace-create-submit").click();
+  await enterWorkspace(page, name);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("widget-tab-diagram")).toHaveCount(0);
+
+  await scriptDiagram(request, { name: "auto flow", source: FLOW });
+  await send(page, "画一个流程图");
+
+  await waitForDiagram(page);
+  await expect(page.getByTestId("widget-tab-diagram")).toBeVisible();
+
+  // The reader is not pulled onto it: the drawing is already on screen, and the panel would
+  // move them away from it. Clicking it opens the panel on the diagram that was just drawn.
+  await page.getByTestId("widget-tab-diagram").click();
+  await expect(page.getByTestId("diagram-row").first()).toContainText("auto flow");
+});

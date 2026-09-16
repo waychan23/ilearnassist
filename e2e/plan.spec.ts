@@ -385,4 +385,43 @@ test.describe("the plan widget", () => {
     // The composer collapses after sending.
     await expect(page.getByTestId("plan-adjust-open")).toBeVisible();
   });
+
+  test("the plan panel installs itself when a plan is made in a conversation without one", async ({
+    page,
+    request,
+  }) => {
+    /*
+     * The `auto-install` mode, end to end, and the one flow that was impossible before it: with
+     * the tools `required`, this conversation could not have made a plan at all — the model would
+     * have had no plan tool to call, because the panel that would have assembled it was the thing
+     * this test does not install.
+     */
+    const name = unique("Plan auto");
+    await page.goto("/");
+    await page.getByTestId("workspace-new").click();
+    await page.getByTestId("workspace-name-input").fill(name);
+    await page.getByTestId("workspace-create-submit").click();
+    await enterWorkspace(page, name);
+    await page.getByTestId("new-session").click();
+    // Nothing ticked: no plan widget, so no plan tab and no plan tool.
+    await page.getByTestId("create-session").click();
+    await expect(page.getByTestId("widget-tab-plan")).toHaveCount(0);
+
+    await scriptLlm(request as APIRequestContext, { title: "学习 Rust", turns: makeTurn("call_auto", TREE) });
+    await send(page, "帮我制定一个两周学习 Rust 的计划");
+
+    // The call installed the widget *and* the panel opened on it: the plan is on screen without
+    // the reader having gone looking for the tab.
+    await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(4);
+    await expect(page.getByTestId("widget-tab-plan")).toBeVisible();
+
+    // And the install is the server's, not this tab's guess. A reload lands on the workspace
+    // home, so getting back to the conversation re-reads the widget list from the database —
+    // which is the claim: the panel that appeared came from a row, not from a local guess.
+    await page.reload();
+    await enterWorkspace(page, name);
+    await page.getByTestId("session-item").first().click();
+    await expect(page.getByTestId("widget-tab-plan")).toBeVisible();
+    await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(4);
+  });
 });
