@@ -117,35 +117,3 @@ const prettyInput = computed(() => {
     </div>
   </div>
 </template>
-
-<style scoped>
-.name {
-  color: var(--text);
-  font-weight: 500;
-  white-space: nowrap;
-}
-.arg {
-  flex: 1;
-  color: var(--text-3);
-}
-.status {
-  font-size: var(--fs-2);
-  white-space: nowrap;
-}
-.icon.run {
-  color: var(--accent);
-  animation: spin 1s linear infinite;
-  display: inline-block;
-}
-.icon.ok {
-  color: var(--success);
-}
-.toggle {
-  color: var(--text-3);
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-</style>
