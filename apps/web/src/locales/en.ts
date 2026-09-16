@@ -1141,14 +1141,15 @@ const en: typeof MessageSchema = {
   },
 
   /**
-   * The account's uploaded files.
+   * The account's library: every source it holds, whether that arrived as an upload, a page
+   * the agent kept, or a file a conversation wrote. See `zh-CN` for the shapes.
    *
    * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
    * *not* delete this file, and which way round the two actions are. Without it, "delete"
    * reads as tidying up something already gone.
    */
   sources: {
-    title: "Sources",
+    title: "Library",
     loading: "Loading…",
     empty: "Nothing matches these filters.",
     parsed: "Parsed",

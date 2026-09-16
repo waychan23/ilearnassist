@@ -1348,14 +1348,20 @@ export default {
   },
 
   /**
-   * The account's uploaded files.
+   * The account's library: every source it holds, whether that arrived as an upload, a page
+   * the agent kept, or a file a conversation wrote.
+   *
+   * `title` is the *only* string behind the name, and it is read by two surfaces — the rail's
+   * row and this dialog's heading. It says 资料库 rather than 资料源 because the note-export
+   * feature already calls the same place 资料库 (`noteSync.*`), and one destination with two
+   * names is the drift this key exists to prevent.
    *
    * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
    * *not* delete this file, and which way round the two actions are. Without it, "delete"
    * reads as tidying up something already gone.
    */
   sources: {
-    title: "资料源",
+    title: "资料库",
     loading: "读取中…",
     empty: "没有符合条件的资料。",
     parsed: "已解析",
