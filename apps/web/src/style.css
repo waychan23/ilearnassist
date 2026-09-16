@@ -353,6 +353,18 @@ body {
   .note-flash {
     animation: none;
   }
+  /*
+   * The running indicator stops turning but does not stop meaning "running": it keeps its
+   * accent colour and its `retry` glyph, so it is still plainly not the tick a finished call
+   * wears. The `.note-flash` reasoning above, one layer down.
+   *
+   * Worth stating because this duration is a literal rather than a `--dur-*` token, so the
+   * token override in the block above cannot reach it — the same reason the spin belongs in
+   * `style.css` rather than a scoped block, where nothing would have found it at all.
+   */
+  .tool-card .tool-head .icon.run {
+    animation: none;
+  }
 }
 
 ::-webkit-scrollbar {
@@ -1650,6 +1662,87 @@ body {
 .tool-card .tool-head .icon {
   color: var(--accent);
   font-size: var(--fs-2);
+}
+
+/*
+ * The head's parts, shared by a single tool card and a collapsed run of them.
+ *
+ * They live here rather than in `ToolCallCard`'s scoped block because a scoped rule reaches
+ * only its own template — Vue attaches the scope attribute to a child component's root element
+ * and to nothing inside it, so a rule left there would have stopped applying the moment
+ * `ToolCallGroup` drew the same head. The alternative was two copies, which is how `tool-card`
+ * heads and `diagram-card` heads already say `done`/`running` in two places.
+ */
+.tool-card .tool-head .name {
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tool-card .tool-head .arg {
+  flex: 1;
+  color: var(--text-3);
+}
+
+.tool-card .tool-head .status {
+  font-size: var(--fs-2);
+  white-space: nowrap;
+}
+
+.tool-card .tool-head .toggle {
+  color: var(--text-3);
+}
+
+/*
+ * The running/done indicator, written under `.tool-card .tool-head` rather than as a bare
+ * `.icon.run`: the `.icon` rule above is (0,3,0) and a bare `.icon.ok` is (0,2,0), so it would
+ * silently lose and leave a finished call's tick accent-coloured. Nothing tests a colour, so
+ * that one is only visible in a screenshot.
+ */
+.tool-card .tool-head .icon.run {
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+.tool-card .tool-head .icon.ok {
+  color: var(--success);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * A collapsed run of tool calls, drawn as the same card with a summary head.
+ *
+ * The head is a real `<button>` because it carries `aria-expanded` — a disclosure a keyboard
+ * user can operate, unlike `ToolCallCard`'s clickable `<div>`, whose purpose is the same but
+ * which only a mouse can work.
+ */
+.tool-group .group-head {
+  width: 100%;
+  background: none;
+  border: 0;
+  font: inherit;
+  text-align: start;
+}
+
+/* No `.arg` and no `.status` in this head, so the name is what pushes the chevron over. */
+.tool-group .group-head .name {
+  flex: 1;
+}
+
+.tool-group .tool-group-body {
+  border-top: 1px solid var(--border);
+  padding: var(--space-5);
+}
+
+/* The body's padding closes the group, so the last card's own bottom margin would double it. */
+.tool-group .tool-group-body > .tool-card:last-child {
+  margin-bottom: 0;
 }
 
 .tool-card .tool-body {

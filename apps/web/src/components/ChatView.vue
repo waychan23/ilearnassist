@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { isCompact } from "../composables/breakpoints";
 import { useScrollFollow } from "../composables/scrollFollow";
+import { expandToolGroup } from "../composables/toolCallGroups";
 import { subscribeWidgetEvents } from "../composables/widgetEvents";
 import {
   closeWidgetDrawer,
@@ -133,6 +134,35 @@ function jumpToAnchor(anchor: MessageMinimapAnchor) {
   scrollToMessage(anchor.messageId);
 }
 
+/**
+ * The card for one tool-call id, opening the collapsed run that is hiding it.
+ *
+ * A run of tool calls renders as one folded card, so its members are *not in the DOM* — and a
+ * plan node's start anchor points at one of them. Before this, `定位` on a node that began
+ * with bookkeeping calls did nothing at all, silently: the selector found no element and the
+ * handler had nothing to scroll to. Turns shaped that way are the ordinary case, since the
+ * plan guidance asks for the bookkeeping call before the prose.
+ *
+ * The group carries its members' ids for exactly this, and they are read out of `dataset`
+ * rather than interpolated into a selector — an id is model- and provider-authored text, and
+ * a value that reaches `querySelector` as syntax is a selector injection. The re-query has to
+ * wait a tick, because the card does not exist until Vue has re-rendered after the expand.
+ */
+async function revealToolCall(container: HTMLElement, id: string): Promise<HTMLElement | null> {
+  const attribute = (value: string): string => `[data-tool-call-id="${value}"]`;
+
+  const direct = container.querySelector<HTMLElement>(attribute(id));
+  if (direct) return direct;
+
+  for (const group of container.querySelectorAll<HTMLElement>("[data-tool-call-ids]")) {
+    if (!group.dataset.toolCallIds?.split(" ").includes(id)) continue;
+    expandToolGroup(group.dataset.groupKey ?? "");
+    await nextTick();
+    return container.querySelector<HTMLElement>(attribute(id));
+  }
+  return null;
+}
+
 // A plan node's start anchor jumps to the exact tool-call card (placed before the node's
 // teaching content), which is more precise than scrolling the whole message to the top; a
 // thread's heading jumps to its first message row. The widget cannot reach this scroll
@@ -143,11 +173,11 @@ onMounted(() => {
     if (event.type === "chat.jump") {
       const container = messagesEl.value;
       if (!container) return;
-      // The attribute is on every tool-call card, persisted or currently streaming.
-      const target = container.querySelector<HTMLElement>(
-        `[data-tool-call-id="${event.toolCallId}"]`
-      );
-      if (target) scrollRectIntoView(container, target);
+      // The attribute is on every tool-call card, persisted or currently streaming — but a
+      // card inside a collapsed run is not rendered at all, which `revealToolCall` answers.
+      void revealToolCall(container, event.toolCallId).then((target) => {
+        if (target) scrollRectIntoView(container, target);
+      });
     } else if (event.type === "chat.jumpToMessage") {
       scrollToMessage(event.messageId);
     }

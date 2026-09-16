@@ -532,6 +532,14 @@ export default {
     running: "运行中",
     args: "参数",
     result: "结果",
+    /**
+     * A run of consecutive tool calls, folded into one card. `count` is how many calls the
+     * run holds; `name` is a `tools.name.*` label for the call still in flight.
+     */
+    group: {
+      count: "{count} 个工具调用",
+      running: "正在使用工具[{name}]…",
+    },
   },
 
   /**

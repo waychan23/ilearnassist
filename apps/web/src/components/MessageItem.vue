@@ -8,7 +8,9 @@ import { openNoteFromHighlight } from "../composables/messageNotes";
 import { renderMarkdown } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
 import { applyNoteHighlights, noteIdAt, type NoteHighlightMark } from "../utils/noteAnchor";
+import { groupToolCalls } from "../utils/toolCallGroups";
 import ToolCallCard from "./ToolCallCard.vue";
+import ToolCallGroup from "./ToolCallGroup.vue";
 import AttachmentChips from "./AttachmentChips.vue";
 import ReasoningBlock from "./ReasoningBlock.vue";
 import Icon from "./Icon.vue";
@@ -73,6 +75,17 @@ const toolCalls = computed(() =>
  */
 const actionToolCalls = computed(() => toolCalls.value.filter((tc) => !isInteractiveTool(tc.name)));
 const questionToolCalls = computed(() => toolCalls.value.filter((tc) => isInteractiveTool(tc.name)));
+
+/**
+ * The actions, with runs of consecutive calls collapsed into one entry each.
+ *
+ * Grouping happens *here*, after `toolCalls` has already chosen between the live stream and
+ * the persisted message, so the collapsed view is identical during a turn and after it — a
+ * reader who saw three calls fold into one line does not watch it unfold when the turn ends.
+ * The arithmetic itself is in `utils/toolCallGroups`. A run of one is a `single` and renders
+ * exactly as it did before there was any grouping.
+ */
+const actionRuns = computed(() => groupToolCalls(actionToolCalls.value));
 const error = computed(() => props.streaming?.error ?? null);
 /**
  * Whether the user cut this reply short.
@@ -310,7 +323,15 @@ const usageText = computed(() => {
         :thinking="reasoningThinking"
         :duration-ms="reasoningMs"
       />
-      <ToolCallCard v-for="tc in actionToolCalls" :key="tc.id" :tool-call="tc" />
+      <!--
+        A run of two or more actions is one card; a lone call is the card it always was. The
+        `v-if`/`v-else` is written out rather than folded into the `v-for`, because it is what
+        narrows the union for `vue-tsc` — `run.calls` does not exist on the `single` arm.
+      -->
+      <template v-for="run in actionRuns" :key="run.kind === 'group' ? run.calls[0]!.id : run.call.id">
+        <ToolCallGroup v-if="run.kind === 'group'" :calls="run.calls" />
+        <ToolCallCard v-else :tool-call="run.call" />
+      </template>
       <div
         v-if="rendered"
         ref="noteRoot"

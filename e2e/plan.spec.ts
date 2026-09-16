@@ -173,6 +173,66 @@ test.describe("the plan widget", () => {
     await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(5);
   });
 
+  test("a node's jump opens the folded run hiding its start anchor", async ({ page, request }) => {
+    /*
+     * 定位 scrolls the chat to the exact tool-call card a node began with — and that card can be
+     * inside a folded run, which renders no cards at all. The jump therefore has to open the run
+     * before it can scroll to anything, and before that it did nothing whatsoever: the selector
+     * simply found no element and the handler had nothing to move.
+     *
+     * The turn below is the ordinary shape rather than a contrived one. The plan guidance asks
+     * for the bookkeeping call before the teaching prose, so "mark the node, then write the
+     * chapter file" is what most chapter turns look like — which makes this the common case, and
+     * the reason the earlier lifecycle test misses it is only that its turn has a single call.
+     */
+    const name = unique("Plan jump fold");
+    await planSession(page, name);
+
+    await scriptLlm(request as APIRequestContext, {
+      title: "折叠跳转",
+      turns: makeTurn("call_make", TREE),
+    });
+    await send(page, "帮我制定一个计划");
+    await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(4);
+
+    const chapter1 = await idOf(page, "Chapter 1");
+    await scriptLlm(request as APIRequestContext, {
+      turns: [
+        {
+          toolCalls: [
+            {
+              id: "call_progress",
+              name: "ila_update_plan_progress",
+              args: { nodes: [{ id: chapter1, status: "in_progress" }] },
+            },
+            { id: "call_write", name: "write_file", args: { path: "notes.md", content: "# 第一章" } },
+          ],
+        },
+        { content: "第一章开始了。" },
+      ],
+    });
+    await send(page, "开始第一章");
+
+    await expect(page.getByTestId(`plan-node-${chapter1}`)).toHaveAttribute(
+      "data-node-status",
+      "in_progress"
+    );
+
+    // Folded: two consecutive calls, so the anchor card is not in the DOM at all — which is
+    // exactly what makes the jump worth asserting.
+    await expect(page.getByTestId("tool-call-group")).toHaveCount(1);
+    await expect(page.locator('[data-tool-call-id="call_progress"]')).toHaveCount(0);
+
+    await page.getByTestId(`plan-jump-${chapter1}`).click();
+
+    // The run opened and the card the jump was aiming at is there to scroll to.
+    await expect(page.getByTestId("tool-call-group-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+    await expect(page.locator('[data-tool-call-id="call_progress"]')).toBeVisible();
+  });
+
   test("the conflict card edits this plan when chosen", async ({ page, request }) => {
     const name = unique("Plan conflict edit");
     await planSession(page, name);

@@ -419,6 +419,11 @@ const en: typeof MessageSchema = {
     running: "Running",
     args: "Arguments",
     result: "Result",
+    /** A run of consecutive tool calls, folded into one card. See `zh-CN` for the shapes. */
+    group: {
+      count: "{count} tool call | {count} tool calls",
+      running: "Using {name}…",
+    },
   },
 
   askUser: {
