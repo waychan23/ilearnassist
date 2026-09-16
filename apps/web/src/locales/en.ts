@@ -226,6 +226,16 @@ const en: typeof MessageSchema = {
     stop: "Stop generating",
     stopping: "Stopping…",
     attach: "Add an image or file",
+    /*
+     * The canned replies above the input. Each label is also the message that gets sent — the
+     * chip *is* the sentence — so they are kept short and conversational rather than being
+     * names for intents. "OK" rather than "Okay" to match the Chinese in length on screen.
+     */
+    quick: {
+      continue: "Continue",
+      yes: "Yes",
+      ok: "OK",
+    },
     /* The session-parameters button's label lives under `sessionSettings.open`: three places
        open that dialog, and it is the dialog that owns the words. */
   },

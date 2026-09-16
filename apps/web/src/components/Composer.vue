@@ -149,6 +149,46 @@ function send() {
   void store.sendMessage(t, attachments);
 }
 
+/**
+ * The canned replies, as *label = the message that gets sent*.
+ *
+ * A list rather than three buttons written out, and the keys are literal `t()` calls in the
+ * source rather than assembled from an id — `catalog.test.ts` reads the source for those
+ * literals, and a key built from a loop index is invisible to it, which is how a dead key
+ * survives a guard written to catch exactly that.
+ *
+ * A `computed` rather than a plain array because the labels are translated: a language switch
+ * has to redraw them, and a value computed once at setup would keep the language the page
+ * loaded in.
+ */
+const quickReplies = computed(() => [
+  { id: "continue", label: t("composer.quick.continue") },
+  { id: "yes", label: t("composer.quick.yes") },
+  { id: "ok", label: t("composer.quick.ok") },
+]);
+
+/**
+ * The row is there once there is something to reply to, and not while a reply is arriving.
+ *
+ * An empty conversation has nothing to continue, and the welcome screen is where a first
+ * message is composed rather than picked. A streaming turn is the other half, and it is not
+ * merely tidy: sending is refused while a turn runs, so a chip on screen then would be a
+ * control that looks live and does nothing.
+ */
+const showQuickReplies = computed(() => !store.streaming.active && store.messages.length > 0);
+
+/**
+ * Send one of them.
+ *
+ * Deliberately not `send()` with an argument: there is nothing in the textarea to clear and
+ * nothing staged to attach, and a half-written draft is the user's — a chip that wiped it would
+ * be a one-click way to lose a paragraph. The chip sends its own words and leaves the box alone.
+ */
+function sendQuick(message: string) {
+  if (store.streaming.active || store.documentsParsing) return;
+  void store.sendMessage(message, []);
+}
+
 function onKeydown(e: KeyboardEvent) {
   // The picker gets first refusal on the keys it navigates with, and says so by consuming
   // them: Enter with it open must choose a source rather than send the message.
@@ -180,6 +220,25 @@ function onInput() {
 
       <div v-if="imageWithoutVision" class="vision-warning">
         {{ t("composer.visionWarning", { model: store.effectiveModel?.name ?? "" }) }}
+      </div>
+
+      <!--
+        The canned replies, above the input and centred: the assistant asks a question at the
+        end of a turn, and these are the three answers to it that cost no typing. Directly above
+        the surface rather than above the notices, so the row that acts on the input sits
+        against it and the status lines stay where they were.
+      -->
+      <div v-if="showQuickReplies" class="quick-row" data-testid="composer-quick">
+        <button
+          v-for="reply in quickReplies"
+          :key="reply.id"
+          type="button"
+          class="pill quick-pill"
+          :data-testid="`quick-${reply.id}`"
+          @click="sendQuick(reply.label)"
+        >
+          {{ reply.label }}
+        </button>
       </div>
 
       <!-- One surface owns the input, the attachments and the toolbar (chatbox's
@@ -332,6 +391,45 @@ function onInput() {
  * were both inert and a long Copilot name pushed the toolbar's other controls off the row
  * instead of truncating.
  */
+/*
+ * The canned replies. Centred rather than stretched: three short answers are a set of choices,
+ * and a row that filled the width would read as a segmented control the user has to pick from
+ * rather than as three things they may say.
+ */
+.quick-row {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  /*
+   * Pulled up by the wrap's gap, so the row sits against the input it fills: `.inner-wrap`'s
+   * `gap` already spaces it from the surface, and two gaps between the chips and the box they
+   * belong to reads as a separate control. The extra space above is what keeps it from colliding
+   * with the notices.
+   */
+  margin-bottom: calc(-1 * var(--space-2));
+}
+/*
+ * `.pill` in the stylesheet gives the shape — the border and the radius. What a *clickable* pill
+ * needs on top is a cursor, a colour that responds, and a font size of its own, since the shared
+ * class is sized for static tags.
+ */
+.quick-pill {
+  font-size: var(--fs-2);
+  color: var(--text-2);
+  background: var(--panel);
+  padding: var(--space-2) var(--space-6);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.quick-pill:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 .copilot-tag {
   font-size: var(--fs-1);
   color: var(--text-3);

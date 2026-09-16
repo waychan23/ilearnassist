@@ -34,6 +34,7 @@ import type {
   SourceOwner,
   SourceStorage,
   ToolCall,
+  TurnRequestMeta,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
@@ -108,6 +109,7 @@ import {
 } from "./quizzes.js";
 import type { DocumentService } from "./documents/service.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { turnClock, type TurnClock } from "./agent/clock.js";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { classifyProviderError } from "./agent/providerErrors.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
@@ -3341,6 +3343,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      */
     sessionDirPath: string;
     writeLocation: FileLocation;
+    /**
+     * What time it is where the user is, read at the top of the turn.
+     *
+     * Per turn rather than per session, and that is the whole point: a conversation left open
+     * overnight must not answer tomorrow's "what is today" from yesterday's clock. Read here
+     * because this is where the request body is in hand, and the body is the only place the
+     * browser's own zone appears.
+     */
+    clock: TurnClock;
     /** Present when the plan widget is installed; appended to the turn's system prompt. */
     planGuidance?: string;
     /** Present when the quiz widget is installed; appended to the turn's system prompt. */
@@ -3384,8 +3395,21 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * the turn's own attachments on purpose — see `read_document`'s note.
        */
       sources: Source[];
+      /**
+       * The IANA zone the browser reported, or absent when it reported none.
+       *
+       * Untrusted like every other body field, which is why it goes through
+       * `knownTimeZone` on the way in — and it is the *browser's* answer rather than this
+       * process's because the server may be on a desk while the user is on a phone in
+       * another timezone. Absent falls back to the server's own zone.
+       */
+      timezone?: string;
     }
   ): TurnContext {
+    // Read at the top of the turn and carried through it, so every step of one turn states the
+    // same time — a turn that fetched a page at 14:32 and answers at 14:33 was still a turn.
+    const clock = turnClock(new Date(), input.timezone);
+
     // The session's own settings; request fields are one-turn overrides. There is no Copilot
     // tier left to consult — its defaults were merged in when the conversation was created.
     const providerId = resolveProviderId(input.provider, session.settings);
@@ -3534,6 +3558,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       toolUse: isToolUseModel(provider, modelId),
       sessionDirPath: ownDir,
       writeLocation,
+      clock,
       planGuidance: planInstalled ? PLAN_GUIDANCE : undefined,
       quizGuidance: quizInstalled ? QUIZ_GUIDANCE : undefined,
       /*
@@ -3799,6 +3824,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       userId,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
+      timezone: body.timezone,
     });
 
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
@@ -3853,6 +3879,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        clock: ctx.clock,
         quizMakeupNote,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
@@ -3960,6 +3987,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       userId,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
+      timezone: body.timezone,
     });
 
     await reply.hijack();
@@ -4000,6 +4028,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
@@ -4090,6 +4119,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       userId,
       user: treeFor(actor(request)),
       sources: db.listReadableSources(userId, id, workspace.id),
+      // A regenerate is a turn like any other and gets the clock like any other: the client
+      // posts a body for this one field alone.
+      timezone: (request.body as TurnRequestMeta | undefined)?.timezone,
     });
 
     // After the delete: the reply being replaced is not part of what the model is shown.
@@ -4126,6 +4158,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });

@@ -292,3 +292,114 @@ test("the title's two controls are icon-only, and both do what they say", async 
   await page.getByTestId("open-session-settings").click();
   await expect(page.getByTestId("session-name")).toBeVisible();
 });
+
+test("the canned replies appear once there is something to reply to", async ({ page, request }) => {
+  await scriptLlm(request, { turns: [{ content: "第一轮回答。" }] });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
+
+  /*
+   * Nothing to continue on a conversation that has not started. The welcome screen is where a
+   * first message is *composed*, and "继续 / 是的 / 可以" are answers to something the assistant
+   * has not said yet — three buttons that cannot mean anything are three buttons that teach the
+   * user to ignore the row.
+   */
+  await expect(page.getByTestId("composer-quick")).toHaveCount(0);
+
+  await page.getByTestId("composer-input").fill("你好");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("第一轮回答。");
+
+  const quick = page.getByTestId("composer-quick");
+  await expect(quick).toBeVisible();
+  await expect(quick.getByTestId("quick-continue")).toHaveText("继续");
+  await expect(quick.getByTestId("quick-yes")).toHaveText("是的");
+  await expect(quick.getByTestId("quick-ok")).toHaveText("可以");
+
+  /*
+   * Centred, which is a layout claim and so only a browser can answer it. Asserted as
+   * "the row's midpoint is the composer's" rather than by reading `justify-content`, since the
+   * declaration is not what the user sees and a flex item's own margins can override it.
+   */
+  const row = (await quick.boundingBox())!;
+  const surface = (await page.locator(".composer .surface").boundingBox())!;
+  expect(Math.abs(row.x + row.width / 2 - (surface.x + surface.width / 2))).toBeLessThan(2);
+});
+
+test("a canned reply sends its own words as the user's message", async ({ page, request }) => {
+  await scriptLlm(request, {
+    turns: [{ content: "第一轮回答。" }, { content: "那我们就继续。" }],
+  });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await page.getByTestId("composer-input").fill("你好");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("第一轮回答。");
+
+  await page.getByTestId("quick-continue").click();
+
+  // The chip *is* the sentence: what the user sees on the button is what the conversation
+  // records, so the label and the sent text cannot drift apart.
+  await expect(page.getByTestId("message-user").last()).toContainText("继续");
+  await expect(page.getByTestId("message-assistant").last()).toContainText("那我们就继续。");
+});
+
+test("a canned reply leaves a draft where it was", async ({ page, request }) => {
+  /*
+   * The chip sends its own words and nothing else. It shares the send *button*'s path in every
+   * way but one: there is nothing staged to attach and nothing typed to consume, and a chip that
+   * cleared the textarea would be a one-click way to lose a paragraph the user was writing.
+   */
+  await scriptLlm(request, { turns: [{ content: "第一轮回答。" }, { content: "好。" }] });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await page.getByTestId("composer-input").fill("你好");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("第一轮回答。");
+
+  await page.getByTestId("composer-input").fill("这是我还没写完的草稿");
+  await page.getByTestId("quick-yes").click();
+
+  await expect(page.getByTestId("message-user").last()).toContainText("是的");
+  await expect(page.getByTestId("composer-input")).toHaveValue("这是我还没写完的草稿");
+});
+
+test("the canned replies are gone while a reply is arriving", async ({ page, request }) => {
+  /*
+   * Not merely tidiness. Sending is refused while a turn runs — the send button has already
+   * become Stop — so a chip on screen then would look live and do nothing when clicked, which
+   * is the class of control this app keeps out of the UI.
+   */
+  // Held per *frame* rather than for a fixed duration, so the turn has to be slow enough to be
+  // caught mid-flight and short enough that the assertions after it do not spend the whole
+  // retry budget waiting for it. 1500 here is a nine-second turn and a flake.
+  await scriptLlm(request, {
+    turns: [{ content: "第一轮回答。" }, { content: "慢一点的回答", holdMs: 400 }],
+  });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await page.getByTestId("composer-input").fill("你好");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("第一轮回答。");
+  await expect(page.getByTestId("composer-quick")).toBeVisible();
+
+  await page.getByTestId("quick-ok").click();
+  // The row goes with the send, and comes back with the answer.
+  await expect(page.getByTestId("composer-quick")).toHaveCount(0);
+  await expect(page.getByTestId("composer-stop")).toBeVisible();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("慢一点的回答");
+  await expect(page.getByTestId("composer-quick")).toBeVisible();
+});

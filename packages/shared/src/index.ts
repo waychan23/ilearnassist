@@ -1065,7 +1065,7 @@ export interface WorkspaceStats {
 }
 
 /** What the client POSTs back to `/api/sessions/:id/answers`. */
-export interface AnswerToolCallInput {
+export interface AnswerToolCallInput extends TurnRequestMeta {
   toolCallId: string;
   action: "submit" | "cancel";
   /**
@@ -2629,7 +2629,31 @@ export interface SourceReference {
   name: string;
 }
 
-export interface ChatInput {
+/**
+ * What every request that starts or resumes a turn carries besides its own payload.
+ *
+ * One field, and it is here rather than in three places because the *reason* is the same three
+ * times: the turn's system prompt states what time it is where the user is, and only the
+ * browser knows where that is. The server runs on the user's desk while the user may be holding
+ * a phone in another timezone, so "the server's local time" is a proxy for the answer and not
+ * the answer itself.
+ *
+ * Optional on purpose. A script, a test or an older client omits it and the server falls back
+ * to its own zone, which is right for the desktop app and is a better guess than refusing the
+ * turn.
+ */
+export interface TurnRequestMeta {
+  /**
+   * The IANA zone name the browser reports, e.g. `Asia/Shanghai`.
+   *
+   * A *name* rather than an offset, because the server derives the offset from it at the moment
+   * the turn runs: an offset sent by a browser that has been open across a daylight-saving
+   * boundary would state the wrong hour for the rest of the session.
+   */
+  timezone?: string;
+}
+
+export interface ChatInput extends TurnRequestMeta {
   message: string;
   provider?: string;
   model?: string;

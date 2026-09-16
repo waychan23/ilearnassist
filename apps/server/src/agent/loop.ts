@@ -24,6 +24,7 @@ import type { UserLayout } from "../paths.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
 import { Suspension } from "../tools/suspension.js";
 import { redactQuizInput } from "../tools/quiz.js";
+import type { TurnClock } from "./clock.js";
 import { buildModel } from "./model.js";
 
 /** Fallback ReAct step budget when a session does not set one. */
@@ -79,6 +80,12 @@ export interface RunAgentInput {
   systemPrompt: string;
   /** Resolved per-session generation parameters (temperature, maxSteps, …). */
   settings: SessionSettings;
+  /**
+   * What time it is where the user is. Required rather than defaulted here: `agent/clock.ts`
+   * needs the browser's zone to be right about anything but the server's own, and a call site
+   * that forgot to pass one would be a turn with a subtly wrong clock rather than an error.
+   */
+  clock: TurnClock;
   /**
    * Extra system-prompt guidance for turns in a conversation with the plan widget
    * installed; absent in every other conversation.
@@ -239,6 +246,13 @@ function safeParseArgs(json: string): Record<string, unknown> {
  */
 export interface SystemPromptInput {
   workspace: Workspace;
+  /**
+   * What time it is where the user is, as of this turn.
+   *
+   * An input rather than a `new Date()` call inside, so the prompt's wording is testable at a
+   * pinned instant and so "the turn's clock" has one definition — `agent/clock.ts`.
+   */
+  clock: TurnClock;
   /** The conversation's own directory: `<workspaceRoot>/sessions/<sessionId>`. */
   sessionDirPath: string;
   /** Where an unqualified write goes, already resolved down the settings chain. */
@@ -254,6 +268,31 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   const base =
     input.persona.trim() ||
     "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Do the same once you have produced a plan or another substantial artifact: put it to them for confirmation rather than assuming it is accepted. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
+
+  /*
+   * The date, on every turn, stated rather than left to be worked out.
+   *
+   * Not a courtesy and not decoration: a model asked about "today" without being told the date
+   * answers from the most recent date in its training data, and does it with the same confidence
+   * it answers anything else. There is nothing in such a reply to reveal that it is wrong, which
+   * is what makes this worth a fixed cost on every turn in every conversation — including the
+   * ones that have nothing to do with time, where it is only context.
+   *
+   * It goes *second*, right after the persona and before the workspace: it is a fact about the
+   * world the answer is being written in, and the folders are facts about where files go. The
+   * session's own persona, when there is one, is the `base` above and is not displaced.
+   *
+   * There is deliberately no "if the user asks about time" condition. The failure being fixed is
+   * a model that does not know it should have asked, so the instruction has to be unconditional
+   * and has to name the cases rather than wait to be relevant.
+   */
+  const timeNote =
+    `\n\nRight now it is ${input.clock.local} for the user (${input.clock.zone}).\n` +
+    `Your training data ends before this, so this is the only source of truth for the current ` +
+    `date and time: never infer them from the most recent date you remember. Any request that ` +
+    `depends on when it is — today, yesterday, this week, how long ago something happened, ` +
+    `what is coming up, what the latest version is, whether something is out of date — is ` +
+    `answered from the line above.`;
 
   /*
    * Two folders, named, with the default spelled out.
@@ -296,7 +335,7 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   // One make-up turn's answer key, last: it is the most specific instruction in the prompt.
   const makeupNote = input.quizMakeupNote ? `\n\n${input.quizMakeupNote}` : "";
 
-  return base + workspaceNote + planNote + quizNote + collectNote + makeupNote;
+  return base + timeNote + workspaceNote + planNote + quizNote + collectNote + makeupNote;
 }
 
 /**
@@ -452,6 +491,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     new SystemMessage(
       buildSystemPrompt({
         workspace: input.workspace,
+        clock: input.clock,
         sessionDirPath: input.sessionDirPath,
         writeLocation: input.writeLocation,
         persona: input.systemPrompt,

@@ -260,6 +260,7 @@ apps/server/src/
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
+  agent/clock.ts          # what time it is where the user is, for the turn's prompt
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
   agent/mediaSummary.ts   # one line about an image, from the model that saw it
@@ -971,6 +972,18 @@ Fuller map in `docs/reference.md`.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace, provider and source
   deletes go through `confirm()` from `composables/confirm.ts`. The agent's own `delete_file`
   tool is deliberately *not* gated.
+- **A canned reply is the sentence, and the button sends what it shows.** The composer's chips
+  (继续 / 是的 / 可以, `composer.quick.*`) send their own rendered label rather than a second
+  string beside it, so the words on the button and the words in the conversation cannot drift —
+  which is also why the list is built from literal `t()` calls in the component rather than from
+  keys assembled out of an id, `catalog.test.ts` reading the source for those literals. Two
+  rules about when the row is there, each with a reason: **not on an empty conversation**, since
+  they are answers to something the assistant has not said and three buttons that cannot mean
+  anything teach the user to ignore the row; and **not while a turn is streaming**, which is not
+  tidiness — sending is refused then (the send button has already become Stop), so a chip on
+  screen would look live and do nothing. `sendQuick` is deliberately not `send()` with an
+  argument: there is nothing staged to attach, and a chip that cleared the textarea would be a
+  one-click way to lose a paragraph.
 - **`ConfirmDialog` sits above every other overlay, and that is a token rather than an
   ordering.** Two `.modal-overlay`s at the same `z-index` stack by DOM order, and
   `ConfirmDialog` is `App.vue`'s first child — so a confirm raised from *inside* a dialog
@@ -1307,6 +1320,27 @@ Fuller map in `docs/reference.md`.
   a Copilot whose allow-list excludes the tool is never given guidance for a call it cannot make.
   Its absence is the shape the requirement is about: `web_fetch` stays a pure read, and the
   decision to keep is the model's, made deliberately once per page worth keeping.
+- **Every turn's system prompt states what time it is where the user is.** `agent/clock.ts`
+  formats it and `buildSystemPrompt` appends it second — after the persona, before the folders —
+  unconditionally, including on turns that have nothing to do with time. The reason is a failure
+  rather than a nicety: a model asked about "today" without a date answers from the most recent
+  date in its training data, confidently, and nothing in the reply reveals that it is wrong. What
+  makes the instruction unconditional is the same failure — a model that does not know it should
+  have checked will not check. Three things about it are load-bearing:
+  - **The zone is the browser's, not the server's**, and it rides the request
+    (`TurnRequestMeta.timezone`, shared by `/chat`, `/answers` and `/regenerate` because all three
+    start a turn). The server may be on a desk while the user is on a phone in another timezone,
+    so "the server's local time" is a proxy for the answer and not the answer. The *instant* is
+    still the server's: the client contributes the zone and nothing else.
+  - **It is a zone *name*, and the offset is derived at turn time.** An offset sent by a browser
+    left open across a daylight-saving boundary would state the wrong hour for the rest of the
+    session, and `Europe/London` is `UTC+01:00` in September and `UTC+00:00` in January.
+  - **The zone is untrusted and unusable names are dropped, not refused.** `Intl` throws a
+    `RangeError` on a zone it cannot resolve, and a throw here would fail the turn; `knownTimeZone`
+    narrows it, and the fallback is the server's own zone — the same answer as sending none, and
+    the right one for the desktop app where the two are the same machine.
+  `clock.ts` is pure and takes `now` and the zone as arguments, which is what lets the format be
+  tested at a pinned instant rather than at whatever day the suite runs.
 - **A referenced source is *linked*, not copied.** `ChatInput.sources` names ids; the server
   links each to the conversation (`session_sources`) and records the snapshot in
   **`messages.sources`**, a column of its own beside `attachments`. The link is what lets a later

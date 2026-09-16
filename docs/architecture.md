@@ -533,9 +533,10 @@ A hand-written ReAct loop (not LangGraph's prebuilt agent), chosen for full
 control over the streaming shape:
 
 1. Compose messages: `SystemMessage` (the conversation's own system prompt — copied
-   from its Copilot at creation, or the built-in assistant prompt when empty — plus a
-   note that file tools are scoped to the workspace) → prior history → current
-   `HumanMessage`.
+   from its Copilot at creation, or the built-in assistant prompt when empty — then, in
+   order: **the current date, time and timezone**, a note naming the two writable folders
+   and the effective write default, and whatever guidance the turn's widgets and tools
+   contribute) → prior history → current `HumanMessage`.
 2. `chatModel.bindTools(tools)`.
 3. Loop up to `settings.maxSteps` (default **15**). Each step:
    - `modelWithTools.stream(messages)` and emit `text` deltas as they arrive,
@@ -557,6 +558,14 @@ control over the streaming shape:
      [`ask_user`](#ask_user-and-the-suspended-turn)).
 4. Emit `{ type: "usage" }` when the provider reported anything, then return
    `{ content, reasoning, toolCalls, usage, awaiting }` for persistence.
+
+> **The clock is stated on every turn.** `agent/clock.ts` formats it; the *zone* comes from the
+> client (`TurnRequestMeta.timezone`), read from the browser rather than from the server, which
+> may be on a desk while the user is on a phone in another timezone. The reason is a failure
+> rather than a nicety: a model asked about "today" without a date answers from the most recent
+> date in its training data, and nothing in such a reply reveals that it is wrong. That is also
+> why it is unconditional — it rides turns that have nothing to do with time, because the
+> failure being fixed is a model that does not know it should have checked.
 
 > **Usage is read from the chunks, not the reduced message.** Scanning the step's chunks
 > for the one that reports usage is the robust choice: it works whatever the provider
