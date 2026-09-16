@@ -949,6 +949,62 @@ export interface GetSessionNotesResponse {
   notes: Note[];
 }
 
+/* ------------------------------ notes → the library ------------------------------ */
+
+/**
+ * What the export run for one conversation is doing, or last did.
+ *
+ * Three settled outcomes rather than two, for the reason the insight pass gives: "it looked and
+ * there were no notes" and "it produced nothing usable" ask the reader for opposite things, and
+ * a single `failed` would report a conversation with nothing in it as a broken button.
+ *
+ * `running` is written *before* the work starts, and that write is the lock — see
+ * `runNoteSync`. A row left `running` by a process that died is reported as `stuck` rather than
+ * quietly settled, because only the clock can tell "still working" from "the owner is gone".
+ */
+export type NoteSyncStatus = "running" | "ok" | "empty" | "failed";
+
+/** One conversation's export state. */
+export interface SessionNoteSync {
+  status: NoteSyncStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  /** Source rows created, rewritten, and soft-deleted by the run. */
+  added: number;
+  updated: number;
+  removed: number;
+  /**
+   * The run's failure sentence, in the server's own words.
+   *
+   * Deliberately not translated and not code-keyed: it is whatever the provider or the parser
+   * said, which has no code to key on — the same rule the raw SSE `error` body follows.
+   */
+  error: string | null;
+  /**
+   * A `running` run whose owner is gone. Derived on read from `startedAt`, never stored: only
+   * the clock can answer it, and a stored flag would freeze at whatever the answer was the
+   * first time somebody looked.
+   */
+  stuck: boolean;
+}
+
+/** `GET /api/sessions/:id/notes/sync`. `null` when this conversation was never exported. */
+export interface GetNoteSyncResponse {
+  sync: SessionNoteSync | null;
+}
+
+/** `POST /api/sessions/:id/notes/sync`. */
+export interface StartNoteSyncInput {
+  /**
+   * Start even though one is running.
+   *
+   * The recovery for a run whose process died before the timeout could call it stuck, and for
+   * a reader who does not want to wait out the timeout to be sure. Never coerced from a string:
+   * `"false"` is truthy, and a forced sync is a real cost.
+   */
+  force?: boolean;
+}
+
 /* ----------------------------------- insights ----------------------------------- */
 
 /**
@@ -1194,6 +1250,15 @@ export const SOURCE_ORIGINS = [
   "agent_session",
   "web",
   /**
+   * A learner's own note, exported into the library by the conversation's 同步到资料库 action.
+   *
+   * Not one of the two `agent_*` values, and not `session_attachment` either: every one of
+   * those names *who wrote* the material, and the browser prints that beside the row. This
+   * material is the learner's own words — filing it under the assistant's name would attribute
+   * a person's notes to a model, which is the same lie the `discovered` note below guards.
+   */
+  "note_export",
+  /**
    * A file that was in a sandbox with no row to account for it — dropped in from the Finder, a
    * restored backup, a `git clone`, or a file from before this registry existed.
    *
@@ -1344,6 +1409,9 @@ export const API_ERROR_CODES = [
   // A `type` outside NOTE_TYPES. Refused rather than defaulted, for the reason `INVALID_FIELD`
   // gives: a note that silently became an annotation is a note the user did not write.
   "NOTE_TYPE_INVALID",
+  // A note export is already running for this conversation. One at a time, so two presses
+  // cannot interleave their writes into the same files or race each other's summary.
+  "SYNC_IN_PROGRESS",
   // A history version was asked for (…/plan/versions/:version) that never existed. No plan
   // at all is a 200 `{ plan: null }`, not this — that is the ordinary empty state.
   "PLAN_VERSION_NOT_FOUND",

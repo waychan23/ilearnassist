@@ -69,7 +69,12 @@ import {
   SUPERADMIN_ROLE,
   USERNAME_MAX_LENGTH,
 } from "@ilearnassist/shared";
-import { insightReasoningSetting, threadReasoningSetting, type AppConfig } from "./config.js";
+import {
+  insightReasoningSetting,
+  noteSyncReasoningSetting,
+  threadReasoningSetting,
+  type AppConfig,
+} from "./config.js";
 import {
   DEFAULT_SESSION_TITLE,
   newId,
@@ -96,8 +101,10 @@ import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
 import { makeInsightGenerator } from "./agent/insights.js";
+import { makeNoteSummarizer } from "./agent/notesSummary.js";
 import { buildInsightViews, generateInsights } from "./insights.js";
 import { createNote, deleteNote, updateNote } from "./notes.js";
+import { readNoteSync, runNoteSync } from "./notesExport.js";
 import { listDiagramViews, registerDiagram } from "./diagrams.js";
 import {
   dismissQuizQuestions,
@@ -351,6 +358,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   // The insight pass's own switch, read at the same moment for the same reason. Two variables
   // rather than one because each changes its own call alone, by design.
   const insightReasoning = insightReasoningSetting();
+  // And the note export's, the same shape a third time for the same reason.
+  const noteSyncReasoning = noteSyncReasoningSetting();
 
   /**
    * The turn currently streaming for each session, so another request can stop it.
@@ -2276,6 +2285,86 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(result.status).send(apiError(result.code, "note not found"));
     }
     return { ok: true };
+  });
+
+  /* ----------------------------- notes → the library ----------------------------- */
+
+  /*
+   * Exporting this conversation's notes into the source library, object-not-widget like the
+   * notes routes above: the run outlives the panel that started it, and `sync: null` is "never
+   * exported" — a 200 with an empty answer rather than a missing object, because a conversation
+   * nobody has exported is the ordinary state and not an error to report.
+   *
+   * The pair is **asynchronous on purpose**, which is where it parts company with
+   * `/insights/generate`'s long POST. That pass is a single model call whose answer *is* the
+   * reply; this one is a model call followed by a sweep of the filesystem, and the requirement is
+   * a status the reader can watch and a button they can force. So the work outlives the reply and
+   * `GET` is how the panel learns how it went.
+   */
+  app.get("/api/sessions/:id/notes/sync", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    // A pure read. Settling a `running` row from here would make this route a second writer on a
+    // status row, and the "stuck" answer would then be visible exactly once.
+    return { sync: readNoteSync(db, id) };
+  });
+
+  app.post("/api/sessions/:id/notes/sync", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const owned = db.getSessionForUser(id, userId);
+    if (!owned) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    const body = (request.body ?? {}) as { force?: unknown };
+    // Never coerced: `"false"` is truthy, and forcing a sync is a real model call plus a
+    // rewrite of every exported file. The shape of the rule `PATCH /api/admin/users/:id`
+    // follows for `disabled`.
+    if (body.force !== undefined && typeof body.force !== "boolean") {
+      return reply.code(400).send(apiError("INVALID_FIELD", "force must be a boolean"));
+    }
+
+    /*
+     * The lock, and it is this write rather than a map of in-flight runs.
+     *
+     * better-sqlite3 is synchronous and this handler is one turn of the event loop, so the read
+     * and the write below cannot interleave with another request's: of two concurrent starts,
+     * one sees `running` and is refused and the other proceeds. A `Map` could not survive the
+     * process restart this guard exists for — a run whose server was killed mid-flight leaves
+     * the row `running`, which `stuck` reports and a later press recovers.
+     */
+    const current = readNoteSync(db, id);
+    if (current?.status === "running" && !current.stuck && body.force !== true) {
+      return reply
+        .code(409)
+        .send(apiError("SYNC_IN_PROGRESS", "this conversation is already being exported"));
+    }
+
+    db.saveNoteSyncState({ sessionId: id, status: "running", startedAt: new Date().toISOString() });
+
+    const provider = db.getProvider(resolveProviderId(undefined, owned.session.settings));
+    const modelId = resolveModelId(provider, undefined, owned.session.settings);
+
+    // Deliberately not awaited: the reply is the state the panel polls, and the work continues
+    // after it. `runNoteSync` never rejects — its own catch settles `failed` — and the net here
+    // covers the case where even that write failed, since an unhandled rejection would take the
+    // process down. A missing provider is not an HTTP error either: it settles as `failed`,
+    // which is a fact about the call rather than a refusal of the request.
+    void runNoteSync({
+      db,
+      userId,
+      sessionId: id,
+      sessionDir: sessionDir(owned.workspace.dirPath, id),
+      sessionTitle: owned.session.title,
+      summarize: makeNoteSummarizer({ provider, modelId, reasoning: noteSyncReasoning }),
+      model: modelId,
+    }).catch(() => undefined);
+
+    return reply.code(202).send({ sync: readNoteSync(db, id) });
   });
 
   /* ---------------------------------- insights ---------------------------------- */

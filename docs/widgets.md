@@ -80,8 +80,17 @@ consumer add a second path to the same query. Likewise the arithmetic lives in
      | { type: "session.renamed"; sessionId: string; title: string }
      | { type: "session.deleted"; workspaceId: string; sessionId: string }
      | { type: "turn.started"; sessionId: string }
-     | { type: "turn.finished"; sessionId: string };
+     | { type: "turn.finished"; sessionId: string }
+     | { type: "plan.changed"; sessionId: string }
+     | { type: "quiz.changed"; sessionId: string }
+     | { type: "diagram.changed"; sessionId: string }
+     | { type: "library.changed"; sessionId: string }
+     | { type: "chat.jump"; toolCallId: string }
+     | { type: "chat.jumpToMessage"; messageId: string };
    ```
+
+   (`composables/widgetEvents.ts` is the source of truth; this list is the shape of it. The
+   `chat.jump*` pair runs the other way — a widget asking the message list to scroll.)
 
 3. **A data failure is reported inside the panel, never as a toast.** A widget that cannot load
    its numbers is not a failure of the conversation the user is having — the same split

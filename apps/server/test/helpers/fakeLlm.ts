@@ -67,6 +67,7 @@ export interface FakeTurn {
 const OUT_OF_BAND_MARKERS = [
   "topic-classification function", // threads.ts — THREAD_SYSTEM_PROMPT
   "reflective study coach", // insights.ts — INSIGHT_SYSTEM_PROMPT
+  "short summary of a study conversation", // notesExport.ts — NOTE_SUMMARY_SYSTEM_PROMPT
 ];
 
 /**

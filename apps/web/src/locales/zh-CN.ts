@@ -1147,6 +1147,29 @@ export default {
   },
 
   /**
+   * Exporting a conversation's notes into the source library — the topbar control, and the state
+   * of the run it starts.
+   *
+   * Its own namespace rather than a corner of `notes.*`: this is about the *library*, and the
+   * notes panel knows nothing about it. The three settled outcomes keep their own sentences,
+   * because "there were no notes", "it worked" and "it produced nothing usable" ask the reader
+   * for different things and a single failure line would conflate them.
+   */
+  noteSync: {
+    action: "同步到资料库",
+    /** The button's tooltip: what it does, and the one consequence worth knowing before pressing. */
+    hint: "把这次会话的笔记导出成资料：会写进资料库，账号内其他会话也能引用。",
+    running: "正在同步…",
+    /** `count` is a plural: `en` carries both branches, `zh-CN` the one. */
+    done: "已同步 {count} 条笔记",
+    empty: "这次会话还没有笔记",
+    failed: "同步失败",
+    /** A `running` run past its timeout — the process that owned it is gone. */
+    stuck: "上一次同步没有结束",
+    force: "强制重新同步",
+  },
+
+  /**
    * The thread widget's own strings. Widget display name/hint live under `widgets.thread`;
    * these are the panel and its tree.
    */
@@ -1288,6 +1311,7 @@ export default {
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
+    SYNC_IN_PROGRESS: "这个会话正在同步到资料库，请稍候。",
     INSIGHT_NOT_FOUND: "找不到这条洞察，可能已经被新一次总结替换了。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
     MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
@@ -1368,6 +1392,7 @@ export default {
       agent_workspace: "助理写入工作区",
       agent_session: "助理写入会话",
       web: "网页",
+      note_export: "学习笔记",
       discovered: "已有文件",
     },
     /** The coarse content types. A closed set, so a key per value rather than a pattern. */

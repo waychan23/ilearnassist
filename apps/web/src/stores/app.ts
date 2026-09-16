@@ -53,6 +53,7 @@ import type {
   ProviderConfig,
   PublicConfig,
   Session,
+  SessionNoteSync,
   SessionSettings,
   Source,
   ToolCall,
@@ -264,6 +265,18 @@ export const useAppStore = defineStore("app", () => {
    * an idle conversation must not keep asking.
    */
   let parsePoll: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * The active conversation's note-export state, and the timer that watches it.
+   *
+   * The export is asynchronous on the server by design — the POST returns as soon as the job is
+   * recorded — so the panel polls for the outcome the same way the attachment chips do, and for
+   * the same reason: a button whose press produced nothing visible is a control that looks
+   * broken. It stops on any settled status, so an idle conversation asks for nothing.
+   */
+  const noteSync = ref<SessionNoteSync | null>(null);
+  const noteSyncing = ref(false);
+  let noteSyncPoll: ReturnType<typeof setInterval> | null = null;
 
   /** Attachment ids whose re-parse was asked for but has not yet settled. */
   const markingParsing = ref(new Set<string>());
@@ -578,6 +591,10 @@ export const useAppStore = defineStore("app", () => {
     draftSettings.value = {};
     pendingAttachments.value = [];
     parseStatus.value = {};
+    // The export's state and its timer go with the account: a run started by one person's click
+    // must not report itself into whoever signs in next.
+    stopNoteSyncPolling();
+    noteSync.value = null;
     // The half-arrived reply is as much a part of the account as the messages are, and the
     // login screen has no business showing either.
     streaming.value = EMPTY_STREAMING();
@@ -1137,9 +1154,18 @@ export const useAppStore = defineStore("app", () => {
 
     activeSessionId.value = id;
     activeCopilotId.value = activeSession.value?.copilotId ?? null;
+    /*
+     * The export state belongs to the conversation being left, so it is cleared rather than kept —
+     * and the poll for it is stopped with it. A poll left running would settle the *previous*
+     * conversation's run into the new one's panel, which is a status line about somebody else's
+     * notes.
+     */
+    stopNoteSyncPolling();
+    noteSync.value = null;
     const [loaded, widgets] = await Promise.all([
       api.listMessages(id),
       api.listSessionWidgets(id),
+      loadNoteSync(id),
     ]);
     messages.value = loaded;
     workspaceWidgets.value = widgets.workspace;
@@ -1606,6 +1632,98 @@ export const useAppStore = defineStore("app", () => {
       clearInterval(parsePoll);
       parsePoll = null;
     }
+  }
+
+  /* ------------------------- notes → the library ---------------------------- */
+
+  function stopNoteSyncPolling(): void {
+    if (noteSyncPoll !== null) {
+      clearInterval(noteSyncPoll);
+      noteSyncPoll = null;
+    }
+    noteSyncing.value = false;
+  }
+
+  /**
+   * Read this conversation's export state, once.
+   *
+   * Called when a conversation is opened, so a run started in another tab — or finished while the
+   * page was closed — is on screen rather than remembered only by whoever pressed the button.
+   * A failure is silently left as "never exported": the panel then shows an idle button, which is
+   * the honest reading of a state nobody could fetch.
+   */
+  async function loadNoteSync(sessionId: string): Promise<void> {
+    try {
+      const { sync } = await api.getNoteSync(sessionId);
+      // Dropped when the reader has moved on, the `loadedSessionId` idiom the other lists use:
+      // a reply that arrives after a switch describes a conversation that is no longer open.
+      if (activeSessionId.value !== sessionId) return;
+      noteSync.value = sync;
+    } catch {
+      if (activeSessionId.value === sessionId) noteSync.value = null;
+    }
+  }
+
+  /**
+   * Export this conversation's notes, and follow the run to its end.
+   *
+   * A **start** failure is reported; a run that later settles `failed` is not. That split is not
+   * tidiness: the status line is on screen for as long as the conversation is and carries the
+   * server's own sentence, so a toast would say the same thing twice — while a press that could
+   * not even be recorded has nowhere else to appear, and a button that does nothing is exactly
+   * what this app keeps out of the UI.
+   */
+  async function syncNotesToLibrary(force = false): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return;
+    noteSyncing.value = true;
+    try {
+      const { sync } = await api.startNoteSync(sessionId, force ? { force: true } : {});
+      if (activeSessionId.value !== sessionId) return;
+      noteSync.value = sync;
+      startNoteSyncPolling(sessionId);
+    } catch (e) {
+      setError(messageOf(e));
+      stopNoteSyncPolling();
+      // The refusal is the one failure with a state to re-read: another tab's run is live, and
+      // the panel should say so rather than sitting on the button it just failed to press.
+      await loadNoteSync(sessionId);
+    }
+  }
+
+  /**
+   * Follow a run until it settles.
+   *
+   * `tick` first and the interval after, the shape `startParsePolling` uses — a run this short
+   * would otherwise always cost one interval before the panel noticed it had finished.
+   */
+  function startNoteSyncPolling(sessionId: string): void {
+    if (noteSyncPoll !== null) return;
+
+    const tick = async (): Promise<void> => {
+      try {
+        const { sync } = await api.getNoteSync(sessionId);
+        if (activeSessionId.value !== sessionId) {
+          stopNoteSyncPolling();
+          return;
+        }
+        noteSync.value = sync;
+        if (sync && sync.status !== "running") {
+          stopNoteSyncPolling();
+          // Only when it touched something: a run that rewrote nothing left the panel's copy
+          // correct, and refetching for it would be work about a change that did not happen.
+          if (sync.status === "ok" && sync.added + sync.updated + sync.removed > 0) {
+            emitWidgetEvent({ type: "library.changed", sessionId });
+          }
+        }
+      } catch {
+        // A failed poll is not worth surfacing — the next one usually succeeds, and the status
+        // line keeps showing the last known state either way.
+      }
+    };
+
+    noteSyncPoll = setInterval(() => void tick(), 1500);
+    void tick();
   }
 
   /**
@@ -2416,6 +2534,8 @@ export const useAppStore = defineStore("app", () => {
     sources,
     sourcesLoading,
     sourcesError,
+    noteSync,
+    noteSyncing,
     workspaces,
     copilots,
     sessions,
@@ -2466,6 +2586,8 @@ export const useAppStore = defineStore("app", () => {
     enabledWidgetIds,
     // actions
     init,
+    loadNoteSync,
+    syncNotesToLibrary,
     signIn,
     changePassword,
     enterApp,

@@ -757,6 +757,36 @@ export const DDL = `
   -- list is small enough for — one conversation's observations, tens of rows at most.
   CREATE INDEX IF NOT EXISTS idx_insights_session
     ON insight_items(session_id, adopted, created_at);
+
+  /*
+   * One conversation's note export: the state of its last — or current — run.
+   *
+   * Derived data, like session_threads and session_diagrams, so no deleted_at: nothing in the
+   * product deletes a run, and a column no read filters on would make the soft-delete invariant
+   * false the moment it was written.
+   *
+   * The primary key IS the session. The row answers one question — "what is this conversation's
+   * export doing" — in a single statement, and it is also the lock: 'running' is written before
+   * any work starts, with no await between the read and the write, so of two concurrent starts
+   * exactly one wins. A log of runs would be a different table with a different question, and it
+   * could not be the lock.
+   *
+   * No summary column: that belongs to the conversation, not to the run, and it is regenerated
+   * on every sync — see sessions.summary.
+   */
+  CREATE TABLE IF NOT EXISTS session_note_syncs (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    -- 'running' | 'ok' | 'empty' | 'failed'.
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    -- What the run did: rows created, rows rewritten, rows soft-deleted.
+    added INTEGER NOT NULL DEFAULT 0,
+    updated INTEGER NOT NULL DEFAULT 0,
+    removed INTEGER NOT NULL DEFAULT 0,
+    -- The provider's or the parser's own sentence. Untranslated, like every raw failure string.
+    error TEXT
+  );
 `;
 
 /**

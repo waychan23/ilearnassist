@@ -22,9 +22,13 @@ import { dirname } from "node:path";
  */
 
 /** Which out-of-band call a block came from. One log file each. */
-export type ModelLogKind = "threads" | "insights";
+export type ModelLogKind = "threads" | "insights" | "notes";
 
-const logFiles: Record<ModelLogKind, string | null> = { threads: null, insights: null };
+const logFiles: Record<ModelLogKind, string | null> = {
+  threads: null,
+  insights: null,
+  notes: null,
+};
 
 /**
  * Point the logs at their files (the process entry point), or `null` to silence one (tests).
