@@ -117,6 +117,7 @@ import { needsSummary, summarizeImage } from "./agent/mediaSummary.js";
 import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
+import { COLLECT_PAGE_GUIDANCE } from "./tools/collectPage.js";
 import { PLAN_GUIDANCE } from "./tools/planTools.js";
 import { QUIZ_GUIDANCE } from "./tools/quizReview.js";
 import { SUSPENDING_TOOLS } from "./tools/suspending.js";
@@ -3344,6 +3345,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     planGuidance?: string;
     /** Present when the quiz widget is installed; appended to the turn's system prompt. */
     quizGuidance?: string;
+    /**
+     * Present when `ila_collect_page` survived assembly; appended to the turn's system prompt.
+     * Not a widget — this one is on by default, which is exactly why it needed the guidance.
+     */
+    collectPageGuidance?: string;
   }
 
   /**
@@ -3530,6 +3536,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       writeLocation,
       planGuidance: planInstalled ? PLAN_GUIDANCE : undefined,
       quizGuidance: quizInstalled ? QUIZ_GUIDANCE : undefined,
+      /*
+       * Read off the assembled set rather than off the config, and that is the whole of the
+       * condition: a Copilot whose allow-list excludes `ila_collect_page` gets no guidance for a
+       * call it cannot make, while the `webFetch.enabled` switch is already expressed by the
+       * context above having been passed at all. Asking the array is the one form of the
+       * question that cannot disagree with the answer.
+       */
+      collectPageGuidance: tools.some((t) => t.name === "ila_collect_page")
+        ? COLLECT_PAGE_GUIDANCE
+        : undefined,
     };
   }
 
@@ -3836,6 +3852,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         writeLocation: ctx.writeLocation,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
+        collectPageGuidance: ctx.collectPageGuidance,
         quizMakeupNote,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
@@ -3982,6 +3999,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         writeLocation: ctx.writeLocation,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
+        collectPageGuidance: ctx.collectPageGuidance,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });
@@ -4107,6 +4125,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         writeLocation: ctx.writeLocation,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
+        collectPageGuidance: ctx.collectPageGuidance,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });

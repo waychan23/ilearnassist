@@ -595,6 +595,64 @@ describe("POST /api/sessions/:id/chat", () => {
     };
   }
 
+  /**
+   * The *streamed* turn's request, which `sentToModel` cannot promise.
+   *
+   * A turn fires out-of-band calls of its own — the auto-titler, the image summary pass — and
+   * one of them can land first, so `requests()[0]` is whichever got there. `stream: true` is
+   * the conversation's own call and nothing else's, which matters most for the system prompt:
+   * every one of those side calls has a prompt of its own to be mistaken for.
+   */
+  function streamedTurn(): { system: string; tools: string[] } {
+    const body = llm.requests().find((r) => r.stream === true) as
+      | { messages: { role: string; content: unknown }[]; tools?: { function?: { name: string } }[] }
+      | undefined;
+    if (!body) throw new Error("no streamed turn was recorded");
+    return {
+      system: JSON.stringify(body.messages[0]!.content),
+      tools: (body.tools ?? []).map((t) => t.function?.name as string),
+    };
+  }
+
+  it("tells the model it may keep a web page, on a turn where it can", async () => {
+    /*
+     * The prompt half of `ila_collect_page`. The tool was assembled, wired, stored and tested
+     * long before this, and none of it was visible in use, because nothing in the system prompt
+     * ever mentioned the tool: its own description is a *restriction* ("do this only for pages
+     * this conversation is about"), which a model that was never told to keep anything reads as
+     * "usually do not". This is what fails if the guidance stops being appended.
+     */
+    const { session } = await freshSession();
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi" });
+
+    const turn = streamedTurn();
+    expect(turn.tools).toContain("ila_collect_page");
+    expect(turn.system).toContain("ila_collect_page");
+  });
+
+  it("says nothing about keeping pages to a conversation that cannot", async () => {
+    /*
+     * The other half, and the reason the route reads the *assembled* set rather than the config:
+     * guidance for a call the model has no tool to make is an instruction it can only fail. A
+     * Copilot restricted to one file tool is the case that makes the two answers differ.
+     */
+    const { session } = await sessionFromCopilot({
+      name: "Reader",
+      systemPrompt: "Read only.",
+      allTools: false,
+      tools: ["read_file"],
+    });
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi" });
+
+    const turn = streamedTurn();
+    expect(turn.tools).toEqual(["read_file"]);
+    expect(turn.system).not.toContain("ila_collect_page");
+  });
+
   it("answers with the Copilot's prompt as it was at creation, not as it is now", async () => {
     const { copilot, session } = await sessionFromCopilot({
       name: "Coach",

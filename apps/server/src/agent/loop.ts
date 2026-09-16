@@ -87,6 +87,12 @@ export interface RunAgentInput {
   /** The same mechanism for the quiz widget: judge/record answers and recognise make-ups. */
   quizGuidance?: string;
   /**
+   * The same mechanism again for keeping a web page, on turns where `ila_collect_page` is
+   * assembled — the tool exists in every conversation with web fetching on, and this is what
+   * says when to reach for it.
+   */
+  collectPageGuidance?: string;
+  /**
    * The quiz make-up turn's grading key, appended to THIS turn's system prompt only: the
    * question's reference answer and explanation, which never travel to the client. Absent
    * on every ordinary turn.
@@ -240,6 +246,7 @@ export interface SystemPromptInput {
   persona: string;
   planGuidance?: string;
   quizGuidance?: string;
+  collectPageGuidance?: string;
   quizMakeupNote?: string;
 }
 
@@ -283,10 +290,13 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   const planNote = input.planGuidance ? `\n\n${input.planGuidance}` : "";
   // Likewise for the quiz widget: installed or not is the whole switch.
   const quizNote = input.quizGuidance ? `\n\n${input.quizGuidance}` : "";
+  // Not a widget this time — the switch is whether the tool itself was assembled, which is
+  // what "an installation with web fetching off" looks like from here.
+  const collectNote = input.collectPageGuidance ? `\n\n${input.collectPageGuidance}` : "";
   // One make-up turn's answer key, last: it is the most specific instruction in the prompt.
   const makeupNote = input.quizMakeupNote ? `\n\n${input.quizMakeupNote}` : "";
 
-  return base + workspaceNote + planNote + quizNote + makeupNote;
+  return base + workspaceNote + planNote + quizNote + collectNote + makeupNote;
 }
 
 /**
@@ -447,6 +457,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         persona: input.systemPrompt,
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
+        collectPageGuidance: input.collectPageGuidance,
         quizMakeupNote: input.quizMakeupNote,
       })
     ),
