@@ -261,7 +261,10 @@ test("the widget lists what the conversation has drawn, and locates it", async (
   await expect(page.getByTestId("file-preview-diagram-source")).toContainText("开始");
 });
 
-test("the conversation's folder is browsable from the chat header", async ({ page, request }) => {
+test("the conversation's folder is browsable from the sidebar's library", async ({
+  page,
+  request,
+}) => {
   await diagramSession(page, unique("会话文件"));
   await scriptDiagram(request, [
     { name: "browsable", source: FLOW },
@@ -270,11 +273,13 @@ test("the conversation's folder is browsable from the chat header", async ({ pag
   await expect(page.getByTestId("diagram-row").first()).toBeVisible({ timeout: 20_000 });
 
   /*
-   * Opened from the chat header's source browser rather than from the panel: a diagram is a
-   * source like any other, so the one control that lists the workspace's material lists it too
-   * — by name, with the panel staying the *filtered* view for rows the model drew.
+   * Opened from the sidebar's library row rather than from the panel: a diagram is a source like
+   * any other, so the one control that lists the workspace's material lists it too — by name, with
+   * the panel staying the *filtered* view for rows the model drew. The row is the sidebar's, and
+   * that rail is where this conversation's workspace is, so the browser opens already narrowed to
+   * it — which is what makes the conversation's own folder a row in the list below.
    */
-  await page.getByTestId("open-workspace-sources").click();
+  await page.getByTestId("open-sources").click();
   const dialog = page.getByTestId("sources-dialog");
   await expect(dialog).toBeVisible();
 

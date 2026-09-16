@@ -152,10 +152,6 @@ export const ICON_PATHS = {
    * which is already the new-conversation action one panel up. */
   "folder-plus": ["M2.5 12.5V4.5H6.5L8 6.5H13.5V12.5Z", "M8 8V11.25", "M6.4 9.6H9.6"],
 
-  /* Three stacked planes, for "everything this workspace holds" — distinct at a glance from
-   * the folder beside it, which is one conversation's own files. */
-  layers: ["M8 2.5L14 5.5L8 8.5L2 5.5Z", "M2 8.5L8 11.5L14 8.5", "M2 11.5L8 14.5L14 11.5"],
-
   /* A link: two rounded ends and the bar between them, drawn as three strokes so it reads at
    * 14px as a chain rather than as an infinity sign. */
   link: [

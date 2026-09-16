@@ -264,7 +264,6 @@ export default {
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
     startAction: "新建会话（选择助理）",
-    backToWorkspaces: "返回工作区列表",
     jumpToLatest: "回到最新",
   },
 
@@ -1322,8 +1321,6 @@ export default {
     pickFiles: "选择文件",
     addLinkHint: "服务端会抓取这个页面并保存下来，稍后可以在会话里引用。",
     viewLabel: "视图",
-    /** The chat topbar's entry point: the browser, already narrowed to this workspace. */
-    workspaceScope: "本工作区的资料",
     /** The four origin values, as the filter and every row's byline spell them. */
     origin: {
       session_attachment: "会话附件",

@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import { enterWorkspace } from "./workspaces";
+import { enterWorkspace, leaveWorkspace } from "./workspaces";
 import { scriptLlm } from "./llm";
 
 /**
@@ -41,8 +41,9 @@ test("the header toggle narrows the sidebar to a rail, and back again", async ({
   // only thing the user sees.
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(RAIL_WIDTH, 0);
   await expect(page.getByTestId("session-list")).toBeHidden();
-  // The way out goes with it. A rail is the toggle and nothing else, which is what keeps it
-  // from becoming a second, cramped copy of the sidebar.
+  // The way out goes with it — and it is still the way out, since the chat header's back arrow
+  // is gone and this row is where the workspace list is reached. A rail is the toggle and
+  // nothing else, which is what keeps it from becoming a second, cramped copy of the sidebar.
   await expect(page.getByTestId("all-workspaces")).toBeHidden();
   await expect(page.getByTestId("workspace-name")).toBeHidden();
   // The account's menu too, whole. It used to be hidden a row at a time and three of its five
@@ -95,27 +96,45 @@ test("the toggle is named for the direction it goes", async ({ page }) => {
   await expect(toggle).toHaveAttribute("aria-label", "展开侧边栏");
 });
 
-test("a rail survives leaving the workspace and coming back", async ({ page }) => {
-  // The flag is about the pane rather than about the visit, so re-entering the same
-  // workspace must not silently widen what was narrowed. The *grid* is what makes this
-  // worth a browser run: `App.vue` picks the track, and the home page in between must not
-  // inherit it — the rail class is false outside the chat view, which is the half that
-  // `ui.test.ts` covers and this one proves end to end.
+test("a rail is the only way out of itself, and the home page never inherits it", async ({
+  page,
+}) => {
+  /*
+   * This used to be "a rail survives leaving the workspace and coming back", driven through the
+   * chat header's back arrow — the one control that was still reachable at 52px. That arrow is
+   * gone (the workspace list is reached from the rail that names the workspace you are in), so
+   * the trip cannot be *made* while collapsed: expanding is both the way back and the way out.
+   * What replaces it is the two claims the old sequence was carrying, each proved where it still
+   * holds — that a rail is not a dead end, and that its grid track is the chat view's alone.
+   *
+   * The *grid* is why either half is worth a browser run: `ui.test.ts` covers the derivation of
+   * `sidebarRail`, and `App.vue` picking the track is what a component test cannot see.
+   */
   await page.goto("/");
   await enterWorkspace(page);
   await page.getByTestId("sidebar-toggle").click();
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(RAIL_WIDTH, 0);
+  await expect(page.getByTestId("all-workspaces")).toBeHidden();
 
-  await page.getByTestId("back-to-workspaces").click();
-  await expect(page.getByTestId("workspace-home")).toBeVisible();
-
-  await enterWorkspace(page);
-  await expect(page.getByTestId("sidebar-toggle")).toBeVisible();
-  await expect.poll(() => sidebarWidth(page)).toBeCloseTo(RAIL_WIDTH, 0);
-  // Still usable, not merely narrow: the toggle is the only control left, so a rail with
-  // nothing clickable in it would be a dead end.
+  // The way out, from the rail: the toggle, and then the sidebar it widens back into.
   await page.getByTestId("sidebar-toggle").click();
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(OPEN_WIDTH, 0);
+  await expect(page.getByTestId("all-workspaces")).toBeVisible();
+  await leaveWorkspace(page);
+
+  // Widened for the trip, and the home page has a rail of its own rather than this one — the
+  // chat's sidebar is not mounted on it at all, which is the term that keeps a 52px track from
+  // narrowing a page whose whole layout is a column of workspace cards.
+  await expect(page.getByTestId("sidebar")).toHaveCount(0);
+  await expect(page.locator(".home-rail")).toBeVisible();
+
+  // The toggle still works where it left off, and the flag did not come back collapsed on the
+  // way in: entering a workspace is navigation, not a reset.
+  await enterWorkspace(page);
+  await expect(page.getByTestId("sidebar-toggle")).toBeVisible();
+  await expect.poll(() => sidebarWidth(page)).toBeCloseTo(OPEN_WIDTH, 0);
+  await page.getByTestId("sidebar-toggle").click();
+  await expect.poll(() => sidebarWidth(page)).toBeCloseTo(RAIL_WIDTH, 0);
 });
 
 test("a row's settings button opens the parameters for that conversation", async ({

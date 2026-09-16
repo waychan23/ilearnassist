@@ -1010,9 +1010,18 @@ Fuller map in `docs/reference.md`.
   puts one above the menu, the rail on the second group, whose upper edge has only empty space
   above it). The footer's **workspaces-root path is gone from both rails** — it was a sentence
   nobody could act on, and the console's providers section still names the directory where that
-  matters. Two rows are conditional rather than shared, each for a stated reason — `workspaceRow`
-  (a page *about the list of workspaces* has no workspace to configure) and `sourcesRow` (the chat
-  header already carries the library button, and the home page has no header to put one in). What
+  matters. **The library row is unconditional and is the only door to that browser**: the chat
+  header used to carry a second button for it, which is the two-idioms-one-dialog this menu exists
+  to remove, so a rail is now the one surface both pages have and both of them draw the row. One
+  row is conditional, behind a prop that now says one thing with two consequences — `inWorkspace`
+  ("this rail is drawn inside a workspace") draws the **workspace settings** row, which a page
+  *about the list of workspaces* has no workspace to configure, *and* scopes the library row to
+  the active workspace, which is the pre-filtering the removed header button used to do. Two props
+  is two chances for them to disagree about the same fact. That is also why the chat header is now
+  the title and nothing else on its left: the back arrow went with the same change, since the
+  sidebar header's `all-workspaces` row already names it more precisely — the price, stated rather
+  than hidden, is that a **collapsed** rail hides that row too, so leaving a workspace from a 52px
+  rail is expand-then-click. What
   the home page *does* keep in its header is the language and the theme: those are properties of
   this browser rather than of the account, and they have nowhere else to live.
   The rail is a 272px column on a wide viewport and a strip across the top below 900px — the admin
@@ -1448,8 +1457,8 @@ Fuller map in `docs/reference.md`.
   `NON_FILE_TOOLS` either — so `fileTools.enabled: false` means no diagrams, because a diagram
   whose file was never written is half the feature. The panel is a viewer: it lists the
   conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
-  folder is the source browser, which the chat header opens pre-filtered to this workspace — see
-  `docs/diagrams.md`.
+  folder is the source browser, which the sidebar's library row opens pre-filtered to this
+  workspace — see `docs/diagrams.md`.
   **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
   comes from an out-of-band model call a button triggers, so there is nothing to bind — and
   binding would be wrong anyway, because a bound tool is something the *agent* can call and the

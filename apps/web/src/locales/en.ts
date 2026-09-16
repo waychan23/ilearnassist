@@ -205,7 +205,6 @@ const en: typeof MessageSchema = {
     autoBadgeTitle: "Titles are generated from the first turn of the conversation",
     start: "Start a conversation",
     startHint: "Type a message below; the agent will call tools as it needs them.",
-    backToWorkspaces: "Back to workspaces",
     startAction: "New conversation (choose an Assistant)",
     jumpToLatest: "Jump to latest",
   },
@@ -1132,8 +1131,6 @@ const en: typeof MessageSchema = {
     pickFiles: "Choose files",
     addLinkHint: "The server fetches the page and keeps it, so a conversation can reference it later.",
     viewLabel: "View",
-    /** The chat topbar's entry point: the browser, already narrowed to this workspace. */
-    workspaceScope: "This workspace's sources",
     origin: {
       session_attachment: "Attachment",
       workspace_upload: "Uploaded to a workspace",

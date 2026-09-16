@@ -301,7 +301,7 @@ test("an unqualified write goes to the conversation, not the workspace tree", as
 
   // …but there, in the conversation's own folder — which the source browser is now the way to
   // see: it lists the row, and the row's byline says which folder wrote it.
-  await page.getByTestId("open-workspace-sources").click();
+  await page.getByTestId("open-sources").click();
   const browser = page.getByTestId("sources-dialog");
   await expect(browser).toBeVisible();
 

@@ -2700,7 +2700,6 @@ body {
   .composer .attach-btn,
   .composer .params-btn,
   .topbar .nav-toggle,
-  .topbar .back-toggle,
   /* Compact-only, so this one is a touch target on essentially every screen it appears on —
      leaving it out would be the one topbar control that stayed small under a finger. */
   .topbar .widget-toggle {

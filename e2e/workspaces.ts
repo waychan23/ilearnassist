@@ -29,8 +29,20 @@ export async function enterWorkspace(page: Page, name?: string): Promise<void> {
   await expect(page.getByTestId("composer-input")).toBeVisible();
 }
 
-/** Back out to the workspace list, through the chat pane's own back button. */
+/**
+ * Back out to the workspace list, through the sidebar header's own back button.
+ *
+ * It is the sidebar's rather than the chat header's, which is the only one there is: the
+ * workspace list is reached from the rail that names the workspace you are in, and that rail is
+ * a drawer on a compact viewport — so this opens it first and the click closes it on the way out.
+ */
 export async function leaveWorkspace(page: Page): Promise<void> {
-  await page.getByTestId("back-to-workspaces").click();
+  // The toggle is `v-if="isCompact"`, so its presence is the viewport's answer rather than a
+  // guess: on a wide screen the sidebar is in flow and the click below is the whole of it. On a
+  // compact one the click has to be what *opens* it first — the back button lives inside the
+  // drawer, and the drawer closes itself on the way out.
+  const navToggle = page.getByTestId("nav-toggle");
+  if (await navToggle.count()) await navToggle.click();
+  await page.getByTestId("all-workspaces").click();
   await expect(page.getByTestId("workspace-home")).toBeVisible();
 }
