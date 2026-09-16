@@ -7,7 +7,8 @@ import { useAppStore } from "../../stores/app";
 // already drifted once — the local list was missing `read_document`.
 import {
   ALL_TOOL_NAMES,
-  WIDGET_IDS,
+  defaultWidgetEnabled,
+  defaultWidgetIdsForScope,
   isWidgetBoundTool,
   widgetsForScope,
 } from "../../api/types";
@@ -31,10 +32,13 @@ const toolLabel = (name: string): string => {
 };
 
 /**
- * Widget-bound tools are not checkable: a Copilot allow-list can neither enable them (the
+ * `required`-mode tools are not checkable: a Copilot allow-list can neither enable them (the
  * widget install does) nor remove them (they bypass the list in all three states), so a box
- * here would be a control that did nothing. They still live in `ALL_TOOL_NAMES` so a stale
- * allow-list naming one never errors.
+ * here would be a control that did nothing. Today that is the quiz pair and nothing else — the
+ * plan and diagram tools are `auto-install`, which means they are ordinary tools a Copilot may
+ * switch like any other. The `isWidgetBoundTool` predicate is what draws that line.
+ *
+ * They still live in `ALL_TOOL_NAMES` so a stale allow-list naming one never errors.
  */
 const pickableTools = computed(() => ALL_TOOL_NAMES.filter((name) => !isWidgetBoundTool(name)));
 
@@ -72,7 +76,14 @@ const widgets = ref<WidgetId[]>([]);
 /** Anything other than the default set — which is what forces the section open, see below. */
 const widgetsDiffer = computed(() => {
   const chosen = [...widgets.value].sort().join(",");
-  const fallback = [...WIDGET_IDS].filter((id) => sessionWidgets.some((w) => w.id === id)).sort().join(",");
+  /*
+   * `defaultWidgetEnabled` rather than "every widget this scope offers", which is what this
+   * compared against before and never was the default: the server's fallback is
+   * `DEFAULT_WIDGET_IDS`, and with an empty list the two happened to agree on the only case that
+   * reached here. Now that the default names two widgets, asking the shared predicate is the only
+   * form of the question that cannot disagree with the install the server would have made.
+   */
+  const fallback = defaultWidgetIdsForScope("session").sort().join(",");
   return chosen !== fallback;
 });
 
@@ -120,7 +131,13 @@ watch(
     draft.description = c?.description ?? "";
     draft.systemPrompt = c?.systemPrompt ?? "";
     draft.tools = [...(c?.tools ?? [])];
-    widgets.value = [...(c?.widgets ?? [])];
+    /*
+     * A new Copilot starts at the defaults — the boxes are pre-ticked so the choice is visible
+     * before the thing exists, which is what "a checkbox is for a choice made in advance" means
+     * here. An existing Copilot's own list wins, including an empty one: that is a decision, and
+     * `?? []` would erase it.
+     */
+    widgets.value = [...(c?.widgets ?? defaultWidgetIdsForScope("session"))];
     isPublic.value = c?.visibility === "public";
     allTools.value = c?.allTools ?? true;
     params.value?.load(c?.settings ?? {});

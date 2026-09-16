@@ -3,6 +3,7 @@ import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { QuizAnswer, QuizQuestionView, QuizVerdict } from "../api/types";
 import { useAppStore } from "../stores/app";
+import { codeCopyClick } from "../composables/codeCopy";
 import { renderMarkdown } from "../utils/markdown";
 import Icon from "../components/Icon.vue";
 import type { IconName } from "../utils/icons";
@@ -106,11 +107,17 @@ function statusLabel(status: QuizQuestionView["status"]): string {
   }
 }
 
+/** The words `renderMarkdown` bakes into a code block's copy control. */
+const markdownLabels = computed(() => ({
+  copy: t("common.copy"),
+  copied: t("common.copied"),
+}));
+
 const questionHtml = computed(() =>
-  props.question ? renderMarkdown(props.question.question) : ""
+  props.question ? renderMarkdown(props.question.question, markdownLabels.value) : ""
 );
 const feedbackHtml = computed(() =>
-  props.question?.feedback ? renderMarkdown(props.question.feedback) : ""
+  props.question?.feedback ? renderMarkdown(props.question.feedback, markdownLabels.value) : ""
 );
 
 /** The answer/options text quoted into the model-facing make-up message. */
@@ -206,7 +213,12 @@ async function submitFollowup(): Promise<void> {
         </div>
 
         <div class="modal-body">
-          <p class="question-text" v-html="questionHtml" data-testid="quiz-detail-question" />
+          <p
+            class="question-text"
+            v-html="questionHtml"
+            data-testid="quiz-detail-question"
+            @click="codeCopyClick"
+          />
 
           <!--
             Read-back of the given answer only. An unanswered question (pending, or
@@ -263,7 +275,7 @@ async function submitFollowup(): Promise<void> {
             </span>
             <template v-if="feedbackHtml">
               <span class="section-label">{{ t("quiz.detail.feedback") }}</span>
-              <div class="feedback" v-html="feedbackHtml" />
+              <div class="feedback" v-html="feedbackHtml" @click="codeCopyClick" />
             </template>
             <p v-else class="feedback waiting">{{ t("quiz.detail.waitingGrade") }}</p>
           </div>

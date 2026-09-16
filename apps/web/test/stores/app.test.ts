@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     createSession: vi.fn(),
     updateSession: vi.fn(),
     deleteSession: vi.fn(),
+    reportSessionLeave: vi.fn().mockResolvedValue({ status: "skipped" }),
     listMessages: vi.fn(),
     listWorkspaceWidgets: vi.fn(),
     setWorkspaceWidget: vi.fn(),
@@ -1481,6 +1482,203 @@ describe("the panel's open tab", () => {
     await store.selectSession("s1");
 
     expect(widgetPanel.activeId.value).toBe("diagram");
+  });
+});
+
+describe("leaving a conversation", () => {
+  /*
+   * The store's half of the leave report: which transitions count as leaving, and what the late
+   * title does to its own copy of the list. `composables/sessionLeave.test.ts` owns the debounce
+   * and the gate; this is where "the store tells it what is on screen" is pinned.
+   */
+
+  /*
+   * The composable is a module singleton, so the conversation it thinks is on screen and any
+   * pending timer both outlive a test — and a leftover timer fires during the *next* case's
+   * `sweep`, which reads as a report from nowhere. `forgetSession` is the production reset (the
+   * store calls it on delete and sign-out), so this is the same call the app makes rather than a
+   * test-only back door.
+   */
+  beforeEach(async () => {
+    const { forgetSession } = await import("../../src/composables/sessionLeave.js");
+    forgetSession();
+    vi.clearAllTimers();
+  });
+
+  const sweep = () => vi.advanceTimersByTimeAsync(3_000);
+
+  it("reports the conversation a switch leaves behind", async () => {
+    const store = await readyStore({ sessions: [session({ id: "s1" }), session({ id: "s2" })] });
+
+    await store.selectSession("s2");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).toHaveBeenCalledWith("s1");
+  });
+
+  it("reports the conversation a workspace switch leaves behind", async () => {
+    const store = await readyStore();
+    await store.selectWorkspace("w2");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).toHaveBeenCalledWith("s1");
+  });
+
+  it("says nothing for a conversation the model already named", async () => {
+    const store = await readyStore({ sessions: [session({ id: "s1", titleState: "model" })] });
+    await store.selectWorkspace("w2");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).not.toHaveBeenCalled();
+  });
+
+  it("patches its own copy when a title arrives late", async () => {
+    /*
+     * The reader has gone somewhere else, so there is no list request to carry this — the patch is
+     * what makes the sidebar show the name without a reload. `titleState` moves with it, which is
+     * what stops the next leave reporting the same conversation again.
+     */
+    mocks.api.reportSessionLeave.mockResolvedValue({ status: "titled", title: "递归入门" });
+    const store = await readyStore({ sessions: [session({ id: "s1" }), session({ id: "s2" })] });
+
+    await store.selectSession("s2");
+    await sweep();
+
+    expect(store.sessions.find((s) => s.id === "s1")?.title).toBe("递归入门");
+    expect(store.sessions.find((s) => s.id === "s1")?.titleState).toBe("model");
+  });
+
+  it("says nothing about a conversation it deletes", async () => {
+    // Deleting is not leaving: there is nowhere to keep a new title, and the report would be a
+    // request whose answer is a 404 by construction.
+    const store = await readyStore();
+    await store.deleteSession("s1");
+    await sweep();
+
+    expect(mocks.api.reportSessionLeave).not.toHaveBeenCalled();
+  });
+});
+
+describe("auto-install widgets", () => {
+  beforeEach(async () => {
+    localStorage.removeItem("gl-widget-active");
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    widgetPanel.reload();
+  });
+
+  const activeTab = async () =>
+    (await import("../../src/composables/widgetPanel.js")).widgetPanel.activeId.value;
+
+  const state = (id: string, enabled: boolean): WidgetState => ({
+    id: id as WidgetState["id"],
+    scope: "session",
+    enabled,
+  });
+
+  const plan = () => state("plan", true);
+  const diagram = () => state("diagram", true);
+
+  /** A store whose active conversation has exactly these session widgets installed. */
+  async function withWidgets(...session: WidgetState[]) {
+    const store = await readyStore();
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session });
+    await store.selectSession("s1");
+    return store;
+  }
+
+  function toolEnd(name: string) {
+    return {
+      type: "tool_end" as const,
+      toolCall: { id: "c1", name, input: "{}", output: "{}" },
+    };
+  }
+
+  it("picks up the plan the server installed when the tool ran", async () => {
+    /*
+     * The install is a *server* fact — the write happens during the call — so this store cannot
+     * see it without asking. Re-reading the route is the whole mechanism: the tool ran in a
+     * conversation with no plan panel, and afterwards there is one.
+     */
+    streamOf(toolEnd("ila_make_plan"), { type: "done" });
+    const store = await withWidgets();
+    // The first read is `selectSession`'s; the second is the one the tool call triggers.
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [plan()] });
+
+    await store.sendMessage("make a plan");
+
+    expect(store.sessionWidgetIds).toContain("plan");
+    expect(await activeTab()).toBe("plan");
+  });
+
+  it("does not re-read the list when the widget is already installed", async () => {
+    // The cost guard, and it matters because the plan tools fire on every progress update: a
+    // conversation with the panel open must not pay a request per call.
+    streamOf(toolEnd("ila_update_plan_progress"), { type: "done" });
+    const store = await withWidgets(plan());
+    vi.mocked(mocks.api.listSessionWidgets).mockClear();
+
+    await store.sendMessage("next chapter");
+
+    expect(mocks.api.listSessionWidgets).not.toHaveBeenCalled();
+  });
+
+  it("does not re-read the list for a tool that belongs to no widget", async () => {
+    streamOf(toolEnd("read_file"), { type: "done" });
+    const store = await withWidgets();
+    vi.mocked(mocks.api.listSessionWidgets).mockClear();
+
+    await store.sendMessage("read it");
+
+    expect(mocks.api.listSessionWidgets).not.toHaveBeenCalled();
+  });
+
+  it("installs the diagram panel without pulling the reader onto it", async () => {
+    /*
+     * A diagram is already visible inline as its own card in the message list, so opening the
+     * panel would move the reader away from the thing they can see. Installing is the whole
+     * requirement; `open` is narrowed to `ila_make_plan` for this reason.
+     */
+    const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
+    streamOf(toolEnd("ila_diagram"), { type: "done" });
+    const store = await withWidgets(state("notes", true));
+    widgetPanel.setActive("notes");
+    mocks.api.listSessionWidgets.mockResolvedValue({
+      workspace: [],
+      session: [state("notes", true), diagram()],
+    });
+
+    await store.sendMessage("draw it");
+
+    expect(store.sessionWidgetIds).toContain("diagram");
+    expect(await activeTab()).toBe("notes");
+  });
+
+  it("shows no panel when the reader has moved on while the refetch was in flight", async () => {
+    /*
+     * The refetch is fire-and-forget, so its continuation can land after the reader has opened
+     * another conversation — at which point the list it just replaced belongs to the one they
+     * left, and a tab opening for it would be a panel about somebody else's conversation.
+     */
+    const store = await withWidgets();
+    let release!: () => void;
+    // Held open so the reader can leave in the middle of the read; every later read (the
+    // `selectSession` below) answers immediately.
+    mocks.api.listSessionWidgets.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ workspace: [], session: [plan()] });
+        })
+    );
+    mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [] });
+    streamOf(toolEnd("ila_make_plan"), { type: "done" });
+
+    await store.sendMessage("make a plan");
+    await store.selectSession("s2");
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.sessionWidgetIds).not.toContain("plan");
   });
 });
 

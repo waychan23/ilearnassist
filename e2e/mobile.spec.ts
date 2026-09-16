@@ -369,6 +369,14 @@ test("layout: the file preview is a bottom sheet that fits the screen", async ({
   const box = await dialog.locator(".modal").boundingBox();
   expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
   expect(box?.width ?? 0).toBeLessThanOrEqual(412);
+
+  /*
+   * And the maximise control is not offered here at all. At this width the dialog is already a
+   * full-width sheet sized to `92dvh`, so the control could only be a no-op — and a control that
+   * renders but does nothing is worse than no control. Asserted where the breakpoint is real
+   * rather than in a desktop spec with a resized window.
+   */
+  await expect(page.getByTestId("file-preview-maximize")).toHaveCount(0);
 });
 
 test("layout: one Escape closes the file preview, not the drawer under it", async ({

@@ -1,6 +1,7 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import * as katexPluginModule from "@vscode/markdown-it-katex";
+import { iconSvg } from "./icons";
 
 type KatexPlugin = typeof import("@vscode/markdown-it-katex").default;
 
@@ -146,6 +147,49 @@ export function highlightFile(code: string, fileName: string): string {
 }
 
 /**
+ * The two words a code block's copy control needs, as *values* rather than keys.
+ *
+ * Passed in rather than read from the catalog here, because this module is pure and synchronous
+ * and the strings belong to whatever component is rendering — the same rule `widgetLabel(id, t)`
+ * follows in the widget registry. Required rather than optional: a default would let a new call
+ * site silently render code blocks with no copy control, which is the failure mode a required
+ * argument turns into a compile error.
+ */
+export interface MarkdownLabels {
+  /** The control's accessible name, and its tooltip. */
+  copy: string;
+  /** What it announces for a moment after a successful copy. */
+  copied: string;
+}
+
+/**
+ * The copy control, as markup.
+ *
+ * **No text nodes, on purpose.** `utils/noteAnchor.ts` counts occurrences of a note's quote over
+ * a message's *visible* text, so anything this button contributed to it would shift every note
+ * anchor in the message below the first code block. Both states are drawn instead — two icons, one
+ * hidden by CSS — which is also why the handler swaps an attribute rather than a label.
+ *
+ * `aria-hidden` is on the SVGs (they are decoration) and the name is on the button, so a screen
+ * reader announces one control with one name in either state.
+ */
+function codeCopyControl(labels: MarkdownLabels): string {
+  // From the catalog, so it is trusted — but escaped anyway, because "trusted" is a property of
+  // today's callers and this string becomes markup.
+  const name = md.utils.escapeHtml(labels.copy);
+  const copied = md.utils.escapeHtml(labels.copied);
+  // Both labels are carried on the element: the handler has no catalog access, and reading the
+  // *current* label back to restore it would capture "copied" on a second press inside the reset
+  // window. `data-idle-label` is the one that never changes.
+  return (
+    `<button type="button" class="code-copy" data-copy-code data-copy-state="idle" ` +
+    `data-idle-label="${name}" data-copied-label="${copied}" ` +
+    `title="${name}" aria-label="${name}">` +
+    `${iconSvg("copy")}${iconSvg("check")}</button>`
+  );
+}
+
+/**
  * Single shared markdown renderer. `html: false` escapes raw HTML, which keeps
  * arbitrary HTML injected by a model out of the DOM.
  */
@@ -164,6 +208,40 @@ const md: MarkdownIt = new MarkdownIt({
     return `<pre class="hljs"><code>${highlightCode(str, named)}</code></pre>`;
   },
 });
+
+/**
+ * Every fenced code block in a rendered string, with its contents.
+ *
+ * The marker is **unforgeable**, which is what makes a post-pass safe rather than a rewrite of
+ * generated HTML: it is emitted by the hook directly above, and a model cannot reproduce it
+ * because `highlightCode` escapes its input — a fence whose text is literally `<pre
+ * class="hljs"><code>` arrives as `&lt;pre …`. So a match can only be a code block this module
+ * made.
+ *
+ * A post-pass at all because markdown-it's `highlight` hook is registered once on the instance
+ * and is called with `(str, lang)` — there is no per-call channel to carry the labels through,
+ * and the alternatives are a mutable module-level value or a second renderer rule that would
+ * re-implement the hook's own `<pre>` decision. This keeps the hook a pure function of its input.
+ */
+const FENCED_CODE = /<pre class="hljs"><code>([\s\S]*?)<\/code><\/pre>/g;
+
+export function renderMarkdown(text: string, labels: MarkdownLabels): string {
+  return md.render(text).replace(FENCED_CODE, (whole, code: string) => {
+    // An empty fence gets no control: there is nothing to copy, and a button that copies nothing
+    // is the "renders but does nothing" this repository keeps out of its UI.
+    if (!code) return whole;
+    /*
+     * The button sits **inside** the `<pre>`, which is valid (`<button>` is phrasing content) and
+     * is why the opening tag is rewritten rather than wrapped: a wrapper div would be a block
+     * inside a `<pre>`, and the CSS positions this absolutely so it cannot disturb the code's own
+     * whitespace. No whitespace between the elements either — `<pre>` keeps it, and
+     * `utils/noteAnchor.ts` counts the text it would become.
+     */
+    return (
+      `<pre class="hljs code-block">${codeCopyControl(labels)}<code>${code}</code></pre>`
+    );
+  });
+}
 
 /**
  * Math, via KaTeX.
@@ -206,6 +284,3 @@ md.use(katexPlugin, {
   enableFencedBlocks: true,
 });
 
-export function renderMarkdown(text: string): string {
-  return md.render(text);
-}

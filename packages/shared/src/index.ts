@@ -99,24 +99,23 @@ export type QueryKind = (typeof QUERY_KINDS)[number];
  * Shared for the `ASK_USER_TOOL_NAME` reason — the client switches on it, to pick the
  * diagram card out of an assistant message's tool calls.
  *
- * It is deliberately **not** widget-bound, unlike the plan and quiz tools below. A bound
- * tool is assembled only when its widget is installed, and nothing installs a widget by
- * default (`DEFAULT_WIDGET_IDS` is empty), so binding it would mean the model has no diagram
- * tool in every ordinary conversation — which is the complaint this tool exists to answer.
- * `isWidgetBoundTool` would also keep it out of a Copilot's tool allow-list, where it could
- * then be neither enabled nor disabled. The diagram *widget* is a viewer with no tools of
- * its own.
+ * It is **not** `required`, and that is what keeps it reachable. A `required` tool is assembled
+ * only where its widget is installed, so the tool would not exist in an ordinary conversation —
+ * which is the complaint this tool exists to answer — and `isWidgetBoundTool` would keep it out
+ * of a Copilot's tool allow-list, where it could then be neither enabled nor disabled. Instead
+ * the widget declares it `auto-install`: ordinary and pickable, and drawing one installs the
+ * panel that lists it. See `WidgetTools`.
  */
 export const DIAGRAM_TOOL_NAME = "ila_diagram";
 
 /**
  * The plan tools' names. Declared here rather than in the plan section below because the
- * widget registry binds the plan widget to them at module-eval time, and a `const` used in
+ * widget registry names the plan widget's tools at module-eval time, and a `const` used in
  * an initializer has to exist first.
  *
- * They are widget-bound (see `WidgetDefinition.boundTools`): assembled for a turn only when
- * the session has the plan widget installed, and never selectable in a Copilot's tool
- * allow-list — that list can neither enable nor disable them.
+ * They are `auto-install` (see `WidgetTools`): assembled like any ordinary tool, selectable in
+ * a Copilot's allow-list like any other, and calling one installs the plan widget in that
+ * conversation. That is what lets a plan be made where no panel was ever installed.
  */
 export const PLAN_MAKE_TOOL_NAME = "ila_make_plan";
 export const PLAN_READ_TOOL_NAME = "ila_read_plan";
@@ -479,6 +478,40 @@ export const WIDGET_IDS = [
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
 
+/**
+ * The two logics a widget's tools can follow, and **the widget chooses**.
+ *
+ * A list rather than two inline string literals for the `WIDGET_SCOPES` reason: the client
+ * switches on the mode (it has to know which tool names install their widget), so a second
+ * copy of the vocabulary would drift.
+ */
+export const WIDGET_TOOL_MODES = ["required", "auto-install"] as const;
+
+export type WidgetToolMode = (typeof WIDGET_TOOL_MODES)[number];
+
+/** The tools a widget brings, and which of the two logics governs them. */
+export interface WidgetTools {
+  names: readonly ToolName[];
+  /**
+   * `"required"` — the tools exist exactly while the widget is installed at the object the turn
+   * runs in. They **bypass the session's tool allow-list in all three of its states** (every
+   * tool / a named list / none), and `isWidgetBoundTool` keeps them out of a Copilot's tool
+   * checklist, because the allow-list can neither enable nor remove them — the install is the
+   * single switch.
+   *
+   * `"auto-install"` — the tools are ordinary. They are assembled whenever their own per-turn
+   * preconditions hold, the allow-list can add or remove them, and they are pickable in a
+   * Copilot. In exchange, **calling one installs the widget in that conversation**: a capability
+   * can be reached before anyone has opened the panel for it, which is the only way a panel
+   * whose tools are what *produces* its data can ever appear on its own.
+   *
+   * The mode is per widget rather than global because the two answers are both right for
+   * different widgets: a quiz nobody can answer needs its panel installed first, while a plan
+   * the user just asked for should bring its panel with it.
+   */
+  mode: WidgetToolMode;
+}
+
 /** A built-in widget. What it is *called* is the client's business — see the web registry. */
 export interface WidgetDefinition {
   id: WidgetId;
@@ -488,63 +521,75 @@ export interface WidgetDefinition {
    */
   scopes: readonly WidgetScope[];
   /**
-   * Tools that come with the widget: they are assembled for a turn exactly when the widget is
-   * installed at the object the turn runs in, **bypassing the session's tool allow-list in all
-   * three of its states** (every tool / a named list / none). They are never shown in the
-   * Copilot tool checklist, because the allow-list can neither enable nor remove them — the
-   * widget install is the single switch. A tool here is still only *assembled* when its own
-   * per-turn preconditions hold (e.g. the plan tools require a session context).
+   * Tools that come with the widget, and how they relate to the install — see `WidgetTools`.
+   * A tool here is still only *assembled* when its own per-turn preconditions hold (e.g. the
+   * plan tools require a session context).
    */
-  boundTools?: readonly ToolName[];
+  tools?: WidgetTools;
 }
 
 export const WIDGETS: readonly WidgetDefinition[] = [
   { id: "workspace_stats", scopes: ["workspace"] },
   { id: "session_stats", scopes: ["session"] },
-  { id: "plan", scopes: ["session"], boundTools: PLAN_TOOL_NAMES },
-  { id: "quiz", scopes: ["session"], boundTools: QUIZ_TOOL_NAMES },
+  /*
+   * The plan tools are `auto-install`, and that is what makes "帮我制定一个学习计划" work in a
+   * conversation nobody has installed anything into. With `required` the tool would be assembled
+   * only where the panel already is, so the capability could never introduce itself: the model
+   * has no way to make a plan in an ordinary conversation, and no way to reach the panel that
+   * would show one. Calling any of the three installs the widget, so the plan and its panel
+   * arrive together.
+   */
+  { id: "plan", scopes: ["session"], tools: { names: PLAN_TOOL_NAMES, mode: "auto-install" } },
+  /*
+   * The quiz tools stay `required`, and the contrast is the rule rather than a leftover: a quiz
+   * exists to be *answered*, so its questions come from a card and its panel is where the answers
+   * live. `ila_quiz` suspends the turn on the card, which means the tool cannot be the thing that
+   * installs the panel — the panel has to be there to receive the answer.
+   */
+  { id: "quiz", scopes: ["session"], tools: { names: QUIZ_TOOL_NAMES, mode: "required" } },
   // The thread widget brings no tools: its classification is an out-of-band model call,
   // like the auto-titler, not a tool the agent can call.
   { id: "thread", scopes: ["session"] },
   /*
-   * Notes bring no **bound** tools, which is not the same as being unreachable.
+   * Notes name no tools of their own, which is not the same as being unreachable.
    *
    * The model reads them through the ordinary `ila_query(kind: "note")` and still cannot write
    * them — no tool creates or edits a note, so a turn can never rewrite what the learner wrote.
-   * Binding a read here would be exactly the wrong move: a bound tool exists only while this
-   * widget is installed, and nothing installs a widget by default, so the learner's own notes
-   * would be invisible in every conversation that had not opted into this panel.
+   * Naming a read here would be the wrong move in either mode: a `required` one would exist only
+   * where this panel does, so the learner's own notes would be invisible in every conversation
+   * that had not opted in, and `auto-install` has nothing to install — the notes already exist,
+   * because the learner wrote them.
    *
    * It is deliberately *not* in the "study" pack either — that pack is material derived from
    * the conversation, and this is what the learner made of it.
    */
   { id: "notes", scopes: ["session"] },
   /*
-   * The diagram widget brings no tools, and that is its whole design rather than an omission.
+   * The diagram widget declares `ila_diagram` in `auto-install` mode, which is the plan widget's
+   * shape applied to a viewer. The tool had to be reachable in an ordinary conversation for the
+   * feature to exist at all — a diagram the model cannot draw is not a diagram — and `required`
+   * would have made it reachable only where the panel already was. So the tool is ordinary, the
+   * allow-list can add or remove it, and it is pickable in a Copilot; what the mode adds is that
+   * drawing one installs the panel that lists it.
    *
-   * `ila_diagram` is an ordinary allow-listable tool — see `DIAGRAM_TOOL_NAME`. Binding it here
-   * would assemble it only when this widget is installed, and nothing installs a widget by
-   * default (`DEFAULT_WIDGET_IDS` is empty), so the model would have no way to draw a diagram
-   * in an ordinary conversation. `isWidgetBoundTool` would also keep the name out of a
-   * Copilot's checklist, so it could not be switched on there either.
-   *
-   * This panel is a *viewer*: it lists the diagrams the conversation has already drawn, and
-   * draws the one you pick. The drawing itself is a file in the conversation's own directory —
-   * there is no diagram record — so the panel reads the folder, and a `.mmd` somebody put there
-   * by hand appears in it exactly like one the model drew.
+   * The panel is still only a *viewer*: it lists the diagrams this conversation has drawn and
+   * draws the one you pick. The drawing itself is a file in the conversation's own directory plus
+   * its row, so the two are independent — a `.mmd` copied in by hand reaches the library and the
+   * file tree without a panel, and a diagram drawn in a conversation whose panel was explicitly
+   * uninstalled is still drawn.
    */
-  { id: "diagram", scopes: ["session"] },
+  { id: "diagram", scopes: ["session"], tools: { names: [DIAGRAM_TOOL_NAME], mode: "auto-install" } },
   /*
-   * The insight panel brings no tools either, and for a stronger reason than the diagram's: the
+   * The insight panel names no tools either, and for a stronger reason than the diagram's: the
    * pass it drives is an **out-of-band model call**, the `agent/title.ts` / `agent/threads.ts`
-   * shape, so there is no tool to bind.
+   * shape, so there is no tool to name.
    *
-   * Even if there were, binding it would be the wrong move twice over. A bound tool is something
-   * the *agent* can call, and the agent must not decide to spend a whole-conversation model call
-   * on a panel nobody may open — it costs a full pass over every source, and the user pressing a
-   * button is what makes that cost acceptable. And a bound tool is assembled only while its
-   * widget is installed, which with an empty `DEFAULT_WIDGET_IDS` means the capability could be
-   * switched on only from the Copilot checklist that `isWidgetBoundTool` keeps it out of.
+   * Even if there were one, both modes would be wrong. The tool would be something the *agent*
+   * can call, and the agent must not decide to spend a whole-conversation model call on a panel
+   * nobody may open — it costs a full pass over every source, and the user pressing a button is
+   * what makes that cost acceptable. And `auto-install` would be wrong in the other direction:
+   * an install is not a request for a pass, so the panel would arrive empty and look broken
+   * rather than ready.
    *
    * `ila_query` is the agent's own way into the material this panel reflects on. Two doors to the
    * same data on purpose: the agent reads it during a turn, the panel thinks about it when asked.
@@ -602,23 +647,34 @@ export function widgetGroupsForScope(scope: WidgetScope): readonly ScopedWidgetG
 }
 
 /**
- * Every tool bound to at least one of `ids`, de-duplicated. The server reads this when
- * assembling a turn's tools; the client reads it to keep the bound tools out of the tool
- * checklist.
+ * Every `required`-mode tool of at least one of `ids`, de-duplicated. The server reads this when
+ * assembling a turn's tools — a name here is what makes an absent tool context assemble nothing
+ * — and the client reads it to keep those tools out of the tool checklist.
+ *
+ * `auto-install` tools are deliberately **not** in this set: they are assembled on their own
+ * merits, and the allow-list governs them like any other tool.
  */
 export function boundToolNamesForWidgetIds(ids: readonly WidgetId[]): ToolName[] {
   const enabled = new Set(ids);
   const out = new Set<ToolName>();
   for (const widget of WIDGETS) {
+    if (widget.tools?.mode !== "required") continue;
     if (!enabled.has(widget.id)) continue;
-    for (const name of widget.boundTools ?? []) out.add(name);
+    for (const name of widget.tools.names) out.add(name);
   }
   return [...out];
 }
 
-/** Whether a tool name belongs to any widget (bound tools are never hand-picked). */
+/**
+ * Whether a tool name is switched by a widget's install rather than by the tool allow-list.
+ *
+ * Only `required`-mode tools are, and this predicate is what keeps them out of a Copilot's
+ * checklist — a box there could neither enable nor remove one, so it would be a control that
+ * does nothing. The `auto-install` names answer `false` on purpose: they are ordinary tools a
+ * Copilot may enable or disable like any other.
+ */
 const WIDGET_BOUND_TOOL_NAMES: ReadonlySet<string> = new Set(
-  WIDGETS.flatMap((w) => w.boundTools ?? [])
+  WIDGETS.filter((w) => w.tools?.mode === "required").flatMap((w) => w.tools?.names ?? [])
 );
 
 export function isWidgetBoundTool(name: string): boolean {
@@ -626,14 +682,48 @@ export function isWidgetBoundTool(name: string): boolean {
 }
 
 /**
- * What a brand-new object starts with — deliberately **empty**, so the panel is opt-in and the
- * create dialogs are where the choice is presented.
+ * Which widget a tool call installs, if any — the reverse of the two lookups above, and the only
+ * place that answers "does calling this tool install something?".
  *
- * This is a product decision about what every *future* object starts with, and it never
- * retroactively changes an existing one: a row exists for anything that has been decided (see
- * `WidgetState`), so changing this list cannot reach an object that has already answered.
+ * Read by the **server** to write the install, and by the **client** to know its own copy of the
+ * widget list has just gone stale. One function for both, because two would be two opinions about
+ * which tools install — and a client that missed one would show a panel the server had already
+ * created, or fail to show one it had.
+ *
+ * First match wins; the auto-install sets are disjoint, so the order of `WIDGETS` cannot matter
+ * to an answer.
  */
-export const DEFAULT_WIDGET_IDS: readonly WidgetId[] = [];
+export function autoInstallWidgetForTool(name: string): WidgetId | undefined {
+  for (const widget of WIDGETS) {
+    if (widget.tools?.mode !== "auto-install") continue;
+    if ((widget.tools.names as readonly string[]).includes(name)) return widget.id;
+  }
+  return undefined;
+}
+
+/**
+ * What a brand-new conversation starts with: the two panels that are *views over what the
+ * conversation already holds*.
+ *
+ * `notes` is what the learner wrote and `sources` is what the conversation is working from.
+ * Both are useful before anybody asks for them, and neither needs setting up — which is what
+ * separates them from the rest. A plan, a quiz, a diagram and an insight pass are all things a
+ * conversation *produces*, so a panel for one of those is meaningful only once there is
+ * something in it, and `plan` and `diagram` install themselves when their tool runs.
+ *
+ * This is a product decision about what every *unanswered* object starts with, and the word
+ * matters: a row exists for anything that has been **decided** (installed or uninstalled, see
+ * `WidgetState`), and this is the answer for everything else. Two consequences are load-bearing
+ * rather than incidental:
+ *
+ * - Changing this list reaches every object nobody has answered for — including ones that
+ *   already exist, which is why it is a decision about *absence* rather than about the future.
+ *   The three create dialogs prefill this list so the choice is visible before the object is
+ *   made; a caller that sends `[]` still means "none", and that stops the fall-through.
+ * - An uninstall writes `enabled = 0` rather than deleting the row, which is what keeps a
+ *   widget removed from *this* list from coming back the moment the list changes again.
+ */
+export const DEFAULT_WIDGET_IDS: readonly WidgetId[] = ["notes", "sources"];
 
 export function isWidgetId(value: unknown): value is WidgetId {
   return typeof value === "string" && (WIDGET_IDS as readonly string[]).includes(value);
@@ -657,11 +747,29 @@ export function defaultWidgetEnabled(id: WidgetId): boolean {
 }
 
 /**
+ * The default widgets that accept `scope` — what a create dialog should actually prefill, and
+ * what a server fallback at one level should actually write.
+ *
+ * `DEFAULT_WIDGET_IDS` is one list, and a level can only install what it accepts. That is not a
+ * matter of installing too much: `parseWidgetIds` **refuses** a misplaced id with
+ * `WIDGET_SCOPE_UNSUPPORTED` rather than filtering it, so a create request carrying a
+ * session-scope default at workspace scope does not install the wrong widgets — it fails, and the
+ * object is never created. The defaults are session-scope today and every scope's answer is the
+ * same empty-relative-to-it list, which is exactly why the mistake is easy to make and worth a
+ * function rather than a `filter` at each of the five call sites.
+ */
+export function defaultWidgetIdsForScope(scope: WidgetScope): WidgetId[] {
+  return widgetsForScope(scope)
+    .filter((w) => defaultWidgetEnabled(w.id))
+    .map((w) => w.id);
+}
+
+/**
  * One widget's state on one object — what the install lists show and the tab strip renders.
  *
- * This is the **resolved** record, not the stored one: an object nothing has ever decided
- * about answers `enabled: false` here, which is why a call site cannot tell a stored row from
- * a defaulted one. Storing the difference would be a second source of truth for the same fact.
+ * This is the **resolved** record, not the stored one: an object nothing has ever decided about
+ * answers `defaultWidgetEnabled(id)`, which is why a call site cannot tell a stored row from a
+ * defaulted one. Storing the difference would be a second source of truth for the same fact.
  */
 export interface WidgetState {
   id: WidgetId;
@@ -861,16 +969,28 @@ export interface GetSessionDiagramsResponse {
 /**
  * What a note *is*, in the learner's own terms.
  *
- * Four values rather than "annotation" plus a separate kind: 标注 is the one-click quick
- * action and the other three are what the window offers, but all four are the same thing to
- * the store, the list and the filter — a note with a label. The quick action picks a
- * *default type*; it does not create a second kind of row.
+ * One list rather than "annotation" plus a separate kind: 标注 is the one-click quick action
+ * and the rest are what the window offers, but all of them are the same thing to the store, the
+ * list and the filter — a note with a label. The quick action picks a *default type*; it does not
+ * create a second kind of row.
+ *
+ * The middle three are three stances a learner takes on the material, and they are angles rather
+ * than kinds: 灵感 is something the reading prompted, 疑问 is something it left open, and 观点 is
+ * something the reader now holds a position on. That last one is the reason the list is not
+ * "question and idea" alone — a note that disagrees with the material, or agrees with it more
+ * firmly than the material does, had nowhere to go before it existed.
+ *
+ * **`annotation` is the one member a note may not always be offered**, and that is a presentation
+ * rule rather than a stored one: it means "this marks a passage", so the window hides it for a
+ * note with nothing marked — the one written from the panel's own button rather than from a
+ * selection. The list is what exists; which of it a given window offers is the client's business,
+ * and `NoteEditor.vue` is where that is decided.
  *
  * Note this is not the `notes` field a `QuizAnswer` carries. That is one question's
  * free-text remark, stored inside the answer; a `Note` below is a record of its own, with an
  * id, a type and (usually) a place in a conversation.
  */
-export const NOTE_TYPES = ["annotation", "idea", "question", "other"] as const;
+export const NOTE_TYPES = ["annotation", "idea", "question", "opinion", "other"] as const;
 
 export type NoteType = (typeof NOTE_TYPES)[number];
 
@@ -2231,6 +2351,16 @@ export interface FileContent {
    * and a `.mmd` nobody drew here — so the client treats "not present" as "no summary".
    */
   summary?: string;
+  /**
+   * The page these bytes came from, set only on a `page` source's preview.
+   *
+   * The preview of a page source is the app's *stored copy* of the reading — extracted HTML, shown
+   * as source. Offering "open in browser" there means the dialog has to know where the reading came
+   * from, and the alternative was a second request for a field the route already has in hand
+   * (`Source.url`). Absent for every other file, which is the same "no page, nowhere to go" the
+   * listing rows render on.
+   */
+  url?: string;
 }
 
 /**
@@ -2435,6 +2565,36 @@ export interface Copilot {
 export type TitleSource = "auto" | "user";
 
 /**
+ * How the automatic titler last left a conversation — absent when it has never run.
+ *
+ * A different question from `TitleSource` beside it, and the difference is the whole reason this
+ * exists: that one says *who owns* the title, and this says **how the automatic pass fared**.
+ *
+ * - `"model"` — the model wrote the title. Nothing left to do.
+ * - `"fallback"` — the call failed, and what is showing is the user's own clipped words. This is
+ *   the state the retry exists for, and it used to be indistinguishable from the one above: both
+ *   leave `titleSource: "auto"` and a non-empty title, so nothing could tell a titled conversation
+ *   from one that had merely failed to be.
+ * - absent — never attempted, because the turn produced no text to name. The title is still the
+ *   create-time placeholder, which is equally worth another try.
+ */
+export type TitleState = "model" | "fallback";
+
+/**
+ * What `POST /api/sessions/:id/leave` answers.
+ *
+ * Three outcomes rather than a boolean, because the client does something different with each:
+ * `titled` carries a title to show, `skipped` means nothing was wrong and nothing needed doing,
+ * and `failed` means the model call did not work — which the reader is told nothing about, since
+ * they have already left and the next leave will try again.
+ */
+export interface TitleRetryResult {
+  status: "titled" | "skipped" | "failed";
+  /** Present only with `titled`. */
+  title?: string;
+}
+
+/**
  * A conversation.
  *
  * The Copilot fields are a **snapshot, not a reference**. `copilotId` is the only link back,
@@ -2466,6 +2626,14 @@ export interface Session {
   tools: string[];
   title: string;
   titleSource: TitleSource;
+  /**
+   * How the automatic titler last left this conversation — see `TitleState`.
+   *
+   * On the wire because the *client* is the one that decides whether to ask for a retry: it
+   * reports a leave, and asking the server to re-title a conversation the model already named
+   * would be a model call per conversation the reader walks away from.
+   */
+  titleState?: TitleState;
   settings: SessionSettings;
   /**
    * What this conversation is about, in the user's own words. Empty means nobody wrote one.

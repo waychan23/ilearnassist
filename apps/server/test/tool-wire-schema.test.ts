@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import type { ProviderDef } from "../src/config.js";
-import { EXPLORE_KINDS, QUERY_KINDS } from "@ilearnassist/shared";
+import { EXPLORE_KINDS, PLAN_TOOL_NAMES, QUERY_KINDS } from "@ilearnassist/shared";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
@@ -147,6 +147,22 @@ describe("the tools a provider is sent", () => {
     expect(tools.every((t) => typeof t.function?.name === "string" && t.function.name.length > 0)).toBe(
       true
     );
+  });
+
+  it("offers the plan tools in a conversation with no widget installed", async () => {
+    /*
+     * The `auto-install` mode's whole premise, asserted where the schemas are checked.
+     *
+     * Two things are load-bearing here at once. The feature: a plan must be makeable where nobody
+     * installed the plan panel, or the capability can never introduce itself. And this file's own
+     * rule — a tool assembled only under a condition gets **zero** wire coverage until a case sets
+     * that condition up, which is the hole `sendOneTurn(workspaceScope?)` exists to close. These
+     * three are the ones most at risk of the trap below, because `planTreeInputSchema` carries the
+     * only recursive (`z.lazy`) shape any tool sends: its top-level `type` would go missing the
+     * same way a union's does.
+     */
+    const names = sentTools(await sendOneTurn()).map((t) => t.function?.name);
+    expect(names).toEqual(expect.arrayContaining([...PLAN_TOOL_NAMES]));
   });
 
   it("offers ila_explore only once the conversation holds an `@` grant", async () => {

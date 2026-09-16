@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { widgetsForScope, type WidgetId } from "../../api/types";
+import { defaultWidgetIdsForScope, widgetsForScope, type WidgetId } from "../../api/types";
 import { useAppStore } from "../../stores/app";
 import { widgetLabel } from "../../widgets/registry";
 import GenerationParams from "../GenerationParams.vue";
@@ -42,8 +42,16 @@ const sessionWidgets = widgetsForScope("session");
  * The set is *seeded* from the chosen Copilot and sent as an explicit list when the conversation
  * is created, which is what makes the Copilot's selection a starting point rather than a
  * constraint.
+ *
+ * **Starting from the defaults rather than from `[]`, and that is not cosmetic.** This dialog
+ * always sends the list it holds, and an explicit `[]` means "none" — it *stops* the server's
+ * fall-through to the defaults. So an empty start here would have made a non-empty default
+ * invisible in every conversation created through the UI, which is most of them.
+ *
+ * A Copilot's own list still wins, including when it is empty: a Copilot that installs nothing is
+ * a decision, and `?? []` below would erase it if it were written the other way round.
  */
-const widgets = ref<WidgetId[]>([]);
+const widgets = ref<WidgetId[]>(defaultWidgetIdsForScope("session"));
 
 function toggleWidget(id: WidgetId) {
   const i = widgets.value.indexOf(id);
@@ -64,7 +72,14 @@ watch(
   (id) => {
     const copilot = id ? store.copilots.find((c) => c.id === id) : undefined;
     params.value?.load(copilot?.settings ?? {});
-    widgets.value = [...(copilot?.widgets ?? [])];
+    /*
+     * The defaults rather than `[]`, and the distinction is the whole point of them: no Copilot
+     * means nobody has chosen, while a Copilot whose list is `[]` means somebody chose *none*. A
+     * Copilot's list is always resolved server-side, so this only ever falls back for the
+     * no-Copilot case — but writing it as `[]` is how "nobody chose" would silently become "chose
+     * nothing".
+     */
+    widgets.value = [...(copilot?.widgets ?? defaultWidgetIdsForScope("session"))];
   },
   { immediate: true, flush: "post" }
 );

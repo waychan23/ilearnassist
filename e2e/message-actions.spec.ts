@@ -140,3 +140,64 @@ test("offers no tail actions while a reply is streaming", async ({ page, request
   await expect(page.getByTestId("composer-send")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("message-delete")).toHaveCount(1);
 });
+
+/*
+ * The clipboard needs granting, and it is granted for the whole file rather than for the one case
+ * below: Playwright's permissions are per test *context*, and a `describe`-scoped override is
+ * inherited by sibling describes — the trap `playwright.config.ts` documents for `storageState`.
+ * Nothing else here reads or writes the clipboard, so the widening costs nothing.
+ */
+test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+test("copies a code block, and only that block", async ({ page, request }) => {
+  /*
+   * The precondition the whole feature rests on, and the one a screenshot cannot check: the
+   * button is *inside* the `<pre>` that holds the code — because a wrapper would be a block
+   * inside a `<pre>`, and because the button must contribute no text to the message, which
+   * `utils/noteAnchor.ts` counts a note's quote over.
+   *
+   * Two blocks, so "the one you pressed" is a real question: a handler that reached for the
+   * first `<pre>` on the page would pass a single-block test.
+   */
+  await scriptLlm(request, {
+    title: "两段代码",
+    turns: [
+      {
+        content: [
+          "第一段：",
+          "",
+          "```js",
+          "const first = 1;",
+          "```",
+          "",
+          "第二段：",
+          "",
+          "```js",
+          "const second = 2;",
+          "```",
+        ].join("\n"),
+      },
+    ],
+  });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("composer-input").fill("给我两段代码");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("第二段：");
+
+  const blocks = page.locator('[data-copy-code]');
+  await expect(blocks).toHaveCount(2);
+  // Nothing is claimed until it is pressed: the idle label is what the catalog says, not "已复制".
+  await expect(blocks.last()).toHaveAttribute("data-copy-state", "idle");
+
+  await blocks.last().click();
+
+  await expect(blocks.last()).toHaveAttribute("data-copy-state", "copied");
+  // …and back to idle, so the control is not left claiming a copy from a minute ago.
+  await expect(blocks.last()).toHaveAttribute("data-copy-state", "idle", { timeout: 5_000 });
+
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  // The text alone: no markup, no label, and not the other block.
+  expect(copied.trim()).toBe("const second = 2;");
+});

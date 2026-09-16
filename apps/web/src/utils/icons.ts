@@ -44,6 +44,24 @@ export const ICON_PATHS = {
 
   retry: ["M14 8a6 6 0 1 1-6-6c1.68 0 3.29.67 4.49 1.83L14 5.33", "M14 2v3.33h-3.33"],
 
+  /*
+   * Two arrows chasing each other round a circle: sending this conversation's notes *into* the
+   * library. The two halves are one circle's two semicircles, each with its own head, which is
+   * the mark "sync" is read by everywhere else.
+   *
+   * Deliberately **not** `upload`, which is what it replaces: an arrow leaving a tray says "send
+   * this away", and nothing is being sent away — the notes stay where they are and a copy joins
+   * the library. It is also not a cloud in the middle, which the requirement offered as an
+   * alternative: at the 12px this is drawn at, a cloud inside a 9px circle is a smudge, and the
+   * two heads already say "round trip" without it.
+   */
+  sync: [
+    "M3.5 8A4.5 4.5 0 0 1 12.5 8",
+    "M11.1 6.5L12.5 8L13.9 6.5",
+    "M12.5 8A4.5 4.5 0 0 1 3.5 8",
+    "M2.1 9.5L3.5 8L4.9 9.5",
+  ],
+
   edit: ["M11.25 2.75L13.25 4.75L5.75 12.25L2.75 13.25L3.75 10.25Z", "M10.25 3.75L12.25 5.75"],
 
   "caret-down": ["M4 6.5L8 10.5L12 6.5"],
@@ -127,6 +145,19 @@ export const ICON_PATHS = {
     "M2.5 13.5L6.5 9.5",
     "M9.5 13.5H13.5V9.5",
     "M13.5 13.5L9.5 9.5",
+  ],
+  /* `expand` mirrored: the arrows point inward and the brackets sit inside the corners, so the
+   * two read as one control in two states rather than as two unrelated marks. The only other
+   * pair shaped like this is the theme trio, which is three. */
+  collapse: [
+    "M2.5 6.5H6.5V2.5",
+    "M6.5 6.5L2.5 2.5",
+    "M13.5 6.5H9.5V2.5",
+    "M9.5 6.5L13.5 2.5",
+    "M2.5 9.5H6.5V13.5",
+    "M6.5 9.5L2.5 13.5",
+    "M13.5 9.5H9.5V13.5",
+    "M9.5 9.5L13.5 13.5",
   ],
 
   /* The viewer's zoom pair: the same magnifier, one with a plus and one without, so the two
@@ -277,3 +308,24 @@ export type IconName = keyof typeof ICON_PATHS;
 
 /** Every icon name, for the guard in `test/icons.test.ts` to iterate. */
 export const ICON_NAMES = Object.keys(ICON_PATHS) as readonly IconName[];
+
+/**
+ * One icon as an SVG *string*, for the places that cannot mount a component.
+ *
+ * `renderMarkdown` returns HTML rather than elements — it is a `string → string` function on
+ * purpose, which is the reason KaTeX was chosen over MathJax — so the copy control inside a
+ * rendered code block cannot be an `<Icon>`. This emits the same markup, and the two have to stay
+ * in step: same viewBox, same stroke, same `aria-hidden`. The size is a literal `1em` rather than
+ * the component's prop, because a string has no prop to read, and `1em` is the component's own
+ * default.
+ *
+ * The path data is a static literal from the table above, so there is nothing to escape.
+ */
+export function iconSvg(name: IconName): string {
+  const paths = ICON_PATHS[name].map((d) => `<path d="${d}"/>`).join("");
+  return (
+    `<svg class="icon" width="1em" height="1em" viewBox="0 0 16 16" fill="none" ` +
+    `stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" ` +
+    `aria-hidden="true" focusable="false">${paths}</svg>`
+  );
+}

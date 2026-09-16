@@ -388,6 +388,37 @@ without the guard the loser overwrote the winner and the list settled on the unf
 while the controls said otherwise. `filePreviewSeq` in the store is the same shape for the same
 reason.
 
+### Following a page back to where it came from
+
+A `page` row carries the URL it was fetched from, and three surfaces now offer to open it in a
+browser: the browser's own rows, the sources panel's rows, and the **preview dialog's header** —
+because the preview shows the app's *stored copy* of the reading, so a reader who wants the page
+itself is standing in exactly that dialog. It is its own verb (`sources.openInBrowser`) rather than
+a second reading of 预览: the two go to different places, one of which is somebody else's website.
+The dialog learns where the page came from through `FileContent.url`, which `GET
+/api/sources/:id/preview` attaches — the route is the only place that holds both the bytes and the
+row, so the alternative was a second request for a field already in hand.
+
+`utils/externalLink.ts` owns the whole of it, so the three surfaces cannot drift into asking
+different questions before leaving for the same kind of destination:
+
+- **It confirms first**, naming the host rather than only asking "are you sure" — the decision is
+  about *where* you are going, and a reader who cannot see the destination is being asked to trust
+  the row they clicked.
+- **The scheme is checked** (`http`/`https` only). Not a second SSRF guard: `web_fetch`'s is the one
+  that decides what becomes a page, and the browser making this request from the user's own machine
+  is the whole difference from the tool. It is checked because `source_url` is written once and
+  rendered into a click later, and a `javascript:` or `data:` value reaching `window.open` runs in
+  *this* app's origin — a stored-XSS shape rather than a fetch shape. One predicate at the point of
+  use is what keeps a future writer of that column from being the thing that decides.
+- **`noopener,noreferrer`**, since the destination is untrusted and a handle back into the app is
+  not something to hand out. `window.open` is called in the continuation of the confirm dialog's
+  own accept click, which is a fresh gesture, so it is not popup-blocked.
+
+The control renders only where there is somewhere to go, so the three surfaces gate on the same
+predicate — an absent `url` is every non-page source, and a disabled button would be a control that
+cannot do anything.
+
 ## The registry is not an access-control list
 
 `sources` is a **catalog**: what material exists. It is not what the model may read.

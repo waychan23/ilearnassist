@@ -28,13 +28,14 @@ See [What is a file and what is a row](#what-is-a-file-and-what-is-a-row).
 
 ## The tool
 
-`ila_diagram`, with `{ name, source, summary }`. It is an **ordinary, allow-listable tool** — not
-widget-bound, unlike the plan and quiz tools. A bound tool is assembled only when its widget is
-installed, and nothing installs a widget by default (`DEFAULT_WIDGET_IDS` is empty), so binding
-this one would mean the model has no way to draw a diagram in most conversations, which is the
-complaint the tool exists to answer. It is also *not* in `NON_FILE_TOOLS`, so
-`fileTools.enabled: false` means no diagrams — an operator saying "this agent does not write
-files" should not get a diagram whose file was never written.
+`ila_diagram`, with `{ name, source, summary }`. It is an **ordinary, allow-listable tool** in
+`auto-install` mode: it is assembled whenever its own preconditions hold, a Copilot may enable or
+disable it, and drawing one **installs the diagram panel** in that conversation. What it must not
+be is `required` — that mode assembles a tool only where its widget is already installed, so the
+model would have no way to draw a diagram in most conversations, which is the complaint the tool
+exists to answer. See [widgets.md](widgets.md) for the two modes. It is also *not* in
+`NON_FILE_TOOLS`, so `fileTools.enabled: false` means no diagrams — an operator saying "this agent
+does not write files" should not get a diagram whose file was never written.
 
 `name` is a short label in any language; the server slugifies it (`diagramFileName`) and writes
 `<slug>.mmd`. **Re-using a name overwrites that file**, which is the revise mechanism: a model

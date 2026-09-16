@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WIDGET_IDS,
+  defaultWidgetIdsForScope,
   widgetsForScope,
   type MessageUsage,
   type SessionStats,
@@ -272,6 +273,67 @@ describe("over HTTP", () => {
     expect(await widgetsOf(`/api/workspaces/${ws.id}/widgets`)).toEqual([
       { id: "workspace_stats", scope: "workspace", enabled: DEFAULT_WIDGET_IDS.includes("workspace_stats") },
     ]);
+  });
+
+  it("filters the defaults to the level's own scope, which is what makes them sendable", () => {
+    /*
+     * The regression, and the reason this is a function rather than a `filter` at each call site.
+     *
+     * Two session-scope widgets are on the default list, and a workspace-scope list is what the
+     * workspace dialog sends. With the list empty the two expressions were indistinguishable;
+     * with it non-empty, sending the raw list at workspace scope is not a request that installs
+     * too much — it is a request that **fails**, so no workspace was ever created.
+     */
+    expect(defaultWidgetIdsForScope("workspace")).toEqual([]);
+    expect(defaultWidgetIdsForScope("session")).toEqual(["notes", "sources"]);
+  });
+
+  it("refuses the raw default list at workspace scope", async () => {
+    // The hazard the helper exists to avoid, pinned directly so the next person meets it in a
+    // test: a misplaced id is refused rather than narrowed.
+    const res = await env.inject({
+      method: "POST",
+      url: "/api/workspaces",
+      payload: { name: `Scoped ${Math.random().toString(36).slice(2)}`, widgets: [...DEFAULT_WIDGET_IDS] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: { code: "WIDGET_SCOPE_UNSUPPORTED" } });
+  });
+
+  it("installs the two view widgets into a conversation that asked for nothing", async () => {
+    /*
+     * The session half of the absence path, and the product decision this constant carries: a
+     * conversation nobody configured still shows what the learner wrote and what it is working
+     * from. Both are *views over what the conversation already holds*, which is what separates
+     * them from the panels that are meaningful only once something has produced data for them.
+     *
+     * The ids are named rather than derived, unlike the workspace case above: "these two, and
+     * nothing else" is the claim, and a derived assertion would pass on any list.
+     */
+    const ws = await newWorkspace(env);
+    const session = await newSession(env, ws.id);
+
+    const rows = await sessionWidgetsOf(session.id);
+    expect(rows.filter((r) => r.enabled).map((r) => r.id)).toEqual(["notes", "sources"]);
+    // …and nothing was *stored*: a state that equals the default needs no row, which is what
+    // keeps the default a default rather than something the object can drift away from.
+    const stored = env.server.db.raw
+      .prepare("SELECT COUNT(*) AS n FROM widget_instances WHERE scope = 'session' AND scope_id = ?")
+      .get(session.id) as { n: number };
+    expect(stored.n).toBe(0);
+  });
+
+  it("honours an explicit list literally, without adding the defaults", async () => {
+    /*
+     * The other half of the same rule, and the reason the create dialogs had to start sending
+     * the defaults themselves: a request that names a list gets exactly that list. `[]` means
+     * none and `["diagram"]` means one — neither means "that, plus what you would have chosen".
+     */
+    const ws = await newWorkspace(env);
+    const session = await newSession(env, ws.id, { widgets: ["diagram"] });
+
+    const rows = await sessionWidgetsOf(session.id);
+    expect(rows.filter((r) => r.enabled).map((r) => r.id)).toEqual(["diagram"]);
   });
 
   it("turns a widget off without deleting the row", async () => {

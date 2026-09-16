@@ -40,10 +40,10 @@ import {
  * in its attention, five allow-list boxes for one capability, and five ways for a Copilot to
  * end up with a partial view of a conversation.
  *
- * **Ordinary, not widget-bound**, which is the whole point: a bound tool is assembled only
- * when its widget is installed, and nothing installs a widget by default
- * (`DEFAULT_WIDGET_IDS` is empty). Binding this would hide the app's own records from every
- * ordinary conversation — the opposite of letting the agent discover what it needs.
+ * **Not bound to any widget, in either mode.** A `required` binding would assemble this only
+ * where its panel is installed, hiding the app's own records from every ordinary conversation;
+ * and this tool spans five panels, so there is no single widget an `auto-install` binding could
+ * name. Binding it would be the opposite of letting the agent discover what it needs.
  *
  * Every kind delegates to the read its widget's route already uses, so there is one
  * implementation of each answer. `kind: "quiz"` is the load-bearing case rather than a

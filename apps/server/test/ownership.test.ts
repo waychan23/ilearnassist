@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type AppDb } from "../src/db.js";
 import { startTestServer, type TestEnv } from "./helpers/tempEnv.js";
+import { defaultWidgetEnabled, type WidgetState } from "@ilearnassist/shared";
 
 /**
  * The scoping rule, walked accessor by accessor with two fully-populated accounts.
@@ -154,7 +155,7 @@ describe("sessions", () => {
   });
 
   it("does not auto-title another account's conversation", () => {
-    expect(db.setAutoTitleForUser(`s-${BOB}`, ADA, "stolen")).toBeUndefined();
+    expect(db.setAutoTitleForUser(`s-${BOB}`, ADA, "stolen", "model")).toBeUndefined();
     expect(db.getSessionForUser(`s-${BOB}`, BOB)?.session.title).toBe("T");
   });
 
@@ -263,26 +264,40 @@ describe("copilots", () => {
   });
 });
 
+/**
+ * Every row sits at the state an object that has *decided nothing* resolves to.
+ *
+ * The assertion these cases are actually making, now that the default set is not empty: what
+ * must not leak is anything the other account **chose**. Writing it as "everything is `false`"
+ * was the same claim only while `DEFAULT_WIDGET_IDS` was empty, and it would fail today for the
+ * two widgets a conversation gets without asking.
+ */
+function allAtDefault(rows: WidgetState[]): boolean {
+  return rows.every((w) => Object.is(w.enabled, defaultWidgetEnabled(w.id)));
+}
+
 describe("widgets", () => {
   it("does not see another account's installs", () => {
     /*
      * The read resolves every widget the registry knows, so a foreign id does not come back
-     * empty — it comes back as the **defaults**, which is the same answer an unwidgetted
-     * workspace gives. That is the right shape for this layer (the route refuses the id with a
-     * 404 before asking), and the thing worth pinning is that nothing Bob *decided* leaks:
-     * `enabled` stays false everywhere for Ada.
+     * empty — it comes back as the **defaults**, which is the same answer an unwidgetted object
+     * gives. That is the right shape for this layer (the route refuses the id with a 404 before
+     * asking), and the thing worth pinning is that nothing Bob *decided* leaks.
      */
     db.setWorkspaceWidgetForUser(BOB, `w-${BOB}`, "workspace_stats", true);
     db.setSessionWidgetForUser(BOB, `s-${BOB}`, "session_stats", true);
 
-    expect(db.listWorkspaceWidgetsForUser(ADA, `w-${BOB}`).every((w) => !w.enabled)).toBe(true);
-    expect(db.listSessionWidgetsForUser(ADA, `s-${BOB}`).every((w) => !w.enabled)).toBe(true);
+    expect(allAtDefault(db.listWorkspaceWidgetsForUser(ADA, `w-${BOB}`))).toBe(true);
+    expect(allAtDefault(db.listSessionWidgetsForUser(ADA, `s-${BOB}`))).toBe(true);
 
     // And the owner still has them, so the assertions above are about scoping rather than
     // about the writes having failed.
     expect(db.listWorkspaceWidgetsForUser(BOB, `w-${BOB}`)).toEqual([
       { id: "workspace_stats", scope: "workspace", enabled: true },
     ]);
+    expect(db.listSessionWidgetsForUser(BOB, `s-${BOB}`).find((w) => w.id === "session_stats")).toEqual(
+      { id: "session_stats", scope: "session", enabled: true }
+    );
   });
 
   it("does not install or uninstall on another account's object", () => {
@@ -291,8 +306,8 @@ describe("widgets", () => {
 
     // Unchanged, which is the half that matters: a refused write that still wrote would pass an
     // assertion on the return value alone.
-    expect(db.listWorkspaceWidgetsForUser(BOB, `w-${BOB}`).every((w) => !w.enabled)).toBe(true);
-    expect(db.listSessionWidgetsForUser(BOB, `s-${BOB}`).every((w) => !w.enabled)).toBe(true);
+    expect(allAtDefault(db.listWorkspaceWidgetsForUser(BOB, `w-${BOB}`))).toBe(true);
+    expect(allAtDefault(db.listSessionWidgetsForUser(BOB, `s-${BOB}`))).toBe(true);
   });
 
   it("does not read another account's statistics", () => {

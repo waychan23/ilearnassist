@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
 import { sourceRawPath } from "../src/sourcePaths.js";
+import { captureWebPage } from "../src/webCapture.js";
 import { DEFAULT_SESSION_TITLE } from "../src/db.js";
 import { NO_SCOPE, resolveWorkspaceScope } from "../src/workspaceScope.js";
 import type {
@@ -1137,6 +1138,53 @@ describe("sources", () => {
       truncated: false,
       size: body.length,
     });
+  });
+
+  it("carries the page's URL when the source is one, and nothing when it is not", async () => {
+    /*
+     * The preview dialog's "open in browser" control is gated on this field, so the two halves are
+     * asserted together: a page says where it came from, and every other file says nothing rather
+     * than an empty string — the same "absent means nowhere to go" the listing rows render on.
+     *
+     * The page is captured through `captureWebPage` with a stubbed cache, because the other branch
+     * of that function goes through `web_fetch`'s SSRF guard and refuses loopback by design — the
+     * same reason `webCapture.test.ts` drives it this way.
+     */
+    const url = "https://example.com/kept-page";
+    const page = await captureWebPage(env.server.db, {
+      user: env.userLayout,
+      userId: env.user.id,
+      owner: { kind: "workspace", id: workspace.id },
+      workspaceId: workspace.id,
+      url,
+      cache: new Map([
+        [
+          url,
+          {
+            finalUrl: url,
+            body: "<html><head><title>Kept</title></head><body><p>正文</p></body></html>",
+            contentType: "text/html",
+          },
+        ],
+      ]),
+    });
+
+    const preview = await inject({ method: "GET", url: `/api/sources/${page.id}/preview` });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json<FileContent>()).toMatchObject({ kind: "text", url });
+
+    // The other half: an upload has no page behind it, and the field must be absent rather than
+    // empty — a client gating on `url` would offer the control for `""` if this were written the
+    // lazy way.
+    const attachment = (
+      await upload({
+        name: "no-page.txt",
+        mimeType: "text/plain",
+        data: Buffer.from(`plain ${Date.now()}`).toString("base64"),
+      })
+    ).json<Attachment>();
+    const plain = await inject({ method: "GET", url: `/api/sources/${attachment.id}/preview` });
+    expect(plain.json<FileContent>().url).toBeUndefined();
   });
 
   it("sends an uploaded text file's contents", async () => {

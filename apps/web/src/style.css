@@ -1595,6 +1595,63 @@ body {
 }
 
 /*
+ * A fenced code block's copy control, written into the HTML by `renderMarkdown`.
+ *
+ * Absolutely positioned rather than in the flow, because it lives *inside* the `<pre>` — a
+ * `<button>` is phrasing content and valid there, but as a normal child it would be laid out on
+ * its own line of the code's own whitespace, which `<pre>` preserves and `noteAnchor` would then
+ * count. Out of the flow, it sits in the corner and the code is untouched.
+ *
+ * Always visible rather than hover-only: a control that appears on hover is invisible on a touch
+ * screen, and this one has no other affordance. `--text-3` keeps it quiet next to the code, at
+ * full contrast when pointed at or focused.
+ */
+.code-copy {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  /* Selecting the button would add nothing to a copy and everything to a note's quote. */
+  user-select: none;
+}
+.code-copy:hover,
+.code-copy:focus-visible {
+  background: var(--panel-2);
+  color: var(--text);
+}
+/* Both icons are in the markup and one is shown, so the state is an attribute the stylesheet
+ * paints rather than a text node the handler writes — see the note in `markdown.ts`. */
+.code-copy svg:nth-child(2) {
+  display: none;
+}
+.code-copy[data-copy-state="copied"] {
+  color: var(--accent);
+}
+.code-copy[data-copy-state="copied"] svg:nth-child(1) {
+  display: none;
+}
+.code-copy[data-copy-state="copied"] svg:nth-child(2) {
+  display: block;
+}
+.code-copy[data-copy-state="failed"] {
+  color: var(--danger-text);
+}
+/* The positioning context the control is absolutely placed against. Not scoped to `.markdown`:
+ * `renderMarkdown`'s output is also rendered in the quiz dialog, and the marker is on the `<pre>`
+ * itself. */
+pre.code-block {
+  position: relative;
+}
+
+/*
  * Display math. KaTeX lays a `$$…$$` out as a centred, `nowrap` block, so a formula wider
  * than the bubble would widen the message column instead of scrolling — `overflow-x` here
  * is the same treatment `.markdown pre` gets, one rule up.

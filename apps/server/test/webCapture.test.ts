@@ -60,6 +60,29 @@ afterEach(() => {
 });
 
 describe("a workspace page — the user pasted a link", () => {
+  it("carries the URL into the listing a client reads", async () => {
+    /*
+     * The URL is what a row's "open in browser" control is *gated on* — the client offers it only
+     * when there is somewhere to go — so a page whose `url` stopped reaching the view would make
+     * the control silently disappear from both surfaces rather than fail. Asserted on the view
+     * rather than on the capture's return value for that reason: the row having a URL is not the
+     * question, the row *arriving with one* is.
+     */
+    const url = "https://example.com/kept";
+    const row = await captureWebPage(db, {
+      user,
+      userId: "u1",
+      owner: { kind: "workspace", id: "w1" },
+      workspaceId: "w1",
+      url,
+      cache: cacheWith(url),
+    });
+
+    const views = await listSourceViewsForUser(db, user, "u1");
+    const listed = views.find((v) => v.id === row.id);
+    expect(listed?.url).toBe(url);
+  });
+
   it("stores the bytes and the text, and links it to the workspace", async () => {
     const url = "https://example.com/recursion";
     const row = await captureWebPage(db, {

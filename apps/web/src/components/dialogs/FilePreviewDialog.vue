@@ -2,9 +2,13 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+import { isNarrow } from "../../composables/breakpoints";
+import { codeCopyClick } from "../../composables/codeCopy";
+import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
 import { highlightFile, renderMarkdown } from "../../utils/markdown";
 import Icon from "../Icon.vue";
+import CopyButton from "../CopyButton.vue";
 import FileViewer from "../FileViewer.vue";
 import MermaidDiagram from "../MermaidDiagram.vue";
 import DiagramDialog from "./DiagramDialog.vue";
@@ -120,9 +124,50 @@ const view = computed<FileView>(() => {
 /** Whether this kind has a rendered view and a source view to choose between. */
 const hasTwoViews = computed(() => view.value.startsWith("markdown") || view.value.startsWith("diagram"));
 
+/**
+ * Whether what is on screen is a *page* — and so whether there is an original to go and look at.
+ *
+ * The preview of a page source shows the app's stored copy of the reading. Somebody who wants the
+ * page itself is standing in exactly this dialog, which is why the control belongs in its header
+ * as well as on the two lists: the lists are where a page is *found*, and this is where it is
+ * *open*. Gated on the URL the route attaches, so every other file has no control at all rather
+ * than a disabled one.
+ */
+const pageUrl = computed(() => (isOpenableUrl(content.value?.url) ? content.value!.url! : null));
+
+function openPage(): void {
+  if (pageUrl.value) void openExternal(pageUrl.value);
+}
+
+/**
+ * Whether the dialog is filling the viewport.
+ *
+ * Local state rather than a store field or a persisted preference: it is a property of *this*
+ * look at *this* file, and the watcher above clears it on both halves of a change of file. What
+ * warrants it is that a preview is often the thing you actually came for — a PDF, a large image,
+ * a wide table — and the default `--modal-lg` is 720px of a 1600px screen.
+ */
+const maximized = ref(false);
+
+/**
+ * Whether the control is offered at all.
+ *
+ * Hidden under the `narrow` breakpoint, where `.modal` is already a full-width bottom sheet sized
+ * to `92dvh` — so the control could only be a no-op, and a control that renders but does nothing
+ * is worse than no control. `isNarrow` rather than a local media query: the sheet spells the same
+ * breakpoint in CSS, and `utils/breakpoints` is where the two are held in step.
+ */
+const canMaximize = computed(() => !isNarrow.value);
+
+/** The words `renderMarkdown` bakes into a code block's copy control. */
+const markdownLabels = computed(() => ({
+  copy: t("common.copy"),
+  copied: t("common.copied"),
+}));
+
 const rendered = computed(() =>
   content.value?.kind === "markdown" && content.value.text !== null
-    ? renderMarkdown(content.value.text)
+    ? renderMarkdown(content.value.text, markdownLabels.value)
     : ""
 );
 
@@ -160,6 +205,12 @@ watch(
     // The viewer belongs to the diagram that opened it, so it goes on both halves of a
     // change of file — opening the next one, and closing this one.
     viewingDiagram.value = false;
+    /*
+     * And so does the *size*. The dialog is always mounted (`App.vue` has no `v-if` on it), so a
+     * `maximized` left true would open the next file full-screen — a mode nobody asked for, in a
+     * dialog that only looks like it was reopened.
+     */
+    maximized.value = false;
     if (open) {
       // Each file starts rendered: the view is a property of what is on screen, not a
       // preference, and carrying "source" onto the next Markdown file would be a mode the
@@ -183,7 +234,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
       data-testid="file-preview"
       @click.self="store.closeFile()"
     >
-      <div class="modal lg">
+      <div class="modal lg" :class="{ maximized }">
         <div class="modal-head">
           <div class="file-title">
             <h3 class="truncate" :title="store.filePreviewPath">{{ name }}</h3>
@@ -194,44 +245,102 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
               <template v-if="meta"><span> · </span><span>{{ t("files.preview.size") }} {{ meta }}</span></template>
             </span>
           </div>
-          <!-- Markdown and diagrams: the two formats with something to look at *and*
-               something that was written. A segmented control rather than two buttons,
-               because it is one choice — see `.segmented` in
-               the sheet for why the shared track is the whole point. `aria-pressed` is both
-               what a reader announces and what the sheet paints the selected segment from. -->
-          <div
-            v-if="hasTwoViews"
-            class="segmented"
-            role="group"
-            :aria-label="t('files.preview.viewLabel')"
-          >
-            <button
-              class="segment"
-              data-testid="file-preview-rendered"
-              :aria-pressed="viewMode === 'rendered'"
-              @click="viewMode = 'rendered'"
+          <!--
+            Two groups at the right-hand end, and the *split* is the point.
+
+            The head is a plain `space-between` row, so six siblings would have spread themselves
+            evenly across it — the file's name, then five controls at no particular distances from
+            each other. Grouping them is what makes the row read as the convention it is: the name
+            on the left, and everything you can *do* to the right of it.
+
+            What the two groups separate is **what they act on**. The first is the file — what you
+            are looking at, and what you can take out of it; the second is the box holding it,
+            which is what a window's controls have always been. That is why the maximize button
+            belongs with the close button rather than with the copy button: they are both about
+            the dialog, and only one of them is about the document.
+          -->
+          <div class="file-actions">
+            <!-- Markdown and diagrams: the two formats with something to look at *and*
+                 something that was written. A segmented control rather than two buttons,
+                 because it is one choice — see `.segmented` in
+                 the sheet for why the shared track is the whole point. `aria-pressed` is both
+                 what a reader announces and what the sheet paints the selected segment from. -->
+            <div
+              v-if="hasTwoViews"
+              class="segmented"
+              role="group"
+              :aria-label="t('files.preview.viewLabel')"
             >
-              {{ t("files.preview.rendered") }}
-            </button>
+              <button
+                class="segment"
+                data-testid="file-preview-rendered"
+                :aria-pressed="viewMode === 'rendered'"
+                @click="viewMode = 'rendered'"
+              >
+                {{ t("files.preview.rendered") }}
+              </button>
+              <button
+                class="segment"
+                data-testid="file-preview-source"
+                :aria-pressed="viewMode === 'source'"
+                @click="viewMode = 'source'"
+              >
+                {{ t("files.preview.source") }}
+              </button>
+            </div>
+
+            <!--
+              The whole file, in one press. Only for the kinds that *are* text: a PDF's bytes are
+              not something the clipboard should receive, and the viewer for those has its own
+              controls. The tooltip changes when the server sent only the head of the file, which
+              is the one case where "copy" would otherwise overstate what was copied — the note
+              under the text says it too, but the button is what travels to the clipboard.
+            -->
+            <CopyButton
+              v-if="content?.text !== null && content?.text !== undefined"
+              :value="content.text"
+              :hint="content.truncated ? t('sources.copyFilePartial') : t('sources.copyFile')"
+              testid="file-preview-copy"
+            />
+
             <button
-              class="segment"
-              data-testid="file-preview-source"
-              :aria-pressed="viewMode === 'source'"
-              @click="viewMode = 'source'"
+              v-if="pageUrl"
+              class="icon-btn"
+              data-testid="file-preview-browser"
+              :title="t('sources.openInBrowser')"
+              :aria-label="t('sources.openInBrowser')"
+              @click="openPage"
             >
-              {{ t("files.preview.source") }}
+              <Icon name="link" />
             </button>
           </div>
 
-          <button
-            class="icon-btn"
-            data-testid="file-preview-close"
-            :title="t('common.close')"
-            :aria-label="t('common.close')"
-            @click="store.closeFile()"
-          >
-            <Icon name="close" />
-          </button>
+          <!-- The window's own two: growing the box, and closing it. Maximise first, close
+               last — the order a window's controls have had for forty years, and the one that
+               keeps the dismiss control in the corner where the pointer already is. -->
+          <div class="window-actions">
+            <button
+              v-if="canMaximize"
+              class="icon-btn"
+              data-testid="file-preview-maximize"
+              :aria-pressed="maximized"
+              :title="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
+              :aria-label="maximized ? t('files.preview.restore') : t('files.preview.maximize')"
+              @click="maximized = !maximized"
+            >
+              <Icon :name="maximized ? 'collapse' : 'expand'" />
+            </button>
+
+            <button
+              class="icon-btn"
+              data-testid="file-preview-close"
+              :title="t('common.close')"
+              :aria-label="t('common.close')"
+              @click="store.closeFile()"
+            >
+              <Icon name="close" />
+            </button>
+          </div>
         </div>
 
         <div
@@ -261,7 +370,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             :name="content?.name ?? name"
           />
 
-          <div v-else-if="view === 'markdown'" class="markdown" v-html="rendered"></div>
+          <div
+            v-else-if="view === 'markdown'"
+            class="markdown"
+            v-html="rendered"
+            @click="codeCopyClick"
+          ></div>
 
           <div v-else-if="view === 'diagram'" class="diagram-host">
             <p v-if="content?.summary" class="diagram-summary" data-testid="file-preview-diagram-summary">
@@ -340,6 +454,39 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 .file-title h3 {
   margin: 0;
 }
+/*
+ * The two groups of controls, at the right-hand end.
+ *
+ * `margin-left: auto` on the first rather than relying on the head's `justify-content:
+ * space-between`: that rule is the global sheet's and is shared by every dialog, and it would
+ * spread three children evenly — title, then a group in the middle, then another at the right.
+ * Pinning the first group here rather than loosening the shared rule is also what keeps every
+ * other dialog's head untouched.
+ *
+ * `flex: none` so neither group gives up room: the title is the part that can afford to be
+ * truncated (`min-width: 0` and `.truncate` above), and a squeezed copy button would lose its
+ * label before the file's name lost a character.
+ */
+.file-actions,
+.window-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.file-actions {
+  gap: var(--space-4);
+  margin-left: auto;
+}
+/*
+ * The window's pair, set apart from the file's controls by more than any gap inside either —
+ * which is the whole of what makes them read as two groups rather than one row of five. The
+ * buttons themselves sit closer together than the file's do, because they are a pair in the way
+ * a window's maximise and close have always been.
+ */
+.window-actions {
+  gap: var(--space-2);
+  margin-left: var(--space-8);
+}
 .file-meta {
   display: block;
   color: var(--text-3);
@@ -349,6 +496,38 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 .file-body {
   overflow: auto;
   max-height: 70vh;
+}
+/*
+ * Maximised: the dialog fills the viewport, and the body takes the room that is left.
+ *
+ * `.modal.lg.maximized` rather than `.modal.maximized`: the global sheet's `.modal.lg` sets the
+ * width and has the same specificity as two classes, so this has to *outrank* it rather than
+ * depend on which stylesheet the bundler put last. `border-radius: 0` because a rounded box that
+ * touches all four edges reads as a mistake.
+ */
+.modal.lg.maximized {
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+}
+.modal.lg.maximized .file-body {
+  max-height: none;
+  flex: 1;
+  /* A flex child will not shrink below its content without this, which would push the body out
+   * of the dialog rather than scrolling inside it. */
+  min-height: 0;
+}
+/*
+ * And the viewer's box, which asks for a *definite* height. `auto` here would hand the library a
+ * zero-height container and it would draw nothing at all — silently, which is the failure
+ * `.file-body-filled`'s own comment exists to prevent. `flex: 1` resolves to a used height, so
+ * the viewer still measures something.
+ */
+.modal.lg.maximized .file-body-filled {
+  height: auto;
+  flex: 1;
 }
 /*
  * The viewer's case, and it is a different box rather than the same one with a tweak.
@@ -410,12 +589,18 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
   border: none;
   padding: 0;
 }
-/* Pushed to the end of the dialog's head, beside the close button — a layout nudge that
-   belongs to this dialog, so the shared control stays free of where it happens to sit. */
-.segmented {
-  margin-left: auto;
-  margin-right: var(--space-4);
-  flex-shrink: 0;
+/*
+ * And the children of both hold theirs, for the reason one level up again — a constricted flex
+ * line would clip the segmented control's labels and the copy button's icon before it would touch
+ * the title, and the title is the part that can afford to truncate.
+ *
+ * This replaced a `margin-left: auto; margin-right: var(--space-4)` nudge on `.segmented` alone —
+ * its job was pinning that one control to the right-hand end, which the groups now do for all of
+ * them, and its margin was the odd 16px gap in an otherwise even row.
+ */
+.file-actions > *,
+.window-actions > * {
+  flex: none;
 }
 .file-note {
   margin: 0;

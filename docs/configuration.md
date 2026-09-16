@@ -265,6 +265,20 @@ language the account is reading. The server's `DEFAULT_SESSION_TITLE` is the sam
 English and is only what a caller that names nothing gets — the CLI, a script, another client.
 It stays `titleSource: "auto"`, which is what makes it a placeholder rather than a name.
 
+**If the first attempt does not work, leaving the conversation tries again.** A titling call can
+fail (no key, a rate limit, a reasoning model that spends its whole budget thinking) and then the
+title is the user's own clipped words; or the first turn can produce no text at all, and then the
+placeholder simply stays. Both are recorded in `sessions.title_state`, and when the reader leaves —
+switching conversations, going back to the workspace list, entering another workspace — the browser
+reports it and the server runs the titler once more. It is deliberately undramatic: it takes about
+three seconds before it fires, nothing waits on it, nothing is said when it fails, and the next
+departure tries again. A conversation the model already named is not reported at all.
+
+Closing the tab is **not** one of the triggers. It would need a `keepalive` request of its own,
+since the bearer token cannot ride a `sendBeacon`, and the case is already covered from the other
+side: the retry is idempotent and cheap, so the next time the reader leaves that conversation —
+from any device — it is tried again.
+
 **Two conversations in one workspace never share a title.** Creation, a rename and the
 auto-titler all pass through `uniqueSessionTitle` (`apps/server/src/sessionTitles.ts`), which
 numbers a collision the way a file manager does — `学习计划`, `学习计划 (2)`, `学习计划 (3)` —

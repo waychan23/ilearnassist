@@ -16,7 +16,19 @@ import Icon from "./Icon.vue";
  * branch is reachable in normal use rather than theoretical.
  */
 
-const props = defineProps<{ value: string; testid?: string }>();
+const props = defineProps<{
+  value: string;
+  testid?: string;
+  /**
+   * A tooltip for a copy that is not the whole thing.
+   *
+   * The file preview is where this exists: past the preview cap the server sends the head of the
+   * file and says so in the body, and a button reading just 复制 would let someone take a
+   * quarter of a log away believing it was all of it. Optional, because every other caller copies
+   * exactly what it says it does.
+   */
+  hint?: string;
+}>();
 const { t } = useI18n();
 
 type State = "idle" | "copied" | "failed";
@@ -41,6 +53,7 @@ async function copy(): Promise<void> {
     type="button"
     :data-testid="testid"
     :data-copy-state="state"
+    :title="hint"
     @click="copy"
   >
     <Icon :name="state === 'copied' ? 'check' : 'copy'" />

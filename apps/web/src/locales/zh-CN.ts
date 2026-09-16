@@ -416,6 +416,10 @@ export default {
       /** Appended to the metadata line when the file was longer than the preview cap. */
       truncated: "仅显示前 {size}",
       size: "大小",
+      /** Filling the viewport, and going back — one control in two states, so the label says
+       *  what pressing it will do rather than what the dialog currently is. */
+      maximize: "最大化",
+      restore: "还原窗口",
     },
     /**
      * A conversation's own directory — where the diagrams it draws are written.
@@ -739,7 +743,7 @@ export default {
     allTools: "全部工具可用",
     allToolsHint: "这个助理可以使用所有工具，之后新增的工具也会自动包含。",
     toolsHint: "只有勾选的工具可用；一个都不勾选就是不使用任何工具。",
-    boundToolsHint: "部分工具随控件自动启用（例如「计划」控件的制定/查看/更新计划工具），不在此列表中，也无需勾选。",
+    boundToolsHint: "少数工具随控件自动启用（目前只有「测验」控件的出题与批改工具），不在此列表中，也无需勾选。计划、图表这类工具在这里可以正常勾选。",
     public: "公开这个助理",
     publicHint: "公开后所有账号都能看到并使用它，但只有你能修改或删除。",
     defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",
@@ -1115,6 +1119,7 @@ export default {
       annotation: "标注",
       idea: "灵感",
       question: "疑问",
+      opinion: "观点",
       other: "其他",
     },
     /** `count` is a plural: `en` carries both branches, `zh-CN` the one. */
@@ -1139,6 +1144,10 @@ export default {
       contentLabel: "笔记内容",
       contentPlaceholder: "写下你的想法…",
       typeLabel: "笔记类型",
+      /** Growing the window to write in, and putting it back where it was. One control in two
+       *  states, so the label names what pressing it will do. */
+      maximize: "放大窗口",
+      restore: "缩小窗口",
       save: "保存",
       saving: "保存中…",
       locate: "定位",
@@ -1348,14 +1357,20 @@ export default {
   },
 
   /**
-   * The account's uploaded files.
+   * The account's library: every source it holds, whether that arrived as an upload, a page
+   * the agent kept, or a file a conversation wrote.
+   *
+   * `title` is the *only* string behind the name, and it is read by two surfaces — the rail's
+   * row and this dialog's heading. It says 资料库 rather than 资料源 because the note-export
+   * feature already calls the same place 资料库 (`noteSync.*`), and one destination with two
+   * names is the drift this key exists to prevent.
    *
    * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
    * *not* delete this file, and which way round the two actions are. Without it, "delete"
    * reads as tidying up something already gone.
    */
   sources: {
-    title: "资料源",
+    title: "资料库",
     loading: "读取中…",
     empty: "没有符合条件的资料。",
     parsed: "已解析",
@@ -1420,6 +1435,27 @@ export default {
       detail: "文件本身、已解析的文本，以及在所有对话里的引用都会被删除，无法恢复。这些对话里已发出的消息仍会显示附件，但打不开了。",
       action: "删除文件",
     },
+    /**
+     * Leaving the app for the page a web source was fetched from. Its own verb rather than a
+     * second reading of `preview`: the row opens the app's *stored copy* of the page, and this
+     * opens the page itself — which is a different destination and somebody else's website.
+     */
+    openInBrowser: "在浏览器中打开",
+    openExternal: {
+      title: "即将打开第三方网址",
+      message: "这个链接指向站外，打开后会离开本应用。",
+      confirm: "继续打开",
+    },
+    /**
+     * The file preview's copy control, and the caveat it carries on a file past the preview cap.
+     *
+     * The caveat is not decoration: the server sends the head of the file and says so in the body,
+     * and a button reading only 复制 would let somebody take a quarter of a log away believing it
+     * was all of it. The two strings sit in different places — the button is in the header, the
+     * note is under the text — so this is the one that travels with the control.
+     */
+    copyFile: "复制文件内容",
+    copyFilePartial: "复制文件内容（文件较大，只有已载入的部分）",
   },
 
   /**

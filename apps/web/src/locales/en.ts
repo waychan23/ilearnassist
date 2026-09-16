@@ -330,6 +330,9 @@ const en: typeof MessageSchema = {
       viewerFailed: "This file could not be previewed",
       truncated: "Showing the first {size}",
       size: "Size",
+      /** Filling the viewport, and going back — see `zh-CN` for why the label names the action. */
+      maximize: "Maximise",
+      restore: "Restore window",
     },
     /**
      * A conversation's own directory — where the diagrams it draws are written.
@@ -590,7 +593,7 @@ const en: typeof MessageSchema = {
       "This Assistant may use every tool, including any added later.",
     toolsHint: "Only the ticked tools are available; none ticked means no tools at all.",
     boundToolsHint:
-      "Some tools come with a widget (the Plan widget's make/read/update plan tools): they switch on automatically when the widget is installed, and are deliberately not listed here.",
+      "A few tools come with a widget and are deliberately not listed here (today only the Quiz widget's ask and grade tools): they switch on automatically when that widget is installed. Tools like the plan and diagram ones are ordinary and can be ticked.",
     public: "Publish this Assistant",
     publicHint:
       "Every account can then see and use it, but only you can edit or delete it.",
@@ -942,6 +945,7 @@ const en: typeof MessageSchema = {
       annotation: "Marked",
       idea: "Idea",
       question: "Question",
+      opinion: "Viewpoint",
       other: "Other",
     },
     count: "{count} note | {count} notes",
@@ -963,6 +967,9 @@ const en: typeof MessageSchema = {
       contentLabel: "Your note",
       contentPlaceholder: "What are you thinking?",
       typeLabel: "Kind of note",
+      /** Growing the window to write in, and putting it back. See `zh-CN`. */
+      maximize: "Expand window",
+      restore: "Shrink window",
       save: "Save",
       saving: "Saving…",
       locate: "Go to it",
@@ -1141,14 +1148,15 @@ const en: typeof MessageSchema = {
   },
 
   /**
-   * The account's uploaded files.
+   * The account's library: every source it holds, whether that arrived as an upload, a page
+   * the agent kept, or a file a conversation wrote. See `zh-CN` for the shapes.
    *
    * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
    * *not* delete this file, and which way round the two actions are. Without it, "delete"
    * reads as tidying up something already gone.
    */
   sources: {
-    title: "Sources",
+    title: "Library",
     loading: "Loading…",
     empty: "Nothing matches these filters.",
     parsed: "Parsed",
@@ -1209,6 +1217,17 @@ const en: typeof MessageSchema = {
       detail: "The file, its extracted text and every reference to it are removed, and this cannot be undone. Messages already sent keep showing the attachment, but it will not open.",
       action: "Delete file",
     },
+    /** Leaving the app for the page a web source came from. See `zh-CN` for why it is its own
+     *  verb rather than a second reading of `preview`. */
+    openInBrowser: "Open in browser",
+    openExternal: {
+      title: "Opening a third-party site",
+      message: "This link goes to an outside site, and following it leaves this app.",
+      confirm: "Continue",
+    },
+    /** The file preview's copy control. See `zh-CN` for why the partial case is worded apart. */
+    copyFile: "Copy file contents",
+    copyFilePartial: "Copy file contents (large file — only the part that was loaded)",
   },
 
   parseErrors: {

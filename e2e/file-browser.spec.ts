@@ -309,3 +309,46 @@ test("an unqualified write goes to the conversation, not the workspace tree", as
   await expect(row).toBeVisible();
   await expect(row.getByTestId("source-origin")).toContainText("助理写入会话");
 });
+
+/*
+ * Granted for the file, not for the case below — Playwright's permissions are per test context,
+ * and a `describe`-scoped `test.use` is inherited by sibling describes (the trap the config
+ * documents for `storageState`). Nothing else here touches the clipboard.
+ */
+test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+test("a text file can be copied whole, and a truncated one says so", async ({ page, request }) => {
+  /*
+   * The file browser's side of one-click copy, and the two states it has.
+   *
+   * The control lives in the preview's header rather than in the body, because the body is three
+   * different renderings of the same bytes (highlighted text, rendered Markdown, a diagram) and
+   * "copy this file" means the same thing in all three. The caveat is the interesting half: past
+   * the preview cap the server sends the head of the file and says so under the text, and a
+   * button reading only 复制 would let somebody take a quarter of a log away believing it was
+   * all of it.
+   */
+  await seedWorkspace(request, "文件复制");
+  await page.goto("/");
+  await enterWorkspace(page, "文件复制");
+  await openFilesTab(page);
+
+  await page.getByTestId("file-row").filter({ hasText: "app.js" }).first().click();
+  const copy = page.getByTestId("file-preview-copy");
+  await expect(copy).toBeVisible();
+  await expect(copy).toHaveAttribute("title", "复制文件内容");
+
+  await copy.click();
+  await expect(copy).toHaveAttribute("data-copy-state", "copied");
+  // The file's own bytes, not the highlighted markup around them.
+  expect((await page.evaluate(() => navigator.clipboard.readText())).trim()).toBe(
+    "const answer = 42;"
+  );
+
+  await page.getByTestId("file-preview-close").click();
+
+  // The file past the cap: the same control, and a tooltip that says what it will not copy.
+  await page.getByTestId("file-row").filter({ hasText: "big.log" }).first().click();
+  await expect(page.getByTestId("file-preview-truncated")).toBeVisible();
+  await expect(page.getByTestId("file-preview-copy")).toHaveAttribute("title", "复制文件内容（文件较大，只有已载入的部分）");
+});

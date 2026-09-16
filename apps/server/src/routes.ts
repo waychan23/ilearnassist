@@ -33,6 +33,8 @@ import type {
   SourceOrigin,
   SourceOwner,
   SourceStorage,
+  TitleRetryResult,
+  TitleState,
   ToolCall,
   TurnRequestMeta,
   UpdateCopilotInput,
@@ -54,8 +56,8 @@ import type {
 import {
   boundToolNamesForWidgetIds,
   DEFAULT_USER_ROLES,
+  defaultWidgetIdsForScope,
   isEnabledSuperadmin,
-  DEFAULT_WIDGET_IDS,
   isPlatformAdmin,
   isUserRole,
   MAX_ATTACHMENT_BYTES,
@@ -97,6 +99,7 @@ import {
   parseErrorDetail,
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
+import { installWidgetForToolUse } from "./widgetInstall.js";
 import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
@@ -1171,8 +1174,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * The widget selection lands here, in one go, because a workspace does not exist when its
      * boxes are ticked — which is what makes `installed` a moment per widget rather than a
      * sequence of flips. Only the *differences* from the default are written, so an object whose
-     * state equals the defaults needs no rows at all; with an empty default set that is one row
-     * per ticked widget and nothing else.
+     * state equals the defaults needs no rows at all.
      *
      * No failure path from here on: the workspace exists, and a write that threw would leave it
      * unusable rather than uncreated.
@@ -1621,7 +1623,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       allTools: body.allTools !== false,
       tools: body.tools ?? [],
       settings: body.settings ?? {},
-      widgets: widgets.ids ?? [...DEFAULT_WIDGET_IDS],
+      // The session-scope defaults, because a Copilot installs into a session: an id of another
+      // scope would be refused by `widgetRowsForSelection("session", …)` when a conversation is
+      // created from this Copilot, not filtered here.
+      widgets: widgets.ids ?? defaultWidgetIdsForScope("session"),
       // Private unless asked otherwise: publishing puts a persona in front of every account,
       // so it is something the owner opts into rather than a default they discover later.
       visibility: body.visibility === "public" ? "public" : "private",
@@ -2171,6 +2176,117 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     }
     return buildThreadViews(db, userId, id);
+  });
+
+  /** One re-titling attempt per conversation, joined rather than duplicated. */
+  const titleRetries = new Map<string, Promise<TitleRetryResult>>();
+
+  /**
+   * The first thing the user said and the first thing the assistant said back — the same pair the
+   * first turn's titler was given.
+   *
+   * Rebuilt from the persisted messages rather than remembered, because the attempt happens long
+   * after the turn that would have held them. The assistant side takes the first message with
+   * *content*: a turn that only called tools has an assistant message with nothing in it, and
+   * naming a conversation after that pair is exactly the case this route exists to retry.
+   */
+  function firstExchangeOf(
+    sessionId: string,
+    userId: string
+  ): { user: string; assistant: string } | undefined {
+    const messages = db.listMessagesForUser(sessionId, userId);
+    const user = messages.find((m) => m.role === "user" && m.content.trim());
+    if (!user) return undefined;
+    const assistant = messages.find(
+      (m) => m.role === "assistant" && m.createdAt >= user.createdAt && m.content.trim()
+    );
+    if (!assistant) return undefined;
+    return { user: user.content, assistant: assistant.content };
+  }
+
+  /**
+   * The reader has left this conversation — try again at the title it did not get.
+   *
+   * The titler runs **once**, on the first turn, and `finishTurn` only reaches it when that turn
+   * produced text. So a conversation whose first reply was stopped, or whose titling call failed
+   * (no key, a rate limit, a reasoning model that spent its whole budget thinking), keeps the
+   * placeholder or the user's own clipped words for good — there was no second attempt and no way
+   * to ask for one. This is the way to ask.
+   *
+   * **The trigger is the client's**, which is why this is an event API rather than a timer: only
+   * the browser knows the reader has gone, and the server-side hook that would otherwise look for
+   * this has nothing to hook — a turn ending is not a reader leaving.
+   *
+   * Three things it deliberately is not:
+   *
+   * - **Not awaited by the caller.** The client reports and forgets, and the answer arrives on
+   *   this response rather than on an SSE stream that no longer exists. A request that is left
+   *   hanging while the model answers costs nothing, because nobody is waiting for it.
+   * - **Not able to fail a leave.** Every failure is a response, not an error: the client has
+   *   already navigated away, and a red toast about a conversation the reader has left is worse
+   *   than the placeholder it is about. `skipped` and `failed` are both 200.
+   * - **Not the fallback path.** `autoTitle` falls back to the user's own words so a first turn is
+   *   never left nameless; repeating that here would write the same string again and mark the row
+   *   as attempted. Only a model title is a success.
+   *
+   * One in-flight attempt per conversation, joined rather than duplicated: the client debounces,
+   * but two tabs can still ask at once, and this is a model call.
+   */
+  app.post("/api/sessions/:id/leave", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const owned = db.getSessionForUser(id, userId);
+    if (!owned) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const { session } = owned;
+
+    /*
+     * Eligible when the title is still the titler's to set and it has not already succeeded. The
+     * client gates on the same pair before reporting at all, and the check is repeated here
+     * because that gate is two fields it may be holding from an hour ago.
+     */
+    if (session.titleSource !== "auto" || session.titleState === "model") {
+      return { status: "skipped" as const };
+    }
+
+    const exchange = firstExchangeOf(session.id, userId);
+    // Nothing to name: the conversation has not been answered yet, so there is no exchange to
+    // read and the next leave is the one that will have something to work with.
+    if (!exchange) return { status: "skipped" as const };
+
+    const inFlight = titleRetries.get(id);
+    if (inFlight) return inFlight;
+
+    const attempt = (async (): Promise<TitleRetryResult> => {
+      const provider = db.getProvider(resolveProviderId(undefined, session.settings));
+      const modelId = resolveModelId(provider, undefined, session.settings);
+      try {
+        const generated = await generateTitle({
+          provider,
+          modelId,
+          userMessage: exchange.user,
+          assistantMessage: exchange.assistant,
+        });
+        const unique = uniqueTitleIn(session.workspaceId, userId, generated, id);
+        // The write can lose a race with a rename, and then there is no new title to report.
+        if (!db.setAutoTitleForUser(id, userId, unique, "model")) {
+          return { status: "skipped" as const };
+        }
+        return { status: "titled" as const, title: unique };
+      } catch (err) {
+        app.log.warn(
+          { err: err instanceof Error ? err.message : String(err), sessionId: id },
+          "re-title on leave failed; the conversation keeps its name"
+        );
+        return { status: "failed" as const };
+      } finally {
+        titleRetries.delete(id);
+      }
+    })();
+
+    titleRetries.set(id, attempt);
+    return attempt;
   });
 
   /**
@@ -2939,7 +3055,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     try {
       // The *stored* name, not the path's: the name is the only part of the two that the user
       // ever chose, and a source deduped onto an earlier upload would otherwise show a uuid.
-      return await readPreviewFile(path, source.name);
+      const content = await readPreviewFile(path, source.name);
+      /*
+       * …and the page it came from, when it is one. Carried here rather than fetched by the
+       * client, because this route is the only one that knows *both* the bytes and the row: a
+       * client holding the preview would otherwise need a second request to learn whether there is
+       * somewhere to go, and the dialog's "open in browser" control is gated on exactly that.
+       */
+      return { ...content, url: source.url ?? undefined };
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -3378,20 +3501,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
   }
 
+  /**
+   * A title for a new conversation, and **how it was arrived at**.
+   *
+   * The second half is new and it is the whole reason the retry can exist: this used to return a
+   * bare string, so a model-written title and the user's own clipped words were the same value to
+   * every caller — both leave `titleSource: "auto"` with a non-empty title, and nothing anywhere
+   * could tell a named conversation from one that had merely failed to be named.
+   */
   async function autoTitle(input: {
     provider: ProviderRecord | undefined;
     modelId: string;
     userMessage: string;
     assistantMessage: string;
-  }): Promise<string | undefined> {
+  }): Promise<{ title: string; state: TitleState } | undefined> {
     try {
-      return await generateTitle(input);
+      return { title: await generateTitle(input), state: "model" };
     } catch (err) {
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
         "auto-title fell back to the user's own words"
       );
-      return fallbackTitle(input.userMessage, input.assistantMessage) || undefined;
+      const title = fallbackTitle(input.userMessage, input.assistantMessage);
+      return title ? { title, state: "fallback" } : undefined;
     }
   }
 
@@ -3486,10 +3618,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * browser's own zone appears.
      */
     clock: TurnClock;
-    /** Present when the plan widget is installed; appended to the turn's system prompt. */
+    /** Present when the plan tools survived assembly; appended to the turn's system prompt. */
     planGuidance?: string;
     /** Present when the quiz widget is installed; appended to the turn's system prompt. */
     quizGuidance?: string;
+    /**
+     * A tool call the model made resolved without throwing, handed the tool's name.
+     *
+     * This is where an `auto-install` widget's install happens: see `installWidgetForToolUse`.
+     * Bound to this turn's user and conversation so a call site cannot name either — the same
+     * closure form `collectPage` and `diagram` take.
+     */
+    onToolUsed?: (toolName: string) => void;
     /**
      * Present when `ila_collect_page` survived assembly; appended to the turn's system prompt.
      * Not a widget — this one is on by default, which is exactly why it needed the guidance.
@@ -3546,18 +3686,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const provider = db.getProvider(providerId);
     const modelId = resolveModelId(provider, input.model, session.settings);
 
-    // Widget-bound tools. Read fresh per turn from the installed session widgets (a widget
-    // can be installed mid-conversation), then derive the bound tool names: if a widget's
-    // tools are bound, that tool context is present and `buildTools` assembles them
-    // regardless of the allow-list. One read decides both widgets.
+    /*
+     * Widget-switched tools. Read fresh per turn from the installed session widgets (a widget
+     * can be installed mid-conversation), then derive the `required`-mode tool names: a name
+     * here means its context is present and `buildTools` assembles it regardless of the
+     * allow-list.
+     *
+     * Only the quiz tools can be in this set now. The plan and diagram tools became
+     * `auto-install` — assembled on their own merits, with the allow-list governing them and a
+     * call installing the widget — so their contexts are passed unconditionally below and this
+     * read no longer decides them. `WidgetToolMode`'s two arms are what keeps that from being a
+     * surprise at the call site.
+     */
     const boundNames = boundToolNamesForWidgetIds(
       db
         .listSessionWidgetsForUser(input.userId, session.id)
         .filter((w) => w.enabled)
         .map((w) => w.id)
-    );
-    const planInstalled = boundNames.some((name) =>
-      (PLAN_TOOL_NAMES as readonly string[]).includes(name)
     );
     const quizInstalled = boundNames.some((name) =>
       (QUIZ_TOOL_NAMES as readonly string[]).includes(name)
@@ -3638,9 +3783,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         sources: sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
-      // `ila_quiz` and its grading companion are widget-bound: both contexts exist only
-      // when the quiz widget is installed. The counter and the question rows are scoped to
-      // this conversation.
+      // `ila_quiz` and its grading companion are `required` mode: both contexts exist only when
+      // the quiz widget is installed, and their absence is what assembles neither tool. The
+      // counter and the question rows are scoped to this conversation.
       quiz: quizInstalled
         ? {
             reserveQuestionNumbers: (count) =>
@@ -3649,7 +3794,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           }
         : undefined,
       quizReview: quizInstalled ? { db, sessionId: session.id } : undefined,
-      plan: planInstalled ? { db, sessionId: session.id } : undefined,
+      // The plan tools are `auto-install`, so this context is not an assembly switch — the
+      // allow-list is. Passing it in every conversation is what lets the model make a plan where
+      // no panel was ever installed, and `installWidgetForToolUse` below is what puts the panel
+      // there when it does.
+      plan: { db, sessionId: session.id },
       /*
        * The rows go to the same session id as the file, in one callback, so the three cannot
        * diverge on which conversation they belong to. `ownDir` is the definition above.
@@ -3725,7 +3874,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       sessionDirPath: ownDir,
       writeLocation,
       clock,
-      planGuidance: planInstalled ? PLAN_GUIDANCE : undefined,
+      /*
+       * Read off the assembled set, like `collectPageGuidance` below and for the same reason:
+       * with the plan tools `auto-install`, "is the widget installed" stopped being the question.
+       * Whether the model can actually call them is, and only the array knows. The three are
+       * assembled as a unit, so naming one would do — naming all three is what keeps that from
+       * being an assumption.
+       */
+      planGuidance: tools.some((t) => (PLAN_TOOL_NAMES as readonly string[]).includes(t.name))
+        ? PLAN_GUIDANCE
+        : undefined,
+      /*
+       * Still gated on the install, and the difference from the line above is the mode: the quiz
+       * tools are `required`, so they bypass the allow-list and the widget install *is* the whole
+       * question. Asking the array here would answer yes whenever the widget is installed and
+       * no otherwise, which is the same answer by a longer route.
+       */
       quizGuidance: quizInstalled ? QUIZ_GUIDANCE : undefined,
       /*
        * Read off the assembled set rather than off the config, and that is the whole of the
@@ -3743,6 +3907,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       exploreGuidance: tools.some((t) => t.name === EXPLORE_TOOL_NAME)
         ? exploreGuidance(scope)
         : undefined,
+      /*
+       * The `auto-install` side effect, and the only reason the loop takes a callback for it: the
+       * loop knows which tool ran, and this closure knows whose conversation it ran in. It
+       * installs from *silence* — a widget this conversation has never been asked about — and
+       * never over a stored "no", so a panel somebody closed stays closed.
+       */
+      onToolUsed: (toolName: string) => {
+        installWidgetForToolUse({ db, userId: input.userId, sessionId: session.id, toolName });
+      },
     };
   }
 
@@ -3845,22 +4018,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       opts.userMessage !== null &&
       result.content.trim()
     ) {
-      const title = await autoTitle({
+      const titled = await autoTitle({
         provider: ctx.provider,
         modelId: ctx.modelId,
         userMessage: opts.userMessage,
         assistantMessage: result.content,
       });
-      if (title) {
+      if (titled) {
         /*
          * Numbered against its siblings, itself excluded — the titler is guessing at a name and
          * has no idea what else is in the list, so two conversations that open the same way
          * would otherwise both be called `什么是递归`. The number is what the SSE event
          * carries, so the sidebar shows the same string the database now holds.
          */
-        const unique = uniqueTitleIn(session.workspaceId, userId, title, id);
-        db.setAutoTitleForUser(id, userId, unique);
-        sse.send({ type: "title", sessionId: id, title: unique });
+        const unique = uniqueTitleIn(session.workspaceId, userId, titled.title, id);
+        /*
+         * The write decides whether there is anything to announce: it refuses when the title is
+         * no longer the titler's to set, which the user can make true by renaming mid-turn. The
+         * event used to be sent regardless, so the sidebar would show a name the database had
+         * just declined to hold.
+         */
+        if (db.setAutoTitleForUser(id, userId, unique, titled.state)) {
+          sse.send({ type: "title", sessionId: id, title: unique });
+        }
       }
     }
 
@@ -4062,6 +4242,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         quizMakeupNote,
         signal: turn.signal,
@@ -4211,6 +4392,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
@@ -4341,6 +4523,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),

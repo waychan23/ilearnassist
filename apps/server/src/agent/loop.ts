@@ -158,6 +158,18 @@ export interface RunAgentInput {
   tools: StructuredToolInterface[];
   onEvent: (event: ChatStreamEvent) => void;
   /**
+   * A tool call the model made resolved without throwing, handed the tool's name.
+   *
+   * Called **before** the `tool_end` event for that call, and the ordering is the contract: the
+   * one consumer installs the widget a tool belongs to (`installWidgetForToolUse`), and a client
+   * that reacts to `tool_end` by re-reading the conversation's widgets must find the install
+   * already written.
+   *
+   * A call that threw reports nothing. A suspension is not a call that committed anything, and
+   * neither is a validation error — both land in the catch arms below.
+   */
+  onToolUsed?: (toolName: string) => void;
+  /**
    * Aborts the turn: the in-flight provider request and any running tool see it, so a
    * stop costs no further tokens. Aborting is not an error — the call resolves with
    * `stopped: true` and whatever text had already streamed.
@@ -691,6 +703,23 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
               configurable: { toolCallId: id },
             });
             output = typeof result === "string" ? result : JSON.stringify(result);
+            /*
+             * The call committed, so an `auto-install` widget's install happens now — before the
+             * `tool_end` below, so a client that reacts to that event by re-reading the
+             * conversation's widgets finds the write already there.
+             *
+             * Guarded so a failing side effect can never be reported as a failing *tool*: the
+             * arm below turns a throw into `Tool error: …`, which would tell the model its
+             * successful call broke and send it looking for another way. A widget that did not
+             * install is a missing panel, not a failed call. Swallowed here rather than logged
+             * because the loop has no logger and the caller's closure is where a failure is
+             * observable.
+             */
+            try {
+              input.onToolUsed?.(name);
+            } catch {
+              // Deliberately ignored — see above.
+            }
           } catch (err) {
             // A suspension is not an error and must not be reported as one: the model would
             // be told its own question failed. Caught before the generic arm below, and by
