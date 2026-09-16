@@ -17,6 +17,7 @@ import {
   uiState,
 } from "../composables/ui";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
+import AppMenu from "./AppMenu.vue";
 import FileTree from "./FileTree.vue";
 import Icon from "./Icon.vue";
 
@@ -43,18 +44,6 @@ function onSidebarToggle() {
 function openWorkspaceSettingsPanel(): void {
   const id = store.activeWorkspaceId;
   if (id) openWorkspaceSettings(id);
-}
-
-/** The footer's row: the same dialog, with the drawer closed first. */
-function openSidebarWorkspaceSettings(): void {
-  closeDrawer();
-  openWorkspaceSettingsPanel();
-}
-
-/** The account's Copilots, from the footer. The home page's header opens the same dialog. */
-function openSidebarCopilots(): void {
-  closeDrawer();
-  openCopilots();
 }
 
 /* ---------------------------------- panels ---------------------------------- */
@@ -326,139 +315,38 @@ async function onDeleteSession(session: Session) {
     </div>
 
     <!--
-      This workspace's settings, at the foot of the sidebar.
+      The account's menu, at the foot of the sidebar — the same component the workspace home's
+      rail draws, so the two surfaces cannot drift in what they offer or in how they say it.
+      They had already drifted in wording, which is the kind of difference nobody files a bug
+      about and everybody notices.
 
-      **The second of the two entries to that dialog**, the other being the workspace's name in
-      the header immediately above. That is deliberate rather than a duplicate to tidy away: the
-      name is the shortcut for someone who already knows it opens, and this is the labelled row
-      for someone who does not. Both call the same function, so the two cannot diverge in what
-      they open — only in how they are found.
+      Its two groups stay together here, where the home page puts them at the rail's two ends: the
+      sidebar's own content is already at the top, so there is no second end to spread to.
 
-      It replaced a "settings" row pointing at an installation-wide dialog that no longer exists:
-      everything that dialog held was either the account's own Copilots (now the row below) or
-      installation-wide and reachable only by an administrator (the platform console, whose own
-      row is below too).
+      `workspace-row` is the one row only a page *inside* a workspace can name: this workspace's
+      own settings. The other entry to that dialog is the workspace's name in the header above —
+      deliberate rather than a duplicate, since the name is the shortcut for someone who already
+      knows, and the row is for someone who does not.
     -->
-    <button
-      class="menu-item side-menu-row side-menu-lead"
-      :title="t('widgets.workspaceSettings.title')"
-      data-testid="open-workspace-settings"
-      @click="openSidebarWorkspaceSettings"
-    >
-      <span class="gear"><Icon name="gear" /></span>
-      <span class="label">{{ t("widgets.workspaceSettings.title") }}</span>
-      <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
-    </button>
-
-    <!--
-      The account's own Copilots.
-
-      Here as well as on the workspace home's header, and it is the front door that makes the
-      pair necessary: the home page has no sidebar, so an account that has not entered a
-      workspace yet would otherwise have no way to manage the Copilots it made.
-
-      No `sub`: there is no single value to show — a count is a sentence about a list, and it
-      belongs in the dialog that lists it rather than in a row that is one word wide.
-    -->
-    <button
-      class="menu-item side-menu-row"
-      :title="t('copilots.title')"
-      data-testid="open-copilots"
-      @click="openSidebarCopilots"
-    >
-      <span class="gear"><Icon name="robot" /></span>
-      <span class="label">{{ t("copilots.title") }}</span>
-    </button>
-
-    <!--
-      The account's own page, and the platform console for the accounts that have it.
-
-      Here as well as on the workspace home because an administrator reaches for these from
-      inside a conversation, not only from the front door — and the two are the same page
-      either way, so there is nothing to keep in step.
-
-      The console is drawn from the role the server reported. A hidden button is not a
-      permission: the routes refuse everybody else regardless of what this rendered.
-    -->
-    <button
-      class="menu-item side-menu-row"
-      :title="t('account.title')"
-      data-testid="open-account-sidebar"
-      @click="showAccount()"
-    >
-      <span class="gear"><Icon name="user" /></span>
-      <span class="label">{{ t("account.title") }}</span>
-      <span class="sub truncate">{{ store.account?.username ?? "" }}</span>
-    </button>
-
-    <button
-      v-if="store.canAdmin"
-      class="menu-item side-menu-row"
-      :title="t('admin.title')"
-      data-testid="open-admin-sidebar"
-      @click="showAdmin()"
-    >
-      <span class="gear"><Icon name="shield" /></span>
-      <span class="label">{{ t("admin.title") }}</span>
-    </button>
-
-    <!-- Sign out sits at the end of the footer rather than on a menu of its own: it is one
-         action and one click costs nothing. No confirmation either — the session is restored
-         by signing in again, which is the only thing a misclick loses. -->
-    <button
-      class="menu-item side-menu-row side-signout"
-      :title="t('common.signOut')"
-      data-testid="sign-out"
-      @click="store.signOut()"
-    >
-      <span class="gear"><Icon name="logout" /></span>
-      <span class="label">{{ t("common.signOut") }}</span>
-      <span class="sub truncate">{{ store.account?.username ?? "" }}</span>
-    </button>
-
-    <div class="side-footer">
-      <span class="dir truncate" :title="store.config?.workspacesRootDir ?? ''">
-        {{ store.config?.workspacesRootDir }}
-      </span>
-    </div>
+    <AppMenu class="side-menu" workspace-row />
 
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
   </aside>
 </template>
 
 <style scoped>
+/*
+ * The menu's top edge. It is a scoped rule of *this* page rather than one of `AppMenu`'s, because
+ * a divider separates the menu from whatever is above it — the file or session list here, the
+ * brand on the workspace home — and only the page knows what that is.
+ */
+.side-menu {
+  border-top: 1px solid var(--border);
+}
 .muted {
   padding: var(--space-4) var(--space-6);
   color: var(--text-3);
   font-size: var(--fs-3);
-}
-/* `.menu-item` gives the row its reset, spacing and hover. It is full-bleed at the foot of
-   the sidebar, so it takes a top border instead of the radius a floating row would have.
-   Every row of the footer group shares this; only the *first* carries the divider, because a
-   rule between every row would draw four lines where one group's edge belongs. */
-.side-menu-row {
-  gap: var(--space-5);
-  padding: var(--space-5) var(--space-6);
-  border-radius: 0;
-  flex-shrink: 0;
-}
-/* Named rather than `:first-of-type`, which would match the header's back button — that is the
-   sidebar's first `<button>`, and the footer's rows are several siblings further down. */
-.side-menu-lead {
-  border-top: 1px solid var(--border);
-}
-.side-menu-row .gear {
-  font-size: var(--fs-4);
-  flex-shrink: 0;
-}
-.side-menu-row .label {
-  flex-shrink: 0;
-}
-.side-menu-row .sub {
-  flex: 1;
-  text-align: right;
-  color: var(--text-3);
-  font-size: var(--fs-1);
 }
 .rename-input {
   padding: 3px var(--space-3);

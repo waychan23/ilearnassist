@@ -179,7 +179,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
   <Teleport to="body">
     <div
       v-if="store.filePreviewPath"
-      class="modal-overlay"
+      class="modal-overlay preview-overlay"
       data-testid="file-preview"
       @click.self="store.closeFile()"
     >
@@ -325,6 +325,15 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 </template>
 
 <style scoped>
+/*
+ * Above the dialogs that open it — see `--z-preview`. This is the layer opened *from* the file
+ * tree, the source browser and a diagram row, and a dialog teleported into existence when it
+ * opens would otherwise land after it in `body` and paint over it.
+ */
+.preview-overlay {
+  z-index: var(--z-preview);
+}
+
 .file-title {
   min-width: 0;
 }

@@ -65,6 +65,37 @@ test("the Copilot list is reachable before any workspace is entered", async ({ p
   await expect(page.getByTestId("new-copilot")).toBeVisible();
 });
 
+test("the rail's menu is two groups, at the two ends of the column", async ({ page, request }) => {
+  /*
+   * The split is a layout decision as much as a content one. The home page's rail holds nothing
+   * else, so the group of things the account can *reach* sits under the brand and the group about
+   * *who is signed in* sits at the foot — rather than both huddling at the bottom of an otherwise
+   * empty column, which is what a single group at the foot looked like.
+   */
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+
+  const app = page.getByTestId("menu-group-app");
+  const account = page.getByTestId("menu-group-account");
+  await expect(app).toBeVisible();
+  await expect(account).toBeVisible();
+
+  // The order, and the *distance*: a rule that only stacked them would pass on the order alone.
+  const railBox = (await page.locator(".home-rail").boundingBox())!;
+  const appBox = (await app.boundingBox())!;
+  const accountBox = (await account.boundingBox())!;
+  expect(appBox.y).toBeLessThan(accountBox.y);
+  expect(appBox.y).toBeLessThan(railBox.y + railBox.height / 2);
+  expect(accountBox.y + accountBox.height).toBeGreaterThan(railBox.y + railBox.height / 2);
+
+  // And the root path the footer used to carry is gone. Read from the server rather than typed
+  // out, so this asserts the removal rather than a string that happens to be missing.
+  const config = (await (await request.get("/api/config")).json()) as {
+    workspacesRootDir: string;
+  };
+  await expect(page.locator(".home-rail")).not.toContainText(config.workspacesRootDir);
+});
+
 test("clicking a card enters that workspace, on its welcome screen", async ({ page }) => {
   await page.goto("/");
   const name = uniqueName("Entered");

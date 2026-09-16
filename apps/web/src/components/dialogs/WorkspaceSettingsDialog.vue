@@ -2,17 +2,18 @@
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../../api/client";
-import type { WidgetId, WidgetState } from "../../api/types";
+import type { FileLocation, WidgetId, WidgetState, WorkspaceSettings } from "../../api/types";
 import { useAppStore } from "../../stores/app";
 import { closeWorkspaceSettings, uiState } from "../../composables/ui";
 import Icon from "../Icon.vue";
+import WriteLocationField from "../WriteLocationField.vue";
 import WidgetToggleList from "./WidgetToggleList.vue";
 
 /**
- * A workspace's own settings, which today means the widgets installed in it.
+ * A workspace's own settings: what its conversations inherit, and the widgets installed in it.
  *
  * A dialog of its own rather than a tab in the installation-wide Settings, and the distinction is
- * the one that keeps `SourcesDialog` separate too: Settings is how the *app* is configured, and
+ * the one that keeps the source browser separate too: Settings is how the *app* is configured, and
  * this is how one workspace is.
  *
  * ### Its own rows, not the store's
@@ -29,11 +30,21 @@ const store = useAppStore();
 const rows = ref<WidgetState[]>([]);
 const error = ref<string | null>(null);
 
+/**
+ * The workspace's own settings, fetched rather than read from the store.
+ *
+ * Same reason the widget rows are: the gear sits on a card, which need not be the workspace
+ * anyone is in. `undefined` means "not loaded yet" — a distinct state from `null`, which is
+ * "this workspace has no opinion", so the control does not render a choice nobody made.
+ */
+const settings = ref<WorkspaceSettings | undefined>(undefined);
+
 async function load(): Promise<void> {
   const id = uiState.workspaceSettingsId;
   if (!id) return;
   try {
     rows.value = await api.listWorkspaceWidgets(id);
+    settings.value = (await api.listWorkspaces()).find((w) => w.id === id)?.settings ?? {};
     error.value = null;
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -52,6 +63,29 @@ async function toggle(id: WidgetId, enabled: boolean): Promise<void> {
     const at = rows.value.findIndex((w) => w.id === state.id);
     if (at === -1) rows.value = [...rows.value, state];
     else rows.value[at] = state;
+    error.value = null;
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+/**
+ * Save the write location.
+ *
+ * Immediately, on change, rather than behind a Save button — the rule this dialog already
+ * follows for widgets, and it is the one that fits: these are toggles on a real object, so each
+ * click takes effect. A form with a Save would make the widget toggles above it inconsistent
+ * with the select below.
+ */
+async function setWriteLocation(value: FileLocation | null): Promise<void> {
+  const id = uiState.workspaceSettingsId;
+  if (!id) return;
+  try {
+    const updated = await api.updateWorkspaceSettings(id, { writeLocation: value });
+    settings.value = updated.settings ?? {};
+    // The store's copy is what a conversation created from a card reads, so it has to agree.
+    const at = store.workspaces.findIndex((w) => w.id === id);
+    if (at !== -1) store.workspaces[at] = { ...store.workspaces[at]!, settings: updated.settings };
     error.value = null;
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -108,6 +142,21 @@ function isActiveWorkspace(): boolean {
             <span>{{ error }}</span>
           </div>
 
+          <!--
+            The workspace's own default, above the widgets: it is what a conversation created
+            here inherits, so it belongs with the settings a conversation is *made* with rather
+            than with the panels it installs.
+          -->
+          <WriteLocationField
+            v-if="settings !== undefined"
+            class="workspace-default"
+            :model-value="settings.writeLocation ?? null"
+            :inherit-label="t('settings.writeLocation.inheritBuiltIn')"
+            testid="workspace-write-location"
+            @update:model-value="setWriteLocation"
+          />
+
+
           <WidgetToggleList
             v-if="uiState.workspaceSettingsId"
             scope="workspace"
@@ -134,3 +183,14 @@ function isActiveWorkspace(): boolean {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+/*
+ * The write location sits above the widget list, separated from it — they answer different
+ * questions, and a select pressed against a list of toggles reads as one more toggle.
+ */
+.workspace-default {
+  display: block;
+  margin-bottom: var(--space-6);
+}
+</style>

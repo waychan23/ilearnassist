@@ -63,6 +63,7 @@ describe("ila_diagram", () => {
     // one file, so they have to be one row.
     expect(saved).toHaveBeenCalledWith({
       name: "auth-flow.mmd",
+      size: expect.any(Number),
       summary: SUMMARY,
       toolCallId: null,
     });

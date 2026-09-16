@@ -195,7 +195,14 @@ function message(overrides: Partial<Message> & Pick<Message, "role">): Message {
   };
 }
 
-/** A source as the parse-status poll reports it — the server's own row for the file. */
+/**
+ * A source as the parse-status poll reports it — the server's own row for the file.
+ *
+ * An upload, since that is what this store deals with today: owned by the conversation it
+ * arrived in, stored as a blob, and classified by its type. The newer fields are filled in
+ * rather than left to the type to make optional, because a source without them is a source the
+ * server does not produce.
+ */
 function sourceOf(overrides: Partial<Source> & Pick<Source, "id">): Source {
   return {
     name: "lecture.pdf",
@@ -204,6 +211,11 @@ function sourceOf(overrides: Partial<Source> & Pick<Source, "id">): Source {
     kind: "file",
     parseStatus: "pending",
     createdAt: "2026-01-01T00:00:00.000Z",
+    ownerKind: "session",
+    ownerId: "s1",
+    origin: "session_attachment",
+    storage: "upload",
+    category: "document",
     ...overrides,
   };
 }
@@ -324,7 +336,7 @@ describe("init", () => {
     // The widget list is **omitted**, not sent empty, and that is the distinction the API is
     // built on: this workspace was created by the app rather than by the dialog, so nobody made a
     // choice about it and it takes the server's default rather than asserting "none".
-    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Default", undefined);
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("默认工作区", undefined);
     expect(store.workspaces).toHaveLength(1);
   });
 

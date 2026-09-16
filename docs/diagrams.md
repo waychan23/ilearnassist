@@ -71,16 +71,24 @@ the session directory, not a bug fix. If that decision is ever made, it belongs 
 
 Flat, one level, `.mmd` (`.mermaid` is accepted by `isDiagramFile` and previews identically, since
 people arrive with it). The directory is a **sibling of `workdir/`**, not a corner of it: the
-workdir is the sandbox `write_file` and the file tree share, and a conversation's own files are
-not the same kind of thing. `write_file` cannot reach `sessions/` — `resolveInWorkspace(workdir,
-"../../sessions/x")` is refused — so this directory contains nothing a typed tool did not write.
+workdir is the tree every conversation in the workspace shares, and a conversation's own files
+are not the same kind of thing. A workspace-relative path cannot climb into `sessions/` —
+`resolveInWorkspace(workdir, "../sessions/x")` is refused — so nothing written *through the
+workspace sandbox* lands here.
 
-The session directory has **one writer** and two readers:
+The session directory has **two writers** and two readers:
 
 | | path | sandbox |
 | --- | --- | --- |
 | write | `ila_diagram` | `resolveInWorkspace` — lexical only, like every agent tool |
+| write | the file tools, with `location: "session"` | the same, against this root |
 | read | the session-files routes, via `files.ts` | lexical **and** `realpath`, like every browser read |
+
+It used to be one writer, and the reason it no longer is is the write-location setting: a
+conversation's default folder is its own, so `write_file` has to be able to reach it. What
+protected the directory was never really the count — it was that every file in it is a row, and
+now that is true of both writers: each leaves a **source** row (see `docs/sources.md`), so a
+file here is addressable by id whatever wrote it.
 
 That asymmetry is inherited rather than invented: it is the same one the workspace browser and the
 file tools already have, and for the same reason. See the invariant in `CLAUDE.md`.
@@ -91,18 +99,31 @@ because the plan widget's snapshot fork writes a session straight to the databas
 near the session route, so "this conversation has no files yet" must be an empty list rather than
 a 404.
 
-## What is a file and what is a row
+## What is a file and what are the rows
 
-A diagram is a **file plus a row**, and each holds only what the other cannot answer. The
-argument that used to sit here — "a table would be a second copy of bytes" — is the reason for
-the split rather than against the table: the row deliberately holds none of the source.
+A diagram is a **file plus two rows**, and each record holds only what the others cannot answer.
+The argument that used to sit here — "a table would be a second copy of bytes" — is the reason for
+the split rather than against it: neither row holds any of the source.
 
-| the row holds | because the file cannot |
+| the `session_diagrams` row holds | because the file cannot |
 | --- | --- |
 | `name`, canonical (`auth-flow.mmd`) | it *is* the file's name — the join key to `FileEntry.name`, so the client derives nothing of its own |
 | `summary` | the model's one-line description of the drawing; nothing else records it |
 | `tool_call_id` | "which reply drew this" without scanning the message list |
 | `thread_id` | which 脉络 node the classifier put it in — not derivable from the bytes at all |
+
+| the `sources` row holds | because the diagram table cannot |
+| --- | --- |
+| `storage: "session"` + `rel_path` | where the file is, in the one shape every other file answers with |
+| `category: "diagram"` | what kind of thing it is, for the browser's filters |
+| `origin: "agent_session"` | that the assistant wrote it, which is what the browser prints |
+| an **id** shared with every other source | so a diagram can be referenced, listed and opened by the same machinery as an upload |
+
+Both rows and the file are written **in one transaction** (`registerDiagram` + `registerFileSource`
+in the tool's `save` callback): a diagram whose file exists but whose rows half-landed is a file
+the conversation draws and the registry cannot name. Without the source row a diagram would be the
+one file in the app the source browser and `@`-reference could not see — the exact split the
+registry exists to close. See `docs/sources.md`.
 
 What is **not** in the row is as deliberate. No `source` (the file is the source; a second copy
 is free to disagree), no `source_path` (a pure function of the session and the name), no
@@ -206,7 +227,10 @@ half-renders is worse than one that renders with a visible complaint in it.
 - **The widget**, in the right panel: the conversation's **rows** — name, the model's summary,
   the thread each diagram belongs to, and a jump to the reply that drew it. `DiagramWidget.vue`,
   a viewer with no tools — see [widgets.md](widgets.md#a-viewer-widget-with-no-tools-the-diagram-widget).
-- **The session-files dialog** lists the whole folder, including a `.mmd` nobody drew here.
+- **The source browser** lists the whole folder as sources — a conversation's own file is a
+  `storage='session'` row like any other, and one of the browser's filters is the conversation. It
+  is where a `.mmd` nobody drew stays reachable, because the folder carries the file and the
+  diagram row does not.
 
 One viewer serves all three, and the file preview as well: `DiagramDialog.vue` owns the zoom and
 shows the summary above the drawing. Zoom is the CSS `zoom` property rather than
@@ -215,15 +239,23 @@ grow with the picture. The file preview's diagram branch gets its summary from t
 session-root `…/files/content` read attaches the row's summary by canonical file name — a
 workspace-root `.mmd` has none.
 
-## The session file browser
+## The session file routes
 
-`GET /api/sessions/:id/files` and `…/files/content` mirror the workspace pair, and are the same
-two functions in `files.ts` with a different root — a second *caller*, never a second browser.
-`SessionFilesDialog.vue` lists the whole folder (not only diagrams; the widget is the filtered
-view) and is opened from the chat header. Every row opens the ordinary file preview, which renders
-a diagram because `kind: "diagram"` is a member of `FILE_CONTENT_KINDS`.
+`GET /api/sessions/:id/files`, `…/files/content` and `…/files/raw` mirror the workspace trio, and
+are the same functions in `files.ts` with a different root — a second *caller*, never a second
+browser. Every row opens the ordinary file preview, which renders a diagram because
+`kind: "diagram"` is a member of `FILE_CONTENT_KINDS`.
 
-There is no write endpoint. The folder's one writer is the tool, and a browser for it is a read.
+**They no longer have a browser of their own.** The dialog that listed the whole folder is gone:
+every entry to it was a second way to see a folder the source browser already lists by scope, and
+two surfaces for one folder are two places to keep in step. The folder view that remains is that
+browser with the conversation as its filter. The *routes* stay, and are not vestigial — the
+diagram widget opens one of its rows through `…/files/content` + `…/files/raw` (a `.mmd` is
+previewed where it is written rather than copied into a preview), and `e2e/diagram.spec.ts` reads
+the listing to assert the tool wrote a file, which is a different claim from a widget having drawn
+something.
+
+There is no write endpoint. Both writers are tools, and a browser for it is a read.
 
 ## Adding another format
 
@@ -242,6 +274,7 @@ pnpm dev:restart
 ```
 
 Ask for a diagram ("画一个登录流程的流程图"), and check: the card draws it, the head names it, the
-expand button opens the viewer, zoom works, and the file appears in 会话文件. Then flip the theme —
+expand button opens the viewer, zoom works, and the source browser (the header's library button,
+with this conversation as the scope) lists the `.mmd` under it. Then flip the theme —
 the diagram redraws. A malformed request ("画一张坏掉的图") should leave the reply standing with the
 complaint in place of the drawing.

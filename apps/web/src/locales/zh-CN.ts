@@ -24,6 +24,7 @@ export default {
     confirm: "确认",
     cancel: "取消",
     create: "创建",
+    add: "添加",
     delete: "删除",
     name: "名称",
     copied: "已复制",
@@ -95,10 +96,17 @@ export default {
 
   app: {
     /**
-     * The product name. Shown when there is no session and no workspace to name the topbar
-     * after, and on the login screen — which is the one page with nothing else to call itself.
+     * The product name as the app *displays* it — on the login screen, in the workspace home's
+     * rail, when there is no session and no workspace to name the topbar after, and in the tab
+     * (`composables/locale.ts` keeps the two in step).
+     *
+     * The rest of the repo keeps the other name: `@ilearnassist/*`, `app.setName`, the userData
+     * directory, `ilearnassist.sqlite`, and the `[ilearnassist] listening on` line the desktop
+     * panel parses. That split is deliberate — every one of those is an *identifier*, and two of
+     * them decide where a user's data already lives. Renaming the display name is this value in
+     * two catalogs; renaming the product is a migration.
      */
-    title: "ilearnassist",
+    title: "交互式学习助理",
     configBanner: {
       before: "尚未配置可用的 API Key。点击右上角",
       action: "设置 → Providers",
@@ -255,7 +263,7 @@ export default {
     autoBadgeTitle: "标题由 AI 根据第一轮对话自动生成",
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
-    startAction: "新建会话（选择 Copilot）",
+    startAction: "新建会话（选择助理）",
     backToWorkspaces: "返回工作区列表",
     jumpToLatest: "回到最新",
   },
@@ -266,7 +274,15 @@ export default {
       "有 {count} 个附件解析失败，模型将无法读取其内容。可点击附件的重新解析按钮重试，或先在「设置 → 文档解析」中配置云解析服务。",
     visionWarning:
       "当前模型「{model}」未标记支持图片输入，图片将以文字占位符发送。可在「设置 → Providers」中为它勾选「图片输入」。",
-    placeholder: "输入消息，Enter 发送，Shift+Enter 换行",
+    /*
+     * The `@` is written as `{'@'}` because vue-i18n reads a bare one as a *linked message*
+     * (`@:key`), and a message it cannot compile throws at render time — which takes down the
+     * whole component the message is in. Same rule as a literal `|` in a plural.
+     */
+    placeholder: "输入消息，Enter 发送，Shift+Enter 换行；输入 {'@'} 可引用资料",
+    /** The `@` picker: nothing matched what has been typed, and nothing exists to match. */
+    noSourceMatch: "没有匹配的资料。",
+    noSources: "还没有可引用的资料。",
     thinking: "Agent 正在思考…",
     parsingShort: "附件解析中…",
     send: "发送 (Enter)",
@@ -318,7 +334,7 @@ export default {
    * the tree is not a part of the sidebar conceptually — the sidebar is just where it lives.
    */
   files: {
-    tab: "文件",
+    tab: "工作区文件",
     refresh: "刷新文件列表",
     empty: "这个工作区还没有文件",
     /**
@@ -330,6 +346,19 @@ export default {
     /** The accessible name of the tree; the rows carry their own names. */
     treeLabel: "工作区文件",
     retry: "重试",
+    /*
+     * The file manager. Four verbs, because a web app has no Finder behind it: without these
+     * the workdir is a directory the agent writes into and the user can only look at.
+     */
+    newFolder: "新建文件夹",
+    newFolderHint: "相对于当前目录的文件夹名称。",
+    upload: "上传文件",
+    rename: "重命名或移动",
+    renameHint: "相对于工作区根目录的路径。输入新路径即可移动。",
+    deleteTitle: "删除这个文件？",
+    deleteDirectoryTitle: "删除这个文件夹？",
+    deleteMessage: "「{name}」将从工作区中移除。文件会保留在回收目录中，但这里不再显示。",
+    deleteDirectoryMessage: "「{name}」将从工作区中移除。只有空文件夹可以这样删除。",
     preview: {
       loading: "正在读取…",
       /** Markdown's two views. Rendered first, because reading a document is the common case;
@@ -357,13 +386,6 @@ export default {
      * same directory the file tools write into. The lead says where they are, since "why is
      * this not in the file tree" is the first question the list raises.
      */
-    session: {
-      title: "会话文件",
-      lead: "这个会话自己产生的文件。它们放在会话自己的目录里，不在工作区中，所以文件树里看不到。",
-      empty: "这个会话还没有产生文件。",
-      failed: "读取会话文件失败。",
-      open: "预览这个文件",
-    },
   },
 
   session: {
@@ -373,11 +395,11 @@ export default {
       title: "新建会话",
       titleLabel: "标题（可选）",
       titlePlaceholder: "留空则为「{fallback}」",
-      noCopilot: "不使用 Copilot",
+      noCopilot: "不使用助理",
       noCopilotDesc: "使用内置的通用助手设定与默认参数。",
-      noCopilots: "还没有 Copilot。可在「设置 → Copilots」中创建。",
-      groupPublic: "公开的 Copilot",
-      groupMine: "我的 Copilot",
+      noCopilots: "还没有助理。可在侧边栏的「助理」里创建。",
+      groupPublic: "公开的助理",
+      groupMine: "我的助理",
       byAuthor: "由 {name} 公开",
       advanced: "其他参数（新建时可一并设定，之后也能在会话参数里改）",
     },
@@ -389,6 +411,15 @@ export default {
   },
 
   workspace: {
+    /**
+     * The workspace a new account starts with, created by `loadApp` on its first sign-in.
+     *
+     * A *name*, not a translation: it is written into the database once and stays whatever it was
+     * when it was created, like every other workspace name. Seeding it in the language the account
+     * is reading is the best that can be done, and is why it is a catalog key rather than a
+     * constant in the store.
+     */
+    defaultName: "默认工作区",
     new: {
       title: "新建工作区",
       namePlaceholder: "例如：My Project",
@@ -433,6 +464,7 @@ export default {
     name: {
       web_search: "网页搜索",
       web_fetch: "读取网页",
+      ila_collect_page: "收藏网页",
       list_files: "列出文件",
       read_file: "读取文件",
       write_file: "写入文件",
@@ -639,50 +671,50 @@ export default {
   },
 
   copilot: {
-    edit: "编辑 Copilot",
-    create: "新建 Copilot",
+    edit: "编辑助理",
+    create: "新建助理",
     namePlaceholder: "例如：代码助手",
     description: "描述",
     descriptionPlaceholder: "一句话说明它的用途",
     systemPrompt: "System Prompt（设定）",
-    systemPromptPlaceholder: "定义这个 Copilot 的角色、能力与行为约束…",
+    systemPromptPlaceholder: "定义这个助理的角色、能力与行为约束…",
     systemPromptHint: "留空则使用内置的通用助手设定。",
     tools: "可用工具",
     allTools: "全部工具可用",
-    allToolsHint: "这个 Copilot 可以使用所有工具，之后新增的工具也会自动包含。",
+    allToolsHint: "这个助理可以使用所有工具，之后新增的工具也会自动包含。",
     toolsHint: "只有勾选的工具可用；一个都不勾选就是不使用任何工具。",
     boundToolsHint: "部分工具随控件自动启用（例如「计划」控件的制定/查看/更新计划工具），不在此列表中，也无需勾选。",
-    public: "公开这个 Copilot",
+    public: "公开这个助理",
     publicHint: "公开后所有账号都能看到并使用它，但只有你能修改或删除。",
     defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",
     widgets: "安装控件",
-    widgetsHint: "用这个 Copilot 新建会话时，会把勾选的控件安装到那个会话里，之后可以在会话参数中单独调整。",
+    widgetsHint: "用这个助理新建会话时，会把勾选的控件安装到那个会话里，之后可以在会话参数中单独调整。",
     /* The list. It used to live under `settings.`, because the list and the editor were two
        halves of one settings dialog; the list has a dialog of its own now, and the editor that
        shares this namespace is what makes `copilot.*` its domain rather than the app's. */
-    countConfigured: "已配置 {count} 个 Copilot",
-    add: "新建 Copilot",
+    countConfigured: "已配置 {count} 个助理",
+    add: "新建助理",
     inUse: "当前会话使用中",
-    empty: "还没有 Copilot，点击「新建 Copilot」创建一个。",
-    groupPublic: "公开的 Copilot",
-    groupMine: "我的 Copilot",
+    empty: "还没有助理，点击「新建助理」创建一个。",
+    groupPublic: "公开的助理",
+    groupMine: "我的助理",
     byAuthor: "由 {name} 公开",
     published: "已公开",
     viewPrompt: "查看它的设定",
     promptNone: "没有填写系统设定。",
     copyToMine: "复制到我的",
     introBefore:
-      "Copilot 定义一段系统设定（System Prompt）、可用工具与默认生成参数。新建会话时选择一个 Copilot，系统设定与默认参数会被",
+      "助理定义一段系统设定（System Prompt）、可用工具与默认生成参数。新建会话时选择一个助理，系统设定与默认参数会被",
     introCopied: "整个复制",
-    introAfter: "到该对话中 —— 之后修改 Copilot 不会影响已开始的对话，对话里也能单独改自己的设定。",
+    introAfter: "到该对话中 —— 之后修改助理不会影响已开始的对话，对话里也能单独改自己的设定。",
     summarySteps: "最多 {count} 轮工具",
     summaryHistory: "历史 {count} 条",
     summaryTools: "{count} 个工具",
     summaryAllTools: "全部工具",
     summaryNoTools: "不使用工具",
     delete: {
-      title: "删除 Copilot",
-      message: "确定删除 Copilot「{name}」吗？",
+      title: "删除助理",
+      message: "确定删除助理「{name}」吗？",
       detail: "已经使用它的会话不受影响，会保留创建时复制过去的系统设定与参数。",
     },
   },
@@ -695,22 +727,34 @@ export default {
    * the same word, which is a product name rather than an untranslated string.
    */
   copilots: {
-    title: "Copilot",
+    title: "助理",
   },
 
 
+  /*
+   * The installation's own settings, and the one word that used to point at them.
+   *
+   * The dialog that held these screens is gone — providers and models, parsers and the app
+   * defaults are the platform console's, because they are shared by every account and only an
+   * administrator may write them. What was left here was `installationMoved`, a sentence the
+   * Copilot list drew for an administrator who came looking for the provider list; it is gone
+   * too, because a list of templates is not where a pointer to the console belongs when the
+   * sidebar's own menu already has one.
+   */
   settings: {
     /**
-     * Where the installation's own settings went, shown only to an account that can reach them.
-     * Nothing was removed — providers and models, parsers and the app defaults are the platform
-     * console's screens now, because they are shared by every account and only an administrator
-     * may write them.
-     *
-     * This namespace has no dialog of its own any more: what is left of it is the console's
-     * sections and this one pointer, which the Copilot list shows. The key stays `settings.`
-     * because the installation's settings are still what it is about.
+     * Where an unqualified file write lands. The three levels that ask this question — a
+     * workspace, a Copilot, a conversation — share these words, and the caller supplies what
+     * "inherit" means at its own level.
      */
-    installationMoved: "模型服务与文档解析由平台管理统一配置。",
+    writeLocation: {
+      label: "文件写入位置",
+      workspace: "写入工作区（所有会话共享）",
+      session: "写入会话（仅本会话可见）",
+      hint: "这是默认位置：你在对话里明确说明时，以你的说明为准。",
+      inheritWorkspace: "跟随工作区设置",
+      inheritBuiltIn: "默认（写入会话）",
+    },
     providers: {
       countConfigured: "已配置 {count} 个 Provider",
       add: "新建 Provider",
@@ -923,7 +967,6 @@ export default {
       hint: "这个会话画过的图表：点一条即可查看，也可以回到它被画出来的那条消息。",
       noSession: "打开一个会话后，这里会显示它画过的图表。",
       /** The panel's own link to the whole folder, which holds more than diagrams. */
-      browse: "查看会话文件",
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "定位到生成它的消息",
       empty: "这个会话还没有画过图表。",
@@ -1116,14 +1159,14 @@ export default {
     systemPrompt: "系统设定（System Prompt）",
     systemPromptPlaceholder: "这个对话要扮演什么角色…",
     systemPromptHint:
-      "只属于这个对话。新建会话时从 Copilot 复制一份过来，之后各自独立 —— 在这里修改不会影响那个 Copilot。",
+      "只属于这个对话。新建会话时从助理复制一份过来，之后各自独立 —— 在这里修改不会影响那个助理。",
     reset: "重置",
   },
 
   errors: {
     NAME_REQUIRED: "名称不能为空。",
     WORKSPACE_NOT_FOUND: "工作区不存在，可能已被删除。",
-    COPILOT_NOT_FOUND: "Copilot 不存在，可能已被删除。",
+    COPILOT_NOT_FOUND: "助理不存在，可能已被删除。",
     SESSION_NOT_FOUND: "会话不存在，可能已被删除。",
     TITLE_EMPTY: "标题不能为空。",
     UNSUPPORTED_FILE_TYPE: "不支持该文件类型：{mimeType}",
@@ -1152,6 +1195,8 @@ export default {
     INVALID_FILE_PATH: "这个位置不在工作区内，无法访问。",
     NOT_A_DIRECTORY: "该路径不是一个目录。",
     NOT_A_FILE: "该路径不是一个文件。",
+    FILE_EXISTS: "这个名字已经被占用了，请换一个名字。",
+    PAGE_FETCH_FAILED: "无法保存这个网页链接：{detail}",
     UNAUTHENTICATED: "登录已失效，请重新登录。",
     USERNAME_REQUIRED: "用户名不能为空。",
     USERNAME_TOO_LONG: "用户名不能超过 {max} 个字符。",
@@ -1198,11 +1243,9 @@ export default {
    * reads as tidying up something already gone.
    */
   sources: {
-    title: "已上传的文件",
-    lead: "这些是你上传过的全部文件，属于你的账号，不属于某一次对话。同一个文件在多个对话里被引用时，只会保存和解析一次。",
-    open: "已上传的文件",
+    title: "资料源",
     loading: "读取中…",
-    empty: "还没有上传过文件。在输入框点回形针、或直接粘贴截图即可上传。",
+    empty: "没有符合条件的资料。",
     parsed: "已解析",
     parsedChars: "已解析 {count} 字",
     parsing: "解析中…",
@@ -1210,6 +1253,56 @@ export default {
     /** The accessible name of a row's open control. The name is in it because the row's own
      *  label is truncated, so this is also the only place a long filename is readable whole. */
     preview: "预览 {name}",
+    search: "搜索",
+    searchHint: "按名称查找",
+    filterWorkspace: "工作区",
+    filterSession: "会话",
+    filterCategory: "内容类型",
+    filterOrigin: "来源",
+    filterMime: "MIME 类型",
+    allWorkspaces: "全部工作区",
+    allSessions: "全部会话",
+    allCategories: "全部类型",
+    allOrigins: "全部来源",
+    allMimes: "全部 MIME",
+    viewFlat: "列表",
+    viewTree: "树状",
+    expandAll: "展开全部",
+    collapseAll: "收起全部",
+    add: "添加资料",
+    addLinkLabel: "网页地址",
+    /* The add dialog: one door, a tab per kind. */
+    addKind: "资料类型",
+    tabFile: "文件",
+    tabLink: "网页链接",
+    addDir: "目录",
+    addDirHint: "留空表示放到根目录",
+    addFiles: "文件",
+    pickFiles: "选择文件",
+    addLinkHint: "服务端会抓取这个页面并保存下来，稍后可以在会话里引用。",
+    viewLabel: "视图",
+    /** The chat topbar's entry point: the browser, already narrowed to this workspace. */
+    workspaceScope: "本工作区的资料",
+    /** The four origin values, as the filter and every row's byline spell them. */
+    origin: {
+      session_attachment: "会话附件",
+      workspace_upload: "工作区上传",
+      agent_workspace: "助理写入工作区",
+      agent_session: "助理写入会话",
+      web: "网页",
+      discovered: "已有文件",
+    },
+    /** The coarse content types. A closed set, so a key per value rather than a pattern. */
+    category: {
+      page: "网页",
+      text: "文本",
+      markdown: "Markdown",
+      code: "代码",
+      diagram: "图表",
+      image: "图片",
+      document: "文档",
+      other: "其他",
+    },
     delete: {
       title: "删除文件",
       message: "确定要删除「{name}」吗？",

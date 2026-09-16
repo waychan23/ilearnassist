@@ -12,6 +12,7 @@ import {
   type Attachment,
   type ChatStreamEvent,
   type Message,
+  type FileLocation,
   type ModelCapability,
   type SessionSettings,
 } from "@ilearnassist/shared";
@@ -20,7 +21,7 @@ import { dataLayout, userLayout } from "../../src/paths.js";
 import { buildAskUserTool } from "../../src/tools/askUser.js";
 import { buildDiagramTool } from "../../src/tools/diagram.js";
 import { buildQuizTool } from "../../src/tools/quiz.js";
-import { buildFileTools } from "../../src/tools/fileTools.js";
+import { fileToolsFor } from "../helpers/fileTools.js";
 import type { ProviderRecord } from "../../src/db.js";
 import { startFakeLlm, type FakeLlm, type FakeTurn } from "../helpers/fakeLlm.js";
 
@@ -84,6 +85,8 @@ interface RunOptions {
   toolUse?: boolean;
   /** Declared capabilities of the model record — `reasoning` gates the replay below. */
   capabilities?: ModelCapability[];
+  /** Where an unqualified write goes, as `turnContext` would have resolved it. */
+  writeLocation?: FileLocation;
   /** Aborts the turn; see `RunAgentInput.signal`. */
   signal?: AbortSignal;
   /** Overridden to point the provider at something that cannot answer. */
@@ -113,6 +116,8 @@ async function run(options: RunOptions) {
     // source's path from the layout, so it needs the root it belongs to.
     user: userLayout(dataLayout(scratch), "tester"),
     sessionId: "s1",
+    sessionDirPath: join(scratch, "ws", "sessions", "s1"),
+    writeLocation: options.writeLocation ?? "session",
     vision: options.vision ?? false,
     toolUse: options.toolUse ?? false,
     history: options.history ?? [],
@@ -240,7 +245,7 @@ describe("runAgentStream — chain of thought", () => {
 
 describe("runAgentStream — tool calling", () => {
   it("runs a real tool and feeds the result back for a final answer", async () => {
-    const files = buildFileTools(workdir);
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
     const { events, result } = await run({
       tools: [files.writeFile],
       turns: [
@@ -267,7 +272,7 @@ describe("runAgentStream — tool calling", () => {
   });
 
   it("hands the tool result back to the model as a tool message", async () => {
-    const files = buildFileTools(workdir);
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
     await run({
       tools: [files.writeFile],
       turns: [
@@ -292,7 +297,7 @@ describe("runAgentStream — tool calling", () => {
   });
 
   it("turns a tool failure into a tool result rather than a failed turn", async () => {
-    const files = buildFileTools(workdir);
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
     const { result, events } = await run({
       tools: [files.readFile],
       turns: [
@@ -307,7 +312,7 @@ describe("runAgentStream — tool calling", () => {
   });
 
   it("refuses a tool call that escapes the workspace sandbox", async () => {
-    const files = buildFileTools(workdir);
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
     const { result } = await run({
       tools: [files.readFile],
       turns: [
@@ -443,16 +448,37 @@ describe("runAgentStream — history handling", () => {
     expect(JSON.stringify(sent.messages)).toContain("flowchart TD");
   });
 
-  it("always sends the workspace sandbox note in the system prompt", async () => {
+  /*
+   * Both folders, by absolute path, and the default named.
+   *
+   * This replaces a test that asserted the opposite — that the session directory was *not* in
+   * the prompt. That was right while the only writable folder was the workdir, and the claim it
+   * protected ("the sandbox is the workdir") stopped being true the moment a file could go into
+   * a conversation's own directory. The thing still worth pinning is that the prompt names *the
+   * folders the tools resolve against* and not their parent: a model told to write into
+   * `<workspace>` would be aiming at the directory holding `workdir/` and `sessions/`, which
+   * the tools refuse.
+   */
+  it("names both writable folders and the effective default", async () => {
     await run({ turns: [{ content: "ok" }] });
 
     const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
     expect(sent.messages[0]!.role).toBe("system");
-    // The *sandbox*, not the workspace's own directory: naming the parent would tell the
-    // model that `sessions/` sits inside the place it may write to.
-    expect(JSON.stringify(sent.messages[0]!.content)).toContain(workdir);
-    expect(JSON.stringify(sent.messages[0]!.content)).not.toContain(join(scratch, "ws") + "/sessions");
-    expect(JSON.stringify(sent.messages[0]!.content)).toContain("sandboxed");
+    const prompt = JSON.stringify(sent.messages[0]!.content);
+    expect(prompt).toContain(workdir);
+    expect(prompt).toContain(join(scratch, "ws", "sessions", "s1"));
+    expect(prompt).toContain("conversation folder");
+    // The workspace's own directory — the parent of both — is never offered as a place to write.
+    expect(prompt).not.toContain(`${join(scratch, "ws")}\n`);
+  });
+
+  it("names the workspace folder as the default when the session says so", async () => {
+    await run({ turns: [{ content: "ok" }], writeLocation: "workspace" });
+
+    const sent = llm.requests()[0] as { messages: { content: unknown }[] };
+    expect(JSON.stringify(sent.messages[0]!.content)).toContain(
+      "goes to the shared workspace folder"
+    );
   });
 
   it("tells the built-in assistant to confirm a deliverable it has finished", async () => {
@@ -618,7 +644,7 @@ describe("runAgentStream — known inconsistencies (pinned)", () => {
    */
 
   it("streams tool-step narration but persists only the final answer", async () => {
-    const files = buildFileTools(workdir);
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
     const { events, result } = await run({
       tools: [files.writeFile],
       turns: [
@@ -841,7 +867,7 @@ describe("runAgentStream — a suspending tool ends the turn", () => {
   it("runs the step's other tool calls before suspending", async () => {
     // Nothing the model asked for is silently dropped: the read still happens, and the
     // question is the only thing left outstanding.
-    const files = buildFileTools(workdir);
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
     await files.writeFile.invoke({ path: "a.txt", content: "hello" });
 
     const { result } = await run({

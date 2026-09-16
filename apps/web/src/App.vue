@@ -12,13 +12,13 @@ import ChangePasswordView from "./components/ChangePasswordView.vue";
 import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import CopilotsDialog from "./components/dialogs/CopilotsDialog.vue";
-import SourcesDialog from "./components/dialogs/SourcesDialog.vue";
-import SessionFilesDialog from "./components/dialogs/SessionFilesDialog.vue";
+import SourceBrowser from "./components/dialogs/SourceBrowser.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
 import {
   closeCopilots,
   closeDrawer,
+  closeSources,
   closeWidgetDrawer,
   sidebarRail,
   uiState,
@@ -216,13 +216,17 @@ watch(
       v-if="uiState.workspaceSettingsId"
       :key="uiState.workspaceSettingsId"
     />
-    <!-- The account's uploaded files. Opened from the home page, because a source belongs to
-         the account rather than to the workspace you happen to be in. -->
-    <SourcesDialog />
-    <!-- A conversation's own folder — the diagrams it drew. Read from `activeSessionId`, so it
-         is mounted beside the sources dialog rather than inside the chat pane, which unmounts
-         on the way back to the workspace home. -->
-    <SessionFilesDialog />
+    <!--
+      The source browser, from either front door. `uiState.sourcesScope` is what the caller
+      decided: the home page opens it over the whole account, a conversation opens it already
+      narrowed to its workspace and without a workspace picker, since a control for a choice
+      that has already been made is a control that does nothing.
+    -->
+    <SourceBrowser
+      :initial="{ workspaceId: uiState.sourcesScope?.workspaceId }"
+      :hidden="uiState.sourcesScope?.workspaceId ? ['workspace'] : []"
+      @close="closeSources"
+    />
     <!-- Mounted for its lifetime rather than behind a `v-if` on the file: it renders nothing
          until one is opened, and the Sidebar — which would be the natural host — unmounts on
          the way back to the workspace home. -->

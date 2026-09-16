@@ -70,6 +70,15 @@ export interface QueryToolContext {
   userId: string;
   sessionId: string;
   /**
+   * The workspace this conversation is in.
+   *
+   * Needed by exactly one kind — `source`, which lists what the conversation may read, and that
+   * set is the conversation's own sources unioned with its workspace's. The alternative was to
+   * have the route hand over the resolved list, which would make this the one kind reading
+   * something passed in rather than something looked up.
+   */
+  workspaceId: string;
+  /**
    * This conversation's own directory — where the `.mmd` sources live. Passed rather than
    * derived, for the reason `DiagramToolContext.sessionDir` gives: deriving it needs the
    * workspace, and this tool must not reach for one.
@@ -157,7 +166,7 @@ const DESCRIPTION = [
   "",
   "Use it whenever the answer depends on what has already happened here rather than on general knowledge — what the learner has already covered, what they got wrong, what they wrote down, what they pushed back on, or what they asked for a picture of. The learner's questions often refer back to material you cannot see from the last few messages, and this is how you look it up instead of guessing or asking them to repeat it.",
   "",
-  "Pick one kind per call (`plan`, `quiz`, `thread`, `note` or `diagram`); call it more than once if you need more than one. Only `kind: \"diagram\"` with a `name` returns the diagram's mermaid source — that file lives in the conversation's own folder, where read_file cannot reach it.",
+  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram` or `source`); call it more than once if you need more than one. Only `kind: \"diagram\"` with a `name` returns the diagram's mermaid source — that file lives in the conversation's own folder, where read_file cannot reach it.",
   "",
   "If an answer comes back with \"truncated\": true, you are seeing part of the set: call again with a larger offset or a narrower filter rather than assuming you have seen it all.",
 ].join("\n");
@@ -216,8 +225,8 @@ const inputSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'kind: "note" only. Only notes whose text or quoted passage contains this, ' +
-        "case-insensitively."
+      'kind: "note" or "source". For notes, only those whose text or quoted passage ' +
+        "contains this, case-insensitively; for sources, only those whose name does."
     ),
   name: z
     .string()
@@ -245,6 +254,7 @@ const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = {
   thread: ["limit"],
   note: ["query", "limit", "offset"],
   diagram: ["name", "limit"],
+  source: ["query", "limit", "offset"],
 };
 
 /**
@@ -457,6 +467,60 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
   };
 
   /**
+   * `kind: "source"` — the material this conversation holds.
+   *
+   * The counterpart to `read_document`, and it answers the question that tool cannot: *what is
+   * there*. A model that has been told to check a document it cannot name has, until now, had
+   * no way to find out — the attachments of the current turn are visible in the prompt, and
+   * everything else the conversation has been handed is not.
+   *
+   * It lists what the conversation may **read**, which is the same set `read_document` is bound
+   * to, so the two cannot disagree about what is available. Files inside the workspace's sandbox
+   * are deliberately absent: they are reached by path with `list_files`, which is the tool for
+   * them, and folding a `node_modules` into this list would make the answer useless.
+   *
+   * The read whitelist already carries the conversation's workspace — that is what
+   * `listReadableSources` unions — so this passes the same workspace the turn's tools were built
+   * for. The context does not carry it, and deriving it here would be a second definition.
+   *
+   * Summaries and parse state only — never contents. Reading a file is `read_document`'s job,
+   * and a list that inlined one would spend the context of every turn that asked.
+   */
+  const source = async (input: QueryInput): Promise<string> => {
+    const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
+    const offset = input.offset ?? 0;
+    const needle = input.query?.trim().toLowerCase();
+
+    const all = ctx.db
+      .listReadableSources(ctx.userId, ctx.sessionId, ctx.workspaceId)
+      .filter((s) => !needle || s.name.toLowerCase().includes(needle));
+
+    const items = all.slice(offset, offset + limit).map((s) => ({
+      id: s.id,
+      name: s.name,
+      mimeType: s.mimeType,
+      category: s.category,
+      size: s.size,
+      origin: s.origin,
+      summary: s.summary ? clip(s.summary) : null,
+      parseStatus: s.parseStatus,
+      /** How to read it: the id `read_document` takes. */
+      readable: s.parseStatus === "ready" || s.parseStatus === "none",
+    }));
+
+    return renderPage({
+      kind: "source",
+      items,
+      total: all.length,
+      offset,
+      note:
+        "These are the documents this conversation can read, by id. Call read_document with " +
+        "one `sourceId` to read its text a page at a time. `readable: false` means its text is " +
+        "not available yet or could not be extracted.",
+    });
+  };
+
+  /**
    * One handler per kind, as a table rather than a `switch`.
    *
    * This is where the completeness check lives now that the schema is one flat object: the record
@@ -470,6 +534,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     thread: (input) => thread(input),
     note: async (input) => note(input),
     diagram: (input) => diagram(input),
+    source,
   };
 
   return tool(

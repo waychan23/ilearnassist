@@ -28,7 +28,7 @@ async function createCopilot(
   await page.getByTestId("new-copilot").click();
 
   await page.getByPlaceholder("例如：代码助手").fill(name);
-  await page.getByPlaceholder("定义这个 Copilot 的角色、能力与行为约束…").fill(systemPrompt);
+  await page.getByPlaceholder("定义这个助理的角色、能力与行为约束…").fill(systemPrompt);
   if (publish) await page.getByTestId("copilot-public").check();
   await page.getByTestId("save-copilot").click();
 
@@ -155,7 +155,7 @@ test("a conversation keeps the prompt it was started with when the Copilot chang
   // share one server and the earlier one left Copilots behind.
   await page.getByTestId("open-copilots").click();
   await page.getByTestId(`copilot-row-${NAME}`).getByTestId("edit-copilot").click();
-  await page.getByPlaceholder("定义这个 Copilot 的角色、能力与行为约束…").fill(AFTER);
+  await page.getByPlaceholder("定义这个助理的角色、能力与行为约束…").fill(AFTER);
   await page.getByTestId("save-copilot").click();
   await page.getByTestId("close-copilots").click();
 

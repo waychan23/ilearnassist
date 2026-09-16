@@ -30,6 +30,14 @@ export interface DiagramSaveInput {
   name: string;
   summary: string;
   toolCallId: string | null;
+  /**
+   * How many bytes the source is, so the source row this file also gets can carry a size.
+   *
+   * Passed rather than measured by the callback: the tool has the string in hand and the
+   * callback has a path it would have to `stat`, and a `stat` between a write and the row that
+   * describes it is one more thing that can disagree with what was written.
+   */
+  size: number;
 }
 
 export interface DiagramToolContext {
@@ -94,7 +102,7 @@ export function buildDiagramTool(ctx: DiagramToolContext): StructuredToolInterfa
         typeof config?.configurable?.toolCallId === "string"
           ? (config.configurable.toolCallId as string)
           : null;
-      ctx.save({ name: fileName, summary, toolCallId });
+      ctx.save({ name: fileName, summary, toolCallId, size: Buffer.byteLength(source, "utf8") });
 
       return (
         `Wrote ${fileName} (${source.length} characters) to this conversation's folder. ` +

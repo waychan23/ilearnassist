@@ -8,10 +8,11 @@ import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
-import { buildFileTools } from "./fileTools.js";
+import { buildFileTools, type FileToolContext } from "./fileTools.js";
 import { buildPlanTools, type PlanToolContext } from "./planTools.js";
 import { buildQueryTool, type QueryToolContext } from "./query.js";
 import { buildWebFetchTool } from "./webFetch.js";
+import { buildCollectPageTool, type CollectPageContext, type PageCache } from "./collectPage.js";
 import { buildWebSearchTool } from "./webSearch.js";
 import { buildQuizTool, type QuizToolContext } from "./quiz.js";
 import { buildQuizReviewTool, type QuizReviewToolContext } from "./quizReview.js";
@@ -52,9 +53,26 @@ const NON_FILE_TOOLS = new Set<string>([
 ]);
 
 export interface BuildToolsInput {
-  workspaceDir: string;
+  /**
+   * The two sandboxes a file tool may touch, the default one, and the sink that records a
+   * write. Required, not optional — see `FileToolContext`.
+   */
+  fileTools: FileToolContext;
   webSearch: WebSearchConfig;
   webFetch: WebFetchConfig;
+  /**
+   * This turn's fetched pages, shared by `web_fetch` and `ila_collect_page`.
+   *
+   * Created by `buildTools` when absent, so a caller that does not care cannot forget it: an
+   * absent cache would make collecting a page fetch it a second time, which is invisible
+   * except in the one place it matters — the network.
+   */
+  pageCache?: PageCache;
+  /**
+   * Present when a page can be kept at all, which is whenever fetching is enabled. Optional so
+   * a test can pin what its absence assembles.
+   */
+  collectPage?: CollectPageContext;
   fileToolsEnabled: boolean;
   /**
    * The tools to expose. **Absent means every tool; an empty array means none.**
@@ -120,7 +138,10 @@ export interface BuildToolsInput {
  * providers are configured. Copilot-level and config-level gating is applied here.
  */
 export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
-  const files = buildFileTools(input.workspaceDir);
+  const files = buildFileTools(input.fileTools);
+  // One cache per assembled set, which is one per turn: the web tools are built together and
+  // discarded together, so the lifetime needs no owner.
+  const pageCache = input.pageCache ?? new Map();
   const fileTools = [
     files.listFiles,
     files.readFile,
@@ -136,7 +157,16 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     buildWebSearchTool(input.webSearch),
     buildAskUserTool(),
   ];
-  if (input.webFetch.enabled) all.push(buildWebFetchTool(input.webFetch));
+  if (input.webFetch.enabled) {
+    // The two web tools share a **turn-scoped cache**: the fetch a model just made is the one
+    // `ila_collect_page` reuses, so keeping a page costs no second request. The cache lives
+    // here rather than in either tool because it is the turn's, and `buildTools` is what a turn
+    // is assembled by.
+    all.push(buildWebFetchTool(input.webFetch, pageCache));
+    if (input.collectPage) {
+      all.push(buildCollectPageTool({ ...input.collectPage, cache: pageCache }));
+    }
+  }
   if (input.documents && input.documents.sources.length > 0) {
     all.push(buildDocumentTool(input.documents));
   }

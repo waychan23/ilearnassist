@@ -75,6 +75,8 @@ export function choosePanelLocale(
  */
 export interface PanelMessages {
   "window.title": string;
+  /** The product's displayed name — the panel's wordmark, and the app window's initial title. */
+  "app.name": string;
   /** The line under the wordmark. Says what the window is, since the name does not. */
   "app.tagline": string;
   "status.stopped": string;
@@ -213,7 +215,8 @@ export interface PanelMessages {
 }
 
 const zhCN: PanelMessages = {
-  "window.title": "ilearnassist 控制面板",
+  "window.title": "交互式学习助理 控制面板",
+  "app.name": "交互式学习助理",
   "app.tagline": "本地服务控制面板",
   "status.stopped": "已停止",
   "status.starting": "启动中…",
@@ -261,7 +264,7 @@ const zhCN: PanelMessages = {
   "cli.fault.ADMIN_NOT_FOUND": "这个数据目录里还没有超级管理员，请先创建。",
   "cli.fault.DATA_DIR_INVALID": "选择的路径不是一个文件夹。",
   "cli.fault.SCHEMA_UNREADABLE": "这个数据库是旧版本（v{found}），当前版本无法读取（需要 v{needed}）。",
-  "cli.fault.NOT_A_DATABASE": "那个文件不是一个 ilearnassist 数据库。",
+  "cli.fault.NOT_A_DATABASE": "那个文件不是交互式学习助理的数据库。",
   "cli.fault.UNREADABLE": "数据库无法读取。",
   "cli.fault.USAGE": "创建程序的参数不正确。",
   "cli.fault.INTERNAL": "创建时发生了内部错误。",
@@ -277,7 +280,7 @@ const zhCN: PanelMessages = {
   "action.chooseDataDir": "选择文件夹…",
   "dataDir.chooseTitle": "选择数据存放位置",
   "dataDir.chooseButton": "使用这个文件夹",
-  "dataDir.confirmTitle": "这个文件夹里没有 ilearnassist 数据",
+  "dataDir.confirmTitle": "这个文件夹里没有交互式学习助理的数据",
   "dataDir.confirmDetail": "会在 {dir} 里新建一个空数据库。你现有的数据不会出现在这里。",
   "dataDir.confirmProceed": "仍然使用",
   "hint.chooseDataDir": "先选择数据存放位置，再启动服务。数据库、工作空间和上传的文件都会放在那里，所以建议选一个在应用之外、并且会被备份的位置。",
@@ -298,7 +301,7 @@ const zhCN: PanelMessages = {
   "qr.preparing": "正在开启局域网访问…",
   "qr.notRunning": "服务还没有运行，暂时无法访问。请先启动服务。",
   "qr.noNetwork": "没有找到可用的局域网地址。请先让这台电脑连上 Wi-Fi 或网线。",
-  "tray.tooltip": "ilearnassist",
+  "tray.tooltip": "交互式学习助理",
   "tray.openPanel": "打开控制面板",
   "tray.stopAndQuit": "停止服务器并退出",
   "fault.spawn_failed": "无法启动服务进程：{message}",
@@ -306,8 +309,8 @@ const zhCN: PanelMessages = {
   "fault.exitedWithSignal": "服务被信号 {signal} 终止。",
   "fault.exitedUnknown": "服务意外退出，原因未知。",
   "fault.timeout": "{seconds} 秒内没有收到服务就绪的信号，请查看日志。",
-  "menu.about": "关于 ilearnassist",
-  "menu.app": "ilearnassist",
+  "menu.about": "关于交互式学习助理",
+  "menu.app": "交互式学习助理",
   "menu.file": "文件",
   "menu.view": "显示",
   "menu.reload": "重新载入",
@@ -316,7 +319,8 @@ const zhCN: PanelMessages = {
 };
 
 const en: PanelMessages = {
-  "window.title": "ilearnassist control panel",
+  "window.title": "Interactive Learning Assistant control panel",
+  "app.name": "Interactive Learning Assistant",
   "app.tagline": "Local server control panel",
   "status.stopped": "Stopped",
   "status.starting": "Starting…",
@@ -365,7 +369,7 @@ const en: PanelMessages = {
   "cli.fault.DATA_DIR_INVALID": "That path is not a folder.",
   "cli.fault.SCHEMA_UNREADABLE":
     "That database is from an older schema (v{found}); this build needs v{needed}.",
-  "cli.fault.NOT_A_DATABASE": "That file is not an ilearnassist database.",
+  "cli.fault.NOT_A_DATABASE": "That file is not an Interactive Learning Assistant database.",
   "cli.fault.UNREADABLE": "The database could not be read.",
   "cli.fault.USAGE": "The administrator tool was called incorrectly.",
   "cli.fault.INTERNAL": "An internal error occurred while creating the account.",
@@ -379,7 +383,7 @@ const en: PanelMessages = {
   "action.chooseDataDir": "Choose folder…",
   "dataDir.chooseTitle": "Choose where to keep your data",
   "dataDir.chooseButton": "Use this folder",
-  "dataDir.confirmTitle": "This folder has no ilearnassist data",
+  "dataDir.confirmTitle": "This folder has no Interactive Learning Assistant data",
   "dataDir.confirmDetail": "A new, empty database will be created in {dir}. Your existing data will not appear here.",
   "dataDir.confirmProceed": "Use it anyway",
   "hint.chooseDataDir": "Choose where to keep your data before starting the server. The database, your workspaces and your uploaded files all live there — so pick somewhere outside the app, somewhere you back up.",
@@ -400,7 +404,7 @@ const en: PanelMessages = {
   "qr.preparing": "Turning on network access…",
   "qr.notRunning": "The server is not running yet, so there is nothing to open. Start it first.",
   "qr.noNetwork": "No network address available. Connect this Mac to Wi-Fi or Ethernet first.",
-  "tray.tooltip": "ilearnassist",
+  "tray.tooltip": "Interactive Learning Assistant",
   "tray.openPanel": "Open control panel",
   "tray.stopAndQuit": "Stop server and quit",
   "fault.spawn_failed": "Could not start the server process: {message}",
@@ -408,8 +412,8 @@ const en: PanelMessages = {
   "fault.exitedWithSignal": "The server was terminated by signal {signal}.",
   "fault.exitedUnknown": "The server exited unexpectedly for an unknown reason.",
   "fault.timeout": "The server did not report itself ready within {seconds}s. Check the output.",
-  "menu.about": "About ilearnassist",
-  "menu.app": "ilearnassist",
+  "menu.about": "About Interactive Learning Assistant",
+  "menu.app": "Interactive Learning Assistant",
   "menu.file": "File",
   "menu.view": "View",
   "menu.reload": "Reload",

@@ -52,6 +52,7 @@ import type {
   WidgetId,
   WidgetState,
   Workspace,
+  WorkspaceSettings,
   WorkspaceStats,
 } from "@ilearnassist/shared";
 import { AUTH_STORAGE_KEY } from "@ilearnassist/shared";
@@ -470,6 +471,17 @@ export const api = {
     request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify({ name, widgets }) }),
   renameWorkspace: (id: string, name: string) =>
     request<Workspace>(`/workspaces/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  /**
+   * A workspace's own defaults, replaced wholesale.
+   *
+   * Omitted means "leave alone", which is what a rename sends — the route takes each field
+   * independently so the two writers do not have to know about each other.
+   */
+  updateWorkspaceSettings: (id: string, settings: WorkspaceSettings) =>
+    request<Workspace>(`/workspaces/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ settings }),
+    }),
   deleteWorkspace: (id: string) =>
     request<{ ok: boolean }>(`/workspaces/${id}`, { method: "DELETE" }),
 
@@ -494,6 +506,53 @@ export const api = {
   readFileContent: (workspaceId: string, path: string) =>
     request<FileContent>(
       `/workspaces/${workspaceId}/files/content?path=${encodeURIComponent(path)}`
+    ),
+  /*
+   * The four writes beside them, because a browser that cannot create, upload, move or delete
+   * is a browser for a filesystem the user has no other way to reach: this is a web app, so
+   * there is no Finder to fall back on.
+   *
+   * Each is one call rather than a general "files" endpoint with a verb in the body: the four
+   * answer four different questions about a path, and their failures are different — a name
+   * that is taken, a directory that is not empty, a path that is not inside the workspace.
+   */
+  createWorkspaceDirectory: (workspaceId: string, path: string) =>
+    request<{ path: string; type: "dir" }>(`/workspaces/${workspaceId}/files/directory`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  /**
+   * Upload bytes into a directory.
+   *
+   * The directory and the name are separate fields rather than one path, which is the server's
+   * rule as well: a name that could carry a separator would let an upload land somewhere the
+   * person did not point at.
+   */
+  uploadWorkspaceFile: (
+    workspaceId: string,
+    input: { dir: string; name: string; mimeType?: string; data: string }
+  ) =>
+    request<Source>(`/workspaces/${workspaceId}/files/upload`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  /**
+   * Add a web page as a source, by pasting its URL.
+   *
+   * A workspace, never a conversation — the same rule the upload picker follows, and the same
+   * reason: material added from outside a conversation belongs to the workspace it was added to.
+   */
+  addWebSource: (input: { url: string; workspaceId: string }) =>
+    request<Source>("/sources/pages", { method: "POST", body: JSON.stringify(input) }),
+  moveWorkspaceEntry: (workspaceId: string, input: { from: string; to: string }) =>
+    request<{ from: string; to: string }>(`/workspaces/${workspaceId}/files/move`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  deleteWorkspaceEntry: (workspaceId: string, path: string) =>
+    request<{ ok: boolean; path: string }>(
+      `/workspaces/${workspaceId}/files?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" }
     ),
   /**
    * The same two reads for a conversation's own directory — where the diagrams it draws are
@@ -738,7 +797,23 @@ export const api = {
    */
   listSessionSources: (sessionId: string) => request<Source[]>(`/sessions/${sessionId}/sources`),
   /** Every file the account has uploaded — the list the sources dialog manages. */
-  listSources: () => request<Source[]>("/sources"),
+  /**
+   * The account's sources, filtered.
+   *
+   * One call for every caller, because the filters are the API rather than a mode: the uploads
+   * dialog asks for `storage=upload`, the source browser asks for whatever its controls say,
+   * and neither needs a route of its own. Only the keys that are set travel — an empty filter
+   * is a request with no query string at all.
+   */
+  listSources: (filter: SourceFilterQuery = {}) => request<Source[]>(`/sources${queryOf(filter)}`),
+  /**
+   * One source, by id.
+   *
+   * For a caller that has the id and needs the row *now*: the composer polls this while a
+   * source the user just referenced is being parsed, and a reference has no other way to be
+   * asked about — it is not in the conversation's list until the turn that links it is sent.
+   */
+  getSource: (id: string) => request<Source>(`/sources/${id}`),
   /**
    * Delete a file. The server hides it — from every list, from the model's whitelist, from
    * `/raw` — and keeps the bytes, the extracted text and its links, so re-uploading the same
@@ -870,6 +945,32 @@ async function fetchRawFile(url: string, name: string): Promise<File> {
 }
 
 /** Read a File as bare base64 (no `data:` prefix), matching `UploadAttachmentInput`. */
+/**
+ * What the source list may be narrowed by, as the wire spells it.
+ *
+ * Every field optional and independent; an empty string is treated as absent, which is what a
+ * cleared `<select>` produces and what "no filter" means.
+ */
+export interface SourceFilterQuery {
+  storage?: string;
+  category?: string;
+  origin?: string;
+  mime?: string;
+  name?: string;
+  workspaceId?: string;
+  sessionId?: string;
+}
+
+/** The query string for a filter, with the empty keys left out. */
+function queryOf(filter: SourceFilterQuery): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filter)) {
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 export async function fileToBase64(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);

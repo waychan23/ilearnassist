@@ -32,6 +32,7 @@ export const ASK_USER_TOOL_NAME = "ask_user";
 export const ALL_TOOL_NAMES = [
   "web_search",
   "web_fetch",
+  "ila_collect_page",
   "list_files",
   "read_file",
   "write_file",
@@ -65,7 +66,7 @@ export const QUERY_TOOL_NAME = "ila_query";
  * to read, and a thread is a thing this tool returns while never being a thing the model can
  * name as a widget. The two lists answer different questions and are free to differ.
  */
-export const QUERY_KINDS = ["plan", "quiz", "thread", "note", "diagram"] as const;
+export const QUERY_KINDS = ["plan", "quiz", "thread", "note", "diagram", "source"] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
@@ -1128,6 +1129,107 @@ export const PARSE_ERROR_CODES = [
 export type ParseErrorCode = (typeof PARSE_ERROR_CODES)[number];
 
 /**
+ * What may become a source, and the three questions a source answers about itself.
+ *
+ * A source used to be one thing — an uploaded file, owned by the account, stored once under
+ * `sources/raw/`. It is now the single record for *every* piece of material an account has:
+ * an upload, a page the agent fetched, a file the agent wrote into a workspace, and a file it
+ * wrote into a conversation's own directory. Three fields, because the questions are genuinely
+ * different and collapsing any two of them loses something:
+ *
+ * - **`origin`** — *how did this come to exist.* Fixed for the life of the row; it is
+ *   provenance, and the user's own list (`会话附件 / 工作区上传 / 助理生成`).
+ * - **`storage`** — *which root are the bytes under.* This is the one that *changes*: a file
+ *   the user deletes from the file manager moves to `trash` rather than being erased, and an
+ *   object store later would be a fifth value. It is also what the resolver switches on.
+ * - **`category`** — *what is it*, coarsely, for the browser's filters and for deciding
+ *   whether anything needs parsing at all.
+ *
+ * Declared as runtime lists wherever a catalog or a filter reads them, for the same reason
+ * `PARSE_ERROR_CODES` is: a type alone is erased by the time a test runs.
+ */
+export const SOURCE_ORIGINS = [
+  "session_attachment",
+  "workspace_upload",
+  "agent_workspace",
+  "agent_session",
+  "web",
+  /**
+   * A file that was in a sandbox with no row to account for it — dropped in from the Finder, a
+   * restored backup, a `git clone`, or a file from before this registry existed.
+   *
+   * Its own value rather than a guess between the two `agent_*` origins, because those two
+   * mean "the assistant wrote this" and the browser prints them as such. A file nobody's tool
+   * wrote, labelled with the assistant's name, is a lie the user has no way to catch.
+   */
+  "discovered",
+] as const;
+export type SourceOrigin = (typeof SOURCE_ORIGINS)[number];
+
+export function isSourceOrigin(value: unknown): value is SourceOrigin {
+  return typeof value === "string" && (SOURCE_ORIGINS as readonly string[]).includes(value);
+}
+
+/**
+ * Where a source's bytes are. Not the same question as `origin`.
+ *
+ * `trash` is where a file goes when the user deletes it from the file manager: the bytes stay
+ * (soft delete is the rule for on-disk bytes too) and the row keeps its identity, but the file
+ * is gone from the sandbox the agent and the tree see. `upload` and `web` have no stored path
+ * at all — their filename is `<id>.<ext>`, derived from the id and the MIME type.
+ */
+export const SOURCE_STORAGES = ["upload", "web", "workspace", "session", "trash"] as const;
+export type SourceStorage = (typeof SOURCE_STORAGES)[number];
+
+export function isSourceStorage(value: unknown): value is SourceStorage {
+  return typeof value === "string" && (SOURCE_STORAGES as readonly string[]).includes(value);
+}
+
+/**
+ * Who holds a source.
+ *
+ * A pair rather than two loose arguments because the two halves are never meaningful apart:
+ * every read of a source by its owner names both, and a helper that took only an id would be
+ * the bug where one account's file answers another's request.
+ */
+export interface SourceOwner {
+  kind: "session" | "workspace";
+  id: string;
+}
+
+/** Coarse content type: what the browser filters on, and what decides whether a parse is needed. */
+export const SOURCE_CATEGORIES = [
+  "page",
+  "text",
+  "code",
+  "markdown",
+  "diagram",
+  "image",
+  "document",
+  "other",
+] as const;
+export type SourceCategory = (typeof SOURCE_CATEGORIES)[number];
+
+export function isSourceCategory(value: unknown): value is SourceCategory {
+  return typeof value === "string" && (SOURCE_CATEGORIES as readonly string[]).includes(value);
+}
+
+/**
+ * Which sandbox a file write lands in.
+ *
+ * A workspace's `workdir/` is shared by every conversation in that workspace; a session's own
+ * directory is not. The default is `session` — a conversation's own material is the common
+ * case, and a shared directory every conversation writes into turns into a junk drawer without
+ * deliberate organisation. See `docs/sources.md`.
+ */
+export const FILE_LOCATIONS = ["workspace", "session"] as const;
+export type FileLocation = (typeof FILE_LOCATIONS)[number];
+
+export function isFileLocation(value: unknown): value is FileLocation {
+  return value === "workspace" || value === "session";
+}
+
+/**
  * Machine codes for the server's curated error replies.
  *
  * Every one of these has an `errors.<CODE>` message in each web catalog, and the catalog
@@ -1172,6 +1274,23 @@ export const API_ERROR_CODES = [
   "INVALID_FILE_PATH",
   "NOT_A_DIRECTORY",
   "NOT_A_FILE",
+  /**
+   * A page that could not be fetched or had nothing to store.
+   *
+   * One code for the whole capture, with the reason in `params.detail`, because the reasons are
+   * a *fetch* guard's own words — "it resolves to a private address", "HTTP 404 from …" — and
+   * the guard's sentence is more specific than any wording invented here would be. The client
+   * shows the code's own sentence and appends the detail.
+   */
+  "PAGE_FETCH_FAILED",
+  /**
+   * A name that is already taken, on a rename or a move.
+   *
+   * Its own code rather than `FILE_NOT_FOUND`, which is what the destination *not* existing
+   * means — and the two are the opposite claim about the same path. A file manager that reports
+   * "not found" for a file the user can see is one whose refusal reads as a bug.
+   */
+  "FILE_EXISTS",
   "UNAUTHENTICATED",
   "USERNAME_REQUIRED",
   "USERNAME_TOO_LONG",
@@ -1353,17 +1472,22 @@ export interface Attachment {
 }
 
 /**
- * An uploaded file, as the *server* holds it: one per distinct content per account.
+ * One piece of material the account holds, as the *server* knows it.
  *
- * The entity behind `Attachment.id`. Two things make it different from the snapshot above,
- * and both are the point of it existing:
+ * The entity behind `Attachment.id`, and — since sources became the one registry — behind
+ * every file the agent writes and every page it fetches. Three things make it different from
+ * the message snapshot above, and all three are why it exists:
  *
- * - **It is owned by the account, not by a conversation.** The same PDF uploaded in two
- *   conversations is one source with two references, so its bytes are stored once and parsed
- *   once. Deleting a conversation removes a reference and leaves the file alone.
+ * - **It is owned by a workspace or a conversation, and so by the account**, not by the
+ *   message that happened to use it. The same PDF uploaded in two conversations is one source
+ *   with two references, so its bytes are stored once and parsed once. `ownerKind`/`ownerId`
+ *   say who holds it; a workspace picking up a source uploaded in one of its conversations is
+ *   a *link*, not a second owner.
  * - **Its fields are current.** `parseStatus` is whatever the last parse did, not what it was
  *   when some message was sent — which is what lets a reparse be reflected everywhere at once
  *   instead of only in conversations that start afterwards.
+ * - **It says where it came from and what it is.** `origin`, `storage` and `category` are the
+ *   three questions the old upload-only row could answer only by implication.
  *
  * `name` is the first name the file was uploaded under. With dedupe that means a second
  * upload of the same bytes shows the first name, which is why the message snapshot keeps its
@@ -1371,6 +1495,55 @@ export interface Attachment {
  */
 export interface Source extends Attachment {
   createdAt: string;
+  /** When the row last changed — a rename, a rewrite, a new summary. */
+  updatedAt?: string;
+  /** Who holds it. `ownerId` is that session's or workspace's id. */
+  ownerKind: "session" | "workspace";
+  ownerId: string;
+  /** How it came to exist. Fixed for the life of the row. */
+  origin: SourceOrigin;
+  /** Which root the bytes are under. The one field here that changes. */
+  storage: SourceStorage;
+  /** The coarse content type — what the browser filters on. */
+  category: SourceCategory;
+  /**
+   * Where it sits inside its root. Absent for `upload` and `web`, whose filename is
+   * `<id>.<ext>` and therefore derived from the id and the MIME type rather than stored.
+   */
+  relPath?: string;
+  /** The page this source is, when it is one. */
+  url?: string;
+  /**
+   * What to call the thing that holds it: a workspace's name, or a conversation's title.
+   *
+   * Resolved server-side because a *conversation* owner is not something the client can name —
+   * it holds the workspaces but not the conversations in them, and a list spanning the account
+   * would need a request per workspace to label one. Absent when the owner is gone, which is
+   * the same "reached through" rule the owner columns themselves follow.
+   */
+  ownerName?: string;
+  /**
+   * The workspace this source ultimately belongs to, whether it is owned by one or held by a
+   * conversation in it. The browser groups by this, and a session-owned upload would otherwise
+   * be grouped under nothing.
+   */
+  workspaceId?: string;
+  workspaceName?: string;
+  /**
+   * The model's one-liner about this source, when something has produced one — a page's
+   * abstract, an image's description. Distinct from `parsedChars`, which counts extracted
+   * text: a summary is the *only* text an image ever has.
+   */
+  summary?: string;
+  /**
+   * The row is live and the bytes are gone — deleted outside the app, or by the agent's own
+   * `delete_file`, which is a real filesystem operation rather than an application deletion.
+   *
+   * **Computed on read, never stored.** A stored flag would need somebody to clear it on the
+   * next write, and the one writer that can create the drift is the file tool — which must
+   * not become a database write. Same rule as `Diagram.fileMissing`.
+   */
+  missing?: boolean;
 }
 
 /**
@@ -1413,6 +1586,14 @@ export interface Message {
   reasoning?: string;
   toolCalls?: ToolCall[];
   attachments?: Attachment[];
+  /**
+   * The sources this turn *referenced*, as snapshots taken when it was sent.
+   *
+   * The same rule as `attachments`, and the same reason for a snapshot rather than a live
+   * lookup: a message describes the turn that was had. A source referenced here and deleted
+   * afterwards still reads as referenced, and the chip keeps the name the composer showed.
+   */
+  sources?: Attachment[];
   usage?: MessageUsage;
   createdAt: string;
 }
@@ -1818,6 +1999,12 @@ export interface Workspace {
    * the parent would leave them outside the sandbox and inside the workspace's own state.
    */
   workdirPath: string;
+  /**
+   * The workspace's own settings — what a conversation in it inherits unless the conversation
+   * (or the Copilot it came from) says otherwise. Absent on a workspace created before this
+   * existed, which reads as "no opinion" at every level.
+   */
+  settings?: WorkspaceSettings;
   createdAt: string;
   /**
    * How many conversations the workspace holds, and when the most recent one was last
@@ -1849,6 +2036,16 @@ export interface FileEntry {
   type: "file" | "dir";
   size: number | null;
   modifiedAt: string | null;
+  /**
+   * The source row this file *is* — its id, which is what a rename or a delete addresses it by.
+   *
+   * Present on files and absent on directories, because a directory is not a source. It is
+   * filled in by the listing itself: the route reconciles the rows for what it found before
+   * answering, so an id is always there — including for a file that appeared with no writer,
+   * which is a file the browser can still rename. A listing that returned entries without ids
+   * would make the file manager possible only for files the agent happened to have written.
+   */
+  sourceId?: string;
 }
 
 /** One directory level. Children are fetched per level, so this is always a single layer. */
@@ -1991,10 +2188,30 @@ export interface SessionSettings {
   maxContextMessages?: number | null;
   /** Maximum ReAct steps (tool rounds) for a single turn. */
   maxSteps?: number | null;
+  /**
+   * Where an unqualified file write lands. `null`/absent means "inherit from the next level
+   * up" — the workspace's default, and then `session`.
+   *
+   * It rides `settings` rather than a column of its own so that the whole precedence chain
+   * (workspace → Copilot → session) is the chain that already exists: a Copilot's settings are
+   * copied onto the session at creation, which is why nothing reads a Copilot at turn time.
+   */
+  writeLocation?: FileLocation | null;
 }
 
 /** A Copilot's default settings, copied onto a session at creation time. */
 export type CopilotDefaults = SessionSettings;
+
+/**
+ * A workspace's own settings — the defaults its conversations inherit.
+ *
+ * Deliberately the same *shape* as `SessionSettings` rather than a type of its own, so that
+ * creating a conversation is one spread in the order the requirement asks for and no level
+ * needs its own reading of the field.
+ */
+export interface WorkspaceSettings {
+  writeLocation?: FileLocation | null;
+}
 
 /**
  * Who a Copilot is visible to.
@@ -2176,7 +2393,16 @@ export interface CreateWorkspaceInput {
 }
 
 export interface UpdateWorkspaceInput {
-  name: string;
+  name?: string;
+  /**
+   * The workspace's own defaults, replaced wholesale when present.
+   *
+   * One object rather than a field per setting, because a settings control draws every field
+   * it knows about and a partial write would make "clear this back to the built-in default"
+   * inexpressible without a sentinel value. Omitted means "leave them alone", which is what a
+   * rename sends.
+   */
+  settings?: WorkspaceSettings;
 }
 
 export interface CreateCopilotInput {
@@ -2341,12 +2567,37 @@ export interface UpdateDocumentParsingInput {
  * the snapshot model makes meaningless — re-pointing the link would move the label and leave
  * the persona behind. A conversation's behaviour is changed through its own `systemPrompt`.
  */
+/**
+ * A source the user referenced, named by them, rather than one sent with the turn.
+ *
+ * The `@` in the composer, and the difference from `attachments` is *where it came from*: an
+ * attachment is an upload made for this turn, and this is something already in the library — a
+ * file in this workspace, in another one, in a past conversation. Both reach the model as
+ * material to read; only the chip's provenance differs, which is why the two travel separately
+ * rather than being merged into one array.
+ *
+ * `id` plus the name the composer showed: the same split `attachments` makes, and for the same
+ * reason — the name is the client's, everything else about the source is re-read server-side.
+ */
+export interface SourceReference {
+  id: string;
+  name: string;
+}
+
 export interface ChatInput {
   message: string;
   provider?: string;
   model?: string;
   /** Attachments previously uploaded for this session (metadata only, no bytes). */
   attachments?: Attachment[];
+  /**
+   * Sources referenced with `@` in this turn.
+   *
+   * Distinct from `attachments` on purpose: an attachment is *sent* with the turn, a reference
+   * is *pointed at*. The server links each to the conversation, so a later turn can
+   * `read_document` it without the user referencing it again.
+   */
+  sources?: SourceReference[];
   /**
    * Set only by the quiz widget's make-up flow: the global id of a question whose answer
    * was just posted and that this ordinary chat turn is meant to grade. The server verifies

@@ -164,6 +164,7 @@ function stateOf(a: Attachment): string {
         class="icon-btn danger remove"
         :title="t('attachments.remove')"
         :aria-label="t('attachments.remove')"
+        data-testid="attachment-remove"
         @click="emit('remove', c.attachment.id)"
       >
         <Icon name="close" />

@@ -41,6 +41,10 @@ const locale = ref<Locale>(readStored() ?? detectBrowserLocale());
 function apply(next: Locale): void {
   i18n.global.locale.value = next;
   document.documentElement.lang = next;
+  // The tab is part of what the app calls itself, so it follows the language with the rest of
+  // it. `index.html` carries the English name as the pre-bundle fallback for the same reason it
+  // carries a pre-paint `lang`: the moment before this line runs is visible in the tab bar.
+  document.title = i18n.global.t("app.title");
 }
 
 let applied = false;

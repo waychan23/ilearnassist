@@ -220,19 +220,6 @@ function copilotSummary(c: Copilot): string {
           <div v-if="store.copilots.length === 0" class="empty">
             {{ t("copilot.empty") }}
           </div>
-
-          <!--
-            Where the installation's settings went, said out loud — and only to an account that
-            can reach them. An ordinary user does not need to be told about a screen they cannot
-            open; an administrator who came here looking for the provider list does. The list is
-            where they would look now that the settings dialog holding them is gone.
-          -->
-          <p v-if="store.canAdmin" class="console-pointer" data-testid="settings-console-pointer">
-            {{ t("settings.installationMoved") }}
-            <button class="btn small" data-testid="settings-open-console" @click="showAdmin('providers')">
-              {{ t("admin.title") }}
-            </button>
-          </p>
         </div>
 
         <div class="modal-foot">

@@ -1,6 +1,6 @@
 # File preview
 
-The file browser and the conversation-files dialog open a file and show it. Text is highlighted,
+The file browser, the source browser and the diagram widget all open a file and show it. Text is highlighted,
 Markdown is rendered, diagrams are drawn, and everything else is handed to
 [`open-file-viewer`](https://github.com/xushanpei/open-file-viewer) — an MIT, framework-agnostic
 viewer with plugins for images, PDF, Office, media, archives, mail, drawings, 3D and GIS.
@@ -226,4 +226,5 @@ and treat `ready` as the thing to wait for first. The first version of the image
   `rendered` = the viewer and `source` = the `<pre>`. It is not in this cut because it makes the
   view state depend on the viewer gate and doubles the states the browser suite must cover.
 - **Files past 32 MB** are refused rather than streamed.
-- **No preview in the message list** — this is the file browser and the conversation-files dialog.
+- **No preview in the message list** — this is the file browser, the source browser and the
+  diagram widget.

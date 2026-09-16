@@ -3,6 +3,9 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import AttachmentChips from "./AttachmentChips.vue";
+import SourceMentionPicker from "./SourceMentionPicker.vue";
+import { activeMention, insertMention, type ActiveMention } from "../utils/mention";
+import type { Source } from "../api/types";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
 import SessionSettingsDialog from "./dialogs/SessionSettingsDialog.vue";
@@ -22,8 +25,43 @@ const canSend = computed(
   () =>
     !store.streaming.active &&
     !store.documentsParsing &&
-    (!!text.value.trim() || store.pendingAttachments.length > 0)
+    (!!text.value.trim() ||
+      store.pendingAttachments.length > 0 ||
+      store.pendingSources.length > 0)
 );
+
+/**
+ * The `@` the caret is inside, if any — what opens the source picker.
+ *
+ * Read from the text and the caret rather than tracked in a flag, because the caret moves for
+ * reasons no handler sees: an arrow key, a click, an undo. `utils/mention.ts` owns the rule;
+ * this only asks it and hands the caret back afterwards.
+ */
+const mention = ref<ActiveMention | null>(null);
+
+function refreshMention(): void {
+  const el = textarea.value;
+  mention.value = el ? activeMention(text.value, el.selectionStart ?? 0) : null;
+}
+
+/** Put the chosen source's name where the mention was, and put the caret after it. */
+function onPickSource(source: Source): void {
+  const el = textarea.value;
+  const current = mention.value;
+  if (!el || !current) return;
+
+  const result = insertMention(text.value, current, source.name);
+  text.value = result.text;
+  mention.value = null;
+  void store.referenceSource(source);
+  // After Vue has written the new value: setting `selectionStart` before the DOM updates
+  // would place the caret in the old text.
+  void nextTick(() => {
+    el.focus();
+    el.setSelectionRange(result.caret, result.caret);
+    autosize();
+  });
+}
 
 /** Warn before sending an image to a model that cannot read it. */
 const imageWithoutVision = computed(
@@ -114,10 +152,20 @@ function send() {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // The picker gets first refusal on the keys it navigates with, and says so by consuming
+  // them: Enter with it open must choose a source rather than send the message.
+  if (picker.value?.handleKey(e)) return;
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     send();
   }
+}
+
+const picker = ref<InstanceType<typeof SourceMentionPicker> | null>(null);
+
+function onInput() {
+  refreshMention();
+  autosize();
 }
 </script>
 
@@ -139,6 +187,7 @@ function onKeydown(e: KeyboardEvent) {
       <!-- One surface owns the input, the attachments and the toolbar (chatbox's
            InputBox layout), so the composer reads as a single control. -->
       <div class="surface">
+        <SourceMentionPicker ref="picker" :mention="mention" @pick="onPickSource" />
         <div class="input-row">
           <textarea
             ref="textarea"
@@ -148,8 +197,12 @@ function onKeydown(e: KeyboardEvent) {
             :placeholder="
               store.streaming.active ? t('composer.thinking') : t('composer.placeholder')
             "
+            @input="onInput"
             @keydown="onKeydown"
+            @keyup="refreshMention"
+            @click="refreshMention"
             @paste="onPaste"
+            @blur="mention = null"
           ></textarea>
 
           <!--
@@ -181,13 +234,28 @@ function onKeydown(e: KeyboardEvent) {
           </button>
         </div>
 
-        <AttachmentChips
-          v-if="store.pendingAttachments.length"
-          :attachments="store.pendingAttachments"
-          removable
-          @remove="store.removePendingAttachment"
-          @reparse="store.reparseAttachment"
-        />
+        <div v-if="store.pendingAttachments.length" data-testid="composer-attachments">
+          <AttachmentChips
+            :attachments="store.pendingAttachments"
+            removable
+            @remove="store.removePendingAttachment"
+            @reparse="store.reparseAttachment"
+          />
+        </div>
+
+        <!--
+          The referenced sources, as chips of their own. A `Source` is an `Attachment` in every
+          field the chip reads, so the same component draws both — and drawing them as two rows
+          rather than one is what says which was uploaded for this turn and which was pointed at.
+        -->
+        <div v-if="store.pendingSources.length" data-testid="composer-sources">
+          <AttachmentChips
+            :attachments="store.pendingSources"
+            removable
+            @remove="store.removePendingSource"
+            @reparse="(source) => store.referenceSource(source as Source)"
+          />
+        </div>
 
         <div class="toolbar">
           <div class="toolbar-left">

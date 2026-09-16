@@ -3,19 +3,12 @@ import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
-import {
-  openCopilots,
-  openSources,
-  openWorkspaceSettings,
-  showAccount,
-  showAdmin,
-  showChat,
-  showWorkspaceHome,
-} from "../composables/ui";
+import { openWorkspaceSettings, showChat, showWorkspaceHome } from "../composables/ui";
 import { isUnauthenticatedError } from "../utils/apiError";
 import { relativeTime } from "../composables/relativeTime";
 import type { Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
+import AppMenu from "./AppMenu.vue";
 import TopbarControls from "./TopbarControls.vue";
 import Icon from "./Icon.vue";
 
@@ -135,181 +128,245 @@ function activityLabel(workspace: Workspace): string {
 
 <template>
   <div class="workspace-home" data-testid="workspace-home">
-    <header class="home-head">
-      <span class="home-brand">{{ t("app.title") }}</span>
-      <!-- Reachable before a workspace has been chosen: the theme and the language are
-           properties of the app, not of a conversation. -->
-      <TopbarControls />
-      <!--
-        Next to Settings rather than in the sidebar, because a source belongs to the account:
-        the same file is reachable from every workspace, and an entry inside one of them would
-        say otherwise.
-      -->
-      <button
-        class="icon-btn"
-        data-testid="open-sources"
-        :title="t('sources.open')"
-        :aria-label="t('sources.open')"
-        @click="openSources"
-      >
-        <Icon name="folder" />
-      </button>
-      <!--
-        The Copilot list, and this is the *front door* to it: the other entry point is the
-        sidebar's footer, which only exists inside a workspace. An account that has not entered
-        one yet must still be able to manage the Copilots it made, which is why this button
-        survived the settings dialog it used to open.
+    <!--
+      The rail: the account's menu, on the page that has no sidebar of its own.
 
-        A gear here and a gear on each card, doing different things — this one is the account's
-        Copilots and the card's is that workspace's settings. It was the *icon* that had to
-        change rather than the button, since "settings" is the one thing it no longer opens.
-      -->
-      <button
-        class="icon-btn"
-        data-testid="open-copilots"
-        :title="t('copilots.title')"
-        :aria-label="t('copilots.title')"
-        @click="openCopilots"
-      >
-        <Icon name="robot" />
-      </button>
-      <!--
-        The platform console, for the accounts the server would let in. Drawn from the role the
-        server reported rather than from anything the page decided — and a hidden button is not
-        a permission, so the routes answer 403 for everybody else regardless. `canAdmin` is the
-        whole "administrators of either tier" question, so the three entry points cannot drift.
-      -->
-      <button
-        v-if="store.canAdmin"
-        class="icon-btn"
-        data-testid="open-admin"
-        :title="t('admin.title')"
-        :aria-label="t('admin.title')"
-        @click="showAdmin()"
-      >
-        <Icon name="shield" />
-      </button>
-      <button
-        class="icon-btn"
-        data-testid="open-account"
-        :title="t('account.title')"
-        :aria-label="t('account.title')"
-        @click="showAccount()"
-      >
-        <Icon name="user" />
-      </button>
-      <button
-        class="icon-btn"
-        data-testid="sign-out"
-        :title="t('common.signOut')"
-        :aria-label="t('common.signOut')"
-        @click="store.signOut()"
-      >
-        <Icon name="logout" />
-      </button>
-    </header>
+      The same rows a conversation's sidebar draws, from the same component — an account that has
+      not entered a workspace yet has exactly the same things to manage, and having them only
+      behind a workspace's front door meant the front door was the one page that could not reach
+      them. The rows that used to be icon buttons in the header are gone with it: two entries to
+      one dialog, in two idioms, chosen by which page you happened to be standing on.
 
-    <div class="home-scroll">
-      <div class="home-intro">
-        <h2 class="home-title">{{ t("workspace.home.title") }}</h2>
-        <p class="home-sub">{{ t("workspace.home.subtitle") }}</p>
+      The menu's two groups are the rail's two ends here rather than one block at the foot: what
+      the account can reach sits under the brand, and who is signed in sits at the bottom, which is
+      what fills a column that has nothing else in it. The divider is the *second* group's, since
+      the brand's own border already separates the first.
+    -->
+    <aside class="home-rail">
+      <div class="rail-head">
+        <span class="rail-brand">{{ t("app.title") }}</span>
       </div>
+      <AppMenu class="rail-menu" sources-row />
+    </aside>
 
-      <div v-if="store.workspaces.length" class="ws-grid">
-        <article
-          v-for="w in store.workspaces"
-          :key="w.id"
-          class="ws-card"
-          data-testid="workspace-card"
-          :data-workspace-id="w.id"
-        >
-          <input
-            v-if="renamingId === w.id"
-            :ref="(el) => (renameInput = el as HTMLInputElement | null)"
-            v-model="renameText"
-            class="input ws-card-rename"
-            data-testid="workspace-rename-input"
-            :aria-label="t('common.rename')"
-            @keydown.enter.prevent="commitRename"
-            @keydown.esc.prevent="cancelRename"
-            @blur="commitRename"
-          />
-          <!--
-            The card's one control. It is the accessible name of the whole card and stretches
-            over it via `::after`, so a click anywhere opens the workspace — see the note on
-            `.ws-card-open` in `style.css` for why the actions are siblings rather than
-            children of it.
-          -->
-          <button
-            v-else
-            class="ws-card-open"
-            data-testid="workspace-open"
-            :aria-label="t('workspace.home.open', { name: w.name })"
-            @click="openWorkspace(w)"
+    <div class="home-main">
+      <!--
+        The header keeps the two controls that are properties of *this browser* rather than of
+        the account — the language and the theme — and nothing else: everything that reaches a
+        page or a dialog is a row of the rail beside it.
+      -->
+      <header class="home-head">
+        <span class="home-spacer"></span>
+        <TopbarControls />
+      </header>
+
+      <div class="home-scroll">
+        <div class="home-intro">
+          <h2 class="home-title">{{ t("workspace.home.title") }}</h2>
+          <p class="home-sub">{{ t("workspace.home.subtitle") }}</p>
+        </div>
+
+        <div v-if="store.workspaces.length" class="ws-grid">
+          <article
+            v-for="w in store.workspaces"
+            :key="w.id"
+            class="ws-card"
+            data-testid="workspace-card"
+            :data-workspace-id="w.id"
           >
-            {{ w.name }}
+            <input
+              v-if="renamingId === w.id"
+              :ref="(el) => (renameInput = el as HTMLInputElement | null)"
+              v-model="renameText"
+              class="input ws-card-rename"
+              data-testid="workspace-rename-input"
+              :aria-label="t('common.rename')"
+              @keydown.enter.prevent="commitRename"
+              @keydown.esc.prevent="cancelRename"
+              @blur="commitRename"
+            />
+            <!--
+              The card's one control. It is the accessible name of the whole card and stretches
+              over it via `::after`, so a click anywhere opens the workspace — see the note on
+              `.ws-card-open` in `style.css` for why the actions are siblings rather than
+              children of it.
+            -->
+            <button
+              v-else
+              class="ws-card-open"
+              data-testid="workspace-open"
+              :aria-label="t('workspace.home.open', { name: w.name })"
+              @click="openWorkspace(w)"
+            >
+              {{ w.name }}
+            </button>
+
+            <p class="ws-card-path truncate" :title="w.dirPath">{{ w.dirPath }}</p>
+
+            <div class="ws-card-foot">
+              <span class="ws-card-activity" data-testid="workspace-activity">
+                {{ sessionLabel(w) }} · {{ activityLabel(w) }}
+              </span>
+              <span v-if="renamingId !== w.id" class="ws-card-actions">
+                <!--
+                  The settings entry point that does not require entering the workspace first, so
+                  the widgets can be chosen before there is anything to look at. The other one is
+                  the workspace name in the sidebar.
+                -->
+                <button
+                  class="icon-btn"
+                  data-testid="workspace-settings-open"
+                  :title="t('widgets.workspaceSettings.title')"
+                  :aria-label="t('widgets.workspaceSettings.title')"
+                  @click="openWorkspaceSettings(w.id)"
+                >
+                  <Icon name="gear" />
+                </button>
+                <button
+                  class="icon-btn"
+                  data-testid="workspace-rename"
+                  :title="t('common.rename')"
+                  :aria-label="t('common.rename')"
+                  @click="startRename(w)"
+                >
+                  <Icon name="edit" />
+                </button>
+                <button
+                  class="icon-btn danger"
+                  data-testid="workspace-delete"
+                  :title="t('common.delete')"
+                  :aria-label="t('common.delete')"
+                  @click="onDelete(w)"
+                >
+                  <Icon name="trash" />
+                </button>
+              </span>
+            </div>
+          </article>
+
+          <button class="ws-card-new" data-testid="workspace-new" @click="openNewWorkspace">
+            <Icon name="plus" /> {{ t("workspace.home.newCard") }}
           </button>
+        </div>
 
-          <p class="ws-card-path truncate" :title="w.dirPath">{{ w.dirPath }}</p>
-
-          <div class="ws-card-foot">
-            <span class="ws-card-activity" data-testid="workspace-activity">
-              {{ sessionLabel(w) }} · {{ activityLabel(w) }}
-            </span>
-            <span v-if="renamingId !== w.id" class="ws-card-actions">
-              <!--
-                The settings entry point that does not require entering the workspace first, so
-                the widgets can be chosen before there is anything to look at. The other one is
-                the workspace name in the sidebar.
-              -->
-              <button
-                class="icon-btn"
-                data-testid="workspace-settings-open"
-                :title="t('widgets.workspaceSettings.title')"
-                :aria-label="t('widgets.workspaceSettings.title')"
-                @click="openWorkspaceSettings(w.id)"
-              >
-                <Icon name="gear" />
-              </button>
-              <button
-                class="icon-btn"
-                data-testid="workspace-rename"
-                :title="t('common.rename')"
-                :aria-label="t('common.rename')"
-                @click="startRename(w)"
-              >
-                <Icon name="edit" />
-              </button>
-              <button
-                class="icon-btn danger"
-                data-testid="workspace-delete"
-                :title="t('common.delete')"
-                :aria-label="t('common.delete')"
-                @click="onDelete(w)"
-              >
-                <Icon name="trash" />
-              </button>
-            </span>
-          </div>
-        </article>
-
-        <button class="ws-card-new" data-testid="workspace-new" @click="openNewWorkspace">
-          <Icon name="plus" /> {{ t("workspace.home.newCard") }}
-        </button>
+        <!-- Only reachable after deleting the last one: `loadApp` seeds a workspace on a first
+             sign-in, so this is a state the user made rather than one they arrived in. -->
+        <div v-else class="home-empty" data-testid="workspace-empty">
+          <h2>{{ t("workspace.home.empty") }}</h2>
+          <p>{{ t("workspace.home.emptyHint") }}</p>
+        </div>
       </div>
 
-      <!-- Only reachable after deleting the last one: `init()` seeds "Default" on a first
-           run, so this is a state the user made rather than one they arrived in. -->
-      <div v-else class="home-empty" data-testid="workspace-empty">
-        <h2>{{ t("workspace.home.empty") }}</h2>
-        <p>{{ t("workspace.home.emptyHint") }}</p>
-      </div>
+      <CreateWorkspaceDialog
+        v-if="showCreateWorkspace"
+        @close="showCreateWorkspace = false"
+        @created="showCreateWorkspace = false"
+      />
     </div>
-
-    <CreateWorkspaceDialog
-      v-if="showCreateWorkspace"
-      @close="showCreateWorkspace = false"
-      @created="showCreateWorkspace = false"
-    />
   </div>
 </template>
+
+<style scoped>
+/*
+ * The page is two columns: the rail, then everything else.
+ *
+ * 272px is the sheet's sidebar width — a literal there for the same reason it is one here, and
+ * the two are the same *thing* drawn on two pages, so they are the same number. See the note on
+ * the grid tracks in `style.css`.
+ */
+.workspace-home {
+  display: grid;
+  grid-template-columns: 272px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+.home-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+}
+.rail-head {
+  display: flex;
+  align-items: center;
+  padding: var(--space-6) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.rail-brand {
+  font-size: var(--fs-4);
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/*
+ * The menu takes the height the brand leaves, so its two groups land at the two ends of the rail
+ * — the class lands on `AppMenu`'s root element, which is what a scoped rule on a child component
+ * can style without `:deep`.
+ */
+.rail-menu {
+  flex: 1;
+  min-height: 0;
+}
+/* The account group's own edge, since it hangs under nothing but empty space. */
+.home-rail :deep(.menu-group + .menu-group) {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+}
+.home-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* The header is one control wide now, pushed to the right edge. */
+.home-spacer {
+  flex: 1;
+}
+
+/*
+ * Narrow: the rail becomes a strip across the top, which is the admin console's rule for the
+ * same shape of menu — "there are a handful of rows and they are the page's only navigation" —
+ * rather than hiding it, which would put the account's own menu out of reach on a phone.
+ */
+@media (max-width: 900px) {
+  .workspace-home {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .home-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .rail-head {
+    padding: var(--space-4) var(--space-5);
+  }
+  /*
+   * The strip: a row of rows, scrolling sideways when more of them than fit — which is the admin
+   * console's own treatment of its menu at a narrow width, so the two read the same. Both groups
+   * go on it, in order, and the divider between them goes: there is no "between" in a row, and the
+   * brand above already draws the line this strip sits under.
+   *
+   * The rows have to be told to stop filling it: `.menu-item` is `width: 100%`, which is exactly
+   * right in a column and makes a one-item strip per screen in a row.
+   */
+  .rail-menu {
+    flex: none;
+    overflow-x: auto;
+  }
+  .workspace-home .home-rail :deep(.app-menu),
+  .workspace-home .home-rail :deep(.menu-group) {
+    flex-direction: row;
+  }
+  .workspace-home .home-rail :deep(.menu-group + .menu-group) {
+    margin-top: 0;
+    border-top: none;
+  }
+  .workspace-home .home-rail :deep(.side-menu-row) {
+    width: auto;
+  }
+}
+</style>

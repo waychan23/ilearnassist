@@ -10,7 +10,9 @@ import type { QuizToolContext } from "../../src/tools/quiz.js";
 import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
 import type { DiagramToolContext } from "../../src/tools/diagram.js";
+import type { CollectPageContext } from "../../src/tools/collectPage.js";
 import type { QueryToolContext } from "../../src/tools/query.js";
+import { fileToolsFor } from "../helpers/fileTools.js";
 
 let workspace: string;
 
@@ -36,11 +38,29 @@ function diagram(): DiagramToolContext {
  * default for the same reason — an assembly case that started without it would be describing an
  * installation that cannot happen. Nothing is invoked here, so the stubs suffice.
  */
+/**
+ * The page-capture context, stubbed — nothing here invokes the tool.
+ *
+ * Present by default like the diagram and query contexts, because `turnContext` always supplies
+ * one when fetching is enabled: an assembly case that started without it would describe an
+ * installation nobody runs. Pass `{ collectPage: undefined }` to pin the other half.
+ */
+function collectPage(): CollectPageContext {
+  return {
+    db: {} as never,
+    user: userLayout(dataLayout("/tmp/ila-tools"), "tester"),
+    userId: "u1",
+    sessionId: "s1",
+    workspaceId: "w1",
+  };
+}
+
 function query(): QueryToolContext {
   return {
     db: {} as never,
     userId: "u1",
     sessionId: "s1",
+    workspaceId: "w1",
     sessionDirPath: join(workspace, "sessions", "s1"),
   };
 }
@@ -59,17 +79,18 @@ const quizReview = { db: {}, sessionId: "s1" } as unknown as QuizReviewToolConte
 
 function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] {
   // No quiz context by default: the quiz tools are widget-bound, so the absence itself is
-  // under test. Cases that want them spread `{ quiz, quizReview }`. The diagram and query
-  // contexts are present because the route always passes both — pass
-  // `{ diagram: undefined }` or `{ query: undefined }` to test the other half. Spread last,
-  // so a case can override either.
+  // under test. Cases that want them spread `{ quiz, quizReview }`. The diagram, query and
+  // page-capture contexts are present because the route always passes them (fetching being
+  // enabled here) — pass `{ diagram: undefined }` and so on to test the other half. Spread
+  // last, so a case can override any of them.
   return buildTools({
-    workspaceDir: workspace,
+    fileTools: fileToolsFor(workspace).ctx,
     webSearch,
     webFetch,
     fileToolsEnabled: true,
     diagram: diagram(),
     query: query(),
+    collectPage: collectPage(),
     ...input,
   }).map((t) => t.name);
 }
@@ -305,7 +326,7 @@ describe("buildTools", () => {
 
   it("binds the file tools to the workspace they were built for", async () => {
     const [writeFile] = buildTools({
-      workspaceDir: workspace,
+      fileTools: fileToolsFor(workspace).ctx,
       webSearch,
       webFetch,
       fileToolsEnabled: true,

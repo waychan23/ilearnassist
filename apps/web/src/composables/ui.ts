@@ -4,9 +4,10 @@ import { isCompact } from "./breakpoints";
 /**
  * Cross-component UI state for the few globals that more than one place needs to open.
  *
- * The Copilot list is reachable from the sidebar footer *and* from the workspace home's header —
- * the front door has no sidebar, and an account that has not entered a workspace yet must still
- * be able to manage the Copilots it made. Rather than threading an event up through App and back
+ * The Copilot list is reachable from the footer of a conversation's sidebar *and* from the rail
+ * the workspace home draws — the front door has no sidebar, and an account that has not entered a
+ * workspace yet must still be able to manage the Copilots it made. Both rails are one component
+ * (`AppMenu.vue`), which is why this is a flag rather than two. Rather than threading an event up through App and back
  * down, the dialog is mounted once in `App.vue` and anyone can ask for it here.
  *
  * The drawer is the same shape, one step further: the button that opens it is in the topbar,
@@ -48,7 +49,7 @@ export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
 export type AdminSection = "users" | "providers" | "documents";
 
 export const uiState = reactive({
-  /** The account's own Copilots, opened from the sidebar footer or the home page's header. */
+  /** The account's own Copilots, opened from the menu either rail draws. */
   copilotsOpen: false,
   /**
    * The uploaded-files dialog.
@@ -57,22 +58,23 @@ export const uiState = reactive({
    * questions: the Copilot list is what this account has *made*, and this is what it has
    * stored. Opening it from the home page is also the only route to a file that no
    * conversation references any more — which is exactly the file someone goes looking for
-   * here.
+   * here. That is the `sources-row` prop on `AppMenu`: the chat page opens this browser from
+   * its header, and the front door has no header to put a button in.
    */
   sourcesOpen: false,
   /**
-   * The conversation's own files.
+   * Which slice the source browser opens on, when it opens.
    *
-   * Distinct from `sourcesOpen` in both halves of what a file can be: a source is the
-   * *account's*, uploaded by the user, and lives outside every workspace; this is one
-   * conversation's own directory, written by the agent — the diagrams it draws. The two lists
-   * never overlap, which is what makes them two dialogs rather than two tabs of one.
+   * The browser has two front doors and one component: the workspace home opens it as the
+   * whole account, and a conversation opens it already narrowed to its workspace. A *scope*
+   * rather than a second `workspaceSourcesOpen` flag, because the two would be the same
+   * dialog twice and the third front door would be a third flag — and because the scope is
+   * also what the caller must *say*, which `true` cannot carry.
    *
-   * A flag rather than a session id, unlike `workspaceSettingsId`: the entry points are the
-   * diagram widget and the chat topbar, both of which mean *this* conversation, and the dialog
-   * watching `activeSessionId` is what keeps it honest if the conversation changes underneath.
+   * Reset by `closeSources`, so a reopen from the other door cannot inherit the last one's
+   * filter. `null` and `{}` both mean the whole account.
    */
-  sessionFilesOpen: false,
+  sourcesScope: null as { workspaceId?: string } | null,
   drawerOpen: false,
   /**
    * The widget panel off-canvas at the *right*, on a compact viewport.
@@ -136,24 +138,22 @@ export function closeCopilots(): void {
   uiState.copilotsOpen = false;
 }
 
-export function openSources(): void {
+export function openSources(scope: { workspaceId?: string } = {}): void {
+  uiState.sourcesScope = scope;
   uiState.sourcesOpen = true;
 }
 
 export function closeSources(): void {
   uiState.sourcesOpen = false;
+  // Cleared rather than left behind: the next open comes from one of two doors, and a stale
+  // scope would silently pre-filter the other one.
+  uiState.sourcesScope = null;
 }
 
-/** The conversation's own files — see `sessionFilesOpen`. */
-export function openSessionFiles(): void {
-  uiState.sessionFilesOpen = true;
-}
-
-export function closeSessionFiles(): void {
-  uiState.sessionFilesOpen = false;
-}
-
-/** Only meaningful on a compact viewport; wider ones render the sidebar in place. */
+/**
+ * The sidebar drawer, on a compact viewport. Not persisted and not the same flag as
+ * `sidebarCollapsed`: one is "the panel covers the pane right now", the other is a preference.
+ */
 export function openDrawer(): void {
   uiState.drawerOpen = true;
 }
@@ -162,7 +162,6 @@ export function closeDrawer(): void {
   uiState.drawerOpen = false;
 }
 
-/** The widget panel's off-canvas form. Compact viewports only, like the drawer above. */
 export function openWidgetDrawer(): void {
   uiState.widgetDrawerOpen = true;
 }
@@ -234,7 +233,6 @@ export function showLogin(): void {
   // is leaving, so all five go with them.
   closeWidgetDrawer();
   closeWorkspaceSettings();
-  closeSessionFiles();
 }
 
 /**
@@ -261,8 +259,6 @@ export function showWorkspaceHome(): void {
   uiState.view = "home";
   closeDrawer();
   closeWidgetDrawer();
-  // A conversation's files are the conversation's; the list is not a page about the workspace.
-  closeSessionFiles();
 }
 
 /** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */

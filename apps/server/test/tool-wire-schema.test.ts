@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import type { ProviderDef } from "../src/config.js";
+import { QUERY_KINDS } from "@ilearnassist/shared";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
@@ -114,7 +115,9 @@ describe("the tools a provider is sent", () => {
     expect(parameters.type).toBe("object");
     const properties = parameters.properties as Record<string, { enum?: string[] }>;
     // The `kind` discriminator, still a real enum after the union was flattened.
-    expect(properties.kind?.enum).toEqual(["plan", "quiz", "thread", "note", "diagram"]);
+    // Read from the shared list rather than restated: the point of the case is that the
+    // discriminator survives as an enum, not that it has five or six members.
+    expect(properties.kind?.enum).toEqual([...QUERY_KINDS]);
     expect(parameters.required).toEqual(["kind"]);
   });
 

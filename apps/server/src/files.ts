@@ -71,6 +71,24 @@ const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdx"]);
 const DIAGRAM_EXTENSIONS = new Set<string>(DIAGRAM_FILE_EXTENSIONS);
 
 /**
+ * The codes a filesystem failure may carry.
+ *
+ * A **subset** of `ApiErrorCode`, not the whole of it. `FileAccessError` used to claim the
+ * whole union, which typechecked only because the class happened to be constructed with file
+ * codes — and it made the status mapping in `routes.ts` unable to say "this is every code that
+ * can arrive here", so an exhaustiveness arm over it was unreachable and therefore decorative.
+ */
+export type FileErrorCode = Extract<
+  ApiErrorCode,
+  | "FILE_NOT_FOUND"
+  | "INVALID_FILE_PATH"
+  | "NOT_A_DIRECTORY"
+  | "NOT_A_FILE"
+  | "FILE_TOO_LARGE"
+  | "FILE_EXISTS"
+>;
+
+/**
  * A path or file the browser cannot serve.
  *
  * Carries the same `ApiErrorCode` the route puts in its envelope, so the mapping from
@@ -78,9 +96,9 @@ const DIAGRAM_EXTENSIONS = new Set<string>(DIAGRAM_FILE_EXTENSIONS);
  * detected, rather than in a chain of try/catch in the route.
  */
 export class FileAccessError extends Error {
-  readonly code: ApiErrorCode;
+  readonly code: FileErrorCode;
 
-  constructor(code: ApiErrorCode, message: string) {
+  constructor(code: FileErrorCode, message: string) {
     super(message);
     this.name = "FileAccessError";
     this.code = code;
@@ -101,8 +119,13 @@ export class FileAccessError extends Error {
  * the boundary CLAUDE.md names, and the arrow points the same way in both roots the browser
  * now serves. Only the *label* would change, and a message string is not worth churning the
  * one function the invariants point at.
+ *
+ * **Exported**, because the file manager's writes need exactly this check and a second copy of
+ * it is how one of the two comes to be the weaker one. A write is the more dangerous half, so
+ * the guard is shared rather than reimplemented: `fileOps.ts` calls this before it touches
+ * anything.
  */
-async function resolveReal(root: string, userPath: string): Promise<string> {
+export async function resolveReal(root: string, userPath: string): Promise<string> {
   const sandboxed = resolveInWorkspace(root, userPath, true);
   if (!sandboxed.ok || !sandboxed.path) {
     throw new FileAccessError("INVALID_FILE_PATH", sandboxed.error ?? "Invalid path.");
@@ -296,7 +319,7 @@ export async function readFileContent(
  * Read one file for preview, given a path its caller has already proved safe.
  *
  * Split out of `readFileContent` when uploaded files gained a preview too. A workspace and a
- * source are different sandboxes with different guards — `resolveReal` for one, `resolveInSources`
+ * source are different sandboxes with different guards — `resolveReal` for one, `resolveSourceBytes`
  * for the other — but *what is this file* is one question, and it is the one that must not be
  * answered twice: two copies of these extension tables is how a `.mmd` ends up drawn in one
  * dialog and shown as code in the other.

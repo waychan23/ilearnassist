@@ -9,7 +9,7 @@ import {
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
-import { sourceRawPath } from "../src/attachments.js";
+import { sourceRawPath } from "../src/sourcePaths.js";
 import type {
   ApiErrorBody,
   Attachment,

@@ -9,7 +9,7 @@ import {
   sourceParsedPath,
   writeParsedText,
 } from "../../src/documents/store.js";
-import { resolveInSources, sourceRawPath } from "../../src/attachments.js";
+import { sourceRawPath } from "../../src/sourcePaths.js";
 import { dataLayout, userLayout, type UserLayout } from "../../src/paths.js";
 
 /**
@@ -106,7 +106,7 @@ describe("where the two kinds of file sit", () => {
     writeFileSync(sourceRawPath(user, "att-1", "application/pdf"), Buffer.from("%PDF-1.4"));
     await writeParsedText(user, "att-1", "extracted text that must not be served");
 
-    const raw = resolveInSources(user, sourceRawPath(user, "att-1", "application/pdf"));
+    const raw = sourceRawPath(user, "att-1", "application/pdf");
     expect(raw).toBeTruthy();
     expect(raw!.endsWith("att-1.pdf")).toBe(true);
   });

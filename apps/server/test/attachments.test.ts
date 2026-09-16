@@ -3,23 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Attachment } from "@ilearnassist/shared";
-import {
-  MAX_INLINE_CHARS,
-  normalizeMime,
-  resolveInSources,
-  sha256Of,
-  sourceRawPath,
-  buildUserContent,
-} from "../src/attachments.js";
+import { MAX_INLINE_CHARS, sha256Of, buildUserContent } from "../src/attachments.js";
+import { normalizeMime, sourceRawPath } from "../src/sourcePaths.js";
 import { writeParsedText } from "../src/documents/store.js";
 import { dataLayout, userLayout, type UserLayout } from "../src/paths.js";
 
 /**
- * Uploaded files: where they live, what hashes them, and how one becomes model content.
+ * How an attachment becomes model content: what is inlined, what is named, and what an
+ * unparsed or missing file reads as.
  *
- * The path helpers are the interesting half. `sourceRawPath` is the *only* place a source's
- * location is constructed, and `resolveInSources` is the check every read goes through —
- * including reads of a path that came out of the database, which is why it exists at all.
+ * The path helpers moved out from under this file when a source stopped being only an upload.
+ * Where a source's bytes are — and the containment check every read goes through — is
+ * `sourcePaths.ts` now, tested in `test/source-paths.test.ts`. What is left here is the half
+ * that is about *content*.
  */
 
 let root: string;
@@ -55,22 +51,6 @@ beforeEach(() => {
   user = userLayout(dataLayout(root), "tester");
 });
 
-describe("normalizeMime", () => {
-  it("trusts a supported MIME type from the browser", () => {
-    expect(normalizeMime("whatever.bin", "image/png")).toBe("image/png");
-  });
-
-  it("falls back to the extension when the browser says nothing useful", () => {
-    expect(normalizeMime("notes.md", undefined)).toBe("text/markdown");
-    expect(normalizeMime("notes.md", "application/octet-stream")).toBe("text/markdown");
-  });
-
-  it("returns undefined for a file we cannot handle", () => {
-    expect(normalizeMime("thing.xyz", "application/xyz")).toBeUndefined();
-    expect(normalizeMime("noextension", undefined)).toBeUndefined();
-  });
-});
-
 describe("sha256Of", () => {
   it("is stable and content-addressed", () => {
     expect(sha256Of(Buffer.from("hello"))).toBe(sha256Of(Buffer.from("hello")));
@@ -83,51 +63,6 @@ describe("sha256Of", () => {
     expect(sha256Of(Buffer.from(""))).toBe(
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     );
-  });
-});
-
-describe("sourceRawPath", () => {
-  it("derives the extension from the MIME type", () => {
-    expect(sourceRawPath(user, "att-1", "text/plain")).toBe(join(user.rawDir, "att-1.txt"));
-    expect(sourceRawPath(user, "att-1", "application/pdf")).toBe(join(user.rawDir, "att-1.pdf"));
-  });
-
-  it("refuses an id that could steer the path", () => {
-    // The id is generated, never client-supplied — but this is the function that turns it
-    // into a path, so it is where the guard belongs.
-    for (const bad of ["../escape", "a/b", "..", "", "with space"]) {
-      expect(() => sourceRawPath(user, bad, "text/plain")).toThrow(/Invalid source id/);
-    }
-  });
-
-  it("refuses a MIME type it cannot map to an extension", () => {
-    expect(() => sourceRawPath(user, "att-1", "application/xyz")).toThrow(/Unsupported/);
-  });
-});
-
-describe("resolveInSources", () => {
-  it("accepts a path inside this account's sources tree", () => {
-    const path = sourceRawPath(user, "att-1", "application/pdf");
-    expect(resolveInSources(user, path)).toBe(path);
-  });
-
-  it("refuses a path outside it, however it was reached", () => {
-    // A stored path is not a trust boundary: it travels through backups and exports, and a
-    // future bug that wrote one column would otherwise turn this into a read of whatever
-    // the row happened to name.
-    for (const bad of [
-      join(user.rawDir, "..", "..", "..", "etc", "passwd"),
-      "/etc/passwd",
-      user.userRoot,
-      user.sourcesRoot,
-    ]) {
-      expect(resolveInSources(user, bad)).toBeUndefined();
-    }
-  });
-
-  it("refuses another account's tree", () => {
-    const other = userLayout(dataLayout(root), "someone-else");
-    expect(resolveInSources(user, join(other.rawDir, "att-1.pdf"))).toBeUndefined();
   });
 });
 

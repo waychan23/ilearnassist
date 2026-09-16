@@ -45,6 +45,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
   document.documentElement.lang = "";
+  document.title = "";
 });
 
 describe("useLocale", () => {
@@ -74,6 +75,17 @@ describe("useLocale", () => {
     const { api } = await loadLocale({ stored: "de-DE", languages: ["zh-CN"] });
 
     expect(api.locale.value).toBe("zh-CN");
+  });
+
+  it("names the app in the tab, in the language on screen", async () => {
+    // The tab is the one piece of the app that is outside every component, so nothing else
+    // would set it — and a Chinese UI under an English tab title is the kind of half-translated
+    // detail that makes a rename look unfinished.
+    const { api } = await loadLocale({ stored: null, languages: ["zh-CN"] });
+    expect(document.title).toBe("交互式学习助理");
+
+    api.setLocale("en");
+    expect(document.title).toBe("Interactive Learning Assistant");
   });
 
   it("survives storage being unavailable", async () => {

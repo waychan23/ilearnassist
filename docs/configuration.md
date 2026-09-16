@@ -198,9 +198,8 @@ deliberate entry in the tool assembly rather than an oversight: see the
 A Copilot is a reusable persona: a system prompt, a tool allow-list and default
 generation parameters. One is chosen when a conversation is created — the
 new-conversation dialog lists every published Copilot and then the account's own —
-and Copilots themselves are managed in the UI (the **Copilots** tab of the settings
-dialog, opened by the **设置** button in the sidebar footer) or via
-`POST /api/copilots`. They are **owned by the account that created them**
+and Copilots themselves are managed in the UI (the **助理** dialog, opened by the
+助理 row at the foot of either sidebar) or via `POST /api/copilots`. They are **owned by the account that created them**
 (`copilots.user_id`) and carry:
 
 - `name`, `description` — shown in the picker and the manager list.

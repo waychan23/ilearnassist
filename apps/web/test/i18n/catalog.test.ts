@@ -44,6 +44,14 @@ const DYNAMIC_PREFIXES = [
      whose only job would be to spell eight strings correctly, and this prefix cannot hide a typo
      in any key outside the insight panel's type list. */
   "widgets.insight.types.",
+  /*
+   * Both closed unions, reached by a value the server sent: a row's origin and its category.
+   * A key per value with a literal `switch` would be eight `t("…")` calls to spell out the
+   * same sentence path, and the guard that matters — every member has a message — is what the
+   * symmetry check above already proves for the other catalog.
+   */
+  "sources.origin.",
+  "sources.category.",
 ];
 
 const isDynamic = (key: string): boolean => DYNAMIC_PREFIXES.some((p) => key.startsWith(p));
@@ -64,6 +72,25 @@ describe("catalog completeness", () => {
   it("has no empty messages", () => {
     for (const [key, leaf] of [...Object.entries(zh), ...Object.entries(enFlat)]) {
       expect(textOf(leaf).trim(), key).not.toBe("");
+    }
+  });
+
+  it("escapes every @ that is not a linked message", () => {
+    /*
+     * vue-i18n reads a bare `@` as its *linked-message* syntax (`@:key`), and a message it cannot
+     * compile throws **at render time** — taking down the whole component the message is in.
+     *
+     * This guard exists because that is exactly what happened: a placeholder ending "…输入 @
+     * 可引用资料" compiled fine in this suite, passed the type checker, and left the composer
+     * blank in a real browser. A raw `@` is therefore never product copy: it is either a mistake
+     * or an escape, and the message says which.
+     */
+    const raw = /(?<!\{'\})@/;
+    for (const [key, leaf] of [...Object.entries(zh), ...Object.entries(enFlat)]) {
+      const text = textOf(leaf);
+      // `{'@'}` is the escape; strip the well-formed ones and anything left is bare.
+      const stripped = text.replaceAll("{'@'}", "");
+      expect(raw.test(stripped), `${key} contains a bare @`).toBe(false);
     }
   });
 

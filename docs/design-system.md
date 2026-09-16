@@ -240,7 +240,7 @@ Tier 2, in `style.css`, for structures several components need:
 | `.check-row` | `.sm` | A labelled checkbox — one line, whole line clickable |
 | `.badge` | `.muted` | A small outlined label. `muted` drops the accent, for the variant that reports absence rather than presence |
 | `.status-dot` | `.ok`, `.off` | A status dot. `ok` is the smaller health dot; `off` is the same dot with nothing in force |
-| `.menu-item` | `.foot` | A full-width action row in a popover, plus the footer that sits under a divider |
+| `.menu-item` | `.foot` | A full-width action row: a popover's row, and the account rows both rails draw. `.foot` is the accent row that sits under a divider |
 | `.btn.ghost` | | A text button with no chrome until hovered |
 | `.pill` | | The rounded outline shared by the Copilot tag and the token counter — shape only |
 | `.truncate` | | The single truncation rule. Includes `min-width: 0`, which is what makes the other three declarations do anything on a flex item |

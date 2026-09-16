@@ -29,6 +29,10 @@ import type {
   SessionSettings,
   SessionStats,
   Source,
+  SourceCategory,
+  SourceOrigin,
+  SourceOwner,
+  SourceStorage,
   ThreadBranch,
   ToolCall,
   User,
@@ -37,6 +41,7 @@ import type {
   WidgetScope,
   WidgetState,
   Workspace,
+  WorkspaceSettings,
   WorkspaceStats,
 } from "@ilearnassist/shared";
 import {
@@ -47,20 +52,45 @@ import {
   isWidgetId,
 } from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
+import { migrateIfNeeded } from "./migrations.js";
 import { applySchema } from "./schema.js";
 import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
+
+/**
+ * What a source listing may be narrowed by. Every field is optional and independent.
+ *
+ * Plain strings rather than the shared unions, because a query string is a string: the *route*
+ * validates each against the union it knows and refuses an unknown value, and this layer
+ * carries what it was given. A type here would only be a promise the caller could not keep.
+ */
+export interface SourceFilter {
+  storage?: SourceStorage;
+  category?: SourceCategory;
+  origin?: SourceOrigin;
+  mime?: string;
+  /** A substring of the name, matched literally — see the escape in the query. */
+  name?: string;
+  workspaceId?: string;
+  sessionId?: string;
+}
 
 /* ---------------------------------- row shapes ---------------------------------- */
 
 interface SourceRow {
   id: string;
   user_id: string;
-  sha256: string;
+  owner_kind: string;
+  owner_id: string;
+  origin: string;
+  storage: string;
+  rel_path: string | null;
   name: string;
   mime_type: string;
+  category: string;
   size: number;
-  kind: string;
-  raw_path: string;
+  source_url: string | null;
+  summary: string | null;
+  sha256: string | null;
   parse_status: string;
   parse_error: string | null;
   parse_error_code: string | null;
@@ -69,6 +99,7 @@ interface SourceRow {
   page_count: number | null;
   parse_updated_at: string | null;
   created_at: string;
+  updated_at: string | null;
 }
 
 interface UserRow {
@@ -98,6 +129,8 @@ interface WorkspaceRow {
   name: string;
   slug: string;
   dir_path: string;
+  /** The workspace's own settings as stored JSON, or null for "never set". */
+  settings: string | null;
   created_at: string;
   /**
    * Present only on rows that came back from the stats query. `getWorkspace` and
@@ -425,6 +458,20 @@ export interface QuizQuestionInsert {
   createdAt: string;
 }
 
+/**
+ * One row per live conversation, with the workspace it belongs to, for labelling sources.
+ *
+ * Names and ids only: the source browser groups and labels by owner, and a *session* owner is
+ * not something the client can name — it holds the workspaces, but fetching every conversation
+ * of every workspace to label a list is a request per workspace.
+ */
+export interface SessionLabelRow {
+  id: string;
+  title: string;
+  workspace_id: string;
+  workspace_name: string;
+}
+
 interface SessionRow {
   id: string;
   workspace_id: string;
@@ -448,6 +495,8 @@ interface MessageRow {
   reasoning: string | null;
   tool_calls: string | null;
   attachments: string | null;
+  /** JSON, nullable: absent on every row written before the `@`-reference existed. */
+  sources: string | null;
   usage: string | null;
   /** SQLite has no boolean: 0/1, and `null` on rows written before the column existed. */
   stopped: number | null;
@@ -565,9 +614,9 @@ export interface AuthTokenRecord {
  *
  * The same split as `ProviderRecord` and its `apiKey`, and for a stronger reason: a password
  * hash is a credential. `mapUser` is the only place one is read, and a route returns `User`
- * by stripping these with a destructuring rest — the pattern the source routes already use
- * for `rawPath`. That is what makes "the hash is never serialised" a property of the shapes
- * rather than of every route remembering to leave a field out.
+ * by stripping these with a destructuring rest — the pattern `toSource` uses for `userId`.
+ * That is what makes "the hash is never serialised" a property of the shapes rather than of
+ * every route remembering to leave a field out.
  */
 export interface UserRecord extends User {
   /** `null` means this account has never been given a password, so it cannot sign in. */
@@ -626,26 +675,43 @@ const mapUser = (r: UserRow): UserRecord => ({
 });
 
 /**
- * A source as the **server** sees it: the wire shape plus the two fields that never leave.
+ * A source as the **server** sees it: the wire shape plus the fields that never leave.
  *
- * Same split as `ProviderRecord` and its `apiKey` — and for a stronger reason, because
- * `rawPath` is a filesystem path inside the data root. A client has no use for it (it asks
- * `/api/sources/:id/raw`) and knowing it would tell them the layout of a directory they are
- * not allowed to browse.
+ * Same split as `ProviderRecord` and its `apiKey`, and for the same reason: `userId` is the
+ * scope every read is filtered by, and a client has no use for it — it cannot ask for another
+ * account's sources, and carrying the owner would only invite a route that trusted it.
+ *
+ * There is deliberately **no stored path** here. Where the bytes are is `storage` plus
+ * `relPath` (or, for a blob, neither), and turning that into a filesystem path is
+ * `sourcePaths.ts`'s single question — because a path in this shape would be one more thing
+ * every caller could disagree about, and the one caller that matters is the sandbox guard.
  */
 export interface SourceRecord extends Source {
   userId: string;
-  /** Where the bytes are. Validated by `resolveInSources` before every read. */
-  rawPath: string;
+  /** ISO, and absent on a row nothing has changed since it was written. */
+  updatedAt?: string;
 }
 
 const mapSource = (r: SourceRow): SourceRecord => ({
   id: r.id,
   userId: r.user_id,
+  ownerKind: r.owner_kind === "workspace" ? "workspace" : "session",
+  ownerId: r.owner_id,
+  origin: r.origin as SourceOrigin,
+  storage: r.storage as SourceStorage,
+  category: r.category as SourceCategory,
+  // Absent rather than null when there is nothing to say, matching the wire type — a JSON
+  // `null` for `relPath` would reach the client as an empty string in a tree.
+  relPath: r.rel_path ?? undefined,
   name: r.name,
   mimeType: r.mime_type,
   size: r.size,
-  kind: r.kind === "image" ? "image" : "file",
+  // Derived, not stored. `image`/`file` is the only thing the client ever asked this column,
+  // and it is a question `category` answers exactly — so the column is gone rather than kept
+  // in agreement with a neighbour.
+  kind: r.category === "image" ? "image" : "file",
+  url: r.source_url ?? undefined,
+  summary: r.summary ?? undefined,
   parseStatus: r.parse_status as ParseStatus,
   // Each of these is absent rather than null when there is nothing to say, matching the
   // wire type — a JSON `null` for `parseError` would reach the client as an empty tooltip.
@@ -654,8 +720,8 @@ const mapSource = (r: SourceRow): SourceRecord => ({
   parserId: r.parser_id ?? undefined,
   parsedChars: r.parsed_chars ?? undefined,
   pageCount: r.page_count ?? undefined,
-  rawPath: r.raw_path,
   createdAt: r.created_at,
+  updatedAt: r.updated_at ?? undefined,
 });
 
 const mapWorkspace = (r: WorkspaceRow): Workspace => ({
@@ -667,6 +733,7 @@ const mapWorkspace = (r: WorkspaceRow): Workspace => ({
   // always its `workdir/` child. Computing it here is what lets a row move between the two
   // meanings without the column having to say which one it now holds.
   workdirPath: workspaceWorkdir(r.dir_path),
+  settings: r.settings ? safeParseObject<WorkspaceSettings>(r.settings) : undefined,
   createdAt: r.created_at,
   sessionCount: r.session_count ?? 0,
   lastActivityAt: r.last_activity_at ?? null,
@@ -743,6 +810,7 @@ const mapMessage = (r: MessageRow): Message => ({
   reasoning: r.reasoning ?? undefined,
   toolCalls: r.tool_calls ? safeParseArray<ToolCall>(r.tool_calls) : undefined,
   attachments: r.attachments ? safeParseArray<Attachment>(r.attachments) : undefined,
+  sources: r.sources ? safeParseArray<Attachment>(r.sources) : undefined,
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
   stopped: r.stopped ? true : undefined,
   createdAt: r.created_at,
@@ -1020,17 +1088,81 @@ export interface AppDb {
    */
   findDeletedSourceByHash(userId: string, sha256: string): SourceRecord | undefined;
   getSourceForUser(id: string, userId: string): SourceRecord | undefined;
-  listSourcesForUser(userId: string): SourceRecord[];
+  /**
+   * Every live source the account holds, oldest first.
+   *
+   * `storage` narrows it to one root, which is what a caller that means "my uploads" wants: a
+   * source is now every file the agent wrote as well, and an account-wide list is not the same
+   * question as a library of uploads. The filter is in the query rather than over the result,
+   * because the reader `stat`s each row.
+   */
+  /**
+   * Every live conversation's id, title and workspace name, for labelling a source list.
+   *
+   * Not `listSessionsForUser` repeated per workspace: the source browser lists the whole
+   * account's material at once, and a request per workspace to find out what to call a
+   * conversation would be a request per workspace.
+   */
+  listSessionLabels(userId: string): SessionLabelRow[];
+
+  listSourcesForUser(userId: string, filter?: SourceFilter): SourceRecord[];
   createSource(input: {
     id: string;
     userId: string;
-    sha256: string;
+    ownerKind: "session" | "workspace";
+    ownerId: string;
+    origin: SourceOrigin;
+    storage: SourceStorage;
+    /** The path within its root. `null` for `upload` and `web`, whose name is derived. */
+    relPath: string | null;
     name: string;
     mimeType: string;
+    category: SourceCategory;
     size: number;
-    kind: "image" | "file";
-    rawPath: string;
+    /** The page this is, for a captured one. */
+    url: string | null;
+    summary: string | null;
+    /** The content hash, for account blobs only. `null` for everything with a place. */
+    sha256: string | null;
+    now?: string;
   }): SourceRecord;
+
+  /**
+   * The live source at one place, or undefined.
+   *
+   * **By place, not by path**, and that is the whole of the rename story: a file the user
+   * moves is the same source, and the caller that wants it back after a move asks by the new
+   * place. `deleted_at IS NULL` is what lets a file be deleted and a new one written at the
+   * same path — the second is a different source, and the index says so too.
+   */
+  getSourceByPlace(
+    userId: string,
+    owner: SourceOwner,
+    relPath: string
+  ): SourceRecord | undefined;
+  /** Every live source one workspace or conversation holds, in path order. */
+  listSourcesForOwner(userId: string, owner: SourceOwner): SourceRecord[];
+  /**
+   * Update a source's place or its description of itself, in place.
+   *
+   * One statement for a rename, a rewrite and a size change because they are one operation:
+   * the row keeps its id and everything hanging off it, and only these columns move. Returns
+   * whether anything matched, so a caller can tell "not yours" from "done".
+   */
+  updateSourcePlace(
+    id: string,
+    userId: string,
+    patch: {
+      relPath?: string;
+      storage?: SourceStorage;
+      name?: string;
+      mimeType?: string;
+      category?: SourceCategory;
+      size?: number;
+      summary?: string | null;
+      now?: string;
+    }
+  ): boolean;
   /** Marks the source deleted. Returns false when no live source existed, or it was not theirs. */
   softDeleteSourceForUser(id: string, userId: string): boolean;
   /**
@@ -1112,6 +1244,19 @@ export interface AppDb {
    * moved files would break every path the agent has already written into a conversation.
    */
   renameWorkspaceForUser(id: string, userId: string, name: string): Workspace | undefined;
+  /**
+   * Replace the workspace's settings.
+   *
+   * A whole-object write rather than a merge, unlike the session's, and the difference is
+   * deliberate: a workspace's settings are the *default* a conversation inherits at creation,
+   * so the only writer is the settings control that drew every field on screen. A merge would
+   * make "clear this back to the built-in default" inexpressible without a sentinel.
+   */
+  setWorkspaceSettingsForUser(
+    id: string,
+    userId: string,
+    settings: WorkspaceSettings
+  ): Workspace | undefined;
   /**
    * Marks the workspace deleted. Returns false when no live workspace existed, or it was not
    * this account's. The directory on disk stays — including the `sessions/` beside `workdir/`
@@ -1269,6 +1414,8 @@ export interface AppDb {
     reasoning?: string;
     toolCalls?: ToolCall[];
     attachments?: Attachment[];
+    /** The sources this turn *referenced* rather than attached. See `ChatInput.sources`. */
+    sources?: Attachment[];
     usage?: MessageUsage;
     /** The user cut this turn short; `content` is whatever had streamed by then. */
     stopped?: boolean;
@@ -1652,6 +1799,20 @@ export interface AppDb {
 
   getSetting(key: string): string | undefined;
   setSetting(key: string, value: string): void;
+
+  /**
+   * Run several writes as one.
+   *
+   * Exposed because a transaction cannot always live *inside* a single accessor. A diagram is
+   * two rows written by two domain modules — its own, and the source row for the same file —
+   * and a half-landed pair is a file the conversation draws and the registry cannot name. The
+   * alternative was a method on `AppDb` that knew about both tables, which would move a domain
+   * rule into the table layer to buy atomicity.
+   *
+   * Nested calls are safe: better-sqlite3 enters a savepoint when a transaction is already
+   * open, so a caller that wraps writes another caller also wraps is not an error.
+   */
+  transaction<T>(fn: () => T): T;
 }
 
 export function createDb(dbPath: string): AppDb {
@@ -1681,6 +1842,17 @@ export function createDb(dbPath: string): AppDb {
   db.pragma("foreign_keys = ON");
 
   /*
+   * Walk the file forward to this build's schema, if it has a path there.
+   *
+   * **Outside the transaction below, and that is a requirement rather than tidiness.** A
+   * migration that rebuilds a table has to run with `foreign_keys` off —
+   * `migrations.ts` explains at length what goes wrong otherwise — and SQLite will not change
+   * that pragma from inside a transaction. So the two are sequential: the walk first, then the
+   * shape. A database already at this version does nothing here.
+   */
+  migrateIfNeeded(db);
+
+  /*
    * Everything that changes the file's *shape* is one write, with the lock taken up front.
    *
    * Two processes can now do this at once — the administrator CLI is designed to be run
@@ -1704,6 +1876,12 @@ export function createDb(dbPath: string): AppDb {
     // which is exactly the gap `ensureColumn` exists to close. Nothing to backfill, so the
     // return value is ignored.
     ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
+    /*
+     * The sources a turn referenced with `@`, beside its attachments. Additive and nullable:
+     * NULL is "this turn referenced nothing", which is what every message written before the
+     * column existed means, and `[]` would have claimed somebody chose an empty list.
+     */
+    ensureColumn(db, "messages", "sources", "sources TEXT");
 
     /*
      * Accounts grew a credential, and the four columns are added rather than version-bumped
@@ -1753,6 +1931,15 @@ export function createDb(dbPath: string): AppDb {
     // conversations that were never re-edited. NULL means "never set", which resolves to the
     // defaults in `mapCopilot`, so an untouched Copilot behaves exactly as it did before.
     ensureColumn(db, "copilots", "widgets", "widgets TEXT");
+
+    /*
+     * Workspaces grew settings of their own — the defaults a conversation in them inherits.
+     *
+     * Nullable and with no default, for the `copilots.widgets` reason exactly: there is no
+     * value that preserves what existing rows "already meant", because they meant nothing.
+     * NULL is "nobody has chosen", which resolves down the chain to the built-in default.
+     */
+    ensureColumn(db, "workspaces", "settings", "settings TEXT");
 
     /*
      * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
@@ -1869,11 +2056,24 @@ export function createDb(dbPath: string): AppDb {
    * finding it is a second lookup, because the first one has to keep answering "is this file
    * already here" with a no.
    */
+  /*
+   * The two hash lookups are about *blobs*, and `sha256 IS NOT NULL` states it rather than
+   * relying on it. Only an upload or a captured page is hashed — a file with a place keeps a
+   * NULL there, because two identical files in two directories are two files — so a lookup
+   * that did not say so would be a lookup that could one day match a path-identified row and
+   * hand back the wrong source.
+   */
   const stmtFindSourceByHash = db.prepare(
-    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL"
+    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL AND deleted_at IS NULL"
   );
   const stmtFindDeletedSourceByHash = db.prepare(
-    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND deleted_at IS NOT NULL"
+    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL AND deleted_at IS NOT NULL"
+  );
+  const stmtListSessionLabels = db.prepare(
+    `SELECT s.id, s.title, w.id AS workspace_id, w.name AS workspace_name
+       FROM sessions s
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE w.user_id = ? AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
   );
   const stmtGetSourceForUser = db.prepare(
     "SELECT * FROM sources WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
@@ -1881,10 +2081,92 @@ export function createDb(dbPath: string): AppDb {
   const stmtListSourcesForUser = db.prepare(
     "SELECT * FROM sources WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
   );
+  /*
+   * The same list, filtered.
+   *
+   * Filtered **in the query**, not over the result, because the reader `stat`s every row it is
+   * given: a workspace with a thousand files would otherwise make "show me my uploads" cost a
+   * thousand metadata calls to then discard them all.
+   *
+   * One statement with `@x IS NULL OR …` guards rather than a statement per combination, which
+   * is the shape the filters' *meaning* needs anyway — each is independent, and seven
+   * statements for seven filters is fifteen combinations. SQLite's planner sees a nullable
+   * parameter and the whole predicate collapses; the `user_id` index is what carries the query.
+   *
+   * The two scope filters are the interesting ones, and both read wider than ownership:
+   *
+   * - **A workspace** holds the files owned by it, the files and uploads owned by its
+   *   conversations, *and* anything linked to it — because an upload is owned by the
+   *   conversation it arrived in while being readable by the whole workspace, so ownership
+   *   alone would hide exactly the sharing those tables exist for.
+   * - **A conversation** holds what it owns and what is linked to it, which is the same union
+   *   the read whitelist is built from.
+   *
+   * Neither looks at whether the owning conversation has been soft-deleted, and that is a
+   * decision: deleting a conversation hides the conversation, not the files it produced. The
+   * bytes are still on disk and the row is still live, so a browser of the user's material
+   * that omitted them would be answering a different question than the one it was asked.
+   */
+  const stmtListSourcesFiltered = db.prepare(
+    `SELECT * FROM sources src
+      WHERE src.user_id = @userId AND src.deleted_at IS NULL
+        AND (@storage IS NULL OR src.storage = @storage)
+        AND (@category IS NULL OR src.category = @category)
+        AND (@origin IS NULL OR src.origin = @origin)
+        AND (@mime IS NULL OR src.mime_type = @mime)
+        AND (@name IS NULL OR src.name LIKE @name ESCAPE '\\')
+        AND (@workspaceId IS NULL OR (
+              (src.owner_kind = 'workspace' AND src.owner_id = @workspaceId)
+              OR (src.owner_kind = 'session' AND src.owner_id IN (
+                    SELECT s.id FROM sessions s WHERE s.workspace_id = @workspaceId))
+              OR EXISTS (SELECT 1 FROM workspace_sources ws
+                          WHERE ws.source_id = src.id AND ws.workspace_id = @workspaceId)
+            ))
+        AND (@sessionId IS NULL OR (
+              (src.owner_kind = 'session' AND src.owner_id = @sessionId)
+              OR EXISTS (SELECT 1 FROM session_sources ss
+                          WHERE ss.source_id = src.id AND ss.session_id = @sessionId)
+            ))
+      ORDER BY src.created_at ASC`
+  );
+  const stmtGetSourceByPlace = db.prepare(
+    `SELECT * FROM sources
+      WHERE user_id = @userId AND owner_kind = @ownerKind AND owner_id = @ownerId
+        AND rel_path = @relPath AND deleted_at IS NULL`
+  );
+  const stmtListSourcesForOwner = db.prepare(
+    `SELECT * FROM sources
+      WHERE user_id = @userId AND owner_kind = @ownerKind AND owner_id = @ownerId
+        AND deleted_at IS NULL
+      ORDER BY rel_path ASC, created_at ASC`
+  );
+  /*
+   * Every column is written on every update, with the row's own value as the fallback.
+   *
+   * `COALESCE` rather than a chain of `if`s building SQL: the patch is partial and the row is
+   * the default, so one statement expresses "whatever the caller did not mention stays". The
+   * exception is `summary`, which a caller may legitimately want to *clear* — hence the
+   * separate `@summarySet` flag rather than a null that would be indistinguishable from
+   * "not mentioned".
+   */
+  const stmtUpdateSourcePlace = db.prepare(
+    `UPDATE sources
+        SET rel_path = COALESCE(@relPath, rel_path),
+            storage = COALESCE(@storage, storage),
+            name = COALESCE(@name, name),
+            mime_type = COALESCE(@mimeType, mime_type),
+            category = COALESCE(@category, category),
+            size = COALESCE(@size, size),
+            summary = CASE WHEN @summarySet = 1 THEN @summary ELSE summary END,
+            updated_at = @updatedAt
+      WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
+  );
   const stmtCreateSource = db.prepare(
     `INSERT INTO sources
-       (id, user_id, sha256, name, mime_type, size, kind, raw_path, parse_status, created_at)
-     VALUES (@id, @userId, @sha256, @name, @mimeType, @size, @kind, @rawPath, 'none', @createdAt)`
+       (id, user_id, owner_kind, owner_id, origin, storage, rel_path, name, mime_type, category,
+        size, source_url, summary, sha256, parse_status, created_at)
+     VALUES (@id, @userId, @ownerKind, @ownerId, @origin, @storage, @relPath, @name, @mimeType,
+             @category, @size, @url, @summary, @sha256, 'none', @createdAt)`
   );
   /*
    * A soft delete and its undo. The revive clears the marker and nothing else — the row's
@@ -2009,6 +2291,9 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtRenameWorkspaceForUser = db.prepare(
     "UPDATE workspaces SET name = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtSetWorkspaceSettingsForUser = db.prepare(
+    "UPDATE workspaces SET settings = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   );
   const stmtSoftDeleteWorkspaceForUser = db.prepare(
     "UPDATE workspaces SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
@@ -2137,8 +2422,8 @@ export function createDb(dbPath: string): AppDb {
   /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, usage, stopped, created_at)
-     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @usage, @stopped, @createdAt)`
+    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, sources, usage, stopped, created_at)
+     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @sources, @usage, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
   /*
@@ -2744,13 +3029,81 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetSourceForUser.get(id, userId) as SourceRow | undefined;
       return r ? mapSource(r) : undefined;
     },
-    listSourcesForUser(userId) {
-      return (stmtListSourcesForUser.all(userId) as SourceRow[]).map(mapSource);
+    listSourcesForUser(userId, filter) {
+      // The unfiltered case keeps its own statement: it is the one the account's library asks
+      // first, and `LIKE`-free full scans of a small table are not worth unifying at the cost
+      // of a query plan that no longer uses the index.
+      if (!filter || Object.values(filter).every((v) => v === undefined)) {
+        return (stmtListSourcesForUser.all(userId) as SourceRow[]).map(mapSource);
+      }
+      const name = filter.name?.trim();
+      return (
+        stmtListSourcesFiltered.all({
+          userId,
+          storage: filter.storage ?? null,
+          category: filter.category ?? null,
+          origin: filter.origin ?? null,
+          mime: filter.mime ?? null,
+          // A search box is not a pattern language: `%` and `_` typed into it are characters
+          // the user is looking for, not wildcards, so they are escaped and the escape
+          // character is declared.
+          name: name ? `%${name.replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null,
+          workspaceId: filter.workspaceId ?? null,
+          sessionId: filter.sessionId ?? null,
+        }) as SourceRow[]
+      ).map(mapSource);
     },
     createSource(input) {
-      stmtCreateSource.run({ ...input, createdAt: now() });
+      stmtCreateSource.run({
+        ...input,
+        relPath: input.relPath ?? null,
+        url: input.url ?? null,
+        summary: input.summary ?? null,
+        sha256: input.sha256 ?? null,
+        createdAt: input.now ?? now(),
+      });
       const r = stmtGetSourceForUser.get(input.id, input.userId) as SourceRow;
       return mapSource(r);
+    },
+    listSessionLabels(userId) {
+      return stmtListSessionLabels.all(userId) as SessionLabelRow[];
+    },
+    getSourceByPlace(userId, owner, relPath) {
+      const r = stmtGetSourceByPlace.get({
+        userId,
+        ownerKind: owner.kind,
+        ownerId: owner.id,
+        relPath,
+      }) as SourceRow | undefined;
+      return r ? mapSource(r) : undefined;
+    },
+    listSourcesForOwner(userId, owner) {
+      return (
+        stmtListSourcesForOwner.all({
+          userId,
+          ownerKind: owner.kind,
+          ownerId: owner.id,
+        }) as SourceRow[]
+      ).map(mapSource);
+    },
+    updateSourcePlace(id, userId, patch) {
+      return (
+        stmtUpdateSourcePlace.run({
+          id,
+          userId,
+          relPath: patch.relPath ?? null,
+          storage: patch.storage ?? null,
+          name: patch.name ?? null,
+          mimeType: patch.mimeType ?? null,
+          category: patch.category ?? null,
+          size: patch.size ?? null,
+          // Two parameters for one column, because "clear the summary" and "do not touch the
+          // summary" are different intentions and a lone null cannot express both.
+          summarySet: patch.summary === undefined ? 0 : 1,
+          summary: patch.summary ?? null,
+          updatedAt: patch.now ?? now(),
+        }).changes > 0
+      );
     },
     softDeleteSourceForUser(id, userId) {
       return stmtSoftDeleteSourceForUser.run(now(), id, userId).changes > 0;
@@ -2805,6 +3158,11 @@ export function createDb(dbPath: string): AppDb {
     },
     renameWorkspaceForUser(id, userId, name) {
       stmtRenameWorkspaceForUser.run(name, id, userId);
+      const r = stmtGetWorkspaceWithStatsForUser.get(id, userId) as WorkspaceRow | undefined;
+      return r ? mapWorkspace(r) : undefined;
+    },
+    setWorkspaceSettingsForUser(id, userId, settings) {
+      stmtSetWorkspaceSettingsForUser.run(JSON.stringify(settings), id, userId);
       const r = stmtGetWorkspaceWithStatsForUser.get(id, userId) as WorkspaceRow | undefined;
       return r ? mapWorkspace(r) : undefined;
     },
@@ -2952,6 +3310,9 @@ export function createDb(dbPath: string): AppDb {
         reasoning: input.reasoning?.trim() ? input.reasoning : null,
         toolCalls: input.toolCalls ? JSON.stringify(input.toolCalls) : null,
         attachments: input.attachments?.length ? JSON.stringify(input.attachments) : null,
+        // Stored only when there is something to store, like the column beside it: a JSON
+        // `[]` would make "referenced nothing" a value rather than an absence.
+        sources: input.sources?.length ? JSON.stringify(input.sources) : null,
         usage: input.usage ? JSON.stringify(input.usage) : null,
         stopped: input.stopped ? 1 : 0,
         createdAt: now(),
@@ -3620,6 +3981,10 @@ export function createDb(dbPath: string): AppDb {
     },
     setSetting(key, value) {
       stmtSetSetting.run(key, value);
+    },
+
+    transaction(fn) {
+      return db.transaction(fn)();
     },
   };
 }

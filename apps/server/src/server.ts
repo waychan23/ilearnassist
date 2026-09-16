@@ -98,6 +98,7 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
   const documents = new DocumentService({ db, config });
 
   const app = Fastify({ logger: input.logger ?? true });
+
   await app.register(cors, { origin: true });
   await app.register(routes, { config, db, documents, layout });
 
