@@ -26,19 +26,29 @@ description of that tree:
   users/<userSlug>/
     workspaces/<wsSlug>/
       workdir/                 the agent's file-tool sandbox and the file browser's root
-      sessions/<sessionId>/    a conversation's own files — the diagrams it draws
+      sessions/<sessionId>/    a conversation's own files — diagrams, and anything else
+      trash/<sourceId>/        a file deleted from the file manager, bytes kept
     sources/
       raw/<sourceId>.<ext>     an uploaded file, one per distinct content per account
-      parsed/<sourceId>.txt    its extracted text
+      web/<sourceId>.<ext>     a page the agent fetched and kept
+      parsed/<sourceId>.txt    its extracted text, for every kind of source
   db/sqlite/ilearnassist.sqlite
 ```
 
-`sessions/<sessionId>/` is a conversation's **own** folder, and its one writer is `ila_diagram`
-— the model draws a diagram, the source lands here as `<name>.mmd`, and the conversation renders
-it. It is a sibling of `workdir/` rather than a corner of it, deliberately: the workdir is the
-sandbox `write_file` and the file tree share, and `write_file` cannot reach `sessions/`
-(`resolveInWorkspace` refuses the traversal), so this directory holds nothing a typed tool did
-not write. See `docs/diagrams.md`.
+`sessions/<sessionId>/` is a conversation's **own** folder, and it has **two writers**: the file
+tools, when a write is aimed there (or when it is where the conversation's default points), and
+`ila_diagram`. It is a sibling of `workdir/` rather than a corner of it, deliberately: the
+workdir is the tree every conversation in the workspace shares, and a conversation's own files
+are not the same kind of thing. The rule that used to stand here — "nothing in it that a typed
+tool did not write", argued from `write_file` being unable to *reach* it — is restated rather
+than kept: what matters is that **every file in it is a source row**, addressable by id, which
+is what `sourcePaths.ts` refusing the traversal still guarantees in the other direction (a
+workspace-relative path cannot climb into `sessions/`). See `docs/sources.md`, `docs/diagrams.md`.
+
+**Every file and every page is a `source`** — one table, one id space, one registry
+(`sources.ts`). An upload, a fetched page, a file the agent wrote into either sandbox: all four
+carry `origin` (how it came to exist), `storage` (which root its bytes are under) and `category`
+(what it is). `docs/sources.md` is the reference.
 
 ## Commands
 
@@ -232,12 +242,19 @@ apps/server/src/
   db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
   files.ts                # the file browser's read side, for both roots: one level, one file
-  attachments.ts          # source paths + the sandbox guard + multimodal content building
+  attachments.ts          # multimodal content building (the MIME vocabulary moved out)
+  sourcePaths.ts          # where a source's bytes are, the MIME table, the blob derivations
+  sourceCategory.ts       # what a file is: one MIME type and one category, from a name
+  sources.ts              # the registry: registerFileSource/rename/reconcile, the page row
+  fileOps.ts              # the file manager's writes: create, upload, move, delete-to-trash
+  migrations.ts           # the version walk (v2 -> v3), canMigrate, openRefusal
+  writeLocation.ts        # the four-level chain deciding which sandbox a write goes to
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
+  agent/mediaSummary.ts   # one line about an image, from the model that saw it
   agent/threads.ts        # the out-of-band topic classifier call
   agent/insights.ts       # the out-of-band insight pass call
   agent/reasoning.ts      # the `thinking` body field, capability-gated (both calls above)
@@ -252,6 +269,7 @@ apps/server/src/
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
+  tools/collectPage.ts    # ila_collect_page — keeps a fetched page as a source
   tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
   tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
@@ -286,12 +304,16 @@ apps/web/src/
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
   widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
+  utils/mention.ts        # the `@`-mention: is the caret in one, and where the name goes
+  utils/sourceTree.ts     # the source browser's tree: group by origin, flatten by open set
   components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
-                          #   AskUserCard, Composer, TopbarControls, FileTree, WidgetPanel,
+                          #   AskUserCard, Composer, SourceMentionPicker, WriteLocationField,
+                          #   FileTree, WidgetPanel,
                           #   WidgetTabStrip, GenerationParams, NoteEditor,
                           #   MessageSelectionToolbar,
-                          #   dialogs (Settings, WorkspaceSettings, Sources, SessionFiles,
+                          #   dialogs (Settings, WorkspaceSettings, SourceBrowser, FilePath,
+                          #   SessionFiles,
                           #   FilePreview, Diagram, Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
@@ -316,10 +338,28 @@ Fuller map in `docs/reference.md`.
 
 ## Invariants worth respecting
 
-- **Workspace sandboxing is a security boundary.** All file-tool paths MUST go
-  through `resolveInWorkspace` (rejects `..` escapes and absolute escapes) and
-  never operate outside the active workspace directory. Do not add a file tool
-  that bypasses this.
+- **Sandboxing is a security boundary, and there are now two sandboxes.** All file-tool paths
+  MUST go through `resolveInWorkspace` (rejects `..` escapes and absolute escapes) against the
+  root the call selected — a workspace's `workdir/` or a conversation's `sessions/<id>/` — and
+  never operate outside it. Do not add a file tool that bypasses this. The two are siblings, so
+  the escape that matters most is the one a single-root implementation would miss: `../workdir/x`
+  from a session, or `../sessions/<id>/x` from the workspace. Both are refused, and both are
+  tested, in `test/tools/fileTools.test.ts`.
+- **Which sandbox a write goes to is a setting, and the setting has four levels.**
+  `resolveWriteLocation` reads, nearest first: this turn's own instruction, the session's
+  `settings.writeLocation`, the workspace's, then `DEFAULT_WRITE_LOCATION` — which is
+  **`session`**. A Copilot is deliberately not read: its value arrives as `session.settings`
+  because the conversation copied it at creation, the same reason `turnContext` consults the
+  session and nothing else. The system prompt names both folders and the effective default, and
+  the model is told to `ask_user` when it cannot tell — guidance as a prompt string, the
+  `PLAN_GUIDANCE` shape, not a code path. Two consequences are load-bearing rather than
+  incidental: the *default* is `session` because a workspace directory every conversation writes
+  into is a junk drawer nobody organised, and that means most new files no longer appear in the
+  sidebar's file tab, which browses `workdir/`. See `docs/sources.md`.
+  The read and delete rules differ on purpose: a **read** with no `location` tries the default
+  and then the other root and says which it used (a model that cannot find a file it wrote last
+  turn stops trusting the tools), while a **delete** refuses when the path exists in both —
+  deleting the wrong file is not a mistake a tool result can walk back.
 - **The file browser reads the same directory the tools do, and is stricter about how.**
   `files.ts` resolves through `resolveInWorkspace` first — the same lexical boundary — and then
   `realpath`s the result, because the lexical check cannot see a symlink inside the workspace
@@ -390,9 +430,10 @@ Fuller map in `docs/reference.md`.
   `.bin` would render an empty box instead of the unsupported panel. `textPlugin` is omitted
   (unreachable — every format it claims is already `text`/`markdown`), and the CAD peers are
   omitted because `@mlightcad/libredwg-web` is GPL-3.0. See `docs/file-preview.md`.
-- **A conversation's own directory has exactly one writer, and a diagram is a file plus a
-  row — each holding what the other cannot.** `sessions/<sessionId>/` is written by
-  `ila_diagram` and read by the session-files routes; `write_file` cannot reach it. The `.mmd`
+- **A diagram is a file plus two rows — each holding what the others cannot.** The contract used
+  to be stated as "one writer, and a file plus a row"; it is now two writers (the file tools can
+  be aimed at `sessions/<sessionId>/` too) and three records, because a diagram is also a
+  *source* like every other file. `sessions/<sessionId>/` is read by the session-files routes. The `.mmd`
   is the source of the bytes; `session_diagrams` holds only what the file cannot answer: the
   canonical `name` (the join key, so the client never derives one), the model's `summary`, the
   `tool_call_id` that wrote or last revised it, and the `thread_id` the classifier put it in.
@@ -405,7 +446,11 @@ Fuller map in `docs/reference.md`.
   one row, new summary and call id, `thread_id` cleared so the new shape is judged again. The
   naming rule (`diagramFileName`, `slugify`) is server-side in `diagrams.ts`/`workspace.ts` — it
   used to be shared because the client derived a name to find the call, and the row retired that
-  derivation; only `isDiagramFile` and the size/tool-name constants stay shared. See
+  derivation; only `isDiagramFile` and the size/tool-name constants stay shared. The third record
+  is the **source row** (`storage: "session"`, `origin: "agent_session"`, `category: "diagram"`,
+  with the model's summary), written in the same transaction as the other two — without it a
+  diagram would be the one file in the app that the registry, the source browser and
+  `@`-reference could not see, which is exactly the split this change exists to close. See
   `docs/diagrams.md`.
   **A diagram rides the turn classification.** The thread is assigned after the turn, so the tool
   writes `thread_id = null` and `threads.ts` places each diagram inside the same transaction as
@@ -474,19 +519,31 @@ Fuller map in `docs/reference.md`.
   when the logout request fails, because the stored token is cleared either way and leaving someone
   looking signed in is the worse of the two outcomes (the failure is surfaced, since a reload will
   sign them back in).
-- **An uploaded file is a `source`: owned by the account, indexed by the database, and
-  referenced rather than owned by a conversation.** It lives at
-  `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose, so chat
-  uploads never show up in the agent's `list_files`. Three things follow, and each is load
-  bearing:
-  - **`UNIQUE (user_id, sha256)`** makes identical bytes one row, one file and two
-    references. The hash is *scoped* — `findSourceByHash(userId, hash)`, never by hash alone,
-    or the second account to upload the same file would be handed the first one's bytes.
-  - **`raw_path` is stored, and re-validated on every read** through `resolveInSources`. It is
-    stored because that is what removes the directory glob an attachment lookup used to need —
-    and with it a whole class of collision (see the `parsed/` note that this retired). It is
-    re-validated because a database row is not a trust boundary: it travels through backups,
-    and a future bug that wrote one column would otherwise become an arbitrary file read.
+- **A `source` is any material the account holds, indexed by the database and owned by a
+  workspace or a conversation.** Its bytes live where they *are* — an upload at
+  `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose so chat uploads
+  never show up in the agent's `list_files`; a file where the file is, in `workdir/` or
+  `sessions/<id>/`. That last part is the change: "outside every workspace by construction" is
+  still exactly true of `upload` and `web` storage, which is what `read_document`'s
+  cross-boundary argument rests on, and a `workspace`-storage source *is* a file in the sandbox —
+  which is what unification means, and no more privileged than the file already was. See
+  `docs/sources.md`. Three things follow, and each is load bearing:
+  - **Two identity rules, as two partial unique indexes.** Identical *uploaded bytes* are one row
+    (`idx_sources_blob`, on `(user_id, sha256) WHERE sha256 IS NOT NULL`, and deliberately not
+    filtered by `deleted_at` — that is what makes re-uploading a deleted file *revive* its row).
+    A *file* is placed by `(user_id, owner_kind, owner_id, rel_path)` while live
+    (`idx_sources_place`), so a rename is an UPDATE that keeps the id, the summary and the parse
+    state, and two identical files in two directories are two sources. A file row's `sha256` is
+    NULL, which is why the two indexes can never contend. The hash is *scoped* —
+    `findSourceByHash(userId, hash)`, never by hash alone, or the second account to upload the
+    same file would be handed the first one's bytes.
+  - **No path is stored absolutely, and every one is re-validated on every read** through
+    `resolveSourceBytes` in `sourcePaths.ts`. `storage` picks the root and `rel_path` says where
+    in it; a blob stores neither, because its filename is `<id>.<ext>` — derived from the id and
+    the MIME type, which is what `raw_path` always was a cache of, and the one stored fact a
+    copied data root silently broke. It is re-validated because a database row is not a trust
+    boundary: it travels through backups, and a future bug that wrote one column would otherwise
+    become an arbitrary file read.
   - **Parse state is columns on the row**, not a `<id>.json` sidecar. A reparse is then
     visible in every conversation at once, and a source shared by two conversations is parsed
     once. Only the extracted *text* stays a file. `attachments.ts` has no root constant: the
@@ -875,9 +932,16 @@ Fuller map in `docs/reference.md`.
   `read_document` is bound to a whitelist resolved per turn — a conversation's own sources
   **unioned with its workspace's** — rather than to any root, so a guessed id fails a `Map`
   lookup before a path is touched. The file tools are sandboxed by `resolveInWorkspace`
-  instead, and can never reach a source: it is outside every workspace by construction. So a
-  document uploaded in one conversation is readable from another in the same workspace, while
-  no path in that workspace could reach it as a file.
+  instead, and can never reach an *upload or a page*: those live outside every workspace by
+  construction. So a document uploaded in one conversation is readable from another in the same
+  workspace, while no path in that workspace could reach it as a file.
+  **The whitelist stays what it always was, and the registry is not one.** A file inside a
+  sandbox is readable *by path* through the file tools, so it is deliberately **not** folded
+  into `listReadableSources`: a workspace with a `node_modules` in it would otherwise put
+  thousands of rows into the model's context as named sources. `read_document` keeps meaning
+  "material from outside the sandbox"; a file the model should read is read with `read_file`,
+  and cross-workspace referencing rides `session_sources` — a link created when a user actually
+  references something.
   That is defensible because a workspace is *already* a shared sandbox — every conversation in
   it can `read_file` the same tree — so a document there is not more privileged than a file
   there; and it is the whole point of the tool, since a model shown a 200-page PDF in turn one
@@ -1114,6 +1178,74 @@ Fuller map in `docs/reference.md`.
   loses on source order alone. This has already produced one bug: the narrow
   `position: fixed` on `.overlay-popover` silently lost to the same class
   declared further down.
+- **A hidden `<input type="file">` is `.hidden-input`, a *scoped* rule, not a utility class.**
+  There is no global `.visually-hidden` in `style.css`, and writing one produced two file pickers
+  (`FileTree`, `SourceBrowser`) that rendered as a visible "Choose File" strip in a toolbar and a
+  dialog footer. The composer's is the convention to copy: `display: none`, because the button
+  above it is the control and an input that stayed focusable would be a second tab stop on a
+  control nobody sees.
+- **A list that two things can reload concurrently needs a sequence number.** The source browser
+  starts a load when it opens and another when a filter changes; responses do not arrive in order,
+  so the older reply used to overwrite the newer and the list settled on the *unfiltered* answer
+  while the controls said otherwise. `loadRows`/`loadScope` drop a reply that is not the latest —
+  the same shape as `runPreview`'s `filePreviewSeq` in `stores/app.ts`.
+- **A `<select>` bound to `undefined` paints blank, not its placeholder option.** The browser's
+  filters open from `?workspaceId=`-style props, which are absent rather than empty, and every
+  control rendered as an empty box — so `asFilters` gives every key the empty string, spelled out
+  as a `Record<keyof SourceFilterQuery, string>` so a new filter is a compile error there rather
+  than a control that stays blank. (A *disabled* select is the same failure and is why the session
+  picker renders only once a workspace is chosen.)
+- **The file tree moves things two ways, and neither replaces the other.** Dragging a row onto a
+  folder is the fast path; `canDropOn` refuses four things, each a move the server would reject or
+  that means nothing — onto itself, onto the folder that already holds it, into its own subtree,
+  and onto a *file*. The rename/move dialog stays the complete path, because a drop target can only
+  be a row you can see. Dropping on the panel itself means the workspace **root**, which has no row
+  to aim at and is otherwise unreachable by drag. One trap, found by the browser suite: read the
+  drag state *before* clearing it — the drop handler cleared first and then asked `canDropOn`,
+  which answered "no" every time.
+- **A bare `@` in a catalog message is a compile-time bomb that only goes off in a browser.**
+  vue-i18n reads `@:key` as its *linked-message* syntax, so a message containing one throws at
+  **render time** — taking down the whole component the message is in. This is not theoretical:
+  `composer.placeholder` gained "输入 @ 可引用资料" with the `@`-reference, passed `vue-tsc`,
+  passed the whole catalog suite, and left the composer blank on every page. The escape is
+  `{'@'}`, the same shape a literal `|` needs in a plural, and `catalog.test.ts` now fails on a
+  bare one.
+- **The registry is an index of the filesystem, and it is refreshed before a source listing.**
+  Two mechanisms answering different questions: `reconcileListing` registers what a *directory
+  listing* finds (the file browser's routes), and `reconcileFilesystem` walks the scopes a
+  **source listing** is about, bounded by depth and a file cap, at the top of `GET /api/sources`.
+  The second exists because the browser lists *rows*, not directories — so a file that appeared
+  with no writer at all (cloned in, restored, dropped from the Finder) was invisible until
+  somebody happened to open the file tree on that folder. A boot-time scan would answer "what was
+  there when the server started", which is a different question from the one the reader is
+  asking. The walk is capped and idempotent, so paying it per listing is affordable.
+- **`ila_collect_page` keeps a page, and its identity is the reading rather than the bytes.**
+  `web_fetch` stays a pure read; keeping a page is a second, deliberate call by the model — which
+  is what the requirement means by "only the pages finally confirmed relevant". It fetches
+  through `web_fetch`'s **exported** `fetchGuarded` (the SSRF guard has one implementation, not
+  two), stores the HTML under `sources/web/`, and hashes URL **plus extracted text**: a masthead
+  that changed since yesterday is the same source, an article that changed is a new one. A turn's
+  fetches are cached by `buildTools`, so keeping a page the model just read costs no second
+  request.
+- **A referenced source is *linked*, not copied.** `ChatInput.sources` names ids; the server
+  links each to the conversation (`session_sources`) and records the snapshot in
+  **`messages.sources`**, a column of its own beside `attachments`. The link is what lets a later
+  turn `read_document` a file the user pointed at once — and it is the same row an upload writes.
+  The two columns are one array in the prompt, because to the model a reference and an attachment
+  are the same thing; the split exists so a chip can say which is which.
+- **An image gets one summary, written by the model that saw it.** `agent/mediaSummary.ts` runs
+  fire-and-forget from `finishTurn`, writes to the `summary` column *and* `parsed/<id>.txt` (a
+  summary in the column alone would be a file the model still could not read), and is gated three
+  ways: `needsSummary` skips an image that already has one, `ctx.vision` skips a model with no
+  vision — a description would be a claim about a picture nothing looked at, and the request
+  would be an `image_url` a non-vision endpoint rejects — and every failure is swallowed, like
+  the titler's.
+- **The `@` picker's rule lives in `utils/mention.ts`, and its `@` must not be glued to a word.**
+  `ada@example.com` is not a mention; punctuation before the `@` is allowed, so `(@report.pdf)`
+  works. The picker is positioned *inside* `.composer .surface`, which is why that rule carries a
+  `position: relative` — without a positioning context the menu renders off-screen, visible to
+  the DOM and not to the person typing. Its query is debounced, and not only for the bandwidth:
+  a fetch per keystroke replaces the rows, so a click aimed at one lands on a detached node.
 - **The server serves the built frontend, and only when one exists.** `webApp.ts`
   registers `@fastify/static` at `/` *after* the API routes, conditional on an
   `index.html` being present. `buildServer` takes `webDir` and **tests never pass it** —

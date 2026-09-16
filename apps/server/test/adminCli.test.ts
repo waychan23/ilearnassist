@@ -21,6 +21,7 @@ import {
   resetAdmin,
 } from "../src/adminCli.js";
 import { dataLayout } from "../src/paths.js";
+import { SCHEMA_VERSION } from "../src/schema.js";
 import { startBareServer } from "./helpers/tempEnv.js";
 
 /**
@@ -168,7 +169,7 @@ describe("status", () => {
     const outcome = adminStatus(root);
 
     expect(codeOf(outcome)).toBe("SCHEMA_UNREADABLE");
-    expect(outcome.ok || outcome.body.error.params).toEqual({ found: 99, needed: 2 });
+    expect(outcome.ok || outcome.body.error.params).toEqual({ found: 99, needed: SCHEMA_VERSION });
   });
 
   it("does not migrate a database it was only asked about", () => {

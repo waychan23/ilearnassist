@@ -61,12 +61,24 @@ export const uiState = reactive({
    */
   sourcesOpen: false,
   /**
+   * Which slice the source browser opens on, when it opens.
+   *
+   * The browser has two front doors and one component: the workspace home opens it as the
+   * whole account, and a conversation opens it already narrowed to its workspace. A *scope*
+   * rather than a second `workspaceSourcesOpen` flag, because the two would be the same
+   * dialog twice and the third front door would be a third flag — and because the scope is
+   * also what the caller must *say*, which `true` cannot carry.
+   *
+   * Reset by `closeSources`, so a reopen from the other door cannot inherit the last one's
+   * filter. `null` and `{}` both mean the whole account.
+   */
+  sourcesScope: null as { workspaceId?: string } | null,
+  /**
    * The conversation's own files.
    *
-   * Distinct from `sourcesOpen` in both halves of what a file can be: a source is the
-   * *account's*, uploaded by the user, and lives outside every workspace; this is one
-   * conversation's own directory, written by the agent — the diagrams it draws. The two lists
-   * never overlap, which is what makes them two dialogs rather than two tabs of one.
+   * Distinct from the source browser in both halves of what a file can be: that one lists what
+   * the *account* has, across every workspace; this is one conversation's own directory, and
+   * what it shows is exactly the files written inside it. The two lists do not overlap.
    *
    * A flag rather than a session id, unlike `workspaceSettingsId`: the entry points are the
    * diagram widget and the chat topbar, both of which mean *this* conversation, and the dialog
@@ -136,12 +148,16 @@ export function closeCopilots(): void {
   uiState.copilotsOpen = false;
 }
 
-export function openSources(): void {
+export function openSources(scope: { workspaceId?: string } = {}): void {
+  uiState.sourcesScope = scope;
   uiState.sourcesOpen = true;
 }
 
 export function closeSources(): void {
   uiState.sourcesOpen = false;
+  // Cleared rather than left behind: the next open comes from one of two doors, and a stale
+  // scope would silently pre-filter the other one.
+  uiState.sourcesScope = null;
 }
 
 /** The conversation's own files — see `sessionFilesOpen`. */

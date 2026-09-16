@@ -20,7 +20,8 @@ import {
 } from "./auth.js";
 import { createDb, parseStoredRoles, type AppDb } from "./db.js";
 import { dataLayout, ensureUserLayout, userLayout } from "./paths.js";
-import { applySchema, schemaProblem, SchemaUnreadableError } from "./schema.js";
+import { applySchema, SchemaUnreadableError } from "./schema.js";
+import { openRefusal } from "./migrations.js";
 
 /**
  * Creating the installation's first administrator, and saying whether there is one.
@@ -163,7 +164,13 @@ export function adminStatus(dataRoot: string): AdminCliOutcome {
   }
 
   try {
-    const problem = schemaProblem(db);
+    /*
+     * `openRefusal`, not `schemaProblem`: a file one version behind is not one this build
+     * refuses — it is one the server walks forward on its next start — and reporting it as
+     * unreadable would tell an operator to move a data root aside minutes before the thing
+     * they are checking reads it happily. This is the same question `applySchema` asks.
+     */
+    const problem = openRefusal(db);
     if (problem) {
       return fail("SCHEMA_UNREADABLE", "the database is a schema this build cannot read", {
         found: problem.found,
@@ -442,7 +449,13 @@ export async function resetAdmin(input: ResetAdminInput): Promise<AdminCliOutcom
   }
 
   try {
-    const problem = schemaProblem(db);
+    /*
+     * `openRefusal`, not `schemaProblem`: a file one version behind is not one this build
+     * refuses — it is one the server walks forward on its next start — and reporting it as
+     * unreadable would tell an operator to move a data root aside minutes before the thing
+     * they are checking reads it happily. This is the same question `applySchema` asks.
+     */
+    const problem = openRefusal(db);
     if (problem) {
       return fail("SCHEMA_UNREADABLE", "the database is a schema this build cannot read", {
         found: problem.found,

@@ -61,6 +61,7 @@ describe("userLayout", () => {
     expect(layout.workspacesRoot).toBe(join("/data", "users", "ada", "workspaces"));
     expect(layout.sourcesRoot).toBe(join("/data", "users", "ada", "sources"));
     expect(layout.rawDir).toBe(join("/data", "users", "ada", "sources", "raw"));
+    expect(layout.webDir).toBe(join("/data", "users", "ada", "sources", "web"));
     expect(layout.parsedDir).toBe(join("/data", "users", "ada", "sources", "parsed"));
   });
 
@@ -80,7 +81,7 @@ describe("ensureUserLayout", () => {
     const layout = userLayout(dataLayout(join(root, "deep", "nested")), "ada");
     ensureUserLayout(layout);
 
-    for (const dir of [layout.workspacesRoot, layout.rawDir, layout.parsedDir]) {
+    for (const dir of [layout.workspacesRoot, layout.rawDir, layout.webDir, layout.parsedDir]) {
       expect(existsSync(dir)).toBe(true);
     }
   });

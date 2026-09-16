@@ -4,6 +4,7 @@ import { load } from "cheerio";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { WebFetchConfig } from "../config.js";
+import type { PageCache } from "../webCapture.js";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
@@ -107,7 +108,15 @@ async function readCapped(res: Response, maxBytes: number): Promise<string> {
  * Follow redirects manually so that *every* hop is re-validated. Using
  * `redirect: "follow"` would let a public URL bounce the server to an internal address.
  */
-async function fetchGuarded(
+/**
+ * One guarded fetch, exported for the page-capture tool.
+ *
+ * `ila_collect_page` needs exactly this: the SSRF check on the URL *and on every redirect hop*,
+ * the capped body, the content type. A second implementation would be a second chance to get
+ * the guard wrong, and this is the one place the model can make the server issue an arbitrary
+ * outbound request — so it is one function with two callers rather than two functions.
+ */
+export async function fetchGuarded(
   rawUrl: string
 ): Promise<{ finalUrl: string; body: string; contentType: string }> {
   let current = rawUrl;
@@ -158,12 +167,22 @@ export function htmlToText(html: string): { title: string; text: string } {
   return { title, text };
 }
 
-/** Build the URL-fetch tool. The configured `maxChars` caps what reaches the model. */
-export function buildWebFetchTool(cfg: WebFetchConfig) {
+/**
+ * Build the URL-fetch tool. The configured `maxChars` caps what reaches the model.
+ *
+ * `cache` is where a fetch is *remembered*, and it is what makes `ila_collect_page` free for a
+ * page the model has already read: keeping a page it just fetched costs no second request.
+ * Optional, because a test that only exercises this tool has nothing to share it with.
+ */
+export function buildWebFetchTool(cfg: WebFetchConfig, cache?: PageCache) {
   return tool(
     async ({ url, maxChars }) => {
       const limit = Math.min(maxChars ?? cfg.maxChars, cfg.maxChars);
       const { finalUrl, body, contentType } = await fetchGuarded(url);
+      // Keyed by the URL the model asked for *and* by the one it landed on: a redirect means
+      // the two differ, and a model that collects the address it typed is the common case.
+      cache?.set(url, { finalUrl, body, contentType });
+      cache?.set(finalUrl, { finalUrl, body, contentType });
 
       let text: string;
       let title = "";

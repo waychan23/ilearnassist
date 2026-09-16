@@ -29,6 +29,8 @@ const OWNER = "u1";
 const OTHER = "u2";
 const SESSION = "s1";
 const OTHER_SESSION = "s2";
+/** The workspace the conversation is in — what the `source` kind unions the whitelist with. */
+const WORKSPACE = "w1";
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gl-query-"));
@@ -76,6 +78,7 @@ function build(options: { userId?: string; sessionId?: string } = {}) {
     db,
     userId: options.userId ?? OWNER,
     sessionId: options.sessionId ?? SESSION,
+    workspaceId: WORKSPACE,
     sessionDirPath,
   });
 }

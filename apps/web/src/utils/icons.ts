@@ -148,6 +148,26 @@ export const ICON_PATHS = {
    * caret says which rows belong to it, the folder says whether it is open. */
   folder: ["M2.5 12.5V4.5H6.5L8 6.5H13.5V12.5Z"],
   "folder-open": ["M2.5 12.5V4.5H6.5L8 6.5H12V8.5", "M2.5 12.5L4.6 8.5H14L12 12.5Z"],
+  /* The folder with a plus where its body is, for "new folder" — rather than a bare plus,
+   * which is already the new-conversation action one panel up. */
+  "folder-plus": ["M2.5 12.5V4.5H6.5L8 6.5H13.5V12.5Z", "M8 8V11.25", "M6.4 9.6H9.6"],
+
+  /* Three stacked planes, for "everything this workspace holds" — distinct at a glance from
+   * the folder beside it, which is one conversation's own files. */
+  layers: ["M8 2.5L14 5.5L8 8.5L2 5.5Z", "M2 8.5L8 11.5L14 8.5", "M2 11.5L8 14.5L14 11.5"],
+
+  /* A link: two rounded ends and the bar between them, drawn as three strokes so it reads at
+   * 14px as a chain rather than as an infinity sign. */
+  link: [
+    "M6.6 9.4L9.4 6.6",
+    "M7.3 4.4L8.6 3.1a2.4 2.4 0 0 1 3.4 3.4L10.7 7.8",
+    "M8.7 11.6L7.4 12.9a2.4 2.4 0 0 1 -3.4 -3.4L5.3 8.2",
+  ],
+
+  /* An arrow leaving a line: the one direction this app does not otherwise have, since
+   * `send` is an arrow the user aims at the model. Strokes are kept inside 3..13 so the
+   * horizontal bar reads as a floor rather than as a border. */
+  upload: ["M8 12.25V3.5", "M4.5 7L8 3.5L11.5 7", "M3.5 12.75H12.5"],
 
   image: [
     "M2.5 3.5H13.5V12.5H2.5Z",

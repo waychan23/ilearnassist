@@ -17,6 +17,7 @@ const en: typeof MessageSchema = {
     confirm: "Confirm",
     cancel: "Cancel",
     create: "Create",
+    add: "Add",
     delete: "Delete",
     name: "Name",
     copied: "Copied",
@@ -215,7 +216,11 @@ const en: typeof MessageSchema = {
       "1 attachment could not be parsed, so the model will not be able to read it. Use the retry button on the attachment, or configure a cloud parser under Settings → Document parsing. | {count} attachments could not be parsed, so the model will not be able to read them. Use the retry button on an attachment, or configure a cloud parser under Settings → Document parsing.",
     visionWarning:
       "The current model “{model}” is not marked as accepting image input, so images will be sent as text placeholders. Tick “Image input” for it under Settings → Providers.",
-    placeholder: "Type a message — Enter to send, Shift+Enter for a new line",
+    /* The `@` is `{'@'}`: see the note in the Chinese catalog. */
+    placeholder: "Type a message — Enter to send, Shift+Enter for a new line, {'@'} to reference a source",
+    /** The `@` picker: nothing matched what has been typed, and nothing exists to match. */
+    noSourceMatch: "No source matches that.",
+    noSources: "Nothing to reference yet.",
     thinking: "The agent is thinking…",
     parsingShort: "Parsing attachments…",
     send: "Send (Enter)",
@@ -265,6 +270,19 @@ const en: typeof MessageSchema = {
     truncated: "Too many entries — showing the first {count}",
     treeLabel: "Workspace files",
     retry: "Try again",
+    /*
+     * The file manager. Four verbs, because a web app has no Finder behind it: without these
+     * the workdir is a directory the agent writes into and the user can only look at.
+     */
+    newFolder: "New folder",
+    newFolderHint: "A folder name, relative to the folder you are in.",
+    upload: "Upload files",
+    rename: "Rename or move",
+    renameHint: "A path relative to the workspace root. Type a new one to move it.",
+    deleteTitle: "Delete this file?",
+    deleteDirectoryTitle: "Delete this folder?",
+    deleteMessage: "“{name}” will be removed from the workspace. Its bytes are kept in the trash folder, but it is gone from here.",
+    deleteDirectoryMessage: "“{name}” will be removed from the workspace. Only an empty folder can be deleted this way.",
     preview: {
       loading: "Reading…",
       rendered: "Preview",
@@ -350,6 +368,7 @@ const en: typeof MessageSchema = {
     name: {
       web_search: "Web search",
       web_fetch: "Read a web page",
+      ila_collect_page: "Keep a page",
       list_files: "List files",
       read_file: "Read a file",
       write_file: "Write a file",
@@ -587,13 +606,16 @@ const en: typeof MessageSchema = {
     title: "Copilot",
   },
 
+  /* The installation's own settings — see the note in the Chinese catalog. */
   settings: {
-    /**
-     * This namespace has no dialog of its own any more: what is left of it is the console's
-     * sections and this one pointer, which the Copilot list shows. The key stays `settings.`
-     * because the installation's settings are still what it is about.
-     */
-    installationMoved: "Model services and document parsing are configured in the platform console.",
+    writeLocation: {
+      label: "Where files are written",
+      workspace: "The workspace (shared by every conversation)",
+      session: "This conversation (private to it)",
+      hint: "This is the default. An explicit instruction in the conversation wins over it.",
+      inheritWorkspace: "Follow the workspace setting",
+      inheritBuiltIn: "Default (this conversation)",
+    },
     providers: {
       countConfigured: "{count} provider configured | {count} providers configured",
       add: "New provider",
@@ -1002,6 +1024,8 @@ const en: typeof MessageSchema = {
     INVALID_FILE_PATH: "That location is outside the workspace and cannot be opened.",
     NOT_A_DIRECTORY: "That path is not a folder.",
     NOT_A_FILE: "That path is not a file.",
+    FILE_EXISTS: "That name is already taken — pick another one.",
+    PAGE_FETCH_FAILED: "That link could not be kept: {detail}",
     UNAUTHENTICATED: "Your session has ended. Sign in again.",
     USERNAME_REQUIRED: "A username is required.",
     USERNAME_TOO_LONG: "A username cannot be longer than {max} characters.",
@@ -1053,22 +1077,59 @@ const en: typeof MessageSchema = {
    * reads as tidying up something already gone.
    */
   sources: {
-    title: "Uploaded files",
-    lead: "Everything you have uploaded. These belong to your account rather than to one conversation — a file referenced from several conversations is stored and parsed once.",
+    title: "Sources",
     open: "Uploaded files",
     loading: "Loading…",
-    empty: "Nothing uploaded yet. Use the paperclip in the composer, or paste a screenshot.",
-    parsed: "Read",
-    parsedChars: "{count} characters read",
-    parsing: "Reading…",
-    parseFailed: "Could not be read",
-    /** The accessible name of a row's open control. The name is in it because the row's own
-     *  label is truncated, so this is also the only place a long filename is readable whole. */
+    empty: "Nothing matches these filters.",
+    parsed: "Parsed",
+    parsedChars: "{count} characters parsed",
+    parsing: "Parsing…",
+    parseFailed: "Parsing failed",
     preview: "Preview {name}",
+    search: "Search",
+    searchHint: "Find by name",
+    filterWorkspace: "Workspace",
+    filterSession: "Conversation",
+    filterCategory: "Kind",
+    filterOrigin: "Came from",
+    filterMime: "MIME type",
+    allWorkspaces: "All workspaces",
+    allSessions: "All conversations",
+    allCategories: "All kinds",
+    allOrigins: "Any origin",
+    allMimes: "All MIME types",
+    viewFlat: "List",
+    viewTree: "Tree",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    add: "Add a source",
+    addLink: "Add a link",
+    addLinkLabel: "Web address",
+    viewLabel: "View",
+    /** The chat topbar's entry point: the browser, already narrowed to this workspace. */
+    workspaceScope: "This workspace's sources",
+    origin: {
+      session_attachment: "Attachment",
+      workspace_upload: "Uploaded to a workspace",
+      agent_workspace: "Written into a workspace",
+      agent_session: "Written into a conversation",
+      web: "Web page",
+      discovered: "Found in a folder",
+    },
+    category: {
+      page: "Web page",
+      text: "Text",
+      markdown: "Markdown",
+      code: "Code",
+      diagram: "Diagram",
+      image: "Image",
+      document: "Document",
+      other: "Other",
+    },
     delete: {
-      title: "Delete file",
-      message: 'Delete "{name}"?',
-      detail: "The file, its extracted text and every reference to it will be removed for good. Messages that were sent with it still show the attachment, but it will no longer open.",
+      title: "Delete this file",
+      message: "Delete \u201c{name}\u201d?",
+      detail: "The file, its extracted text and every reference to it are removed, and this cannot be undone. Messages already sent keep showing the attachment, but it will not open.",
       action: "Delete file",
     },
   },

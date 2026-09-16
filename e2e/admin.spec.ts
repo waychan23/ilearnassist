@@ -388,8 +388,8 @@ test("an ordinary account is offered no way to configure models", async ({ page,
   await expect(page.getByTestId("open-admin")).toHaveCount(0);
   await expect(page.getByTestId("open-admin-sidebar")).toHaveCount(0);
 
-  // The Copilot list still opens — those are the account's own — but it points nowhere useful
-  // and the console pointer is for administrators only.
+  // The Copilot list still opens — those are the account's own — and points at nothing else:
+  // the console pointer it used to draw for administrators is gone from the dialog entirely.
   await page.getByTestId("open-copilots").click();
   await expect(page.getByTestId("new-copilot")).toBeVisible();
   await expect(page.getByTestId("settings-console-pointer")).toHaveCount(0);

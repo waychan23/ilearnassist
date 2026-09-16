@@ -150,7 +150,7 @@ function activityLabel(workspace: Workspace): string {
         data-testid="open-sources"
         :title="t('sources.open')"
         :aria-label="t('sources.open')"
-        @click="openSources"
+        @click="openSources()"
       >
         <Icon name="folder" />
       </button>

@@ -11,11 +11,12 @@ import {
   isWidgetBoundTool,
   widgetsForScope,
 } from "../../api/types";
-import type { Copilot, SessionSettings, WidgetId } from "../../api/types";
+import type { Copilot, FileLocation, SessionSettings, WidgetId } from "../../api/types";
 import type { CopilotDraft } from "../../stores/app";
 import { widgetLabel } from "../../widgets/registry";
 import Icon from "../Icon.vue";
 import GenerationParams from "../GenerationParams.vue";
+import WriteLocationField from "../WriteLocationField.vue";
 
 const props = defineProps<{ copilot: Copilot | null }>();
 const emit = defineEmits<{ close: []; save: [draft: CopilotDraft] }>();
@@ -42,6 +43,16 @@ const pickableTools = computed(() => ALL_TOOL_NAMES.filter((name) => !isWidgetBo
  * form, and this dialog keeps only what is genuinely its own.
  */
 const params = ref<InstanceType<typeof GenerationParams> | null>(null);
+
+/**
+ * Where conversations started from this Copilot write their files.
+ *
+ * `null` means "follow the workspace", which is the level below — and the requirement's own
+ * order: a Copilot overrides the workspace's default, and the conversation can override the
+ * Copilot afterwards. It travels in `settings`, which `createSession` already copies onto the
+ * session, so nothing reads a Copilot at turn time.
+ */
+const writeLocation = ref<FileLocation | null>(null);
 
 /**
  * A Copilot installs into a **session**, so only session-scope widgets are offered here. That is
@@ -113,6 +124,7 @@ watch(
     isPublic.value = c?.visibility === "public";
     allTools.value = c?.allTools ?? true;
     params.value?.load(c?.settings ?? {});
+    writeLocation.value = c?.settings?.writeLocation ?? null;
     showDefaults.value = c ? hasAnySetting(c.settings) || widgetsDiffer.value : false;
   },
   { immediate: true, flush: "post" }
@@ -169,7 +181,7 @@ function save() {
     // Sent as given even when the flag overrides it; the server is the side that decides the
     // flag wins, so a client cannot leave a row asserting both.
     tools: [...draft.tools],
-    settings: params.value?.commit() ?? {},
+    settings: { ...(params.value?.commit() ?? {}), writeLocation: writeLocation.value },
     widgets: [...widgets.value],
     visibility: isPublic.value ? "public" : "private",
   });
@@ -266,6 +278,17 @@ function save() {
             <summary>{{ t("copilot.defaults") }}</summary>
 
             <GenerationParams ref="params" />
+
+            <!--
+              The write location, beside the other defaults: a Copilot is a *template*, so this
+              is a note about conversations that do not exist yet, exactly like the widget boxes
+              below it and unlike the same control in the two settings dialogs.
+            -->
+            <WriteLocationField
+              v-model="writeLocation"
+              :inherit-label="t('settings.writeLocation.inheritWorkspace')"
+              testid="copilot-write-location"
+            />
 
             <!--
               Widgets, at the end of the same section, and as checkboxes rather than the toggles

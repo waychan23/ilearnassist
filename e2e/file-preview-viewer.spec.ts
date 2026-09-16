@@ -79,6 +79,30 @@ async function openLibrary(page: Page): Promise<void> {
   await expect(page.getByTestId("sources-dialog")).toBeVisible();
 }
 
+/**
+ * The sources dialog, narrowed to *uploads*.
+ *
+ * It used to be the uploads list and nothing else, so a name was enough to find a row. It is a
+ * browser over every source the account holds now, and this file seeds the same names as
+ * workspace files (that is how the tree cases above work) — so a lookup by name alone is
+ * ambiguous, and the filter that tells them apart is the one the dialog was given for it.
+ */
+async function openUploads(page: Page, name: string): Promise<void> {
+  await openLibrary(page);
+  await page.getByTestId("sources-filter-origin").selectOption("session_attachment");
+  /*
+   * Wait for the filtered list to *arrive* before anything is clicked.
+   *
+   * `selectOption` returns as soon as the change is dispatched; the list is re-fetched, so for
+   * a moment the dialog still shows the unfiltered rows — and a click aimed at "the row called
+   * doc.pdf" then resolves to several. Counting first is what makes the click unambiguous
+   * rather than lucky.
+   */
+  await expect(
+    page.getByTestId("source-row").filter({ hasText: name })
+  ).toHaveCount(1);
+}
+
 /** Open one file from the tree by name, and wait for its dialog. */
 async function openFile(page: Page, name: string): Promise<void> {
   await page.getByTestId("file-row").filter({ hasText: name }).first().click();
@@ -128,7 +152,7 @@ test("an uploaded image opens in the viewer, over the list it came from", async 
    * files dialog offered nothing but a delete button.
    */
   await seedSource(request, "shot.png", "image/png", ONE_PX_PNG);
-  await openLibrary(page);
+  await openUploads(page, "shot.png");
 
   await page.getByTestId("source-open").filter({ hasText: "shot.png" }).click();
 
@@ -152,7 +176,7 @@ test("an uploaded PDF opens in the viewer", async ({ page, request }) => {
   // The same route with a format that has no text fallback at all: a PDF's bytes are the only
   // thing that can show it, which is the shape the sources list could not reach before.
   await seedSource(request, "doc.pdf", "application/pdf", buildPdf(["Viewer fixture"]));
-  await openLibrary(page);
+  await openUploads(page, "doc.pdf");
 
   await page.getByTestId("source-open").filter({ hasText: "doc.pdf" }).click();
 

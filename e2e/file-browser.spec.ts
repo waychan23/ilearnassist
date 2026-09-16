@@ -121,6 +121,13 @@ test("the tree picks up a change on refresh, and after a turn", async ({ page, r
    * re-read when one ends. This is the only way to test it — the refresh is triggered by the
    * turn finishing, which means a turn has to actually finish.
    */
+  /*
+   * `location: "workspace"` is named, and it has to be. This tree browses `workdir/`, and the
+   * default an unqualified write gets is the **conversation's** folder — a product decision, not
+   * an accident (see `docs/sources.md`). The subject here is the post-turn re-read, so the file
+   * the turn writes is the one this panel shows; the default is covered by the server's own
+   * tests, and by the case below.
+   */
   await scriptLlm(request, {
     title: "写一个文件",
     turns: [
@@ -130,7 +137,7 @@ test("the tree picks up a change on refresh, and after a turn", async ({ page, r
           {
             id: "call_1",
             name: "write_file",
-            args: { path: "written-by-agent.txt", content: "done" },
+            args: { path: "written-by-agent.txt", content: "done", location: "workspace" },
           },
         ],
       },
@@ -252,4 +259,49 @@ test("source files are highlighted, and Markdown can be read as source", async (
   // Switching back restores the rendered view.
   await page.getByTestId("file-preview-rendered").click();
   await expect(body.locator(".markdown h1")).toBeVisible();
+});
+
+/**
+ * The default an unqualified write gets, and where it lands.
+ *
+ * The mirror image of the case above: the same kind of turn, with no `location` at all, and the
+ * file is **not** in this tree. That is the setting doing its job — a workspace directory every
+ * conversation writes into becomes a junk drawer — and it is the visible half of a product
+ * decision, so it is worth a browser spec rather than a unit test alone. The conversation-files
+ * dialog is where the file does appear.
+ */
+test("an unqualified write goes to the conversation, not the workspace tree", async ({
+  page,
+  request,
+}) => {
+  await seedWorkspace(request, "默认写入位置");
+  await page.goto("/");
+  await enterWorkspace(page, "默认写入位置");
+
+  await scriptLlm(request, {
+    title: "写一个文件",
+    turns: [
+      {
+        content: "我把它写下来。",
+        toolCalls: [
+          { id: "call_1", name: "write_file", args: { path: "mine.txt", content: "done" } },
+        ],
+      },
+      { content: "文件已保存。" },
+    ],
+  });
+
+  await page.getByTestId("composer-input").fill("帮我写一个文件");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("文件已保存。");
+
+  // Not in the workspace tree…
+  await openFilesTab(page);
+  await expect(page.getByTestId("file-row").filter({ hasText: "mine.txt" })).toHaveCount(0);
+
+  // …but there, in the conversation's own folder.
+  await page.getByTestId("open-session-files").click();
+  await expect(
+    page.getByTestId("session-files").getByTestId("session-file-row").filter({ hasText: "mine.txt" })
+  ).toBeVisible();
 });

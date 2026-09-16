@@ -24,6 +24,7 @@ export default {
     confirm: "确认",
     cancel: "取消",
     create: "创建",
+    add: "添加",
     delete: "删除",
     name: "名称",
     copied: "已复制",
@@ -266,7 +267,15 @@ export default {
       "有 {count} 个附件解析失败，模型将无法读取其内容。可点击附件的重新解析按钮重试，或先在「设置 → 文档解析」中配置云解析服务。",
     visionWarning:
       "当前模型「{model}」未标记支持图片输入，图片将以文字占位符发送。可在「设置 → Providers」中为它勾选「图片输入」。",
-    placeholder: "输入消息，Enter 发送，Shift+Enter 换行",
+    /*
+     * The `@` is written as `{'@'}` because vue-i18n reads a bare one as a *linked message*
+     * (`@:key`), and a message it cannot compile throws at render time — which takes down the
+     * whole component the message is in. Same rule as a literal `|` in a plural.
+     */
+    placeholder: "输入消息，Enter 发送，Shift+Enter 换行；输入 {'@'} 可引用资料",
+    /** The `@` picker: nothing matched what has been typed, and nothing exists to match. */
+    noSourceMatch: "没有匹配的资料。",
+    noSources: "还没有可引用的资料。",
     thinking: "Agent 正在思考…",
     parsingShort: "附件解析中…",
     send: "发送 (Enter)",
@@ -330,6 +339,19 @@ export default {
     /** The accessible name of the tree; the rows carry their own names. */
     treeLabel: "工作区文件",
     retry: "重试",
+    /*
+     * The file manager. Four verbs, because a web app has no Finder behind it: without these
+     * the workdir is a directory the agent writes into and the user can only look at.
+     */
+    newFolder: "新建文件夹",
+    newFolderHint: "相对于当前目录的文件夹名称。",
+    upload: "上传文件",
+    rename: "重命名或移动",
+    renameHint: "相对于工作区根目录的路径。输入新路径即可移动。",
+    deleteTitle: "删除这个文件？",
+    deleteDirectoryTitle: "删除这个文件夹？",
+    deleteMessage: "「{name}」将从工作区中移除。文件会保留在回收目录中，但这里不再显示。",
+    deleteDirectoryMessage: "「{name}」将从工作区中移除。只有空文件夹可以这样删除。",
     preview: {
       loading: "正在读取…",
       /** Markdown's two views. Rendered first, because reading a document is the common case;
@@ -433,6 +455,7 @@ export default {
     name: {
       web_search: "网页搜索",
       web_fetch: "读取网页",
+      ila_collect_page: "收藏网页",
       list_files: "列出文件",
       read_file: "读取文件",
       write_file: "写入文件",
@@ -699,18 +722,30 @@ export default {
   },
 
 
+  /*
+   * The installation's own settings, and the one word that used to point at them.
+   *
+   * The dialog that held these screens is gone — providers and models, parsers and the app
+   * defaults are the platform console's, because they are shared by every account and only an
+   * administrator may write them. What was left here was `installationMoved`, a sentence the
+   * Copilot list drew for an administrator who came looking for the provider list; it is gone
+   * too, because a list of templates is not where a pointer to the console belongs when the
+   * sidebar's own menu already has one.
+   */
   settings: {
     /**
-     * Where the installation's own settings went, shown only to an account that can reach them.
-     * Nothing was removed — providers and models, parsers and the app defaults are the platform
-     * console's screens now, because they are shared by every account and only an administrator
-     * may write them.
-     *
-     * This namespace has no dialog of its own any more: what is left of it is the console's
-     * sections and this one pointer, which the Copilot list shows. The key stays `settings.`
-     * because the installation's settings are still what it is about.
+     * Where an unqualified file write lands. The three levels that ask this question — a
+     * workspace, a Copilot, a conversation — share these words, and the caller supplies what
+     * "inherit" means at its own level.
      */
-    installationMoved: "模型服务与文档解析由平台管理统一配置。",
+    writeLocation: {
+      label: "文件写入位置",
+      workspace: "写入工作区（所有会话共享）",
+      session: "写入会话（仅本会话可见）",
+      hint: "这是默认位置：你在对话里明确说明时，以你的说明为准。",
+      inheritWorkspace: "跟随工作区设置",
+      inheritBuiltIn: "默认（写入会话）",
+    },
     providers: {
       countConfigured: "已配置 {count} 个 Provider",
       add: "新建 Provider",
@@ -1152,6 +1187,8 @@ export default {
     INVALID_FILE_PATH: "这个位置不在工作区内，无法访问。",
     NOT_A_DIRECTORY: "该路径不是一个目录。",
     NOT_A_FILE: "该路径不是一个文件。",
+    FILE_EXISTS: "这个名字已经被占用了，请换一个名字。",
+    PAGE_FETCH_FAILED: "无法保存这个网页链接：{detail}",
     UNAUTHENTICATED: "登录已失效，请重新登录。",
     USERNAME_REQUIRED: "用户名不能为空。",
     USERNAME_TOO_LONG: "用户名不能超过 {max} 个字符。",
@@ -1198,11 +1235,10 @@ export default {
    * reads as tidying up something already gone.
    */
   sources: {
-    title: "已上传的文件",
-    lead: "这些是你上传过的全部文件，属于你的账号，不属于某一次对话。同一个文件在多个对话里被引用时，只会保存和解析一次。",
+    title: "资料源",
     open: "已上传的文件",
     loading: "读取中…",
-    empty: "还没有上传过文件。在输入框点回形针、或直接粘贴截图即可上传。",
+    empty: "没有符合条件的资料。",
     parsed: "已解析",
     parsedChars: "已解析 {count} 字",
     parsing: "解析中…",
@@ -1210,6 +1246,48 @@ export default {
     /** The accessible name of a row's open control. The name is in it because the row's own
      *  label is truncated, so this is also the only place a long filename is readable whole. */
     preview: "预览 {name}",
+    search: "搜索",
+    searchHint: "按名称查找",
+    filterWorkspace: "工作区",
+    filterSession: "会话",
+    filterCategory: "内容类型",
+    filterOrigin: "来源",
+    filterMime: "MIME 类型",
+    allWorkspaces: "全部工作区",
+    allSessions: "全部会话",
+    allCategories: "全部类型",
+    allOrigins: "全部来源",
+    allMimes: "全部 MIME",
+    viewFlat: "列表",
+    viewTree: "树状",
+    expandAll: "展开全部",
+    collapseAll: "收起全部",
+    add: "添加资料",
+    addLink: "添加链接",
+    addLinkLabel: "网页地址",
+    viewLabel: "视图",
+    /** The chat topbar's entry point: the browser, already narrowed to this workspace. */
+    workspaceScope: "本工作区的资料",
+    /** The four origin values, as the filter and every row's byline spell them. */
+    origin: {
+      session_attachment: "会话附件",
+      workspace_upload: "工作区上传",
+      agent_workspace: "助理写入工作区",
+      agent_session: "助理写入会话",
+      web: "网页",
+      discovered: "已有文件",
+    },
+    /** The coarse content types. A closed set, so a key per value rather than a pattern. */
+    category: {
+      page: "网页",
+      text: "文本",
+      markdown: "Markdown",
+      code: "代码",
+      diagram: "图表",
+      image: "图片",
+      document: "文档",
+      other: "其他",
+    },
     delete: {
       title: "删除文件",
       message: "确定要删除「{name}」吗？",

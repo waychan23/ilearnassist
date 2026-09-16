@@ -744,6 +744,32 @@ describe("schema versioning", () => {
     }
   });
 
+  it("gains the workspace settings column on an existing file of the current version", () => {
+    /*
+     * `ensureColumn`, not the version bump: adding a column is additive, and NULL is exactly
+     * what a row written before it existed means — "nobody has chosen". This is the column the
+     * write location needs, and a workspace from before it must read as "no opinion" rather
+     * than as a value nobody set.
+     */
+    const path = join(root, "pre-settings.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    const raw = new Database(path);
+    raw.exec(
+      "CREATE TABLE workspaces (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, slug TEXT NOT NULL, dir_path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)"
+    );
+    raw.close();
+
+    const opened = createDb(path);
+    try {
+      const columns = (
+        opened.raw.prepare("PRAGMA table_info(workspaces)").all() as { name: string }[]
+      ).map((c) => c.name);
+      expect(columns).toContain("settings");
+    } finally {
+      opened.raw.close();
+    }
+  });
+
   it("gains the counters table on an existing file of the current version", () => {
     // The claim that a new *table* needs no `SCHEMA_VERSION` bump — the DDL runs on every
     // open, so a database created before the table existed simply gains it. The bump rule

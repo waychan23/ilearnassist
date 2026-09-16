@@ -2,8 +2,10 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+import type { FileLocation } from "../../api/types";
 import Icon from "../Icon.vue";
 import GenerationParams from "../GenerationParams.vue";
+import WriteLocationField from "../WriteLocationField.vue";
 import WidgetToggleList from "./WidgetToggleList.vue";
 
 const emit = defineEmits<{ close: [] }>();
@@ -29,6 +31,32 @@ watch(
 /** The seven generation parameters, which are the shared form's business now. */
 const params = ref<InstanceType<typeof GenerationParams> | null>(null);
 
+/**
+ * Where this conversation's unqualified writes go, or `null` for "follow the workspace".
+ *
+ * Its own control rather than a ninth field in `GenerationParams`, because it is not a
+ * generation parameter: that form is also the Copilot editor's, where a session-scoped
+ * behaviour setting would be a sentence about an object that does not exist yet. It is saved
+ * through `updateSettings` like the rest, since the server merges settings rather than
+ * replacing them — which is what lets this field and `commit()` be written in one call.
+ */
+const writeLocation = ref<FileLocation | null>(null);
+watch(
+  () => store.sessionSettings.writeLocation ?? null,
+  (v) => {
+    writeLocation.value = v;
+  },
+  { immediate: true }
+);
+
+/** What this level inherits from, in words — the workspace's choice, or the built-in default. */
+const inheritLabel = computed(() => {
+  const fromWorkspace = store.activeWorkspace?.settings?.writeLocation;
+  return fromWorkspace
+    ? t("settings.writeLocation.inheritWorkspace")
+    : t("settings.writeLocation.inheritBuiltIn");
+});
+
 // `sessionSettings` already falls back to the staged draft settings, so this works both for a
 // live session and for the welcome screen.
 watch(
@@ -38,13 +66,17 @@ watch(
 );
 
 function save() {
-  void store.updateSettings(params.value?.commit() ?? {});
+  void store.updateSettings({
+    ...(params.value?.commit() ?? {}),
+    writeLocation: writeLocation.value,
+  });
   if (store.activeSession) void store.updateSessionPrompt(prompt.value);
   emit("close");
 }
 
 function reset() {
   params.value?.load({});
+  writeLocation.value = null;
   // Empty means the built-in assistant prompt, which is the same "inherit" the fields above
   // express — there is nothing above the conversation left to inherit a persona from.
   prompt.value = "";
@@ -99,6 +131,18 @@ const scopeNote = computed(() =>
           </div>
 
           <GenerationParams ref="params" />
+
+          <!--
+            The write location, between the generation parameters and the widgets: it is a
+            setting of the conversation like those, and unlike the persona above it can be
+            changed for a conversation that does not exist yet — the value is carried onto the
+            session when one is created.
+          -->
+          <WriteLocationField
+            v-model="writeLocation"
+            :inherit-label="inheritLabel"
+            testid="session-write-location"
+          />
 
           <!--
             The session's widgets, with a toggle per widget rather than the checkbox list the

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import type { Attachment, Source } from "@ilearnassist/shared";
-import { resolveInSources } from "../attachments.js";
+import { resolveSourceBytes } from "../sourcePaths.js";
 import type { AppConfig } from "../config.js";
 import { readDocumentParsing, type AppDb, type SourceRecord } from "../db.js";
 import type { UserLayout } from "../paths.js";
@@ -92,10 +92,15 @@ export class DocumentService {
    * Writes `pending` before returning so a status poll issued immediately after the upload
    * response sees a real state rather than a gap between the two.
    */
-  async schedule(user: UserLayout, userId: string, source: SourceRecord): Promise<void> {
+  async schedule(
+    user: UserLayout,
+    userId: string,
+    source: SourceRecord,
+    workspaceRoot: string
+  ): Promise<void> {
     if (!this.handles(source)) return;
     this.#db.updateSourceParse(source.id, userId, { status: "pending" });
-    this.#enqueue(source.id, () => this.#execute(user, userId, source));
+    this.#enqueue(source.id, () => this.#execute(user, userId, source, workspaceRoot));
   }
 
   /**
@@ -104,14 +109,19 @@ export class DocumentService {
    * Cancels any run already in flight for the same source: two writers racing for the same
    * text file is how a stale result overwrites a fresh one.
    */
-  async reparse(user: UserLayout, userId: string, source: SourceRecord): Promise<void> {
+  async reparse(
+    user: UserLayout,
+    userId: string,
+    source: SourceRecord,
+    workspaceRoot: string
+  ): Promise<void> {
     if (!this.handles(source)) {
       throw new ParseError("unsupported_type", `${source.name} 不是可解析的文档类型。`);
     }
     this.#cancel(source.id);
     await removeParsedText(user, source.id).catch(() => undefined);
     this.#db.updateSourceParse(source.id, userId, { status: "pending" });
-    this.#enqueue(source.id, () => this.#execute(user, userId, source));
+    this.#enqueue(source.id, () => this.#execute(user, userId, source, workspaceRoot));
   }
 
   /**
@@ -198,13 +208,18 @@ export class DocumentService {
    * Failures are recorded rather than thrown: this runs detached from any request, so the
    * only place a user can learn what happened is the source's row.
    */
-  async #execute(user: UserLayout, userId: string, source: SourceRecord): Promise<void> {
+  async #execute(
+    user: UserLayout,
+    userId: string,
+    source: SourceRecord,
+    workspaceRoot: string
+  ): Promise<void> {
     const controller = new AbortController();
     this.#inFlight.set(source.id, controller);
 
     // The stored path is ours, but read it back through the same containment check every
     // other reader uses: a row is not a trust boundary, and this one holds a filesystem path.
-    const path = resolveInSources(user, source.rawPath);
+    const path = resolveSourceBytes(user, source, workspaceRoot);
     if (!path) {
       this.#db.updateSourceParse(source.id, userId, {
         status: "failed",

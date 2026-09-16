@@ -11,6 +11,7 @@ import {
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
+import type { SourceFilterQuery } from "../api/client";
 import { fileViewerSupported } from "../utils/fileViewer";
 import {
   closeCopilots,
@@ -221,6 +222,18 @@ export const useAppStore = defineStore("app", () => {
 
   /** Uploaded-but-not-yet-sent attachments for the composer. */
   const pendingAttachments = ref<Attachment[]>([]);
+
+  /**
+   * Sources the user referenced with `@`, staged for the next turn.
+   *
+   * Beside the attachments rather than merged into them, because the two say different things
+   * on screen: a chip the user uploaded for this turn, and one they pointed at. Both reach the
+   * model as material; only the provenance differs, and only the client shows it.
+   *
+   * Held as whole rows rather than ids, so a chip can carry the parse state it already had —
+   * a reference to a document that is still being extracted is a chip that should say so.
+   */
+  const pendingSources = ref<Source[]>([]);
 
   /**
    * Live parse state per source id, as the server last reported it.
@@ -898,6 +911,111 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * A listing the tree must not trust any more.
+   *
+   * The tree caches one listing per directory and `loadDirectory` returns early for a path it
+   * already has, so a write that changed a directory *nobody has open* — moving a file into a
+   * collapsed one, deleting a subtree — would leave a stale cache that re-expanding would
+   * serve without ever asking the server. Dropping the entry is what makes the next expand a
+   * real read.
+   */
+  function invalidateListing(path: string): void {
+    if (fileListings.value[path] === undefined) return;
+    const next = { ...fileListings.value };
+    delete next[path];
+    fileListings.value = next;
+  }
+
+  /** The directory a path lives in. `""` for a top-level entry, and for the root itself. */
+  function parentOf(path: string): string {
+    const cut = path.lastIndexOf("/");
+    return cut === -1 ? "" : path.slice(0, cut);
+  }
+
+  /**
+   * The four file-manager writes.
+   *
+   * Each reports its own failure into the tree panel rather than the toast, on the rule the
+   * rest of the file browser follows: a write the user asked for has one obvious home for its
+   * error, and it is the panel the action was taken in. Each then *re-reads the tree*, because
+   * the point of the action is what the tree shows afterwards — a create that leaves the row
+   * missing is indistinguishable from a create that failed.
+   *
+   * The `await` order matters. `refreshFileTree` runs after the write resolved and after the
+   * affected listings were dropped, so it re-reads the directories that actually changed
+   * rather than the ones that were open a moment ago.
+   */
+  async function createFolder(dirPath: string, name: string): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) return;
+    const path = dirPath ? `${dirPath}/${name}` : name;
+    try {
+      await api.createWorkspaceDirectory(workspaceId, path);
+    } catch (e) {
+      fileTreeError.value = messageOf(e);
+      return;
+    }
+    invalidateListing(dirPath);
+    await refreshFileTree();
+  }
+
+  async function uploadToFolder(dirPath: string, file: File): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) return;
+    try {
+      const data = await fileToBase64(file);
+      await api.uploadWorkspaceFile(workspaceId, {
+        dir: dirPath,
+        name: file.name,
+        mimeType: file.type || undefined,
+        data,
+      });
+    } catch (e) {
+      fileTreeError.value = messageOf(e);
+      return;
+    }
+    invalidateListing(dirPath);
+    await refreshFileTree();
+  }
+
+  /**
+   * Move or rename, and take the cached listings with it.
+   *
+   * Both ends are invalidated, and the moved path *itself* when it was a directory — its
+   * listing is cached under a path that no longer exists, and leaving it would mean the next
+   * expand of the new path re-fetching while the old one lingers.
+   */
+  async function moveEntry(from: string, to: string): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId || !to.trim() || to === from) return;
+    try {
+      await api.moveWorkspaceEntry(workspaceId, { from, to });
+    } catch (e) {
+      fileTreeError.value = messageOf(e);
+      return;
+    }
+    invalidateListing(parentOf(from));
+    invalidateListing(parentOf(to));
+    invalidateListing(from);
+    await refreshFileTree();
+  }
+
+  async function deleteEntry(path: string): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) return;
+    try {
+      await api.deleteWorkspaceEntry(workspaceId, path);
+    } catch (e) {
+      fileTreeError.value = messageOf(e);
+      return;
+    }
+    invalidateListing(parentOf(path));
+    invalidateListing(path);
+    fileExpanded.value = fileExpanded.value.filter((p) => p !== path && !p.startsWith(`${path}/`));
+    await refreshFileTree();
+  }
+
+  /**
    * An uploaded file, open in the same dialog as a workspace one.
    *
    * Its own entry point rather than a `root` argument to `openFile`, because a source is not
@@ -1459,7 +1577,7 @@ export const useAppStore = defineStore("app", () => {
   function mergeParseStatus(sources: Source[]): void {
     const byId = new Map(sources.map((s) => [s.id, s]));
     parseStatus.value = { ...parseStatus.value, ...Object.fromEntries(byId) };
-    pendingAttachments.value = pendingAttachments.value.map((attachment) => {
+    const fold = <T extends Attachment>(attachment: T): T => {
       const source = byId.get(attachment.id);
       if (!source) return attachment;
       return {
@@ -1470,7 +1588,9 @@ export const useAppStore = defineStore("app", () => {
         parsedChars: source.parsedChars,
         pageCount: source.pageCount,
       };
-    });
+    };
+    pendingAttachments.value = pendingAttachments.value.map(fold);
+    pendingSources.value = pendingSources.value.map(fold);
   }
 
   /**
@@ -1486,6 +1606,19 @@ export const useAppStore = defineStore("app", () => {
     const tick = async (): Promise<void> => {
       try {
         const sources = await api.listSessionSources(sessionId);
+        /*
+         * A referenced source is not in that list yet — the link is written when the turn is
+         * sent — so it is asked for by id. Read individually rather than by widening the list
+         * route: there are a handful of them, and the alternative is a route that answers a
+         * question about a conversation with material that is not the conversation's.
+         */
+        const referenced = pendingSources.value.filter(isSettling);
+        if (referenced.length > 0) {
+          const rows = await Promise.all(
+            referenced.map((source) => api.getSource(source.id).catch(() => null))
+          );
+          mergeParseStatus(rows.filter((row): row is Source => row !== null));
+        }
         mergeParseStatus(sources);
         for (const id of [...markingParsing.value]) {
           const status = sources.find((s) => s.id === id)?.parseStatus;
@@ -1495,7 +1628,13 @@ export const useAppStore = defineStore("app", () => {
         // A failed poll is not worth surfacing — the next one usually succeeds, and the
         // attachment chip keeps showing the last known state either way.
       }
-      if (!pendingAttachments.value.some(isSettling) && !also()) stopParsePolling();
+      if (
+        !pendingAttachments.value.some(isSettling) &&
+        !pendingSources.value.some(isSettling) &&
+        !also()
+      ) {
+        stopParsePolling();
+      }
     };
 
     parsePoll = setInterval(() => void tick(), 1500);
@@ -1545,20 +1684,25 @@ export const useAppStore = defineStore("app", () => {
   /* ------------------------------ uploaded files ---------------------------- */
 
   /**
-   * Read the account's uploaded files.
+   * Read the account's sources, filtered.
    *
    * Errors go to `sourcesError` rather than the toast: the dialog is open and the user asked
-   * for this, so the place to say it failed is where they are looking.
+   * for this, so the place to say it failed is where they are looking — which is also why the
+   * previous list is *kept* on a failure rather than cleared. A filter that fails to apply
+   * should leave the reader looking at what they had, not at an empty panel.
+   *
+   * `silent` is for a re-read nobody asked for: the post-delete refresh, where a failure has
+   * the delete's own report to ride on. Two errors for one action is one too many.
    */
-  async function loadSources(): Promise<void> {
-    sourcesLoading.value = true;
-    sourcesError.value = null;
+  async function loadSources(filter: SourceFilterQuery = {}, options: { silent?: boolean } = {}): Promise<void> {
+    if (!options.silent) sourcesLoading.value = true;
+    if (!options.silent) sourcesError.value = null;
     try {
-      sources.value = await api.listSources();
+      sources.value = await api.listSources(filter);
     } catch (e) {
-      sourcesError.value = messageOf(e);
+      if (!options.silent) sourcesError.value = messageOf(e);
     } finally {
-      sourcesLoading.value = false;
+      if (!options.silent) sourcesLoading.value = false;
     }
   }
 
@@ -1629,6 +1773,58 @@ export const useAppStore = defineStore("app", () => {
     } catch (e) {
       sourcesError.value = messageOf(e);
     }
+  }
+
+  /**
+   * Reference a source in the next turn, the way `@` names it.
+   *
+   * An unparsed document is extracted first, because the requirement is exact about it: a
+   * model may only read a source that has been parsed, so pointing at one has to *make* it
+   * readable rather than hand the model a name. The chip shows the state while that runs and
+   * the composer waits on it, which is the same shape an attachment already has.
+   *
+   * Already-referenced is a no-op rather than a second chip: the reference is the pair, and
+   * two chips for one file would be two references in one turn.
+   */
+  async function referenceSource(source: Source): Promise<void> {
+    if (pendingSources.value.some((s) => s.id === source.id)) return;
+    pendingSources.value = [...pendingSources.value, source];
+
+    if (!isSettling(source) || !needsExtraction(source)) return;
+    try {
+      await api.reparseSource(source.id, source.name);
+      markingParsing.value.add(source.id);
+      markSourceParsing(source.id);
+      startParsePolling(activeSessionId.value ?? "");
+    } catch (e) {
+      // A parse that could not be *started* is reported, unlike one that failed: the chip
+      // would otherwise sit at "pending" forever with nothing running.
+      setError(messageOf(e));
+    }
+  }
+
+  function removePendingSource(id: string): void {
+    pendingSources.value = pendingSources.value.filter((s) => s.id !== id);
+  }
+
+  function clearPendingSources(): void {
+    pendingSources.value = [];
+  }
+
+  /** Whether this source is one a model can only read after extraction. */
+  function needsExtraction(source: Source): boolean {
+    return source.category === "document" || source.category === "image";
+  }
+
+  /** Show a source as parsing in both the staged list and the live overlay. */
+  function markSourceParsing(id: string): void {
+    pendingSources.value = pendingSources.value.map((s) =>
+      s.id === id ? { ...s, parseStatus: "pending" } : s
+    );
+    parseStatus.value = {
+      ...parseStatus.value,
+      [id]: { ...parseStatus.value[id], ...pendingSources.value.find((s) => s.id === id) } as Source,
+    };
   }
 
   async function reparseAttachment(attachment: Attachment): Promise<void> {
@@ -1955,7 +2151,11 @@ export const useAppStore = defineStore("app", () => {
     chatExtras: Partial<ChatInput> = {}
   ): Promise<void> {
     const content = text.trim();
-    if ((!content && attachments.length === 0) || streaming.value.active) return;
+    // A reference counts as something to send, on the same footing as an attachment: pointing
+    // at a file is a turn, even when the sentence around it is empty.
+    const references = [...pendingSources.value];
+    if ((!content && attachments.length === 0 && references.length === 0) || streaming.value.active)
+      return;
 
     // Auto-create a session if the user is on a fresh workspace.
     if (!activeSessionId.value) {
@@ -1980,10 +2180,12 @@ export const useAppStore = defineStore("app", () => {
       role: "user",
       content,
       attachments: attachments.length > 0 ? attachments : undefined,
+      sources: references.length > 0 ? references : undefined,
       createdAt: new Date().toISOString(),
     });
 
     clearPendingAttachments();
+    clearPendingSources();
     streaming.value = { ...EMPTY_STREAMING(), active: true };
     emitWidgetEvent({ type: "turn.started", sessionId });
 
@@ -1991,6 +2193,11 @@ export const useAppStore = defineStore("app", () => {
       streamChat(sessionId, {
         message: content,
         attachments,
+        // Ids and the names the composer showed: everything else about a source is re-read
+        // server-side, the same split an attachment makes.
+        sources: references.length > 0
+          ? references.map((source) => ({ id: source.id, name: source.name }))
+          : undefined,
         ...chatExtras,
       }),
       sessionId
@@ -2115,6 +2322,7 @@ export const useAppStore = defineStore("app", () => {
     activeCopilotId,
     draftSettings,
     pendingAttachments,
+    pendingSources,
     parseStatus,
     parserKinds,
     streaming,
@@ -2191,6 +2399,9 @@ export const useAppStore = defineStore("app", () => {
     testDocumentParser,
     setDocumentParsing,
     uploadAttachment,
+    referenceSource,
+    removePendingSource,
+    clearPendingSources,
     reparseAttachment,
     removePendingAttachment,
     clearPendingAttachments,
@@ -2204,6 +2415,10 @@ export const useAppStore = defineStore("app", () => {
     loadDirectory,
     toggleDirectory,
     refreshFileTree,
+    createFolder,
+    uploadToFolder,
+    moveEntry,
+    deleteEntry,
     openFile,
     openSourceFile,
     closeFile,

@@ -9,6 +9,7 @@ import {
   closeWidgetDrawer,
   openDrawer,
   openSessionFiles,
+  openSources,
   openWidgetDrawer,
   showWorkspaceHome,
   uiState,
@@ -441,6 +442,21 @@ onBeforeUnmount(() => {
         @click="openSessionFiles"
       >
         <Icon name="folder" />
+      </button>
+      <!--
+        The workspace's material, from here: the source browser pre-filtered to this
+        workspace, which is the second front door the requirement asks for. Distinct from the
+        folder beside it — that one is *this conversation's* files, this one is everything the
+        workspace holds, including what it inherited from its other conversations.
+      -->
+      <button
+        class="icon-btn"
+        data-testid="open-workspace-sources"
+        :title="t('sources.workspaceScope')"
+        :aria-label="t('sources.workspaceScope')"
+        @click="openSources({ workspaceId: store.activeWorkspaceId ?? undefined })"
+      >
+        <Icon name="layers" />
       </button>
 
       <div class="title-block">

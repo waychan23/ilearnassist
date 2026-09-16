@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { join, relative, resolve as resolvePath, extname } from "node:path";
+import { join, extname } from "node:path";
 import type { Attachment } from "@ilearnassist/shared";
 import { isDocumentMime } from "./documents/formats.js";
 import { readParsedTextHead } from "./documents/store.js";
+import { sourceRawPath } from "./sourcePaths.js";
 import type { UserLayout } from "./paths.js";
-import { isSafeId } from "./ids.js";
 
 /**
  * Uploaded files. Bytes live at `<userRoot>/sources/raw/<sourceId>.<ext>`, extracted text
@@ -23,73 +23,8 @@ import { isSafeId } from "./ids.js";
  * module-scope default would have to invent one.
  */
 
-/** Accepted MIME types → the extension used on disk. */
-const MIME_EXT: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/gif": "gif",
-  "text/plain": "txt",
-  "text/markdown": "md",
-  "text/csv": "csv",
-  "text/html": "html",
-  "text/css": "css",
-  "text/xml": "xml",
-  "application/xml": "xml",
-  "application/json": "json",
-  "application/javascript": "js",
-  "application/typescript": "ts",
-  "application/pdf": "pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-  "application/vnd.oasis.opendocument.text": "odt",
-  "application/vnd.oasis.opendocument.spreadsheet": "ods",
-};
-
-/** Filename extension → MIME type, used when the browser reports nothing useful. */
-const EXT_MIME: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-  gif: "image/gif",
-  txt: "text/plain",
-  md: "text/markdown",
-  csv: "text/csv",
-  html: "text/html",
-  htm: "text/html",
-  css: "text/css",
-  xml: "text/xml",
-  json: "application/json",
-  js: "application/javascript",
-  ts: "application/typescript",
-  pdf: "application/pdf",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  odt: "application/vnd.oasis.opendocument.text",
-  ods: "application/vnd.oasis.opendocument.spreadsheet",
-};
-
 /** Per-file cap on how much inlined text is handed to the model. */
 export const MAX_INLINE_CHARS = 20_000;
-
-export { isSafeId };
-
-/**
- * Pick the MIME type to trust: the browser's value when we support it, otherwise the
- * one implied by the filename extension. Returns undefined for unsupported files.
- */
-export function normalizeMime(name: string, mimeType: string | undefined): string | undefined {
-  if (mimeType && MIME_EXT[mimeType]) return mimeType;
-  const ext = extname(name).slice(1).toLowerCase();
-  return EXT_MIME[ext];
-}
-
-export function isSupportedMime(mimeType: string | undefined): mimeType is string {
-  return !!mimeType && mimeType in MIME_EXT;
-}
 
 export function kindFor(mimeType: string): Attachment["kind"] {
   return mimeType.startsWith("image/") ? "image" : "file";
@@ -117,30 +52,6 @@ export function sha256Of(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** Absolute path for a source's bytes. Throws if the id or the MIME type is unusable. */
-export function sourceRawPath(user: UserLayout, sourceId: string, mimeType: string): string {
-  if (!isSafeId(sourceId)) throw new Error("Invalid source id.");
-  const ext = MIME_EXT[mimeType];
-  if (!ext) throw new Error(`Unsupported source type: ${mimeType}`);
-  return join(user.rawDir, `${sourceId}.${ext}`);
-}
-
-/**
- * Resolve a stored path, refusing anything outside this account's sources tree.
- *
- * Every read of a `sources.raw_path` goes through here even though the value is one this
- * code wrote. A database row is not a trust boundary: `raw_path` travels through backups and
- * exports, and any future bug that let a request write one column would otherwise turn a
- * stored path into an arbitrary file read. Mirrors `resolveInWorkspace`.
- */
-export function resolveInSources(user: UserLayout, storedPath: string): string | undefined {
-  const root = resolvePath(user.sourcesRoot);
-  const full = resolvePath(storedPath);
-  const rel = relative(root, full);
-  if (!rel || rel.startsWith("..") || resolvePath(root, rel) !== full) return undefined;
-  return full;
-}
-
 export async function readAsDataUrl(path: string, mimeType: string): Promise<string> {
   const buf = await fs.readFile(path);
   return `data:${mimeType};base64,${buf.toString("base64")}`;
@@ -160,6 +71,20 @@ export const PREVIEW_CHARS = 4_000;
 export interface BuildContentOptions {
   /** Whose sources tree to read from. Derived per request, never held. */
   user: UserLayout;
+  /**
+   * Where each attachment's bytes actually are, by id — for the ones that are not uploads.
+   *
+   * An attachment is a snapshot, and the snapshot was enough while a source was always an
+   * upload: its bytes are at `<id>.<ext>`, an expression this module can compute from the id
+   * and the MIME type alone. A file the agent wrote into a sandbox has no such path — its
+   * location is `storage` + `relPath` on a row — so the caller resolves those and hands them
+   * over. Absent, the derivation below is exactly what this module has always done.
+   *
+   * Paths rather than rows, because resolving one needs the workspace it lives in, and a turn
+   * may reference sources held by several: the caller is the side that knows, per row, and this
+   * module stays the side that knows what to *do* with a file once it has a path.
+   */
+  sourcePaths?: ReadonlyMap<string, string>;
   /** When false, images are replaced by a text placeholder instead of being sent. */
   vision: boolean;
   /**
@@ -194,13 +119,23 @@ export async function buildUserContent(
   if (text.trim()) blocks.push({ type: "text", text });
 
   for (const att of attachments) {
-    // Derived from the id and the MIME type rather than read from the row, so this module
-    // needs no database: `raw_path` is a cache of exactly this expression.
-    let path: string | undefined;
-    try {
-      path = sourceRawPath(opts.user, att.id, att.mimeType);
-    } catch {
-      path = undefined;
+    /*
+     * Where the bytes are, asked of the row when the caller has one and derived from the id
+     * and the MIME type when it does not.
+     *
+     * The derivation is the upload case and stays first only in the sense of being the
+     * fallback: a source whose row is in the map may live in either sandbox, and asking the
+     * row is the only way to know. Both answers are re-checked against a root before use —
+     * `resolveSourceBytes` for a row, and `sourceRawPath`'s own table for a derivation — so
+     * neither is a path this module trusts from the wire.
+     */
+    let path = opts.sourcePaths?.get(att.id);
+    if (path === undefined) {
+      try {
+        path = sourceRawPath(opts.user, att.id, att.mimeType);
+      } catch {
+        path = undefined;
+      }
     }
 
     if (att.kind === "image") {

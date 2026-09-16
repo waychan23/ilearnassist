@@ -1744,6 +1744,10 @@ body {
   justify-content: space-between;
   gap: var(--space-3);
   min-height: 84px;
+  /* The containing block for the `@` picker, which is positioned above this box. Without it
+     the picker resolves against whatever the nearest positioned ancestor happens to be and
+     renders somewhere off-screen — visible to the DOM, and not to the person typing. */
+  position: relative;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

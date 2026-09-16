@@ -12,6 +12,7 @@ import {
   QUIZ_TOOL_NAME,
   type Attachment,
   type ChatStreamEvent,
+  type FileLocation,
   type Message,
   type MessageUsage,
   type SessionSettings,
@@ -94,6 +95,27 @@ export interface RunAgentInput {
   /** Whose sources tree the attachment bytes live in. Derived per request, never held. */
   user: UserLayout;
   sessionId: string;
+  /**
+   * The conversation's own directory, named in the prompt so the model can see both of the
+   * folders it may write into. Derived the same way `turnContext` derives it for the file
+   * tools, and passed rather than recomputed because the prompt and the tools disagreeing
+   * about a path is a model that writes somewhere it was not told about.
+   */
+  sessionDirPath: string;
+  /** Where an unqualified write goes, resolved down the settings chain before the turn. */
+  writeLocation: FileLocation;
+  /**
+   * The filesystem path of every source this run might read, by id.
+   *
+   * Built by the caller because resolving one is a database read plus a sandbox check, and both
+   * callers of `buildUserContent` in here — the live turn and every replayed one — would
+   * otherwise repeat it per message. An id absent from the map falls back to the upload
+   * derivation, which is what an attachment has always been.
+   *
+   * It has to cover *history* as well as this turn: a file referenced three turns ago is
+   * replayed on every turn after it, and its path is not derivable from its id.
+   */
+  sourcePaths?: ReadonlyMap<string, string>;
   /** Whether the selected model accepts image input. */
   vision: boolean;
   /**
@@ -202,32 +224,67 @@ function safeParseArgs(json: string): Record<string, unknown> {
   }
 }
 
-function buildSystemPrompt(
-  workspace: Workspace,
-  systemPrompt: string,
-  planGuidance?: string,
-  quizGuidance?: string,
-  quizMakeupNote?: string
-): string {
+/**
+ * The prompt, as one object rather than five positional arguments.
+ *
+ * It was four optional strings appended in a fixed order; a fifth is where a caller starts
+ * passing them in the wrong order and nothing complains, because they are all `string`. The
+ * named form costs a few lines at three call sites and makes the next addition free.
+ */
+export interface SystemPromptInput {
+  workspace: Workspace;
+  /** The conversation's own directory: `<workspaceRoot>/sessions/<sessionId>`. */
+  sessionDirPath: string;
+  /** Where an unqualified write goes, already resolved down the settings chain. */
+  writeLocation: FileLocation;
+  persona: string;
+  planGuidance?: string;
+  quizGuidance?: string;
+  quizMakeupNote?: string;
+}
+
+function buildSystemPrompt(input: SystemPromptInput): string {
   const base =
-    systemPrompt.trim() ||
+    input.persona.trim() ||
     "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Do the same once you have produced a plan or another substantial artifact: put it to them for confirmation rather than assuming it is accepted. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
 
-  // `workdirPath`, not `dirPath`: the sandbox is the workspace's `workdir/`, and naming the
-  // parent here would tell the model that `sessions/` is inside the directory it may write
-  // to — a claim the tools would then refuse to honour.
+  /*
+   * Two folders, named, with the default spelled out.
+   *
+   * The sentence this replaces said "All file tools are sandboxed to this directory", which
+   * stopped being true the moment a file could be written into the conversation's own folder.
+   * A prompt that understates what the tools can do is not safer than one that overstates it —
+   * it is a model that never uses half of a feature, and an instructor that is wrong about the
+   * app it is running in.
+   *
+   * `workdirPath`, not `dirPath`, for the reason it always was: naming the workspace's parent
+   * would say `sessions/` is inside the sandbox, which the tools would then refuse to honour.
+   */
   const workspaceNote =
-    `\n\nThe user is working inside a workspace located at:\n${workspace.workdirPath}\n` +
-    `All file tools are sandboxed to this directory. Use paths relative to it ` +
-    `(or absolute paths under it). Never attempt to access files outside this directory.`;
+    `\n\nThe user is working inside a workspace. Two folders are writable:\n` +
+    `${input.workspace.workdirPath}\n` +
+    `  shared by every conversation in this workspace — use it for material the whole ` +
+    `workspace is about (a project, a codebase, a corpus), and for files the user says belong ` +
+    `to the workspace.\n` +
+    `${input.sessionDirPath}\n` +
+    `  this conversation's own folder — nothing else sees it. Use it for material that is about ` +
+    `this conversation, including anything you produce for the user to read here.\n` +
+    `File paths are relative to whichever of the two you are working in.\n` +
+    `A write with no stated location goes to the ${
+      input.writeLocation === "workspace" ? "shared workspace folder" : "conversation folder"
+    }. Pass location:"workspace" or location:"session" to choose deliberately, and follow an ` +
+    `explicit instruction from the user over this default. When a file belongs beside another ` +
+    `file the user referred to, write it into that file's folder. If you cannot tell which ` +
+    `folder a file belongs in, ask with ask_user rather than guessing. Never attempt to access ` +
+    `files outside these two folders.`;
 
   // Present while the plan widget is installed, whether or not a plan exists yet — the
   // rhythm starts the moment one is made.
-  const planNote = planGuidance ? `\n\n${planGuidance}` : "";
+  const planNote = input.planGuidance ? `\n\n${input.planGuidance}` : "";
   // Likewise for the quiz widget: installed or not is the whole switch.
-  const quizNote = quizGuidance ? `\n\n${quizGuidance}` : "";
+  const quizNote = input.quizGuidance ? `\n\n${input.quizGuidance}` : "";
   // One make-up turn's answer key, last: it is the most specific instruction in the prompt.
-  const makeupNote = quizMakeupNote ? `\n\n${quizMakeupNote}` : "";
+  const makeupNote = input.quizMakeupNote ? `\n\n${input.quizMakeupNote}` : "";
 
   return base + workspaceNote + planNote + quizNote + makeupNote;
 }
@@ -255,11 +312,22 @@ async function buildHistoryMessages(
 
   for (const m of history) {
     if (m.role === "user") {
-      const content = await buildUserContent(m.content, m.attachments, {
-        user: input.user,
-        vision: input.vision,
-        toolUse: input.toolUse,
-      });
+      /*
+       * References are replayed with attachments, because to the model the two are the same
+       * thing: material this turn is about. They are two columns rather than one so the *chips*
+       * can say which is which — a file the user uploaded for this turn, or one they pointed
+       * at — and that distinction is the client's, not the model's.
+       */
+      const content = await buildUserContent(
+        m.content,
+        [...(m.attachments ?? []), ...(m.sources ?? [])],
+        {
+          user: input.user,
+          vision: input.vision,
+          toolUse: input.toolUse,
+          sourcePaths: input.sourcePaths,
+        }
+      );
       out.push(new HumanMessage(content as string | UserContentBlock[]));
       continue;
     }
@@ -372,13 +440,15 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
   const messages: BaseMessage[] = [
     new SystemMessage(
-      buildSystemPrompt(
-        input.workspace,
-        input.systemPrompt,
-        input.planGuidance,
-        input.quizGuidance,
-        input.quizMakeupNote
-      )
+      buildSystemPrompt({
+        workspace: input.workspace,
+        sessionDirPath: input.sessionDirPath,
+        writeLocation: input.writeLocation,
+        persona: input.systemPrompt,
+        planGuidance: input.planGuidance,
+        quizGuidance: input.quizGuidance,
+        quizMakeupNote: input.quizMakeupNote,
+      })
     ),
     ...history,
   ];
@@ -390,6 +460,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       user: input.user,
       vision: input.vision,
       toolUse: input.toolUse,
+      sourcePaths: input.sourcePaths,
     });
     messages.push(new HumanMessage(userContent as string | UserContentBlock[]));
   }

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Attachment, ChatStreamEvent, Message, Session } from "@ilearnassist/shared";
+import type { Attachment, ChatStreamEvent, Message, Session, Workspace } from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
 import { eventTypes, parseSse } from "./helpers/sse.js";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
@@ -14,6 +14,17 @@ import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpe
  * messages. Only the model is fake. `inject()` captures the hijacked SSE response in full,
  * so no port is bound and the assertions run on the exact bytes the browser would receive.
  */
+
+/** The source fields these cases read, so the assertions do not rest on the whole wire type. */
+interface SourceRowish {
+  relPath?: string;
+  storage: string;
+  ownerKind: string;
+  origin: string;
+  category: string;
+  mimeType: string;
+  missing?: boolean;
+}
 
 let llm: FakeLlm;
 let env: TestEnv;
@@ -50,6 +61,28 @@ async function chat(sessionId: string, payload: Record<string, unknown>) {
   return { res, events: parseSse(res.body) as ChatStreamEvent[] };
 }
 
+/**
+ * The request the *turn* made, out of everything the fake LLM recorded.
+ *
+ * Not `requests()[0]`. The turn fires side calls of its own — the auto-titler, and the image
+ * summary pass — and a fire-and-forget one can land *after the test has reset the recorder*,
+ * so "the first request" is whichever of them got there first. Matching on the user's own words
+ * is what makes these assertions about the turn rather than about the race.
+ *
+ * `text` must therefore be unique to the calling test. The image-summary pass carries a sample
+ * of the conversation, so two image tests that both said "what is this" would have their side
+ * calls match each other's marker — which is exactly how this was found.
+ */
+function turnRequest(text: string): { messages: { role: string; content: unknown }[] } {
+  const found = llm
+    .requests()
+    .find((r) => JSON.stringify(r).includes(text)) as
+    | { messages: { role: string; content: unknown }[] }
+    | undefined;
+  if (!found) throw new Error(`no request carrying "${text}" was recorded`);
+  return found;
+}
+
 async function messagesOf(sessionId: string): Promise<Message[]> {
   return (await env.inject({ method: "GET", url: `/api/sessions/${sessionId}/messages` })).json<Message[]>();
 }
@@ -64,11 +97,21 @@ async function sessionOf(sessionId: string): Promise<Session> {
   return sessions.find((s) => s.id === sessionId)!;
 }
 
-async function freshSession(): Promise<{ session: Session; workdirPath: string }> {
+async function freshSession(): Promise<{
+  session: Session;
+  workdirPath: string;
+  sessionDirPath: string;
+  workspace: Workspace;
+}> {
   const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
   currentWorkspaceId = workspace.id;
   const session = await newSession(env, workspace.id);
-  return { session, workdirPath: workspace.workdirPath };
+  return {
+    session,
+    workspace,
+    workdirPath: workspace.workdirPath,
+    sessionDirPath: join(workspace.dirPath, "sessions", session.id),
+  };
 }
 
 describe("POST /api/sessions/:id/chat", () => {
@@ -133,7 +176,7 @@ describe("POST /api/sessions/:id/chat", () => {
   });
 
   it("runs a tool call and records it on the assistant message", async () => {
-    const { session, workdirPath } = await freshSession();
+    const { session, sessionDirPath } = await freshSession();
     llm.setTurns([
       { content: "Writing the file.", toolCalls: [{ id: "call_1", name: "write_file", args: { path: "out.txt", content: "done" } }] },
       { content: "Wrote it." },
@@ -157,14 +200,155 @@ describe("POST /api/sessions/:id/chat", () => {
     const started = events.find((e) => e.type === "tool_start") as { toolCall: { name: string } };
     expect(started.toolCall.name).toBe("write_file");
 
-    // The tool really ran, inside the session's own workspace.
-    expect(existsSync(join(workdirPath, "out.txt"))).toBe(true);
-    expect(readFileSync(join(workdirPath, "out.txt"), "utf8")).toBe("done");
+    /*
+     * The tool really ran, into the conversation's **own** folder — which is the default an
+     * unqualified write gets. It used to be the workspace's `workdir/`, and the change is the
+     * product decision the setting exists for: a workspace directory every conversation writes
+     * into becomes a junk drawer, so a file that is about one conversation belongs to it.
+     */
+    expect(existsSync(join(sessionDirPath, "out.txt"))).toBe(true);
+    expect(readFileSync(join(sessionDirPath, "out.txt"), "utf8")).toBe("done");
 
     const persisted = await messagesOf(session.id);
     expect(persisted[1]!.toolCalls).toHaveLength(1);
     expect(persisted[1]!.toolCalls![0]).toMatchObject({ name: "write_file" });
     expect(persisted[1]!.toolCalls![0]!.output).toContain("Wrote 4 characters");
+  });
+
+  it("leaves a source row for every file the turn writes", async () => {
+    /*
+     * The registry's end-to-end claim, through the real route rather than the registry's own
+     * test: a tool writes bytes, and the row that comes out has the same shape the file
+     * manager and the browser will read. What it pins beyond "a row exists" is the pair that a
+     * second implementation would get wrong — the file lands in the conversation's own folder,
+     * and the row says so (`storage`, `ownerKind`, `origin`), rather than claiming the
+     * workspace owns it or that somebody uploaded it.
+     */
+    const { session, sessionDirPath } = await freshSession();
+    llm.setTurns([
+      {
+        content: "Writing.",
+        toolCalls: [
+          { id: "call_1", name: "write_file", args: { path: "notes/a.md", content: "# hi" } },
+        ],
+      },
+      { content: "Done." },
+    ]);
+
+    await chat(session.id, { message: "write a file" });
+
+    const sources = (await env.inject({ method: "GET", url: "/api/sources" })).json<
+      SourceRowish[]
+    >();
+    const row = sources.find((s) => s.relPath === "notes/a.md")!;
+    expect(row).toBeTruthy();
+    expect(row.storage).toBe("session");
+    expect(row.ownerKind).toBe("session");
+    expect(row.origin).toBe("agent_session");
+    expect(row.category).toBe("markdown");
+    expect(row.mimeType).toBe("text/markdown");
+    expect(row.missing).toBe(false);
+    expect(existsSync(join(sessionDirPath, "notes/a.md"))).toBe(true);
+  });
+
+  it("records a workspace write as the workspace's", async () => {
+    // The other half of `fileOwner`, and the reason it is a function: the *act* happened in a
+    // conversation, but a file every conversation in the workspace can read belongs to the
+    // workspace, and a row claiming otherwise would put it under the wrong filter.
+    const { session, workdirPath } = await freshSession();
+    llm.setTurns([
+      {
+        content: "Writing.",
+        toolCalls: [
+          {
+            id: "call_1",
+            name: "write_file",
+            args: { path: "shared/a.md", content: "# hi", location: "workspace" },
+          },
+        ],
+      },
+      { content: "Done." },
+    ]);
+
+    await chat(session.id, { message: "write a shared file" });
+
+    const sources = (await env.inject({ method: "GET", url: "/api/sources" })).json<
+      SourceRowish[]
+    >();
+    const row = sources.find((s) => s.relPath === "shared/a.md")!;
+    expect(row).toBeTruthy();
+    expect(row.storage).toBe("workspace");
+    expect(row.ownerKind).toBe("workspace");
+    expect(row.origin).toBe("agent_workspace");
+    expect(existsSync(join(workdirPath, "shared/a.md"))).toBe(true);
+  });
+
+  it("links and records a source the turn referenced with @", async () => {
+    /*
+     * The three halves of a reference, and each is a different claim. The source is **linked**
+     * — which is what lets a later turn `read_document` it without the user pointing at it
+     * again, and what puts it in the whitelist the tool is built from. The **snapshot** is
+     * recorded on the message, under its own column, so the chips can say which material was
+     * pointed at rather than uploaded. And the **content** reaches the model, because a
+     * reference that only appeared in a chip would be a turn the user thinks is about a file
+     * and the model has never seen.
+     */
+    const { session } = await freshSession();
+    const uploaded = await env
+      .inject({
+        method: "POST",
+        url: `/api/sessions/${session.id}/sources`,
+        payload: {
+          name: "referenced.txt",
+          mimeType: "text/plain",
+          data: Buffer.from("the referenced body").toString("base64"),
+        },
+      })
+      .then((r) => r.json<{ id: string }>());
+
+    llm.setTurns([{ content: "read it" }]);
+    await chat(session.id, {
+      message: "look at this",
+      sources: [{ id: uploaded.id, name: "referenced.txt" }],
+    });
+
+    const persisted = await messagesOf(session.id);
+    const user = persisted[0]!;
+    expect(user.sources).toHaveLength(1);
+    expect(user.sources![0]!.id).toBe(uploaded.id);
+    expect(user.sources![0]!.name).toBe("referenced.txt");
+    // Not in `attachments`: the two columns are what tell the chips apart.
+    expect(user.attachments).toBeUndefined();
+
+    // Every request of the turn, because the *last* one is the auto-titler's — a side call
+    // that sees the conversation and is not the turn.
+    const bodies = llm
+      .requests()
+      .map((r) => JSON.stringify((r as { messages: unknown }).messages))
+      .join("\n");
+    expect(bodies).toContain("the referenced body");
+
+    // The link, which is what a later turn reads the whitelist from.
+    const readable = (
+      await env.inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })
+    ).json<{ id: string }[]>();
+    expect(readable.map((s) => s.id)).toContain(uploaded.id);
+  });
+
+  it("ignores a reference to somebody else's source", async () => {
+    // `getSourceForUser` is the whole check, and a reference that fails it simply does not
+    // arrive — the turn still runs, because the message the user typed is the turn.
+    const { session } = await freshSession();
+
+    llm.setTurns([{ content: "ok" }]);
+    const { res } = await chat(session.id, {
+      message: "look at this",
+      sources: [{ id: "not-mine", name: "someone-elses.pdf" }],
+    });
+
+    expect(res.statusCode).toBe(200);
+    const persisted = await messagesOf(session.id);
+    expect(persisted[0]!.sources).toBeUndefined();
   });
 
   it("names the conversation from the first exchange", async () => {
@@ -338,8 +522,7 @@ describe("POST /api/sessions/:id/chat", () => {
     llm.setTurns([{ content: "I see it." }]);
     await chat(session.id, { message: "what is this", model: "fake-vision", attachments: [attachment] });
 
-    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
-    const userTurn = sent.messages.at(-1)!;
+    const userTurn = turnRequest("what is this").messages.at(-1)!;
     expect(JSON.stringify(userTurn.content)).toContain("image_url");
     expect(JSON.stringify(userTurn.content)).toContain("data:image/png;base64,");
 
@@ -359,10 +542,15 @@ describe("POST /api/sessions/:id/chat", () => {
     ).json<Attachment>();
 
     llm.setTurns([{ content: "ok" }]);
-    await chat(session.id, { message: "what is this", model: "fake-model", attachments: [attachment] });
+    await chat(session.id, {
+      message: "what is this, non-vision",
+      model: "fake-model",
+      attachments: [attachment],
+    });
 
-    const sent = llm.requests()[0] as { messages: { content: unknown }[] };
-    const serialized = JSON.stringify(sent.messages.at(-1)!.content);
+    const serialized = JSON.stringify(
+      turnRequest("what is this, non-vision").messages.at(-1)!.content
+    );
     expect(serialized).not.toContain("image_url");
     expect(serialized).toContain("当前模型不支持图片输入");
   });

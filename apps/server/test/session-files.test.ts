@@ -226,3 +226,63 @@ describe("the diagram tool's file, through the browser", () => {
     expect(file.text).toBe("flowchart LR\n  甲 --> 乙");
   });
 });
+
+/**
+ * The listing is where "every file is a source" is made true.
+ *
+ * The writers that can register a row are the ones that go through a tool or an upload; the
+ * ones that cannot are the agent's own `delete_file` (a plain filesystem operation, which must
+ * not become a database write) and every file nobody's code wrote at all — dropped in from the
+ * Finder, restored from a backup, cloned into the workspace. So the read reconciles, and the
+ * half of that worth pinning is that it is *visible*: the id comes back on the entry, because a
+ * listing without one would make the file manager possible only for files a tool happened to
+ * have written.
+ */
+describe("the listing registers what it finds", () => {
+  it("gives every file an id, including the ones no writer claimed", async () => {
+    seed(sessionId, "dropped-in.txt", "hello");
+    mkdirSync(join(sessionDir(workspaceDir, sessionId), "nested"), { recursive: true });
+
+    const listing = (await list(sessionId)).json<DirectoryListing>();
+    const file = listing.entries.find((e) => e.name === "dropped-in.txt")!;
+    expect(file.sourceId).toBeTruthy();
+
+    const nested = listing.entries.find((e) => e.name === "nested")!;
+    // A directory is not a source — it has an id of its own in the tree, not in the registry.
+    expect(nested.sourceId).toBeUndefined();
+  });
+
+  it("keeps the same id across listings", async () => {
+    // Required, not tidy: a message's attachment snapshot names a source id, and an id that
+    // changed on every read would make the file a different source each time it was looked at.
+    seed(sessionId, "stable.txt", "x");
+    const first = (await list(sessionId)).json<DirectoryListing>();
+    const second = (await list(sessionId)).json<DirectoryListing>();
+
+    const idOf = (l: DirectoryListing) => l.entries.find((e) => e.name === "stable.txt")!.sourceId;
+    expect(idOf(first)).toBe(idOf(second));
+  });
+
+  it("keeps the row when the file is deleted behind the app's back", async () => {
+    /*
+     * The drift the agent's own `delete_file` creates — and the reason the row stays. That
+     * tool is a plain filesystem operation, deliberately: making it unregister would make a
+     * tool that deletes a *file* into one that writes the database. So the row survives, the
+     * listing stops showing the entry (it is reading the directory, and the directory is
+     * right), and the source is reported as missing wherever sources are listed.
+     */
+    seed(sessionId, "transient.txt", "x");
+    const id = (await list(sessionId))
+      .json<DirectoryListing>()
+      .entries.find((e) => e.name === "transient.txt")!.sourceId;
+    rmSync(join(sessionDir(workspaceDir, sessionId), "transient.txt"));
+
+    const after = (await list(sessionId)).json<DirectoryListing>();
+    expect(after.entries.some((e) => e.name === "transient.txt")).toBe(false);
+
+    const sources = (
+      await env.inject({ method: "GET", url: "/api/sources" })
+    ).json<{ id: string }[]>();
+    expect(sources.some((s) => s.id === id)).toBe(true);
+  });
+});

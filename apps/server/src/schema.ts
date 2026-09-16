@@ -31,38 +31,79 @@ import type Database from "better-sqlite3";
  * the same idea one entity at a time.
  */
 
-/**
- * 2 — `messages.attachments[].id` stops being an upload id and becomes a **source** id.
+/*
+ * The versions this file has been through, newest first. There are three:
  *
- * Same field, same JSON column, different referent: nothing about the row says which kind of
- * id it holds, so an old file cannot be detected by shape and is refused instead. That is the
- * case this guard exists for.
+ * 1 — the original schema.
+ * 2 — `messages.attachments[].id` stops being an upload id and becomes a **source** id. Same
+ *     field, same JSON column, different referent: nothing about the row says which kind of id
+ *     it holds, so an old file cannot be detected by shape and is refused instead. That is the
+ *     case the guard exists for.
+ * 3 — a source stops being an upload and becomes the record for every piece of material an
+ *     account holds; below.
  */
-export const SCHEMA_VERSION = 2;
+
+/**
+ * 3 — a source stops being "an uploaded file" and becomes **the one record for every piece of
+ * material an account holds**: an upload, a page the agent fetched, a file it wrote into a
+ * workspace, and a file it wrote into a conversation's own directory.
+ *
+ * Three things change at once, and each is a genuine meaning change rather than an addition —
+ * which is why this is a rebuild of the table and a version bump rather than a few
+ * `ensureColumn` calls:
+ *
+ * - **Identity splits in two.** `UNIQUE (user_id, sha256)` was the whole rule while a source
+ *   was always a blob; it is now one of *two* rules. Identical uploaded bytes are still one
+ *   row (and a re-upload still revives a deleted one), while a file is identified by where it
+ *   is — so moving it keeps its row, its summary and its parse state, and two identical files
+ *   in two directories are two sources. Two partial unique indexes express that; the old
+ *   table-wide constraint cannot.
+ * - **`raw_path` is retired.** An absolute path was the one stored fact that silently breaks
+ *   when a data root is copied or moved, and it was never needed: an upload's location is
+ *   already derived from its id and its MIME type, as `paths.ts` has always insisted
+ *   ("derived, never stored as a fact in its own right"). What is stored instead is
+ *   `rel_path`, the path *within a root*, which is load-bearing only where nothing else can
+ *   supply it.
+ * - **`kind` is derived.** `category` supersedes it — `image`/`file` is `category === "image"`
+ *   or not — so the column is dropped and computed in `mapSource`, the way `workdirPath` is
+ *   computed from `dir_path`.
+ *
+ * `session_sources` and `workspace_sources` are deliberately untouched: they answer *who may
+ * read it*, which is a different question from *who owns it*, and the read whitelist built
+ * from them must not change.
+ *
+ * The upgrade is `migrations.ts`'s `migrateV2ToV3` — the first migration this project has
+ * ever had. See the note on `applySchema` there for why relaxing the guard is safe.
+ */
+export const SCHEMA_VERSION = 3;
 
 /**
  * Every table, with the columns that earlier releases added by migration folded back in.
  *
  * That folding is why this file can be read as the schema rather than as the schema plus a
  * pile of corrections. It is safe because a database from before the version guard can
- * never reach this code (see below), so there is nothing to upgrade in place.
+ * never reach this code (see below), so there is nothing to upgrade in place — and a database
+ * from *after* it is either current or is walked forward by `MIGRATIONS`, which is the one
+ * thing that changed when v3 arrived.
  *
  * `copilots.model` is gone rather than dormant: it was superseded by `settings.modelId` and
  * only existed to be folded forward by a migration that no longer runs.
  *
- * ### Uploaded files are `sources`
+ * ### A source is one row for one piece of material
  *
- * Owned by an **account** rather than by the conversation they arrived in, because one file
- * can be referenced by several. `UNIQUE (user_id, sha256)` is what makes identical bytes one
- * row, one file and two references — and it is also why the hash is *scoped*: a lookup by
- * hash alone would hand one account's bytes to another who uploaded the same content, which
- * is exactly the case dedupe makes common.
+ * Owned by a **workspace or a conversation** — and so by an account — rather than by the
+ * message that happened to use it, because one file can be referenced by several. `origin`
+ * says how it came to exist; `storage` says which root its bytes are under, and is the one
+ * field that changes; `category` is what the browser filters on. Two partial unique indexes
+ * carry the two identity rules: identical uploaded bytes are one row (`idx_sources_blob`),
+ * and a file is placed by its owner and its path (`idx_sources_place`).
  *
- * `raw_path` is where the bytes are. Storing it (rather than deriving and globbing for it)
- * is what retired a whole class of collision — nothing has to list a directory to find a
- * file any more. It is still validated against the account's sources root before every read:
- * a database row is not a trust boundary, and a path that travelled through a backup, or
- * through a future bug, is not the same thing as one this code wrote.
+ * Where the bytes are is answered in two steps rather than one, and neither step is a stored
+ * absolute path. `storage` picks the root and `rel_path` says where in it — both re-validated
+ * before every read, because a database row is not a trust boundary and a path that travelled
+ * through a backup, or through a future bug, is not the same thing as one this code wrote. An
+ * `upload` or a `web` source stores no path at all: its filename is `<id>.<ext>`, derived from
+ * the id and the MIME type, exactly as `paths.ts` says every path here is.
  *
  * Parse state lives in **columns** here rather than in a `parsed/<id>.json` sidecar. That is
  * the "index it in the database" half of the design: a reparse is then visible in every
@@ -82,7 +123,7 @@ export const SCHEMA_VERSION = 2;
  * unlinked or deleted afterwards — and it carries the name that upload used, which the source
  * itself deliberately does not (it keeps the first name it ever saw).
  */
-const DDL = `
+export const DDL = `
   -- An account carries a password now, which is what changed this table's meaning: a
   -- username used to *be* the credential, so the login route created the row if the name was
   -- new. It identifies nobody now — the row has to exist first, and only an administrator
@@ -143,6 +184,11 @@ const DDL = `
     name TEXT NOT NULL,
     slug TEXT NOT NULL,
     dir_path TEXT NOT NULL UNIQUE,
+    -- The workspace's own settings, as a JSON object — the defaults its conversations inherit.
+    -- Nullable on the copilots.settings precedent: NULL is "never set", which is a different
+    -- claim from "set to nothing", and a NOT NULL default would have told every workspace
+    -- written before the column existed that somebody had chosen something.
+    settings TEXT,
     created_at TEXT NOT NULL,
     -- Soft delete. The directory stays on disk, so 'uniqueSlug''s filesystem loop is what
     -- keeps a re-created name off a deleted one's path; these two UNIQUEs are the backstop
@@ -152,16 +198,54 @@ const DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id, created_at);
 
-  -- Uploaded files. See the note above on ownership, dedupe, raw_path and parse state.
+  -- Every piece of material the account holds. See the note above on ownership, the two
+  -- identity rules, storage/rel_path and parse state.
   CREATE TABLE IF NOT EXISTS sources (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    sha256 TEXT NOT NULL,
+
+    -- Who holds it: 'session' | 'workspace', and that row's id.
+    --
+    -- No foreign key, and the cost is real: SQLite cannot point one column at two tables. It
+    -- is affordable because ownership is only ever *reached through* — every read resolves the
+    -- owner first (getSessionForUser / getWorkspaceForUser) and then reads its sources — so an
+    -- orphan is invisible rather than handed to whoever asked. The cascade a foreign key would
+    -- have provided is not wanted anyway: relations are never dismantled.
+    owner_kind TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+
+    -- How it came to exist. Provenance: fixed for the life of the row.
+    -- 'session_attachment' | 'workspace_upload' | 'agent_workspace' | 'agent_session' | 'web'
+    origin TEXT NOT NULL,
+
+    -- Which root the bytes are under: 'upload' | 'web' | 'workspace' | 'session' | 'trash'.
+    -- The one field here that changes — deleting a file from the manager moves it to 'trash'
+    -- rather than erasing it — and the one the resolver switches on.
+    storage TEXT NOT NULL,
+
+    -- The path within that root. NULL for 'upload' and 'web', whose filename is
+    -- '<id>.<ext>' and therefore derived from the id and the MIME type; non-NULL for
+    -- 'workspace' and 'session', where it is the only record of the file's name.
+    rel_path TEXT,
+
+    -- The display name. For an upload, the name it arrived under; for a file, the last path
+    -- segment. Never used to address the bytes — that is "rel_path".
     name TEXT NOT NULL,
     mime_type TEXT NOT NULL,
+    -- 'page' | 'text' | 'code' | 'markdown' | 'diagram' | 'image' | 'document' | 'other'.
+    -- A label for the browser's filters, not an access-control decision: what decides whether
+    -- anything is *parsed* is still "isDocumentMime", which this does not replace.
+    category TEXT NOT NULL,
     size INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    raw_path TEXT NOT NULL,
+    -- The page this source is, when it is one.
+    source_url TEXT,
+    -- The model's one-liner, where something has produced one. "session_diagrams.summary" is
+    -- the precedent: the thing the bytes cannot answer, stored beside them rather than in them.
+    summary TEXT,
+
+    -- The content hash, for account blobs only. See idx_sources_blob.
+    sha256 TEXT,
+
     parse_status TEXT NOT NULL DEFAULT 'none',
     parse_error TEXT,
     parse_error_code TEXT,
@@ -170,13 +254,30 @@ const DDL = `
     page_count INTEGER,
     parse_updated_at TEXT,
     created_at TEXT NOT NULL,
-    -- Soft delete, and the one that has to be read carefully: 'UNIQUE (user_id, sha256)' is
-    -- not going anywhere, so re-uploading the same bytes cannot make a second row. It revives
-    -- this one instead — see 'findDeletedSourceByHash' / 'reviveSourceForUser'.
-    deleted_at TEXT,
-    UNIQUE (user_id, sha256)
+    updated_at TEXT,
+
+    -- Soft delete. On the byte side too: the file stays on disk, so a delete costs no disk
+    -- and a future restore has something to restore.
+    deleted_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id, created_at);
+  -- The listing query: one owner's sources, in path order.
+  CREATE INDEX IF NOT EXISTS idx_sources_owner ON sources(owner_kind, owner_id, rel_path);
+  -- Identical *uploaded bytes* are one row — and this one is deliberately NOT filtered on
+  -- 'deleted_at', because that is what makes a re-upload of deleted bytes revive the row
+  -- rather than insert beside it. See 'findDeletedSourceByHash' / 'reviveSourceForUser'.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_blob
+    ON sources(user_id, sha256) WHERE sha256 IS NOT NULL;
+  -- One row per file at one path, per owner. A rename is an UPDATE of 'rel_path' on this row,
+  -- which is the whole reason identity is the id and not a hash of either the path or the
+  -- bytes. Filtered on 'deleted_at' so a deleted file does not block a new one at the same
+  -- path. SQLite treats NULLs as distinct in a unique index, so the predicate and the NULL are
+  -- belt and braces — but the predicate is the *documentation*.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_place
+    ON sources(user_id, owner_kind, owner_id, rel_path)
+    WHERE deleted_at IS NULL AND rel_path IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_sources_web
+    ON sources(user_id, source_url) WHERE source_url IS NOT NULL;
 
   -- What a source is referenced by. Two tables, and both are needed — see the note above.
   CREATE TABLE IF NOT EXISTS session_sources (

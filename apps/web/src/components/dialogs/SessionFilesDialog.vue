@@ -76,7 +76,7 @@ async function load(): Promise<void> {
  *
  * This component is always mounted — it renders nothing while closed, and `App.vue` has no
  * `v-if` on it — so `onMounted` fires once at app start and would leave the list as it was at
- * boot. `SourcesDialog` shipped that bug once; this is the shape that replaced it.
+ * boot. The source browser shipped that bug once; this is the shape that replaced it.
  *
  * `activeSessionId` is watched too, so a conversation switched while the dialog is open does
  * not leave the previous one's files on screen under the new one's name.

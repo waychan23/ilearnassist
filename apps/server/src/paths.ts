@@ -18,7 +18,8 @@ import { join } from "node:path";
  *       sessions/<sessionId>/    a conversation's own files — the diagrams it draws
  *     sources/
  *       raw/<sourceId>.<ext>     an uploaded file
- *       parsed/<sourceId>.txt    its extracted text
+ *       web/<sourceId>.<ext>     a page the agent fetched and kept
+ *       parsed/<sourceId>.txt    its extracted text, for every kind of source
  *   db/sqlite/ilearnassist.sqlite
  * ```
  *
@@ -83,6 +84,8 @@ export interface UserLayout {
   workspacesRoot: string;
   sourcesRoot: string;
   rawDir: string;
+  /** Captured web pages. A sibling of `raw/` because its bytes come from somewhere else. */
+  webDir: string;
   parsedDir: string;
 }
 
@@ -94,6 +97,7 @@ export function userLayout(layout: DataLayout, userSlug: string): UserLayout {
     workspacesRoot: join(userRoot, "workspaces"),
     sourcesRoot,
     rawDir: join(sourcesRoot, "raw"),
+    webDir: join(sourcesRoot, "web"),
     parsedDir: join(sourcesRoot, "parsed"),
   };
 }
@@ -104,7 +108,7 @@ export function userLayout(layout: DataLayout, userSlug: string): UserLayout {
  * look at rather than a thing that materialises the first time something is written.
  */
 export function ensureUserLayout(user: UserLayout): void {
-  for (const dir of [user.workspacesRoot, user.rawDir, user.parsedDir]) {
+  for (const dir of [user.workspacesRoot, user.rawDir, user.webDir, user.parsedDir]) {
     mkdirSync(dir, { recursive: true });
   }
 }
@@ -125,6 +129,18 @@ export function workspaceWorkdir(workspaceRoot: string): string {
 /** The directory holding a workspace's conversations. Holds nothing but session dirs. */
 export function workspaceSessionsDir(workspaceRoot: string): string {
   return join(workspaceRoot, "sessions");
+}
+
+/**
+ * Where a workspace's deleted files go: a sibling of `workdir/` and `sessions/`, deliberately.
+ *
+ * A soft delete keeps the bytes, and the sandbox must not be able to reach them — a file the
+ * user deleted from the file manager that the agent could still `read_file` would make the
+ * delete a lie in the one place it matters. Namespacing by source id is what lets a restored
+ * file keep its original path without two deletions colliding on one.
+ */
+export function workspaceTrashDir(workspaceRoot: string): string {
+  return join(workspaceRoot, "trash");
 }
 
 /**
