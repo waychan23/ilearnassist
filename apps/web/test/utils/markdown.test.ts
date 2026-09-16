@@ -1,26 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { highlightFile, renderMarkdown } from "../../src/utils/markdown.js";
 
+/**
+ * The labels every call would pass in a component. A helper rather than a second argument at each
+ * of the twenty-odd call sites below: these cases are about what markdown *renders*, and the copy
+ * control is checked in its own describe.
+ */
+const LABELS = { copy: "Copy", copied: "Copied" };
+const render = (text: string): string => renderMarkdown(text, LABELS);
+
 describe("renderMarkdown", () => {
   it("renders basic markdown", () => {
-    expect(renderMarkdown("# Title")).toContain("<h1>Title</h1>");
-    expect(renderMarkdown("**bold**")).toContain("<strong>bold</strong>");
+    expect(render("# Title")).toContain("<h1>Title</h1>");
+    expect(render("**bold**")).toContain("<strong>bold</strong>");
   });
 
   it("turns single newlines into line breaks", () => {
     // `breaks: true` — chat replies are written as plain lines and expected to keep them.
-    expect(renderMarkdown("one\ntwo")).toContain("one<br>\ntwo");
+    expect(render("one\ntwo")).toContain("one<br>\ntwo");
   });
 
   it("linkifies a bare URL", () => {
-    const html = renderMarkdown("see https://example.com now");
+    const html = render("see https://example.com now");
     expect(html).toContain('<a href="https://example.com">https://example.com</a>');
   });
 
   describe("sanitizing model output", () => {
     it("escapes raw HTML instead of executing it", () => {
       // `html: false` — model output is untrusted content, never markup.
-      const html = renderMarkdown("<script>alert(1)</script>");
+      const html = render("<script>alert(1)</script>");
       expect(html).not.toContain("<script>");
       expect(html).toContain("&lt;script&gt;");
     });
@@ -28,18 +36,18 @@ describe("renderMarkdown", () => {
     it("escapes a tag carrying an inline event handler", () => {
       // The attribute text survives as escaped characters, which is harmless; what must
       // not survive is a real tag.
-      const html = renderMarkdown('<img src=x onerror="alert(1)">');
+      const html = render('<img src=x onerror="alert(1)">');
       expect(html).not.toContain("<img");
       expect(html).toContain("&lt;img");
       expect(html).toContain("&quot;");
     });
 
     it("escapes an iframe", () => {
-      expect(renderMarkdown('<iframe src="https://evil.test"></iframe>')).not.toContain("<iframe");
+      expect(render('<iframe src="https://evil.test"></iframe>')).not.toContain("<iframe");
     });
 
     it("still renders markdown that surrounds the HTML", () => {
-      const html = renderMarkdown("**bold** <b>raw</b>");
+      const html = render("**bold** <b>raw</b>");
       expect(html).toContain("<strong>bold</strong>");
       expect(html).toContain("&lt;b&gt;");
     });
@@ -47,37 +55,97 @@ describe("renderMarkdown", () => {
 
   describe("code blocks", () => {
     it("highlights a known language", () => {
-      const html = renderMarkdown("```js\nconst a = 1;\n```");
-      expect(html).toContain('<pre class="hljs"><code>');
+      const html = render("```js\nconst a = 1;\n```");
+      expect(html).toContain('<pre class="hljs code-block">');
       expect(html).toContain("hljs-keyword");
     });
 
     it("falls back to a highlighted-container with escaped code for an unknown language", () => {
-      const html = renderMarkdown("```notalanguage\n<b>&\n```");
-      expect(html).toContain('<pre class="hljs"><code>');
+      const html = render("```notalanguage\n<b>&\n```");
+      expect(html).toContain('<pre class="hljs code-block">');
       expect(html).toContain("&lt;b&gt;&amp;");
     });
 
     it("escapes code with no language at all", () => {
-      const html = renderMarkdown("```\n<script>x</script>\n```");
+      const html = render("```\n<script>x</script>\n```");
       expect(html).toContain("&lt;script&gt;");
       expect(html).not.toContain("<script>");
     });
 
     it("renders inline code", () => {
-      expect(renderMarkdown("use `npm test`")).toContain("<code>npm test</code>");
+      expect(render("use `npm test`")).toContain("<code>npm test</code>");
+    });
+  });
+
+  describe("a code block's copy control", () => {
+    /*
+     * The control is written into the HTML rather than mounted, so these are the assertions that
+     * hold its shape: the two attributes the handler reads, both labels on the element, and the
+     * absence of anything that would reach the message's *visible* text.
+     */
+    it("carries both labels and the marker the handler looks for", () => {
+      const html = renderMarkdown("```js\nconst a = 1;\n```", { copy: "复制", copied: "已复制" });
+
+      expect(html).toContain("data-copy-code");
+      expect(html).toContain('data-copied-label="已复制"');
+      expect(html).toContain('data-idle-label="复制"');
+      // Both states are drawn, so the swap is an attribute the stylesheet paints rather than a
+      // text node the handler writes.
+      expect(html.match(/<svg/g)).toHaveLength(2);
+    });
+
+    it("contributes no text to the message", () => {
+      /*
+       * The load-bearing one. `utils/noteAnchor.ts` counts a note's quote over a message's
+       * **visible** text, so a label inside this button would shift every anchor in the message
+       * below the first code block — and a note made before the code was there would resolve to
+       * the wrong occurrence.
+       */
+      // A fence with no language, so the code comes back escaped rather than tokenised and the
+      // visible text is exactly the two lines that were written.
+      const html = renderMarkdown("text\n\n```\nconst a = 1;\n```\n", {
+        copy: "复制",
+        copied: "已复制",
+      });
+      const visible = html
+        .replace(/<[^>]*>/g, "")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'");
+
+      // Trimmed, because markdown-it's own trailing newlines are not what this case is about.
+      expect(visible.trim()).toBe("text\nconst a = 1;");
+      expect(visible).not.toContain("复制");
+    });
+
+    it("offers nothing for an empty fence", () => {
+      // A button that copies nothing is the "renders but does nothing" this repo keeps out of its
+      // UI. A model writes an empty fence often enough for it to be worth the branch.
+      const html = renderMarkdown("```js\n```", { copy: "复制", copied: "已复制" });
+      expect(html).not.toContain("data-copy-code");
+      expect(html).toContain('<pre class="hljs"><code>');
+    });
+
+    it("escapes a label rather than letting it close the attribute", () => {
+      // The labels come from the catalog, so this is not reachable today — but the string becomes
+      // markup, and "trusted" is a property of today's callers.
+      const html = renderMarkdown("```js\nx\n```", { copy: '"><script>', copied: "ok" });
+      expect(html).not.toContain("<script>");
+      expect(html).toContain("&quot;&gt;&lt;script&gt;");
     });
   });
 
   describe("math", () => {
     it("renders inline math between dollar signs", () => {
-      const html = renderMarkdown("能量是 $E = mc^2$ 的关系。");
+      const html = render("能量是 $E = mc^2$ 的关系。");
       expect(html).toContain('class="katex"');
       expect(html).not.toContain("$E = mc^2$");
     });
 
     it("renders $$ as a display block", () => {
-      const html = renderMarkdown("推导：\n\n$$\n\\frac{1}{3}\n$$\n\n完毕。");
+      const html = render("推导：\n\n$$\n\\frac{1}{3}\n$$\n\n完毕。");
       expect(html).toContain('<p class="katex-block">');
       expect(html).toContain("katex-display");
       // The prose on either side survives — a display block replaces its paragraph, not
@@ -87,17 +155,17 @@ describe("renderMarkdown", () => {
     });
 
     it("treats a single-line $$ pair as a display block too", () => {
-      expect(renderMarkdown("$$a^2 + b^2 = c^2$$")).toContain('<p class="katex-block">');
+      expect(render("$$a^2 + b^2 = c^2$$")).toContain('<p class="katex-block">');
     });
 
     it("renders a bare \\begin block that carries no delimiters", () => {
       // What a model writes when it is not thinking about markdown at all.
-      const html = renderMarkdown("结果：\n\n\\begin{align}\na &= b\n\\end{align}");
+      const html = render("结果：\n\n\\begin{align}\na &= b\n\\end{align}");
       expect(html).toContain('<p class="katex-block">');
     });
 
     it("renders a ```math fence as math rather than as code", () => {
-      const html = renderMarkdown("```math\n\\pi r^2\n```");
+      const html = render("```math\n\\pi r^2\n```");
       expect(html).toContain("katex");
       expect(html).not.toContain("hljs");
     });
@@ -106,7 +174,7 @@ describe("renderMarkdown", () => {
       // `throwOnError: false`. The failure it prevents is not a bad-looking formula: a
       // throw out of `renderMarkdown` fails the `rendered` computed, so the bubble goes
       // blank and the prose around the formula is lost with it.
-      const html = renderMarkdown("看这个 $\\frac{1}{$ 坏掉了。");
+      const html = render("看这个 $\\frac{1}{$ 坏掉了。");
       expect(html).toContain("坏掉了");
       expect(html).toContain("katex-error");
       // A palette token, not KaTeX's `#cc0000` — one red for both themes, and dim on the
@@ -123,12 +191,12 @@ describe("renderMarkdown", () => {
         "成本 $100-$200 不等。",
         "设置 $HOME 和 $PATH 环境变量。",
       ]) {
-        expect(renderMarkdown(prose)).not.toContain("katex");
+        expect(render(prose)).not.toContain("katex");
       }
     });
 
     it("leaves dollar signs inside a code span alone", () => {
-      expect(renderMarkdown("用 `$x$` 表示行内公式。")).toContain("<code>$x$</code>");
+      expect(render("用 `$x$` 表示行内公式。")).toContain("<code>$x$</code>");
     });
 
     it("does not let a formula turn into a link or an image", () => {
@@ -141,7 +209,7 @@ describe("renderMarkdown", () => {
         "$\\includegraphics{/etc/passwd}$",
         "$\\htmlClass{evil}{x}$",
       ]) {
-        const html = renderMarkdown(formula);
+        const html = render(formula);
         expect(html).not.toContain("<a ");
         expect(html).not.toContain("<img");
         expect(html).not.toContain('class="evil"');
@@ -150,7 +218,7 @@ describe("renderMarkdown", () => {
   });
 
   it("returns an empty string for empty input", () => {
-    expect(renderMarkdown("")).toBe("");
+    expect(render("")).toBe("");
   });
 });
 

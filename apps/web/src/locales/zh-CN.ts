@@ -1437,6 +1437,16 @@ export default {
       message: "这个链接指向站外，打开后会离开本应用。",
       confirm: "继续打开",
     },
+    /**
+     * The file preview's copy control, and the caveat it carries on a file past the preview cap.
+     *
+     * The caveat is not decoration: the server sends the head of the file and says so in the body,
+     * and a button reading only 复制 would let somebody take a quarter of a log away believing it
+     * was all of it. The two strings sit in different places — the button is in the header, the
+     * note is under the text — so this is the one that travels with the control.
+     */
+    copyFile: "复制文件内容",
+    copyFilePartial: "复制文件内容（文件较大，只有已载入的部分）",
   },
 
   /**

@@ -1218,6 +1218,9 @@ const en: typeof MessageSchema = {
       message: "This link goes to an outside site, and following it leaves this app.",
       confirm: "Continue",
     },
+    /** The file preview's copy control. See `zh-CN` for why the partial case is worded apart. */
+    copyFile: "Copy file contents",
+    copyFilePartial: "Copy file contents (large file — only the part that was loaded)",
   },
 
   parseErrors: {

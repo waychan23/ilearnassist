@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { isInteractiveTool, type Message, type ToolCall } from "../api/types";
+import { codeCopyClick } from "../composables/codeCopy";
 import { confirm } from "../composables/confirm";
 import { openNoteFromHighlight } from "../composables/messageNotes";
 import { renderMarkdown } from "../utils/markdown";
@@ -130,9 +131,15 @@ const reasoning = computed(() =>
 const reasoningThinking = computed(() => props.streaming?.thinking ?? false);
 const reasoningMs = computed(() => (props.streaming ? props.streaming.reasoningMs : null));
 
+/** The words `renderMarkdown` bakes into a code block's copy control — see `utils/markdown.ts`. */
+const markdownLabels = computed(() => ({
+  copy: t("common.copy"),
+  copied: t("common.copied"),
+}));
+
 const rendered = computed(() => {
   if (!content.value) return "";
-  const html = renderMarkdown(content.value);
+  const html = renderMarkdown(content.value, markdownLabels.value);
   return props.streaming ? html + '<span class="streaming-cursor"></span>' : html;
 });
 
@@ -184,6 +191,9 @@ onMounted(() => void nextTick(drawNoteMarks));
  * message — including on a link — is left alone.
  */
 function onContentClick(event: MouseEvent): void {
+  // A code block's copy control first, and it reports whether it took the event: the two
+  // behaviours are distinguished by what was pressed, not by which ran first.
+  if (codeCopyClick(event)) return;
   const noteId = noteIdAt(event.target as Element | null);
   if (noteId) openNoteFromHighlight(noteId);
 }

@@ -277,3 +277,24 @@ export type IconName = keyof typeof ICON_PATHS;
 
 /** Every icon name, for the guard in `test/icons.test.ts` to iterate. */
 export const ICON_NAMES = Object.keys(ICON_PATHS) as readonly IconName[];
+
+/**
+ * One icon as an SVG *string*, for the places that cannot mount a component.
+ *
+ * `renderMarkdown` returns HTML rather than elements — it is a `string → string` function on
+ * purpose, which is the reason KaTeX was chosen over MathJax — so the copy control inside a
+ * rendered code block cannot be an `<Icon>`. This emits the same markup, and the two have to stay
+ * in step: same viewBox, same stroke, same `aria-hidden`. The size is a literal `1em` rather than
+ * the component's prop, because a string has no prop to read, and `1em` is the component's own
+ * default.
+ *
+ * The path data is a static literal from the table above, so there is nothing to escape.
+ */
+export function iconSvg(name: IconName): string {
+  const paths = ICON_PATHS[name].map((d) => `<path d="${d}"/>`).join("");
+  return (
+    `<svg class="icon" width="1em" height="1em" viewBox="0 0 16 16" fill="none" ` +
+    `stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" ` +
+    `aria-hidden="true" focusable="false">${paths}</svg>`
+  );
+}

@@ -2,10 +2,12 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
+import { codeCopyClick } from "../../composables/codeCopy";
 import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
 import { highlightFile, renderMarkdown } from "../../utils/markdown";
 import Icon from "../Icon.vue";
+import CopyButton from "../CopyButton.vue";
 import FileViewer from "../FileViewer.vue";
 import MermaidDiagram from "../MermaidDiagram.vue";
 import DiagramDialog from "./DiagramDialog.vue";
@@ -136,9 +138,15 @@ function openPage(): void {
   if (pageUrl.value) void openExternal(pageUrl.value);
 }
 
+/** The words `renderMarkdown` bakes into a code block's copy control. */
+const markdownLabels = computed(() => ({
+  copy: t("common.copy"),
+  copied: t("common.copied"),
+}));
+
 const rendered = computed(() =>
   content.value?.kind === "markdown" && content.value.text !== null
-    ? renderMarkdown(content.value.text)
+    ? renderMarkdown(content.value.text, markdownLabels.value)
     : ""
 );
 
@@ -239,6 +247,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             </button>
           </div>
 
+          <!--
+            The whole file, in one press. Only for the kinds that *are* text: a PDF's bytes are
+            not something the clipboard should receive, and the viewer for those has its own
+            controls. The tooltip changes when the server sent only the head of the file, which
+            is the one case where "copy" would otherwise overstate what was copied — the note
+            under the text says it too, but the button is what travels to the clipboard.
+          -->
+          <CopyButton
+            v-if="content?.text !== null && content?.text !== undefined"
+            :value="content.text"
+            :hint="content.truncated ? t('sources.copyFilePartial') : t('sources.copyFile')"
+            testid="file-preview-copy"
+          />
+
           <button
             v-if="pageUrl"
             class="icon-btn"
@@ -288,7 +310,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             :name="content?.name ?? name"
           />
 
-          <div v-else-if="view === 'markdown'" class="markdown" v-html="rendered"></div>
+          <div
+            v-else-if="view === 'markdown'"
+            class="markdown"
+            v-html="rendered"
+            @click="codeCopyClick"
+          ></div>
 
           <div v-else-if="view === 'diagram'" class="diagram-host">
             <p v-if="content?.summary" class="diagram-summary" data-testid="file-preview-diagram-summary">
