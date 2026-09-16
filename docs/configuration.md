@@ -255,14 +255,29 @@ cannot be selected or a selection that matches nothing:
 
 ## Conversation titles
 
-A new conversation is called **New conversation** until its first reply arrives, at which
-point a model writes a short title from that first exchange and the sidebar updates. The
-generated title is capped at 6 words / 20 characters (60 characters hard limit, beyond
-which it is truncated) and is asked to match the language of the conversation.
+A new conversation is called **（未命名）会话** / **(Untitled) Session** until its first reply
+arrives, at which point a model writes a short title from that first exchange and the sidebar
+updates. The generated title is capped at 6 words / 20 characters (60 characters hard limit,
+beyond which it is truncated) and is asked to match the language of the conversation.
 
-Editing the title yourself — double-click it in the sidebar, or click it in the chat
+That placeholder is written by the **client**, from `session.fallbackTitle`, so it is in the
+language the account is reading. The server's `DEFAULT_SESSION_TITLE` is the same string in
+English and is only what a caller that names nothing gets — the CLI, a script, another client.
+It stays `titleSource: "auto"`, which is what makes it a placeholder rather than a name.
+
+**Two conversations in one workspace never share a title.** Creation, a rename and the
+auto-titler all pass through `uniqueSessionTitle` (`apps/server/src/sessionTitles.ts`), which
+numbers a collision the way a file manager does — `学习计划`, `学习计划 (2)`, `学习计划 (3)` —
+taking the lowest free number and continuing from one a name already carries. It is applied on
+the server because that is the only place all three paths meet. A rename is therefore
+*suffixed rather than refused*: an empty title is the one this rejects, because there is no name
+to number.
+
+Editing the title yourself — double-click it in the sidebar, or click the pencil in the chat
 header — marks the conversation as user-titled, and **the auto-titler never touches it
-again**. The chat header shows a small `AI` badge while a title is still machine-written.
+again**. The chat header shows a small `AI` badge while a title is still machine-written. The
+same dialog the composer's sliders button opens also carries the title and a free-text
+**description**, which is display-only — it reaches no prompt.
 
 The titler gets a 512-token output budget on purpose. Reasoning models
 (`deepseek-v4-pro`, `deepseek-reasoner`, o-series) spend that budget on chain-of-thought

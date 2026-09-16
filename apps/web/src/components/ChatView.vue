@@ -8,6 +8,7 @@ import { subscribeWidgetEvents } from "../composables/widgetEvents";
 import {
   closeWidgetDrawer,
   openDrawer,
+  openSessionSettings,
   openSources,
   openWidgetDrawer,
   showWorkspaceHome,
@@ -443,6 +444,7 @@ onBeforeUnmount(() => {
             v-model="titleDraft"
             class="input title-input"
             :placeholder="t('chat.titlePlaceholder')"
+            data-testid="chat-title-input"
             @keydown.enter.prevent="commitTitle"
             @keydown.esc.prevent="cancelTitleEdit"
             @blur="commitTitle"
@@ -463,13 +465,31 @@ onBeforeUnmount(() => {
             >
               {{ store.activeSession?.title || store.activeWorkspace?.name || t("app.title") }}
             </span>
+            <!--
+              Two icon-only controls rather than a labelled button and an icon: the title
+              block is the bar's most crowded spot, and both actions are about the same
+              thing. The label is still there for a screen reader and a tooltip, which is
+              where a one-word control belongs.
+            -->
             <button
               v-if="store.activeSession"
-              class="btn title-edit-btn"
+              class="icon-btn"
+              data-testid="edit-session-title"
               :title="t('chat.editTitle')"
+              :aria-label="t('chat.editTitle')"
               @click="startTitleEdit"
             >
-              <Icon name="edit" /> <span class="label">{{ t("chat.editTitle") }}</span>
+              <Icon name="edit" />
+            </button>
+            <button
+              v-if="store.activeSession"
+              class="icon-btn"
+              data-testid="chat-session-settings"
+              :title="t('sessionSettings.open')"
+              :aria-label="t('sessionSettings.open')"
+              @click="openSessionSettings()"
+            >
+              <Icon name="sliders" />
             </button>
             <span
               v-if="store.activeSession?.titleSource === 'auto'"
@@ -635,17 +655,6 @@ onBeforeUnmount(() => {
 }
 .topbar .title.editable:hover {
   color: var(--accent);
-}
-/* Always visible — a hover-only affordance is undiscoverable. */
-.title-edit-btn {
-  flex-shrink: 0;
-  padding: 3px 9px;
-  font-size: var(--fs-2);
-  color: var(--text-2);
-}
-.title-edit-btn:hover {
-  color: var(--text);
-  border-color: var(--text-3);
 }
 .title-edit {
   display: flex;

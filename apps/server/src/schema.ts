@@ -189,6 +189,12 @@ export const DDL = `
     -- claim from "set to nothing", and a NOT NULL default would have told every workspace
     -- written before the column existed that somebody had chosen something.
     settings TEXT,
+    -- What the workspace is for, in the account's own words. Display-only: nothing reads it
+    -- into a prompt, so it says what its author meant rather than feeding a model. Defaulted
+    -- to the empty string rather than nullable, on the copilots.description precedent — an
+    -- absent description and an empty one are the same claim, and a NULL would make every
+    -- reader branch on two spellings of it.
+    description TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     -- Soft delete. The directory stays on disk, so 'uniqueSlug''s filesystem loop is what
     -- keeps a re-created name off a deleted one's path; these two UNIQUEs are the backstop
@@ -351,6 +357,11 @@ export const DDL = `
     title TEXT NOT NULL,
     title_source TEXT NOT NULL DEFAULT 'auto',
     settings TEXT NOT NULL DEFAULT '{}',
+    -- What this conversation is about, in the user's own words — the same display-only field
+    -- a workspace carries, and defaulted the same way. It deliberately has nothing to do with
+    -- title_source: a description is not a name, so writing one neither offers nor costs the
+    -- auto-titler its turn.
+    description TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     -- Soft delete. The reserved 'sessions/<id>/' directory and every row that hangs off this

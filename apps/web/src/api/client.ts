@@ -472,6 +472,17 @@ export const api = {
   renameWorkspace: (id: string, name: string) =>
     request<Workspace>(`/workspaces/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   /**
+   * A workspace's name and description, either or both.
+   *
+   * One method rather than a `rename…` and a `set…Description`, because the settings dialog
+   * edits the two on one screen and the route takes them in one statement. An **omitted** field
+   * is left alone and an empty description clears it — the absent/empty distinction the route
+   * documents, and the reason this takes a patch object rather than two positional arguments
+   * (which could not express "the name, but nothing about the description").
+   */
+  updateWorkspace: (id: string, patch: { name?: string; description?: string }) =>
+    request<Workspace>(`/workspaces/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  /**
    * A workspace's own defaults, replaced wholesale.
    *
    * Omitted means "leave alone", which is what a rename sends — the route takes each field

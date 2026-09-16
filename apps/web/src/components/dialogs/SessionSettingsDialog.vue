@@ -12,6 +12,55 @@ const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const store = useAppStore();
 
+/** A failed save, reported inside the dialog rather than as a toast — see `save()`. */
+const error = ref<string | null>(null);
+
+/**
+ * The conversation's name and its description — what it is called and what it is about.
+ *
+ * Two fields rather than one, because they are two different claims and only the first has a
+ * consequence: `store.renameSession` is what flips `titleSource` to `"user"`, which is what
+ * stops the auto-titler renaming the conversation after a later turn. The description reaches
+ * nothing but this form.
+ *
+ * Both ride the Save button rather than committing on blur, which is the one place this dialog
+ * deliberately differs from `WorkspaceSettingsDialog`: that one has no Save, so its text fields
+ * commit as they lose focus, and a field that saved differently from the button beside it would
+ * be the inconsistency.
+ */
+const title = ref("");
+const description = ref("");
+watch(
+  () => store.activeSession,
+  (s) => {
+    title.value = s?.title ?? "";
+    description.value = s?.description ?? "";
+  },
+  { immediate: true }
+);
+
+/**
+ * Write the name and the description, each only when it actually changed.
+ *
+ * A blank name is left alone rather than sent: the route refuses it with `TITLE_EMPTY`, and a
+ * nameless conversation is not something this form should be able to produce.
+ */
+async function saveIdentity(): Promise<void> {
+  const session = store.activeSession;
+  if (!session) return;
+
+  const next = title.value.trim();
+  if (next && next !== session.title) {
+    await store.renameSession(session.id, next);
+    // Read back rather than assuming: the server **numbers** a duplicate rather than refusing
+    // it, so what is stored may not be the string that was typed.
+    title.value = store.activeSession?.title ?? next;
+  }
+  if (description.value !== session.description) {
+    await store.updateSessionDescription(description.value);
+  }
+}
+
 /**
  * The conversation's own persona.
  *
@@ -65,13 +114,31 @@ watch(
   { immediate: true, deep: true, flush: "post" }
 );
 
-function save() {
-  void store.updateSettings({
-    ...(params.value?.commit() ?? {}),
-    writeLocation: writeLocation.value,
-  });
-  if (store.activeSession) void store.updateSessionPrompt(prompt.value);
-  emit("close");
+/**
+ * Await every write before closing, and stay open when one fails.
+ *
+ * The dialog used to fire them and close immediately, which meant a failed save closed on top of
+ * its own failure — the user saw the dialog disappear and the old values come back on the next
+ * open, with nothing saying why. It now reports where the sibling dialog reports, at the top of
+ * the body.
+ *
+ * The identity writes come last so that a failure in the parameters does not leave a rename
+ * half-applied from this button's point of view.
+ */
+async function save(): Promise<void> {
+  try {
+    await store.updateSettings({
+      ...(params.value?.commit() ?? {}),
+      writeLocation: writeLocation.value,
+    });
+    if (store.activeSession) {
+      await store.updateSessionPrompt(prompt.value);
+      await saveIdentity();
+    }
+    emit("close");
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
 }
 
 function reset() {
@@ -80,6 +147,10 @@ function reset() {
   // Empty means the built-in assistant prompt, which is the same "inherit" the fields above
   // express — there is nothing above the conversation left to inherit a persona from.
   prompt.value = "";
+  // The name goes back to the stored one rather than to blank: a nameless conversation is not
+  // something `save` can produce, so a reset that offered one would be a state with no way out.
+  title.value = store.activeSession?.title ?? "";
+  description.value = store.activeSession?.description ?? "";
 }
 
 const scopeNote = computed(() =>
@@ -107,6 +178,7 @@ const scopeNote = computed(() =>
             class="icon-btn"
             :title="t('common.close')"
             :aria-label="t('common.close')"
+            data-testid="session-settings-close"
             @click="emit('close')"
           >
             <Icon name="close" />
@@ -115,6 +187,37 @@ const scopeNote = computed(() =>
         <div class="modal-body">
           <div class="config-tip">
             {{ scopeNote }}{{ t("sessionSettings.scopeSuffix") }}
+          </div>
+
+          <div v-if="error" class="widget-error" data-testid="session-settings-error">
+            {{ error }}
+          </div>
+
+          <!--
+            What the conversation is called and what it is about, above the parameters it runs
+            with. Only for a conversation that exists — a name before one does is the create
+            dialog's business, and the welcome screen has nothing to attach a description to.
+          -->
+          <div v-if="store.activeSession" class="field">
+            <label>{{ t("sessionSettings.name") }}</label>
+            <input
+              v-model="title"
+              class="input"
+              data-testid="session-name"
+              :placeholder="t('sessionSettings.namePlaceholder')"
+            />
+            <div class="hint">{{ t("chat.titleHint") }}</div>
+          </div>
+
+          <div v-if="store.activeSession" class="field">
+            <label>{{ t("sessionSettings.description") }}</label>
+            <textarea
+              v-model="description"
+              class="textarea"
+              data-testid="session-description"
+              :placeholder="t('sessionSettings.descriptionPlaceholder')"
+            ></textarea>
+            <div class="hint">{{ t("sessionSettings.descriptionHint") }}</div>
           </div>
 
           <!-- Only for a conversation that exists: there is nothing to hold a prompt before

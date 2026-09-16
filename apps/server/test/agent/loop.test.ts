@@ -105,6 +105,7 @@ async function run(options: RunOptions) {
       slug: "w",
       dirPath: join(scratch, "ws"),
       workdirPath: workdir,
+      description: "",
       createdAt: new Date().toISOString(),
       sessionCount: 0,
       lastActivityAt: null,

@@ -1153,7 +1153,12 @@ export const useAppStore = defineStore("app", () => {
    * take it literally as "unset this" over the Copilot's copied value.
    */
   async function createSession(
-    options: { copilotId?: string | null; settings?: SessionSettings; widgets?: WidgetId[] } = {}
+    options: {
+      title?: string;
+      copilotId?: string | null;
+      settings?: SessionSettings;
+      widgets?: WidgetId[];
+    } = {}
   ): Promise<Session | null> {
     if (!activeWorkspaceId.value) return null;
     const workspaceId = activeWorkspaceId.value;
@@ -1161,6 +1166,16 @@ export const useAppStore = defineStore("app", () => {
       ([, v]) => v != null
     );
     const created = await api.createSession(workspaceId, {
+      /*
+       * Named here rather than by the server, because the placeholder has to be in a language,
+       * and the server has no reader to ask. The workspace's first-run name is written the same
+       * way and for the same reason — see `workspace.defaultName`, which this mirrors.
+       *
+       * It is sent **with** `titleSource: "auto"`, which is what makes it a placeholder: the
+       * auto-titler still replaces it after the first turn. A name the user actually typed is a
+       * different thing, and `NewSessionDialog` sets it afterwards so it reads as `user`.
+       */
+      title: options.title ?? i18n.global.t("session.fallbackTitle"),
       copilotId: options.copilotId ?? activeCopilotId.value ?? null,
       ...(staged.length ? { settings: Object.fromEntries(staged) } : {}),
       // `[]` is a decision and is sent as one — it means "none", and omitting it would fall
@@ -1403,6 +1418,20 @@ export const useAppStore = defineStore("app", () => {
     const session = activeSession.value;
     if (!session) return;
     replaceSession(await api.updateSession(session.id, { systemPrompt }));
+  }
+
+  /**
+   * Write the conversation's own note about itself.
+   *
+   * An empty string is sent rather than skipped, because clearing a description is a decision
+   * and it is the only way to express one — the same absent/empty rule `UpdateSessionInput`
+   * documents. Nothing is announced on the widget bus: a description is not in any list a
+   * widget draws.
+   */
+  async function updateSessionDescription(description: string): Promise<void> {
+    const session = activeSession.value;
+    if (!session) return;
+    replaceSession(await api.updateSession(session.id, { description }));
   }
 
   /* ------------------------------ copilots --------------------------------- */
@@ -2389,6 +2418,7 @@ export const useAppStore = defineStore("app", () => {
     setWidgetGroupEnabled,
     setProviderAndModel,
     updateSessionPrompt,
+    updateSessionDescription,
     saveCopilot,
     deleteCopilot,
     copyCopilotToMine,

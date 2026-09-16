@@ -81,8 +81,13 @@ async function create() {
       widgets: [...widgets.value],
     });
     if (session && title.value.trim()) {
-      // Still a second call, and not an oversight: a title given at create writes
+      // Still a second call, and not an oversight: a title sent *at create* writes
       // `titleSource: "auto"`, and the auto-titler would then overwrite what the user typed.
+      // A rename is what flips the flag to `"user"`, which is what makes the name permanent.
+      //
+      // Nothing is sent for a blank field, deliberately. `createSession` names the conversation
+      // with `session.fallbackTitle` — the same placeholder this field's hint offers — and goes
+      // on leaving it `auto`, so the auto-titler still gets its turn.
       await store.renameSession(session.id, title.value);
     }
     emit("close");

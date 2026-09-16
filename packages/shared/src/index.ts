@@ -2005,6 +2005,15 @@ export interface Workspace {
    * existed, which reads as "no opinion" at every level.
    */
   settings?: WorkspaceSettings;
+  /**
+   * What this workspace is for, in the account's own words. Empty means nobody wrote one.
+   *
+   * Display-only: it reaches no prompt, so it is a note to the reader rather than an
+   * instruction to a model. Renaming a workspace is display-only in the same way and for a
+   * related reason — the directory keeps its slug — but unlike the name this one is editable
+   * wherever the workspace is configured.
+   */
+  description: string;
   createdAt: string;
   /**
    * How many conversations the workspace holds, and when the most recent one was last
@@ -2311,6 +2320,13 @@ export interface Session {
   title: string;
   titleSource: TitleSource;
   settings: SessionSettings;
+  /**
+   * What this conversation is about, in the user's own words. Empty means nobody wrote one.
+   *
+   * Display-only, like the workspace's, and deliberately unrelated to `titleSource`: a
+   * description is not a name, so writing one neither offers nor costs the auto-titler its turn.
+   */
+  description: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -2395,6 +2411,15 @@ export interface CreateWorkspaceInput {
 export interface UpdateWorkspaceInput {
   name?: string;
   /**
+   * The workspace's own note about itself.
+   *
+   * Optional *and* independent of `name`, like everything else here. An **omitted** field
+   * leaves the stored one alone; an empty string clears it. That is the same absent/empty
+   * distinction `all_tools` and `widgets` carry, and here it is what makes "delete my
+   * description" expressible without a sentinel.
+   */
+  description?: string;
+  /**
    * The workspace's own defaults, replaced wholesale when present.
    *
    * One object rather than a field per setting, because a settings control draws every field
@@ -2451,6 +2476,11 @@ export interface CreateSessionInput {
 
 export interface UpdateSessionInput {
   title?: string;
+  /**
+   * The conversation's own note about itself. Omitted leaves it alone; `""` clears it — the
+   * `UpdateWorkspaceInput.description` rule, spelled the same way on both objects.
+   */
+  description?: string;
   settings?: SessionSettings;
   /** The conversation's own persona. Independent of the Copilot it came from. */
   systemPrompt?: string;

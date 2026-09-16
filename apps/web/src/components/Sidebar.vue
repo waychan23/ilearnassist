@@ -8,6 +8,7 @@ import type { Session } from "../api/types";
 import {
   closeDrawer,
   openCopilots,
+  openSessionSettings,
   openWorkspaceSettings,
   showAccount,
   showAdmin,
@@ -127,6 +128,33 @@ async function commitRename() {
 
 function cancelRename() {
   renamingId.value = null;
+}
+
+/* ------------------------------ row parameters ------------------------------ */
+
+/**
+ * Open the conversation's parameters from its row.
+ *
+ * Selecting first is the whole of it, and it is not a shortcut around a missing feature. The
+ * dialog reads `store.activeSession`, `store.sessionSettings` and `store.sessionWidgets` — the
+ * conversation on screen — so pointing it at an arbitrary row would mean fetching all three for
+ * an id the user is not looking at, which is the refactor `WorkspaceSettingsDialog` needed for
+ * its widget rows and could not avoid. Here it can be avoided: a row already selects on click,
+ * so this is that click with a dialog on the end.
+ *
+ * Awaited, and the dialog opens **only** if the switch finished. `selectSession` assigns the
+ * active id before its two requests, so a failure part-way leaves the conversation changed but
+ * its messages and widgets not — and parameters shown over that are parameters for a
+ * conversation that is half the one on screen.
+ */
+async function openRowSettings(session: Session): Promise<void> {
+  try {
+    await store.selectSession(session.id);
+  } catch {
+    return;
+  }
+  closeDrawer();
+  openSessionSettings();
 }
 
 /* --------------------------------- deletes ---------------------------------- */
@@ -301,6 +329,19 @@ async function onDeleteSession(session: Session) {
           </span>
           <button class="icon-btn" :title="t('common.rename')"
             :aria-label="t('common.rename')" @click.stop="startRename(s)"><Icon name="edit" /></button>
+          <!--
+            The parameters, between the two edits to the row itself. It selects the conversation
+            first, because the dialog is about the conversation on screen (`store.activeSession`)
+            and there is no second object to point it at — clicking a row already selects it, so
+            this is the same navigation with a dialog on the end.
+          -->
+          <button
+            class="icon-btn"
+            data-testid="session-row-settings"
+            :title="t('sessionSettings.open')"
+            :aria-label="t('sessionSettings.open')"
+            @click.stop="openRowSettings(s)"
+          ><Icon name="sliders" /></button>
           <button class="icon-btn danger" :title="t('common.delete')"
             :aria-label="t('common.delete')" @click.stop="onDeleteSession(s)"><Icon name="trash" /></button>
         </template>

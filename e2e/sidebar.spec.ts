@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import { enterWorkspace } from "./workspaces";
+import { scriptLlm } from "./llm";
 
 /**
  * The sidebar's rail, at desktop width.
@@ -115,4 +116,38 @@ test("a rail survives leaving the workspace and coming back", async ({ page }) =
   // nothing clickable in it would be a dead end.
   await page.getByTestId("sidebar-toggle").click();
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(OPEN_WIDTH, 0);
+});
+
+test("a row's settings button opens the parameters for that conversation", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The row's third control, and the one thing about it a unit test cannot reach: it *selects*
+   * before it opens. The dialog reads whichever conversation is on screen, so a row that opened
+   * it without switching would show the parameters of the conversation the user just left —
+   * which is the failure this asserts against, by acting on a row that is not the active one.
+   */
+  await scriptLlm(request, { title: "第二个", turns: [{ content: "好的。" }] });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("composer-input").fill("第二个问题");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("session-title")).toHaveText("第二个");
+
+  // A second conversation, named by hand so the two rows are tellable apart — and it becomes
+  // the active one, so the row this test presses is the one that is *not* on screen.
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("session-title-input").fill("别的东西");
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("session-title")).toHaveText("别的东西");
+
+  const row = page.getByTestId("session-item").filter({ hasText: "第二个" });
+  await row.getByTestId("session-row-settings").click();
+
+  // The dialog is up, and it is about the row that was pressed — not the conversation that was
+  // on screen when the click happened.
+  await expect(page.getByTestId("session-name")).toHaveValue("第二个");
+  await expect(page.getByTestId("session-title")).toHaveText("第二个");
 });

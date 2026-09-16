@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
 import { sourceRawPath } from "../src/sourcePaths.js";
+import { DEFAULT_SESSION_TITLE } from "../src/db.js";
 import type {
   ApiErrorBody,
   Attachment,
@@ -131,6 +132,54 @@ describe("workspaces", () => {
   it("lists workspaces and returns 404 for a missing one on delete", async () => {
     expect((await inject({ method: "GET", url: "/api/workspaces" })).json<Workspace[]>().length).toBeGreaterThan(0);
     expect((await inject({ method: "DELETE", url: "/api/workspaces/nope" })).statusCode).toBe(404);
+  });
+
+  it("starts with no description and renames and describes in one request", async () => {
+    const workspace = await newWorkspace(env, "Before");
+    expect(workspace.description).toBe("");
+
+    const patched = (
+      await inject({
+        method: "PATCH",
+        url: `/api/workspaces/${workspace.id}`,
+        payload: { name: "After", description: "线性代数的习题" },
+      })
+    ).json<Workspace>();
+    expect(patched.name).toBe("After");
+    expect(patched.description).toBe("线性代数的习题");
+    // Display-only, as it always was: the directory keeps the slug it was created with.
+    expect(patched.slug).toBe("before");
+
+    // Independent fields: a rename does not clear the description, and the other way round.
+    const renamed = (
+      await inject({
+        method: "PATCH",
+        url: `/api/workspaces/${workspace.id}`,
+        payload: { name: "Again" },
+      })
+    ).json<Workspace>();
+    expect(renamed.description).toBe("线性代数的习题");
+    expect(
+      (
+        await inject({
+          method: "PATCH",
+          url: `/api/workspaces/${workspace.id}`,
+          payload: { description: "" },
+        })
+      ).json<Workspace>().name
+    ).toBe("Again");
+  });
+
+  it("refuses an empty workspace name even when a description comes with it", async () => {
+    const workspace = await newWorkspace(env, "Named");
+    const res = await inject({
+      method: "PATCH",
+      url: `/api/workspaces/${workspace.id}`,
+      payload: { name: "  ", description: "something" },
+    });
+    expect(res.statusCode).toBe(400);
+    // Nothing landed: the refused request is refused whole, not partially applied.
+    expect(env.server.db.getWorkspaceForUser(workspace.id, env.user.id)?.description).toBe("");
   });
 
   it("keeps the directory, and the rows under it, when the workspace is deleted", async () => {
@@ -487,7 +536,9 @@ describe("sessions", () => {
     ).json<Copilot>();
 
     const session = await newSession(env, workspace.id, { copilotId: copilot.id });
-    expect(session.title).toBe("New conversation");
+    // The placeholder a caller that names nothing gets. The web client sends its own, in the
+    // language being read — see `createSession` in `stores/app.ts`.
+    expect(session.title).toBe(DEFAULT_SESSION_TITLE);
     expect(session.titleSource).toBe("auto");
     // All four parts of the Copilot, not just the generation settings.
     expect(session).toMatchObject({
@@ -575,6 +626,92 @@ describe("sessions", () => {
       (await inject({ method: "PATCH", url: `/api/sessions/${session.id}`, payload: { title: "   " } })).statusCode
     ).toBe(400);
     expect((await inject({ method: "PATCH", url: "/api/sessions/nope", payload: { title: "x" } })).statusCode).toBe(404);
+  });
+
+  it("numbers a duplicate title at creation rather than refusing it", async () => {
+    const workspace = await newWorkspace(env);
+
+    const first = await newSession(env, workspace.id, { title: "学习计划" });
+    const second = await newSession(env, workspace.id, { title: "学习计划" });
+    const third = await newSession(env, workspace.id, { title: "学习计划" });
+
+    expect([first.title, second.title, third.title]).toEqual([
+      "学习计划",
+      "学习计划 (2)",
+      "学习计划 (3)",
+    ]);
+  });
+
+  it("numbers a duplicate rename, and leaves the renamed session's own name alone", async () => {
+    const workspace = await newWorkspace(env);
+    await newSession(env, workspace.id, { title: "学习计划" });
+    const other = await newSession(env, workspace.id, { title: "别的东西" });
+
+    const renamed = (
+      await inject({
+        method: "PATCH",
+        url: `/api/sessions/${other.id}`,
+        payload: { title: "学习计划" },
+      })
+    ).json<Session>();
+    expect(renamed.title).toBe("学习计划 (2)");
+
+    // Re-saving under the name it now holds must not walk it to `(3)`: the session itself is
+    // not one of the siblings it is checked against.
+    const resaved = (
+      await inject({
+        method: "PATCH",
+        url: `/api/sessions/${other.id}`,
+        payload: { title: "学习计划 (2)" },
+      })
+    ).json<Session>();
+    expect(resaved.title).toBe("学习计划 (2)");
+  });
+
+  it("numbers within one workspace, not across the account's workspaces", async () => {
+    const a = await newWorkspace(env);
+    const b = await newWorkspace(env);
+
+    expect((await newSession(env, a.id, { title: "Plan" })).title).toBe("Plan");
+    // A different workspace has its own list, so the name is free there.
+    expect((await newSession(env, b.id, { title: "Plan" })).title).toBe("Plan");
+  });
+
+  it("stores a description on a session, independently of its title", async () => {
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id, { title: "Keep Me" });
+
+    const described = (
+      await inject({
+        method: "PATCH",
+        url: `/api/sessions/${session.id}`,
+        payload: { description: "第三章的复习" },
+      })
+    ).json<Session>();
+    expect(described.description).toBe("第三章的复习");
+    expect(described.title).toBe("Keep Me");
+    // A description is not a name, so writing one does not silence the auto-titler.
+    expect(described.titleSource).toBe("auto");
+
+    // Empty clears it; omitting it leaves it alone — the absent/empty distinction.
+    expect(
+      (
+        await inject({
+          method: "PATCH",
+          url: `/api/sessions/${session.id}`,
+          payload: { settings: { maxSteps: 2 } },
+        })
+      ).json<Session>().description
+    ).toBe("第三章的复习");
+    expect(
+      (
+        await inject({
+          method: "PATCH",
+          url: `/api/sessions/${session.id}`,
+          payload: { description: "" },
+        })
+      ).json<Session>().description
+    ).toBe("");
   });
 
   it("updates settings without touching the title", async () => {
