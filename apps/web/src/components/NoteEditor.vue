@@ -59,6 +59,26 @@ const card = ref<HTMLElement | null>(null);
 const existing = computed(() => !!props.draft.noteId);
 
 /**
+ * What kind this note may be — which is not always the whole list.
+ *
+ * 标注 means "this marks a passage", so offering it for a note with nothing marked is offering a
+ * kind that cannot be true of the note being written. The window is opened with no quote in
+ * exactly one case — the panel's own 新建笔记 — and that is the case this excludes it from. The
+ * four that remain are stances on the material, and none of them needs a passage to be about.
+ *
+ * The second clause is for a row this window did not create: a note that *is* a 标注 keeps its own
+ * kind in the strip even with an empty quote. Only the API can produce that (the server defaults
+ * a missing type to `annotation`), and without the clause the strip would show nothing pressed —
+ * which reads as a note of no kind rather than as one this window cannot name. A note's own kind
+ * being hidden from it would be the worse of the two.
+ */
+const offeredTypes = computed(() =>
+  props.draft.quote || props.draft.type === "annotation"
+    ? NOTE_TYPES
+    : NOTE_TYPES.filter((candidate) => candidate !== "annotation")
+);
+
+/**
  * Whether there is anything to lose by closing.
  *
  * Every close path goes through this — the X, Escape, and the panel switching away — because
@@ -300,7 +320,7 @@ function typeLabel(candidate: NoteType): string {
         <label>{{ t("notes.editor.typeLabel") }}</label>
         <div class="segmented" role="group" :aria-label="t('notes.editor.typeLabel')">
           <button
-            v-for="candidate in NOTE_TYPES"
+            v-for="candidate in offeredTypes"
             :key="candidate"
             type="button"
             class="segment"

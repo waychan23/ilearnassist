@@ -182,6 +182,14 @@ test.describe("the notes widget", () => {
     await expect(replyContent(page)).toBeVisible();
     // The annotated original, read-only, above the field it is about.
     await expect(page.getByTestId("note-editor-quote")).toHaveText(SECOND_PHRASE);
+    /*
+     * …and here 标注 *is* offered, which is the other half of the rule the case above asserts the
+     * absence of: a passage is marked, so the kind that means "this marks a passage" is a true
+     * thing to say about the note. It is also the default, because the reader who chose 笔记 over
+     * the one-click mark has usually not changed their mind about what they are doing.
+     */
+    await expect(page.getByTestId("note-type-annotation")).toBeVisible();
+    await expect(page.getByTestId("note-type-annotation")).toHaveAttribute("aria-pressed", "true");
 
     // Floating *near* the selection means floating inside the window: the placement measures
     // the card and clamps it, so this is the assertion that it was placed at all rather than
@@ -221,6 +229,18 @@ test.describe("the notes widget", () => {
     await expect(page.getByTestId("note-editor-locate")).toHaveCount(0);
     // And nothing to delete yet — the note does not exist until it is saved.
     await expect(page.getByTestId("note-editor-remove")).toHaveCount(0);
+
+    /*
+     * 标注 is not offered, because there is nothing marked: the kind means "this marks a passage",
+     * and the note being written has none. Asserted as absence *and* as the four that remain,
+     * since a strip that had lost its whole list would satisfy the first half.
+     */
+    await expect(page.getByTestId("note-type-annotation")).toHaveCount(0);
+    for (const kind of ["idea", "question", "opinion", "other"]) {
+      await expect(page.getByTestId(`note-type-${kind}`)).toBeVisible();
+    }
+    // The one that is chosen is one of those, so nothing is pressed-but-hidden.
+    await expect(page.getByTestId("note-type-other")).toHaveAttribute("aria-pressed", "true");
 
     await page.getByTestId("note-editor-content").fill("复习这一节");
     await page.getByTestId("note-editor-save").click();

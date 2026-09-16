@@ -980,6 +980,12 @@ export interface GetSessionDiagramsResponse {
  * "question and idea" alone — a note that disagrees with the material, or agrees with it more
  * firmly than the material does, had nowhere to go before it existed.
  *
+ * **`annotation` is the one member a note may not always be offered**, and that is a presentation
+ * rule rather than a stored one: it means "this marks a passage", so the window hides it for a
+ * note with nothing marked — the one written from the panel's own button rather than from a
+ * selection. The list is what exists; which of it a given window offers is the client's business,
+ * and `NoteEditor.vue` is where that is decided.
+ *
  * Note this is not the `notes` field a `QuizAnswer` carries. That is one question's
  * free-text remark, stored inside the answer; a `Note` below is a record of its own, with an
  * id, a type and (usually) a place in a conversation.
