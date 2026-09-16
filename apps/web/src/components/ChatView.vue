@@ -26,6 +26,7 @@ import { useMessageSelection } from "../composables/messageSelection";
 import { useWidgetActivation } from "../composables/widgetActivation";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 import MessageItem from "./MessageItem.vue";
+import NoteSyncControl from "./NoteSyncControl.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
 import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
 import NoteEditor from "./NoteEditor.vue";
@@ -490,6 +491,14 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </div>
+
+      <!--
+        The conversation's own action, between the title it acts on and the browser's properties —
+        locale and theme belong to the browser, so they keep the outer edge. Its own group rather
+        than a third control inside the title block, which is that block's own comment's "most
+        crowded spot" and would have to absorb a label that grows and shrinks with the export.
+      -->
+      <NoteSyncControl v-if="store.activeSession" />
 
       <!-- The title block takes the free space, so the actions land on the right. -->
       <TopbarControls />

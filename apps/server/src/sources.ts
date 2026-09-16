@@ -86,7 +86,18 @@ export function registerFileSource(db: AppDb, input: RegisterFileInput): SourceR
 
   if (existing) {
     db.updateSourcePlace(existing.id, input.userId, {
-      name,
+      /*
+       * `name` moves only when the caller names it.
+       *
+       * A reconcile knows where a file *is*, not what it ought to be called: `GET /api/sources`
+       * walks every session directory and re-registers every file it finds, row or no row, and
+       * the `basename` fallback above would silently reset a name its owner had chosen — an
+       * exported note's title back to `nt_ab12.md`, on nothing more than somebody opening the
+       * library. `updateSourcePlace` COALESCEs, so an absent `name` leaves the row's own, and
+       * the paths that really do rename (the file manager's, and the agent writing a new path)
+       * pass a name explicitly.
+       */
+      ...(input.name === undefined ? {} : { name }),
       mimeType,
       category,
       size: input.size,

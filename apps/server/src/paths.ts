@@ -77,6 +77,17 @@ export function insightLogPath(dataRoot: string): string {
   return join(dataRoot, "logs", "insights.log");
 }
 
+/**
+ * The note export's log: the summary call, and what the run then did with it.
+ *
+ * A third file rather than a section of either of the others, for the reason the second is not
+ * a section of the first — this one is triggered by a button and reports a *write* as well as a
+ * call, so its block carries the counts and the timing beside the prompt and the answer.
+ */
+export function noteSyncLogPath(dataRoot: string): string {
+  return join(dataRoot, "logs", "notes.log");
+}
+
 /** One user's tree. `userSlug` is `users.slug`, which a rename does not change. */
 export interface UserLayout {
   userRoot: string;
