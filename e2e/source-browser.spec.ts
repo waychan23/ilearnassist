@@ -189,7 +189,7 @@ test("a conversation opens it pre-filtered, without a workspace picker", async (
 
   await page.goto("/");
   await enterWorkspace(page, mine);
-  await page.getByTestId("open-workspace-sources").click();
+  await page.getByTestId("open-sources").click();
 
   const dialog = page.getByTestId("sources-dialog");
   await expect(dialog).toBeVisible();

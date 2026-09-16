@@ -146,7 +146,7 @@ function activityLabel(workspace: Workspace): string {
       <div class="rail-head">
         <span class="rail-brand">{{ t("app.title") }}</span>
       </div>
-      <AppMenu class="rail-menu" sources-row />
+      <AppMenu class="rail-menu" />
     </aside>
 
     <div class="home-main">

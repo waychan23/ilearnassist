@@ -117,9 +117,9 @@ test("layout: one Escape closes the confirm prompt, not the drawer under it", as
 });
 
 test("layout: the closed drawer is not reachable by keyboard", async ({ page, request }) => {
-  // `visibility: hidden` on the closed panel is what keeps its back-to-workspaces row, its
-  // glyph buttons, every session row and the settings entry out of the tab order. Without it
-  // they are focusable and announced while off-screen.
+  // `visibility: hidden` on the closed panel is what keeps its all-workspaces row, its glyph
+  // buttons, every session row and the settings entry out of the tab order. Without it they
+  // are focusable and announced while off-screen.
   await converse(page, request, "你好");
   await expect(page.getByTestId("sidebar")).toBeHidden();
 

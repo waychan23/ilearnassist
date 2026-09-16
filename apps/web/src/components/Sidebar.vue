@@ -364,12 +364,13 @@ async function onDeleteSession(session: Session) {
       Its two groups stay together here, where the home page puts them at the rail's two ends: the
       sidebar's own content is already at the top, so there is no second end to spread to.
 
-      `workspace-row` is the one row only a page *inside* a workspace can name: this workspace's
-      own settings. The other entry to that dialog is the workspace's name in the header above —
-      deliberate rather than a duplicate, since the name is the shortcut for someone who already
-      knows, and the row is for someone who does not.
+      `in-workspace` says one thing with two consequences: this rail is drawn inside a workspace,
+      so the workspace-settings row appears (only a page *inside* a workspace has one to name, and
+      the other entry to that dialog is the workspace's name in the header above — deliberate
+      rather than a duplicate, since the name is the shortcut for someone who already knows and
+      the row is for someone who does not), and the library row opens pre-filtered to it.
     -->
-    <AppMenu class="side-menu" workspace-row />
+    <AppMenu class="side-menu" in-workspace />
 
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
   </aside>

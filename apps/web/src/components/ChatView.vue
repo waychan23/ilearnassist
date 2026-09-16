@@ -9,9 +9,7 @@ import {
   closeWidgetDrawer,
   openDrawer,
   openSessionSettings,
-  openSources,
   openWidgetDrawer,
-  showWorkspaceHome,
   uiState,
 } from "../composables/ui";
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
@@ -50,22 +48,6 @@ const messagesEl = ref<HTMLElement | null>(null);
 function toggleWidgetDrawer(): void {
   if (uiState.widgetDrawerOpen) closeWidgetDrawer();
   else openWidgetDrawer();
-}
-
-/* --------------------------------- leaving ----------------------------------- */
-
-/**
- * Out of the workspace and back to the list.
- *
- * The workspace list is refetched rather than assumed: the conversation counts and last
- * activity on the cards are the whole reason the page exists, and a turn sent since the
- * user entered would leave the card they are about to look at stale. Not awaited — the
- * navigation must not wait on a request, and the page renders from what is already in the
- * store while the fresh numbers land.
- */
-function leaveWorkspace(): void {
-  showWorkspaceHome();
-  void store.refreshWorkspaces().catch(() => undefined);
 }
 
 /* ------------------------------- title editing ------------------------------- */
@@ -388,22 +370,6 @@ onBeforeUnmount(() => {
   <main class="main">
     <header class="topbar">
       <!--
-        The way out, on every viewport. `isCompact` does not gate it the way it gates the
-        drawer toggle below: the drawer is one way to reach other conversations, but the
-        workspace list is the only way to reach another workspace, and a phone needs that
-        as much as a desktop does.
-      -->
-      <button
-        class="icon-btn back-toggle"
-        data-testid="back-to-workspaces"
-        :title="t('chat.backToWorkspaces')"
-        :aria-label="t('chat.backToWorkspaces')"
-        @click="leaveWorkspace"
-      >
-        <Icon name="arrow-left" />
-      </button>
-
-      <!--
         Only on a compact viewport, which also means no desktop spec can click it by
         accident. `aria-expanded` conveys the state without a second string; `aria-controls`
         needs the id the sidebar carries.
@@ -419,22 +385,6 @@ onBeforeUnmount(() => {
         @click="openDrawer"
       >
         <Icon name="menu" />
-      </button>
-
-      <!--
-        This workspace's material: the source browser pre-filtered to it, which is the second
-        front door the requirement asks for. It is the only file control in this bar, and it is
-        the one that reaches everything — the conversation's own files are among its rows,
-        reached by filtering rather than by a second dialog that showed the same folder.
-      -->
-      <button
-        class="icon-btn"
-        data-testid="open-workspace-sources"
-        :title="t('sources.workspaceScope')"
-        :aria-label="t('sources.workspaceScope')"
-        @click="openSources({ workspaceId: store.activeWorkspaceId ?? undefined })"
-      >
-        <Icon name="layers" />
       </button>
 
       <div class="title-block">

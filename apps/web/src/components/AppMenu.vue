@@ -20,37 +20,38 @@ import Icon from "./Icon.vue";
  * differ in *wording* rather than in content: the home page called the same dialog by a
  * different label. The rows are identical here; only the surface they are drawn on differs.
  *
+ * The **library** is the row that has to be in both rails unconditionally, and it is the reason
+ * this menu is the only door to it: a conversation's header used to carry a second button for
+ * the same browser, and two entries to one dialog in two idioms is what this change removes. A
+ * rail is the one surface both pages have, so a row here is reachable from the front door and
+ * from inside a conversation alike.
+ *
  * The one row that is not always there is **workspace settings**, which belongs to a workspace
  * rather than to an account — a rail on a page that is *about the list of workspaces* has no
- * workspace to configure, so the row is behind a prop rather than drawn and disabled.
+ * workspace to configure, so the row is behind a prop rather than drawn and disabled. That same
+ * prop is what the library row reads to decide its *scope*: entered from a conversation it opens
+ * pre-filtered to that workspace — the shortcut the removed header button used to be — while
+ * entered from the front door there is no workspace in view and it opens on the whole account.
+ * One fact ("this rail is drawn inside a workspace") with two consequences, rather than two
+ * props that could disagree.
  *
  * The test ids are shared with the surfaces, and that is safe for a reason worth stating: the
  * two rails are never mounted at once. `uiState.view` picks `WorkspaceHome` *or* the
  * `Sidebar + ChatView` pair, so a spec that asks for `open-copilots` finds exactly one.
  */
 
-defineProps<{
-  /** Draw the workspace-settings row. Only a page inside a workspace has one to name. */
-  workspaceRow?: boolean;
-  /**
-   * Draw the account's library row.
-   *
-   * The chat rail does not: its header already has the button that opens the same browser, and
-   * two entries to one dialog in two idioms is what this change is removing rather than adding.
-   * The home page has no such header — its topbar is the language and the theme — so this is
-   * where the library is reachable from the front door.
-   */
-  sourcesRow?: boolean;
-}>();
-
 const { t } = useI18n();
 const store = useAppStore();
+const props = defineProps<{
+  /** This rail is drawn inside a workspace: it has settings to name, and a library to scope. */
+  inWorkspace?: boolean;
+}>();
 
 /*
- * Both dialogs close the drawer on the way out, because this menu is drawn *inside* it on a
- * compact viewport: leaving it open would carry the flag into the page behind, which greets the
- * user with a drawer they did not ask for. The two view switches (`showAccount`, `showAdmin`)
- * already do this themselves, which is why only these two need it here.
+ * Every dialog opened from here closes the drawer on the way out, because this menu is drawn
+ * *inside* it on a compact viewport: leaving it open would carry the flag into the page behind,
+ * which greets the user with a drawer they did not ask for. The two view switches
+ * (`showAccount`, `showAdmin`) already do this themselves, which is why they are not here.
  */
 function onOpenCopilots(): void {
   closeDrawer();
@@ -62,6 +63,19 @@ function onOpenWorkspaceSettings(): void {
   if (!id) return;
   closeDrawer();
   openWorkspaceSettings(id);
+}
+
+/**
+ * `props.inWorkspace` is what decides the scope, and the guard is on the *id* rather than on the
+ * flag: a rail that believes it is inside a workspace while the store has not settled on one yet
+ * opens the whole account, which is the wider of the two answers and the safe one to be wrong
+ * with. The browser's own workspace filter is then one click away, which is why this is a
+ * shortcut rather than a restriction.
+ */
+function onOpenSources(): void {
+  const id = props.inWorkspace ? store.activeWorkspaceId : null;
+  closeDrawer();
+  openSources(id ? { workspaceId: id } : {});
 }
 </script>
 
@@ -75,13 +89,29 @@ function onOpenWorkspaceSettings(): void {
     -->
     <div class="menu-group" data-testid="menu-group-app">
       <!--
-        The workspace's own settings. It is the *labelled* of the two entries to that dialog (the
-        other is the workspace's name in the sidebar header), for someone who does not already know
-        that the name opens it. First in the group because it is the only row that names *where you
-        are* rather than what you can reach.
+        The account's library: every source it holds, filterable. First in the group, above the
+        workspace's own settings, because it is about the *material* while that row is about the
+        place the material sits in — and because it is the row with the most behind it, so the
+        thing a reader is most likely to want sits at the top of an otherwise identical column of
+        rows. Its scope is the prop's second consequence; see the note at the top.
       -->
       <button
-        v-if="workspaceRow"
+        class="menu-item side-menu-row"
+        :title="t('sources.title')"
+        data-testid="open-sources"
+        @click="onOpenSources"
+      >
+        <span class="gear"><Icon name="folder" /></span>
+        <span class="label">{{ t("sources.title") }}</span>
+      </button>
+
+      <!--
+        The workspace's own settings. It is the *labelled* of the two entries to that dialog (the
+        other is the workspace's name in the sidebar header), for someone who does not already know
+        that the name opens it.
+      -->
+      <button
+        v-if="props.inWorkspace"
         class="menu-item side-menu-row"
         :title="t('widgets.workspaceSettings.title')"
         data-testid="open-workspace-settings"
@@ -92,34 +122,19 @@ function onOpenWorkspaceSettings(): void {
         <span class="sub truncate">{{ store.activeWorkspace?.name ?? "" }}</span>
       </button>
 
-    <!--
-      The account's library: every source it holds, filterable. See the prop's note for why only
-      one of the two rails draws it.
-    -->
-    <button
-      v-if="sourcesRow"
-      class="menu-item side-menu-row"
-      :title="t('sources.title')"
-      data-testid="open-sources"
-      @click="openSources()"
-    >
-      <span class="gear"><Icon name="folder" /></span>
-      <span class="label">{{ t("sources.title") }}</span>
-    </button>
-
-    <!--
-      The account's own assistants. One row here and one on each rail, so an account that has not
-      entered a workspace yet can still manage the ones it made.
-    -->
-    <button
-      class="menu-item side-menu-row"
-      :title="t('copilots.title')"
-      data-testid="open-copilots"
-      @click="onOpenCopilots"
-    >
-      <span class="gear"><Icon name="robot" /></span>
-      <span class="label">{{ t("copilots.title") }}</span>
-    </button>
+      <!--
+        The account's own assistants. One row here and one on each rail, so an account that has not
+        entered a workspace yet can still manage the ones it made.
+      -->
+      <button
+        class="menu-item side-menu-row"
+        :title="t('copilots.title')"
+        data-testid="open-copilots"
+        @click="onOpenCopilots"
+      >
+        <span class="gear"><Icon name="robot" /></span>
+        <span class="label">{{ t("copilots.title") }}</span>
+      </button>
 
       <!--
         The platform console, for the accounts the server would let in. Drawn from the role the

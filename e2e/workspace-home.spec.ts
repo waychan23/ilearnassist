@@ -112,7 +112,11 @@ test("clicking a card enters that workspace, on its welcome screen", async ({ pa
   await expect(page.getByTestId("workspace-name")).toHaveText(name);
 });
 
-test("the chat pane's back button returns to the list", async ({ page }) => {
+test("leaving the workspace unmounts the pane and its rail", async ({ page }) => {
+  // One route out, and it is the sidebar header's: the chat header's arrow went with the library
+  // button, on the rule that the rail naming the workspace is where leaving it belongs. What this
+  // pins is the *unmount* — the workspace home is a different branch of `App.vue` rather than a
+  // pane hidden behind the chat, so nothing of the conversation is left mounted underneath it.
   await page.goto("/");
   await enterWorkspace(page);
   await expect(page.getByTestId("sidebar")).toBeVisible();
@@ -123,11 +127,7 @@ test("the chat pane's back button returns to the list", async ({ page }) => {
   await expect(page.getByTestId("sidebar")).toHaveCount(0);
 });
 
-test("the sidebar's header leaves the workspace too, and carries nothing else", async ({
-  page,
-}) => {
-  // The two ways out are reached from different places — one from the topbar, one from the
-  // sidebar — and on a phone the sidebar is the only one of them on screen.
+test("the sidebar's header is the way out, and carries nothing else", async ({ page }) => {
   await page.goto("/");
   await enterWorkspace(page);
 
