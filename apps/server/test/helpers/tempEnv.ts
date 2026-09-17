@@ -4,6 +4,7 @@ import { join } from "node:path";
 // From `fastify`, which re-exports both, rather than from `light-my-request` directly: that
 // package is a transitive dependency and is not something this one may name.
 import type { InjectOptions, LightMyRequestResponse } from "fastify";
+import { CLIENT_ID_HEADER } from "@ilearnassist/shared";
 import type {
   Attachment,
   AuthResult,
@@ -120,6 +121,15 @@ export interface TestEnv {
    * state no real account is ever in, and every test using it would be testing that state.
    */
   asUser(username: string): Promise<{ user: User; inject: TestEnv["inject"] }>;
+  /**
+   * A **second client of the same account** — the same token, a different client id.
+   *
+   * This is the seam the session-lock tests need and the harness did not have: `asUser` makes a
+   * second *account*, while two clients of one account is the situation a write lock is about
+   * (a desktop and a phone, two tabs). Nothing about the account changes, so a request from this
+   * one is authorized exactly as the first one's is, and only the lease tells them apart.
+   */
+  asClient(clientId: string): TestEnv["inject"];
   cleanup(): Promise<void>;
 }
 
@@ -139,8 +149,31 @@ const bearer = (token: string): Record<string, string> => ({
 });
 
 /** An `inject` that carries one account's token. */
-function injectAs(server: BuiltServer, token: string): TestEnv["inject"] {
-  return (opts) => server.app.inject({ ...opts, headers: { ...opts.headers, ...bearer(token) } });
+/**
+ * `app.inject`, as a named client of a named account.
+ *
+ * The client id is a **header** rather than part of the token, which is what makes "the same
+ * account, two clients" expressible here at all: a session write is gated on a lease held by
+ * whichever client asks, and a request that never says which client it is can never hold one. So
+ * every harness request carries an id, and a test that wants a second client passes a second one
+ * (`asClient`).
+ *
+ * A default rather than a requirement per call, because the choice is uninteresting to the ~40
+ * tests that write to a conversation for some other reason — and a suite that had to name a
+ * client in every `inject` would be a suite where the lock is everywhere and therefore invisible.
+ */
+const DEFAULT_CLIENT_ID = "test-client-1";
+
+function injectAs(
+  server: BuiltServer,
+  token: string,
+  clientId: string = DEFAULT_CLIENT_ID
+): TestEnv["inject"] {
+  return (opts) =>
+    server.app.inject({
+      ...opts,
+      headers: { ...opts.headers, ...bearer(token), [CLIENT_ID_HEADER]: clientId },
+    });
 }
 
 /**
@@ -348,6 +381,9 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
       }
       const { tokens } = settled.json<AuthResult>();
       return { user: first.user, inject: injectAs(bare.server, tokens.accessToken) };
+    },
+    asClient(clientId) {
+      return injectAs(bare.server, signedIn.token, clientId);
     },
   };
 }

@@ -32,7 +32,7 @@ import {
 import { emitWidgetEvent } from "../composables/widgetEvents";
 import { forgetSession, noteSession, onRetitled } from "../composables/sessionLeave";
 import { widgetPanel } from "../composables/widgetPanel";
-import { WIDGET_MODULES, type WidgetContext } from "../widgets/registry";
+import { WIDGET_MODULES, type WidgetInstall } from "../widgets/registry";
 import type {
   AskUserAnswers,
   Attachment,
@@ -54,6 +54,7 @@ import type {
   ProviderConfig,
   PublicConfig,
   Session,
+  SessionLockView,
   SessionNoteSync,
   SessionSettings,
   Source,
@@ -75,12 +76,48 @@ import {
   PLAN_TOOL_NAMES,
   autoInstallWidgetForTool,
   QUIZ_REVIEW_TOOL_NAME,
+  SESSION_LOCK_TTL_SECONDS,
   widgetGroupsForScope,
   type InteractiveAnswer,
   type PlanConflictAnswer,
   type QuizAnswer,
   type QuizQuestionView,
 } from "../api/types";
+import { ApiError } from "../utils/apiError";
+
+/**
+ * How often the workspace-wide lock check runs on its own.
+ *
+ * A backstop rather than the mechanism: every state change the client knows about asks for a
+ * check directly, and this is for the ones it cannot know — another client taking or releasing a
+ * conversation while this one sits still. Five minutes is long because the cost of being late is
+ * a stale dot that corrects itself on the next write, and the cost of being eager is a request
+ * per client per interval forever.
+ */
+const LOCK_POLL_MS = 300_000;
+
+/**
+ * How long a burst of "something changed" waits before it becomes one request.
+ *
+ * Short enough that a dot appears while the reader is still looking at the list, long enough that
+ * a switch between two conversations is one check rather than two.
+ */
+const LOCK_REFRESH_DEBOUNCE_MS = 2_000;
+
+/**
+ * The heartbeat, derived from the lease rather than chosen beside it.
+ *
+ * Half the server's TTL, so **one** missed beat is survivable: an unlucky request — a laptop
+ * waking, a network blink — must not cost the reader a conversation. The two numbers are one
+ * fact, which is why the client computes this rather than naming a second constant that could
+ * drift into a lease which expires between beats.
+ */
+export const SESSION_LOCK_HEARTBEAT_MS = (SESSION_LOCK_TTL_SECONDS * 1000) / 2;
+
+/** Whether a failure is the server saying another client holds this conversation. */
+function isSessionLocked(e: unknown): boolean {
+  return e instanceof ApiError && e.code === "SESSION_LOCKED";
+}
 
 interface StreamingState {
   active: boolean;
@@ -225,6 +262,26 @@ export const useAppStore = defineStore("app", () => {
   const activeWorkspaceId = ref<string | null>(null);
   const activeSessionId = ref<string | null>(null);
   const activeCopilotId = ref<string | null>(null);
+
+  /**
+   * Which conversations are being written to, and by which client.
+   *
+   * Keyed by session id, and holding only *live* leases — the server filters by expiry, so an
+   * entry here means "somebody may write to this right now". An absent entry is a free or expired
+   * conversation, which is the same thing to every reader: no dot, and writing is allowed.
+   *
+   * The `clientId` of every lease matters only for `mine`; the UI draws two states from it, not
+   * a list of holders. See `docs/session-locks.md`.
+   */
+  const sessionLocks = ref<Record<string, SessionLockView>>({});
+  /**
+   * The conversation this client holds, which it holds at most one of.
+   *
+   * Kept separately rather than derived from `sessionLocks` because the two answer different
+   * questions: `sessionLocks` is the workspace as the server sees it (and may lag), while this is
+   * what *this* client last took. A release clears it, and the heartbeat beats for it.
+   */
+  const heldSessionId = ref<string | null>(null);
 
   /**
    * Settings chosen before a conversation exists. Folded into the session on creation,
@@ -400,6 +457,25 @@ export const useAppStore = defineStore("app", () => {
   );
   const activeSession = computed(
     () => sessions.value.find((s) => s.id === activeSessionId.value) ?? null
+  );
+  /**
+   * The conversation on screen is held by *another* client, so it is read-only here.
+   *
+   * The one flag the composer and the banner read. Deliberately keyed on `mine` rather than on
+   * `heldSessionId`: this client's own lease may have lapsed (a failed heartbeat, a resumed
+   * laptop), and the question the UI asks is "may I write", which the server's view answers and
+   * a local record cannot.
+   *
+   * A conversation nobody holds is writable, which is what makes the whole thing unobtrusive:
+   * a single client sees no lock at all until a second one appears.
+   */
+  const isActiveSessionReadOnly = computed(() => {
+    const lease = sessionLocks.value[activeSessionId.value ?? ""];
+    return lease !== undefined && !lease.mine;
+  });
+  /** Whether *this* client holds the conversation on screen — what the green dot means. */
+  const holdsActiveSessionLock = computed(
+    () => sessionLocks.value[activeSessionId.value ?? ""]?.mine === true
   );
   /**
    * The label for the active conversation's persona, or null when it has none.
@@ -597,6 +673,18 @@ export const useAppStore = defineStore("app", () => {
     draftSettings.value = {};
     pendingAttachments.value = [];
     parseStatus.value = {};
+    /*
+     * The locks go with the account, like everything else here — and for a sharper reason than
+     * most: a lease held by a signed-out account would keep beating, and a *stale* list would
+     * hand the next account a read-only conversation that is not its own.
+     *
+     * `stopLockChecks` cancels the pending debounced refresh, which would otherwise land after
+     * the sign-out and write the previous account's locks into the new one's state. The lease
+     * itself is released by the lock lifecycle's `onScopeDispose`, which fires with the view.
+     */
+    sessionLocks.value = {};
+    heldSessionId.value = null;
+    stopLockChecks();
     // The export's state and its timer go with the account: a run started by one person's click
     // must not report itself into whoever signs in next.
     stopNoteSyncPolling();
@@ -761,9 +849,14 @@ export const useAppStore = defineStore("app", () => {
     // different one — so an open preview must go. `resetFileTree` closes it, which is why
     // there is no `closeFile()` beside this.
     resetFileTree();
-    // Both are reads of the same workspace and neither needs the other, so they go together
-    // rather than as two round trips on every switch.
-    await Promise.all([loadSessions(), loadWorkspaceWidgets()]);
+    // The previous workspace's locks mean nothing here, so they are dropped rather than left to
+    // be re-read: a dot on a conversation from another workspace would be a mark with nothing
+    // behind it. Read alongside the rest, as one of three.
+    sessionLocks.value = {};
+    heldSessionId.value = null;
+    // All three are reads of the same workspace and none needs the others, so they go together
+    // rather than as three round trips on every switch.
+    await Promise.all([loadSessions(), loadWorkspaceWidgets(), refreshWorkspaceLocks()]);
     // After the reads, so a widget that reacts by fetching sees the workspace it is now in
     // rather than the one that was there a moment ago.
     emitWidgetEvent({ type: "workspace.selected", workspaceId: id });
@@ -1180,6 +1273,20 @@ export const useAppStore = defineStore("app", () => {
      */
     stopNoteSyncPolling();
     noteSync.value = null;
+    /*
+     * Take this conversation's write lock, and give back the one being left.
+     *
+     * Not awaited with the reads below, deliberately: the lock is advisory, and making the
+     * conversation's messages wait on a lease would put a write lock in front of a read. It
+     * resolves into the state either way, and a refusal is the read-only state rather than an
+     * error — see `acquireSessionLock`.
+     *
+     * The release is keyed on `heldSessionId` rather than on "the session before this one",
+     * because a client holds at most one lease and the one it holds is the only one it owes.
+     */
+    const held = heldSessionId.value;
+    if (held && held !== id) void releaseSessionLock(held);
+    void acquireSessionLock(id);
     const [loaded, widgets] = await Promise.all([
       api.listMessages(id),
       api.listSessionWidgets(id),
@@ -1444,7 +1551,7 @@ export const useAppStore = defineStore("app", () => {
    */
   async function runWidgetHook(
     kind: "onInstall" | "onUninstall",
-    ctx: WidgetContext
+    ctx: WidgetInstall
   ): Promise<void> {
     const hook = WIDGET_MODULES[ctx.widgetId]?.[kind];
     if (!hook) return;
@@ -1728,6 +1835,148 @@ export const useAppStore = defineStore("app", () => {
   ): Promise<void> {
     const updated = await api.updateDocumentParsing(input);
     if (config.value) config.value.documentParsing = updated;
+  }
+
+  /* ------------------------- session write locks ---------------------------- */
+
+  /**
+   * Take the conversation, warning nobody if it is taken.
+   *
+   * A 409 is an *answer* here rather than a failure: it is how this client learns the
+   * conversation belongs to another one, which is the read-only state. So this never throws, and
+   * the caller — `selectSession`, which does not await anything about locks — needs no catch.
+   *
+   * The lease is recorded locally on success so the heartbeat has something to beat for even
+   * before the workspace list has been re-read; the list then confirms it (or corrects it, if the
+   * lease had already expired and somebody else took it in the meantime).
+   */
+  async function acquireSessionLock(sessionId: string): Promise<boolean> {
+    try {
+      const { lock } = await api.acquireSessionLock(sessionId);
+      heldSessionId.value = sessionId;
+      sessionLocks.value = { ...sessionLocks.value, [sessionId]: lock };
+      return true;
+    } catch (e) {
+      if (isSessionLocked(e)) {
+        /*
+         * Somebody else has it. Recorded here rather than left to the next workspace-wide read,
+         * because this is the answer to *the reader's own action*: they clicked a conversation and
+         * the composer has to be right about it before they type, not a poll later.
+         *
+         * The entry is deliberately bare — `mine` is the only field anything reads, and it is the
+         * only one a refusal answers. The holder's id, and when it took the lease, are what the
+         * workspace list carries; this is a belief about a lock, not a row copied from one, and
+         * the next read replaces it with the real thing.
+         */
+        heldSessionId.value = heldSessionId.value === sessionId ? null : heldSessionId.value;
+        sessionLocks.value = {
+          ...sessionLocks.value,
+          [sessionId]: {
+            sessionId,
+            clientId: "",
+            mine: false,
+            acquiredAt: "",
+            expiresAt: "",
+          },
+        };
+        // And ask the server for the real list, so the bare entry above lives for one round trip
+        // rather than until the five-minute poll. Debounced with every other trigger.
+        requestLockRefresh(0);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Give it back.
+   *
+   * Every failure is swallowed, like the leave report's: the reader has already gone, the
+   * conversation is not broken, and the lease expiring in two minutes is the same outcome for
+   * everybody else. What must happen either way is the local forgetting — a client that kept
+   * believing it held a conversation it had released would beat for it forever.
+   */
+  async function releaseSessionLock(sessionId: string): Promise<void> {
+    if (heldSessionId.value === sessionId) heldSessionId.value = null;
+    const { [sessionId]: released, ...rest } = sessionLocks.value;
+    if (released !== undefined) sessionLocks.value = rest;
+    try {
+      await api.releaseSessionLock(sessionId);
+    } catch {
+      /* silent — see above */
+    }
+  }
+
+  /**
+   * Re-read every lock in the workspace, once.
+   *
+   * One request for the whole list rather than one per conversation, because the marks are drawn
+   * on the session list; the sequence guard drops a reply that is not the latest, the shape
+   * `loadRows` and `runPreview` already use.
+   *
+   * **A second call while one is in flight for the same workspace joins it** rather than starting
+   * another — the "one in-flight attempt per conversation, joined rather than duplicated" rule the
+   * auto-titler uses. It is not hypothetical: entering a workspace reads the list (here, alongside
+   * the session list) and then mounts the chat view, whose lock lifecycle reads it again. Two
+   * requests for one action, and the join makes the second wait for the first instead.
+   */
+  let lockSeq = 0;
+  let lockRead: { workspaceId: string; promise: Promise<void> } | null = null;
+  async function refreshWorkspaceLocks(): Promise<void> {
+    const workspaceId = activeWorkspaceId.value;
+    if (!workspaceId) return;
+    if (lockRead?.workspaceId === workspaceId) return lockRead.promise;
+
+    const seq = (lockSeq += 1);
+    const read = readLocks(workspaceId, seq);
+    lockRead = { workspaceId, promise: read };
+    // The tracking is released whatever the read did, and only if this is still the read being
+    // tracked — a newer one for a different workspace has replaced it and owns the slot now.
+    // `readLocks` never rejects, so there is nothing here for the discarded promise to carry.
+    void read.finally(() => {
+      if (lockRead?.promise === read) lockRead = null;
+    });
+    return read;
+  }
+
+  /**
+   * The request itself, and the two ways its answer is not usable: it is not the latest read, or
+   * the reader has moved to another workspace. Either way it is dropped rather than applied.
+   */
+  async function readLocks(workspaceId: string, seq: number): Promise<void> {
+    try {
+      const { locks } = await api.listWorkspaceLocks(workspaceId);
+      if (seq !== lockSeq || activeWorkspaceId.value !== workspaceId) return;
+      sessionLocks.value = Object.fromEntries(locks.map((l) => [l.sessionId, l]));
+    } catch {
+      // Silently keep what is on screen. A lock list that could not be fetched is not a reason to
+      // strip the marks off the conversations — the dots would flicker on every hiccup, and the
+      // server refuses writes it should refuse regardless of what this client believes.
+    }
+  }
+
+  /**
+   * Ask for a workspace-wide refresh, at most once every couple of seconds.
+   *
+   * Six things notice a lock changing — entering the workspace, entering a conversation, a
+   * release, the five-minute poll, and a refusal from a turn — and without this they would each
+   * be a request. The debounce is short because the states it feeds are visible: a dot that
+   * appears a second late is fine, one that appears after a keystroke is not.
+   */
+  let lockRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  function requestLockRefresh(delayMs = LOCK_REFRESH_DEBOUNCE_MS): void {
+    if (lockRefreshTimer !== null) clearTimeout(lockRefreshTimer);
+    lockRefreshTimer = setTimeout(() => {
+      lockRefreshTimer = null;
+      void refreshWorkspaceLocks();
+    }, delayMs);
+  }
+
+  /** Stop every pending check. Called on sign-out, and by the lifecycle when the view goes. */
+  function stopLockChecks(): void {
+    if (lockRefreshTimer !== null) {
+      clearTimeout(lockRefreshTimer);
+      lockRefreshTimer = null;
+    }
   }
 
   /* ----------------------------- attachments ------------------------------- */
@@ -2367,7 +2616,33 @@ export const useAppStore = defineStore("app", () => {
       }
     } catch (e) {
       requestFailed = true;
-      if (epoch === accountEpoch) streaming.value.error = messageOf(e);
+      if (epoch === accountEpoch) {
+        streaming.value.error = messageOf(e);
+        /*
+         * A refusal from a turn route is the last way this client learns a lease changed.
+         *
+         * It is the case the requirement names — the heartbeat failed for some reason and the
+         * lease expired under a reader who was typing — and it is the one no amount of polling
+         * can prevent, because the turn is refused before it starts. Re-reading the workspace's
+         * locks is what turns the error into a state: the composer goes read-only, the dot turns
+         * orange, and the sentence on screen matches what the buttons do.
+         */
+        if (isSessionLocked(e)) {
+          /*
+           * The toast as well, unlike every other failure that arrives as a thrown response —
+           * and the difference is that this one is about the *action*, not about the turn.
+           *
+           * A refused turn is never persisted (the server refuses it before a turn exists), so
+           * the message list keeps no trace of it and the banner unmounts with the streaming
+           * block a moment later. Left at that, a reader who pressed send would watch a red line
+           * vanish and have nothing told to them, which is the shape of failure the error must
+           * survive. The persistent banner and the orange dot explain the state; this is the
+           * answer to the press.
+           */
+          error.value = messageOf(e);
+          requestLockRefresh(0);
+        }
+      }
     } finally {
       streaming.value.active = false;
       streaming.value.stopping = false;
@@ -2680,6 +2955,15 @@ export const useAppStore = defineStore("app", () => {
     activeWorkspace,
     activeSession,
     activeCopilotName,
+    sessionLocks,
+    heldSessionId,
+    isActiveSessionReadOnly,
+    holdsActiveSessionLock,
+    acquireSessionLock,
+    releaseSessionLock,
+    refreshWorkspaceLocks,
+    requestLockRefresh,
+    stopLockChecks,
     canAdmin,
     activeSystemPrompt,
     myCopilots,

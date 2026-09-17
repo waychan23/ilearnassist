@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import { isCompact } from "../composables/breakpoints";
-import type { Session } from "../api/types";
+import type { Session, SessionLockView } from "../api/types";
 import {
   closeDrawer,
   openCopilots,
@@ -100,6 +100,17 @@ function openNewSession() {
 function selectSession(id: string) {
   void store.selectSession(id);
   closeDrawer();
+}
+
+/**
+ * The live write lease on a conversation, or undefined when there is none.
+ *
+ * A method rather than a map the template indexes, because `sessionLocks` holds only what the
+ * server last reported and a missing key is the ordinary case — a `v-if` on an index read would
+ * be a `v-if` on `undefined` in the template, which is legal and reads as a mistake.
+ */
+function lockOf(sessionId: string): SessionLockView | undefined {
+  return store.sessionLocks[sessionId];
 }
 
 /* --------------------------------- rename ---------------------------------- */
@@ -324,6 +335,23 @@ async function onDeleteSession(session: Session) {
           @blur="commitRename"
         />
         <template v-else>
+          <!--
+            Who may write to this conversation. Present only while somebody holds it: a free
+            conversation has no mark, which is what keeps a single client's list looking exactly
+            as it did before this feature existed.
+
+            Green is this client's (typing works here), orange is another's (this one is
+            read-only). The `title` carries the sentence, since a dot is not self-explanatory —
+            and it is what the browser suite asserts on, a colour being awkward to test and easy
+            to get wrong.
+          -->
+          <span
+            v-if="lockOf(s.id)"
+            class="session-lock-dot"
+            data-testid="session-lock-dot"
+            :data-lock="lockOf(s.id)?.mine ? 'mine' : 'other'"
+            :title="lockOf(s.id)?.mine ? t('lock.mine') : t('lock.other')"
+          ></span>
           <span class="label" :title="t('sidebar.renameHint')" @dblclick.stop="startRename(s)">
             {{ s.title || t("session.fallbackTitle") }}
           </span>

@@ -27,6 +27,7 @@ import type {
   QuizQuestionStatus,
   QuizVerdict,
   Session,
+  SessionLockView,
   SessionSettings,
   SessionStats,
   Source,
@@ -551,6 +552,13 @@ interface SessionRow {
   updated_at: string;
 }
 
+interface SessionLockRow {
+  session_id: string;
+  client_id: string;
+  acquired_at: string;
+  expires_at: string;
+}
+
 interface MessageRow {
   id: string;
   session_id: string;
@@ -881,6 +889,20 @@ const mapSession = (r: SessionRow): Session => ({
   description: r.description ?? "",
   createdAt: r.created_at,
   updatedAt: r.updated_at,
+});
+
+/**
+ * A lease as the wire shows it.
+ *
+ * `mine` is computed against the asking client rather than stored, because it is the one part
+ * that is a fact about the *request* — the row knows who holds the lock, not who is asking.
+ */
+const mapSessionLock = (r: SessionLockRow, clientId: string): SessionLockView => ({
+  sessionId: r.session_id,
+  clientId: r.client_id,
+  mine: r.client_id === clientId,
+  acquiredAt: r.acquired_at,
+  expiresAt: r.expires_at,
 });
 
 const mapMessage = (r: MessageRow): Message => ({
@@ -1534,6 +1556,50 @@ export interface AppDb {
    * guard is genuinely upstream rather than merely inconvenient here.
    */
   touchSession(id: string): void;
+
+  /*
+   * Session write locks. All three are owner-scoped, and the two writes assert `ForUser` in
+   * their own `WHERE` rather than relying on a read that came before: these are the statements
+   * the routes consult *instead of* a lock table's own permission check, so they are the wrong
+   * place for the documented bare-id asymmetry above.
+   *
+   * `acquireSessionLock` answers `undefined` when a live lease is held by another client — the
+   * route turns that into 409 — and the lease when it took or renewed it. `releaseSessionLock`
+   * answers whether this client's lease was the one removed.
+   */
+  acquireSessionLock(input: {
+    sessionId: string;
+    userId: string;
+    clientId: string;
+    ttlSeconds: number;
+    now?: Date;
+  }): SessionLockView | undefined;
+  releaseSessionLock(input: {
+    sessionId: string;
+    userId: string;
+    clientId: string;
+    now?: Date;
+  }): boolean;
+  /**
+   * The live lease on this session, or undefined when it is free, expired, or not this account's.
+   *
+   * `clientId` is the *asking* client, and it is what `mine` is computed from — passed in rather
+   * than attached by the route so that the one field about the request is filled at the same
+   * place as the fields about the row.
+   */
+  sessionLockFor(
+    sessionId: string,
+    userId: string,
+    clientId: string,
+    now?: Date
+  ): SessionLockView | undefined;
+  /** Every live lease in the workspace. Empty for a workspace this account does not own. */
+  listSessionLocksForUser(
+    workspaceId: string,
+    userId: string,
+    clientId: string,
+    now?: Date
+  ): SessionLockView[];
 
   listMessagesForUser(sessionId: string, userId: string): Message[];
   getMessageForUser(id: string, userId: string): Message | undefined;
@@ -2668,6 +2734,75 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtTouchSession = db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?");
 
+  /* ----------------------------- session locks ---------------------------- */
+  /*
+   * Acquire, renew and release in one statement each.
+   *
+   * The `WHERE` on the upsert is the **whole of the concurrency control**, which is the same
+   * shape `setAutoTitleForUser` uses and for the same reason: a read followed by a write is a
+   * window two callers both pass. A row is claimable when it has expired or when it is already
+   * this client's, so `changes === 0` means exactly "a live lease held by somebody else" and
+   * needs no second query to interpret.
+   *
+   * Re-entry falls out of that rather than being a branch: the same client's second call matches
+   * `client_id = @clientId`, takes the DO UPDATE path, and is a heartbeat. `acquired_at` is kept
+   * on that path because it is the one column a beat must *not* move — it answers when this
+   * client first took the conversation, and resetting it every minute would make it a second
+   * `expires_at`.
+   */
+  const stmtAcquireSessionLock = db.prepare(
+    `INSERT INTO session_locks (session_id, client_id, acquired_at, expires_at)
+     SELECT s.id, @clientId, @now, @expiresAt
+       FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+      WHERE s.id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+     ON CONFLICT(session_id) DO UPDATE SET
+       client_id = @clientId,
+       acquired_at = CASE WHEN session_locks.client_id = @clientId
+                          THEN session_locks.acquired_at ELSE @now END,
+       expires_at = @expiresAt
+     WHERE session_locks.expires_at <= @now OR session_locks.client_id = @clientId`
+  );
+  /*
+   * Release. Owner-checked in the statement, and an expired row counts as releaseable: it is not
+   * anybody's any more, so letting its former holder clean it up is harmless and saves a beat.
+   * Note the *shape* of the owner check — a subquery rather than a join, because SQLite's DELETE
+   * has no join.
+   */
+  const stmtReleaseSessionLock = db.prepare(
+    `DELETE FROM session_locks
+      WHERE session_id = ? AND (client_id = ? OR expires_at <= ?)
+        AND session_id IN (
+          SELECT s.id FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+           WHERE w.user_id = ? AND s.deleted_at IS NULL AND w.deleted_at IS NULL)`
+  );
+  /*
+   * The lease on one conversation, for the write gate. The expiry is left to `lockFor` rather
+   * than filtered here, so that the rule for "is this lease still alive" exists once and reads
+   * the same for the single-session and the workspace-wide question.
+   */
+  const stmtGetSessionLock = db.prepare(
+    `SELECT l.* FROM session_locks l
+       JOIN sessions s ON s.id = l.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE l.session_id = ? AND w.user_id = ?
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
+  );
+  /*
+   * Every live lease in a workspace, in one query rather than one per conversation — this is what
+   * the client polls, and a per-session shape would make the session list N requests on every
+   * check. Owner-scoped through the join, exactly as the session list is, so a workspace that is
+   * not the caller's returns nothing rather than another account's leases.
+   */
+  const stmtListSessionLocksForUser = db.prepare(
+    `SELECT l.* FROM session_locks l
+       JOIN sessions s ON s.id = l.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE s.workspace_id = ? AND w.user_id = ?
+        AND l.expires_at > ?
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
+  );
+
   /* ------------------------------- messages ------------------------------- */
   /*
    * Two ways to read the same rows, and the pair is the point: `stmtListMessages` is the
@@ -3250,6 +3385,25 @@ export function createDb(dbPath: string): AppDb {
   const listMessagesOf = (sessionId: string): Message[] =>
     (stmtListMessages.all(sessionId) as MessageRow[]).map(mapMessage);
 
+  /**
+   * The lease on a conversation, if it is still alive, as the asking client sees it.
+   *
+   * An expired row is `undefined` — "free" and "expired" are the same answer to every caller,
+   * which is the point of a lease: nothing has to be cleaned up for the conversation to become
+   * available again. The comparison is lexical because both sides are ISO strings in UTC, the
+   * same rule `auth_tokens.expires_at` is read by.
+   */
+  const lockFor = (
+    sessionId: string,
+    userId: string,
+    clientId: string,
+    now_: Date
+  ): SessionLockView | undefined => {
+    const r = stmtGetSessionLock.get(sessionId, userId) as SessionLockRow | undefined;
+    if (!r || r.expires_at <= now_.toISOString()) return undefined;
+    return mapSessionLock(r, clientId);
+  };
+
   const listUsersOf = (): UserRecord[] => (stmtListUsers.all() as UserRow[]).map(mapUser);
 
   return {
@@ -3628,6 +3782,51 @@ export function createDb(dbPath: string): AppDb {
     },
     touchSession(id) {
       stmtTouchSession.run(now(), id);
+    },
+
+    acquireSessionLock({ sessionId, userId, clientId, ttlSeconds, now: at }) {
+      const at_ = at ?? new Date();
+      // `changes` **is** the decision, and it is the statement's own, so nothing can slip between
+      // the check and the write. Zero rows means one thing only: the upsert's `WHERE` excluded
+      // this client, i.e. a live lease held by somebody else — or, unreachably, a session this
+      // account does not own, since the INSERT selects through the owner. Both answer the same
+      // refusal, which is not a distinguishable one: the route resolves the session `ForUser`
+      // before it gets here, so a foreign id has already become a 404.
+      const written = stmtAcquireSessionLock.run({
+        sessionId,
+        userId,
+        clientId,
+        now: at_.toISOString(),
+        expiresAt: new Date(at_.getTime() + ttlSeconds * 1000).toISOString(),
+      });
+      if (written.changes === 0) return undefined;
+      // Read back only to *build* the view, never to decide: a fresh acquire, a heartbeat and a
+      // takeover of an expired row are three ways to succeed, and the caller wants the lease in
+      // all of them. Returning the row without the guard above is how this handed a second client
+      // the first one's lease while reporting success.
+      return lockFor(sessionId, userId, clientId, at_);
+    },
+
+    releaseSessionLock({ sessionId, userId, clientId, now: at }) {
+      const at_ = at ?? new Date();
+      const result = stmtReleaseSessionLock.run(
+        sessionId,
+        clientId,
+        at_.toISOString(),
+        userId
+      );
+      return result.changes > 0;
+    },
+
+    sessionLockFor(sessionId, userId, clientId, at) {
+      return lockFor(sessionId, userId, clientId, at ?? new Date());
+    },
+
+    listSessionLocksForUser(workspaceId, userId, clientId, at) {
+      const at_ = at ?? new Date();
+      return (
+        stmtListSessionLocksForUser.all(workspaceId, userId, at_.toISOString()) as SessionLockRow[]
+      ).map((r) => mapSessionLock(r, clientId));
     },
 
     listMessagesForUser(sessionId, userId) {

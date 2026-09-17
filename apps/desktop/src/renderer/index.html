@@ -75,6 +75,18 @@
           environment variable.
         -->
         <p class="field__hint" data-role="data-dir-hint" hidden></p>
+        <!--
+          The one-click answer, and only while nothing has been chosen: it creates the folder
+          named in the hint above. `button--primary` because in this state it is *the* action —
+          every other control is waiting on a data root, including Start.
+
+          "Choose folder…" stays in the head rather than moving down here, because it is the
+          control for both states: the first-run prompt and the later "move my data". A second
+          copy beside this one would be two controls meaning one thing.
+        -->
+        <p class="field__answer" data-role="default-data-dir" hidden>
+          <button type="button" class="button button--primary" data-action="use-default-data-dir"></button>
+        </p>
       </section>
 
       <section class="field">

@@ -28,14 +28,17 @@ export interface AppPaths {
   /** `ILA_CONFIG_PATH` — the app's own overlay, merged over `configFile` on every boot. */
   overlayFile: string;
   /**
-   * Where the file picker opens, and nothing more.
+   * The folder the panel offers when nobody has chosen one yet, and where the picker opens.
    *
-   * The data root itself is the *user's* to choose and lives in `desktop.json` — see
-   * `DesktopSettings.dataDir`. This is only the sensible place to start looking, and it is
-   * under the app's own per-user directory because that is out of the application bundle:
-   * dragging the `.app` to the trash does not take `~/Library/Application Support` with it.
+   * `~/ilearnassist`, in the user's home directory. It is offered rather than assumed: the
+   * data root is still the *user's* to choose and is recorded in `desktop.json` — see
+   * `DesktopSettings.dataDir` — and this is the answer that one click takes instead of
+   * navigating a file dialog.
+   *
+   * It is deliberately **outside the application bundle**, which is the whole reason it is not
+   * a path beside the binary: dragging the `.app` to the trash does not take it with you.
    */
-  suggestedDataDir: string;
+  defaultDataDir: string;
   /** The built frontend shipped inside the app bundle. Read-only. */
   webDir: string;
   /** The `config.yaml` template shipped inside the app bundle. Read-only. */
@@ -45,6 +48,8 @@ export interface AppPaths {
 export interface ResolveAppPathsInput {
   /** `app.getPath("userData")` — `~/Library/Application Support/ilearnassist` on macOS. */
   userDataDir: string;
+  /** `app.getPath("home")` — where `defaultDataDir` goes. */
+  homeDir: string;
   /** `process.resourcesPath` packed; a directory under `apps/desktop` when running unpacked. */
   resourcesDir: string;
 }
@@ -56,10 +61,47 @@ export function resolveAppPaths(input: ResolveAppPathsInput): AppPaths {
     configDir,
     configFile: join(configDir, "config.yaml"),
     overlayFile: join(configDir, "config.local.yaml"),
-    suggestedDataDir: join(input.userDataDir, "data"),
+    defaultDataDir: join(input.homeDir, "ilearnassist"),
     webDir: join(input.resourcesDir, "web"),
     templateConfig: join(input.resourcesDir, "config", "config.yaml"),
   };
+}
+
+/**
+ * Make the folder the panel offered, so a data root exists to hand the server.
+ *
+ * The one place this app creates a data directory, and it is a *user's click* rather than a
+ * launch side effect — which is why `seedFirstRun` still creates none (see its comment) and why
+ * the requirement is still "chosen, never defaulted": the server is handed a path a human said
+ * yes to, and it goes on refusing without one.
+ *
+ * The caller passes `paths.defaultDataDir` and nothing else, so there is no argument here for a
+ * renderer to steer — the shape of the call is the guard. Only the root is made; the server's own
+ * boot builds the rest (`createDb` makes the database's directory, `ensureUserLayout` the
+ * running user's), both recursively.
+ */
+export function ensureDataDir(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+}
+
+/**
+ * What the first-run prompt came back with, from the button index a native dialog answers with.
+ *
+ * Here rather than in `main.ts` for this module's reason: main has no tests — it is Electron
+ * plumbing, kept thin enough to read — while this is a decision with three outcomes and an
+ * `else` that has to be right. The index order it decodes is the order `main.ts` passes its
+ * buttons in, and the two live side by side for that reason.
+ *
+ * **Anything unrecognised is a cancel**, which is the safe direction: the alternatives would be
+ * treating a dismissed or unexpected answer as consent to create a folder, or as consent to open
+ * another dialog on top of the one that just closed.
+ */
+export type DataDirPromptAnswer = "default" | "choose" | "cancel";
+
+export function dataDirPromptAnswer(response: number): DataDirPromptAnswer {
+  if (response === 0) return "default";
+  if (response === 1) return "choose";
+  return "cancel";
 }
 
 /** The database file a chosen data root would hold. The one marker of "there is data here". */
@@ -114,7 +156,8 @@ server:
  * **Nothing here creates a data directory.** It used to create `<userData>/data` as the
  * server's default; now that the root is the user's to choose, making a folder for them
  * would produce an empty directory that looks exactly like the data root they were supposed
- * to pick — and a second, empty database if they picked it by mistake.
+ * to pick — and a second, empty database if they picked it by mistake. The one place this app
+ * *does* create one is `ensureDataDir`, and it runs because somebody pressed a button.
  *
  * Throws if the template is missing, because the alternative is a server that boots with no
  * providers and dies with "No providers configured", which names the symptom and not the

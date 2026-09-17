@@ -443,6 +443,17 @@ body.is-mac {
   line-height: 1.5;
 }
 
+/*
+ * The answer to the question the hint above it asks: the button that takes the offered folder.
+ *
+ * A `p` only because it is a paragraph of the form, and it holds a control rather than prose —
+ * so the one thing it needs is the browser's default margin removed. The spacing around it is
+ * `.field`'s own gap, which is why there is no padding here.
+ */
+.field__answer {
+  margin: 0;
+}
+
 /* ---------- the QR sheet ---------- */
 
 .overlay {

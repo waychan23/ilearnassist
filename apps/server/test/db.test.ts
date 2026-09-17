@@ -1456,3 +1456,151 @@ describe("counters", () => {
     }
   });
 });
+
+describe("session locks", () => {
+  /** A fixed clock, so the lease arithmetic is asserted rather than assumed. */
+  const AT = new Date("2026-09-16T10:00:00.000Z");
+  const TTL = 120;
+
+  function lock(id = "s1", clientId = "c1", at: Date = AT) {
+    return db.acquireSessionLock({
+      sessionId: id,
+      userId: OWNER,
+      clientId,
+      ttlSeconds: TTL,
+      now: at,
+    });
+  }
+
+  beforeEach(() => {
+    addWorkspace();
+    addSession();
+  });
+
+  it("takes a free conversation, and stamps the lease the client asked for", () => {
+    const taken = lock();
+    expect(taken).toMatchObject({
+      sessionId: "s1",
+      clientId: "c1",
+      mine: true,
+      acquiredAt: AT.toISOString(),
+      expiresAt: new Date(AT.getTime() + TTL * 1000).toISOString(),
+    });
+  });
+
+  it("refuses a second client while the lease is live", () => {
+    lock("s1", "c1");
+    expect(lock("s1", "c2")).toBeUndefined();
+  });
+
+  it("treats the holder's second call as a heartbeat, not an error", () => {
+    // The re-entrancy rule, and it falls out of the statement's own WHERE rather than being a
+    // branch a caller could forget: the same client matches `client_id = @clientId`.
+    lock("s1", "c1");
+    const later = new Date(AT.getTime() + 60_000);
+    const beaten = lock("s1", "c1", later);
+
+    expect(beaten?.clientId).toBe("c1");
+    expect(beaten?.expiresAt).toBe(new Date(later.getTime() + TTL * 1000).toISOString());
+    // `acquiredAt` is the one column a beat must not move — it answers when this client first
+    // took the conversation, and resetting it every minute would make it a second `expiresAt`.
+    expect(beaten?.acquiredAt).toBe(AT.toISOString());
+  });
+
+  it("hands an expired lease to whoever asks next", () => {
+    lock("s1", "c1");
+    // One millisecond past the expiry, not on it: the comparison is `<=`, so the boundary
+    // belongs to the new client.
+    const taken = lock("s1", "c2", new Date(AT.getTime() + TTL * 1000 + 1));
+
+    expect(taken?.clientId).toBe("c2");
+    expect(taken?.acquiredAt).toBe(new Date(AT.getTime() + TTL * 1000 + 1).toISOString());
+  });
+
+  it("reads a live lease, and nothing once it has expired", () => {
+    lock("s1", "c1");
+
+    expect(db.sessionLockFor("s1", OWNER, "c1", AT)?.mine).toBe(true);
+    expect(db.sessionLockFor("s1", OWNER, "c2", AT)?.mine).toBe(false);
+    // Free and expired are one answer, which is the whole point of a lease: nothing has to be
+    // cleaned up for the conversation to become available again.
+    expect(db.sessionLockFor("s1", OWNER, "c1", new Date(AT.getTime() + TTL * 1000))).toBeUndefined();
+  });
+
+  it("releases only its own lease, and says whether it did", () => {
+    lock("s1", "c1");
+    expect(db.releaseSessionLock({ sessionId: "s1", userId: OWNER, clientId: "c2", now: AT })).toBe(
+      false
+    );
+    expect(db.sessionLockFor("s1", OWNER, "c1", AT)).toBeDefined();
+
+    expect(db.releaseSessionLock({ sessionId: "s1", userId: OWNER, clientId: "c1", now: AT })).toBe(
+      true
+    );
+    expect(db.sessionLockFor("s1", OWNER, "c1", AT)).toBeUndefined();
+  });
+
+  it("lets the holder clean up a lease that already expired", () => {
+    // Not anybody's any more, so this is tidying rather than seizing, and it saves a beat.
+    lock("s1", "c1");
+    const after = new Date(AT.getTime() + TTL * 1000 + 1);
+    expect(db.releaseSessionLock({ sessionId: "s1", userId: OWNER, clientId: "c1", now: after })).toBe(
+      true
+    );
+  });
+
+  it("lists only live leases, and only in the workspace asked about", () => {
+    addWorkspace("w2");
+    addSession("s2", { workspaceId: "w2" });
+    lock("s1", "c1");
+    lock("s2", "c2");
+
+    expect(db.listSessionLocksForUser("w1", OWNER, "c1", AT).map((l) => [l.sessionId, l.mine])).toEqual([
+      ["s1", true],
+    ]);
+    expect(db.listSessionLocksForUser("w2", OWNER, "c1", AT).map((l) => [l.sessionId, l.mine])).toEqual([
+      ["s2", false],
+    ]);
+    // Expiry is filtered by the query, so a workspace-wide read does not hand back stale rows
+    // the single-session read would refuse.
+    const later = new Date(AT.getTime() + TTL * 1000 + 1);
+    expect(db.listSessionLocksForUser("w1", OWNER, "c1", later)).toEqual([]);
+  });
+
+  it("keeps one account's lease out of another's reach", () => {
+    // The lock is not a security boundary, but the row it lives in still belongs to an account:
+    // a foreign session id must be as invisible here as it is everywhere else.
+    db.createUser({ id: "u2", username: "other", slug: "other" });
+    addSession("s2");
+    lock("s1", "c1");
+
+    expect(db.sessionLockFor("s1", "u2", "c1", AT)).toBeUndefined();
+    expect(db.listSessionLocksForUser("w1", "u2", "c1", AT)).toEqual([]);
+    expect(db.releaseSessionLock({ sessionId: "s1", userId: "u2", clientId: "c1", now: AT })).toBe(
+      false
+    );
+    expect(db.sessionLockFor("s1", OWNER, "c1", AT)).toBeDefined();
+
+    // And the acquire cannot *create* one either, which is the belt to the route's braces: the
+    // INSERT selects the session through the owner, so a foreign id writes zero rows — even on a
+    // conversation that is completely free, which is the case a "held by another" guard alone
+    // would have let through.
+    const foreign = db.acquireSessionLock({
+      sessionId: "s2",
+      userId: "u2",
+      clientId: "c9",
+      ttlSeconds: TTL,
+      now: AT,
+    });
+    expect(foreign).toBeUndefined();
+    expect(db.sessionLockFor("s2", OWNER, "c1", AT)).toBeUndefined();
+  });
+
+  it("forgets a lease with the conversation it belonged to", () => {
+    // `ON DELETE CASCADE`, unlike the soft delete every application entity gets: a lease on a
+    // conversation nobody can reach is a row nothing can act on.
+    lock("s1", "c1");
+    db.raw.prepare("DELETE FROM sessions WHERE id = ?").run("s1");
+    expect(db.raw.prepare("SELECT COUNT(*) AS n FROM session_locks").get()).toEqual({ n: 0 });
+  });
+});

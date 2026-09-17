@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, type EffectScope } from "vue";
-import type { WidgetId } from "@ilearnassist/shared";
+import type { SessionLockView, WidgetId } from "@ilearnassist/shared";
 
 /**
  * Which widget is told it is live, and when.
@@ -29,6 +29,13 @@ const mocks = vi.hoisted(() => ({
     listWorkspaceWidgets: vi.fn(() => Promise.resolve([])),
     listCopilots: vi.fn(() => Promise.resolve([])),
     listSources: vi.fn(() => Promise.resolve([])),
+    // The lock list, because the session's writability — which is one of the inputs this effect
+    // gathers into a widget's context — comes from what the server reports here.
+    listWorkspaceLocks: vi.fn(
+      (): Promise<{ locks: SessionLockView[] }> => Promise.resolve({ locks: [] })
+    ),
+    acquireSessionLock: vi.fn(),
+    releaseSessionLock: vi.fn(),
   },
 }));
 
@@ -106,7 +113,38 @@ describe("activating the installed widgets", () => {
       scope: "session",
       scopeId: "s1",
       widgetId: "notes",
+      // Nothing holds the conversation, so it accepts writes.
+      writable: true,
     });
+  });
+
+  it("tells the widget the conversation is read-only when another client holds it", async () => {
+    // The parameter the notes widget obeys, and the reason it is a parameter: the widget is *told*
+    // by the session rather than looking it up, so nothing on the notes path has to know what a
+    // write lock is. See `WidgetContext.writable`.
+    const store = useAppStore();
+    store.activeWorkspaceId = "w1";
+    store.activeSessionId = "s1";
+    (store as unknown as { sessionWidgets: unknown[] }).sessionWidgets = [
+      { id: "notes", scope: "session", enabled: true },
+    ];
+    mocks.api.listWorkspaceLocks.mockResolvedValue({
+      locks: [
+        {
+          sessionId: "s1",
+          clientId: "another-client",
+          mine: false,
+          acquiredAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "2026-01-01T00:02:00.000Z",
+        },
+      ],
+    });
+
+    scope.run(() => useWidgetActivation());
+    await store.refreshWorkspaceLocks();
+    await nextTick();
+
+    expect(contextsOf("notes").at(-1)).toMatchObject({ scope: "session", writable: false });
   });
 
   it("prefers the conversation's install over the workspace's", async () => {
@@ -129,6 +167,7 @@ describe("activating the installed widgets", () => {
       scope: "session",
       scopeId: "s1",
       widgetId: "notes",
+      writable: true,
     });
   });
 

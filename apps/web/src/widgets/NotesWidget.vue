@@ -9,6 +9,7 @@ import {
   noteList,
   notesClaimRefused,
   notesError,
+  notesWritable,
   openNewNoteEditor,
   openNoteEditor,
 } from "../composables/notes";
@@ -121,11 +122,18 @@ function retryClaim(): void {
         <span class="notes-count" data-testid="notes-count">
           {{ t("notes.count", { count: notes.length }, notes.length) }}
         </span>
+        <!--
+          Disabled while another client holds the conversation, and it says which reason it is
+          rather than going quiet: the reader can still read every note here, so a control that
+          did nothing when pressed would read as the panel being broken. The flag comes from the
+          widget context (`WidgetContext.writable`) — this component never asks about locks.
+        -->
         <button
           type="button"
           class="icon-btn"
           data-testid="notes-add"
-          :title="t('notes.add')"
+          :disabled="!notesWritable"
+          :title="notesWritable ? t('notes.add') : t('lock.other')"
           :aria-label="t('notes.add')"
           @click="openNewNoteEditor"
         >

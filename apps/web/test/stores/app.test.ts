@@ -8,6 +8,7 @@ import type {
   Message,
   PublicConfig,
   Session,
+  SessionLockView,
   Source,
   User,
   WidgetId,
@@ -40,6 +41,17 @@ const mocks = vi.hoisted(() => ({
     updateSession: vi.fn(),
     deleteSession: vi.fn(),
     reportSessionLeave: vi.fn().mockResolvedValue({ status: "skipped" }),
+    /**
+     * The session write lock. Given a resting value rather than left `undefined`, for the same
+     * reason the export state is: `selectSession` and `selectWorkspace` both reach for these on
+     * the way in, and an `undefined` would be a TypeError swallowed by their own catch — every
+     * test paying for a failure none of them is about.
+     */
+    acquireSessionLock: vi.fn().mockResolvedValue({
+      lock: { sessionId: "s1", clientId: "c", mine: true, acquiredAt: "t", expiresAt: "t" },
+    }),
+    releaseSessionLock: vi.fn().mockResolvedValue({ released: true }),
+    listWorkspaceLocks: vi.fn().mockResolvedValue({ locks: [] }),
     listMessages: vi.fn(),
     listWorkspaceWidgets: vi.fn(),
     setWorkspaceWidget: vi.fn(),
@@ -313,6 +325,23 @@ beforeEach(() => {
   );
   mocks.api.createSession.mockImplementation(async () => session());
   mocks.api.listSessions.mockResolvedValue([session()]);
+  /*
+   * The lock calls are re-established here rather than only in the hoisted factory, because
+   * `vi.clearAllMocks()` clears *calls* and not implementations — so a test that made the
+   * acquire refuse (the read-only case) would leave it refusing for every test after it. The
+   * rest of this block exists for the same reason.
+   */
+  mocks.api.acquireSessionLock.mockResolvedValue({
+    lock: {
+      sessionId: "s1",
+      clientId: "this-client",
+      mine: true,
+      acquiredAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:02:00.000Z",
+    },
+  });
+  mocks.api.releaseSessionLock.mockResolvedValue({ released: true });
+  mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [] });
   mocks.fileToBase64.mockResolvedValue("aGk=");
 });
 
@@ -3441,5 +3470,208 @@ describe("the note export", () => {
     const calls = mocks.api.getNoteSync.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(mocks.api.getNoteSync).toHaveBeenCalledTimes(calls);
+  });
+});
+
+/**
+ * Session write locks.
+ *
+ * The store's half of the feature: it records which conversations are held and by whom, and it
+ * offers the two flags the UI reads. What it deliberately does *not* do is enforce anything —
+ * the server refuses the write — so a test here is about the state being right when the server
+ * says a conversation is somebody else's.
+ *
+ * `composables/sessionLock.test.ts` owns the lifetimes (the heartbeat and the release on the way
+ * out), because those are the view's, not the store's.
+ */
+describe("session write locks", () => {
+  /** A refusal, shaped exactly as the client's error normaliser builds one. */
+  function lockedError() {
+    return new ApiError("SESSION_LOCKED", "held by another client", 409);
+  }
+
+  function lease(overrides: Partial<SessionLockView> = {}): SessionLockView {
+    return {
+      sessionId: "s1",
+      clientId: "other-client",
+      mine: false,
+      acquiredAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:02:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("takes the conversation's lock on the way in", async () => {
+    const store = await readyStore();
+    expect(mocks.api.acquireSessionLock).toHaveBeenCalledWith("s1");
+    expect(store.heldSessionId).toBe("s1");
+    expect(store.holdsActiveSessionLock).toBe(true);
+    expect(store.isActiveSessionReadOnly).toBe(false);
+  });
+
+  it("marks the conversation read-only when another client holds it", async () => {
+    // The 409 is an answer rather than a failure: it is how this client learns the conversation
+    // is somebody else's. So it must not throw out of `selectSession`, and it must land in the
+    // state the composer reads.
+    mocks.api.acquireSessionLock.mockRejectedValue(lockedError());
+    const store = await readyStore();
+
+    expect(store.isActiveSessionReadOnly).toBe(true);
+    expect(store.holdsActiveSessionLock).toBe(false);
+    // And it does not claim to hold what it was refused.
+    expect(store.heldSessionId).toBeNull();
+  });
+
+  it("gives back the conversation it was holding when another one is opened", async () => {
+    // A client holds at most one lease, and the one it owes is the one it took — not "whatever
+    // was on screen before", which a click on the same row twice would get wrong.
+    const store = await readyStore({ sessions: [session(), session({ id: "s2" })] });
+    mocks.api.listMessages.mockResolvedValue([]);
+
+    await store.selectSession("s2");
+
+    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1");
+    expect(mocks.api.acquireSessionLock).toHaveBeenCalledWith("s2");
+  });
+
+  it("does not release the conversation it is re-opening", async () => {
+    const store = await readyStore();
+    await store.selectSession("s1");
+    expect(mocks.api.releaseSessionLock).not.toHaveBeenCalled();
+  });
+
+  it("carries every lock in the workspace, with mine settled per conversation", async () => {
+    const store = await readyStore({
+      sessions: [session(), session({ id: "s2" })],
+    });
+    mocks.api.listWorkspaceLocks.mockResolvedValue({
+      locks: [lease({ mine: true }), lease({ sessionId: "s2" })],
+    });
+
+    await store.refreshWorkspaceLocks();
+
+    expect(mocks.api.listWorkspaceLocks).toHaveBeenCalledWith("w1");
+    expect(Object.keys(store.sessionLocks).sort()).toEqual(["s1", "s2"]);
+    expect(store.sessionLocks["s1"]?.mine).toBe(true);
+    expect(store.sessionLocks["s2"]?.mine).toBe(false);
+  });
+
+  it("reads the workspace's locks on entering it, in one request", async () => {
+    // One request for the whole list is the shape's whole point: the marks are drawn on the
+    // session list, so a per-conversation check would be N requests on every entry.
+    const store = useAppStore();
+    await store.init();
+    await store.selectWorkspace("w1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.api.listWorkspaceLocks).toHaveBeenCalledWith("w1");
+  });
+
+  it("joins a read that is already in flight rather than making a second request", async () => {
+    // Entering a workspace reads the list alongside the session list, and then mounts the chat
+    // view whose lock lifecycle reads it again — one action, two asks. The second waits for the
+    // first instead of starting its own, which is the auto-titler's "joined rather than
+    // duplicated" rule.
+    const store = useAppStore();
+    await store.init();
+    await store.selectWorkspace("w1");
+    mocks.api.listWorkspaceLocks.mockClear();
+
+    const first = store.refreshWorkspaceLocks();
+    const second = store.refreshWorkspaceLocks();
+    await Promise.all([first, second]);
+
+    expect(mocks.api.listWorkspaceLocks).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a fresh read once the one in flight has finished", async () => {
+    // The join is per *moment*, not a cache: a later ask is a later ask, or the dot would never
+    // catch up with a lease taken while the first read was in the air.
+    const store = await readyStore();
+    mocks.api.listWorkspaceLocks.mockClear();
+
+    await store.refreshWorkspaceLocks();
+    await store.refreshWorkspaceLocks();
+
+    expect(mocks.api.listWorkspaceLocks).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the previous workspace's marks rather than leaving them behind", async () => {
+    const store = await readyStore();
+    mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [lease()] });
+    await store.refreshWorkspaceLocks();
+    expect(Object.keys(store.sessionLocks)).toEqual(["s1"]);
+
+    mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [] });
+    await store.selectWorkspace("w1");
+
+    expect(store.sessionLocks).toEqual({});
+    expect(store.heldSessionId).toBeNull();
+  });
+
+  it("turns a refused turn into the read-only state", async () => {
+    // The last way this client learns a lease changed, and the one the requirement names: the
+    // heartbeat failed, the lease expired underneath a reader who was typing, and the server
+    // refuses the turn. Re-reading is what turns the error into a state instead of a one-off
+    // sentence that leaves the buttons looking live.
+    const store = await readyStore();
+    mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [lease()] });
+    mocks.streamChat.mockImplementation(async function* () {
+      throw lockedError();
+    });
+
+    await store.sendMessage("hello");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.isActiveSessionReadOnly).toBe(true);
+    // Both surfaces: the banner inside the streaming message, and the toast that outlives it.
+    expect(store.streaming.error).toBeTruthy();
+    expect(store.error).toBeTruthy();
+  });
+
+  it("does not re-read on an ordinary failure", async () => {
+    // A provider outage is not a lock change, and a workspace-wide read on every failed turn
+    // would be a request per outage for a state that did not move.
+    const store = await readyStore();
+    mocks.api.listWorkspaceLocks.mockClear();
+    mocks.streamChat.mockImplementation(async function* () {
+      throw new Error("upstream is down");
+    });
+
+    await store.sendMessage("hello");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.api.listWorkspaceLocks).not.toHaveBeenCalled();
+    expect(store.isActiveSessionReadOnly).toBe(false);
+  });
+
+  it("forgets every lock with the account", async () => {
+    // A lease held by a signed-out account would keep beating, and a stale list would hand the
+    // next account a read-only conversation that is not its own.
+    const store = await readyStore();
+    mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [lease()] });
+    await store.refreshWorkspaceLocks();
+    expect(store.sessionLocks).not.toEqual({});
+
+    store.signOut();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.sessionLocks).toEqual({});
+    expect(store.heldSessionId).toBeNull();
+    expect(store.isActiveSessionReadOnly).toBe(false);
+  });
+
+  it("answers a workspace it cannot read with the locks it already had", async () => {
+    // A failed read is not a reason to strip the marks off the conversations: the dots would
+    // flicker on every hiccup, and the server refuses what it should refuse regardless of what
+    // this client believes.
+    const store = await readyStore();
+    mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [lease()] });
+    await store.refreshWorkspaceLocks();
+
+    mocks.api.listWorkspaceLocks.mockRejectedValue(new Error("offline"));
+    await store.refreshWorkspaceLocks();
+
+    expect(Object.keys(store.sessionLocks)).toEqual(["s1"]);
   });
 });

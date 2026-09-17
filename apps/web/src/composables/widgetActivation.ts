@@ -42,15 +42,24 @@ function contextFor(
     sessionId: string | null;
     workspaceWidgetIds: readonly WidgetId[];
     sessionWidgetIds: readonly WidgetId[];
+    /** The conversation on screen is being written to from another client. */
+    sessionReadOnly: boolean;
   }
 ): WidgetContext | null {
   // The session first: a widget installed at both levels is the more specific install on
   // screen, and a session always belongs to a workspace, so the wider one is the fallback.
   if (state.sessionId && state.sessionWidgetIds.includes(id)) {
-    return { scope: "session", scopeId: state.sessionId, widgetId: id };
+    return {
+      scope: "session",
+      scopeId: state.sessionId,
+      widgetId: id,
+      writable: !state.sessionReadOnly,
+    };
   }
   if (state.workspaceId && state.workspaceWidgetIds.includes(id)) {
-    return { scope: "workspace", scopeId: state.workspaceId, widgetId: id };
+    // Always writable: a workspace has no write lock, and a widget scoped to it has nothing to be
+    // read-only about. Only a conversation is held by one client at a time.
+    return { scope: "workspace", scopeId: state.workspaceId, widgetId: id, writable: true };
   }
   return null;
 }
@@ -70,6 +79,11 @@ export function useWidgetActivation(): void {
       sessionId: store.activeSessionId,
       workspaceWidgetIds: store.workspaceWidgetIds,
       sessionWidgetIds: store.sessionWidgetIds,
+      // Read here and passed down rather than left for a widget to look up: this effect is where
+      // the host's facts are gathered into a context, and `WidgetContext.writable` is one of them.
+      // It also means a lease changing re-runs this, so a widget is told when writing becomes
+      // possible again — not just when it is taken away.
+      sessionReadOnly: store.isActiveSessionReadOnly,
     };
     for (const id of WIDGET_IDS) WIDGET_MODULES[id]?.onActive?.(contextFor(id, state));
   });

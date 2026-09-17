@@ -20,8 +20,19 @@ const uploading = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 const textarea = ref<HTMLTextAreaElement | null>(null);
 
+/**
+ * Whether this client may write to the conversation on screen.
+ *
+ * The same fact the server enforces — and the server is the one that matters, since a client can
+ * only refuse itself. This is here so the button says so *before* a turn is composed and thrown
+ * away: the alternative is an enabled send button whose every press returns a refusal, which
+ * reads as the app being broken rather than as the conversation being somebody else's.
+ */
+const readOnly = computed(() => store.isActiveSessionReadOnly);
+
 const canSend = computed(
   () =>
+    !readOnly.value &&
     !store.streaming.active &&
     !store.documentsParsing &&
     (!!text.value.trim() ||
@@ -127,6 +138,32 @@ const stopLabel = computed(() =>
   store.streaming.stopping ? t("composer.stopping") : t("composer.stop")
 );
 
+/**
+ * Why the send button is inert, when it is inert for the reason that has nothing to do with what
+ * has been typed.
+ *
+ * Read-only first: it is the state the reader cannot fix by editing the box, so a tooltip about
+ * the empty textarea would send them to the wrong problem. `composer.send` otherwise, so the
+ * button keeps its own name when it is simply disabled by an empty draft.
+ */
+const sendTitle = computed(() =>
+  readOnly.value ? t("lock.other") : t("composer.send")
+);
+
+/**
+ * What the box says when it is empty — and the one place a reader who never notices the dot or
+ * the banner will still find out why nothing can be sent.
+ *
+ * The read-only sentence outranks the others because it is the only one of the three that is not
+ * about the box's contents: `composer.placeholder` advertises the `@` reference, which is useless
+ * in a conversation this client cannot write to, and the thinking placeholder describes a turn
+ * that cannot be started.
+ */
+const placeholder = computed(() => {
+  if (readOnly.value) return t("lock.other");
+  return store.streaming.active ? t("composer.thinking") : t("composer.placeholder");
+});
+
 function stop() {
   void store.stopMessage();
 }
@@ -207,8 +244,13 @@ const quickReplies = computed(() => [
  * message is composed rather than picked. A streaming turn is the other half, and it is not
  * merely tidy: sending is refused while a turn runs, so a chip on screen then would be a
  * control that looks live and does nothing.
+ *
+ * Read-only joins those for the same reason, since a chip *is* a send: leaving the row up would
+ * offer three buttons that each come back with a refusal.
  */
-const showQuickReplies = computed(() => !store.streaming.active && store.messages.length > 0);
+const showQuickReplies = computed(
+  () => !readOnly.value && !store.streaming.active && store.messages.length > 0
+);
 
 /**
  * Send one of them.
@@ -218,7 +260,7 @@ const showQuickReplies = computed(() => !store.streaming.active && store.message
  * be a one-click way to lose a paragraph. The chip sends its own words and leaves the box alone.
  */
 function sendQuick(message: string) {
-  if (store.streaming.active || store.documentsParsing) return;
+  if (readOnly.value || store.streaming.active || store.documentsParsing) return;
   void store.sendMessage(message, []);
 }
 
@@ -294,9 +336,7 @@ function onInput() {
             v-model="text"
             data-testid="composer-input"
             rows="1"
-            :placeholder="
-              store.streaming.active ? t('composer.thinking') : t('composer.placeholder')
-            "
+            :placeholder="placeholder"
             @input="onInput"
             @keydown="onKeydown"
             @keyup="refreshMention"
@@ -326,7 +366,7 @@ function onInput() {
             class="send-btn"
             data-testid="composer-send"
             :disabled="!canSend"
-            :title="sendLabel"
+            :title="sendTitle"
             :aria-label="sendLabel"
             @click="send"
           >
@@ -397,10 +437,16 @@ function onInput() {
 
         <div class="toolbar">
           <div class="toolbar-left">
+            <!--
+              Read-only is in the disabled set for the same reason it is in `canSend`: attaching is
+              a write into this conversation (`POST /sessions/:id/sources` is gated), so a live
+              button here would stage a file whose upload the server then refuses. The title says
+              which of the reasons it is, like the send button's does.
+            -->
             <button
               class="icon-btn attach-btn"
-              :title="t('composer.attach')"
-              :disabled="uploading || store.streaming.active || parsingDocuments"
+              :title="readOnly ? t('lock.other') : t('composer.attach')"
+              :disabled="readOnly || uploading || store.streaming.active || parsingDocuments"
               @click="fileInput?.click()"
             >
               <Icon v-if="!uploading" name="attach" /><template v-else>…</template>

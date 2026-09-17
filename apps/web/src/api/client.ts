@@ -36,6 +36,9 @@ import type {
   QuizQuestionView,
   PublicConfig,
   Session,
+  SessionLockRelease,
+  SessionLockResult,
+  SessionLockView,
   SessionStats,
   SessionWidgets,
   Source,
@@ -58,7 +61,7 @@ import type {
   WorkspaceSettings,
   WorkspaceStats,
 } from "@ilearnassist/shared";
-import { AUTH_STORAGE_KEY } from "@ilearnassist/shared";
+import { AUTH_STORAGE_KEY, CLIENT_ID_HEADER } from "@ilearnassist/shared";
 import { ApiError, translateApiError } from "../utils/apiError";
 
 /**
@@ -309,14 +312,76 @@ async function recoverFrom401(
 }
 
 /**
- * The headers a request goes out with, with the bearer token on them if there is one.
+ * Which client of this account this tab is, for the server's session write locks.
+ *
+ * Generated once per **tab** and kept in `sessionStorage`, which is the whole of the design:
+ * `localStorage` would make two tabs one client, and two tabs of one browser writing into the
+ * same conversation is exactly the interleaving the lock exists to prevent. A reload keeps the id
+ * (so a refresh does not look like a takeover), and a new tab is a new client (so it sees the
+ * conversation as held and opens read-only).
+ *
+ * The id is **asserted, not authenticated** — it is not a credential and the lock is not a
+ * security boundary. Nothing here needs to be unguessable for the feature to work; it needs to be
+ * *stable within a tab*, which is what makes the lease recognisable as this client's own.
+ */
+const CLIENT_ID_STORAGE_KEY = "gl-client-id";
+
+/**
+ * A fresh id, from a source that works where this app is actually used.
+ *
+ * **Not `crypto.randomUUID`**, which is available only in a *secure context* — and the address a
+ * phone reaches this app at over LAN sharing is `http://192.168.x.x:3720`, which is not one. It
+ * would be `undefined` on exactly the client the lock exists for, taking the app's writes with it.
+ * `crypto.getRandomValues` carries no such restriction.
+ *
+ * Sixteen bytes as hex rather than a dash-formatted UUID: the value is opaque, compared for
+ * equality and stored in one row, so the shape buys nothing and one code path is one thing to
+ * reason about.
+ */
+function newClientId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * The id, read fresh each time rather than cached in a module variable.
+ *
+ * `sessionStorage` is synchronous and this runs once per request, so a cache would buy nothing —
+ * and it would cost something: "a new tab is a new client" is then a fact about storage, which a
+ * test can produce by clearing it, rather than a fact about whether a module was re-imported.
+ */
+function currentClientId(): string {
+  const existing = sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  if (existing) return existing;
+
+  const created = newClientId();
+  // Private browsing with storage disabled throws here rather than returning null, and an app
+  // that could not open a conversation because of it would be worse than one where two tabs share
+  // an id for the length of this session — the lock is advisory either way.
+  try {
+    sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+  } catch {
+    /* in-memory for this tab's lifetime, which is all the lock needs */
+  }
+  return created;
+}
+
+/**
+ * The headers a request goes out with: the bearer token if there is one, and this tab's id.
  *
  * One function for both the JSON calls and the image fetch, because the two must not disagree
  * about how a token is spelled — and a second `Bearer ` literal is how they would.
+ *
+ * The client id rides **every** request rather than only the lock endpoints, and it has to: the
+ * server's write gate has to know who is asking, so a `/chat` sent without one would arrive as a
+ * client that holds nothing and refuse itself. Attaching it in the one place every request is
+ * built is what keeps that from depending on four call sites remembering.
  */
 function authHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
   if (tokens) headers.set("Authorization", `Bearer ${tokens.accessToken}`);
+  headers.set(CLIENT_ID_HEADER, currentClientId());
   return headers;
 }
 
@@ -643,6 +708,33 @@ export const api = {
     request<TitleRetryResult>(`/sessions/${sessionId}/leave`, { method: "POST" }),
   deleteSession: (id: string) =>
     request<{ ok: boolean }>(`/sessions/${id}`, { method: "DELETE" }),
+
+  /**
+   * Take this conversation's write lock, or renew it.
+   *
+   * The same call does both on purpose — the server treats a second request by the holder as a
+   * heartbeat rather than an error, which is its re-entrancy rule falling out of the statement
+   * rather than a branch — so the client never has to know whether it is claiming or beating.
+   *
+   * A 409 (`SESSION_LOCKED`) means some *other* client holds it: the answer to "should I show
+   * this as read-only", not an error to report. Callers handle it rather than letting it throw.
+   */
+  acquireSessionLock: (sessionId: string) =>
+    request<SessionLockResult>(`/sessions/${sessionId}/lock`, { method: "POST" }),
+  /**
+   * Give it back. Always answers 200, with `released` saying whether there was anything of this
+   * client's to give back — a stale tab doing this is ordinary, and it is leaving either way.
+   */
+  releaseSessionLock: (sessionId: string) =>
+    request<SessionLockRelease>(`/sessions/${sessionId}/lock`, { method: "DELETE" }),
+  /**
+   * Every live lock in the workspace, in one request.
+   *
+   * Workspace-wide rather than per conversation because the session list is where the marks are
+   * drawn, and it is what makes the client's periodic check one request instead of N.
+   */
+  listWorkspaceLocks: (workspaceId: string) =>
+    request<{ locks: SessionLockView[] }>(`/workspaces/${workspaceId}/locks`),
 
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
   /**

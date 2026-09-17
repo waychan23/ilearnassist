@@ -1283,6 +1283,21 @@ export default {
     reset: "重置",
   },
 
+  /**
+   * The session write lock: which client may write to a conversation.
+   *
+   * A domain of its own rather than keys under `session` or `sidebar`, because the same two facts
+   * are drawn in three places — the dot on a session row, the banner over the conversation, and
+   * the composer's disabled send button — and none of those is where the concept lives.
+   * `docs/session-locks.md` is the concept.
+   */
+  lock: {
+    /** The dot's own words, and the row's `title`: this client holds it, so typing works here. */
+    mine: "这个会话由当前客户端编辑，可正常发送",
+    /** The other client's dot — orange, and the reason the conversation is read-only here. */
+    other: "另一个客户端正在编辑这个会话，此处只读",
+  },
+
   errors: {
     NAME_REQUIRED: "名称不能为空。",
     WORKSPACE_NOT_FOUND: "工作区不存在，可能已被删除。",
@@ -1334,6 +1349,7 @@ export default {
     MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
     NO_REPLY_TO_REGENERATE: "没有可以重新生成的回复（最后一条不是助手回复，或者它正在等待你的回答）。",
     TURN_IN_PROGRESS: "上一条回复还在生成中，请先停止或等它结束。",
+    SESSION_LOCKED: "这个会话正在另一个客户端上编辑，这里暂时只能看。",
 
     INVALID_CREDENTIALS: "用户名或密码不正确。",
     ACCOUNT_DISABLED: "这个账号已被禁用，请联系管理员。",

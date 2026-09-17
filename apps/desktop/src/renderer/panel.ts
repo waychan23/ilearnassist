@@ -65,6 +65,7 @@ const urlRow = element<HTMLElement>('[data-role="url-row"]');
 const urlCode = element<HTMLElement>('[data-role="url"]');
 const dataDirCode = element<HTMLElement>('[data-role="data-dir"]');
 const dataDirHint = element<HTMLElement>('[data-role="data-dir-hint"]');
+const defaultDataDirAnswer = element<HTMLElement>('[data-role="default-data-dir"]');
 const lanUrlCode = element<HTMLElement>('[data-role="lan-url"]');
 const logsLabel = element<HTMLElement>('[data-role="logs-label"]');
 const logOutput = element<HTMLPreElement>('[data-role="logs"]');
@@ -107,6 +108,7 @@ const buttons = {
   copy: action("copy"),
   reveal: action("reveal"),
   chooseDataDir: action("choose-data-dir"),
+  useDefaultDataDir: action("use-default-data-dir"),
   share: action("share"),
   unshare: action("unshare"),
   qrCopy: action("qr-copy"),
@@ -142,6 +144,7 @@ function applyStaticLabels(): void {
   buttons.qrCopy.textContent = t("action.copyUrl");
   buttons.reveal.textContent = t("action.reveal");
   buttons.chooseDataDir.textContent = t("action.chooseDataDir");
+  buttons.useDefaultDataDir.textContent = t("action.useDefaultDataDir");
   buttons.share.textContent = t("action.share");
   buttons.unshare.textContent = t("action.unshare");
   buttons.resetAdmin.textContent = t("action.resetAdmin");
@@ -239,7 +242,7 @@ function render(next: PanelState): void {
   // choice the first time a state arrived.
   localeSelect.value = next.localeChoice;
 
-  const { server, sharedOnLan, lanUrl, needsDataDir, needsAdmin } = next;
+  const { server, sharedOnLan, lanUrl, needsDataDir, defaultDataDir, needsAdmin } = next;
   const running = server.state === "running";
   const busy = server.state === "starting" || server.state === "stopping";
 
@@ -262,8 +265,13 @@ function render(next: PanelState): void {
   // An empty path box reads as a bug. Until one is chosen, the row shows the reason instead
   // — and there is nothing to reveal, so that action goes inert with it.
   dataDirCode.hidden = needsDataDir;
-  dataDirHint.textContent = needsDataDir ? t("hint.chooseDataDir") : "";
+  // The sentence names the folder it is about to offer, so it comes off the state rather than
+  // the catalog alone: "one will be created" is only honest with the path in it.
+  dataDirHint.textContent = needsDataDir ? t("hint.chooseDataDir", { dir: defaultDataDir }) : "";
   dataDirHint.hidden = !needsDataDir;
+  // The one-click answer, in the same state and only that state: once a folder is chosen the
+  // question is answered, and the control that changes it is the head's "Choose folder…".
+  defaultDataDirAnswer.hidden = !needsDataDir;
 
   // Start is also refused while an administrator is missing: the server exits on it, so a
   // button that produced "failed: exited 1" would be the exact failure the card prevents.
@@ -291,10 +299,17 @@ function render(next: PanelState): void {
   buttons.browser.disabled = !running;
   buttons.copy.disabled = !running;
   buttons.adminCreate.disabled = needsDataDir || creating;
-  buttons.start.disabled = busy || running || waitingForAdmin;
+  /*
+   * Start is live in the needs-admin state on purpose: it is now the door that walks the reader
+   * through creating the first administrator (see `startFlow`). It used to be inert there, with
+   * the card's own button as the only way in — which left the panel's primary action dead in
+   * precisely the state a new install is in.
+   */
+  buttons.start.disabled = busy || running;
   buttons.stop.disabled = !(busy || running);
   buttons.reveal.disabled = needsDataDir;
   buttons.chooseDataDir.disabled = busy;
+  buttons.useDefaultDataDir.disabled = busy;
   buttons.open.title = running ? "" : t("hint.notRunning");
 
   // The switch, and the address it produces. `lanUrl` is null unless sharing is on, so the
@@ -332,8 +347,19 @@ function render(next: PanelState): void {
 let createOpen = false;
 let creating = false;
 
-function openCreateAdmin(): void {
-  if (!state || state.needsDataDir) return;
+/**
+ * Whether the administrator was created — which is how `startFlow` learns it may carry on.
+ *
+ * The sheet answers on the *submission*, not on the dismissal, because the two callers want
+ * different things from the same form. The card's button ignores the answer and leaves the sheet
+ * open on its success line, as it always has: the reader asked to create an account, and the
+ * acknowledgement is theirs to close. `startFlow` waits on the answer, closes the sheet itself,
+ * and goes on to start the server.
+ */
+let created: ((ok: boolean) => void) | null = null;
+
+function openCreateAdmin(): Promise<boolean> {
+  if (!state || state.needsDataDir) return Promise.resolve(false);
   createOpen = true;
   adminError.hidden = true;
   adminOk.hidden = true;
@@ -342,11 +368,26 @@ function openCreateAdmin(): void {
   adminPassword.value = "";
   adminConfirm.value = "";
   adminUsername.focus();
+  return new Promise((resolve) => {
+    // A second open while one is pending cannot happen — the sheet is modal — but resolving the
+    // abandoned one is what keeps a `Promise` from being left dangling if it ever does.
+    created?.(false);
+    created = resolve;
+  });
+}
+
+function settleCreate(ok: boolean): void {
+  const resolve = created;
+  created = null;
+  resolve?.(ok);
 }
 
 function closeCreateAdmin(): void {
   createOpen = false;
   adminOverlay.hidden = true;
+  // A dismissal before anything was submitted is a "no"; one after a success is just tidying up,
+  // and `settleCreate` has already answered by then.
+  settleCreate(false);
 }
 
 /**
@@ -375,8 +416,9 @@ async function submitCreateAdmin(): Promise<void> {
   try {
     const result = await window.panel.createAdministrator({ username, password });
     if (result.ok) {
-      // The main process re-checks and broadcasts `needsAdmin: false`, so the card and the
-      // Start button follow on their own. Here the sheet only reports success.
+      // The main process re-checks and broadcasts `needsAdmin: false`, so the card follows on its
+      // own. Here the sheet reports success — and answers whoever opened it, which is how the
+      // Start flow learns it may carry on.
       adminOk.textContent = t("create.done", { name: result.username });
       adminOk.hidden = false;
       adminUsername.disabled = true;
@@ -385,6 +427,7 @@ async function submitCreateAdmin(): Promise<void> {
       buttons.adminSubmit.hidden = true;
       buttons.adminCreate.disabled = true;
       creating = false;
+      settleCreate(true);
       return;
     }
     showCreateError(describeAdminFault(messages, result.fault));
@@ -622,13 +665,59 @@ function closeQrOverlay(): void {
 
 // ---- wiring ----------------------------------------------------------------
 
-buttons.start.addEventListener("click", () => void window.panel.start().then(render));
+/**
+ * Start, and the two preconditions the server has in front of it.
+ *
+ * A data root and an administrator, and the server refuses to listen without either. The button
+ * walks them in order and ends by actually starting — which is the difference between a Start that
+ * works and one that leaves the reader to work out what else is missing.
+ *
+ * ### Which side owns which step
+ *
+ * The **folder** is main's, and main asks for it itself: the question is native, and main is the
+ * side that knows what folder it would create. Nothing about it is here.
+ *
+ * The **administrator** is unavoidably split, because the form that collects a name and a password
+ * is this page's. So main answers a Start with "nobody can sign in yet" by *not* spawning and
+ * saying so in the state, and this function opens the sheet and calls Start again once the account
+ * exists. The chaining lives here because the sheet does, and because both preconditions are
+ * already readable from the state rather than needing anything new to carry them.
+ *
+ * ### The other door does not do this
+ *
+ * The card's own 创建管理员 button creates and stops there — *creating an administrator is not a
+ * request to run the server*, which is what the reader asked for by pressing Start. Same form, two
+ * endings, and the door they came through is what tells them apart. So a sheet opened from Start is
+ * closed here the moment it succeeds, because the reader's attention belongs back on the panel.
+ */
+async function startFlow(): Promise<void> {
+  const first = await window.panel.start();
+  render(first);
+
+  // "Nobody has said where the data goes", which main has just asked about natively. Reaching here
+  // with it still true means that question was dismissed, and there is nothing to chain into.
+  if (first.needsDataDir) return;
+  // Started, or failed for a reason of its own — which the status line now reports. The one thing
+  // left to handle is the state this whole function exists for.
+  if (first.needsAdmin !== true) return;
+
+  const created = await openCreateAdmin();
+  if (!created) return;
+
+  closeCreateAdmin();
+  render(await window.panel.start());
+}
+
+buttons.start.addEventListener("click", () => void startFlow());
 buttons.stop.addEventListener("click", () => void window.panel.stop().then(render));
 buttons.open.addEventListener("click", () => void window.panel.openApp());
 buttons.browser.addEventListener("click", () => void window.panel.openInBrowser());
 buttons.reveal.addEventListener("click", () => void window.panel.revealDataDir());
 buttons.chooseDataDir.addEventListener("click", () =>
   void window.panel.chooseDataDir().then(render)
+);
+buttons.useDefaultDataDir.addEventListener("click", () =>
+  void window.panel.useDefaultDataDir().then(render)
 );
 
 /**
@@ -739,7 +828,12 @@ for (const field of [resetPasswordInput, resetConfirmInput]) {
   });
 }
 
-buttons.adminCreate.addEventListener("click", openCreateAdmin);
+/*
+ * The card's own button, which **creates and stops there** — opening this form is not a request to
+ * run the server. `startFlow` below is the other door, and it starts because *Start* is what the
+ * reader pressed.
+ */
+buttons.adminCreate.addEventListener("click", () => void openCreateAdmin());
 buttons.adminSubmit.addEventListener("click", () => void submitCreateAdmin());
 document
   .querySelectorAll<HTMLElement>('[data-action="admin-cancel"]')

@@ -584,6 +584,49 @@ Fuller map in `docs/reference.md`.
   inserting beside it — and because its links survived, the file comes back everywhere it was
   used. `DocumentService.cancelSource` is per *source* rather than per session for the older
   reason: cancelling by session would abort a parse another conversation is waiting on.
+- **One conversation has one writer, and the lease is keyed on a client id the browser makes up.**
+  A client that opens a conversation holds its write lock; every other client of the same account
+  reads it read-only. `docs/session-locks.md` is the reference, including the tolerances the
+  requirement asks to be recorded. Four things are load-bearing:
+  - **The holder is not the auth token.** `issueTokens()` mints a fresh access token *and a fresh
+    row* on every refresh, so a lease keyed on it would change holder underneath a client that had
+    merely been running for a day. The id is generated per browser tab and kept in `sessionStorage`
+    — a reload keeps it, a new tab does not — and is sent on **every** request as `X-Client-Id`,
+    because the write gate has to know who is asking. It is *asserted, not verified*: the lock is
+    advisory, and the account check on the session is what protects the row.
+  - **Acquire, renew and release are one statement each, and the statement's own `WHERE` is the
+    whole of the concurrency control** (`setAutoTitleForUser`'s shape). Three things fall out of
+    that rather than being branches: the holder's second call is a heartbeat, `changes === 0` means
+    exactly "a live lease held by somebody else", and `acquired_at` is kept across beats. No
+    `deleted_at` — the row means "held *now*", so release and expiry are real `DELETE`s — and no
+    sweep job, because the upsert reclaims an expired row in place.
+  - **The gate renews a lease and never takes one, and it is a route config.** A gated write by the
+    holder renews it; a write on a conversation nobody holds is allowed, because there is nobody to
+    conflict with. It deliberately does **not** claim a free conversation — the first shape did, and
+    a second writer showed why that is wrong: any API client writing to a conversation seized its
+    lock and left the reader's own tab read-only for two minutes, having no lifecycle to give it
+    back. A lease exists because a client *opened* a conversation; a write is not that act. The flag
+    is on every session-scoped write, the deliberate exceptions and the assertion that keeps the
+    list honest are in `test/route-lock-coverage.test.ts`, and a client with no `X-Client-Id` is
+    refused outright. The gate **never answers for a session that does not exist** — the
+    owner-scoped lease lookup finds nothing, so it returns and lets the route 404, or a bad id would
+    come back "somebody is editing this" and the "not yours and does not exist are one answer" rule
+    would hold everywhere except the flagged routes.
+  - **Its lifetime is the view's, not the store's.** `composables/sessionLock.ts` is an effect owned
+    by `ChatView`'s setup, which is what makes 退出工作区时取消所有检测 structural rather than a flag
+    somebody remembers: the view going away stops the timers and releases the lease. The heartbeat
+    is derived as half the shared TTL so one missed beat is survivable, and the five-minute poll
+    only *asks* through the same 2s debounce every other trigger uses. A refusal from a turn route
+    re-reads the workspace's locks **and** raises the toast — unlike every other thrown-response
+    failure, because a refused turn is never persisted, so the bubble's banner unmounts and nothing
+    else would say what happened.
+  - **A widget is told whether it may write; it never looks it up.** `WidgetContext.writable` is a
+    *parameter*, set by `useWidgetActivation` from the session's lock state, and the notes widget
+    obeys it — its add button, the editor's save and delete, and the selection toolbar. That is
+    deliberate decoupling rather than tidiness: a widget that read the session's state to find out
+    would make every widget depend on whatever the host is doing, so the session decides, the widget
+    is told, and nothing on the notes path knows what a write lock is. The install hooks take
+    `WidgetInstall` instead, which has no `writable` — an install is a write that already landed.
 - **A message is deleted from the tail only, and deleting one is not the same as regenerating
   it.** `DELETE /api/sessions/:id/messages/:messageId` refuses anything but the conversation's
   last live message (`MESSAGE_NOT_LAST`), and `POST /api/sessions/:id/regenerate` peels the last
@@ -960,6 +1003,15 @@ Fuller map in `docs/reference.md`.
   would mean something different from one launcher to the next. The throw lives in `main()`
   and not at module scope: `config.ts` is imported by the whole test suite, and a top-level
   throw would take out every test that never starts a server.
+  **Offering a folder is not defaulting one, and the difference is the whole of the panel's
+  first-run prompt.** `AppPaths.defaultDataDir` is `~/ilearnassist` — in the user's home, outside
+  the application bundle — and the panel names it in the first-run hint and takes it with one
+  click, because making somebody work out where their data should live before they have used the
+  app once is the cost the offer removes. What keeps the rule above true: nothing is created and
+  nothing is recorded until that button is pressed (`ensureDataDir` is its only caller), `Start`
+  with no data root raises the question rather than opening a picker the user did not ask for, and
+  the server is still handed a path a human agreed to. The picker starts in that same folder, so
+  there is one "suggested" location rather than two that disagree — see `docs/desktop.md`.
 - **Documents cross a sandbox boundary that files cannot, and that asymmetry is deliberate.**
   `read_document` is bound to a whitelist resolved per turn — a conversation's own sources
   **unioned with its workspace's** — rather than to any root, so a guessed id fails a `Map`
@@ -1429,7 +1481,13 @@ Fuller map in `docs/reference.md`.
   data root, where the server would then refuse to listen. The rule is three inputs and two
   answers: `true` starts, `false` does not (the server would exit on its own boot gate, and the
   create card is already on screen), and **`undefined` starts anyway** — no data root, an
-  unreadable database, a CLI that would not run. Trying is what keeps the button from going
+  unreadable database, a CLI that would not run.
+  What `false` is *not* is a dead end, and that is the page's half: `startFlow` in the renderer
+  reads `needsAdmin` off the state this returns, opens the create-administrator sheet, and asks
+  Start again once the account exists. The split is forced — the form that collects a name and a
+  password is the page's, so main cannot complete it alone — and it is why Start is no longer
+  *disabled* in the needs-admin state: a button that refuses without saying what is missing is the
+  failure `mayStartServer` exists to prevent, one step earlier. Trying is what keeps the button from going
   silent when the check it depends on is the thing that is broken; the server's gate is the
   backstop and says so on stderr. A predicate cannot be inverted by accident the way a boolean
   variable's meaning can, which is why this is a function and not an `if`.
@@ -1667,6 +1725,7 @@ Fuller map in `docs/reference.md`.
   staged in `dist/resources/web` and leaves it alone. Run `pnpm desktop:build` (or
   `pnpm build`) once if the panel's server has nothing to serve.
 
-For the full architecture and configuration reference, see `docs/`. Two of those files are working
-references rather than background: `docs/design-system.md` for anything visual, and
-`docs/widgets.md` before adding a widget to the right sidebar.
+For the full architecture and configuration reference, see `docs/`. Three of those files are working
+references rather than background: `docs/design-system.md` for anything visual,
+`docs/widgets.md` before adding a widget to the right sidebar, and `docs/session-locks.md` before
+touching anything that writes to a conversation from more than one client.
