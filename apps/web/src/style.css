@@ -526,6 +526,24 @@ body {
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-8) 0;
+  /*
+   * Both gutters, so the column is centred in the *visible* width rather than in a box the
+   * scrollbar has already eaten into.
+   *
+   * The sheet styles `::-webkit-scrollbar` at 8px, and styling it is what opts Blink out of
+   * overlay scrollbars — so in a real browser the bar is a classic one that takes layout space,
+   * off the **inline-end** edge. Every message gutter is therefore unequal: `--space-6` on the
+   * left and `--space-6` + 8px on the right, which reads as the text being pushed off-centre.
+   * `stable` reserves the space whether or not the bar is showing, so the column does not jump
+   * sideways when a short conversation grows into a long one; `both-edges` mirrors it, which is
+   * what makes the two sides equal. It has to be both: `stable` alone just makes a *consistent*
+   * asymmetry, and `both-edges` alone is not a valid value.
+   *
+   * Note that this device's headless Chromium gives overlay scrollbars — `offsetWidth` and
+   * `clientWidth` agree even with the list overflowing — so the asymmetry cannot be reproduced in
+   * a browser test here. The declaration is the fix, and the test pins that.
+   */
+  scrollbar-gutter: stable both-edges;
 }
 
 /* Gutter so the rail does not sit on top of the messages. */
