@@ -165,6 +165,23 @@ describe("the tools a provider is sent", () => {
     expect(names).toEqual(expect.arrayContaining([...PLAN_TOOL_NAMES]));
   });
 
+  it("offers ila_table, whose schema is a flat object like the rest", async () => {
+    /*
+     * The context-gated tool this file's docblock warns about, covered from the start rather than
+     * after the first 400: its schema is written by hand in the flat shape (`name` / `table` /
+     * `summary`), which is exactly the shape a later "tidy-up" into a discriminated union would
+     * break — see the `ila_query` case below for what that costs in production.
+     *
+     * Asserted through a real turn rather than by calling `buildTools`, because the conversion the
+     * provider rejects happens in the request the loop builds.
+     */
+    const tools = sentTools(await sendOneTurn());
+    const table = tools.find((t) => t.function?.name === "ila_table");
+    expect(table).toBeDefined();
+    expect(table?.function?.parameters).toMatchObject({ type: "object" });
+    expect(table?.function?.parameters).not.toHaveProperty("anyOf");
+  });
+
   it("offers ila_explore only once the conversation holds an `@` grant", async () => {
     // The gate is the grant, the `read_document` rule: a tool that could only refuse is one the
     // model wastes a step discovering. Asserted in both directions, because "never assembled"

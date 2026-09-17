@@ -412,26 +412,36 @@ the file tree with no panel involved.
 
 What that changes relative to the widgets above:
 
-- **Its data is rows, written by the tool.** It calls `GET /api/sessions/:id/diagrams`, the
-  `session_diagrams` rows the tool upserts beside each `.mmd`. The row carries the canonical file
-  name, the model's `summary`, the call id, and the thread the classifier placed it in — what the
-  file alone cannot answer. The whole-folder view is the source browser, so a
-  `.mmd` copied in by hand is still reachable but is not listed as something the agent drew.
-- **Opening a row goes through the ordinary file preview**, not a dialog of its own: that dialog
-  already renders a diagram, already has the source toggle, already reports its own load failures,
-  and already offers the enlarged viewer. A fourth surface drawing the same picture is what this
-  avoids. The session-file content route attaches the row's summary to the preview.
+- **Its data is rows, written by the tools** — `session_diagrams` for a drawing and
+  `session_tables` for a table, which is why it reads two routes rather than one. A diagram's row
+  carries the canonical file name, the model's `summary`, the call id, and the thread the
+  classifier placed it in — what the file alone cannot answer. A table's row carries the summary,
+  the call id, the thread, and **the markdown itself**, because a table has no file for the bytes
+  to live in. The whole-folder view is the source browser, so a `.mmd` copied in by hand is still
+  reachable but is not listed as something the agent drew.
+- **Opening a row goes through the ordinary file preview for a diagram**, not a dialog of its own:
+  that dialog already renders a diagram, already has the source toggle, already reports its own
+  load failures, and already offers the enlarged viewer. A fourth surface drawing the same picture
+  is what this avoids. The session-file content route attaches the row's summary to the preview.
+  **A table's row cannot go that way** — there is no file to open — so it hands the row's own
+  markdown to the viewer, which is the same dialog with a second kind. That asymmetry is the row's
+  kind deciding, not two idioms for one thing.
 - **One carried affordance.** 定位 scrolls the conversation to the tool call that drew a diagram,
   emitting the existing `chat.jump` with the row's `tool_call_id` — no client-side join. A row
   whose call no longer exists (a regenerated message) simply has no button, and the jump no-ops on
-  a missing target.
+  a missing target. It is also why `TableCard` exists at all: the *generic* card already carries
+  `[data-tool-call-id]`, so what the table's own card is for is that the generic card's disclosure
+  would render the whole table as JSON in a fold — inside a tool container, which is the one shape
+  the table feature rules out.
 - **No `onActive` and no install hook.** It claims no host capability and needs no cooperation for
   as long as it is installed — it draws itself and nothing else. `docs/widgets.md`'s step 8 asks
   the question; this is the answer for a widget that owns only its own tab.
 - **`diagram.changed` is a bus event**, emitted from the store's `tool_end` arm beside
   `plan.changed` and `quiz.changed`. The row is written during the tool call, so the event covers
   it; `turn.finished` catches a later step and the arrival of the thread title after the
-  post-turn classifier.
+  post-turn classifier. **`table.changed` is its own type**, not a share of it: the emission site
+  is keyed on the tool's name, so one event would make each panel refetch on the other's calls —
+  and the sentence above, about the result being a file on disk, would be false for a table.
 
 ### An on-demand widget with no tools: the insight widget
 

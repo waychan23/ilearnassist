@@ -99,6 +99,8 @@ export interface RunAgentInput {
    * says when to reach for it.
    */
   collectPageGuidance?: string;
+  /** `ila_table`'s positive half — see `TABLE_GUIDANCE`. */
+  tableGuidance?: string;
   /**
    * What the user opened to this conversation with `@`, on turns where `ila_explore` is
    * assembled. Absent on every ordinary conversation, and it does more than add a paragraph —
@@ -279,6 +281,8 @@ export interface SystemPromptInput {
   planGuidance?: string;
   quizGuidance?: string;
   collectPageGuidance?: string;
+  /** `ila_table`'s positive half — see `TABLE_GUIDANCE`. */
+  tableGuidance?: string;
   /**
    * What the user has opened to this conversation with `@`.
    *
@@ -371,6 +375,9 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   // Not a widget this time — the switch is whether the tool itself was assembled, which is
   // what "an installation with web fetching off" looks like from here.
   const collectNote = input.collectPageGuidance ? `\n\n${input.collectPageGuidance}` : "";
+  // `ila_table`'s positive half, on the same switch as the line above: the tool is assembled, so
+  // the model is told to write the table into its reply as well as record it.
+  const tableNote = input.tableGuidance ? `\n\n${input.tableGuidance}` : "";
   // The same switch again: assembled, so the conversation holds an `@` grant. It sits after the
   // workspace note it qualifies, and before the make-up key, which is the most specific
   // instruction in the prompt and belongs last.
@@ -379,7 +386,15 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   const makeupNote = input.quizMakeupNote ? `\n\n${input.quizMakeupNote}` : "";
 
   return (
-    base + timeNote + workspaceNote + planNote + quizNote + collectNote + exploreNote + makeupNote
+    base +
+    timeNote +
+    workspaceNote +
+    planNote +
+    quizNote +
+    collectNote +
+    tableNote +
+    exploreNote +
+    makeupNote
   );
 }
 
@@ -543,6 +558,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
         collectPageGuidance: input.collectPageGuidance,
+        tableGuidance: input.tableGuidance,
         exploreGuidance: input.exploreGuidance,
         quizMakeupNote: input.quizMakeupNote,
       })

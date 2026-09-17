@@ -13,7 +13,9 @@ import {
   buildThreadPrompt,
   buildThreadViews,
   parseDiagramDecisions,
+  parseTableDecisions,
   parseThreadDecisions,
+  THREAD_SYSTEM_PROMPT,
   progressNodeForTurn,
   segmentTurns,
   syncThreads,
@@ -241,6 +243,41 @@ describe("buildThreadPrompt", () => {
     expect(prompt).toContain("登录流程图");
   });
 
+  it("renders a table under the message whose call recorded it", () => {
+    // The same placement rule as a diagram's, under its own wire key: the classifier sees a name
+    // and a summary, never the markdown.
+    const prompt = buildThreadPrompt({
+      plan: undefined,
+      existing: [],
+      recent: [],
+      currentThreadRef: undefined,
+      turns: [
+        {
+          messages: [
+            { role: "user", content: "对比一下" },
+            {
+              role: "assistant",
+              content: "好",
+              toolCalls: [{ id: "c1", name: "ila_table", input: "{}" }],
+            },
+          ] as Message[],
+        },
+      ],
+      tables: new Map([["c1", { ref: "t1", name: "季度对比", summary: "三项指标" }]]),
+    });
+    expect(prompt).toContain('<table ref="t1" name="季度对比">');
+    expect(prompt).toContain("三项指标");
+    expect(prompt).not.toContain("<diagram");
+  });
+
+  it("tells the model how to answer for a table, and that a table starts no thread", () => {
+    // The rule is in the system prompt rather than the user one, so it is stated once for every
+    // chunk — and the "no new thread" half is the part a model would otherwise try.
+    expect(THREAD_SYSTEM_PROMPT).toContain("<table ref=");
+    expect(THREAD_SYSTEM_PROMPT).toContain('"tables"');
+    expect(THREAD_SYSTEM_PROMPT).toContain("never starts its own thread");
+  });
+
   it("is byte-identical when no diagram map is given", () => {
     const base = {
       plan: undefined,
@@ -272,7 +309,7 @@ describe("syncThreads", () => {
       return "";
     });
     expect(called).toBe(0);
-    expect(result).toEqual({ turns: 0, messages: 0, diagrams: 0, unassigned: 0 });
+    expect(result).toEqual({ turns: 0, messages: 0, diagrams: 0, tables: 0, unassigned: 0 });
   });
 
   it("classifies turns into threads and assigns both messages of each", async () => {
@@ -402,6 +439,113 @@ describe("syncThreads", () => {
     expect(view.unassigned).toBe(0);
     expect(view.threads.map((t) => t.title)).toEqual(["登录"]);
     expect(db.listDiagramsBySession(SESSION)[0]?.threadTitle).toBe("登录");
+  });
+
+  function seedTable(toolCallId: string, name = "季度对比", summary = "三项指标"): void {
+    db.upsertSessionTable({
+      id: newId(),
+      sessionId: SESSION,
+      name,
+      summary,
+      content: "| 项目 | 数值 |\n| --- | --- |\n| 速度 | 3 |",
+      toolCallId,
+    });
+  }
+
+  /** A pending exchange whose assistant recorded one table. */
+  function tableTurn(callId: string): void {
+    userMessage("做一个对比表");
+    assistantMessage("放在下面了。", [
+      { id: callId, name: "ila_table", input: JSON.stringify({ name: "季度对比" }) },
+    ]);
+    seedTable(callId);
+  }
+
+  it("rides its turn's thread when the classifier answers continue for a table", async () => {
+    tableTurn(newId());
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "指标对比" }],
+        tables: [{ ref: "t1", thread: "continue" }],
+      })
+    );
+
+    const table = db.listTablesBySession(SESSION)[0]!;
+    expect(table.threadTitle).toBe("指标对比");
+  });
+
+  it("collapses a table onto its turn's thread when the answer omits it", async () => {
+    tableTurn(newId());
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({ decisions: [{ thread: "new", branch: "other", title: "指标对比" }] })
+    );
+
+    // The invariant stated as one sentence: a table's thread_id is null iff the turn owning its
+    // latest call has no thread yet. The turn has one, so the table does.
+    expect(db.listTablesBySession(SESSION)[0]?.threadTitle).toBe("指标对比");
+  });
+
+  it("a malformed table entry never blocks the turn, and the table collapses", async () => {
+    tableTurn(newId());
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "指标对比" }],
+        tables: [{ ref: "t9", thread: "e7" }, { ref: "t1", thread: "new" }],
+      })
+    );
+
+    const view = buildThreadViews(db, OWNER, SESSION);
+    expect(view.unassigned).toBe(0);
+    expect(view.threads.map((t) => t.title)).toEqual(["指标对比"]);
+    expect(db.listTablesBySession(SESSION)[0]?.threadTitle).toBe("指标对比");
+  });
+
+  it("places a forced turn's table with no model call at all", async () => {
+    /*
+     * The case easiest to lose in a second array, which is why it is written out rather than
+     * assumed: the ref allocation is shared by both kinds, so a forced turn's table is never in
+     * the prompt and can only ride the collapse. A separate loop over all turns would break this
+     * for tables while leaving it intact for diagrams — the asymmetry no other test would catch.
+     */
+    forceMakePlan(db, SESSION, { tree: [{ title: "第一章", children: [{ title: "可数集" }] }] });
+    const plan = readCurrentPlan(db, SESSION)!;
+    const leaf = plan.tree[0]!.children![0]!;
+
+    const callId = newId();
+    userMessage("开始学 1.1 并做个表");
+    assistantMessage("", [
+      {
+        id: newId(),
+        name: PLAN_PROGRESS_TOOL_NAME,
+        input: JSON.stringify({ nodes: [{ id: leaf.id, status: "in_progress" }] }),
+      },
+    ]);
+    assistantMessage("表在这。", [
+      { id: callId, name: "ila_table", input: JSON.stringify({ name: "季度对比" }) },
+    ]);
+    seedTable(callId);
+
+    // A classifier invoked at all is a bug: the forced path makes no model call.
+    await syncThreads(db, SESSION, async () => {
+      throw new Error("the model must not be called for a forced turn");
+    });
+
+    expect(db.listTablesBySession(SESSION)[0]?.threadTitle).toBe("可数集");
+  });
+
+  it("counts the tables it placed in the result", async () => {
+    tableTurn(newId());
+    const result = await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "指标对比" }],
+        tables: [{ ref: "t1", thread: "continue" }],
+      })
+    );
+    expect(result.tables).toBe(1);
+    expect(result.diagrams).toBe(0);
   });
 
   it("places a forced turn's diagram with no model call at all", async () => {

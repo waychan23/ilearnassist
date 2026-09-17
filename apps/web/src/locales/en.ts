@@ -61,9 +61,20 @@ const en: typeof MessageSchema = {
     tooLarge: "This diagram is over {size} characters, so its source is shown instead.",
     expand: "Open larger",
     viewTitle: "Diagram",
+    tableTitle: "Table",
     zoomIn: "Zoom in",
     zoomOut: "Zoom out",
-    fit: "Fit to width",
+    fit: "Back to 100%",
+    maximize: "Maximise the window",
+    restore: "Restore the window",
+    download: "Download as an image",
+    formats: {
+      png: "PNG image (transparent)",
+      jpg: "JPG image (theme background)",
+      svg: "SVG vector",
+    },
+    downloadFailed: "The download failed — this drawing could not be written to a file.",
+    copyHint: "Copies an HTML table; pasting into a plain-text editor gives the Markdown",
     source: "Source",
     summary: "Summary",
   },
@@ -417,6 +428,7 @@ const en: typeof MessageSchema = {
       ila_read_plan: "Read plan",
       ila_update_plan_progress: "Update plan progress",
       ila_diagram: "Diagram",
+      ila_table: "Table",
       ila_query: "Query record",
       ila_explore: "Explore other workspaces",
     },
@@ -424,6 +436,9 @@ const en: typeof MessageSchema = {
     running: "Running",
     args: "Arguments",
     result: "Result",
+    table: {
+      inlineHint: "The table is written out in the reply",
+    },
     /** A run of consecutive tool calls, folded into one card. See `zh-CN` for the shapes. */
     group: {
       count: "{count} tool call | {count} tool calls",
@@ -863,7 +878,14 @@ const en: typeof MessageSchema = {
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "Go to the reply that drew it",
-      empty: "This conversation has not drawn any diagrams yet.",
+      empty: "This conversation has not drawn a diagram or recorded a table yet.",
+      filterKind: "Filter by kind",
+      allKinds: "All",
+      kinds: {
+        diagram: "Diagrams",
+        table: "Tables",
+      },
+      noMatch: "Nothing matches that filter.",
       failed: "Could not read the diagrams.",
       /** The thread the classifier put this diagram in. */
       inThread: "In: {title}",

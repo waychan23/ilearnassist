@@ -10,6 +10,8 @@ import {
   type NoteInsert,
 } from "../../src/db.js";
 import { registerDiagram } from "../../src/diagrams.js";
+import { registerTable } from "../../src/tables.js";
+import { QUERY_TABLE_SOURCE_MAX } from "../../src/tools/query.js";
 import { forceMakePlan, readCurrentPlan, renderReadResult } from "../../src/plans.js";
 import { registerQuizQuestions } from "../../src/quizzes.js";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
@@ -259,6 +261,76 @@ describe("ila_query — notes", () => {
   });
 });
 
+describe("ila_query — tables", () => {
+  const TABLE = "| 项目 | 数值 |\n| --- | --- |\n| 速度 | 3 |";
+
+  beforeEach(() => {
+    registerTable(db, SESSION, {
+      name: "季度对比",
+      summary: "三项指标",
+      content: TABLE,
+      toolCallId: "call-8",
+    });
+  });
+
+  it("lists names and summaries without the markdown", async () => {
+    const answer = await ask({ kind: "table" });
+    expect(answer).toMatchObject({ total: 1 });
+    expect(answer.items).toEqual([
+      { name: "季度对比", summary: "三项指标", threadTitle: null },
+    ]);
+    expect(JSON.stringify(answer)).not.toContain("速度");
+  });
+
+  it("returns one table's markdown, which is the only copy there is", async () => {
+    /*
+     * The read a file would otherwise have given, and the reason this kind exists: a table has no
+     * file, so without this the model could not see one again once the turn that wrote it left the
+     * history window — and the revise instruction the tool hands back ("call again with the same
+     * name") would be advice it had no way to follow, since a revise needs the current contents.
+     */
+    const answer = await ask({ kind: "table", name: "季度对比" });
+    expect(answer).toMatchObject({
+      table: {
+        name: "季度对比",
+        summary: "三项指标",
+        contentTruncated: false,
+        content: TABLE,
+      },
+    });
+  });
+
+  it("normalises the name the way the writer does", async () => {
+    // The same `tableName` on both sides, so a model that remembers "季度对比 " or a differently
+    // cased Latin name still finds its row.
+    expect((await ask({ kind: "table", name: " 季度对比 " })).table).not.toBeNull();
+  });
+
+  it("says what it has instead of failing when the name is unknown", async () => {
+    const answer = await ask({ kind: "table", name: "nope" });
+    expect(answer).toMatchObject({ table: null, available: ["季度对比"] });
+  });
+
+  it("is scoped to the account", async () => {
+    // The same pair the other kinds use: another account's id returns nothing rather than a row.
+    const other = { userId: OTHER, sessionId: OTHER_SESSION };
+    expect(await ask({ kind: "table" }, other)).toMatchObject({ total: 0 });
+  });
+
+  it("truncates a table past the read cap, and says so", async () => {
+    registerTable(db, SESSION, {
+      name: "long",
+      summary: "很长",
+      content: `| a |\n| --- |\n| ${"x".repeat(QUERY_TABLE_SOURCE_MAX)} |`,
+      toolCallId: "call-9",
+    });
+    const answer = await ask({ kind: "table", name: "long" });
+    const table = answer.table as Record<string, unknown>;
+    expect(table.contentTruncated).toBe(true);
+    expect((table.content as string).length).toBe(QUERY_TABLE_SOURCE_MAX);
+  });
+});
+
 describe("ila_query — diagrams", () => {
   beforeEach(() => {
     registerDiagram(db, SESSION, {
@@ -334,6 +406,7 @@ describe("ila_query — ownership", () => {
     expect(await ask({ kind: "thread" }, other)).toMatchObject({ total: 0 });
     expect(await ask({ kind: "note" }, other)).toMatchObject({ total: 0 });
     expect(await ask({ kind: "diagram" }, other)).toMatchObject({ total: 0 });
+    expect(await ask({ kind: "table" }, other)).toMatchObject({ total: 0 });
   });
 
   it("answers nothing when the owner does not match the session", async () => {

@@ -193,6 +193,13 @@ diagram whose file was never written is half the feature, so the switch that mea
 deliberate entry in the tool assembly rather than an oversight: see the
 `NON_FILE_TOOLS` note in `apps/server/src/tools/index.ts`.
 
+**`ila_table` does not, and the difference is the line this switch is drawn on.**
+The question is not "does this tool touch the workspace" but "does this agent write
+files", and a table writes a database row and nothing else — its display is the
+reply's own Markdown. So it stays, like `ila_query` and `ila_explore`, both of which
+read without writing. Turning the file tools off removes diagrams and not tables;
+`docs/tables.md` has the rest.
+
 ## Copilots
 
 A Copilot is a reusable persona: a system prompt, a tool allow-list and default

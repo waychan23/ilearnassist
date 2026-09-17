@@ -111,7 +111,7 @@ const viewing = ref(false);
 
     <DiagramDialog
       v-if="viewing"
-      :source="source"
+      :content="{ kind: 'diagram', source }"
       :name="fileName"
       :summary="summary"
       @close="viewing = false"

@@ -5,11 +5,13 @@ import {
   DIAGRAM_TOOL_NAME,
   PLAN_MAKE_TOOL_NAME,
   QUIZ_TOOL_NAME,
+  TABLE_TOOL_NAME,
   isInteractiveTool,
   type ToolCall,
 } from "../api/types";
 import AskUserCard from "./AskUserCard.vue";
 import DiagramCard from "./DiagramCard.vue";
+import TableCard from "./TableCard.vue";
 import PlanConflictCard from "./PlanConflictCard.vue";
 import QuizCard from "./QuizCard.vue";
 import Icon from "./Icon.vue";
@@ -48,6 +50,15 @@ const card = computed<"ask" | "quiz" | "plan" | null>(() => {
  * decides between a drawing and a failure — see `DiagramCard`, which reads the output.
  */
 const isDiagram = computed(() => props.toolCall.name === DIAGRAM_TOOL_NAME);
+
+/**
+ * A recorded table, which is the second specialized card that is not a question.
+ *
+ * Gated on the name alone like the diagram's, and it is *not* the generic disclosure: that one
+ * would render the whole markdown under "参数", which is the table-inside-a-tool-container shape
+ * the feature deliberately avoids. See `TableCard` for the three things this card is for.
+ */
+const isTable = computed(() => props.toolCall.name === TABLE_TOOL_NAME);
 
 const open = ref(false);
 const { t, te } = useI18n();
@@ -89,6 +100,7 @@ const prettyInput = computed(() => {
 
 <template>
   <DiagramCard v-if="isDiagram" :tool-call="toolCall" />
+  <TableCard v-else-if="isTable" :tool-call="toolCall" />
   <AskUserCard v-else-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
   <PlanConflictCard v-else-if="card === 'plan'" :tool-call="toolCall" />

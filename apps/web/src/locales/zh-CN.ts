@@ -85,9 +85,35 @@ export default {
     /** The viewer. `expand` is its trigger, on the card and in the file preview. */
     expand: "放大查看",
     viewTitle: "查看图表",
+    /** The viewer's own heading when it is showing a table rather than a drawing. */
+    tableTitle: "查看表格",
     zoomIn: "放大",
     zoomOut: "缩小",
-    fit: "适应窗口",
+    /**
+     * Clicking the percentage returns to 100 %. Named for the state rather than for the gesture
+     * because that is what the button shows — it is the readout that is clickable.
+     */
+    fit: "恢复到 100%",
+    maximize: "放大窗口",
+    restore: "缩小窗口",
+    /** The viewer's download control, for a drawing. */
+    download: "下载图片",
+    /**
+     * The three formats, named as a person would ask for them rather than as MIME types — and the
+     * parenthetical is the one thing they differ by that a reader cannot see from the name: what
+     * happens where the picture has no ink. JPG says "the current theme's background" rather than
+     * "white" because that is what it does, and a dark-palette diagram on white is illegible.
+     */
+    formats: {
+      png: "PNG 图片（透明背景）",
+      jpg: "JPG 图片（带主题背景色）",
+      svg: "SVG 矢量图",
+    },
+    /** A download that produced nothing. Loud on purpose: the dialog closes either way, so
+     *  silence would look exactly like a file that was saved. */
+    downloadFailed: "下载失败，这张图没能导出为文件。",
+    /** What the table's copy control writes, said once because the button cannot say both. */
+    copyHint: "复制为 HTML 表格，粘贴到纯文本编辑器时则为 Markdown",
     /** The label on the card's disclosure, which shows the source rather than the drawing. */
     source: "源码",
     /** The label before the model's description in the viewer and file preview. */
@@ -538,6 +564,9 @@ export default {
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
       ila_diagram: "图表",
+      /* 表 rather than 图表: the panel is 图表 (both halves), and this is the half that records a
+         table — the word the card's own hint and the panel's filter both use. */
+      ila_table: "表格",
       ila_query: "查询学习记录",
       ila_explore: "浏览其他工作区",
     },
@@ -545,6 +574,11 @@ export default {
     running: "运行中",
     args: "参数",
     result: "结果",
+    table: {
+      /** Said on the card itself, because a reader who expected the table to be *there* would
+       *  otherwise think the call had shown them nothing. The table is in the reply. */
+      inlineHint: "表格已写在回复里",
+    },
     /**
      * A run of consecutive tool calls, folded into one card. `count` is how many calls the
      * run holds; `name` is a `tools.name.*` label for the call still in flight.
@@ -1048,7 +1082,15 @@ export default {
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "定位到生成它的消息",
-      empty: "这个会话还没有画过图表。",
+      empty: "这个会话还没有画过图表，也没有记录过表格。",
+      /** The panel's kind filter. Its empty value is the select's own "everything". */
+      filterKind: "按类型筛选",
+      allKinds: "全部",
+      kinds: {
+        diagram: "图",
+        table: "表",
+      },
+      noMatch: "没有符合筛选条件的图表。",
       failed: "读取图表失败。",
       /** The thread the classifier put this diagram in. */
       inThread: "属于：{title}",

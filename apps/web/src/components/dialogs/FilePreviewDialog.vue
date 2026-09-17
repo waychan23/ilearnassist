@@ -400,7 +400,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 
           <DiagramDialog
             v-if="viewingDiagram && content?.text"
-            :source="content.text"
+            :content="{ kind: 'diagram', source: content.text }"
             :name="name"
             :summary="content.summary"
             @close="viewingDiagram = false"

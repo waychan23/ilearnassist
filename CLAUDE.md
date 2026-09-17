@@ -475,6 +475,37 @@ Fuller map in `docs/reference.md`.
   a missing/unusable answer, and any diagram in a deterministically-forced plan turn, collapses
   to the turn's thread. The invariant is one sentence and testable: a diagram's `thread_id` is
   null iff the turn owning its latest call has no thread yet.
+- **A table is a row and nothing else, and the 图表 panel shows both kinds.** The requirement is
+  explicit that a table's display is the **reply's own Markdown**, never a tool container — so the
+  feature splits in two and each half holds one copy: the reply is what a person reads, and
+  `session_tables.content` is what the panel, the viewer and the clipboard read. Nothing can make
+  the two agree, so the drift is *reported rather than prevented* (the rule the two diagram drifts
+  already follow): the tool's result says what was **saved** and asks for the inline copy
+  separately, and `TABLE_GUIDANCE` is the only mechanism that can ask — no server-side code path
+  writes into a model's reply, and the tool's own description is necessarily a restriction. Four
+  things are load-bearing:
+  - **The row holds the content**, which inverts `session_diagrams`' rule and is the one place to
+    read before "fixing" it: a diagram's bytes are a *file*, so a second copy in the row would be
+    two copies free to disagree; a table has no file, so the row is the only copy. `notes.body` is
+    the same shape for the same reason. It writes **no `sources` row** either — a source's
+    `rel_path` is non-NULL for both sandbox storages and every consumer is path-driven, so an
+    honest one is impossible — and no `.md` file in `sessions/<id>/`, which would put two full
+    copies of one source on disk.
+  - **`ila_table` is `NON_FILE_TOOLS`.** The switch means "this agent does not write files", and
+    the comparison is `ila_query`'s, not `ila_diagram`'s: a table writes a database row. Leaving it
+    out would let an operator's file-tools switch silently remove a capability that never touched a
+    file.
+  - **A table keeps the one content check this repo takes on** — a header separator row, refused
+    before the write so a refused revise cannot wipe the row the panel holds. Only that row: a full
+    parse would be a second renderer free to disagree with the `markdown-it` that draws it, which is
+    the argument against validating mermaid. And because there is no file, the model's way back to a
+    table it wrote is `ila_query(kind: "table")` — without it, "call again with the same name" is
+    advice it cannot follow past the history window.
+  - **The classifier places tables through the same machinery**, with two wire keys (`diagrams` /
+    `tables`) over one parameterised parser, `d1` / `t1` refs as the discriminant, and a **separate
+    `MAX_TABLES_PER_PROMPT`**. The one thing that must not be duplicated is the ref allocation: it
+    is one loop over the same `modelTurns`, which is what makes a forced turn's table collapse
+    exactly as its diagram does. See `docs/tables.md`.
 - **Mermaid renders in its own component, never through `renderMarkdown`.** `renderMarkdown` is a
   synchronous `string → string` on purpose — that is the reason KaTeX was chosen over MathJax —
   and mermaid's API is async, so a diagram cannot go through the markdown path, and making the
@@ -1596,17 +1627,21 @@ Fuller map in `docs/reference.md`.
 - **Widget-bound tools are switched by the install, and bypass the tool allow-list.** A `WIDGETS` entry may name `boundTools`; `turnContext()` reads the session's installed widgets per turn and assembles those tools (context-gated like `read_document`) regardless of the `allTools`/`tools` snapshot in all three states, including the empty "no tools" list. They are filtered out of the Copilot tool checklist (`isWidgetBoundTool`), since a box there can neither enable nor remove them. The plan widget binds `ila_make_plan` / `ila_read_plan` / `ila_update_plan_progress` (session scope only).
   **A tool whose widget is a *viewer* must not be bound, and `ila_diagram` is the case that
   settles it.** Binding is the right answer only when the widget is the capability's home — a
-  quiz nobody can answer, a plan nobody can see. `WIDGETS.diagram` deliberately names no
-  `boundTools`, because a bound tool is assembled *only* when its widget is installed and nothing
-  installs a widget by default (`DEFAULT_WIDGET_IDS` is empty): binding diagrams would leave the
-  model with no way to draw one in an ordinary conversation, which is the complaint the tool
-  exists to answer, and `isWidgetBoundTool` would keep the name out of the allow-list so it could
-  not even be switched on. It is an ordinary allow-listable tool, and it is deliberately **not** in
-  `NON_FILE_TOOLS` either — so `fileTools.enabled: false` means no diagrams, because a diagram
-  whose file was never written is half the feature. The panel is a viewer: it lists the
-  conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
-  folder is the source browser, which the sidebar's library row opens pre-filtered to this
-  workspace — see `docs/diagrams.md`.
+  quiz nobody can answer, a plan nobody can see. `WIDGETS.diagram` declares its two tools
+  `auto-install` rather than binding them, because a bound tool is assembled *only* when its
+  widget is installed and the only widgets installed by default are the notes and sources panels:
+  binding diagrams would leave the model with no way to draw one in an ordinary conversation,
+  which is the complaint the tool exists to answer, and `isWidgetBoundTool` would keep the name
+  out of the allow-list so it could not even be switched on. They are ordinary allow-listable
+  tools, and they differ from each other on `NON_FILE_TOOLS`: `ila_diagram` is deliberately **not**
+  in it — `fileTools.enabled: false` means no diagrams, because a diagram whose file was never
+  written is half the feature — while `ila_table` **is**, because its comparison is `ila_query`'s
+  rather than the diagram's: a table writes a row and no file, so the switch about *files* has no
+  bearing on it. The panel is a viewer over **both**: it lists the conversation's diagrams (name,
+  summary, thread) and its tables (name, summary, the markdown), and opens the one you pick — a
+  diagram through the ordinary file preview, a table through the viewer directly, since only one of
+  the two has a file. The whole folder is the source browser, which the sidebar's library row opens
+  pre-filtered to this workspace — see `docs/diagrams.md` and `docs/tables.md`.
   **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
   comes from an out-of-band model call a button triggers, so there is nothing to bind — and
   binding would be wrong anyway, because a bound tool is something the *agent* can call and the

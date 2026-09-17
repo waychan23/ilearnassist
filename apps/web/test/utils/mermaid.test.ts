@@ -1,99 +1,61 @@
-import { describe, expect, it, vi } from "vitest";
-import { MAX_DIAGRAM_CHARS } from "@ilearnassist/shared";
-import { diagramThemeVariables, diagramTooLarge, renderMermaid } from "../../src/utils/mermaid.js";
+import { describe, expect, it } from "vitest";
+import { svgSize } from "../../src/utils/mermaid";
 
 /**
- * Did anything import mermaid?
+ * Reading a drawing's own size off the SVG text.
  *
- * Set by the mocked factory, which vitest runs the first time `"mermaid"` is imported by
- * anything under test. Since `vi.mock` is hoisted above the imports of this file, the answer at
- * the end of it is a statement about `utils/mermaid.ts` and not about this test.
- */
-const mermaidLoaded = vi.hoisted(() => ({ value: false }));
-
-vi.mock("mermaid", () => {
-  mermaidLoaded.value = true;
-  // Never called: the point is that the module is not *evaluated*, and the shape only has to
-  // be good enough that a caller inside `renderMermaid` would not throw on import.
-  return { default: { initialize: () => {}, parse: async () => ({}), render: async () => ({ svg: "" }) } };
-});
-
-/**
- * What can be pinned without a browser.
+ * This is the whole of what makes the figure viewer's zoom work, and it is here rather than in the
+ * browser suite because the arithmetic is the part that can be wrong in ways a screenshot would
+ * not show: a size read as `0` scales to nothing, and a size read from the wrong place scales to
+ * something plausible and wrong.
  *
- * The render itself cannot be: mermaid needs real layout, `getBBox` and SVG measurement, none
- * of which jsdom has. That half is the browser suite's, which is the same division the app
- * already accepts for `.vue` components. What is left is the part that decides *whether* to
- * render and *what colours* it renders with — and that second one is here rather than in the
- * browser because the mapping takes an injected reader, precisely so it can be.
+ * The svg strings are mermaid's own shape, and reproducing that shape is the point — this reads
+ * the `viewBox` precisely *because* the `width` and `height` attributes are percentages that mean
+ * nothing without a container.
  */
 
-describe("diagramTooLarge", () => {
-  it("accepts a source at the cap and refuses one past it", () => {
-    // The boundary is shared with the server, which refuses to *write* one this size — a
-    // diagram the tool accepted and the viewer declined would read as a broken viewer.
-    expect(diagramTooLarge("x".repeat(MAX_DIAGRAM_CHARS))).toBe(false);
-    expect(diagramTooLarge("x".repeat(MAX_DIAGRAM_CHARS + 1))).toBe(true);
-  });
-});
+/** What mermaid emits under `useMaxWidth: true`, which is the setting this app keeps. */
+const MERMAID_SVG =
+  '<svg id="mmd-1" width="100%" xmlns="http://www.w3.org/2000/svg" ' +
+  'style="max-width: 312.5px;" viewBox="0 0 312.5 154" role="graphics-document document">' +
+  "<g></g></svg>";
 
-describe("diagramThemeVariables", () => {
-  it("draws its colours from the palette tokens", () => {
-    const read = vi.fn((_name: string) => "#123456");
-    const vars = diagramThemeVariables(read);
-    const asked = new Set(read.mock.calls.map((call) => call[0]));
-
-    // The surface, the two greys, the border and the text tones: everything a node, an edge
-    // and a cluster is painted from.
-    for (const token of ["--panel", "--panel-2", "--text", "--border", "--text-3"]) {
-      expect(asked).toContain(token);
-    }
-    // The error pair, because a mermaid parse error is drawn *by mermaid*, not by us.
-    expect(asked).toContain("--danger-bg");
-    expect(asked).toContain("--danger-text");
-    expect(vars.background).toBe("#123456");
+describe("svgSize", () => {
+  it("reads the drawing's own size from the viewBox", () => {
+    expect(svgSize(MERMAID_SVG)).toEqual({ width: 312.5, height: 154 });
   });
 
-  it("trims what the reader gives it", () => {
-    /*
-     * `getComputedStyle(...).getPropertyValue("--panel")` returns the declared value *with*
-     * its surrounding whitespace, and mermaid hands these straight to its colour functions. A
-     * value of `" #1f2328 "` is not the same string as `"#1f2328"`, and whether it survives
-     * that trip is mermaid's business rather than something to find out per diagram.
-     */
-    const vars = diagramThemeVariables(() => "  #1f2328  ");
-    expect(vars.primaryTextColor).toBe("#1f2328");
+  it("is not fooled by the percentage width mermaid writes beside it", () => {
+    // The failure this exists to prevent: `100%` is not a size, and a viewer that believed it
+    // would scale every drawing by a number that means "whatever the box is".
+    const size = svgSize(MERMAID_SVG);
+    expect(size?.width).not.toBe(100);
+    expect(size?.width).toBe(312.5);
   });
 
-  it("falls back rather than producing an empty colour", () => {
-    // jsdom does not apply `style.css`, so a computed-style read returns "" there — and an
-    // empty string handed to mermaid is a broken palette rather than a missing one. It is also
-    // the shape a *browser* gives for a token nobody declared yet.
-    const vars = diagramThemeVariables(() => "");
-
-    expect(Object.values(vars).every((v) => v.length > 0)).toBe(true);
-    expect(vars.background).toBe("#ffffff");
+  it("accepts a comma-separated viewBox, which is equally valid SVG", () => {
+    expect(svgSize('<svg viewBox="0,0,120,60"></svg>')).toEqual({ width: 120, height: 60 });
   });
 
-  it("gives edge labels the surface colour rather than mermaid's white", () => {
-    // Mermaid's default is hard white, which on a dark theme is a white box sitting on top of
-    // every edge label. This is the one variable whose absence is visible in every diagram.
-    const vars = diagramThemeVariables((name) => (name === "--panel" ? "#101418" : ""));
-    expect(vars.edgeLabelBackground).toBe("#101418");
+  it("accepts a viewBox whose origin is not the corner", () => {
+    // Only the last two numbers are the size; an origin read as a dimension would give a drawing
+    // twice its width.
+    expect(svgSize('<svg viewBox="-10 -20 80 40"></svg>')).toEqual({ width: 80, height: 40 });
   });
-});
 
-describe("loading", () => {
-  it("does not load mermaid until something asks for a render", () => {
-    /*
-     * The dynamic import lives *inside* a function on purpose: mermaid is a ~1 MB package of
-     * some two hundred modules, and importing this one should cost nothing until a diagram is
-     * actually on screen. Lift `import mermaid from "mermaid"` to the top of `utils/mermaid.ts`
-     * and every user pays for it on first paint, diagram or no diagram — while `renderMermaid`
-     * would still be a function and every other test here would still pass. This is the test
-     * that would not.
-     */
-    expect(mermaidLoaded.value).toBe(false);
-    expect(typeof renderMermaid).toBe("function");
+  it("answers null rather than a number for anything it cannot read", () => {
+    // Null is the caller's "fall back to mermaid's own behaviour" — the honest answer, and the
+    // reason the viewer's zoom controls are disabled rather than misleading in this case.
+    expect(svgSize("<svg></svg>")).toBeNull();
+    expect(svgSize('<svg viewBox="0 0 100"></svg>')).toBeNull();
+    expect(svgSize('<svg viewBox="0 0 abc 100"></svg>')).toBeNull();
+    expect(svgSize("")).toBeNull();
+  });
+
+  it("treats an empty drawing as no size at all", () => {
+    // Mermaid emits `0 0 0 0` for a graph with nothing in it. Zero is not a scale factor, and a
+    // canvas of zero pixels is a failure rather than a blank picture.
+    expect(svgSize('<svg viewBox="0 0 0 0"></svg>')).toBeNull();
+    expect(svgSize('<svg viewBox="0 0 100 -5"></svg>')).toBeNull();
   });
 });

@@ -69,6 +69,7 @@ import type {
 } from "../api/types";
 import {
   DIAGRAM_TOOL_NAME,
+  TABLE_TOOL_NAME,
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
   isPlatformAdmin,
@@ -2518,6 +2519,16 @@ export const useAppStore = defineStore("app", () => {
         if (ev.toolCall.name === DIAGRAM_TOOL_NAME) {
           emitWidgetEvent({
             type: "diagram.changed",
+            sessionId: activeSessionId.value ?? "",
+          });
+        }
+        // A table call has written its row by now, and the same argument holds one level over:
+        // the message's tool calls name the *call*, and nothing local turns one into the row the
+        // panel lists. Two events rather than one because the panels filter on them by name, so
+        // sharing would wake the other on every call.
+        if (ev.toolCall.name === TABLE_TOOL_NAME) {
+          emitWidgetEvent({
+            type: "table.changed",
             sessionId: activeSessionId.value ?? "",
           });
         }

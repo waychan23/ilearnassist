@@ -11,6 +11,7 @@ import {
 } from "@ilearnassist/shared";
 import type { AppDb } from "../db.js";
 import { diagramFileName, listDiagramViews } from "../diagrams.js";
+import { tableName } from "../tables.js";
 import { readCurrentPlan, renderReadResult } from "../plans.js";
 import { listQuizQuestionViews } from "../quizzes.js";
 import { buildThreadViews } from "../threads.js";
@@ -65,6 +66,16 @@ export const QUERY_MAX_LIMIT = RESULT_MAX_LIMIT;
 
 /** The mermaid source a `kind: "diagram"` answer may carry, per diagram. */
 export const QUERY_DIAGRAM_SOURCE_MAX = 4_000;
+
+/**
+ * The markdown a `kind: "table"` answer may carry, per table.
+ *
+ * Larger than the diagram cap because a table is *rows*, and a table trimmed to a couple of
+ * thousand characters is a table with its middle missing — where a diagram's source is the whole
+ * drawing or nothing. Still a cap: `MAX_TABLE_CHARS` bounds what can be stored at 16 KB, and a
+ * read that returned several of those at once would spend the turn's context on one answer.
+ */
+export const QUERY_TABLE_SOURCE_MAX = 8_000;
 
 export interface QueryToolContext {
   db: AppDb;
@@ -211,6 +222,7 @@ const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = {
   thread: ["limit"],
   note: ["query", "limit", "offset"],
   diagram: ["name", "limit"],
+  table: ["name", "limit"],
   source: ["query", "limit", "offset"],
 };
 
@@ -485,12 +497,82 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
    * branch here is a `tsc` error. A `switch` over a non-union `kind` would narrow to nothing and
    * buy no such guarantee — it would compile with a missing case and fall off the end.
    */
+  const table = async (input: { name?: string; limit?: number }): Promise<string> => {
+    const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
+    const all = ctx.db.listTablesForUser(ctx.userId, ctx.sessionId);
+
+    if (input.name) {
+      // The same normalisation the writer applies, so the model does not have to have remembered
+      // the slug exactly — `tableName` is the one rule and this is the other side of it.
+      const wanted = tableName(input.name);
+      const found = all.find((t) => t.name === wanted);
+      if (!found) {
+        return JSON.stringify(
+          {
+            kind: "table",
+            table: null,
+            available: all.map((t) => t.name),
+            note:
+              all.length > 0
+                ? "No recorded table with that name in this conversation. `available` lists the ones it has."
+                : "This conversation has not recorded a table yet.",
+          },
+          null,
+          2
+        );
+      }
+      const truncated = found.content.length > QUERY_TABLE_SOURCE_MAX;
+      return JSON.stringify(
+        {
+          kind: "table",
+          table: {
+            name: found.name,
+            summary: found.summary,
+            threadTitle: found.threadTitle,
+            contentTruncated: truncated,
+            content: truncated ? found.content.slice(0, QUERY_TABLE_SOURCE_MAX) : found.content,
+          },
+          note:
+            /*
+             * Why this kind exists at all, said to the model rather than only in a docblock: a
+             * table has no file, so this read is the *only* way to see one again once the turn
+             * that wrote it is out of the history window — and without it the revise instruction
+             * the tool hands back ("call again with the same name") would be advice the model
+             * could not follow, since a revise needs the current contents.
+             */
+            "This is the table as it was recorded, in Markdown. The copy in the conversation's " +
+            "reply is a separate copy and may differ. To revise it, call ila_table again with " +
+            "the same name and the complete corrected table.",
+        },
+        null,
+        2
+      );
+    }
+
+    const items = all.slice(0, limit).map((t) => ({
+      name: t.name,
+      summary: clip(t.summary),
+      threadTitle: t.threadTitle,
+    }));
+    return page({
+      kind: "table",
+      items,
+      total: all.length,
+      offset: 0,
+      note:
+        "These are the tables this conversation has recorded in its 图表 panel. Only their names " +
+        "and summaries are listed here; call ila_query again with one `name` to read that " +
+        "table's Markdown.",
+    });
+  };
+
   const HANDLERS: Record<QueryKind, (input: QueryInput) => Promise<string>> = {
     plan: async () => plan(),
     quiz: (input) => quiz(input),
     thread: (input) => thread(input),
     note: async (input) => note(input),
     diagram: (input) => diagram(input),
+    table: (input) => table(input),
     source,
   };
 

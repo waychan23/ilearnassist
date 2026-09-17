@@ -1,4 +1,9 @@
-import { DIAGRAM_TOOL_NAME, isInteractiveTool, type ToolCall } from "../api/types";
+import {
+  DIAGRAM_TOOL_NAME,
+  TABLE_TOOL_NAME,
+  isInteractiveTool,
+  type ToolCall,
+} from "../api/types";
 
 /**
  * Runs of consecutive action tool calls, as the message list renders them.
@@ -28,12 +33,20 @@ export type ToolCallRun =
  *     function, and saying so here keeps that true if a call site changes.
  *   - `ila_diagram` renders a drawing. Folding it into a count hides the artifact behind a
  *     number, which is the opposite of what that card is for.
+ *   - `ila_table` renders one line and no table — its artifact is in the *reply*. So the reason
+ *     is a different one and is worth stating rather than borrowing: what a collapsed group would
+ *     hide is the row the panel's 定位 jumps to, and a table one click further from its own
+ *     record is the one affordance that card carries.
  *
  * A non-groupable call *breaks* a run rather than sitting inside one: `[a, diagram, b]` becomes
  * three singles, never a group with a picture hidden in it.
  */
 export function isGroupableToolCall(call: ToolCall): boolean {
-  return !isInteractiveTool(call.name) && call.name !== DIAGRAM_TOOL_NAME;
+  return (
+    !isInteractiveTool(call.name) &&
+    call.name !== DIAGRAM_TOOL_NAME &&
+    call.name !== TABLE_TOOL_NAME
+  );
 }
 
 /** Split the action calls into what to render, in order. */

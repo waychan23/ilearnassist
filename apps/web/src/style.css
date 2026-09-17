@@ -2578,6 +2578,18 @@ pre.code-block {
   min-width: 160px;
 }
 
+/*
+ * The figure viewer's download menu, which anchors the same way for the same reason: it hangs off
+ * a control in a dialog header, and a menu that opened *upwards* from the top of the screen would
+ * leave the window. Declared here, immediately after `.widget-menu`, because `.overlay-popover`
+ * sets `bottom` three rules up and this has to beat it on source order.
+ */
+.figure-menu {
+  bottom: auto;
+  top: calc(100% + var(--space-2));
+  min-width: 140px;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;

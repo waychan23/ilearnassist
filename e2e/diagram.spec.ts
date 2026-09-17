@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "./fixtures";
 import { scriptLlm } from "./llm";
@@ -22,6 +22,14 @@ const unique = (prefix: string): string => `${prefix} ${Date.now()}`;
 
 /** A flowchart with a CJK label, so the assertion is on text rather than on geometry. */
 const FLOW = "flowchart TD\n  A[开始] --> B[结束]";
+/**
+ * A drawing wider than the dialog that shows it.
+ *
+ * The zoom spec needs one: a two-node flow is a couple of hundred pixels across, so at 4× it still
+ * fits the viewer and the scroll half of a zoom has nothing to prove.
+ */
+const WIDE =
+  "flowchart LR\n  A[开始] --> B[读取] --> C[校验] --> D[处理] --> E[保存] --> F[完成]";
 /** Mermaid cannot parse this: the arrow points at nothing. */
 const BROKEN = "flowchart TD\n  A --> ";
 
@@ -181,7 +189,7 @@ test("a diagram the model could not write is reported, not drawn empty", async (
 
 test("the viewer opens larger and zooms", async ({ page, request }) => {
   await diagramSession(page, unique("图表查看器"));
-  await scriptDiagram(request, { name: "zoomable", source: FLOW });
+  await scriptDiagram(request, { name: "zoomable", source: WIDE });
   await send(page, "画一个流程图");
   await waitForDiagram(page);
 
@@ -193,13 +201,107 @@ test("the viewer opens larger and zooms", async ({ page, request }) => {
     timeout: 20_000,
   });
 
+  /*
+   * Everything below is a **measurement**, and that is the point of this spec's shape.
+   *
+   * It previously asserted only the readout — that pressing 放大 left "125%" on screen — and it
+   * passed for as long as the control did nothing useful, because the readout was the one half of
+   * the arrangement that worked. A zoom is a claim about pixels, so it is measured in pixels, and
+   * it is measured on the *drawing* rather than on a wrapper this implementation happens to use:
+   * "the picture got bigger" is the feature; how it got bigger is not.
+   */
+  const drawn = viewer.getByTestId("mermaid");
+  const widthOf = async () => (await drawn.boundingBox())!.width;
+  const at100 = await widthOf();
+  expect(at100).toBeGreaterThan(0);
+
   await viewer.getByTestId("diagram-zoom-in").click();
   await expect(viewer.getByTestId("diagram-zoom")).toHaveText("125%");
-  await viewer.getByTestId("diagram-fit").click();
+  // Polled rather than read once: the scale lands on the next frame.
+  await expect.poll(widthOf).toBeGreaterThan(at100 * 1.2);
+
+  // The readout is the control that goes back to 100 %, which is where 适应窗口 used to be.
+  await viewer.getByTestId("diagram-zoom").click();
   await expect(viewer.getByTestId("diagram-zoom")).toHaveText("100%");
+  await expect.poll(widthOf).toBeCloseTo(at100, 0);
+
+  // And outwards below 100 %, which is the third direction.
+  await viewer.getByTestId("diagram-zoom-out").click();
+  await expect.poll(widthOf).toBeLessThan(at100);
+
+  /*
+   * **The assertion that catches the bug this spec was rewritten for**, and the reason the three
+   * above are not enough on their own.
+   *
+   * The old arrangement scaled with the CSS `zoom` property on a full-width block, which left the
+   * drawing's size derived from its *container*: whatever the factor, the picture came out at
+   * `min(container, natural × zoom)` — it could never be wider than the box it was in. So a small
+   * factor on a small drawing did move, which is why the run above is not a proof of anything on
+   * its own, while for a diagram that already filled the box (`useMaxWidth` makes that the common
+   * case) nothing happened at all, at any factor.
+   *
+   * A drawing that can be enlarged past its window is therefore the whole difference, and it is
+   * asserted as such: the picture gets wider than the container *and* the container can scroll to
+   * all of it — which is what makes the enlargement usable rather than a picture cropped by its own
+   * frame.
+   */
+  const body = viewer.getByTestId("diagram-viewer-body");
+  await viewer.getByTestId("diagram-zoom").click();
+  for (let i = 0; i < 4; i += 1) await viewer.getByTestId("diagram-zoom-in").click();
+
+  const viewportWidth = await body.evaluate((el) => el.clientWidth);
+  await expect.poll(widthOf).toBeGreaterThan(viewportWidth);
+  const finalWidth = await widthOf();
+  await expect
+    .poll(() => body.evaluate((el) => el.scrollWidth))
+    .toBeGreaterThanOrEqual(Math.floor(finalWidth));
 
   await viewer.getByTestId("diagram-viewer-close").click();
   await expect(viewer).toBeHidden();
+});
+
+test("the viewer maximises, and downloads the drawing in three formats", async ({ page, request }) => {
+  await diagramSession(page, unique("图表下载"));
+  await scriptDiagram(request, { name: "downloadable", source: FLOW });
+  await send(page, "画一个流程图");
+  await waitForDiagram(page);
+
+  await card(page).getByTestId("diagram-expand").click();
+  const viewer = page.getByTestId("diagram-viewer");
+  await expect(viewer.getByTestId("mermaid")).toHaveAttribute("data-render-state", "ready", {
+    timeout: 20_000,
+  });
+
+  /*
+   * Maximise, asserted on the *box* rather than on the class. The class is what this added, so a
+   * maximised dialog that stayed 720px wide would satisfy a check on the class and fail at the only
+   * thing the user sees.
+   */
+  const dialog = viewer.locator(".modal");
+  const before = (await dialog.boundingBox())!;
+  await viewer.getByTestId("diagram-viewer-maximize").click();
+  await expect.poll(async () => (await dialog.boundingBox())!.width).toBeGreaterThan(before.width);
+  await viewer.getByTestId("diagram-viewer-maximize").click();
+  await expect.poll(async () => (await dialog.boundingBox())!.width).toBeCloseTo(before.width, 0);
+
+  /*
+   * Each format, as a real file. The name is asserted because it is the one part a download can
+   * get wrong without failing: a file called `download` with no extension arrives unopenable, and
+   * the only place that shows up is the name.
+   */
+  for (const format of ["png", "jpg", "svg"] as const) {
+    await viewer.getByTestId("diagram-download").click();
+    const download = page.waitForEvent("download");
+    await viewer.getByTestId(`diagram-download-${format}`).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toBe(`downloadable.${format}`);
+
+    // Non-empty, and written as the format it claims. The bytes matter: a broken SVG string
+    // rasterises to a blank canvas, and a blank PNG is still a valid PNG.
+    const path = await file.path();
+    const bytes = readFileSync(path);
+    expect(bytes.byteLength).toBeGreaterThan(100);
+  }
 });
 
 test("the widget lists what the conversation has drawn, and locates it", async ({
