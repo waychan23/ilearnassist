@@ -1554,6 +1554,11 @@ export const API_ERROR_CODES = [
   // A turn is streaming for this conversation right now. Only the two tail-mutating routes
   // refuse on it — /chat has no such guard, deliberately (see its note in routes.ts).
   "TURN_IN_PROGRESS",
+  // Another client holds this conversation's write lock, so this one may not write to it —
+  // reads still work, which is what makes the refusal a read-only conversation rather than an
+  // error. Also the answer to a write that arrived with no client id at all, since a request
+  // that never identified itself can never hold a lease. See docs/session-locks.md.
+  "SESSION_LOCKED",
 
   /*
    * Accounts and signing in.
@@ -2644,6 +2649,59 @@ export interface Session {
   description: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/*
+ * Session write locks.
+ *
+ * A lease over one conversation: whoever holds it may write, and every other client of the same
+ * account reads it read-only until it is released or expires. See `docs/session-locks.md` for
+ * the design and, more importantly, for what it deliberately does not guarantee.
+ */
+
+/** The header a client identifies itself with. */
+export const CLIENT_ID_HEADER = "x-client-id";
+
+/**
+ * How long a lease stays valid without a heartbeat.
+ *
+ * Shared rather than server-only, because the *client* has to beat faster than this or its own
+ * lease expires underneath it — the two numbers are one fact, and a heartbeat derived from this
+ * (`SESSION_LOCK_HEARTBEAT_MS`) is what keeps them from drifting apart. One missed heartbeat is
+ * survivable on purpose: 60 against 120, so an unlucky request is not a lost conversation.
+ */
+export const SESSION_LOCK_TTL_SECONDS = 120;
+
+/** Live leases in a workspace, keyed by conversation. */
+export interface SessionLockView {
+  sessionId: string;
+  /**
+   * The client holding it. Opaque, generated per browser tab, and **not a secret** — the lock
+   * is advisory, so this is here to make state legible (a test, a log, a future "which of my
+   * devices is this"), not to authenticate anybody. The account check is what protects the row.
+   */
+  clientId: string;
+  /** Whether the *asking* client is the holder, which is the only part the UI acts on. */
+  mine: boolean;
+  acquiredAt: string;
+  expiresAt: string;
+}
+
+/** What the acquire route answers with. */
+export interface SessionLockResult {
+  lock: SessionLockView;
+}
+
+/** What the release route answers with. */
+export interface SessionLockRelease {
+  /**
+   * Whether a lease this client held was actually released.
+   *
+   * False is not an error — releasing something you do not hold, or one that already expired,
+   * is what a stale tab does, and it is the honest answer rather than a refusal. The route
+   * always answers 200 for the same reason `/leave` does: the caller is leaving either way.
+   */
+  released: boolean;
 }
 
 /** Provider metadata exposed to the client (never includes the apiKey). */
