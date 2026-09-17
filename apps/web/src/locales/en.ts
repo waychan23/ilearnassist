@@ -522,6 +522,8 @@ const en: typeof MessageSchema = {
     step: "Question {current} of {total}",
     previous: "Previous",
     next: "Next",
+    /** The pager's third move: the next question with no answer at all. Absent when there is none. */
+    nextUnanswered: "Next unanswered",
     submit: "Submit",
     cancel: "Dismiss",
     unanswered: "No answer",

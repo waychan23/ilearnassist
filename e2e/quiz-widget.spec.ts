@@ -478,3 +478,148 @@ test("folding a chapter keeps the tree, and only the tree", async ({ page, reque
   await expect(page.getByTestId("quiz-tree")).toBeVisible();
   await expect(page.getByTestId("quiz-empty")).toHaveCount(0);
 });
+
+/**
+ * The detail dialog's pager.
+ *
+ * Only a browser can hold this one: the dialog is a component, so Vitest does not see it (the
+ * coverage config excludes `*.vue`), and the arithmetic that decides what the pager offers is
+ * worth pinning at the two ends — answered questions and unanswered ones behave differently.
+ */
+test("the detail dialog pages through the questions the panel is showing", async ({
+  page,
+  request,
+}) => {
+  await sessionWithWidgets(page, unique("Quiz pager"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "先测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: TWO_QUESTIONS } }],
+      },
+    ],
+  });
+  await send(page, "测测我");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+
+  // Answer both, so neither is make-up eligible and the unanswered jump has nothing to offer.
+  const ids = await panelIds(page);
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        toolCalls: [
+          {
+            id: "call_grade",
+            name: "ila_review_quiz",
+            args: {
+              reviews: [
+                { quizId: ids[0], verdict: "correct", explanation: "答对了。" },
+                { quizId: ids[1], verdict: "correct", explanation: "也对了。" },
+              ],
+            },
+          },
+        ],
+      },
+      { content: "两题都对。" },
+    ],
+  });
+  await page.locator('[data-testid="quiz-option-0-0"]').click();
+  await page.getByTestId("quiz-next").click();
+  await page.locator('[data-testid="quiz-option-1-0"]').click();
+  await page.getByTestId("quiz-submit").click();
+  await expect(page.locator('[data-tool-call-id="call_grade"]')).toBeVisible();
+
+  await page.getByTestId("widget-tab-quiz").click();
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+
+  await page.locator('[data-testid^="quiz-row-"]').first().click();
+  await expect(page.getByTestId("quiz-nav")).toBeVisible();
+  await expect(page.getByTestId("quiz-nav-count")).toHaveText("第 1 / 2 题");
+  // The first question has nowhere to go back to, and the count says so rather than the control
+  // being absent — a pager with a missing arrow is one you cannot tell the position of.
+  await expect(page.getByTestId("quiz-nav-prev")).toBeDisabled();
+  await expect(page.getByTestId("quiz-nav-next")).toBeEnabled();
+  // Both were answered, so there is nothing to skip to: the button is not rendered at all.
+  await expect(page.getByTestId("quiz-nav-unanswered")).toHaveCount(0);
+
+  await page.getByTestId("quiz-nav-next").click();
+  await expect(page.getByTestId("quiz-nav-count")).toHaveText("第 2 / 2 题");
+  await expect(page.getByTestId("quiz-nav-next")).toBeDisabled();
+  await expect(page.getByTestId("quiz-nav-prev")).toBeEnabled();
+
+  // …and back, so the pair is a pair rather than one-way.
+  await page.getByTestId("quiz-nav-prev").click();
+  await expect(page.getByTestId("quiz-nav-count")).toHaveText("第 1 / 2 题");
+});
+
+test("the pager walks the filter the panel is set to, and skips to the next unanswered", async ({
+  page,
+  request,
+}) => {
+  await sessionWithWidgets(page, unique("Quiz pager filter"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "先测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: TWO_QUESTIONS } }],
+      },
+    ],
+  });
+  await send(page, "测测我");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+
+  // Walk away, so both are unanswered and both remain make-up eligible.
+  await scriptLlm(request as APIRequestContext, { turns: [{ content: "先讲别的。" }] });
+  await send(page, "先讲别的吧");
+  await expect(page.getByTestId("quiz-status")).toContainText("已跳过");
+
+  await page.getByTestId("widget-tab-quiz").click();
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+  await page.locator('[data-testid^="quiz-row-"]').first().click();
+  await expect(page.getByTestId("quiz-nav-count")).toHaveText("第 1 / 2 题");
+  // There is a question ahead with no answer, so the jump is offered.
+  await expect(page.getByTestId("quiz-nav-unanswered")).toBeVisible();
+
+  await page.getByTestId("quiz-nav-unanswered").click();
+  await expect(page.getByTestId("quiz-nav-count")).toHaveText("第 2 / 2 题");
+  // Nothing unanswered is *ahead* of the last one, so the jump goes away rather than wrapping
+  // round to the top — a button that silently returns you to the beginning is a different action
+  // wearing the same label.
+  await expect(page.getByTestId("quiz-nav-unanswered")).toHaveCount(0);
+
+  await page.getByTestId("quiz-detail-close").click();
+
+  // Now narrow the list: the pager counts the filtered list, not the conversation.
+  await selectFilter(page, "skipped");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+  await page.locator('[data-testid^="quiz-row-"]').last().click();
+  await expect(page.getByTestId("quiz-nav-count")).toHaveText("第 2 / 2 题");
+});
+
+test("a list of one question has no pager", async ({ page, request }) => {
+  await sessionWithWidgets(page, unique("Quiz pager single"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "先测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: ONE_QUESTION } }],
+      },
+    ],
+  });
+  await send(page, "测测我");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+
+  await scriptLlm(request as APIRequestContext, { turns: [{ content: "先讲别的。" }] });
+  await send(page, "先讲别的吧");
+  await expect(page.getByTestId("quiz-status")).toContainText("已跳过");
+
+  await page.getByTestId("widget-tab-quiz").click();
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(1);
+  await page.locator('[data-testid^="quiz-row-"]').click();
+  await expect(page.getByTestId("quiz-detail-overlay")).toBeVisible();
+  // One question in the list, so a pager over it would be three controls that cannot act.
+  await expect(page.getByTestId("quiz-nav")).toHaveCount(0);
+});

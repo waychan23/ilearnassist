@@ -333,7 +333,18 @@ function statusTitle(q: QuizQuestionView): string {
         </template>
       </ul>
 
-      <QuizDetailDialog :question="active" @close="active = null" />
+      <!--
+        `filteredQuestions` is the order the panel is showing, so the dialog's pager walks the
+        filter the reader set rather than the whole conversation. `select` is what the panel's own
+        rows emit, so a question reached by paging and one reached by clicking land the same way —
+        including the jump a `pending` question gets instead of a dialog.
+      -->
+      <QuizDetailDialog
+        :question="active"
+        :questions="filteredQuestions"
+        @close="active = null"
+        @select="openQuestion"
+      />
     </template>
   </div>
 </template>
