@@ -3194,12 +3194,18 @@ export interface SourceReference {
 /**
  * What a reference points at.
  *
- * Four, and each is addressed the way *that* thing can be addressed rather than by a uniform id:
- * a message by its id, a figure by its canonical name (which is what `ila_query` takes and what
- * the panel labels the row with), a note by its id. The asymmetry is the honest shape — a
- * diagram has no id the model can use, and a note's name is not unique.
+ * Five, and each is addressed the way *that* thing can be addressed rather than by a uniform id:
+ * a message and a note and a quiz question by their ids, a figure by its canonical name (which is
+ * what `ila_query` takes and what the panel labels the row with). The asymmetry is the honest
+ * shape — a diagram has no id the model can use, and a note's name is not unique.
+ *
+ * `quiz` is the one that arrived last, migrating an older gesture onto this mechanism: the quiz
+ * widget used to compose a sentence naming the question and send that as the user's own message,
+ * which worked and was the only 追问 there was. It is a kind here for the same reason the other
+ * four are — so the chip, the block and the bubble are one implementation rather than five, and so
+ * the question reaches the agent as a question id rather than as prose it has to parse.
  */
-export const TURN_REFERENCE_KINDS = ["message", "diagram", "table", "note"] as const;
+export const TURN_REFERENCE_KINDS = ["message", "diagram", "table", "note", "quiz"] as const;
 
 export type TurnReferenceKind = (typeof TURN_REFERENCE_KINDS)[number];
 
@@ -3222,9 +3228,9 @@ export interface TurnReference {
   /**
    * The handle, in the kind's own terms.
    *
-   * `message` → the message id. `diagram`/`table` → the figure's canonical name, which the server
-   * normalises again on the way in, so a client that opened a dialog with "Auth Flow.mmd" and one
-   * that read `auth-flow.mmd` off the panel are asking about one figure. `note` → the note id.
+   * `message`/`note`/`quiz` → the row's id. `diagram`/`table` → the figure's canonical name, which
+   * the server normalises again on the way in, so a client that opened a dialog with
+   * "Auth Flow.mmd" and one that read `auth-flow.mmd` off the panel are asking about one figure.
    */
   ref: string;
   label: string;

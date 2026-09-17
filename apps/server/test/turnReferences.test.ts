@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Message, TurnReference } from "@ilearnassist/shared";
 import { DEFAULT_SESSION_TITLE, createDb, newId, type AppDb } from "../src/db.js";
+import { registerQuizQuestions } from "../src/quizzes.js";
 import {
   parseTurnReferences,
   referencesForHistory,
@@ -83,6 +84,22 @@ function seedTable(name: string, summary = "两季度对比"): void {
     summary,
     content: "| a |\n| - |\n| 1 |",
     toolCallId: null,
+  });
+}
+
+/** A question as `ila_quiz` would have posed it — the rows a reference can name. */
+function registerQuestion(): void {
+  registerQuizQuestions(db, SESSION, {
+    toolCallId: "call-1",
+    items: [
+      {
+        qid: "Q1",
+        position: 1,
+        header: "递归",
+        question: "递归的终止条件是什么？",
+        options: [{ label: "A" }, { label: "B" }],
+      },
+    ],
   });
 }
 
@@ -199,6 +216,29 @@ describe("resolving what a turn points at", () => {
     expect(resolve(many)).toMatchObject({ ok: false, status: 400, code: "INVALID_FIELD" });
   });
 
+  it("resolves a quiz question by its global id, and refuses one this conversation lacks", () => {
+    /*
+     * The kind that arrived last, migrating an older gesture. The id matters more here than
+     * anywhere else: the question is identified to the reader as `Q1`, which is scoped to one
+     * conversation, while `ila_review_quiz` and the reference both take the global uuid. Sending
+     * the `Qn` would be a reference that resolves to nothing.
+     */
+    registerQuestion();
+    const [question] = db.listQuizQuestionsBySession(SESSION);
+
+    const found = resolve([{ kind: "quiz", ref: question!.id, label: "递归的终止条件是什么？" }]);
+    expect(found.ok && found.resolved[0]).toMatchObject({
+      kind: "quiz",
+      quizId: question!.id,
+      qid: "Q1",
+      question: "递归的终止条件是什么？",
+      missing: false,
+    });
+
+    const missing = resolve([{ kind: "quiz", ref: newId(), label: "x" }]);
+    expect(missing).toMatchObject({ ok: false, status: 404, code: "REFERENCE_NOT_FOUND" });
+  });
+
   it("resolves nothing into nothing, rather than into a failure", () => {
     expect(resolve([])).toEqual({ ok: true, resolved: [] });
   });
@@ -244,6 +284,30 @@ describe("the block the model reads", () => {
       { kind: "note", noteId: "note-1", noteType: "question", content: "不太懂", missing: false },
     ])!;
     expect(block).toContain('ila_query(kind: "note", id: "note-1")');
+  });
+
+  it("carries a quiz question's own words, and says what is being asked", () => {
+    /*
+     * The one reference that is *not* a pointer, and the difference is the question's length:
+     * fourteen words a round trip would fetch anyway. So the block carries them and names the id
+     * beside them — the id is what makes the reference re-resolvable and what `ila_review_quiz`
+     * takes, and the sentence is what the reader wants explained.
+     */
+    const block = renderReferenceBlock([
+      {
+        kind: "quiz",
+        quizId: "q-1",
+        qid: "Q2",
+        question: "递归的终止条件是什么？",
+        missing: false,
+      },
+    ])!;
+    expect(block).toContain("递归的终止条件是什么？");
+    expect(block).toContain("quiz_id: q-1");
+    expect(block).toContain("Q2");
+    // The instruction the old prose template carried, kept: a follow-up is not a request for
+    // another question.
+    expect(block).toContain("do not pose a new quiz");
   });
 
   it("numbers the references, so a question can name one", () => {

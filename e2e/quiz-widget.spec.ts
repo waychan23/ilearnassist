@@ -1,12 +1,12 @@
 import { expect, test, type APIRequestContext, type Page } from "./fixtures";
-import { scriptLlm } from "./llm";
+import { FAKE_LLM, scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
 
 /**
  * The quiz widget over a real browser and a scripted model: questions are registered
  * against the current plan chapter, the resumed turn grades them with ila_review_quiz,
  * the panel lists/groups/filters them, a walked-away question is made up (same row,
- * graded once), and a follow-up goes through as a normal chat message.
+ * graded once), and a follow-up is asked as a reference on an ordinary turn.
  */
 
 const unique = (prefix: string): string => `${prefix} ${Date.now()}`;
@@ -362,15 +362,34 @@ test("the follow-up box sends a normal chat message quoting the question", async
   await scriptLlm(request as APIRequestContext, {
     turns: [{ content: "map 是一对一转换，flatMap 是一对多。" }],
   });
-  await page.getByTestId("quiz-followup-toggle").click();
-  await page.getByTestId("quiz-followup-text").fill("map 和 flatMap 有什么区别？");
-  await page.getByTestId("quiz-followup-send").click();
+  /*
+   * The gesture every other object uses now: 追问 stages a chip and closes, and the question is
+   * typed in the composer. What this replaced was a text box inside the dialog whose submission
+   * composed a sentence naming the question — so what is asserted is the part that changed: the
+   * chip carries the question, and the prompt carries its *global* id rather than its `Qn`.
+   */
+  await page.getByTestId("quiz-followup-ask").click();
 
-  // The dialog closed and the answer arrives in the chat, with the global id quoted.
   await expect(page.getByTestId("quiz-detail-overlay")).toHaveCount(0);
+  await expect(page.getByTestId("composer-refs")).toContainText("题目");
+  await expect(page.getByTestId("composer-refs")).toContainText(ONE_QUESTION[0]!.question);
+
+  await page.getByTestId("composer-input").fill("map 和 flatMap 有什么区别？");
+  await page.getByTestId("composer-send").click();
   await expect(page.locator('[data-testid="message-content"]').last()).toContainText(
     "flatMap 是一对多"
   );
+
+  // The bubble names the question it was about, above the answer's question.
+  await expect(page.getByTestId("message-refs")).toContainText(ONE_QUESTION[0]!.question);
+
+  // And what the model read: the question's own words, and the id `ila_review_quiz` takes —
+  // never the `Qn`, which is scoped to this conversation and would resolve to nothing.
+  const sent = JSON.stringify(
+    (await (await request.get(`${FAKE_LLM}/__requests`)).json()) as unknown[]
+  );
+  expect(sent).toContain(quizId);
+  expect(sent).toContain("do not pose a new quiz");
   expect(quizId.length).toBeGreaterThan(8);
 });
 

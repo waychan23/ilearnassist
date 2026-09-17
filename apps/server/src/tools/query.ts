@@ -8,6 +8,7 @@ import {
   planNodeNumbers,
   type Note,
   type PlanTreeNode,
+  type QuizQuestionView,
   type QueryKind,
 } from "@ilearnassist/shared";
 import type { AppDb } from "../db.js";
@@ -135,7 +136,7 @@ const DESCRIPTION = [
   "",
   "Use it whenever the answer depends on what has already happened here rather than on general knowledge — what the learner has already covered, what they got wrong, what they wrote down, what they pushed back on, or what they asked for a picture of. The learner's questions often refer back to material you cannot see from the last few messages, and this is how you look it up instead of guessing or asking them to repeat it.",
   "",
-  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table` or `source`); call it more than once if you need more than one. When a message of yours quotes a reference the user attached — a diagram, a table or one of their notes — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"note\"` with an `id` returns that one note.",
+  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table` or `source`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
   "",
   "If an answer comes back with \"truncated\": true, you are seeing part of the set: call again with a larger offset or a narrower filter rather than assuming you have seen it all.",
 ].join("\n");
@@ -233,7 +234,7 @@ type QueryInput = z.infer<typeof inputSchema>;
  */
 export const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = {
   plan: [],
-  quiz: ["status", "limit", "offset"],
+  quiz: ["id", "status", "limit", "offset"],
   thread: ["limit"],
   note: ["id", "query", "limit", "offset"],
   diagram: ["name", "limit"],
@@ -263,47 +264,82 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
   /** `kind: "plan"` — the same string `ila_read_plan` returns, from the same function. */
   const plan = (): string => renderReadResult(readCurrentPlan(ctx.db, ctx.sessionId));
 
+  /** One question rendered for the model, shared by the listing and the single lookup. */
+  const quizItem = (q: QuizQuestionView): Record<string, unknown> => ({
+    /*
+     * The global id, which is what `ila_review_quiz` takes and what a reference carries. It was
+     * absent here for as long as the listing was only ever read by prose — the quiz follow-up
+     * quoted this id in a sentence, and nothing could resolve it because nothing was given it.
+     */
+    id: q.id,
+    qid: q.qid,
+    node: q.nodeTitle,
+    header: q.header,
+    question: clip(q.question),
+    multiSelect: q.multiSelect,
+    options: q.options.map((o) => ({
+      label: o.label,
+      ...(o.description ? { description: clip(o.description, 200) } : {}),
+    })),
+    status: q.status,
+    verdict: q.verdict,
+    answer: q.answer
+      ? {
+          selected: q.answer.selected,
+          ...(q.answer.unsure ? { unsure: true } : {}),
+          ...(q.answer.unsureReason ? { unsureReason: clip(q.answer.unsureReason) } : {}),
+          ...(q.answer.notes ? { notes: clip(q.answer.notes) } : {}),
+        }
+      : null,
+    feedback: text(q.feedback),
+    askedAt: q.createdAt,
+  });
+
   const quiz = async (input: {
+    id?: string;
     status?: "pending" | "answered" | "skipped" | "dismissed";
     limit?: number;
     offset?: number;
   }): Promise<string> => {
+    const all = listQuizQuestionViews(ctx.db, ctx.userId, ctx.sessionId);
+
+    /*
+     * By id first, and it is the only filter that applies when it is given: this is the "read the
+     * one question I was asked about" path, and a caller that named a question is not asking for a
+     * filtered list. A question id this conversation does not hold answers the way a missing
+     * diagram name does — a null, and how to get back to a list.
+     */
+    if (input.id !== undefined) {
+      const found = all.find((q) => q.id === input.id);
+      if (!found) {
+        return JSON.stringify(
+          {
+            kind: "quiz",
+            item: null,
+            note:
+              "No question with that id in this conversation. Call again without `id` to list the " +
+              "questions there are.",
+          },
+          null,
+          2
+        );
+      }
+      return JSON.stringify({ kind: "quiz", item: quizItem(found) }, null, 2);
+    }
+
     const offset = input.offset ?? 0;
     const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
-    const all = listQuizQuestionViews(ctx.db, ctx.userId, ctx.sessionId).filter(
-      (q) => !input.status || q.status === input.status
-    );
-    const items = all.slice(offset, offset + limit).map((q) => ({
-      qid: q.qid,
-      node: q.nodeTitle,
-      header: q.header,
-      question: clip(q.question),
-      multiSelect: q.multiSelect,
-      options: q.options.map((o) => ({
-        label: o.label,
-        ...(o.description ? { description: clip(o.description, 200) } : {}),
-      })),
-      status: q.status,
-      verdict: q.verdict,
-      answer: q.answer
-        ? {
-            selected: q.answer.selected,
-            ...(q.answer.unsure ? { unsure: true } : {}),
-            ...(q.answer.unsureReason ? { unsureReason: clip(q.answer.unsureReason) } : {}),
-            ...(q.answer.notes ? { notes: clip(q.answer.notes) } : {}),
-          }
-        : null,
-      feedback: text(q.feedback),
-      askedAt: q.createdAt,
-    }));
+    const filtered = all.filter((q) => !input.status || q.status === input.status);
+    const items = filtered.slice(offset, offset + limit).map(quizItem);
     return page({
       kind: "quiz",
       items,
-      total: all.length,
+      total: filtered.length,
       offset,
       note:
         "`verdict` is the model's grading of the learner's answer: correct, incorrect, or " +
-        "unsure (no claim either way). `feedback` is what was explained at the time.",
+        "unsure (no claim either way). `feedback` is what was explained at the time. `id` is the " +
+        "global id `ila_review_quiz` takes, and what a message referring to a question carries.",
     });
   };
 
@@ -637,7 +673,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
 
   const HANDLERS: Record<QueryKind, (input: QueryInput) => Promise<string>> = {
     plan: async () => plan(),
-    quiz: (input) => quiz(input),
+    quiz: async (input) => quiz(input),
     thread: (input) => thread(input),
     note: async (input) => note(input),
     diagram: (input) => diagram(input),

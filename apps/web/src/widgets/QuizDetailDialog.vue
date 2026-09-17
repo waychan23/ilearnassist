@@ -3,6 +3,7 @@ import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { QuizAnswer, QuizQuestionView, QuizVerdict } from "../api/types";
 import { useAppStore } from "../stores/app";
+import { quizReference } from "../utils/turnRefs";
 import { codeCopyClick } from "../composables/codeCopy";
 import { renderMarkdown } from "../utils/markdown";
 import Icon from "../components/Icon.vue";
@@ -13,7 +14,8 @@ import QuizQuestionForm, { type QuizDraft } from "../components/QuizQuestionForm
  * The quiz widget's question detail. Read-only once answered/dismissed; a SKIPPED
  * question gets the shared answer form, whose submission persists on the same row and
  * then drives an ordinary chat turn (POST then `/chat`, like the plan jump). Every
- * status gets a follow-up box: question about this question, quoted by global id.
+ * status offers 追问: a reference to this question, staged in the composer like every other
+ * object's.
  */
 const props = defineProps<{ question: QuizQuestionView | null }>();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -24,13 +26,11 @@ const store = useAppStore();
 const emptyDraft = (): QuizDraft => ({ selected: [], unsure: false, unsureReason: "", notes: "" });
 const draft = reactive<QuizDraft>(emptyDraft());
 
+// A different question is a different draft. The follow-up box this used to reset is gone —
+// asking about a question now stages a reference and closes, so there is nothing to carry over.
 watch(
   () => props.question?.id,
-  () => {
-    Object.assign(draft, emptyDraft());
-    followOpen.value = false;
-    followText.value = "";
-  }
+  () => Object.assign(draft, emptyDraft())
 );
 
 function close() {
@@ -168,24 +168,28 @@ async function submitMakeup(): Promise<void> {
 
 /* --------------------------------- follow-up --------------------------------- */
 
-const followOpen = ref(false);
-const followText = ref("");
-
-async function submitFollowup(): Promise<void> {
+/**
+ * Ask about this question.
+ *
+ * Migrated onto the 追问 mechanism every other object uses, and what changed is where the
+ * *question* goes: this used to compose a sentence naming the question and send that as the
+ * user's own message, so the agent read the id and the wording out of prose. Now the id is a
+ * reference — a chip in the composer, and a line in the prompt that names it — which is the same
+ * code path a diagram or a note takes.
+ *
+ * Two things fall out rather than being decided. The reader types their question in the composer,
+ * where every other question is typed, instead of in a box inside this dialog; and **the dialog
+ * closes**, because the composer is behind it and a chip staged under an overlay is a chip the
+ * reader cannot see. Closing here is safe in a way the note window's is not: this dialog holds no
+ * unsaved draft of the reader's own writing.
+ */
+function askFollowup(): void {
   const question = props.question;
-  const text = followText.value.trim();
-  if (!question || !text || busy.value) return;
-  const message = t("quiz.followupMessage", {
-    id: question.id,
-    qid: question.qid,
-    question: question.question,
-    text,
-  });
-  followText.value = "";
-  // Dispatch then close immediately: the model's reply streams into the chat behind
-  // where the dialog was, instead of being covered until the turn ends.
+  if (!question) return;
+  // The question's own words are the label — a chip reading "Q3" would say nothing about what is
+  // being asked, and the reader is looking at the question right now.
+  store.stageReference(quizReference(question));
   close();
-  void store.sendPanelMessage(message);
 }
 </script>
 
@@ -291,34 +295,18 @@ async function submitFollowup(): Promise<void> {
             />
           </div>
 
-          <!-- Follow-up, in every status. -->
+          <!--
+            Ask about this question, in every status.
+          -->
           <div class="followup" data-testid="quiz-followup">
             <button
               type="button"
               class="btn ghost small"
-              data-testid="quiz-followup-toggle"
-              @click="followOpen = !followOpen"
+              data-testid="quiz-followup-ask"
+              @click="askFollowup"
             >
-              <Icon name="help" /> {{ t("quiz.detail.followup") }}
+              <Icon name="link" /> {{ t("turnRef.ask") }}
             </button>
-            <div v-if="followOpen" class="followup-box">
-              <textarea
-                v-model="followText"
-                class="textarea"
-                rows="2"
-                :placeholder="t('quiz.detail.followupPlaceholder')"
-                data-testid="quiz-followup-text"
-              />
-              <button
-                type="button"
-                class="btn primary small"
-                :disabled="!followText.trim() || busy"
-                data-testid="quiz-followup-send"
-                @click="submitFollowup"
-              >
-                {{ t("quiz.detail.followupSend") }}
-              </button>
-            </div>
           </div>
         </div>
 
@@ -483,10 +471,5 @@ async function submitFollowup(): Promise<void> {
   padding-top: var(--space-4);
   display: grid;
   gap: var(--space-3);
-}
-.followup-box {
-  display: grid;
-  gap: var(--space-3);
-  justify-items: start;
 }
 </style>

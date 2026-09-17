@@ -1,4 +1,5 @@
 import {
+  TURN_REFERENCE_KINDS,
   TURN_REFERENCE_MAX,
   type ApiErrorCode,
   type Message,
@@ -48,7 +49,15 @@ export type ResolvedReference =
       /** The row is gone. The note-style answer: named, and said to be missing. */
       missing: boolean;
     }
-  | { kind: "note"; noteId: string; noteType: NoteType; content: string; missing: boolean };
+  | { kind: "note"; noteId: string; noteType: NoteType; content: string; missing: boolean }
+  | {
+      kind: "quiz";
+      quizId: string;
+      /** The session-scoped `Qn`, shown to the reader and used by the model in prose. */
+      qid: string;
+      question: string;
+      missing: boolean;
+    };
 
 export interface ReferenceRefusal {
   ok: false;
@@ -71,7 +80,7 @@ export function parseTurnReferences(value: unknown): TurnReference[] | null {
   return Array.isArray(value) ? (value as TurnReference[]) : null;
 }
 
-const KINDS = new Set<TurnReferenceKind>(["message", "diagram", "table", "note"]);
+const KINDS = new Set<TurnReferenceKind>(TURN_REFERENCE_KINDS);
 
 /**
  * Turn what the client sent into what this conversation holds.
@@ -134,6 +143,21 @@ export function resolveReferences(
         noteId: note.id,
         noteType: note.type,
         content: note.content,
+        missing: false,
+      });
+      continue;
+    }
+
+    if (ref.kind === "quiz") {
+      // Owner *and* session, the scoped read: a question id is a client-supplied id like any
+      // other, and one from another conversation must not become a thing this turn is about.
+      const question = db.getQuizQuestionForUser(userId, sessionId, ref.ref);
+      if (!question) return { ok: false, status: 404, code: "REFERENCE_NOT_FOUND" };
+      resolved.push({
+        kind: "quiz",
+        quizId: question.id,
+        qid: question.qid,
+        question: question.question,
         missing: false,
       });
       continue;
@@ -221,6 +245,26 @@ export function renderReferenceBlock(
       );
       return;
     }
+    if (reference.kind === "quiz") {
+      /*
+       * A question the learner is asking about, and the one reference whose *whole text* travels.
+       *
+       * Deliberately unlike the figures: the question is short, and the thing the reader wants is
+       * an explanation of *this wording* — so an identifier plus a tool call would be a round trip
+       * to fetch fourteen words the block could just carry. The id is still named, because
+       * `ila_review_quiz` and any later turn need it and because it is what makes the reference
+       * re-resolvable rather than a sentence somebody composed.
+       */
+      lines.push(
+        `${label} A quiz question from this conversation${
+          reference.missing ? ", which is no longer there" : ""
+        }${reference.qid ? ` (${reference.qid})` : ""}, quiz_id: ${reference.quizId}. The learner is ` +
+          "asking about it — answer their question, and do not pose a new quiz:",
+        `${reference.question}`,
+        ""
+      );
+      return;
+    }
     const noun = reference.figureKind === "diagram" ? "diagram" : "table";
     lines.push(
       `${label} A ${noun} from this conversation${
@@ -294,6 +338,21 @@ function resolveForReplay(
       } else {
         out.push({ kind: "note", noteId: ref.ref, noteType: "other", content: "", missing: true });
       }
+      continue;
+    }
+
+    if (ref.kind === "quiz") {
+      // A question is never really "gone" — `quiz_questions` has no `deleted_at` and nothing
+      // removes a row — so this branch exists for completeness rather than for a state that
+      // happens. It says `missing` instead of refusing, on this path's rule.
+      const question = db.getQuizQuestionForUser(userId, sessionId, ref.ref);
+      out.push({
+        kind: "quiz",
+        quizId: ref.ref,
+        qid: question?.qid ?? "",
+        question: question?.question ?? "",
+        missing: question === undefined,
+      });
       continue;
     }
 

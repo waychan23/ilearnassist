@@ -697,9 +697,6 @@ export default {
       /** Only skipped questions can be made up. */
       makeupHint: "这道题当时没有作答（跳过或取消了小测），可以在这里补答，提交后助手会判分。",
       makeupSubmit: "提交补答",
-      followup: "追问",
-      followupPlaceholder: "针对这道题继续追问…",
-      followupSend: "发送追问",
       close: "关闭",
     },
     /**
@@ -714,9 +711,6 @@ export default {
       "可选选项：{options}\n" +
       "我的补答：{answer}\n" +
       "请针对我的补答判分：用完全一致的题目 ID 调用 ila_review_quiz，给出 verdict 和讲解。",
-    /** The follow-up user message; quotes the same global id. Params: id, qid, question, text. */
-    followupMessage:
-      "关于题目 {id}（编号 {qid}）的追问。\n题目：{question}\n我的追问：{text}\n请直接解答，不需要重新出题。",
   },
 
   /**
@@ -727,11 +721,13 @@ export default {
    * composer, the block in the bubble the message was sent as, and the button that stages one.
    */
   turnRef: {
+    /** In `TURN_REFERENCE_KINDS` order, so a missing one is a gap where it should be. */
     kind: {
       message: "选中的内容",
       diagram: "图",
       table: "表",
       note: "笔记",
+      quiz: "题目",
     },
     /** The composer's chip row, and the control that takes one back off. */
     remove: "取消引用",

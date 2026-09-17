@@ -215,6 +215,65 @@ describe("ila_query — threads", () => {
   });
 });
 
+describe("ila_query — a quiz question by id", () => {
+  it("carries the global id, which is what a reference and ila_review_quiz take", async () => {
+    /*
+     * Absent for as long as the listing was only read by prose. The quiz follow-up used to quote
+     * this id in a sentence and nothing could resolve it, because nothing was ever given it — so
+     * what is asserted here is both halves: the id comes out, and it is the id that goes back in.
+     */
+    registerQuestion();
+    const listing = await ask({ kind: "quiz" });
+    const [item] = listing.items as Record<string, unknown>[];
+    expect(typeof item!.id).toBe("string");
+    // The reader's own `Qn` is a different thing and is still there: one is what a person sees,
+    // the other is what a tool takes.
+    expect(item!.qid).toBe("Q1");
+    expect(item!.id).not.toBe("Q1");
+  });
+
+  it("reads the one question its id names, without a search", async () => {
+    registerQuestion();
+    const [stored] = db.listQuizQuestionsBySession(SESSION);
+    const answer = await ask({ kind: "quiz", id: stored!.id });
+    expect(answer).toMatchObject({ kind: "quiz" });
+    expect(answer.item).toMatchObject({ id: stored!.id, qid: "Q1" });
+    expect(answer.items).toBeUndefined();
+  });
+
+  it("answers null for an id this conversation does not hold", async () => {
+    registerQuestion();
+    const answer = await ask({ kind: "quiz", id: newId() });
+    expect(answer.item).toBeNull();
+    expect(JSON.stringify(answer)).not.toContain("递归");
+    expect(answer.note as string).toContain("without `id`");
+  });
+
+  it("does not reach another conversation's question by id", async () => {
+    // The scoped read is the whole check, and it is the same one every `ForUser` accessor makes:
+    // a question id from elsewhere is not "refused", it simply is not in this conversation's list.
+    const otherId = newId();
+    db.insertQuizQuestions([
+      {
+        id: otherId,
+        sessionId: OTHER_SESSION,
+        nodeId: null,
+        nodeTitle: null,
+        toolCallId: "call-other",
+        qid: "Q1",
+        position: 1,
+        header: "别的会话",
+        question: "另一个会话里的题目",
+        multiSelect: false,
+        options: [{ label: "A" }],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+    const answer = await ask({ kind: "quiz", id: otherId });
+    expect(answer.item).toBeNull();
+  });
+});
+
 describe("ila_query — notes", () => {
   it("returns the learner's own writing", async () => {
     addNote("这里我还是不太懂", "栈溢出");

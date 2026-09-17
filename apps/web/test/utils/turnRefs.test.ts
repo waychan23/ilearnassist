@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Note } from "@ilearnassist/shared";
+import type { Note, QuizQuestionView } from "@ilearnassist/shared";
 import {
   figureReference,
   messageReference,
   noteReference,
+  quizReference,
   referenceKey,
 } from "../../src/utils/turnRefs";
 import type { FigureRow } from "../../src/utils/figures";
@@ -52,6 +53,27 @@ const note = (overrides: Partial<Note> = {}): Note => ({
   targetMissing: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
+  ...overrides,
+});
+
+const question = (overrides: Partial<QuizQuestionView> = {}): QuizQuestionView => ({
+  id: "q-uuid",
+  qid: "Q1",
+  position: 1,
+  header: "递归",
+  question: "递归的终止条件是什么？",
+  multiSelect: false,
+  options: [{ label: "A" }, { label: "B" }],
+  status: "answered",
+  verdict: "correct",
+  feedback: null,
+  answer: null,
+  nodeId: null,
+  nodeTitle: null,
+  toolCallId: "call-1",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  answeredAt: null,
+  gradedAt: null,
   ...overrides,
 });
 
@@ -119,6 +141,31 @@ describe("a note", () => {
     // A bare 标注 has no words of its own, so the quote is the only thing there is to show — the
     // same fallback the panel's own row makes, and for the same reason.
     expect(noteReference(note({ content: "", quote: "暗反应" })).label).toBe("暗反应");
+  });
+});
+
+describe("a quiz question", () => {
+  it("is addressed by its global id, not the Qn the reader sees", () => {
+    /*
+     * The one thing that matters about this kind. `Q1` is scoped to a conversation and is not what
+     * `ila_review_quiz` takes; the global uuid is. Sending the `Qn` would be a reference the server
+     * could not resolve — and it would *look* right, because that is the id the reader is looking
+     * at on screen.
+     */
+    expect(quizReference(question())).toEqual({
+      kind: "quiz",
+      ref: "q-uuid",
+      label: "递归的终止条件是什么？",
+    });
+  });
+
+  it("labels with the question itself, clipped", () => {
+    // A chip reading "Q3" would say nothing about what is being asked, and the reader is looking
+    // at the question at the moment they press the button.
+    const long = "很长的题目。".repeat(20);
+    const ref = quizReference(question({ question: long }));
+    expect(ref.label.length).toBeLessThanOrEqual(60);
+    expect(ref.label.endsWith("…")).toBe(true);
   });
 });
 

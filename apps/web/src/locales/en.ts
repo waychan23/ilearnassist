@@ -525,9 +525,6 @@ const en: typeof MessageSchema = {
       makeupHint:
         "You did not answer this question earlier (skipped or cancelled the quiz). Answer it here and the assistant will grade it.",
       makeupSubmit: "Submit make-up answer",
-      followup: "Follow up",
-      followupPlaceholder: "Ask a follow-up about this question…",
-      followupSend: "Send follow-up",
       close: "Close",
     },
     makeupMessage:
@@ -537,17 +534,17 @@ const en: typeof MessageSchema = {
       "Options: {options}\n" +
       "My make-up answer: {answer}\n" +
       "Please grade this make-up answer: call ila_review_quiz with the exact question ID, a verdict, and an explanation.",
-    followupMessage:
-      "A follow-up about question {id} ({qid}).\nQuestion: {question}\nMy follow-up: {text}\nPlease answer directly; no new quiz is needed.",
   },
 
   /** What a message can point at. See `zh-CN` for why this is a namespace of its own. */
   turnRef: {
+    /** In `TURN_REFERENCE_KINDS` order — see `zh-CN`. */
     kind: {
       message: "Selected text",
       diagram: "Diagram",
       table: "Table",
       note: "Note",
+      quiz: "Quiz question",
     },
     remove: "Remove this reference",
     ask: "Ask about it",

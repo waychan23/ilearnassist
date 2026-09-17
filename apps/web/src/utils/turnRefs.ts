@@ -1,4 +1,4 @@
-import type { Note, TurnReference, TurnReferenceKind } from "@ilearnassist/shared";
+import type { Note, QuizQuestionView, TurnReference, TurnReferenceKind } from "@ilearnassist/shared";
 import { i18n } from "../i18n";
 import type { MessageSelection } from "../composables/messageSelection";
 import type { FigureRow } from "./figures";
@@ -35,6 +35,8 @@ export function kindLabel(kind: TurnReferenceKind): string {
       return i18n.global.t("turnRef.kind.table");
     case "note":
       return i18n.global.t("turnRef.kind.note");
+    case "quiz":
+      return i18n.global.t("turnRef.kind.quiz");
   }
 }
 
@@ -95,6 +97,22 @@ export function noteReference(note: Note): TurnReference {
     // A note with no body is a bare 标注, so the passage it marks is the only thing there is to
     // show — the same fallback `NotesWidget.rowText` makes, and for the same reason.
     label: clipLabel(note.content.trim() || note.quote),
+  };
+}
+
+/**
+ * A question the reader was asked, and is now asking about.
+ *
+ * The handle is the **global** id — not the `Qn` the reader sees, which is scoped to one
+ * conversation and is not what `ila_review_quiz` takes. The label is the question itself: a chip
+ * reading "Q3" would say nothing about what is being asked, and the reader is looking at the
+ * question at the moment they press the button.
+ */
+export function quizReference(question: QuizQuestionView): TurnReference {
+  return {
+    kind: "quiz",
+    ref: question.id,
+    label: clipLabel(question.question),
   };
 }
 
