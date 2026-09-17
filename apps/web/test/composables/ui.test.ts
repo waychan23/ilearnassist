@@ -163,12 +163,30 @@ describe("the view switch", () => {
     expect(uiState.drawerOpen).toBe(false);
   });
 
-  it("leaves the drawer alone when entering a workspace", () => {
-    // `showChat` is called by the card that was just clicked on a page with no drawer; the
-    // drawer's own open/close is the sidebar's business.
+  it("closes the drawer on the way into a workspace", () => {
+    /*
+     * This asserted the opposite until the workspace home grew a drawer of its own, and the
+     * reason it gave is the reason it changed: "`showChat` is called by the card that was just
+     * clicked on a page with no drawer". That premise is gone — the home page's rail and the
+     * conversation's sidebar are the same column of the same rows — so leaving the flag set
+     * would carry an opened drawer from one page into the other.
+     *
+     * Reachable in practice only through a bug, since the backdrop covers the cards and `inert`
+     * keeps them out of the keyboard's reach. Asserted anyway, because the alternative is a rule
+     * that holds by hit-testing, and a rule nobody can read is a rule nobody can keep.
+     */
     openDrawer();
     showChat();
-    expect(uiState.drawerOpen).toBe(true);
+    expect(uiState.drawerOpen).toBe(false);
+  });
+
+  it("leaves the widget drawer alone on the way into a workspace", () => {
+    // The other half of the split, and the reason the rule is not "close everything": the widget
+    // panel belongs to the chat pane, and `showChat` is the function that enters it. Every other
+    // `show*` closes this one because every other `show*` is on its way *out*.
+    openWidgetDrawer();
+    showChat();
+    expect(uiState.widgetDrawerOpen).toBe(true);
   });
 });
 

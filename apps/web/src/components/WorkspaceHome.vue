@@ -3,7 +3,14 @@ import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
-import { openWorkspaceSettings, showChat, showWorkspaceHome } from "../composables/ui";
+import { isCompact } from "../composables/breakpoints";
+import {
+  openDrawer,
+  openWorkspaceSettings,
+  showChat,
+  showWorkspaceHome,
+  uiState,
+} from "../composables/ui";
 import { isUnauthenticatedError } from "../utils/apiError";
 import { relativeTime } from "../composables/relativeTime";
 import type { Workspace } from "../api/types";
@@ -142,20 +149,48 @@ function activityLabel(workspace: Workspace): string {
       what fills a column that has nothing else in it. The divider is the *second* group's, since
       the brand's own border already separates the first.
     -->
-    <aside class="home-rail">
+    <aside id="home-rail" class="home-rail" :class="{ open: uiState.drawerOpen }">
       <div class="rail-head">
         <span class="rail-brand">{{ t("app.title") }}</span>
       </div>
       <AppMenu class="rail-menu" />
     </aside>
 
-    <div class="home-main">
+    <!--
+      Covered by the drawer on a compact viewport, so it is taken out of the tab order and the
+      accessibility tree for as long as the drawer is over it — the same `inert` the chat pane
+      gets, and the whole of the focus story on this page too. It is bound *here* rather than
+      passed down from `App.vue` because the element it belongs on is this one: the rail is the
+      drawer and must stay reachable, and an attribute falling through to the page root would
+      make the drawer itself inert.
+    -->
+    <div class="home-main" :inert="isCompact && uiState.drawerOpen">
       <!--
         The header keeps the two controls that are properties of *this browser* rather than of
         the account — the language and the theme — and nothing else: everything that reaches a
-        page or a dialog is a row of the rail beside it.
+        page or a dialog is a row of the rail beside it. The one thing that is not a property of
+        the browser is now the way *into* the rail, which on a compact viewport is a drawer and
+        has to be opened from something.
       -->
       <header class="home-head">
+        <!--
+          The same control the chat topbar draws, at the same edge and with the same id, because
+          it does the same thing: on a compact viewport the rail is off-canvas and this is how
+          it comes back. Not rendered above the breakpoint, where the rail is a column and there
+          is nothing to open — which also means no desktop spec can reach it by accident.
+        -->
+        <button
+          v-if="isCompact"
+          class="icon-btn nav-toggle"
+          data-testid="nav-toggle"
+          :title="t('sidebar.openNav')"
+          :aria-label="t('sidebar.openNav')"
+          :aria-expanded="uiState.drawerOpen"
+          aria-controls="home-rail"
+          @click="openDrawer"
+        >
+          <Icon name="menu" />
+        </button>
         <span class="home-spacer"></span>
         <TopbarControls />
       </header>
@@ -342,45 +377,52 @@ function activityLabel(workspace: Workspace): string {
 }
 
 /*
- * Narrow: the rail becomes a strip across the top, which is the admin console's rule for the
- * same shape of menu — "there are a handful of rows and they are the page's only navigation" —
- * rather than hiding it, which would put the account's own menu out of reach on a phone.
+ * Narrow: the rail leaves the grid and becomes a **drawer**, which is the treatment the
+ * conversation's sidebar gets on the same viewport.
+ *
+ * It used to become a strip across the top — the admin console's rule for a handful of rows that
+ * are the page's only navigation — and the reason that changed is what the two pages have in
+ * common rather than what differs: both rails draw the *same* menu from the same component, so a
+ * phone was giving one set of rows two presentations depending on which page you happened to be
+ * standing on. The drawer is the one that survives the comparison, because the account's rows are
+ * navigation and a strip is a band of the screen permanently spent on it.
+ *
+ * The values are the sidebar's own, and deliberately: 272px is the column this rail is at a wide
+ * width and the drawer both rails slide in from, and the transition, the visibility delay and the
+ * stacking are the same three decisions. `style.css` holds that block for the sidebar and says why
+ * each part is there.
  */
 @media (max-width: 900px) {
+  /*
+   * One column and one explicit row, which is `.app`'s rule for the same moment: the rail is out
+   * of the grid entirely, so the pane is the only in-flow child, and an explicit row is what keeps
+   * it filling the height rather than being sized to its content.
+   */
   .workspace-home {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: 1fr;
   }
   .home-rail {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 272px;
+    z-index: var(--z-drawer);
+    transform: translateX(-100%);
+    /*
+     * `visibility` for the reason the sidebar gives: without it the closed panel's brand and every
+     * menu row stay in the tab order — focusable, off-screen, and announced. The delay keeps it
+     * visible until the slide finishes; `.open` cancels both.
+     */
+    visibility: hidden;
+    transition:
+      transform var(--dur-slow) var(--ease-drawer),
+      visibility 0s linear var(--dur-slow);
   }
-  .rail-head {
-    padding: var(--space-4) var(--space-5);
-  }
-  /*
-   * The strip: a row of rows, scrolling sideways when more of them than fit — which is the admin
-   * console's own treatment of its menu at a narrow width, so the two read the same. Both groups
-   * go on it, in order, and the divider between them goes: there is no "between" in a row, and the
-   * brand above already draws the line this strip sits under.
-   *
-   * The rows have to be told to stop filling it: `.menu-item` is `width: 100%`, which is exactly
-   * right in a column and makes a one-item strip per screen in a row.
-   */
-  .rail-menu {
-    flex: none;
-    overflow-x: auto;
-  }
-  .workspace-home .home-rail :deep(.app-menu),
-  .workspace-home .home-rail :deep(.menu-group) {
-    flex-direction: row;
-  }
-  .workspace-home .home-rail :deep(.menu-group + .menu-group) {
-    margin-top: 0;
-    border-top: none;
-  }
-  .workspace-home .home-rail :deep(.side-menu-row) {
-    width: auto;
+  .home-rail.open {
+    transform: none;
+    visibility: visible;
+    transition-delay: 0s, 0s;
   }
 }
 </style>

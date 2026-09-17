@@ -308,6 +308,19 @@ export function showWorkspaceHome(): void {
 /** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */
 export function showChat(): void {
   uiState.view = "chat";
+  /*
+   * The left drawer goes with the page that opened it. Both pages have that drawer now — the
+   * home page's rail and the conversation's sidebar are the same column of the same rows — so
+   * leaving the flag set would carry an opened drawer from one into the other.
+   *
+   * In practice a card cannot be tapped behind the backdrop, and `inert` keeps it out of the
+   * keyboard's reach too, so this is the belt to that pair of braces. Written out because the
+   * alternative is a rule that holds by hit-testing, which is a rule nobody can see.
+   *
+   * The widget drawer is deliberately *not* closed here: it belongs to this pane, and this is the
+   * function that enters it. Every other `show*` closes it for the same reason.
+   */
+  closeDrawer();
 }
 
 /**
