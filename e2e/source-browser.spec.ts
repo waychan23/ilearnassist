@@ -172,19 +172,20 @@ test("adds a file to a workspace from the browser", async ({ page, request }) =>
   expect(listed.entries.map((e: { name: string }) => e.name)).toContain("added.txt");
 });
 
-test("a conversation opens it pre-filtered, without a workspace picker", async ({
+test("a conversation opens it on its own workspace, and the picker moves it", async ({
   page,
   request,
 }) => {
   /*
-   * The second front door, and the two props are the whole of it: a scope, and the option
-   * groups that scope makes meaningless. A picker offering a choice that has already been made
-   * is a control that does nothing.
+   * The second front door. It differs from the first by one prop — the scope the list opens
+   * *on* — and not by which controls exist, which is the claim this case exists for: the
+   * workspace picker used to be hidden here, so the only way to see another workspace's
+   * material (or an upload, which no workspace holds) was to leave the conversation.
    */
   const suffix = Date.now();
   const mine = `Scoped-${suffix}`;
   const other = `Elsewhere-${suffix}`;
-  await seedWorkspace(request, mine, "mine.md");
+  const mineId = await seedWorkspace(request, mine, "mine.md");
   await seedWorkspace(request, other, "theirs.md");
 
   await page.goto("/");
@@ -194,9 +195,35 @@ test("a conversation opens it pre-filtered, without a workspace picker", async (
   const dialog = page.getByTestId("sources-dialog");
   await expect(dialog).toBeVisible();
   await settle(page);
+
+  // Opened on this conversation's workspace: its own files are here, the other one's are not.
   await expect(dialog.getByTestId("source-row").filter({ hasText: "mine.md" })).toBeVisible();
   await expect(dialog.getByTestId("source-row").filter({ hasText: "theirs.md" })).toHaveCount(0);
-  await expect(dialog.getByTestId("sources-filter-workspace")).toHaveCount(0);
+
+  const picker = dialog.getByTestId("sources-filter-workspace");
+  await expect(picker).toBeVisible();
+  await expect(picker).toHaveValue(mineId);
+
+  // …and it is a default rather than a lock: the other workspace is one selection away.
+  await picker.selectOption({ label: other });
+  await settle(page);
+  await expect(dialog.getByTestId("source-row").filter({ hasText: "theirs.md" })).toBeVisible();
+  await expect(dialog.getByTestId("source-row").filter({ hasText: "mine.md" })).toHaveCount(0);
+
+  // All the way out — the whole account, which is what the other front door opens on.
+  await picker.selectOption("");
+  await settle(page);
+  await expect(dialog.getByTestId("source-row").filter({ hasText: "mine.md" })).toBeVisible();
+  await expect(dialog.getByTestId("source-row").filter({ hasText: "theirs.md" })).toBeVisible();
+
+  /*
+   * And what is added goes where the list is *looking*, not where the dialog was opened. With
+   * nothing filtered the destination is a question again, so the picker is drawn — it was
+   * answered from the door's own scope, which here would have silently aimed an upload at the
+   * workspace the reader had just navigated away from.
+   */
+  await dialog.getByTestId("sources-add").click();
+  await expect(page.getByTestId("add-source-workspace")).toBeVisible();
 });
 
 /*

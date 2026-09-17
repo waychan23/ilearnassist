@@ -227,13 +227,12 @@ watch(
     <SessionSettingsDialog v-if="uiState.sessionSettingsOpen" @close="closeSessionSettings" />
     <!--
       The source browser, from either front door. `uiState.sourcesScope` is what the caller
-      decided: the home page opens it over the whole account, a conversation opens it already
-      narrowed to its workspace and without a workspace picker, since a control for a choice
-      that has already been made is a control that does nothing.
+      decided: the home page opens it over the whole account, and a conversation opens it *on*
+      its workspace — a default the browser's own workspace picker moves in one click, which is
+      why the picker is drawn from both doors.
     -->
     <SourceBrowser
       :initial="{ workspaceId: uiState.sourcesScope?.workspaceId }"
-      :hidden="uiState.sourcesScope?.workspaceId ? ['workspace'] : []"
       @close="closeSources"
     />
     <!-- Mounted for its lifetime rather than behind a `v-if` on the file: it renders nothing
