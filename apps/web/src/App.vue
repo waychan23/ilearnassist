@@ -1,14 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { RouterView, useRoute } from "vue-router";
 import { useAppStore } from "./stores/app";
 import Sidebar from "./components/Sidebar.vue";
-import ChatView from "./components/ChatView.vue";
-import WorkspaceHome from "./components/WorkspaceHome.vue";
-import AccountView from "./components/AccountView.vue";
-import AdminConsole from "./components/AdminConsole.vue";
-import LoginView from "./components/LoginView.vue";
-import ChangePasswordView from "./components/ChangePasswordView.vue";
 import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import CopilotsDialog from "./components/dialogs/CopilotsDialog.vue";
@@ -28,10 +23,22 @@ import {
 import { isCompact } from "./composables/breakpoints";
 import { widgetPanel } from "./composables/widgetPanel";
 import { confirmState } from "./composables/confirm";
+import type { View } from "./composables/ui";
 import Icon from "./components/Icon.vue";
 
 const store = useAppStore();
 const { t } = useI18n();
+const route = useRoute();
+
+/**
+ * Which page is on screen — the successor to `uiState.view`, read from the route.
+ *
+ * `route.meta.view` is typed as required, and is genuinely absent for the moment before the
+ * first navigation resolves. `"login"` is the answer in that window, and it is the *same*
+ * answer the flag used to start on: nothing is painted until `authReady` either way, and
+ * `auth` is the layout for a page with no shell, which is what an unresolved route is.
+ */
+const view = computed<View>(() => route.meta.view ?? "login");
 
 /**
  * Whether the widget panel exists at all.
@@ -41,9 +48,7 @@ const { t } = useI18n();
  * all — the *same* element, laid out by a media query, which is why this does not test `isCompact`
  * while the grid track below does.
  */
-const showWidgetPanel = computed(
-  () => uiState.view === "chat" && store.enabledWidgetIds.length > 0
-);
+const showWidgetPanel = computed(() => view.value === "chat" && store.enabledWidgetIds.length > 0);
 
 /**
  * Whether the panel is a third grid track.
@@ -54,9 +59,20 @@ const showWidgetPanel = computed(
  */
 const widgetPanelInFlow = computed(() => showWidgetPanel.value && !isCompact.value);
 
-onMounted(() => {
-  store.init().catch((e) => store.setError(e instanceof Error ? e.message : String(e)));
-});
+/**
+ * The one attribute the routed page is given, and only when it is a conversation.
+ *
+ * `ChatView` is single-root, so `inert` falls through to its `<main>` and takes the pane behind
+ * an open drawer out of the tab order. Every other page is bound *nothing* rather than bound
+ * `false`: an attribute that falls through to a component with several roots is a Vue warning
+ * and a stray attribute on whichever element it lands, and the pages that do not need this have
+ * no drawer to be behind.
+ */
+const pageAttrs = computed(() =>
+  view.value === "chat"
+    ? { inert: (uiState.drawerOpen || uiState.widgetDrawerOpen) && isCompact.value }
+    : {}
+);
 
 /* ---------------------------------- drawer ---------------------------------- */
 
@@ -151,16 +167,24 @@ watch(
 
 <template>
   <!--
-    Three views, and the flag that picks between them lives in `composables/ui.ts`. There is
-    still no router: a route table for one flag would be a dependency and a URL nobody types.
+    The shell, and one routed page inside it.
 
-    Nothing renders until `authReady`, and that gate is not tidiness. The session cookie is
-    HttpOnly, so the page cannot know whether anyone is signed in until `/api/auth/me`
-    answers — and treating the login screen as the initial guess would flash it at a
-    signed-in user on every single refresh. Rendering neither view for those few hundred
-    milliseconds is the only honest option.
+    Which page is a URL now — see `router/index.ts` for the table and `router/guards.ts` for
+    what moving between them means. It used to be a flag in `composables/ui.ts`, and the cost
+    of that was a browser which only ever knew one address: a refresh threw the reader back to
+    the front door, and a conversation could not be linked to, bookmarked or returned to.
 
-    The overlays below sit outside the branch because the signed-in views all reach them —
+    Nothing renders until `authReady`, and that gate is not tidiness. The session is a bearer
+    token and whether anyone is signed in is the server's fact, answered by `/api/auth/me` —
+    and treating the sign-in screen as the initial guess would flash it at a signed-in user on
+    every single refresh. Rendering neither view for those few hundred milliseconds is the only
+    honest option. The guard is what flips it, before any route resolves.
+
+    The shell is drawn per page rather than around them: `Sidebar` and the two backdrops belong
+    to a conversation (the workspace home draws its own rail from the same menu, in a column
+    that is not this one), and `WidgetPanel` belongs to a conversation with widgets installed.
+
+    The overlays below sit outside the branch because the signed-in pages all reach them —
     the Copilot list from the sidebar footer *and* from the workspace home.
   -->
   <div
@@ -170,8 +194,8 @@ watch(
          password-change screen shares with the sign-in screen: both are one centred card with
          no sidebar, which is a layout rather than a session state. The `home` class is the
          same rule for the pages that do have a header — see `style.css`. */
-      home: uiState.view === 'home' || uiState.view === 'account' || uiState.view === 'admin',
-      auth: uiState.view === 'login' || uiState.view === 'password',
+      home: view === 'home' || view === 'account' || view === 'admin',
+      auth: view === 'login' || view === 'password',
       /* The rail is a grid *track*, not a width on the sidebar. See `sidebarRail` for the
          two conditions inside it, and `style.css` for why the track is the element that
          has to move. */
@@ -182,51 +206,35 @@ watch(
     }"
     :style="{ '--widget-w': widgetPanel.widthCss.value }"
   >
-    <LoginView v-if="uiState.authReady && uiState.view === 'login'" />
-
-    <!-- Signed in, and held here until a password is chosen. Its own branch rather than a
-         dialog over the app: the server refuses every other route in this state, so there is
-         no app behind it to draw. -->
-    <ChangePasswordView v-else-if="uiState.authReady && uiState.view === 'password'" />
-
-    <template v-else-if="uiState.authReady">
-      <WorkspaceHome v-if="uiState.view === 'home'" />
-
-      <AccountView v-else-if="uiState.view === 'account'" />
-      <!-- Superadmin-only, and the server is what enforces it — this branch is the shape of
-           the feature. Reached from the account page and the workspace home. -->
-      <AdminConsole v-else-if="uiState.view === 'admin'" />
-
-      <template v-else>
-        <Sidebar :inert="!uiState.drawerOpen && isCompact" />
-
-        <!--
-          Only on a compact viewport, and only while one of the drawers is open. `inert` takes the
-          pane behind it out of the tab order and the accessibility tree, which is the same job a
-          focus trap does with a fraction of the state. `ChatView` is single-root, so the attribute
-          falls through to `<main>` — and it tests *both* drawers, since either one covers it.
-        -->
-        <ChatView :inert="(uiState.drawerOpen || uiState.widgetDrawerOpen) && isCompact" />
-
-        <WidgetPanel v-if="showWidgetPanel" />
-
-        <!-- A backdrop of its own rather than a shared one, so a click can only dismiss the
-             drawer it was pointing at. -->
-        <div
-          v-if="isCompact && uiState.widgetDrawerOpen"
-          class="drawer-backdrop"
-          data-testid="widget-drawer-backdrop"
-          aria-hidden="true"
-          @click="closeWidgetDrawer"
-        />
-      </template>
+    <template v-if="uiState.authReady">
+      <Sidebar v-if="view === 'chat'" :inert="!uiState.drawerOpen && isCompact" />
 
       <!--
-        The left drawer's backdrop, outside the branch above because **two pages have that
-        drawer**: the conversation's sidebar and the workspace home's rail, which is the same
-        column holding the same menu. One element, one flag — the two never render together, so
-        there is nothing for a second backdrop to disambiguate.
+        One outlet for every page. `pageAttrs` is the `inert` a conversation needs on a compact
+        viewport with a drawer open — the attribute takes the pane behind it out of the tab
+        order and the accessibility tree, which is the same job a focus trap does with a
+        fraction of the state. It is bound here rather than written on the component because
+        the component is whatever the route chose.
       -->
+      <RouterView v-slot="{ Component }">
+        <component :is="Component" v-bind="pageAttrs" />
+      </RouterView>
+
+      <WidgetPanel v-if="showWidgetPanel" />
+
+      <!--
+        The backdrops, outside the conversation check above because **two pages have that
+        drawer**: the conversation's sidebar and the workspace home's rail, which is the same
+        column holding the same menu. Each gets its own element rather than sharing one, so a
+        click can only dismiss the drawer it was pointing at.
+      -->
+      <div
+        v-if="isCompact && uiState.widgetDrawerOpen"
+        class="drawer-backdrop"
+        data-testid="widget-drawer-backdrop"
+        aria-hidden="true"
+        @click="closeWidgetDrawer"
+      />
       <div
         v-if="isCompact && uiState.drawerOpen"
         class="drawer-backdrop"

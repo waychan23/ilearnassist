@@ -326,8 +326,8 @@ test("the widget lists what the conversation has drawn, and locates it", async (
   await expect(row).toContainText("登录流程图：提交、校验、进入工作台");
 
   // The summary survives a reload — it is the persisted tool arguments and the row, neither
-  // of which is transient turn state. The app remembers neither the workspace nor the session
-  // across a reload, so walk back in (the `chat.spec.ts` idiom) before reading the panel.
+  // of which is transient turn state. The walk back in is the `chat.spec.ts` idiom: a reload
+  // would stay in the conversation, so going through the front door is what re-reads it.
   await page.reload();
   await enterWorkspace(page, workspaceName);
   await page.getByTestId("session-item").first().click();

@@ -262,4 +262,38 @@ test("a workspace's name and description are edited in its settings dialog", asy
   await card.getByTestId("workspace-settings-open").click();
   await expect(dialog.getByTestId("workspace-name")).toHaveValue(renamed);
   await expect(dialog.getByTestId("workspace-description")).toHaveValue("线性代数的习题与讲义");
+
+  /*
+   * And a description longer than two lines is *two lines* — the row it is given, with the
+   * rest behind `title`.
+   *
+   * Asserted on the rendered box rather than on the class, because "two lines" is a claim
+   * about a laid-out paragraph: `-webkit-line-clamp` has no effect at all without
+   * `display: -webkit-box`, and a width-dependent count is exactly what a test can only ask
+   * of the browser. The paragraph below is deliberately far past two lines, so an unclamped
+   * card would be four or five tall and this would catch it.
+   */
+  const long =
+    "线性代数的习题与讲义：矩阵与线性方程组、向量空间与子空间、特征值与特征向量、" +
+    "正交性与最小二乘、二次型与正定矩阵，以及每一章的课后练习与期末复习提纲。";
+  await dialog.getByTestId("workspace-description").fill(long);
+  await dialog.getByTestId("workspace-description").blur();
+  await page.getByTestId("workspace-settings-done").click();
+
+  const box = await card
+    .getByTestId("workspace-description-text")
+    .evaluate((el) => {
+      const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+      return {
+        lines: Math.round(el.clientHeight / lineHeight),
+        // The overflow the clamp is hiding, which is what separates "two lines of text" from
+        // "a two-line box that happens to fit".
+        clipped: el.scrollHeight > el.clientHeight,
+      };
+    });
+  expect(box).toEqual({ lines: 2, clipped: true });
+
+  // The whole sentence is still reachable, which is what makes clamping it a presentation
+  // choice rather than a loss.
+  await expect(card.getByTestId("workspace-description-text")).toHaveAttribute("title", long);
 });

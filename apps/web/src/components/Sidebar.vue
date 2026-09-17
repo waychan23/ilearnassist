@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
+import { openSession } from "../composables/openSession";
 import { confirm } from "../composables/confirm";
 import { isCompact } from "../composables/breakpoints";
 import type { Session, SessionLockView } from "../api/types";
@@ -10,9 +12,6 @@ import {
   openCopilots,
   openSessionSettings,
   openWorkspaceSettings,
-  showAccount,
-  showAdmin,
-  showWorkspaceHome,
   sidebarRail,
   toggleSidebar,
   uiState,
@@ -24,6 +23,7 @@ import Icon from "./Icon.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
+const router = useRouter();
 
 const showNewSession = ref(false);
 
@@ -80,15 +80,20 @@ function onRefresh() {
  * Every navigation closes the drawer, and none of them is a watcher.
  *
  * `watch(() => store.activeSessionId, closeDrawer)` looks tempting and is wrong twice over:
- * it also fires on first load, when `init()` sets the active session and no drawer is open,
- * and it cannot cover the workspace switch, which changes every session underneath.
+ * it also fires on first load, when the account is probed and no drawer is open, and it
+ * cannot cover the workspace switch, which changes every session underneath.
  *
  * These are on the actions rather than on the dialogs' results, so the drawer is already
  * gone by the time a modal covers the screen — and it is never left open behind one.
+ *
+ * The drawer is closed here rather than left to `router/guards.ts`, which closes it on every
+ * *page* change: a conversation to a conversation is not a page change — that is the rule that
+ * keeps an open settings dialog from being dismissed by a session switch — so this one
+ * transition has to say so itself.
  */
 function backToWorkspaces() {
   closeDrawer();
-  showWorkspaceHome();
+  void router.push({ name: "home" });
   void store.refreshWorkspaces().catch(() => undefined);
 }
 
@@ -98,8 +103,11 @@ function openNewSession() {
 }
 
 function selectSession(id: string) {
-  void store.selectSession(id);
   closeDrawer();
+  // Nothing is awaited: the conversation is loaded by the route's own guard, and `selectSession`
+  // on the store is no longer what moves the app — the URL is. `openSession` carries the one
+  // exception, and says why.
+  openSession(router, store, id);
 }
 
 /**
@@ -199,14 +207,17 @@ function cancelRename() {
  * its widget rows and could not avoid. Here it can be avoided: a row already selects on click,
  * so this is that click with a dialog on the end.
  *
- * Awaited, and the dialog opens **only** if the switch finished. `selectSession` assigns the
- * active id before its two requests, so a failure part-way leaves the conversation changed but
- * its messages and widgets not — and parameters shown over that are parameters for a
- * conversation that is half the one on screen.
+ * Awaited, and the dialog opens **only** if the switch finished. A navigation that the guard
+ * refuses — the conversation went away under the row — would otherwise open parameters over
+ * whichever conversation is still on screen, which is a dialog about something the user did
+ * not click.
  */
 async function openRowSettings(session: Session): Promise<void> {
   try {
-    await store.selectSession(session.id);
+    await router.push({
+      name: "session",
+      params: { workspaceId: store.activeWorkspaceId, sessionId: session.id },
+    });
   } catch {
     return;
   }

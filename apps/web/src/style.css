@@ -734,25 +734,20 @@ body {
 }
 
 /*
- * The account's own note about the workspace, when there is one. Brighter than the path below
- * it and in the prose font rather than the monospace: the path is machine output, this is what
- * a person wrote, and the card should read the second before the first.
+ * The account's own note about the workspace, when there is one.
+ *
+ * The card's only text below the name, so it takes `--text-2` rather than the quieter tone it
+ * used to hold against the directory path: there is nothing under it for it to defer to, and a
+ * second grey line is what makes a card look like it is hiding something.
+ *
+ * The clamp is `.clamp-2` at the call site rather than a line here, which is how the shared
+ * utilities work: they carry the *count* and this carries the tone, so how many lines a
+ * description is worth stays a decision its reader can see.
  */
 .ws-card-desc {
   margin: 0;
   color: var(--text-2);
   font-size: var(--fs-2);
-}
-
-.ws-card-desc + .ws-card-path {
-  margin-top: var(--space-1);
-}
-
-.ws-card-path {
-  margin: 0;
-  color: var(--text-3);
-  font-size: var(--fs-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .ws-card-foot {

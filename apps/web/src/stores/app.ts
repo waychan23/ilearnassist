@@ -22,14 +22,12 @@ import {
 import type { ReferenceChoice } from "../utils/referencePicker";
 import type { SourceFilterQuery } from "../api/client";
 import { fileViewerSupported } from "../utils/fileViewer";
-import {
-  closeCopilots,
-  closeSources,
-  showLogin,
-  showPasswordChange,
-  showWorkspaceHome,
-  uiState,
-} from "../composables/ui";
+import { closeCopilots, closeSources, uiState } from "../composables/ui";
+// The store causes exactly two navigations of its own — a conversation it just created, and
+// the fork a plan edit opens — and both are consequences of a write rather than of a click, so
+// there is no component to push them. Acyclic because every route component is a lazy import:
+// see `router/index.ts`.
+import { router } from "../router";
 import { emitWidgetEvent } from "../composables/widgetEvents";
 import { forgetSession, noteSession, onRetitled } from "../composables/sessionLeave";
 import { widgetPanel } from "../composables/widgetPanel";
@@ -713,10 +711,17 @@ export const useAppStore = defineStore("app", () => {
     resetFileTree();
     closeCopilots();
     closeSources();
+    /*
+     * And the load itself is forgotten, not merely its results. `ensureLoaded` answers with one
+     * memoised promise, so leaving it in place would hand the *next* account a resolved promise
+     * for a load that happened for somebody else — an empty workspace list with nothing on the
+     * way to fill it.
+     */
+    loaded = null;
   }
 
   /**
-   * Work out who is asking, then load the app for them — or show the sign-in screen.
+   * Work out who is asking.
    *
    * One question, because there is only one left to ask: the installation always has an
    * administrator by the time anything can reach this page — the server refuses to listen
@@ -726,43 +731,43 @@ export const useAppStore = defineStore("app", () => {
    * `me()` answering 401 is the ordinary "nobody is signed in" case rather than a failure,
    * which is why it is caught here instead of reaching the toast.
    *
-   * `authReady` is set before either branch, and that ordering is the whole reason the flag
-   * exists: rendering the sign-in screen first would flash it at someone already signed in, on
-   * every single refresh.
+   * **Where to go is not this function's decision any more.** It answers *who* is here and
+   * stops; `router/guards.ts` reads `account` and decides which page that is — which is also
+   * what lets a bookmark into a conversation survive the sign-in it turns out to need.
+   *
+   * `authReady` is set before the answer is used, and that ordering is the whole reason the
+   * flag exists: rendering the sign-in screen first would flash it at someone already signed
+   * in, on every single refresh.
    */
-  async function init(): Promise<void> {
+  async function probeAccount(): Promise<void> {
     try {
       account.value = await api.me();
     } catch {
       account.value = null;
     }
-
     uiState.authReady = true;
-    if (!account.value) {
-      showLogin();
-      return;
-    }
-    await enterApp();
   }
 
   /**
-   * Everything a signed-in account gets, or the one screen it still owes first.
+   * Everything a signed-in account gets, read once.
    *
-   * The password check is not a courtesy to the server. A password an administrator generated
-   * is one the account was told to replace, and the server refuses every other route until it
-   * is — so loading the app behind the screen would be a workspace list of failing requests.
-   * The screen comes first and the app follows it.
+   * Idempotent, and that is what the router needs it to be: this is an app-wide load rather
+   * than a workspace's, and the guard runs on every navigation into a signed-in page. Awaiting
+   * the *same* promise from two navigations arriving together is what keeps a reload from
+   * fetching the config twice.
+   *
+   * The password check that used to guard this is the guard's now: a password an administrator
+   * generated is one the account was told to replace, the server refuses every other route
+   * until it is, and loading the app behind that screen would be a workspace list of failing
+   * requests.
    */
-  async function enterApp(): Promise<void> {
-    if (account.value?.mustChangePassword) {
-      showPasswordChange();
-      return;
-    }
-    showWorkspaceHome();
-    await loadApp();
+  let loaded: Promise<void> | null = null;
+
+  function ensureLoaded(): Promise<void> {
+    return (loaded ??= loadApp());
   }
 
-  /** Everything that needs a session. The half of `init` that a signed-out user must not run. */
+  /** The half of `ensureLoaded` that a signed-out user must not run. */
   async function loadApp(): Promise<void> {
     config.value = await api.getConfig();
     workspaces.value = await api.listWorkspaces();
@@ -781,14 +786,21 @@ export const useAppStore = defineStore("app", () => {
    * Sign in with a name and a password.
    *
    * The stored token pair is `api.login`'s business, not this function's — see `requestAuth`.
-   * What is left here is the account and where to go next.
+   * What is left here is the account, and nothing else: the caller navigates, because where to
+   * land depends on the URL the reader was refused from, and the *guard* loads, because whether
+   * to load at all depends on the page it lands on.
+   *
+   * That split is not tidiness. An account an administrator created owes a password change, and
+   * the server refuses everything but three routes until it is settled — so a load attempted
+   * here would be a page of 403s, and it would surface as a *sign-in* failure on the form,
+   * which reads as "that password is wrong". The guard asks the account about its password
+   * before it asks for anything else.
    */
   async function signIn(username: string, password: string): Promise<void> {
     const result = await api.login(username.trim(), password);
     account.value = result.user;
     uiState.authReady = true;
     error.value = null;
-    await enterApp();
   }
 
   /**
@@ -811,6 +823,11 @@ export const useAppStore = defineStore("app", () => {
    * worse than the reverse. So the local state goes either way and the failure is reported
    * rather than swallowed: the cookie is still there, and a reload will sign them back in,
    * which is exactly the kind of thing to say out loud rather than let them discover.
+   *
+   * **The landing is not written here.** Clearing the account is what `router/guards.ts` watches
+   * for, and it is what takes the reader to the sign-in screen — on this path and on the 401
+   * one below, which is the pair that used to be two calls to the same function and an
+   * invariant maintained by hand.
    */
   async function signOut(): Promise<void> {
     let failure: unknown;
@@ -820,21 +837,19 @@ export const useAppStore = defineStore("app", () => {
       failure = e;
     }
     forgetAccount();
-    showLogin();
     if (failure) error.value = messageOf(failure);
   }
 
   /**
    * What a 401 from anywhere means: the session went away under us.
    *
-   * A toast *and* the login screen. The screen alone reads as the app having forgotten
+   * A toast *and* the sign-in screen. The screen alone reads as the app having forgotten
    * something, and the toast alone leaves the user looking at a page none of whose controls
    * will work. Registered here rather than in `client.ts` because the client would have to
    * import the store to know any of this, and the two would circle.
    */
   setUnauthenticatedHandler(() => {
     forgetAccount();
-    showLogin();
     // Through the code, not a message of its own: the server sends UNAUTHENTICATED for
     // exactly this, and one sentence in the catalog is one place to keep it right.
     setError(translateApiError("UNAUTHENTICATED", undefined, undefined));
@@ -1361,7 +1376,22 @@ export const useAppStore = defineStore("app", () => {
     });
     draftSettings.value = {};
     sessions.value = [created, ...sessions.value.filter((s) => s.id !== created.id)];
+    /*
+     * Opened here **and** addressed, in that order, and the two are not redundant.
+     *
+     * The `selectSession` is what makes "create a conversation" a complete act on its own —
+     * three callers rely on it and none of them is a navigation: the welcome screen's Send, a
+     * file dropped on an empty conversation, and the new-session dialog. The push is what puts
+     * the new conversation's address in the URL, and it is a second statement rather than a
+     * replacement precisely because the first one happened: `router/guards.ts` loads a session
+     * only when the store is not already showing it, so the guard sees this one is loaded and
+     * does nothing but name it.
+     */
     await selectSession(created.id);
+    await router.push({
+      name: "session",
+      params: { workspaceId, sessionId: created.id },
+    });
     // After `selectSession`, so the list is the server's resolved answer rather than the request's
     // — a Copilot's selection is copied in by the server, and this call may have named no widgets
     // of its own at all.
@@ -2752,6 +2782,19 @@ export const useAppStore = defineStore("app", () => {
         pendingPlanSessionId = null;
         if (planSessionId && activeSessionId.value === sessionId) {
           await selectSession(planSessionId).catch(() => undefined);
+          /*
+           * …and the URL follows, because the fork is a conversation the reader is now looking
+           * at. The push is the address of a move that has already happened rather than the
+           * move itself — `createSession` above gives the reason the two are separate
+           * statements — and the `loadSessions` two lines up is what keeps the conversation in
+           * the list the guard checks against.
+           */
+          await router
+            .push({
+              name: "session",
+              params: { workspaceId: activeWorkspaceId.value, sessionId: planSessionId },
+            })
+            .catch(() => undefined);
           // The server made this conversation to hold a plan and installed the plan widget
           // into it, so naming that tab is the stronger true statement than taking the first
           // one. `activateWidget`'s guard supplies the fallback if that ever stops being so.
@@ -3085,12 +3128,12 @@ export const useAppStore = defineStore("app", () => {
     sessionWidgetIds,
     enabledWidgetIds,
     // actions
-    init,
+    probeAccount,
+    ensureLoaded,
     loadNoteSync,
     syncNotesToLibrary,
     signIn,
     changePassword,
-    enterApp,
     signOut,
     loadSources,
     deleteSource,

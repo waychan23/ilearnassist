@@ -344,8 +344,9 @@ test.describe("the notes widget", () => {
     await send(page, "讲讲光合作用");
     await annotate(page, replyContent(page), FIRST_PHRASE);
 
-    // A reload lands on the workspace home — the app remembers neither the workspace nor the
-    // conversation, deliberately — so walk back in and reopen the session from the sidebar.
+    // Back in through the front door and into the session from the sidebar: the reload alone
+    // would leave the reader here (the page is a URL now), and re-opening it is what reads the
+    // anchor and the note off the server rather than off the page that wrote them.
     await page.reload();
     await enterWorkspace(page, name);
     await page.getByTestId("session-item").first().click();

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import AttachmentChips from "./AttachmentChips.vue";
 import SourceMentionPicker from "./SourceMentionPicker.vue";
@@ -9,13 +10,14 @@ import type { ReferenceChoice } from "../utils/referencePicker";
 import type { Source } from "../api/types";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
-import { closeWidgetDrawer, openSessionSettings, showAdmin } from "../composables/ui";
+import { closeWidgetDrawer, openSessionSettings } from "../composables/ui";
 import { autosizeTextarea } from "../utils/autosize";
 import { kindLabel, referenceKey } from "../utils/turnRefs";
 import Icon from "./Icon.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
+const router = useRouter();
 const text = ref("");
 const uploading = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -539,7 +541,7 @@ function onInput() {
             <TokenCountPopover :pending-text="text" />
             <!-- "Manage models…" is a platform administrator's screen, so it opens the console
                  on the model services rather than the dialog that used to hold them. -->
-            <ModelSelector @manage="showAdmin('providers')" />
+            <ModelSelector @manage="router.push({ name: 'admin', params: { section: 'providers' } })" />
           </div>
         </div>
 

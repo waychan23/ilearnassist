@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
-import { showAdmin, showWorkspaceHome } from "../composables/ui";
 import PasswordChangeForm from "./PasswordChangeForm.vue";
 import TopbarControls from "./TopbarControls.vue";
 import Icon from "./Icon.vue";
@@ -20,6 +20,7 @@ import Icon from "./Icon.vue";
 
 const store = useAppStore();
 const { t } = useI18n();
+const router = useRouter();
 
 const changed = ref(false);
 
@@ -36,7 +37,7 @@ function onChanged(): void {
         data-testid="account-back"
         :title="t('common.back')"
         :aria-label="t('common.back')"
-        @click="showWorkspaceHome()"
+        @click="router.push({ name: 'home' })"
       >
         <Icon name="arrow-left" />
       </button>
@@ -78,7 +79,7 @@ function onChanged(): void {
             v-if="store.canAdmin"
             class="btn"
             data-testid="account-open-admin"
-            @click="showAdmin()"
+            @click="router.push({ name: 'admin' })"
           >
             <Icon name="shield" /> {{ t("admin.title") }}
           </button>

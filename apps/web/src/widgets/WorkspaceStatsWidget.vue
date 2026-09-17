@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { api } from "../api/client";
 import type { WorkspaceStats } from "../api/types";
 import { useAppStore } from "../stores/app";
+import { openSession } from "../composables/openSession";
 import { subscribeWidgetEvents } from "../composables/widgetEvents";
 import { formatTokens } from "../utils/format";
 
@@ -27,6 +29,7 @@ import { formatTokens } from "../utils/format";
  */
 const { t } = useI18n();
 const store = useAppStore();
+const router = useRouter();
 
 /**
  * `null` means "nothing has arrived yet", which the template reads as an unspecified state rather
@@ -124,7 +127,7 @@ onBeforeUnmount(() => {
             :class="{ active: row.sessionId === store.activeSessionId }"
             data-testid="widget-session-row"
             :data-session-id="row.sessionId"
-            @click="store.selectSession(row.sessionId)"
+            @click="openSession(router, store, row.sessionId)"
           >
             <span class="truncate">{{ row.title }}</span>
             <span class="widget-row-figures">

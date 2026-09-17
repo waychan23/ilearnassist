@@ -1,7 +1,9 @@
 import { computed, reactive } from "vue";
 import { isCompact } from "./breakpoints";
-// No cycle: `sessionLeave` imports the api client and nothing else of ours.
-import { reportLeave } from "./sessionLeave";
+// For one derived value only — `sidebarRail`, which is a fact about the page. Read through
+// `currentRoute` rather than taken as a parameter because its two readers are siblings, and
+// acyclic because the router imports no view eagerly: see `router/index.ts`.
+import { router } from "../router";
 
 /**
  * Cross-component UI state for the few globals that more than one place needs to open.
@@ -16,22 +18,21 @@ import { reportLeave } from "./sessionLeave";
  * the thing that slides is the sidebar, and whether either exists is decided in `App.vue`.
  * Three components, one boolean — which is what this module is for.
  *
- * `view` is the third, and the one that decides the *page* rather than an overlay. There is
- * still no router: six views and a six-valued flag do not need a dependency and a route table,
- * and none of them has a URL anyone would type — the app opens on the sign-in screen, the
- * first-run screen or the workspace list according to who is asking, not according to a link.
- * The two account pages are reached from controls that are already on screen, which is what
- * the "no URL" test really asks.
+ * **The page is not here, and that is the change.** It used to be — `view`, with six
+ * `show*` functions as its only writers — and a browser that only ever knew one URL meant a
+ * refresh threw the reader back to the front door, losing the conversation they were reading.
+ * A page is a *place*, and places have addresses, so the page lives in `router/index.ts` now
+ * and this module holds only the overlays and the two flags that describe the chrome around a
+ * page rather than the page itself.
  *
- * Not persisted, unlike the theme and the locale. A drawer left open across a reload is a
- * bug rather than a preference, and a storage key would drag in the pre-paint lock-step
- * obligation those two carry. The same goes for the home page: the app is *meant* to open
- * on the workspace list, so remembering "you were in a conversation" would defeat the point
- * of the page rather than restore anything.
+ * Nothing here is persisted, unlike the theme and the locale, and the reasons are the ones the
+ * page used to give: a drawer left open across a reload is a bug rather than a preference, and
+ * a storage key would drag in the pre-paint lock-step obligation those two carry. The
+ * *page*, meanwhile, is not persisted because it does not need to be — it is in the URL.
  *
- * The account is the same case one level up: it is the *server's* fact, held in a cookie the
- * page cannot read, so there is nothing here to persist and nothing to trust on the way back
- * in. See `authReady`.
+ * The account is the same case one level up: it is the *server's* fact, held in a bearer token
+ * the page stores but cannot verify, so there is nothing here to trust on the way back in. See
+ * `authReady`.
  *
  * `sidebarCollapsed` is the drawer's near neighbour and the one pair worth reading together:
  * the drawer says where the sidebar *is*, this says how wide it is, and the sidebar's own
@@ -42,11 +43,10 @@ export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
 /**
  * Which screen the platform console is showing.
  *
- * Held here rather than in `AdminConsole.vue` because a control *outside* the console opens it
- * on a particular section: the composer's model picker offers "manage models…" to an
- * administrator, and landing them on the accounts list would make them find it themselves.
- * A section id is also what the console's left menu is built from, so the flag and the menu
- * cannot disagree about what exists.
+ * A *type* here and a **route parameter** in fact: `/admin/providers` is what the composer's
+ * model picker pushes, and the console's left menu is built from the same ids, so the two
+ * cannot disagree about what exists. It used to be a field on `uiState`, which is the shape
+ * the URL replaced: a section is a place in the console, so it belongs in the address of one.
  */
 export type AdminSection = "users" | "providers" | "documents" | "uploads";
 
@@ -128,19 +128,17 @@ export const uiState = reactive({
    */
   sidebarCollapsed: false,
   /**
-   * The console's current section. Reset on every entry, so the menu cannot open on a screen
-   * somebody chose last week and has no memory of.
-   */
-  adminSection: "users" as AdminSection,
-  view: "login" as View,
-  /**
    * Whether `/api/auth/me` has answered yet.
    *
-   * The session cookie is HttpOnly, so nothing on the page can tell whether anyone is signed
-   * in until a request comes back — which means the correct view is genuinely unknown for the
-   * first moments after a reload. `App.vue` renders neither view until this flips: starting
-   * on `"login"` without it would flash the login screen at someone who is already signed in,
+   * The session is a bearer token, so nothing on the page can tell whether anyone is signed in
+   * until a request comes back — which means the correct view is genuinely unknown for the
+   * first moments after a reload. `App.vue` renders neither view until this flips: starting on
+   * the sign-in screen without it would flash that screen at someone who is already signed in,
    * on every single refresh.
+   *
+   * The *destination* is the router's, and the guard is what flips this on its way past. The
+   * two are one decision between them: `router/guards.ts` calls `probeAccount()` before it
+   * decides anything, so the flag is set by the time any route resolves.
    */
   authReady: false,
 });
@@ -236,122 +234,14 @@ export function toggleSidebar(): void {
  * `.app` to pick the grid track. Written out twice, they are also two chances to drop a
  * term — and every term is load-bearing:
  *
- * - `view === "chat"`, because the other two views render one full-width child. Without it a
- *   rail left collapsed behind you on the workspace home would narrow the home page's grid.
+ * - the route is a conversation, because every other page renders one full-width child.
+ *   Without it a rail left collapsed behind you on the workspace home would narrow the home
+ *   page's grid. The page is the router's now, so the term is read from there; both chat paths
+ *   declare the same `meta.view`, which is what makes this one condition rather than two.
  * - `!isCompact`, because a compact viewport's sidebar is a fixed 272px drawer. A 52px
  *   track would tie with the drawer's own rule on specificity and win on source order,
  *   leaving a sliver of empty column beside a drawer nobody could read.
  */
 export const sidebarRail = computed(
-  () => uiState.view === "chat" && uiState.sidebarCollapsed && !isCompact.value,
+  () => router.currentRoute.value.meta.view === "chat" && uiState.sidebarCollapsed && !isCompact.value,
 );
-
-/**
- * Ask who the caller is: the login screen.
- *
- * Reached on a cold start with no session, and from anywhere an authenticated request comes
- * back 401 — a session that expired while a tab sat open, or a secret that was rotated. Both
- * are "start again", not an error to report.
- */
-export function showLogin(): void {
-  uiState.view = "login";
-  closeDrawer();
-  // Both drawers and both of the dialogs that belong to a *pane* go with the pane being torn
-  // down. Leaving one open would paint it over the sign-in screen.
-  closeWidgetDrawer();
-  closeWorkspaceSettings();
-  closeSessionSettings();
-}
-
-/**
- * The screen a signed-in account owes a password change is stuck on.
- *
- * A view rather than a dialog, and the difference is not cosmetic: this is a state the account
- * cannot leave, and a dialog can be dismissed, escaped or navigated out from under. The server
- * refuses every other route until it is settled, so a screen that could be dismissed would
- * simply be dismissed onto a page of failing requests.
- */
-export function showPasswordChange(): void {
-  uiState.view = "password";
-  closeDrawer();
-  closeWidgetDrawer();
-  closeWorkspaceSettings();
-  closeSessionSettings();
-}
-
-/**
- * Leave the workspace for the list. Closes the drawer on the way out: the drawer belongs to
- * the pane that is being torn down, and leaving it open would carry the flag into the next
- * workspace the user enters, which greets them with a drawer they did not ask for.
- */
-export function showWorkspaceHome(): void {
-  uiState.view = "home";
-  closeDrawer();
-  closeWidgetDrawer();
-  // The session parameters are a property of the conversation being left, and the dialog has
-  // no conversation to show on the way out. Workspace settings deliberately stay: that one is
-  // opened *from* a card on this page.
-  closeSessionSettings();
-  /*
-   * …and the conversation being left is reported, here rather than at the five call sites that
-   * reach this function. It is the one leave that `activeSessionId` does not move for — the app
-   * deliberately does not remember which workspace you were in, so the id survives the transition
-   * and the store's own "the conversation changed" hook sees nothing to report.
-   *
-   * No handler: there is no session list on this page, and entering a workspace re-reads it — so
-   * a title that lands a few seconds after the reader got here is simply there when they next
-   * open the conversation. `composables/sessionLeave.ts` is where the whole of that lives.
-   */
-  reportLeave();
-}
-
-/** Enter a workspace's chat pane. The workspace itself is chosen by the store, not here. */
-export function showChat(): void {
-  uiState.view = "chat";
-  /*
-   * The left drawer goes with the page that opened it. Both pages have that drawer now — the
-   * home page's rail and the conversation's sidebar are the same column of the same rows — so
-   * leaving the flag set would carry an opened drawer from one into the other.
-   *
-   * In practice a card cannot be tapped behind the backdrop, and `inert` keeps it out of the
-   * keyboard's reach too, so this is the belt to that pair of braces. Written out because the
-   * alternative is a rule that holds by hit-testing, which is a rule nobody can see.
-   *
-   * The widget drawer is deliberately *not* closed here: it belongs to this pane, and this is the
-   * function that enters it. Every other `show*` closes it for the same reason.
-   */
-  closeDrawer();
-}
-
-/**
- * The account's own page: who it is signed in as, and how to change its password.
- *
- * Its own view rather than a tab of Settings, because Settings is how *this installation* is
- * configured — providers, parsers, Copilots, all shared by everybody — and this is one
- * account's business about itself. A superadmin who is also a user of the app is the same
- * person on both pages, which is exactly why they are two.
- */
-export function showAccount(): void {
-  uiState.view = "account";
-  closeDrawer();
-  closeWidgetDrawer();
-  closeSessionSettings();
-}
-
-/**
- * The platform console: everything that belongs to the installation rather than to one account.
- *
- * Reachable only by an administrator of either tier, and the server is what enforces that — the
- * control is hidden for everybody else, but a hidden button is not a permission.
- *
- * Takes the section because one caller knows which one it means: "manage models…" in the
- * composer is a request about providers, and opening on the accounts list would answer a
- * different question. Every other caller omits it and gets the first section.
- */
-export function showAdmin(section: AdminSection = "users"): void {
-  uiState.adminSection = section;
-  uiState.view = "admin";
-  closeDrawer();
-  closeWidgetDrawer();
-  closeSessionSettings();
-}

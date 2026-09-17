@@ -1,17 +1,11 @@
 <script setup lang="ts">
 import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import { isCompact } from "../composables/breakpoints";
-import {
-  openDrawer,
-  openWorkspaceSettings,
-  showChat,
-  showWorkspaceHome,
-  uiState,
-} from "../composables/ui";
-import { isUnauthenticatedError } from "../utils/apiError";
+import { openDrawer, openWorkspaceSettings, uiState } from "../composables/ui";
 import { relativeTime } from "../composables/relativeTime";
 import type { Workspace } from "../api/types";
 import CreateWorkspaceDialog from "./dialogs/CreateWorkspaceDialog.vue";
@@ -31,6 +25,7 @@ import Icon from "./Icon.vue";
  */
 const { t } = useI18n();
 const store = useAppStore();
+const router = useRouter();
 
 const showCreateWorkspace = ref(false);
 
@@ -39,23 +34,14 @@ const showCreateWorkspace = ref(false);
 /**
  * Enter a workspace.
  *
- * The pane is shown before the session list is awaited, so the click paints immediately
- * rather than after a round trip; the sidebar renders its empty state and fills in. On a
- * failure the user is put back on this page, which is where the retry is — leaving them in
- * a chat pane belonging to a workspace that never loaded is the one outcome with no way out.
- * The one failure that must *not* navigate is a dead session: the global 401 handler has
- * already cleared the account and switched to the login screen, and showing the chat pane
- * again here would just switch it back.
+ * A URL to push, and no more: loading the workspace is the route's own guard, which is what
+ * makes this card and a pasted link the same journey. The three failures this used to handle
+ * by hand are handled there for the same reason — a workspace that will not load puts the
+ * reader back on this page, which is where the retry is, and a dead session is left to the 401
+ * handler rather than fought over by two callers.
  */
-async function openWorkspace(workspace: Workspace): Promise<void> {
-  showChat();
-  try {
-    await store.selectWorkspace(workspace.id);
-  } catch (e) {
-    if (isUnauthenticatedError(e)) return;
-    showWorkspaceHome();
-    store.setError(e instanceof Error ? e.message : String(e));
-  }
+function openWorkspace(workspace: Workspace): void {
+  void router.push({ name: "workspace", params: { workspaceId: workspace.id } });
 }
 
 /* ------------------------------ create/delete ------------------------------- */
@@ -237,20 +223,25 @@ function activityLabel(workspace: Workspace): string {
             </button>
 
             <!--
-              The description, when there is one, above the path. The path is the card's least
-              interesting line and the only one that is always there, so the description earns
-              the row above it rather than another line below.
+              The account's own note about the workspace, and the card's only line below the
+              name. A workspace's directory used to sit here instead and was the wrong thing to
+              spend the row on: it is machine output, a path is a decision nobody reading the
+              list made, and the one moment it matters — deleting — names it in the prompt that
+              asks. The description is what a person wrote about this workspace, so it is what
+              the row is for; with none written, the card is the name and its figures.
+
+              Two lines rather than one, because a description is a sentence somebody chose and
+              the whole of it is usually the useful part — a clipped first line reads as a
+              caption. `title` carries whatever runs past the second.
             -->
             <p
               v-if="w.description"
-              class="ws-card-desc truncate"
+              class="ws-card-desc clamp-2"
               data-testid="workspace-description-text"
               :title="w.description"
             >
               {{ w.description }}
             </p>
-
-            <p class="ws-card-path truncate" :title="w.dirPath">{{ w.dirPath }}</p>
 
             <div class="ws-card-foot">
               <span class="ws-card-activity" data-testid="workspace-activity">

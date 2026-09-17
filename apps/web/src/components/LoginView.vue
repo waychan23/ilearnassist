@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import Icon from "./Icon.vue";
 import LocaleSelect from "./LocaleSelect.vue";
@@ -25,6 +26,8 @@ import LocaleSelect from "./LocaleSelect.vue";
 
 const store = useAppStore();
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 
 const username = ref("");
 const password = ref("");
@@ -39,6 +42,17 @@ const canSubmit = computed(
 
 onMounted(() => input.value?.focus());
 
+/**
+ * Sign in, then go where the reader was going.
+ *
+ * The `redirect` is not a courtesy — it is the whole reason a bookmark still works after a
+ * session expires. The guard sends a refused navigation here with the address it refused, and
+ * without this the reader would sign in and land on the workspace list having lost the
+ * conversation they clicked on, which is the same broken promise the URL was added to fix.
+ *
+ * `replace`, so Back from here does not return to the sign-in form a signed-in account has no
+ * business seeing.
+ */
 async function submit(): Promise<void> {
   if (!canSubmit.value) return;
 
@@ -46,6 +60,8 @@ async function submit(): Promise<void> {
   failure.value = null;
   try {
     await store.signIn(username.value, password.value);
+    const to = route.query.redirect;
+    await router.replace(typeof to === "string" && to ? to : { name: "home" });
   } catch (e) {
     // Reported here rather than as a toast: the user is looking at this form, and the answer
     // to "that password is wrong" belongs next to the field it is about.

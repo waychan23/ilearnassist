@@ -3,20 +3,26 @@ import { expect, type Page } from "@playwright/test";
 /**
  * Enter a workspace's chat pane from the app's front door.
  *
- * The app opens on the workspace home now, and a card there is the only way into a
- * conversation — so every flow that touches the chat pane starts with this call. A spec that
- * skipped it would be waiting on a composer that never renders, and would fail with a
- * timeout pointing at the wrong thing.
+ * A card on the workspace home is the only way into a conversation — so every flow that
+ * touches the chat pane starts with this call. A spec that skipped it would be waiting on a
+ * composer that never renders, and would fail with a timeout pointing at the wrong thing.
  *
  * `name` is optional and defaults to the first card. Cards are ordered oldest-first, so
- * "first" is the workspace the suite seeded or the one `init()` created on a first run —
+ * "first" is the workspace the suite seeded or the one `loadApp` created on a first run —
  * stable for a spec that never creates one of its own.
  *
- * Reloads land back on the home page: the app deliberately does not remember which
- * workspace you were in, since remembering it would defeat the point of the page. A spec
- * that reloads has to call this again.
+ * **The front door is where this starts from, and the app no longer guarantees it is there.**
+ * A reload used to land on the workspace list, because the page was held in memory; a page is
+ * a URL now, so a reload lands back in the conversation it was in — including in the ~20 specs
+ * that reload to prove something survived a round trip to the database and then call this to
+ * get back. Rather than have each of them remember to leave first, this normalises: if the
+ * workspace home is not on screen, it goes there. The specs keep testing what they were
+ * testing, and `routing.spec.ts` is where staying put is the assertion.
  */
 export async function enterWorkspace(page: Page, name?: string): Promise<void> {
+  if (!(await page.getByTestId("workspace-home").isVisible())) {
+    await page.goto("/");
+  }
   await expect(page.getByTestId("workspace-home")).toBeVisible();
 
   const card = name

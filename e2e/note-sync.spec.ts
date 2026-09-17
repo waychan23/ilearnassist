@@ -87,9 +87,9 @@ test("exports a conversation's notes, and the library shows them as sources", as
   });
 
   /*
-   * A reload lands on the workspace home, so walking back in proves the status came from the
-   * server rather than from the page that pressed the button — which is the whole point of the
-   * state being a row rather than a component's flag.
+   * Walking back in proves the status came from the server rather than from the page that
+   * pressed the button — which is the whole point of the state being a row rather than a
+   * component's flag. Opening the conversation again reads it as a new reader would.
    */
   await openConversation(page, workspace);
   await expect(page.getByTestId("note-sync-status")).toHaveText("已同步 2 条笔记");

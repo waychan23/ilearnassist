@@ -103,7 +103,8 @@ function startLock(): EffectScope {
 /** Sign in and open a workspace, so the store is in the state the composable expects. */
 async function readyStore() {
   const store = useAppStore();
-  await store.init();
+  await store.probeAccount();
+  await store.ensureLoaded();
   await store.selectWorkspace("w1");
   await vi.advanceTimersByTimeAsync(0);
   return store;

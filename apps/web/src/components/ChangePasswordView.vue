@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import PasswordChangeForm from "./PasswordChangeForm.vue";
 import Icon from "./Icon.vue";
@@ -23,6 +24,23 @@ import Icon from "./Icon.vue";
 
 const store = useAppStore();
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
+
+/**
+ * Where the account goes now that it may.
+ *
+ * Back to whatever the guard refused it from, which is the whole of why `/login` and this
+ * screen carry a `redirect`: a session that expires mid-conversation — or a first-run password
+ * that has to be replaced before anything loads — would otherwise always end on the workspace
+ * list, having lost the address the reader arrived with. The front door is the fallback, and
+ * the guard has already cleared `mustChangePassword` by the time this runs, so it will let it
+ * through.
+ */
+function onChanged(): void {
+  const to = route.query.redirect;
+  void router.replace(typeof to === "string" && to ? to : { name: "home" });
+}
 </script>
 
 <template>
@@ -33,7 +51,7 @@ const { t } = useI18n();
         <p class="auth-lead">{{ t("password.lead", { name: store.account?.username ?? "" }) }}</p>
       </header>
 
-      <PasswordChangeForm @done="store.enterApp()" />
+      <PasswordChangeForm @done="onChanged" />
 
       <button class="link-btn" data-testid="change-password-sign-out" @click="store.signOut()">
         <Icon name="logout" />

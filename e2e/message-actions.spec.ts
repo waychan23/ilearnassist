@@ -73,7 +73,12 @@ test("deletes from the tail only, peeling one message at a time", async ({ page,
   await expect(page.getByTestId("message-delete")).toHaveCount(1);
 
   // A deleted message is out of the conversation for good, including after a reload.
+  //
+  // The reload lands back in this conversation rather than on the workspace list, which is what
+  // makes this a claim about the *stored* transcript: before the page was a URL, a reload went
+  // home and the count below would have been zero because there was nothing on screen at all.
   await page.reload();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
   await expect(page.getByTestId("message-assistant")).toHaveCount(0);
 });
 
