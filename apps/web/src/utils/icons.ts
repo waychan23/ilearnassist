@@ -207,6 +207,12 @@ export const ICON_PATHS = {
    * horizontal bar reads as a floor rather than as a border. */
   upload: ["M8 12.25V3.5", "M4.5 7L8 3.5L11.5 7", "M3.5 12.75H12.5"],
 
+  /* `upload`'s arrow, turned round: taking something out of the app is the inverse of putting it
+   * in, so the pair is one drawing in two directions. The line it lands on is the same line the
+   * upload arrow rises from, and it sits *below* the point rather than behind the stem — which is
+   * the whole of what makes the direction readable without a colour or a second glyph. */
+  download: ["M8 2.75V10.5", "M4.75 7.25L8 10.5L11.25 7.25", "M3.5 13.25H12.5"],
+
   image: [
     "M2.5 3.5H13.5V12.5H2.5Z",
     "M2.5 9.75L5.5 6.75L8.5 9.75L10.25 8L13.5 11.25",
