@@ -545,6 +545,8 @@ interface SessionRow {
   title: string;
   title_source: string | null;
   title_state: string | null;
+  /** SQLite's integer spelling of a boolean; see `Session.pinned`. */
+  pinned: number | null;
   settings: string | null;
   /** The user's own note about this conversation. Always written; empty means none. */
   description: string;
@@ -885,6 +887,9 @@ const mapSession = (r: SessionRow): Session => ({
   // which is the safe direction, since the only thing the answer decides is whether a retry is
   // worth making.
   titleState: r.title_state === "model" || r.title_state === "fallback" ? r.title_state : undefined,
+  // `=== 1`, not a truthiness test: a row written before the column existed reads `NULL`, and
+  // `Boolean(null)` would be the right answer by accident rather than by rule.
+  pinned: r.pinned === 1,
   settings: safeParseObject<SessionSettings>(r.settings),
   description: r.description ?? "",
   createdAt: r.created_at,
@@ -1544,6 +1549,14 @@ export interface AppDb {
    * it here is what takes them out of view.
    */
   softDeleteSessionForUser(id: string, userId: string): boolean;
+  /**
+   * Pin or unpin the conversation, and return the row as it now reads.
+   *
+   * One statement whose own `WHERE` carries the owner, like `setAutoTitleForUser`, so `undefined`
+   * means exactly one thing: no live session of this account has that id. There is deliberately
+   * **no** `updated_at` write — see the statement for why pinning is not activity.
+   */
+  setSessionPinnedForUser(id: string, userId: string, pinned: boolean): Session | undefined;
 
   /*
    * The session-id-only accessors below — `touchSession`, and `createMessage`,
@@ -2222,6 +2235,16 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "sessions", "title_state", "title_state TEXT");
 
     /*
+     * Whether the reader pinned this conversation to the top of the sidebar's list.
+     *
+     * A boolean column rather than a `pinned_at` timestamp, because the ordering inside the
+     * pinned group is the ordinary `updated_at DESC` one — pinning lifts a conversation into the
+     * group, it does not decide where it sits in it, and pinning is not activity, so it must not
+     * move the row within a group either. See `stmtSetSessionPinnedForUser`.
+     */
+    ensureColumn(db, "sessions", "pinned", "pinned INTEGER NOT NULL DEFAULT 0");
+
+    /*
      * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
      * that gives Copilots an owner.
      *
@@ -2686,11 +2709,18 @@ export function createDb(dbPath: string): AppDb {
    * second thing that has to stay in agreement, and the day the two disagree is the day one
    * account reads another's conversation.
    */
+  /*
+   * Pinned first, then by recency — and the two keys have to agree with the split the sidebar
+   * makes, or a list rendered in this order would interleave the groups it draws. The sidebar
+   * partitions on `pinned` rather than trusting the position of the boundary, so this is the
+   * order *within* each group and the partition is the flag; the two are one answer stated twice
+   * because a consumer reading this array in order must see the same thing.
+   */
   const stmtListSessionsForUser = db.prepare(
     `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
      WHERE s.workspace_id = ? AND w.user_id = ?
        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
-     ORDER BY s.updated_at DESC`
+     ORDER BY s.pinned DESC, s.updated_at DESC`
   );
   const stmtGetSessionForUser = db.prepare(
     `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
@@ -2729,6 +2759,25 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtSoftDeleteSessionForUser = db.prepare(
     `UPDATE sessions SET deleted_at = ?
+      WHERE id = ? AND deleted_at IS NULL
+        AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
+  );
+  /*
+   * The pin toggle, and `updated_at` is absent from the `SET` on purpose.
+   *
+   * Every other session write bumps it, because every other one is somebody touching the
+   * conversation. A pin is a statement about where the row should be listed, not about the
+   * conversation having moved — and if it bumped the timestamp, then unpinning would drop the
+   * conversation at the *top* of the other group, so the two halves of one toggle would produce
+   * an ordering neither of them asked for. The list is sorted on `updated_at`, so leaving it
+   * alone is the whole of "pinning does not reorder anything but the group".
+   *
+   * The owner is in this statement's own `WHERE` rather than behind a read, the
+   * `setAutoTitleForUser` argument: `changes === 0` is then the answer to "was there a live
+   * session of yours", and no caller can forget to ask.
+   */
+  const stmtSetSessionPinnedForUser = db.prepare(
+    `UPDATE sessions SET pinned = ?
       WHERE id = ? AND deleted_at IS NULL
         AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
   );
@@ -3779,6 +3828,12 @@ export function createDb(dbPath: string): AppDb {
     },
     softDeleteSessionForUser(id, userId) {
       return stmtSoftDeleteSessionForUser.run(now(), id, userId).changes > 0;
+    },
+    setSessionPinnedForUser(id, userId, pinned) {
+      const { changes } = stmtSetSessionPinnedForUser.run(pinned ? 1 : 0, id, userId);
+      if (changes === 0) return undefined;
+      const r = stmtGetSession.get(id) as SessionRow;
+      return mapSession(r);
     },
     touchSession(id) {
       stmtTouchSession.run(now(), id);

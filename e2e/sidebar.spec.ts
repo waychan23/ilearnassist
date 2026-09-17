@@ -142,7 +142,7 @@ test("a row's settings button opens the parameters for that conversation", async
   request,
 }) => {
   /*
-   * The row's third control, and the one thing about it a unit test cannot reach: it *selects*
+   * The row's second control, and the one thing about it a unit test cannot reach: it *selects*
    * before it opens. The dialog reads whichever conversation is on screen, so a row that opened
    * it without switching would show the parameters of the conversation the user just left —
    * which is the failure this asserts against, by acting on a row that is not the active one.
@@ -169,4 +169,62 @@ test("a row's settings button opens the parameters for that conversation", async
   // on screen when the click happened.
   await expect(page.getByTestId("session-name")).toHaveValue("第二个");
   await expect(page.getByTestId("session-title")).toHaveText("第二个");
+});
+
+test("pinning a conversation lifts it into its own group, and it survives a reload", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The whole of the feature, in the order it can go wrong.
+   *
+   * A pin is a *column*, so the two halves that matter are that the group appears at all and
+   * that the server still says so on the next visit — and the second is the one a client-side
+   * flag would also pass on screen and fail here. The divider is asserted as well as the
+   * heading, because the two have different conditions (the heading belongs to the pinned group
+   * alone, the rule belongs between the two) and a list that drew only one of them would still
+   * look deliberate.
+   */
+  await scriptLlm(request, { title: "置顶 A", turns: [{ content: "好的。" }] });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("composer-input").fill("置顶 A 的问题");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("session-title")).toHaveText("置顶 A");
+
+  // A second conversation, so there is an ordinary group for the pinned one to be lifted out of.
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("session-title-input").fill("置顶 B");
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("session-title")).toHaveText("置顶 B");
+
+  // Nothing is pinned yet, so neither the heading nor the rule is drawn: a heading over an empty
+  // group is the first thing this could get wrong.
+  await expect(page.getByTestId("session-group-pinned")).toHaveCount(0);
+  await expect(page.getByTestId("session-group-divider")).toHaveCount(0);
+
+  // The *older* conversation, so the pin is what moves it rather than recency — it is the second
+  // row, and it becomes the first.
+  const older = page.getByTestId("session-item").filter({ hasText: "置顶 A" });
+  await older.getByTestId("session-pin").click();
+
+  await expect(page.getByTestId("session-group-pinned")).toHaveText("置顶的");
+  await expect(page.getByTestId("session-group-divider")).toHaveCount(1);
+  await expect(page.getByTestId("session-item").first()).toContainText("置顶 A");
+
+  /*
+   * Read back from the server rather than remembered by this tab. A reload is the only honest
+   * way to ask it, and the app lands on the workspace home again — so the way back in is the
+   * same call the spec started with.
+   */
+  await page.reload();
+  await enterWorkspace(page);
+  await expect(page.getByTestId("session-group-pinned")).toBeVisible();
+  await expect(page.getByTestId("session-item").first()).toContainText("置顶 A");
+
+  // Unpin, and both marks go with it — the heading and the rule are one state, not two.
+  await page.getByTestId("session-item").first().getByTestId("session-pin").click();
+  await expect(page.getByTestId("session-group-pinned")).toHaveCount(0);
+  await expect(page.getByTestId("session-group-divider")).toHaveCount(0);
 });

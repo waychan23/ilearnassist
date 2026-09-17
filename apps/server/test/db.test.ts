@@ -351,6 +351,45 @@ describe("sessions", () => {
     expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s1", "s2"]);
   });
 
+  it("pins a conversation, and lists pinned ones first without reordering either group", () => {
+    addSession("s1", { title: "one" });
+    addSession("s2", { title: "two" });
+    const stamp = db.raw.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?");
+    stamp.run("2026-01-01T00:00:00.000Z", "s1");
+    stamp.run("2026-01-02T00:00:00.000Z", "s2");
+    // `s3` is the recency control: the *older* of the two pinned rows, so a list ordered by the
+    // flag alone would put it last and one ordered by recency alone would put it second.
+    addSession("s3", { title: "three" });
+    stamp.run("2025-12-31T00:00:00.000Z", "s3");
+
+    expect(db.setSessionPinnedForUser("s1", OWNER, true)?.pinned).toBe(true);
+    expect(db.setSessionPinnedForUser("s3", OWNER, true)?.pinned).toBe(true);
+
+    // Pinned group by recency, then the rest by recency — the array the sidebar partitions.
+    expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s1", "s3", "s2"]);
+
+    /*
+     * The write that must *not* happen: pinning leaves `updated_at` alone, so `s3` stays the
+     * oldest row. If it bumped the timestamp, `s3` would sort first among the pinned and the
+     * order asserted above would come out ["s3", "s1", "s2"] — which is why this is asserted
+     * rather than left to the list order above, where one bump and one tie could hide it.
+     */
+    const updatedAt = (id: string): string =>
+      (db.raw.prepare("SELECT updated_at FROM sessions WHERE id = ?").get(id) as { updated_at: string })
+        .updated_at;
+    expect(updatedAt("s3")).toBe("2025-12-31T00:00:00.000Z");
+
+    expect(db.setSessionPinnedForUser("s1", OWNER, false)?.pinned).toBe(false);
+    expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s3", "s2", "s1"]);
+  });
+
+  it("refuses to pin a session that is not yours, or that is gone", () => {
+    addSession("s1", { title: "one" });
+    expect(db.setSessionPinnedForUser("s1", "someone-else", true)).toBeUndefined();
+    expect(db.listSessionsForUser("w1", OWNER)[0]?.pinned).toBe(false);
+    expect(db.setSessionPinnedForUser("nope", OWNER, true)).toBeUndefined();
+  });
+
   it("holds a Copilot's snapshot independently of the Copilot", () => {
     // The conversation is not a view onto the Copilot. Editing the Copilot afterwards must
     // leave this row alone, and so must deleting it — which is the case that used to widen the

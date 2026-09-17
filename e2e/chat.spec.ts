@@ -251,14 +251,17 @@ test("an attached file reaches the model's prompt and survives a reload", async 
   await expect(page.getByTestId("attachment-chip")).toContainText("notes.txt");
 });
 
-test("the title's two controls are icon-only, and both do what they say", async ({ page }) => {
+test("the title is the rename control, and the settings button opens the composer's dialog", async ({
+  page,
+}) => {
   /*
-   * The topbar used to carry a labelled "编辑标题" button and nothing else; both controls are
-   * icon-only now, which is only observable in a browser — `vue-tsc` cannot see whether a span
-   * was left in the markup, and the accessible name is what a screen reader gets when the
-   * visible one goes.
+   * The title *is* the edit, and that is the whole of what the topbar carries for renaming — the
+   * pencil button beside it was a second entry to the same editor and is gone. Asserted here
+   * because it is only observable in a browser: `vue-tsc` cannot see whether a click handler
+   * reached the right element, and the tooltip that teaches the gesture is a title attribute
+   * rather than anything on screen.
    *
-   * The second control's real content is that it opens the *same* dialog the composer's button
+   * The settings button's real content is that it opens the *same* dialog the composer's button
    * does. Two entries to one dialog is a claim about identity, so the assertion is on the same
    * field the composer's route reaches.
    */
@@ -271,13 +274,13 @@ test("the title's two controls are icon-only, and both do what they say", async 
   await page.getByTestId("create-session").click();
   await expect(page.getByTestId("composer-input")).toBeVisible();
 
-  const edit = page.getByTestId("edit-session-title");
-  await expect(edit).toHaveAttribute("aria-label", "编辑标题");
-  // The glyph, not the word: the label is gone from the element's text.
-  await expect(edit).toHaveText("");
+  // No pencil: the row is the title and the parameters, and nothing else.
+  await expect(page.getByTestId("edit-session-title")).toHaveCount(0);
 
-  await edit.click();
-  // The label and the title swap for an input — the control really is the edit.
+  const title = page.getByTestId("session-title");
+  await expect(title).toHaveAttribute("title", "点击编辑标题");
+  await title.click();
+  // The title swaps for an input — the control really is the edit.
   await expect(page.getByTestId("chat-title-input")).toBeVisible();
   await page.getByTestId("chat-title-input").press("Escape");
   await expect(page.getByTestId("session-title")).toBeVisible();

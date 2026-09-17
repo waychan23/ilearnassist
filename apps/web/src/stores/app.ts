@@ -1368,6 +1368,20 @@ export const useAppStore = defineStore("app", () => {
     emitWidgetEvent({ type: "session.renamed", sessionId: id, title: updated.title });
   }
 
+  /**
+   * Pin or unpin a conversation.
+   *
+   * No re-read and no new event: the sidebar computes its two groups from `pinned` on the rows it
+   * already holds, so replacing the row is the whole of what the list needs, and no widget lists
+   * conversations in an order this decides. The one thing it must *not* do is move the row within
+   * the array — the server leaves `updated_at` alone for exactly that reason, and the two groups
+   * are drawn from the flag rather than from the position of a boundary.
+   */
+  async function setSessionPinned(id: string, pinned: boolean): Promise<void> {
+    const updated = await api.setSessionPinned(id, pinned);
+    replaceSession(updated);
+  }
+
   /* --------------------------------- widgets --------------------------------- */
 
   /**
@@ -3002,6 +3016,7 @@ export const useAppStore = defineStore("app", () => {
     selectSession,
     createSession,
     renameSession,
+    setSessionPinned,
     updateSettings,
     deleteSession,
     loadWorkspaceWidgets,

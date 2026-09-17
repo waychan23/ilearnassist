@@ -2647,6 +2647,16 @@ export interface Session {
    * description is not a name, so writing one neither offers nor costs the auto-titler its turn.
    */
   description: string;
+  /**
+   * Pinned to the top of the sidebar's list.
+   *
+   * A boolean rather than a pin *timestamp*, and the difference is a decision rather than an
+   * economy: the ordering inside the pinned group is the ordinary most-recently-updated one, so
+   * pinning decides which group a conversation is in and nothing about where it sits in it.
+   * A timestamp would be a second ordering rule to keep in step with `updatedAt` for no reader
+   * who asked for one.
+   */
+  pinned: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -2861,6 +2871,23 @@ export interface UpdateSessionInput {
   allTools?: boolean;
   /** Ignored when `allTools` is true. Empty with `allTools: false` means no tools. */
   tools?: string[];
+}
+
+/**
+ * Payload for `PATCH /api/sessions/:id/pin`.
+ *
+ * Required, and required to be a real boolean on the server, because the two states are not a
+ * default and a value: `false` is how a conversation is unpinned, so an absent field and a
+ * `"false"` are both a request that does not say what it wants. A route that guessed would turn
+ * `{"pinned": "false"}` — truthy in JavaScript — into a pin, which is the mistake
+ * `PATCH /api/admin/users/:id` refuses to make with `disabled`.
+ *
+ * Its own route rather than a field on `UpdateSessionInput` for two reasons: pinning must not
+ * touch `updatedAt` (see the statement in `db.ts`), and the update route returns through the
+ * whole settings/persona path for a change that only moves a row in a list.
+ */
+export interface SetSessionPinnedInput {
+  pinned: boolean;
 }
 
 /**

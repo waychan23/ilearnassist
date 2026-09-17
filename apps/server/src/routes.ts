@@ -29,6 +29,7 @@ import type {
   QuizAnswers,
   Session,
   SessionSettings,
+  SetSessionPinnedInput,
   Source,
   SourceOrigin,
   SourceOwner,
@@ -1995,6 +1996,43 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       allTools: body?.allTools,
       tools: body?.tools,
     });
+  });
+
+  /**
+   * Pin a conversation to the top of the sidebar's list, or take it back out.
+   *
+   * A route of its own rather than a field on the PATCH above, for two reasons. Pinning must not
+   * count as activity — the statement it writes deliberately leaves `updated_at` alone, or
+   * unpinning would drop the conversation at the top of the other group — and the update route
+   * writes that column on every call. And it is one column: routing it through the settings and
+   * persona path would be three reads and a JSON round trip to move a row in a list.
+   *
+   * `requiresSessionLock` like every other session-scoped write: a pin is visible to the other
+   * clients of this account, so it is exactly the kind of change the lease exists to serialise.
+   */
+  app.patch("/api/sessions/:id/pin", { config: { requiresSessionLock: true } }, async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const body = request.body as SetSessionPinnedInput;
+
+    /*
+     * A real boolean or nothing. `"false"` is truthy, so a coerced body would *pin* a
+     * conversation whose caller asked for the opposite — the mistake
+     * `PATCH /api/admin/users/:id` refuses to make with `disabled`, and refused here for the same
+     * reason rather than for symmetry: the two states are both deliberate, so there is no absent
+     * field that could mean either.
+     */
+    if (typeof body?.pinned !== "boolean") {
+      return reply.code(400).send(apiError("INVALID_FIELD", "pinned must be a boolean"));
+    }
+
+    // "Not yours" and "does not exist" are one answer here too: the accessor's own `WHERE` holds
+    // the owner, so a refused write and a missing session are the same `undefined`.
+    const updated = db.setSessionPinnedForUser(id, userId, body.pinned);
+    if (!updated) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return updated;
   });
 
   /**

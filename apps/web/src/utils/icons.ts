@@ -224,6 +224,16 @@ export const ICON_PATHS = {
     "M5.75 10.5H10.25",
   ],
 
+  /* 置顶: a pushpin, drawn straight on rather than at the diagonal a paper pin sits at, because
+   * the diagonal reads as a *slanted* bar at 14px. Head, shoulder, needle — the three parts are
+   * what tell it apart from `lock` (a body with a closed shackle) and from `marker` (a diagonal
+   * nib), which is what this would otherwise be mistaken for in a row of icon buttons. */
+  pin: [
+    "M6.5 2.75H9.5V6.25H6.5Z",
+    "M4.5 6.25H11.5",
+    "M8 6.25V13.25",
+  ],
+
   bulb: [
     "M11.5 6.75a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0",
     "M6.4 10.4V11.9H9.6V10.4",
