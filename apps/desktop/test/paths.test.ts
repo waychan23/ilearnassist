@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   databaseIn,
+  dataDirPromptAnswer,
+  ensureDataDir,
   hasExistingData,
   resolveAppPaths,
   seedFirstRun,
@@ -20,12 +22,16 @@ import {
  */
 
 let root: string;
+let home: string;
 let resourcesDir: string;
 let template: string;
 
 beforeEach(() => {
   const scratch = mkdtempSync(join(tmpdir(), "gl-desktop-paths-"));
   root = join(scratch, "userData");
+  // A stand-in for the user's home directory, so `defaultDataDir` is asserted against a path
+  // this test owns rather than against whatever `/Users/<whoever>` the suite happens to run as.
+  home = join(scratch, "home");
   resourcesDir = join(scratch, "resources");
   template = join(resourcesDir, "config", "config.yaml");
 
@@ -41,21 +47,24 @@ afterEach(() => {
 
 describe("resolveAppPaths", () => {
   it("keeps the app's own writable paths under the user data directory", () => {
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
-    for (const value of [paths.configFile, paths.overlayFile, paths.suggestedDataDir]) {
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
+    for (const value of [paths.configFile, paths.overlayFile, paths.root]) {
       expect(value.startsWith(root)).toBe(true);
     }
   });
 
-  it("suggests a data folder outside the app bundle", () => {
-    // Dragging the `.app` to the trash does not take `~/Library/Application Support` with it,
-    // which is the whole reason the suggestion lives there rather than beside the binary.
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
-    expect(paths.suggestedDataDir.startsWith(resourcesDir)).toBe(false);
+  it("offers a data folder in the user's home, beside nothing of the app's", () => {
+    // `~/ilearnassist`. Two properties at once: it is the home directory the caller named, and
+    // it is nowhere near the application bundle — dragging the `.app` to the trash does not
+    // take it with you, which is the whole reason it is not a path beside the binary.
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
+    expect(paths.defaultDataDir).toBe(join(home, "ilearnassist"));
+    expect(paths.defaultDataDir.startsWith(resourcesDir)).toBe(false);
+    expect(paths.defaultDataDir.startsWith(root)).toBe(false);
   });
 
   it("keeps every read-only path under the app's resources", () => {
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     expect(paths.webDir.startsWith(resourcesDir)).toBe(true);
     expect(paths.templateConfig.startsWith(resourcesDir)).toBe(true);
   });
@@ -63,7 +72,7 @@ describe("resolveAppPaths", () => {
 
 describe("seedFirstRun", () => {
   it("creates the tree and plants the config on a first launch", () => {
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     seedFirstRun(paths);
 
     expect(readFileSync(paths.configFile, "utf8")).toBe(readFileSync(template, "utf8"));
@@ -71,22 +80,23 @@ describe("seedFirstRun", () => {
   });
 
   it("does not create a data folder", () => {
-    // It used to. Now that the root is the user's to choose, making one for them would leave
-    // an empty directory that looks exactly like the data root they were meant to pick — and
-    // a second, empty database if they picked it by mistake.
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
+    // It used to. Making one at launch would leave an empty directory that looks exactly like
+    // the data root the user was meant to pick — and a second, empty database if they picked it
+    // by mistake. The offered folder is *proposed* until somebody presses the button, which is
+    // the whole difference between a default and defaulting.
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     seedFirstRun(paths);
-    expect(existsSync(paths.suggestedDataDir)).toBe(false);
+    expect(existsSync(paths.defaultDataDir)).toBe(false);
   });
 
   it("picks an OS-assigned port, so a busy port cannot stop the app from starting", () => {
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     seedFirstRun(paths);
     expect(readFileSync(paths.overlayFile, "utf8")).toMatch(/^\s*port:\s*0\s*$/m);
   });
 
   it("never overwrites an existing config", () => {
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     seedFirstRun(paths);
     writeFileSync(paths.configFile, "providers: [edited]\n", "utf8");
 
@@ -96,7 +106,7 @@ describe("seedFirstRun", () => {
   });
 
   it("never overwrites an overlay the user has edited", () => {
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     seedFirstRun(paths);
     writeFileSync(paths.overlayFile, "server:\n  port: 3720\n", "utf8");
 
@@ -107,11 +117,60 @@ describe("seedFirstRun", () => {
 
   it("names the missing template rather than starting a server with no providers", () => {
     rmSync(template);
-    const paths = resolveAppPaths({ userDataDir: root, resourcesDir });
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
 
     // A boot with no providers dies in `validateConfig` with "No providers configured",
     // which describes the symptom and not the cause. Failing here says which file is gone.
     expect(() => seedFirstRun(paths)).toThrow(/Seed config missing/);
+  });
+});
+
+describe("ensureDataDir", () => {
+  it("creates the folder, and is not an error the second time", () => {
+    // Pressing the button twice, or on a folder that already exists, is ordinary — an existing
+    // data folder is somebody coming back to it, not a conflict.
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
+    ensureDataDir(paths.defaultDataDir);
+    expect(existsSync(paths.defaultDataDir)).toBe(true);
+
+    expect(() => ensureDataDir(paths.defaultDataDir)).not.toThrow();
+  });
+
+  it("makes the parents it needs", () => {
+    // The folder is directly in the user's home, so there is normally nothing above it to make.
+    // This pins the recursive flag anyway, because the alternative is an ENOENT on a machine
+    // whose home was removed or renamed underneath a running app.
+    ensureDataDir(join(home, "deep", "ilearnassist"));
+    expect(existsSync(join(home, "deep", "ilearnassist"))).toBe(true);
+  });
+
+  it("leaves the folder empty, so the server's own boot fills it", () => {
+    // The panel makes the root and nothing under it: `createDb` makes the database's directory
+    // and `ensureUserLayout` the running user's, both recursively. A second copy of that layout
+    // here is how the two would drift.
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
+    ensureDataDir(paths.defaultDataDir);
+    expect(hasExistingData(paths.defaultDataDir)).toBe(false);
+  });
+});
+
+describe("dataDirPromptAnswer", () => {
+  it("reads the three buttons in the order main passes them", () => {
+    // The order is a contract between `main.ts` and this function, and the two live apart — the
+    // dialog is Electron plumbing with no tests, the decode is here because it has an `else` that
+    // has to be right.
+    expect(dataDirPromptAnswer(0)).toBe("default");
+    expect(dataDirPromptAnswer(1)).toBe("choose");
+    expect(dataDirPromptAnswer(2)).toBe("cancel");
+  });
+
+  it("treats anything unrecognised as a cancel", () => {
+    // The safe direction, and the only defensible one: the alternatives are reading a dismissed or
+    // unexpected answer as consent to create a folder in the user's home, or as consent to open a
+    // second dialog on top of the one that just closed.
+    for (const response of [-1, 3, 99, Number.NaN]) {
+      expect(dataDirPromptAnswer(response)).toBe("cancel");
+    }
   });
 });
 

@@ -32,6 +32,9 @@ const LAN_URL = `http://${LAN_ADDRESS}:51452`;
 /** The folder the user chose. Deliberately not under the app's own directory. */
 const DATA_DIR = "/Users/someone/Documents/ilearnassist";
 
+/** The folder the panel offers when nobody has chosen one: `~/ilearnassist`. */
+const DEFAULT_DATA_DIR = "/Users/someone/ilearnassist";
+
 const RUNNING: PanelState = {
   server: {
     state: "running",
@@ -44,6 +47,7 @@ const RUNNING: PanelState = {
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
   needsDataDir: false,
+  defaultDataDir: DEFAULT_DATA_DIR,
   needsAdmin: false,
   // The panel's language, as the main process would report it. Following the system here, so
   // the spec renders whichever catalog the browser's locale pinned — which is what the rest of
@@ -87,6 +91,7 @@ const NEEDS_DATA_DIR: PanelState = {
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
   needsDataDir: true,
+  defaultDataDir: DEFAULT_DATA_DIR,
   needsAdmin: undefined,
   localeChoice: "",
   locale: "zh-CN",
@@ -158,6 +163,13 @@ async function openPanel(
       },
       chooseDataDir: async () => {
         await record("chooseDataDir");
+        return w["__status"];
+      },
+      // Records and answers with the state unchanged, like `chooseDataDir`: the real one stops
+      // on the folder question rather than starting the server, so the page's next paint is the
+      // create-administrator card.
+      useDefaultDataDir: async () => {
+        await record("useDefaultDataDir");
         return w["__status"];
       },
       openApp: async () => {
@@ -309,11 +321,61 @@ test.describe("the control panel", () => {
     await expect(page.getByRole("button", { name: "选择文件夹…" })).toBeEnabled();
   });
 
+  test("names the folder it would create, and offers it", async ({ page }) => {
+    // The requirement the offer exists for: a first launch should not make the user work out
+    // where their data goes. Which folder is about to appear is on screen, because "one will
+    // be created for you" is only honest with the path in it.
+    await openPanel(page, NEEDS_DATA_DIR);
+
+    await expect(page.locator('[data-role="data-dir-hint"]')).toContainText(DEFAULT_DATA_DIR);
+    await expect(page.getByRole("button", { name: "使用默认目录" })).toBeEnabled();
+  });
+
+  test("offers the default only while nothing has been chosen", async ({ page }) => {
+    // Once a folder is chosen the question is answered, and the control that changes it is the
+    // head's "选择文件夹…" — which is the same control in both states. A second one down here
+    // would be two controls meaning one thing.
+    await openPanel(page, RUNNING);
+
+    await expect(page.getByRole("button", { name: "使用默认目录" })).toBeHidden();
+    await expect(page.locator('[data-role="data-dir-hint"]')).toBeHidden();
+  });
+
   test("hands the choice to the main process rather than making it", async ({ page }) => {
     // The dialog is native and lives in main, so the page's whole part in this is the ask.
     const panel = await openPanel(page, NEEDS_DATA_DIR);
     await page.getByRole("button", { name: "选择文件夹…" }).click();
     expect(panel.calls).toContain("chooseDataDir");
+  });
+
+  test("hands the default over too, rather than making the folder itself", async ({ page }) => {
+    // Same division as the picker: the page cannot create a directory, and it does not name
+    // one either — `useDefaultDataDir` takes no argument, because the path is main's to compute
+    // from the caller's home directory.
+    const panel = await openPanel(page, NEEDS_DATA_DIR);
+    await page.getByRole("button", { name: "使用默认目录" }).click();
+    expect(panel.calls).toContain("useDefaultDataDir");
+  });
+
+  test("hands an unpickable Start to main, and asks nothing itself", async ({ page }) => {
+    /*
+     * Main answers a Start with no data root by asking — natively, naming the folder it would
+     * create, with the panel's own two answers as its buttons. That dialog is main's and this
+     * suite stubs `window.panel`, so what is asserted here is the page's half of the split: it
+     * asks for the start and *nothing else*.
+     *
+     * The page used to do it instead, by focusing its own default button, and that is worth
+     * pinning as a regression: a programmatic focus draws no ring and moves nothing, so Start read
+     * as a button that did nothing at all.
+     */
+    const panel = await openPanel(page, NEEDS_DATA_DIR);
+    await page.locator('[data-action="start"]').click();
+
+    expect(panel.calls).toContain("start");
+    expect(panel.calls).not.toContain("chooseDataDir");
+    // Unchanged state: the row is still the answer, and its offer still works.
+    await expect(page.locator('[data-role="data-dir-hint"]')).toBeVisible();
+    await expect(page.getByRole("button", { name: "使用默认目录" })).toBeEnabled();
   });
 
   test("offers changing the folder once one is chosen, and revealing it", async ({ page }) => {
@@ -558,20 +620,60 @@ test.describe("creating the first administrator", () => {
   const CARD = '[data-role="admin"]';
   const OVERLAY = '[data-role="admin-overlay"]';
 
-  test("offers the create control and refuses Start when there is no administrator", async ({ page }) => {
+  test("offers the create control, and its own button starts nothing", async ({ page }) => {
     const handle = await openPanel(page, NEEDS_ADMIN);
 
     await expect(page.locator(CARD)).toBeVisible();
-    expect(await page.locator('[data-action="start"]').isEnabled()).toBe(false);
+    /*
+     * Start is **live** in this state, and that is the change: it is the door that walks the reader
+     * through creating this account, so the panel's primary action is no longer dead in exactly the
+     * state a new install is in.
+     */
+    await expect(page.locator('[data-action="start"]')).toBeEnabled();
     // No reset either: it is a conversation with the running server, which is deliberately
     // stopped in this state.
     expect(await page.locator('[data-action="reset-admin"]').isEnabled()).toBe(false);
 
-    // Pressing Start does not even ask main to start, because the button is disabled — but
-    // the card's button is live and opens the sheet.
+    // The card's button opens the same sheet — and asks for no start, because opening a form to
+    // create an account is not a request to run the server.
     await page.locator('[data-action="admin-create"]').click();
     await expect(page.locator(OVERLAY)).toBeVisible();
     expect(handle.calls).not.toContain("start");
+  });
+
+  test("walks a Start through creating the administrator, and then starts", async ({ page }) => {
+    /*
+     * The whole chain, which is the point of the button: the server refuses to listen without an
+     * administrator, so a Start in this state opens the form that makes one and then carries on.
+     * Without it the reader is told what is missing and left to find the control themselves.
+     */
+    const handle = await openPanel(page, NEEDS_ADMIN, undefined, { ok: true, username: "ada" });
+    await page.locator('[data-action="start"]').click();
+
+    await expect(page.locator(OVERLAY)).toBeVisible();
+    await page.locator('[data-role="admin-username"]').fill("ada");
+    await page.locator('[data-role="admin-password"]').fill("a-good-password");
+    await page.locator('[data-role="admin-confirm"]').fill("a-good-password");
+    await page.locator('[data-action="admin-submit"]').click();
+
+    // The sheet closes itself on the way past — the reader's attention belongs back on the panel —
+    // and Start was asked a second time, now that an account exists.
+    await expect(page.locator(OVERLAY)).toBeHidden();
+    await expect.poll(() => handle.calls.filter((call) => call === "start").length).toBe(2);
+  });
+
+  test("stops there when the create sheet is dismissed", async ({ page }) => {
+    // A dismissal is not consent to start without an administrator. One press, one ask — and Start
+    // is still live, so pressing it again is the reader's call rather than a trap.
+    const handle = await openPanel(page, NEEDS_ADMIN);
+    await page.locator('[data-action="start"]').click();
+    await expect(page.locator(OVERLAY)).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator(OVERLAY)).toBeHidden();
+
+    expect(handle.calls.filter((call) => call === "start")).toHaveLength(1);
+    await expect(page.locator('[data-action="start"]')).toBeEnabled();
   });
 
   test("hides the card once an administrator exists", async ({ page }) => {
@@ -592,9 +694,9 @@ test.describe("creating the first administrator", () => {
     expect(handle.calls).not.toContain("createAdministrator");
   });
 
-  test("creates and reports success", async ({ page }) => {
+  test("creates and reports success, and does not start", async ({ page }) => {
     // The stub hands back the typed username, the way the real IPC result does.
-    await openPanel(page, NEEDS_ADMIN, undefined, { ok: true, username: "ada" });
+    const handle = await openPanel(page, NEEDS_ADMIN, undefined, { ok: true, username: "ada" });
     await page.locator('[data-action="admin-create"]').click();
 
     await page.locator('[data-role="admin-username"]').fill("ada");
@@ -603,6 +705,10 @@ test.describe("creating the first administrator", () => {
     await page.locator('[data-action="admin-submit"]').click();
 
     await expect(page.locator('[data-role="admin-ok"]')).toContainText("ada");
+    // And the sheet stays up to say so, rather than closing itself the way the Start-driven one
+    // does: the reader asked to create an account, and this is the acknowledgement of it.
+    await expect(page.locator(OVERLAY)).toBeVisible();
+    expect(handle.calls).not.toContain("start");
   });
 
   test("shows the CLI's refusal with its own wording", async ({ page }) => {

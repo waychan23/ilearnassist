@@ -34,7 +34,14 @@ import {
   resetAdministratorPassword,
 } from "./admin.js";
 import { findLanAddress, lanUrlFor } from "./lan.js";
-import { hasExistingData, resolveAppPaths, seedFirstRun, type AppPaths } from "./paths.js";
+import {
+  dataDirPromptAnswer,
+  ensureDataDir,
+  hasExistingData,
+  resolveAppPaths,
+  seedFirstRun,
+  type AppPaths,
+} from "./paths.js";
 import { readSettings, writeSettings, type DesktopSettings } from "./settings.js";
 import { ServerProcess } from "./serverProcess.js";
 
@@ -202,6 +209,7 @@ function currentState(): PanelState {
     lanUrl: settings.sharedOnLan ? lanUrlFor(status.url, lanAddress) : null,
     lanAddress,
     needsDataDir: !resolveDataDir(),
+    defaultDataDir: paths.defaultDataDir,
     // The negation lives here and only here, so the field the panel renders and the field the
     // Start gate reads can be one fact under one name.
     needsAdmin: hasAdmin === undefined ? undefined : !hasAdmin,
@@ -287,7 +295,7 @@ async function chooseDataDir(): Promise<PanelState> {
     title: t("dataDir.chooseTitle"),
     // The last choice as the starting point, so changing one's mind about a sibling folder is
     // two clicks rather than a walk back down the filesystem.
-    defaultPath: resolveDataDir() || paths.suggestedDataDir,
+    defaultPath: resolveDataDir() || paths.defaultDataDir,
     buttonLabel: t("dataDir.chooseButton"),
     properties,
   };
@@ -323,6 +331,93 @@ async function chooseDataDir(): Promise<PanelState> {
   // The server is **not** auto-started on the way through: a freshly chosen folder usually
   // has no administrator yet, and the server refuses to listen without one. Checking first
   // lets the panel show the create control instead of reporting a start failure.
+  await server.stop();
+  await refreshAdminState();
+
+  broadcast();
+  return currentState();
+}
+
+/**
+ * Ask where the data should go, when a Start arrives with nowhere to put it.
+ *
+ * The native counterpart to the panel's own first-run row, and the answer to a press that cannot
+ * proceed: the server will not run without a data root, so this is the one moment the question has
+ * to be answered before the button can mean anything. Naming the folder it would create is the
+ * whole point — "a default exists" is not actionable, and `~/ilearnassist` is.
+ *
+ * The two answers are the *same* two functions the panel's row calls, so there is one
+ * implementation of each and the dialog is only a second door to them. `choose` chains a second
+ * native dialog (the picker, with its own warning about a folder that holds no data); `cancel`
+ * returns nothing changed, and the panel is exactly as it was.
+ *
+ * A cancelled picker is a cancel of the whole thing rather than a fall back to the default —
+ * someone who picked "choose another location" and then dismissed the picker has not agreed to
+ * the folder they just declined.
+ */
+async function promptForDataDir(): Promise<"ok" | "cancel"> {
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    message: t("dataDir.promptTitle"),
+    detail: t("dataDir.promptDetail", { dir: paths.defaultDataDir }),
+    buttons: [t("action.useDefaultDataDir"), t("action.chooseDataDir"), t("action.cancel")],
+    defaultId: 0,
+    cancelId: 2,
+  });
+
+  switch (dataDirPromptAnswer(response)) {
+    case "default":
+      await useDefaultDataDir();
+      return resolveDataDir() ? "ok" : "cancel";
+    case "choose":
+      await chooseDataDir();
+      return resolveDataDir() ? "ok" : "cancel";
+    default:
+      return "cancel";
+  }
+}
+
+/**
+ * Take the folder the panel offers: create it, remember it, and stop there.
+ *
+ * The one-click answer to the question `chooseDataDir` opens a dialog for. It creates
+ * `~/ilearnassist` — which is the point of the button, since a folder that does not exist yet
+ * cannot be picked — and then does what the picker does, in the same order and for the same
+ * reasons: write the choice, stop the server unconditionally because the data root changed, and
+ * re-check the administrator rather than auto-starting.
+ *
+ * `hasExistingData` is not asked about, unlike in the picker. There, an empty folder and a wrong
+ * one are indistinguishable from the outside; here the folder is this app's own suggestion in the
+ * user's home, so a warning about it would be a warning about the default — and a folder that
+ * already holds data is a *good* outcome, because it means the user is coming back to it.
+ */
+async function useDefaultDataDir(): Promise<PanelState> {
+  try {
+    ensureDataDir(paths.defaultDataDir);
+  } catch (err) {
+    // The button's whole job is to make the folder, so this one cannot be swallowed the way a
+    // settings-write failure is: carrying on would record a data root the server then cannot
+    // open, and the failure would surface later as a start error about a path nobody chose.
+    // A native dialog because that is the only voice main has here — the panel's own error
+    // surface is the server's fault field, and no server is involved in this.
+    console.error("Could not create the default data folder:", err);
+    dialog.showErrorBox(
+      t("dataDir.createFailedTitle"),
+      t("dataDir.createFailedDetail", { dir: paths.defaultDataDir })
+    );
+    return currentState();
+  }
+
+  // Absolute, and read off the resolved paths rather than rebuilt here: `resolveDataDir()` runs
+  // `resolve()` on whatever is stored, and a relative value would then mean something different
+  // from one launcher to the next.
+  settings = { ...settings, dataDir: paths.defaultDataDir };
+  try {
+    writeSettings(settingsFile, settings);
+  } catch (err) {
+    console.error("Could not save the desktop settings:", err);
+  }
+
   await server.stop();
   await refreshAdminState();
 
@@ -502,11 +597,17 @@ function refreshTrayMenu(): void {
 function registerIpc(): void {
   ipcMain.handle(PANEL_CHANNELS.getState, () => currentState());
   ipcMain.handle(PANEL_CHANNELS.start, async () => {
-    // With nowhere to put the data there is nothing to start, so this button means "choose a
-    // folder". The alternative — letting it through — is a start that fails with the
-    // server's own sentence about an unset environment variable, which names the cause and
-    // offers the user nothing.
-    if (!resolveDataDir()) return chooseDataDir();
+    // With nowhere to put the data there is nothing to start — the server refuses to run without
+    // a data root, and letting this through would be a start that fails with the server's own
+    // sentence about an unset environment variable. So the press asks, natively, and then carries
+    // on with the same start it was going to do: the question is a detour to get the missing
+    // input, not a substitute for the press.
+    //
+    // It used to return the unchanged state and let the page point at its own default button.
+    // That is invisible — a programmatic focus draws no ring and moves nothing — so Start read as
+    // a button that did nothing at all, which is the failure this panel's docblocks argue against
+    // everywhere else.
+    if (!resolveDataDir() && (await promptForDataDir()) === "cancel") return currentState();
     // Asked fresh rather than trusted from the cache. The server itself refuses to listen
     // without an administrator, so a stale "ready" hint here would turn this button into the
     // exact failure ("exited 1", no cause) the create flow exists to prevent. Two layers:
@@ -521,6 +622,7 @@ function registerIpc(): void {
     return currentState();
   });
   ipcMain.handle(PANEL_CHANNELS.chooseDataDir, () => chooseDataDir());
+  ipcMain.handle(PANEL_CHANNELS.useDefaultDataDir, () => useDefaultDataDir());
   ipcMain.handle(PANEL_CHANNELS.shareOnLan, (_event, on: unknown) => shareOnLan(on === true));
   ipcMain.handle(PANEL_CHANNELS.openApp, () => openAppWindow());
   ipcMain.handle(PANEL_CHANNELS.openInBrowser, async () => {
@@ -685,7 +787,14 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", () => showPanel());
 
   app.whenReady().then(async () => {
-    paths = resolveAppPaths({ userDataDir: app.getPath("userData"), resourcesDir });
+    paths = resolveAppPaths({
+      userDataDir: app.getPath("userData"),
+      // The default data folder is `~/ilearnassist`, so the home directory is an input like the
+      // other two rather than something `paths.ts` reaches for itself — which is what keeps that
+      // module testable with no Electron runtime.
+      homeDir: app.getPath("home"),
+      resourcesDir,
+    });
     settingsFile = join(paths.root, "desktop.json");
     seedFirstRun(paths);
     settings = readSettings(settingsFile);

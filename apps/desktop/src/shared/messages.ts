@@ -98,6 +98,8 @@ export interface PanelMessages {
   "action.unshare": string;
   "action.cancel": string;
   "action.chooseDataDir": string;
+  /** Takes `~/ilearnassist` instead of picking one. Sits beside `chooseDataDir`. */
+  "action.useDefaultDataDir": string;
   /**
    * Resetting the superadmin's password.
    *
@@ -171,6 +173,25 @@ export interface PanelMessages {
   "dataDir.confirmTitle": string;
   "dataDir.confirmDetail": string;
   "dataDir.confirmProceed": string;
+  /**
+   * The folder this app offers, named in the sentence that offers it.
+   *
+   * `createFailedDetail` is the one failure here that has no server to report it. Making the
+   * folder is the whole job of the button, so a refusal that said nothing would be a button
+   * that appears to do nothing — which is the failure the panel's own docblocks argue against.
+   */
+  "dataDir.createFailedTitle": string;
+  "dataDir.createFailedDetail": string;
+  /**
+   * The prompt a Start with no data root raises.
+   *
+   * Its two buttons are `action.useDefaultDataDir` and `action.chooseDataDir` rather than keys of
+   * their own: they are the same two answers the panel's own row offers, and a second spelling of
+   * each is a second thing to keep in step. Only the question is new.
+   */
+  "dataDir.promptTitle": string;
+  "dataDir.promptDetail": string;
+  /** Names the folder that will be created if the offered one is taken. */
   "hint.chooseDataDir": string;
   /**
    * The language control.
@@ -278,12 +299,17 @@ const zhCN: PanelMessages = {
   "action.unshare": "停止共享",
   "action.cancel": "取消",
   "action.chooseDataDir": "选择文件夹…",
+  "action.useDefaultDataDir": "使用默认目录",
   "dataDir.chooseTitle": "选择数据存放位置",
   "dataDir.chooseButton": "使用这个文件夹",
   "dataDir.confirmTitle": "这个文件夹里没有交互式学习助理的数据",
   "dataDir.confirmDetail": "会在 {dir} 里新建一个空数据库。你现有的数据不会出现在这里。",
   "dataDir.confirmProceed": "仍然使用",
-  "hint.chooseDataDir": "先选择数据存放位置，再启动服务。数据库、工作空间和上传的文件都会放在那里，所以建议选一个在应用之外、并且会被备份的位置。",
+  "dataDir.createFailedTitle": "无法创建默认目录",
+  "dataDir.promptTitle": "还没有设置数据存放位置",
+  "dataDir.promptDetail": "不设置位置，服务就无法启动。可以直接使用默认位置 {dir}（会为你创建），也可以自己选一个。",
+  "dataDir.createFailedDetail": "在 {dir} 新建文件夹失败。可以改用手动选择一个文件夹，或者检查一下这个位置的权限。",
+  "hint.chooseDataDir": "还没选择数据存放位置，所以服务无法启动。可以直接使用默认目录 {dir}（会为你创建），也可以自己选一个。数据库、工作空间和上传的文件都会放在那里。",
   "label.language": "语言",
   "language.system": "跟随系统",
   "language.zh-CN": "简体中文",
@@ -381,12 +407,17 @@ const en: PanelMessages = {
   "action.unshare": "Turn off",
   "action.cancel": "Cancel",
   "action.chooseDataDir": "Choose folder…",
+  "action.useDefaultDataDir": "Use the default folder",
   "dataDir.chooseTitle": "Choose where to keep your data",
   "dataDir.chooseButton": "Use this folder",
   "dataDir.confirmTitle": "This folder has no Interactive Learning Assistant data",
   "dataDir.confirmDetail": "A new, empty database will be created in {dir}. Your existing data will not appear here.",
   "dataDir.confirmProceed": "Use it anyway",
-  "hint.chooseDataDir": "Choose where to keep your data before starting the server. The database, your workspaces and your uploaded files all live there — so pick somewhere outside the app, somewhere you back up.",
+  "dataDir.createFailedTitle": "Could not create the default folder",
+  "dataDir.promptTitle": "No data folder has been set",
+  "dataDir.promptDetail": "The server cannot start without one. Take the default, {dir} — it will be created for you — or choose a folder of your own.",
+  "dataDir.createFailedDetail": "Creating {dir} failed. Choose a folder by hand instead, or check whether you can write to that location.",
+  "hint.chooseDataDir": "No data folder has been chosen yet, so the server cannot start. Take the default, {dir} — it will be created for you — or pick one yourself. The database, your workspaces and your uploaded files all live there.",
   "label.language": "Language",
   "language.system": "System",
   "language.zh-CN": "简体中文",

@@ -142,27 +142,58 @@ Seeding is **idempotent and non-destructive** — an existing `config.yaml` or o
 rewritten, so an API key typed into the Settings UI on a previous launch survives an update.
 It also deliberately **does not create a data folder**: the data root is the user's to choose,
 and an empty directory made on their behalf looks exactly like the one they were supposed to
-pick.
+pick. The one place this app *does* create one is `ensureDataDir`, and it runs because somebody
+pressed a button — see below.
 
 ### Choosing where your data goes
 
-The server will not start without a data root — no default, by design, because that path
-decides how much of your work survives an uninstall. So the first launch asks: the panel shows
-**Choose folder…** and will not start the server until a folder is picked.
+The server will not start without a data root — it has no default, by design, because that path
+decides how much of your work survives an uninstall. So the first launch asks, and the panel
+will not start the server until the question is answered.
 
-Two things make that question honest. The picker starts in
-`~/Library/Application Support/ilearnassist/data`, which is *outside* the application bundle —
-dragging the `.app` to the Trash does not take it with you. And if the folder you pick holds no
-database, the panel says so before accepting it, because an empty folder and a wrong folder are
-indistinguishable from the outside and one of them starts a second, empty database that looks
-exactly like having lost everything. It warns; it does not refuse, since a new folder is the
-normal first-run case.
+It asks in two places, because a question this consequential is worth being able to answer either
+way round.
+
+**In the panel, before anything is pressed**: the hint under the data-folder row names
+`~/ilearnassist`, and a **Use the default folder** button beside the existing **Choose folder…**
+takes it. The offer is one click because the alternative was making somebody work out where their
+data should live before they had used the app once.
+
+**On Start, when nothing has been chosen**: a native prompt says so, names the folder it would
+create, and offers the same two answers — *use the default* or *choose a folder…*. Taking the
+second opens the picker (and its own warning about a folder that holds no data); dismissing it is a
+cancel of the whole thing rather than a fall back to the default, because somebody who declined
+the picker has not agreed to the folder they just declined. Either answer then continues into the
+start that was pressed — the question is a detour to get the missing input, not a substitute for
+the press.
+
+That prompt is main's, and it is worth saying why the *page* does not raise it. An earlier version
+had Start return the unchanged state and point the reader at the panel's own default button; a
+programmatic focus draws no ring and moves nothing, so Start read as a button that did nothing at
+all. The question belongs on the side that can ask it out loud.
+
+That is **not** the same as defaulting, and the distinction is the design rather than a detail.
+Nothing is created and nothing is recorded until that button is pressed, and the button is the
+only thing that ever calls `ensureDataDir`. So the server still receives a path a human agreed
+to, and `seedFirstRun` still creates no data folder — an empty directory made at launch looks
+exactly like the one somebody was supposed to pick, and picking it by mistake starts a second,
+empty database that is indistinguishable from having lost everything. `~/ilearnassist` is also
+*outside* the application bundle, for the same reason the old suggestion lived outside it:
+dragging the `.app` to the Trash does not take it with you.
+
+The picker starts in that same folder, which is the only "suggested" location there is — two of
+them is how the picker ends up somewhere the confirm button would not have gone. And if the
+folder you pick holds no database, the panel says so before accepting it, because an empty folder
+and a wrong folder are indistinguishable from the outside. It warns; it does not refuse, since a
+new folder is the normal first-run case. The offered folder is not warned about, on the other
+hand: it is this app's own suggestion in your home, and a folder that already holds data is
+somebody coming back to it rather than a mistake.
 
 The choice is remembered in `desktop.json` and passed to the server as `ILA_DATA_DIR` on every
-launch — not written into a config file, which is what lets **Choose folder…** take effect on
-the restart that follows. Precedence is `ILA_DATA_DIR` from the environment first, then
-`desktop.json`, then the picker; the environment wins so that `pnpm desktop:dev` and the e2e
-harness can run without a human at a dialog. Changing the folder restarts the server, and the
+launch — not written into a config file, which is what lets either control take effect on the
+restart that follows. Precedence is `ILA_DATA_DIR` from the environment first, then
+`desktop.json`, then the question above; the environment wins so that `pnpm desktop:dev` and the
+e2e harness can run without a human at a dialog. Changing the folder restarts the server, and the
 conversations you had on screen stay where they were.
 
 The app also writes a `config.local.yaml` overlay (via the existing `ILA_CONFIG_PATH`
@@ -174,8 +205,8 @@ non-technical user cannot act on. Edit that file to pin one.
 ### Creating the first administrator
 
 A fresh data folder has no administrator, and the server **refuses to listen until one
-exists**. The web app cannot create accounts, so the panel shows a **Create superadmin** card
-in place of a Start button that would only fail. That control works with the server stopped:
+exists**. The web app cannot create accounts, so the panel shows a **Create superadmin** card.
+That control works with the server stopped:
 
 - the panel spawns the bundled `dist/server/cli.mjs` as a one-shot child (the same
   `ELECTRON_RUN_AS_NODE` trick as the long-lived server, but a process that runs and exits);
@@ -183,7 +214,19 @@ in place of a Start button that would only fail. That control works with the ser
   credential, which is why it is typed rather than generated; the password is handed over
   stdin, so it never appears in the process table or a log line;
 - the CLI writes the account and its directory tree directly to the chosen data folder, then
-  exits, and the panel starts the server.
+  exits.
+
+**Start walks both preconditions and ends by starting.** The server needs a data root *and* an
+administrator, so pressing **Start server** on a new install asks for the folder natively (see
+above) and then opens the create-administrator sheet itself; when the account exists, it starts.
+The reader is never left to work out what else is missing — which is what happened when Start was
+merely *disabled* in this state, with the card's own button as the only way through.
+
+**The two doors into that sheet end differently, on purpose.** Creating an administrator is not a
+request to run the server, so the card's own **Create superadmin** button creates and stops there —
+and leaves the sheet open on its success line as the acknowledgement. The form opened *by Start* is
+closed again the moment it succeeds, because the reader's attention belongs back on the panel where
+the start is happening. The door they came through is what tells the two apart.
 
 Doing it here rather than in the web app is the security boundary: the panel only runs on the
 operator's machine, while the login screen is reachable over the network the moment LAN

@@ -34,7 +34,9 @@ beforeEach(() => {
     configFile: join(appRoot, "config", "config.yaml"),
     overlayFile: join(appRoot, "config", "config.local.yaml"),
     webDir: join(appRoot, "resources", "web"),
-    suggestedDataDir: dataDir,
+    // Unused by the admin CLI, which is handed its data root directly. Deliberately not the same
+    // string as `dataDir`: this fixture should not imply the two are the same thing.
+    defaultDataDir: join(appRoot, "default-data"),
     templateConfig: join(appRoot, "resources", "config", "config.yaml"),
   };
 });

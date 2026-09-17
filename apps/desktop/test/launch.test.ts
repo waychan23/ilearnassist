@@ -18,7 +18,7 @@ const paths: AppPaths = {
   configFile: "/Users/someone/Library/Application Support/ilearnassist/config/config.yaml",
   overlayFile:
     "/Users/someone/Library/Application Support/ilearnassist/config/config.local.yaml",
-  suggestedDataDir: "/Users/someone/Library/Application Support/ilearnassist/data",
+  defaultDataDir: "/Users/someone/ilearnassist",
   webDir: "/Applications/ilearnassist.app/Contents/Resources/web",
   templateConfig: "/Applications/ilearnassist.app/Contents/Resources/config/config.yaml",
 };

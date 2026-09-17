@@ -30,6 +30,19 @@ export const PANEL_CHANNELS = {
    * better at asking than a page is.
    */
   chooseDataDir: "panel:choose-data-dir",
+  /**
+   * Take the folder the panel offers, instead of picking one.
+   *
+   * The other half of `chooseDataDir`, and the reason it exists: a first launch that offers
+   * nothing makes the user work out where their data should live before they have used the app
+   * once. This creates `~/ilearnassist` and remembers it, so the answer is one click.
+   *
+   * Which is *not* the same as defaulting, and the difference is the whole design: nothing is
+   * created or recorded until this is called, and it is only ever called from a button. The
+   * server still receives a path somebody agreed to. It takes no argument — the folder is main's
+   * to compute, so there is nothing here for a page to steer.
+   */
+  useDefaultDataDir: "panel:use-default-data-dir",
   revealDataDir: "panel:reveal-data-dir",
   /**
    * Give the installation's administrator a new password chosen by the operator.
@@ -122,6 +135,14 @@ export interface PanelState {
    */
   needsDataDir: boolean;
   /**
+   * The folder `useDefaultDataDir` would create and use.
+   *
+   * On the state rather than in a catalog string, because the sentence the panel shows has to
+   * name the actual path — "one will be created at `~/ilearnassist`" is only honest if the user
+   * can see which folder is about to appear, and their home directory is not a constant.
+   */
+  defaultDataDir: string;
+  /**
    * Whether this data root still needs its first administrator.
    *
    * A cached hint, not a fact the panel acts on without asking: `start` re-checks through
@@ -212,6 +233,14 @@ export interface PanelApi {
    * dismissed — cancelling is not an error and needs no reply.
    */
   chooseDataDir(): Promise<PanelState>;
+  /**
+   * Create the offered folder, record it, and leave the server stopped.
+   *
+   * Stops short of starting, exactly as the picker does: a folder that did not exist a moment
+   * ago holds no administrator either, and the server refuses to listen without one — so the
+   * next thing the user should see is the create-administrator card, not a failed start.
+   */
+  useDefaultDataDir(): Promise<PanelState>;
   /** Opens (or focuses) the app window. A no-op unless the server is running. */
   openApp(): Promise<void>;
   /** Opens the same URL in the user's own browser, for bookmarks and devtools. */
