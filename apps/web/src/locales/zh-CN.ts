@@ -258,8 +258,11 @@ export default {
   chat: {
     titleHint: "标题由 AI 自动生成，修改后将不再自动更新",
     titlePlaceholder: "会话标题",
+    /**
+     * The whole of the rename affordance on the topbar, and it is a tooltip rather than a
+     * button: the title itself is the control, so this is where the gesture is taught.
+     */
     editTitleHint: "点击编辑标题",
-    editTitle: "编辑标题",
     autoBadgeTitle: "标题由 AI 根据第一轮对话自动生成",
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
@@ -361,6 +364,12 @@ export default {
     newSession: "新建会话",
     renameHint: "双击重命名",
     noSessions: "暂无会话",
+    /** The heading over the pinned group. Only ever drawn when that group has rows in it. */
+    pinnedGroup: "置顶的",
+    /** The two halves of one toggle, named as actions: a pin already set has only the
+     *  opposite one to offer, and the button's title says which it will do. */
+    pin: "置顶",
+    unpin: "取消置顶",
     openNav: "打开导航",
     /** The header toggle's label, which names the *action* — so it changes with the state
      *  rather than describing the button, and there is no second "current state" string. */

@@ -41,6 +41,7 @@ import type {
   SessionLockView,
   SessionStats,
   SessionWidgets,
+  SetSessionPinnedInput,
   Source,
   StartNoteSyncInput,
   TitleRetryResult,
@@ -697,6 +698,15 @@ export const api = {
     }),
   updateSession: (id: string, input: UpdateSessionInput) =>
     request<Session>(`/sessions/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  /**
+   * Pin or unpin a conversation. Its own route rather than an `updateSession` field: see
+   * `SetSessionPinnedInput`, which also says why `pinned` has no "absent means leave it" state.
+   */
+  setSessionPinned: (id: string, pinned: boolean) =>
+    request<Session>(`/sessions/${id}/pin`, {
+      method: "PATCH",
+      body: JSON.stringify({ pinned } satisfies SetSessionPinnedInput),
+    }),
   /**
    * The reader has left this conversation. An event rather than a data change: the answer is
    * usually `skipped`, and the call exists because only the browser knows the reader has gone —

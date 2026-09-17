@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     listSessions: vi.fn(),
     createSession: vi.fn(),
     updateSession: vi.fn(),
+    setSessionPinned: vi.fn(),
     deleteSession: vi.fn(),
     reportSessionLeave: vi.fn().mockResolvedValue({ status: "skipped" }),
     /**
@@ -198,6 +199,7 @@ function session(overrides: Partial<Session> = {}): Session {
     titleSource: "auto",
     settings: {},
     description: "",
+    pinned: false,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -1033,6 +1035,21 @@ describe("sessions", () => {
     mocks.api.updateSession.mockClear();
     await store.renameSession("s1", "   ");
     expect(mocks.api.updateSession).not.toHaveBeenCalled();
+  });
+
+  it("pins a conversation by replacing the row in place", async () => {
+    const store = await readyStore();
+    mocks.api.setSessionPinned.mockResolvedValue(session({ pinned: true }));
+
+    await store.setSessionPinned("s1", true);
+    expect(mocks.api.setSessionPinned).toHaveBeenCalledWith("s1", true);
+    expect(store.sessions[0]?.pinned).toBe(true);
+
+    // Unpinned comes back the same way — the row is replaced, never optimistically flipped, so a
+    // refused write leaves the list exactly as it was.
+    mocks.api.setSessionPinned.mockResolvedValue(session({ pinned: false }));
+    await store.setSessionPinned("s1", false);
+    expect(store.sessions[0]?.pinned).toBe(false);
   });
 
   it("clears the active state when the selected session is deleted", async () => {

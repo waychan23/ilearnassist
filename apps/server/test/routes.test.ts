@@ -630,6 +630,71 @@ describe("sessions", () => {
     expect((await inject({ method: "PATCH", url: "/api/sessions/nope", payload: { title: "x" } })).statusCode).toBe(404);
   });
 
+  it("pins and unpins a conversation", async () => {
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+
+    const pinned = (
+      await inject({ method: "PATCH", url: `/api/sessions/${session.id}/pin`, payload: { pinned: true } })
+    ).json<Session>();
+    expect(pinned.pinned).toBe(true);
+    // Returned as the row now reads rather than as an acknowledgement, so the sidebar can
+    // replace what it holds without a second read.
+    expect(pinned.id).toBe(session.id);
+    expect(pinned.updatedAt).toBe(session.updatedAt);
+
+    const unpinned = (
+      await inject({ method: "PATCH", url: `/api/sessions/${session.id}/pin`, payload: { pinned: false } })
+    ).json<Session>();
+    expect(unpinned.pinned).toBe(false);
+  });
+
+  it("refuses a pin that is not a boolean, and a session that is not there", async () => {
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+
+    /*
+     * `"false"` is the case this exists for. Coerced, it is truthy — so a body that asked to
+     * *unpin* would pin, which is the same trap `disabled` is spelled out against on the admin
+     * routes. An absent field is refused too: the two states are both deliberate, so there is no
+     * absent value that could mean either.
+     */
+    for (const payload of [{ pinned: "false" }, { pinned: 1 }, {}]) {
+      const res = await inject({ method: "PATCH", url: `/api/sessions/${session.id}/pin`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<{ error: { code: string } }>().error.code).toBe("INVALID_FIELD");
+    }
+    expect(
+      (await inject({ method: "PATCH", url: "/api/sessions/nope/pin", payload: { pinned: true } })).statusCode
+    ).toBe(404);
+  });
+
+  it("refuses to pin another account's conversation", async () => {
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+    // A name of its own: `asUser` creates the account on first use and refuses a second under the
+    // same name, so a spec that shared "Bob" with the sources test would pass or fail depending
+    // on which of the two ran first.
+    const bob = await env.asUser("PinBob");
+
+    /*
+     * "Not yours" and "does not exist" are one answer — a 404 either way — so an id cannot be
+     * probed for existence by the status it comes back with. Asserted against the *same* id
+     * twice, once by Bob and once with an id nobody has, because a route that answered 403 for
+     * the first would tell Bob the conversation is real.
+     */
+    const theirs = await bob.inject({
+      method: "PATCH",
+      url: `/api/sessions/${session.id}/pin`,
+      payload: { pinned: true },
+    });
+    expect(theirs.statusCode).toBe(404);
+    expect((await inject({ method: "PATCH", url: "/api/sessions/nope/pin", payload: { pinned: true } })).statusCode).toBe(404);
+
+    // And nothing was written on the way out.
+    expect((await inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json<Session[]>()[0]?.pinned).toBe(false);
+  });
+
   it("numbers a duplicate title at creation rather than refusing it", async () => {
     const workspace = await newWorkspace(env);
 
