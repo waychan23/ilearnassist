@@ -16,9 +16,27 @@ import QuizQuestionForm, { type QuizDraft } from "../components/QuizQuestionForm
  * then drives an ordinary chat turn (POST then `/chat`, like the plan jump). Every
  * status offers 追问: a reference to this question, staged in the composer like every other
  * object's.
+ *
+ * It also **pages**, which is what makes the panel a place to review a quiz rather than a list of
+ * doors: `questions` is the order the panel is showing, so 上一题 / 下一题 walk the filter the
+ * reader set, and 下一未答题 skips to the next one they never answered.
  */
-const props = defineProps<{ question: QuizQuestionView | null }>();
-const emit = defineEmits<{ (e: "close"): void }>();
+const props = defineProps<{
+  question: QuizQuestionView | null;
+  /**
+   * The questions to page through, in the order the panel is showing them.
+   *
+   * A *list* rather than the panel's own state, and deliberately not resolved here from an id:
+   * the reader's filter and the tree's collapse state are the panel's business, and a dialog that
+   * looked them up would be a second implementation of "which question comes next" — the one thing
+   * the two sides must not disagree about.
+   *
+   * A question that is not in this list (the filter changed under an open dialog) has no position
+   * and therefore no navigator: the strip is hidden rather than shown inert.
+   */
+  questions?: QuizQuestionView[];
+}>();
+const emit = defineEmits<{ (e: "close"): void; (e: "select", question: QuizQuestionView): void }>();
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -166,6 +184,52 @@ async function submitMakeup(): Promise<void> {
   if (ok) close();
 }
 
+/* --------------------------------- navigation --------------------------------- */
+
+/**
+ * Where the open question sits in the list the panel is showing, or `-1`.
+ *
+ * By id rather than by object identity: the panel reloads its rows on `quiz.changed` and on every
+ * finished turn, so the object behind the open dialog is replaced by an equal one several times a
+ * conversation — and an index computed from a stale reference would be `-1` from the first reload
+ * onwards, hiding the navigator exactly when it is most useful.
+ */
+const list = computed(() => props.questions ?? []);
+const index = computed(() => {
+  const id = props.question?.id;
+  return id ? list.value.findIndex((q) => q.id === id) : -1;
+});
+const inList = computed(() => index.value >= 0);
+
+/**
+ * The whole strip needs somewhere to go.
+ *
+ * A single question has no next and no previous, so a pager over it would be three controls that
+ * cannot act — the "renders but does nothing" this repository keeps out of its UI.
+ */
+const navigable = computed(() => inList.value && list.value.length > 1);
+
+/**
+ * Where the next question with no answer is, or `-1`.
+ *
+ * **Strictly after the one on screen, and no wrap-around.** "下一未答题" means the next one not
+ * yet answered; when there is none after this question the control is absent rather than jumping
+ * back to the top, because a button that silently returns you to the beginning is a different
+ * action wearing the same label than the one the reader pressed.
+ *
+ * "Unanswered" is `answer === null` — the same set the panel's 未回答 filter and the make-up form
+ * use: `pending` (a card still on screen), `skipped` (walked away) and `dismissed` (cancelled) all
+ * lack an answer, and all three are things a reader reviewing a quiz wants to find again.
+ */
+const nextUnanswered = computed(() =>
+  list.value.findIndex((q, at) => at > index.value && !q.answer)
+);
+
+function go(to: number): void {
+  const question = list.value[to];
+  if (question) emit("select", question);
+}
+
 /* --------------------------------- follow-up --------------------------------- */
 
 /**
@@ -217,6 +281,47 @@ function askFollowup(): void {
         </div>
 
         <div class="modal-body">
+          <!--
+            The pager, above the question rather than in the footer: the footer is the make-up
+            form's, and it exists on only some statuses — a pager that came and went with it would
+            move under the reader's finger as they walked the list.
+          -->
+          <div v-if="navigable" class="navigator" data-testid="quiz-nav">
+            <!-- The same icons, labels and order as the live card's pager (`QuizCard`), because the
+                 two are the same control over two different lists. -->
+            <button
+              type="button"
+              class="btn ghost small"
+              :disabled="index <= 0"
+              data-testid="quiz-nav-prev"
+              @click="go(index - 1)"
+            >
+              <Icon name="caret-left" /> {{ t("quiz.previous") }}
+            </button>
+            <span class="nav-count" data-testid="quiz-nav-count">
+              {{ t("quiz.step", { current: index + 1, total: list.length }) }}
+            </span>
+            <button
+              type="button"
+              class="btn ghost small"
+              :disabled="index >= list.length - 1"
+              data-testid="quiz-nav-next"
+              @click="go(index + 1)"
+            >
+              {{ t("quiz.next") }} <Icon name="caret-right" />
+            </button>
+            <!-- Absent when there is nothing unanswered ahead of this one — see `nextUnanswered`. -->
+            <button
+              v-if="nextUnanswered >= 0"
+              type="button"
+              class="btn ghost small nav-unanswered"
+              data-testid="quiz-nav-unanswered"
+              @click="go(nextUnanswered)"
+            >
+              {{ t("quiz.nextUnanswered") }} <Icon name="caret-right" />
+            </button>
+          </div>
+
           <p
             class="question-text"
             v-html="questionHtml"
@@ -356,6 +461,26 @@ function askFollowup(): void {
 }
 .head-status.pending {
   color: var(--accent);
+}
+
+/* A pager: the two arrows hug the count they move through, and the unanswered jump sits apart from
+ * them because it is a different kind of move — not one step, but the next one you skipped. */
+.navigator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.nav-count {
+  font-size: var(--fs-2);
+  color: var(--text-3);
+  /* Fixed enough not to shuffle the arrows as the count grows from 1 to 10. */
+  min-width: 7em;
+  text-align: center;
+}
+.nav-unanswered {
+  margin-left: auto;
 }
 
 .question-text {

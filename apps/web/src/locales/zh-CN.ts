@@ -692,6 +692,8 @@ export default {
     step: "第 {current} / {total} 题",
     previous: "上一题",
     next: "下一题",
+    /** The pager's third move: the next question with no answer at all. Absent when there is none. */
+    nextUnanswered: "下一未答题",
     submit: "提交",
     cancel: "取消小测",
     unanswered: "未回答",
