@@ -23,17 +23,57 @@ function answer(items: unknown[]): { includes: string; content: string } {
   return { includes: "<study_record>", content: JSON.stringify({ items }) };
 }
 
-/** A conversation with the insight widget installed and the panel open on it. */
-async function insightSession(page: Page, name: string): Promise<void> {
-  await page.goto("/");
-  await page.getByTestId("workspace-new").click();
-  await page.getByTestId("workspace-name-input").fill(name);
-  await page.getByTestId("workspace-create-submit").click();
-  await enterWorkspace(page, name);
+/**
+ * A conversation with the insight widget installed, something to reflect on, and the panel open.
+ *
+ * ### Why the conversation is created over the API rather than in the panel
+ *
+ * A pass reads only the conversation's *derived* records — a plan, answered questions, threads,
+ * notes, diagrams — so a conversation that has just been created has none of them and the pass
+ * deliberately declines to spend a model call on it (`status: "empty"`). A note is the smallest
+ * piece of material there is, so one POST is what makes a pass worth running.
+ *
+ * That POST has to land **before a browser tab opens the conversation**, and that is the order the
+ * lock imposes rather than a convenience: a tab that has a conversation open *holds* it
+ * (`docs/session-locks.md`), so a note written from a second client into it is refused — correctly.
+ * Creating the conversation over the API and seeding into it while no tab is in it is therefore the
+ * honest arrangement, not a way around the rule. The widget is named in the create payload for the
+ * same reason: the panel's own create dialog would open the conversation on the way past.
+ *
+ * Seeding through the API rather than the notes panel on purpose too: what is being tested here is
+ * the pass, and driving a second widget's UI to set it up would make every failure below ambiguous
+ * between the two.
+ */
+async function insightSession(
+  page: Page,
+  request: APIRequestContext,
+  name: string,
+  /** Leave the conversation with nothing to reflect on, for the pass that must decline. */
+  options: { empty?: boolean } = {}
+): Promise<void> {
+  // All of it over the API, and all of it before the page looks at anything: the conversation must
+  // exist and hold its material while no tab is in it, which is the order the lock requires.
+  const created = await request.post("/api/workspaces", { data: { name } });
+  expect(created.status()).toBe(201);
+  const { id } = (await created.json()) as { id: string };
 
-  await page.getByTestId("new-session").click();
-  await page.getByTestId("new-session-widget-check-insight").check();
-  await page.getByTestId("create-session").click();
+  const sessionRes = await request.post(`/api/workspaces/${id}/sessions`, {
+    data: { title: "递归练习", widgets: ["insight"] },
+  });
+  expect(sessionRes.status()).toBe(201);
+  const session = (await sessionRes.json()) as { id: string };
+
+  if (!options.empty) {
+    const note = await request.post(`/api/sessions/${session.id}/notes`, {
+      data: { type: "idea", content: "这里我还是不太懂", quote: "", occurrence: 0 },
+    });
+    expect(note.status()).toBe(201);
+  }
+
+  // Now the reader. Opening the conversation is what takes its lock, so it is the last thing here.
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  await page.getByTestId("session-item").first().click();
 
   /*
    * The insight tab is opened rather than assumed. It used to be the first tab because it was the
@@ -43,28 +83,6 @@ async function insightSession(page: Page, name: string): Promise<void> {
    */
   await page.getByTestId("widget-tab-insight").click();
   await expect(page.getByTestId("widget-insight")).toBeVisible();
-  await expect(page.getByTestId("insight-empty")).toBeVisible();
-}
-
-/**
- * Give the conversation something to reflect on.
- *
- * A pass reads only the conversation's *derived* records — a plan, answered questions, threads,
- * notes, diagrams — so a conversation that has just been created has none of them and the pass
- * deliberately declines to spend a model call on it (`status: "empty"`). A note is the smallest
- * piece of material there is, and its route is not widget-gated, so one POST is enough.
- *
- * Through the API rather than the notes panel on purpose: what is being tested here is the pass,
- * and driving a second widget's UI to set it up would make every failure below ambiguous between
- * the two.
- */
-async function addMaterial(page: Page, request: APIRequestContext): Promise<void> {
-  const sessionId = await page.getByTestId("session-item").first().getAttribute("data-session-id");
-  expect(sessionId, "the new conversation should be listed").toBeTruthy();
-  const res = await request.post(`/api/sessions/${sessionId}/notes`, {
-    data: { type: "idea", content: "这里我还是不太懂", quote: "", occurrence: 0 },
-  });
-  expect(res.ok()).toBe(true);
 }
 
 /** Run a pass and wait for it to finish — the button re-enables when it does. */
@@ -85,8 +103,7 @@ test.describe("the insight panel", () => {
         ]),
       ],
     });
-    await insightSession(page, name);
-    await addMaterial(page, request);
+    await insightSession(page, request, name);
 
     await generate(page);
 
@@ -108,8 +125,7 @@ test.describe("the insight panel", () => {
     // are the same fact, and the rule under the list depends on the reader understanding it.
     const name = unique("Adopt");
     await scriptLlm(request, { turns: [], matches: [answer([{ type: "advice", title: "条目" }])] });
-    await insightSession(page, name);
-    await addMaterial(page, request);
+    await insightSession(page, request, name);
     await generate(page);
 
     const row = page.getByTestId("insight-row").filter({ hasText: "条目" });
@@ -134,8 +150,7 @@ test.describe("the insight panel", () => {
       turns: [],
       matches: [answer([{ type: "habit", title: "留着的" }, { type: "advice", title: "会被替换" }])],
     });
-    await insightSession(page, name);
-    await addMaterial(page, request);
+    await insightSession(page, request, name);
     await generate(page);
     await expect(page.getByTestId("insight-row")).toHaveCount(2);
 
@@ -160,8 +175,7 @@ test.describe("the insight panel", () => {
       turns: [],
       matches: [answer([{ type: "advice", title: "第一条" }, { type: "advice", title: "第二条" }])],
     });
-    await insightSession(page, name);
-    await addMaterial(page, request);
+    await insightSession(page, request, name);
     await generate(page);
 
     await page
@@ -186,8 +200,7 @@ test.describe("the insight panel", () => {
      */
     const name = unique("Failed");
     await scriptLlm(request, { turns: [], matches: [answer([{ type: "advice", title: "已有的" }])] });
-    await insightSession(page, name);
-    await addMaterial(page, request);
+    await insightSession(page, request, name);
     await generate(page);
     await expect(page.getByTestId("insight-row")).toHaveCount(1);
 
@@ -223,7 +236,8 @@ test("a conversation with nothing to reflect on says so instead of doing nothing
   // Scripted as if a pass ran, so an implementation that called the model anyway would fill the
   // panel and fail the assertion below rather than passing quietly.
   await scriptLlm(request, { turns: [], matches: [answer([{ type: "advice", title: "不该出现" }])] });
-  await insightSession(page, name);
+  // No material, which is the whole point of this one — every other test needs the opposite.
+  await insightSession(page, request, name, { empty: true });
 
   await generate(page);
 
