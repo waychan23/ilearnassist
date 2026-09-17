@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALL_TOOL_NAMES, API_ERROR_CODES, PARSE_ERROR_CODES } from "@ilearnassist/shared";
+import { ADMIN_SECTIONS } from "../../src/router/index.js";
 import zhCN from "../../src/locales/zh-CN";
 import en from "../../src/locales/en";
 import { flatten, placeholders, textOf, translationCallSites } from "../helpers/catalog";
@@ -185,5 +186,27 @@ describe("catalog usage", () => {
     const dead = Object.keys(zh).filter((key) => !referenced.has(key) && !isDynamic(key));
 
     expect(dead).toEqual([]);
+  });
+});
+
+/**
+ * Every console section has both of its sentences.
+ *
+ * The `admin.nav.` prefix is allowlisted for the dynamic lookup, and a prefix says "any key under
+ * here is fine" — so a section added to `ADMIN_SECTIONS` without its catalog entries passes the
+ * dead-key scan and then says so *on screen*. It did exactly that: `admin.nav.stats` rendered as
+ * the literal key, in the menu and as the section's own title. This closes the gap for the next one.
+ */
+describe("the console's sections", () => {
+  it("names each one, and describes it, in both catalogs", () => {
+    const zh = flatten(zhCN as unknown as Record<string, unknown>);
+    const en_ = flatten(en as unknown as Record<string, unknown>);
+    for (const section of ADMIN_SECTIONS) {
+      for (const key of [`admin.nav.${section}`, `admin.subtitle.${section}`]) {
+        // A missing leaf is `undefined`; an empty one would pass a truthiness check.
+        expect(zh[key], `${key} is missing from zh-CN`).toBeTruthy();
+        expect(en_[key], `${key} is missing from en`).toBeTruthy();
+      }
+    }
   });
 });

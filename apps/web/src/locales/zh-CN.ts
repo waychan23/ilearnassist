@@ -308,6 +308,7 @@ export default {
       providers: "模型服务",
       documents: "文档解析",
       uploads: "上传设置",
+      stats: "用量统计",
     },
     /**
      * The upload limit. The unit is MB here and bytes on the wire, and the conversion lives in

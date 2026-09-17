@@ -244,6 +244,7 @@ const en: typeof MessageSchema = {
       providers: "Model services",
       documents: "Documents",
       uploads: "Uploads",
+      stats: "Usage",
     },
     uploads: {
       maxSize: "Largest file size (MB)",
