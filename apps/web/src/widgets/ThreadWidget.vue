@@ -322,6 +322,22 @@ function leafTitle(row: Extract<ThreadTreeRow, { kind: "message" }>): string {
   margin: 0;
   padding: var(--space-2) var(--space-3) var(--space-4);
   display: grid;
+  /*
+   * `minmax(0, 1fr)` rather than the implicit `auto` column, and the `0` is the whole of it.
+   *
+   * An `auto` track takes its base size from its items' min-content contribution, which reaches
+   * `li` → the row → `.leaf-text` — and that span is `white-space: nowrap`, so its min-content is
+   * the *entire* 80-character preview. The track therefore grew to fit one leaf's full text
+   * (~1800px) inside a panel that is 272px by default, and `.widget-body` painted a horizontal
+   * scrollbar for it (`overflow-y: auto` computes `overflow-x: auto`, so it is the body that
+   * scrolls). The `0` minimum is what stops the track asking the content how wide it wants to be;
+   * the leaves then shrink to the panel and their own `text-overflow: ellipsis` does the work.
+   *
+   * `min-width: 0` on the `li` would be the same fix one level down; this says it on the container
+   * the size is actually being asked of. `.t-title` and `.leaf-text` keep their `min-width: 0` —
+   * that is the flex-item half of the same pair, and neither half works without the other.
+   */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
 }
 .thread-branch,
