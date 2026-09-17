@@ -29,6 +29,7 @@ import { Suspension } from "../tools/suspension.js";
 import { redactQuizInput } from "../tools/quiz.js";
 import type { TurnClock } from "./clock.js";
 import { buildModel } from "./model.js";
+import { usageOfChunks } from "./callUsage.js";
 
 /** Fallback ReAct step budget when a session does not set one. */
 const DEFAULT_MAX_STEPS = 15;
@@ -666,6 +667,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   let outputTokens = 0;
   let totalTokens = 0;
   let cachedInputTokens = 0;
+  // The share of the output spent thinking, summed the same way. Some providers report none.
+  let reasoningTokens = 0;
   // The final step's input+output — how big the context had grown by the end of the turn.
   let contextTokens = 0;
   let sawUsage = false;
@@ -704,20 +707,24 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       const aiMessage = chunks.reduce((acc, c) => acc.concat(c) as AIMessageChunk);
       messages.push(aiMessage);
 
-      // Providers report usage on a dedicated chunk at the end of the step. Read it from the
-      // chunks rather than from `aiMessage`: `AIMessageChunk.concat` does *not* carry
-      // `usage_metadata` through the reduce, so the reduced message always reports none.
-      const stepUsage = chunks.reduce<AIMessageChunk["usage_metadata"] | undefined>(
-        (acc, c) => c.usage_metadata ?? acc,
-        undefined
-      );
+      /*
+       * Providers report usage on a dedicated chunk at the end of the step, so it is read from
+       * the chunks rather than from `aiMessage`: `AIMessageChunk.concat` does *not* carry
+       * `usage_metadata` through the reduce, so the reduced message always reports none.
+       *
+       * The field mapping itself lives in `callUsage.ts`, shared with the five out-of-band passes
+       * — one place where a provider's names become this app's, so the transcript and the usage
+       * ledger can never disagree about what was reported.
+       */
+      const stepUsage = usageOfChunks(chunks);
       if (stepUsage) {
         sawUsage = true;
-        inputTokens += stepUsage.input_tokens ?? 0;
-        outputTokens += stepUsage.output_tokens ?? 0;
-        totalTokens += stepUsage.total_tokens ?? 0;
-        cachedInputTokens += stepUsage.input_token_details?.cache_read ?? 0;
-        contextTokens = (stepUsage.input_tokens ?? 0) + (stepUsage.output_tokens ?? 0);
+        inputTokens += stepUsage.inputTokens ?? 0;
+        outputTokens += stepUsage.outputTokens ?? 0;
+        totalTokens += stepUsage.totalTokens ?? 0;
+        cachedInputTokens += stepUsage.cachedInputTokens ?? 0;
+        reasoningTokens += stepUsage.reasoningTokens ?? 0;
+        contextTokens = (stepUsage.inputTokens ?? 0) + (stepUsage.outputTokens ?? 0);
       }
 
       if (stepText) lastUtterance = stepText;
@@ -886,7 +893,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   // figures it has cover a half-finished step, which is not worth showing or summing.
   const usage: MessageUsage =
     sawUsage && !stopped
-      ? { inputTokens, outputTokens, totalTokens, cachedInputTokens, contextTokens }
+      ? { inputTokens, outputTokens, totalTokens, cachedInputTokens, reasoningTokens, contextTokens }
       : {};
 
   if (sawUsage && !stopped) input.onEvent({ type: "usage", usage });

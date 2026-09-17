@@ -181,6 +181,10 @@ describe("runAgentStream — plain conversation", () => {
       outputTokens: 20,
       totalTokens: 120,
       cachedInputTokens: 30,
+      // The provider in this turn reports no reasoning tokens, so this is `0` rather than absent:
+      // the loop always fills every figure it knows how to read, the same way it does for
+      // `cachedInputTokens`. See `MessageUsage.reasoningTokens`.
+      reasoningTokens: 0,
       contextTokens: 120,
     });
     expect(events.at(-1)).toEqual({ type: "usage", usage: result.usage });

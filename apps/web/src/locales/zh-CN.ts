@@ -202,6 +202,80 @@ export default {
   },
 
   /**
+   * Token usage: what the model calls cost, and what they were for.
+   *
+   * A namespace of its own rather than keys under `account.` or `admin.`, because the same words
+   * are needed on two pages that belong to different people — an account's own usage and the
+   * console's installation-wide view — and neither is the other's sub-screen.
+   */
+  usage: {
+    title: "用量统计",
+    /** The account's own page. */
+    selfLead: "这是你名下所有会话与后台任务的模型用量。",
+    /** The console's, where the numbers are everybody's. */
+    platformLead: "整个实例的模型用量，按账号、工作区、会话、用途、服务商与模型拆分。",
+    loading: "加载中…",
+    /** Nothing has *ever* been recorded — a different claim from an empty range. */
+    empty: "还没有记录到任何模型调用。",
+    /** A range that happens to contain no calls. */
+    emptyRange: "这个时间范围内没有用量记录。",
+    untitled: "（未命名会话）",
+    /**
+     * When counting began. Deliberately stated: the ledger is forward-only, so a page showing
+     * nothing for last month is telling the truth about its own window rather than about last month.
+     */
+    since: "统计自 {when} 起。",
+    range: {
+      today: "今天",
+      week: "近 7 天",
+      month: "近 30 天",
+      all: "全部",
+      from: "开始日期",
+      to: "结束日期",
+    },
+    /** The headline tiles. */
+    tile: {
+      total: "总 Token",
+      input: "输入",
+      cached: "缓存命中",
+      output: "输出",
+      calls: "调用次数",
+    },
+    /** Table column headers, and the chart series that name the same figures. */
+    field: {
+      calls: "次数",
+      input: "输入",
+      cached: "缓存命中",
+      cacheMiss: "输入（未命中）",
+      output: "输出",
+      reasoning: "思考",
+      total: "合计",
+      averageMs: "平均耗时",
+    },
+    chart: {
+      overTime: "每日用量",
+      byPurpose: "按用途",
+    },
+    table: {
+      purpose: "按用途",
+      provider: "按服务商",
+      model: "按模型",
+      workspace: "按工作区",
+      session: "按会话",
+      user: "按账号",
+    },
+    /** One per `USAGE_PURPOSES` id, so a new purpose is an entry in that array and a key here. */
+    purpose: {
+      chat: "会话",
+      title: "自动生成标题",
+      thread: "脉络整理",
+      insight: "洞察生成",
+      "summary.media": "图片摘要",
+      "summary.notes": "笔记摘要",
+    },
+  },
+
+  /**
    * What an account may do. Keyed by the role id the server stores, so the two sides name the
    * same thing — the label is the only translated part.
    */
@@ -226,6 +300,7 @@ export default {
       providers: "配置所有账号共用的模型服务；普通用户只能在已配置的模型中选择使用。",
       documents: "配置所有账号共用的文档解析方式。",
       uploads: "所有账号共用的上传限制。",
+      stats: "整个实例的模型用量。",
     },
     /** The left menu. One entry per section; the key is the section id. */
     nav: {

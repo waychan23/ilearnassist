@@ -144,6 +144,22 @@ function onOpenSources(): void {
       </button>
 
       <!--
+        The account's own usage. In the *upper* group rather than beside the account page below,
+        because the group is about what can be reached rather than about who is signed in — and
+        because an administrator reads the same screen twice: once scoped to themselves here, and
+        once for everybody in the console below.
+      -->
+      <button
+        class="menu-item side-menu-row"
+        :title="t('usage.title')"
+        data-testid="open-usage"
+        @click="router.push({ name: 'usage' })"
+      >
+        <span class="gear"><Icon name="chart" /></span>
+        <span class="label">{{ t("usage.title") }}</span>
+      </button>
+
+      <!--
         The platform console, for the accounts the server would let in. Drawn from the role the
         server reported rather than from anything this component decided — and a hidden button is
         not a permission, since the routes refuse everybody else regardless.

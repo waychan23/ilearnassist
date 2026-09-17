@@ -146,6 +146,82 @@ const en: typeof MessageSchema = {
     },
   },
 
+  /**
+   * Token usage: what the model calls cost, and what they were for.
+   *
+   * A namespace of its own rather than keys under \`account.\` or \`admin.\`, because the same words
+   * are needed on two pages that belong to different people — an account's own usage and the
+   * console's installation-wide view — and neither is the other's sub-screen.
+   */
+  usage: {
+    title: "Usage",
+    /** The account's own page. */
+    selfLead: "Model usage across every conversation and background task of yours.",
+    /** The console's, where the numbers are everybody's. */
+    platformLead:
+      "Model usage for the whole installation, broken down by account, workspace, conversation, purpose, provider and model.",
+    loading: "Loading…",
+    /** Nothing has *ever* been recorded — a different claim from an empty range. */
+    empty: "No model calls have been recorded yet.",
+    /** A range that happens to contain no calls. */
+    emptyRange: "No usage in this date range.",
+    untitled: "(Untitled conversation)",
+    /**
+     * When counting began. Deliberately stated: the ledger is forward-only, so a page showing
+     * nothing for last month is telling the truth about its own window rather than about last month.
+     */
+    since: "Counting since {when}.",
+    range: {
+      today: "Today",
+      week: "Last 7 days",
+      month: "Last 30 days",
+      all: "All time",
+      from: "From",
+      to: "To",
+    },
+    /** The headline tiles. */
+    tile: {
+      total: "Total tokens",
+      input: "Input",
+      cached: "Cache hits",
+      output: "Output",
+      calls: "Calls",
+    },
+    /** Table column headers, and the chart series that name the same figures. */
+    field: {
+      calls: "Calls",
+      input: "Input",
+      cached: "Cache hits",
+      cacheMiss: "Input (missed)",
+      output: "Output",
+      reasoning: "Thinking",
+      total: "Total",
+      averageMs: "Avg. ms",
+    },
+    chart: {
+      overTime: "Daily usage",
+      byPurpose: "By purpose",
+    },
+    table: {
+      purpose: "By purpose",
+      provider: "By provider",
+      model: "By model",
+      workspace: "By workspace",
+      session: "By conversation",
+      user: "By account",
+    },
+    /** One per \`USAGE_PURPOSES\` id, so a new purpose is an entry in that array and a key here. */
+    purpose: {
+      chat: "Conversation",
+      title: "Auto-title",
+      thread: "Topic classification",
+      insight: "Insight pass",
+      "summary.media": "Image summary",
+      "summary.notes": "Note summary",
+    },
+  },
+
+
   roles: {
     superadmin: "Superadmin",
     admin: "Administrator",
@@ -161,6 +237,7 @@ const en: typeof MessageSchema = {
       providers: "Configure the model services every account shares; ordinary users choose from what is configured here.",
       documents: "Configure how documents are parsed for every account.",
       uploads: "The upload limit every account shares.",
+      stats: "Model usage across the installation.",
     },
     nav: {
       users: "Users",

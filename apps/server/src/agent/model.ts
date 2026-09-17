@@ -1,5 +1,5 @@
 import { ChatOpenAI } from "@langchain/openai";
-import type { SessionSettings } from "@ilearnassist/shared";
+import type { MessageModel, SessionSettings } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
 
 export interface BuiltModel {
@@ -206,4 +206,30 @@ export function buildModel(
   });
 
   return { llm, provider, modelId: model };
+}
+
+/**
+ * Which model a call is about to use, as a record — the one place the two names are resolved.
+ *
+ * `modelId` here is the **wire** name (`ModelDef.modelId`), because that is what identifies a
+ * model to a provider and what every call site already carries. The *display* name lives beside
+ * it in the provider record, and both writers that need this — a message's provenance and a usage
+ * ledger row — take it from here so the two can never disagree about which model ran.
+ *
+ * A model the provider record no longer lists keeps its wire name as its display name rather than
+ * becoming blank: a turn that ran against a since-deleted model is exactly the kind of thing a
+ * transcript should still be able to say.
+ */
+export function describeModel(
+  provider: ProviderRecord | undefined,
+  modelId: string
+): MessageModel | undefined {
+  if (!provider || !modelId) return undefined;
+  const known = provider.models.find((m) => m.modelId === modelId);
+  return {
+    providerId: provider.id,
+    providerName: provider.name,
+    modelId,
+    modelName: known?.name || modelId,
+  };
 }
