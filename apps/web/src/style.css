@@ -2824,6 +2824,39 @@ pre.code-block {
   .form-grid {
     grid-template-columns: 1fr;
   }
+
+  /*
+   * The messages get the width instead of the gutters.
+   *
+   * A message carried 24px of padding on each side at every width, and an assistant message
+   * carried a 30px avatar and a 12px gap in front of its body — 90px of a 412px screen, 22% of
+   * the line, spent before a word is set. On a desk that reads as a comfortable measure; on a
+   * phone it is the difference between a paragraph and a column.
+   *
+   * **The avatar is dropped rather than shrunk**, and what makes that safe is the bubble: a
+   * reply is the message without one, sitting at the left edge, and a 30px robot in front of it
+   * is confirming something the layout already says. (The user's own turn keeps its shape — the
+   * bubble is the mark — so only the assistant's is hidden.)
+   *
+   * `display: none` and not a `v-if`, the rule `.sidebar.collapsed` follows: this is a
+   * presentation decision at one width, and driving it from JavaScript would re-render every
+   * message in the conversation on a resize to accomplish what one declaration does. It takes
+   * the mark out of the accessibility tree too, which is the right answer for an `aria-hidden`
+   * glyph that says nothing.
+   *
+   * Keyed on the width breakpoint rather than on `orientation: portrait`, which was the ask.
+   * Orientation is not a fact this sheet can act on: a phone held sideways is 915px and would
+   * take the *desktop* rules for everything else, so a portrait-only rule here would give one
+   * width two layouts according to how the device was held. Every other responsive rule in this
+   * app is a `max-width` query and `style.test.ts` pins the set.
+   */
+  .msg {
+    padding-inline: var(--space-6);
+  }
+
+  .msg .avatar {
+    display: none;
+  }
 }
 
 /*

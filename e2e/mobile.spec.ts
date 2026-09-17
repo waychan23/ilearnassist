@@ -56,6 +56,46 @@ test("touch: one tap opens the token popover, and it stays open", async ({ page,
   await expect(popover).toBeHidden();
 });
 
+test("layout: the reply gives up its avatar and its gutters, and takes them back", async ({
+  page,
+  request,
+}) => {
+  /*
+   * A reply carried a 30px avatar, a 12px gap and 24px of padding on each side — 90px of a 412px
+   * screen, spent before a word was set. Both halves are asserted, because "more compact" has a
+   * direction: the avatar has to be *gone* and the text has to be *wider*, and a rule that only
+   * shrank the avatar would satisfy neither the ask nor the width.
+   */
+  await converse(page, request, "你好");
+
+  const reply = page.getByTestId("message-assistant").last();
+  await expect(reply.locator(".avatar")).toBeHidden();
+
+  // 412 less the 12px gutter on each side. The body is the flex item, so with the avatar gone it
+  // is the whole of that — which is what makes this a statement about both changes at once.
+  const body = (await reply.locator(".body").boundingBox())!;
+  expect(body.width).toBeCloseTo(388, 0);
+
+  // The user's own turn keeps its avatar-free shape for a different reason — it never had one —
+  // and its bubble still stops short of the edge rather than being stretched by the new gutter.
+  const bubble = (await page.getByTestId("message-user").last().locator(".bubble").boundingBox())!;
+  expect(bubble.width).toBeLessThan(388);
+
+  /*
+   * And it is a rule about this width, not about the app. Read after a resize rather than in a
+   * desktop spec, which is where the rest of this file's "state that is only read once" cases
+   * live: `display: none` cannot get stuck the way a JavaScript flag can, and the assertion is
+   * here to say so.
+   */
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(reply.locator(".avatar")).toBeVisible();
+  // Back, and taking room again: the body is the row's flex item, so it is narrower than the row
+  // by the avatar and its gap. Asserted as that relationship rather than against a number, since
+  // the desktop column's width is a different question from this one.
+  const row = (await reply.boundingBox())!;
+  expect((await reply.locator(".body").boundingBox())!.width).toBeLessThan(row.width);
+});
+
 test("layout: the sidebar is a drawer, and the pane gets the whole width", async ({
   page,
   request,
