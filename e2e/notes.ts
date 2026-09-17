@@ -90,3 +90,19 @@ export async function annotate(
   await expect(page.getByTestId("note-toolbar")).toBeVisible();
   await page.getByTestId(action === "annotate" ? "note-toolbar-annotate" : "note-toolbar-note").click();
 }
+
+/**
+ * Select a passage and ask about it — the 追问 button on the bar.
+ *
+ * Its own helper rather than a third `annotate` action, because what it leaves behind is a
+ * different thing: the two above end with a *note*, and this one ends with a staged reference and
+ * the composer holding the caret. A spec that wants to type a question next reads better saying so.
+ */
+export async function selectAndAsk(page: Page, root: Locator, quote: string): Promise<void> {
+  await selectText(page, root, quote);
+  await expect(page.getByTestId("note-toolbar")).toBeVisible();
+  await page.getByTestId("note-toolbar-ask").click();
+  // The bar goes with the selection it was floating over, and the chip row is what replaces it.
+  await expect(page.getByTestId("note-toolbar")).toBeHidden();
+  await expect(page.getByTestId("composer-refs")).toBeVisible();
+}

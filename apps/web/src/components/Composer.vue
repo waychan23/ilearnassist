@@ -11,6 +11,7 @@ import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
 import { openSessionSettings, showAdmin } from "../composables/ui";
 import { autosizeTextarea } from "../utils/autosize";
+import { kindLabel, referenceKey } from "../utils/turnRefs";
 import Icon from "./Icon.vue";
 
 const { t } = useI18n();
@@ -37,7 +38,30 @@ const canSend = computed(
     !store.documentsParsing &&
     (!!text.value.trim() ||
       store.pendingAttachments.length > 0 ||
-      store.pendingSources.length > 0)
+      store.pendingSources.length > 0 ||
+      // A staged 追问 chip is a complete question on its own: "what about this?" needs no words
+      // around it, and the server's own guard agrees — see `MESSAGE_REQUIRED` in routes.ts.
+      store.pendingRefs.length > 0)
+);
+
+/**
+ * Take the caret when a reference is staged.
+ *
+ * **One rule here rather than a call at every entry point**, and that is the point: 追问 is
+ * offered from the selection bar, the figure panel, the figure card, the enlarged viewer and the
+ * note window, and the gesture is the same in all five — point at something, then type what you
+ * want to know. A rule per call site would be five places to remember and four chances to forget,
+ * and the result of forgetting is a chip that has been staged with the caret still somewhere the
+ * reader has to move by hand.
+ *
+ * Watching the *length* rather than the array: a removal is the reader taking a chip back, and
+ * pulling their caret to the composer then would be the opposite of what they asked for.
+ */
+watch(
+  () => store.pendingRefs.length,
+  (count, previous) => {
+    if (count > (previous ?? 0)) textarea.value?.focus();
+  }
 );
 
 /**
@@ -398,6 +422,30 @@ function onInput() {
         </div>
 
         <!--
+          What this turn is *about* — the follow-up chips. Their own row, and not `AttachmentChips`:
+          a `TurnReference` has no bytes, no size and no parse state, so it is not an attachment
+          in any field that component reads. Forcing it into that shape would be the "never coerce
+          a request field" rule broken in the UI, where the coercion is a chip claiming a parse
+          state that does not exist.
+        -->
+        <div v-if="store.pendingRefs.length" class="composer-refs" data-testid="composer-refs">
+          <span v-for="ref in store.pendingRefs" :key="referenceKey(ref)" class="ref-chip">
+            <span class="ref-kind">{{ kindLabel(ref.kind) }}</span>
+            <span class="ref-label truncate">{{ ref.label }}</span>
+            <button
+              type="button"
+              class="ref-remove"
+              data-testid="composer-ref-remove"
+              :title="t('turnRef.remove')"
+              :aria-label="t('turnRef.remove')"
+              @click="store.removePendingReference(referenceKey(ref))"
+            >
+              <Icon name="close" />
+            </button>
+          </span>
+        </div>
+
+        <!--
           The workspaces this conversation has been opened to. A row of its own rather than
           `AttachmentChips`, and the reason is that a scope is not an `Attachment`: it has no
           size, no parse state and no bytes, so forcing it into that shape would be a lie the
@@ -609,5 +657,58 @@ function onInput() {
 }
 .scope-chip:hover {
   color: var(--text-2);
+}
+
+/*
+ * The 追问 chips, drawn as the persistent-decision shape rather than the attachment shape: a
+ * reference is what this turn is *about*, and the reader is looking at it while they type the
+ * question. So the chip carries the kind as a label and the subject as the content, the way a
+ * quoted passage does, rather than a thumbnail and a parse state it has not got.
+ *
+ * `--panel-2` rather than the accent tint the scope chips use, so the two rows are not mistaken
+ * for each other: the scope chips are a decision the reader made about *access* and stay until
+ * changed, while these are about *this message* and go with it.
+ */
+.composer-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.ref-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 280px;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-4);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-2);
+  color: var(--text);
+}
+/* The kind is the one thing that must not be truncated away — "a diagram" and "a passage" are
+   different claims about the same words, so it keeps its width while the subject gives. */
+.ref-kind {
+  flex: none;
+  color: var(--text-3);
+}
+.ref-label {
+  min-width: 0;
+}
+.ref-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: var(--fs-1);
+  cursor: pointer;
+}
+.ref-remove:hover {
+  color: var(--danger);
+  background: var(--panel);
 }
 </style>

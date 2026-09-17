@@ -130,6 +130,176 @@ describe("creating a note", () => {
   });
 });
 
+/**
+ * A note about a 图 or a 表, which is the same entity with a different thing at the other end.
+ *
+ * The anchor rules are the ones under test, and they mirror the passage anchor's exactly: both
+ * halves or neither, and one anchor rather than two. What is *different* is that the name is
+ * normalised on the way in — a figure's name is this app's join key, so the note has to store
+ * the canonical one rather than whatever the caller typed.
+ */
+describe("a note about a figure", () => {
+  /** A diagram as the tool would have written it: a row, plus the name that is its identity. */
+  function seedDiagram(name: string): void {
+    env.server.db.upsertDiagram({
+      id: `d-${name}`,
+      sessionId,
+      name,
+      summary: "A flow",
+      toolCallId: null,
+    });
+  }
+
+  function seedTable(name: string): void {
+    env.server.db.upsertSessionTable({
+      id: `t-${name}`,
+      sessionId,
+      name,
+      summary: "A table",
+      content: "| a |\n| - |\n| 1 |",
+      toolCallId: null,
+    });
+  }
+
+  it("stores the canonical name, whatever spelling the client used", async () => {
+    seedDiagram("auth-flow.mmd");
+    /*
+     * The name is a server-side rule both ways — `diagramFileName` on this side, the same
+     * normalisation in `ila_query` — so a note that kept the caller's spelling would be the one
+     * place the note, the panel's chip and the model's lookup disagreed.
+     */
+    const res = await createNote({ targetKind: "diagram", targetRef: "Auth Flow", content: "看这里" });
+    expect(res.statusCode).toBe(201);
+    const note = res.json<Note>();
+    expect(note.targetKind).toBe("diagram");
+    expect(note.targetRef).toBe("auth-flow.mmd");
+    expect(note.quote).toBe("");
+    expect(note.targetMissing).toBe(false);
+  });
+
+  it("records a table target the same way, on its own name space", async () => {
+    seedTable("scores");
+    const res = await createNote({ targetKind: "table", targetRef: "Scores", content: "第二行" });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<Note>().targetRef).toBe("scores");
+  });
+
+  it("refuses half a figure target rather than completing it", async () => {
+    // The same rule as the passage anchor, and for the same reason: a kind with no name is a
+    // note about nothing, and a name with no kind cannot be looked for — both `diagramFileName`
+    // and `tableName` would claim it.
+    const noRef = await createNote({ targetKind: "diagram" });
+    expect(noRef.statusCode).toBe(400);
+    expect(noRef.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+
+    const noKind = await createNote({ targetRef: "auth-flow.mmd" });
+    expect(noKind.statusCode).toBe(400);
+    expect(noKind.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+  });
+
+  it("refuses a note that carries both a figure and a passage", async () => {
+    // One note names one thing. Either reading of a request carrying both would throw away half
+    // of what was sent, so it is refused rather than resolved.
+    const withQuote = await createNote({
+      targetKind: "diagram",
+      targetRef: "auth-flow.mmd",
+      quote: "some words",
+    });
+    expect(withQuote.statusCode).toBe(400);
+    expect(withQuote.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+
+    const withMessage = await createNote({
+      targetKind: "diagram",
+      targetRef: "auth-flow.mmd",
+      messageId: lastMessageId,
+      quote: "some words",
+    });
+    expect(withMessage.statusCode).toBe(400);
+    expect(withMessage.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+  });
+
+  it("refuses a figure this conversation does not hold, under its own code", async () => {
+    const res = await createNote({ targetKind: "diagram", targetRef: "no-such-thing" });
+    expect(res.statusCode).toBe(404);
+    // Its own code rather than MESSAGE_NOT_FOUND: a message id and a figure name are different
+    // things to have lost, and the client says so in different words.
+    expect(res.json<ApiErrorBody>().error.code).toBe("FIGURE_NOT_FOUND");
+  });
+
+  it("reports the figure as missing once its row is gone, without losing the note", async () => {
+    seedTable("short-lived");
+    const note = (
+      await createNote({ targetKind: "table", targetRef: "short-lived", content: "记一下" })
+    ).json<Note>();
+    expect(note.targetMissing).toBe(false);
+
+    // A table is derived data with no `deleted_at`, so a revise that renames it really removes
+    // the row — and the note has to survive that, the way it survives a peeled message.
+    env.server.db.raw.prepare("DELETE FROM session_tables WHERE id = ?").run(`t-short-lived`);
+
+    const found = (await listNotes()).find((n) => n.id === note.id);
+    expect(found, "the note should still be in the list").toBeDefined();
+    expect(found!.targetMissing).toBe(true);
+    expect(found!.content).toBe("记一下");
+  });
+
+  it("does not let a table stand in for a missing diagram of the same name", async () => {
+    /*
+     * The `target_kind` guard on each half of the expression, and this is the case that needs it:
+     * a diagram and a table may share a name, so without the guard one row's presence would make
+     * the other's absence read as present — a chip that opens a figure the note was never about.
+     *
+     * Both figures exist when the note is written; only the *diagram* is then removed, while the
+     * table of the same name stays. The note is about the diagram, so it is missing.
+     */
+    seedDiagram("shared-name.mmd");
+    seedTable("shared-name");
+    const note = (
+      await createNote({ targetKind: "diagram", targetRef: "shared-name", content: "图" })
+    ).json<Note>();
+    expect(note.targetMissing).toBe(false);
+
+    env.server.db.raw
+      .prepare("DELETE FROM session_diagrams WHERE id = ?")
+      .run("d-shared-name.mmd");
+
+    const found = (await listNotes()).find((n) => n.id === note.id);
+    expect(found!.targetMissing).toBe(true);
+
+    /*
+     * Then the same pair with the roles swapped, and *this* is the assertion the guard carries:
+     * a table of the name exists, no diagram of it ever did, and without the `target_kind` guard
+     * the diagram half of the expression would report the table note as missing. Both figures
+     * named `other-name` are impossible to confuse, so the two cases together pin the expression
+     * in both directions rather than one.
+     */
+    seedTable("only-a-table");
+    const tableNote = (
+      await createNote({ targetKind: "table", targetRef: "only-a-table", content: "表" })
+    ).json<Note>();
+    expect(tableNote.targetMissing).toBe(false);
+  });
+
+  it("keeps the target out of an edit's reach", async () => {
+    // What a note *was* is settled at creation — the rule the passage anchor already follows.
+    // A PATCH sends only the type and the body, so the target cannot be re-pointed.
+    seedDiagram("sticky.mmd");
+    const note = (
+      await createNote({ targetKind: "diagram", targetRef: "sticky.mmd", content: "初稿" })
+    ).json<Note>();
+
+    const res = await env.inject({
+      method: "PATCH",
+      url: `/api/sessions/${sessionId}/notes/${note.id}`,
+      payload: { content: "改过", targetRef: "something-else" },
+    });
+    expect(res.statusCode).toBe(200);
+    const updated = res.json<Note>();
+    expect(updated.content).toBe("改过");
+    expect(updated.targetRef).toBe("sticky.mmd");
+  });
+});
+
 describe("editing a note", () => {
   it("changes the body and the type, and leaves everything else alone", async () => {
     const created = (await createNote({

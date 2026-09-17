@@ -123,6 +123,8 @@ function addNote(content: string, quote = ""): void {
     quote,
     occurrence: 0,
     content,
+    targetKind: "text",
+    targetRef: null,
   };
   db.createNote(note);
 }
@@ -213,6 +215,65 @@ describe("ila_query — threads", () => {
   });
 });
 
+describe("ila_query — a quiz question by id", () => {
+  it("carries the global id, which is what a reference and ila_review_quiz take", async () => {
+    /*
+     * Absent for as long as the listing was only read by prose. The quiz follow-up used to quote
+     * this id in a sentence and nothing could resolve it, because nothing was ever given it — so
+     * what is asserted here is both halves: the id comes out, and it is the id that goes back in.
+     */
+    registerQuestion();
+    const listing = await ask({ kind: "quiz" });
+    const [item] = listing.items as Record<string, unknown>[];
+    expect(typeof item!.id).toBe("string");
+    // The reader's own `Qn` is a different thing and is still there: one is what a person sees,
+    // the other is what a tool takes.
+    expect(item!.qid).toBe("Q1");
+    expect(item!.id).not.toBe("Q1");
+  });
+
+  it("reads the one question its id names, without a search", async () => {
+    registerQuestion();
+    const [stored] = db.listQuizQuestionsBySession(SESSION);
+    const answer = await ask({ kind: "quiz", id: stored!.id });
+    expect(answer).toMatchObject({ kind: "quiz" });
+    expect(answer.item).toMatchObject({ id: stored!.id, qid: "Q1" });
+    expect(answer.items).toBeUndefined();
+  });
+
+  it("answers null for an id this conversation does not hold", async () => {
+    registerQuestion();
+    const answer = await ask({ kind: "quiz", id: newId() });
+    expect(answer.item).toBeNull();
+    expect(JSON.stringify(answer)).not.toContain("递归");
+    expect(answer.note as string).toContain("without `id`");
+  });
+
+  it("does not reach another conversation's question by id", async () => {
+    // The scoped read is the whole check, and it is the same one every `ForUser` accessor makes:
+    // a question id from elsewhere is not "refused", it simply is not in this conversation's list.
+    const otherId = newId();
+    db.insertQuizQuestions([
+      {
+        id: otherId,
+        sessionId: OTHER_SESSION,
+        nodeId: null,
+        nodeTitle: null,
+        toolCallId: "call-other",
+        qid: "Q1",
+        position: 1,
+        header: "别的会话",
+        question: "另一个会话里的题目",
+        multiSelect: false,
+        options: [{ label: "A" }],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+    const answer = await ask({ kind: "quiz", id: otherId });
+    expect(answer.item).toBeNull();
+  });
+});
+
 describe("ila_query — notes", () => {
   it("returns the learner's own writing", async () => {
     addNote("这里我还是不太懂", "栈溢出");
@@ -258,6 +319,115 @@ describe("ila_query — notes", () => {
       (second.items as Record<string, unknown>[])[0]!.content
     );
     expect(second).toMatchObject({ total: 2, offset: 1 });
+  });
+
+  it("carries each note's id, so one can be asked for by name", async () => {
+    // The ids are what make a note *addressable*: a reference the user attached carries one, and
+    // without it in the listing the model could only ever search by text it was guessing at.
+    addNote("第一条");
+    const answer = await ask({ kind: "note" });
+    const [item] = answer.items as Record<string, unknown>[];
+    expect(typeof item!.id).toBe("string");
+    expect(item!.id).toBe(db.listNotesForUser(OWNER, SESSION)[0]!.id);
+  });
+
+  it("reads the one note its id names, without a search", async () => {
+    addNote("不要这条");
+    addNote("要这条");
+    const wanted = db.listNotesForUser(OWNER, SESSION).find((n) => n.content === "要这条")!;
+
+    const answer = await ask({ kind: "note", id: wanted.id });
+    // The single-object shape the diagram and table kinds use, not a one-item page: a caller who
+    // named a note asked a question, and `items`/`total` would answer a different one.
+    expect(answer).toMatchObject({ kind: "note" });
+    expect(answer.item).toMatchObject({ id: wanted.id, content: "要这条" });
+    expect(answer.items).toBeUndefined();
+  });
+
+  it("does not reach another conversation's note by id", async () => {
+    /*
+     * The lookup runs inside this conversation's own list, which is already owner-scoped — so an
+     * id from elsewhere is not "refused", it simply is not found, and the answer says which of
+     * the two it is by handing back a null rather than a note.
+     */
+    const otherNote = db.createNote({
+      id: newId(),
+      sessionId: OTHER_SESSION,
+      messageId: null,
+      type: "idea",
+      quote: "",
+      occurrence: 0,
+      content: "别的会话",
+      targetKind: "text",
+      targetRef: null,
+    });
+
+    const answer = await ask({ kind: "note", id: otherNote.id });
+    expect(answer.item).toBeNull();
+    expect(JSON.stringify(answer)).not.toContain("别的会话");
+    // The way back to something readable, since a page of uuids would not be.
+    expect(answer.note as string).toContain("without `id`");
+  });
+
+  it("says what a note is about when it is about a figure", async () => {
+    db.upsertDiagram({
+      id: "d1",
+      sessionId: SESSION,
+      name: "auth-flow.mmd",
+      summary: "登录流程",
+      toolCallId: null,
+    });
+    db.createNote({
+      id: newId(),
+      sessionId: SESSION,
+      messageId: null,
+      type: "idea",
+      quote: "",
+      occurrence: 0,
+      content: "这一步没看懂",
+      targetKind: "diagram",
+      targetRef: "auth-flow.mmd",
+    });
+
+    const answer = await ask({ kind: "note" });
+    const [item] = answer.items as Record<string, unknown>[];
+    // The kind says which table to look in; the name is the handle, and it is the same one
+    // `kind: "diagram"` takes — which is what makes a note a route to the figure itself.
+    expect(item).toMatchObject({ target: { kind: "diagram", name: "auth-flow.mmd" } });
+
+    // A text note carries no `target` at all, rather than one saying "text": the field is the
+    // presence of a figure, so its absence is the honest spelling.
+    addNote("普通笔记");
+    const withText = await ask({ kind: "note", query: "普通" });
+    expect((withText.items as Record<string, unknown>[])[0]).not.toHaveProperty("target");
+  });
+
+  it("says when the figure a note is about has gone", async () => {
+    db.upsertDiagram({
+      id: "d1",
+      sessionId: SESSION,
+      name: "gone.mmd",
+      summary: "",
+      toolCallId: null,
+    });
+    db.createNote({
+      id: newId(),
+      sessionId: SESSION,
+      messageId: null,
+      type: "idea",
+      quote: "",
+      occurrence: 0,
+      content: "看这张图",
+      targetKind: "diagram",
+      targetRef: "gone.mmd",
+    });
+    db.raw.prepare("DELETE FROM session_diagrams WHERE id = ?").run("d1");
+
+    const answer = await ask({ kind: "note" });
+    const [item] = answer.items as Record<string, unknown>[];
+    // Named rather than omitted: the name is still what the note is about, and a reader who
+    // follows it to `kind: "diagram"` gets the handler's own "no such diagram" answer.
+    expect(item).toMatchObject({ target: { kind: "diagram", name: "gone.mmd" }, targetMissing: true });
   });
 });
 

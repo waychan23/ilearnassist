@@ -17,12 +17,17 @@ import Icon from "./Icon.vue";
  * panel) and is clamped to the viewport rather than centred, which is what makes "near the thing
  * you pointed at" survive a card that is taller than the space below it.
  *
+ * **Landscape, because the note is about the text beside it.** The card is wider than it is tall in
+ * both its sizes, and that is a reading of what it is for rather than a taste: the quote, the type
+ * and the body are three short things stacked, so height is the dimension that runs out first and
+ * width is the one that goes to waste. A portrait card also has to grow downward past the passage
+ * it is annotating, which is the one thing it must not cover.
+ *
  * The second size is the reader's own choice and is the one case where it *does* cover the page:
- * a note can be long, 340px is a cramped place to write several paragraphs, and a window you
- * deliberately grew is one you asked to give your attention to. So it is the same card in two
- * sizes rather than two components — the type selector, the quote, the body and the actions are
- * identical in both, and a second component would be a second place for all of it to be spelled
- * differently.
+ * a note can be long, and a window you deliberately grew is one you asked to give your attention
+ * to. So it is the same card in two sizes rather than two components — the type selector, the
+ * quote, the body and the actions are identical in both, and a second component would be a second
+ * place for all of it to be spelled differently.
  *
  * It owns no data and knows nothing about notes as records: `save` and `remove` are handed in
  * with the draft. That is what lets the message list render it without knowing that a notes
@@ -56,6 +61,8 @@ const emit = defineEmits<{
   save: [input: { type: NoteType; content: string }];
   remove: [];
   locate: [];
+  /** Ask the agent about this note. The host knows what a note *is*; this window does not. */
+  ask: [];
   close: [];
 }>();
 
@@ -72,9 +79,10 @@ const existing = computed(() => !!props.draft.noteId);
  * What kind this note may be — which is not always the whole list.
  *
  * 标注 means "this marks a passage", so offering it for a note with nothing marked is offering a
- * kind that cannot be true of the note being written. The window is opened with no quote in
- * exactly one case — the panel's own 新建笔记 — and that is the case this excludes it from. The
- * four that remain are stances on the material, and none of them needs a passage to be about.
+ * kind that cannot be true of the note being written. The window is opened with no passage in two
+ * cases — the panel's own 新建笔记, and a note about a 图 or a 表 — and it is those this excludes
+ * it from. The four that remain are stances on the material, and none of them needs a passage to
+ * be about.
  *
  * The second clause is for a row this window did not create: a note that *is* a 标注 keeps its own
  * kind in the strip even with an empty quote. Only the API can produce that (the server defaults
@@ -87,6 +95,9 @@ const offeredTypes = computed(() =>
     ? NOTE_TYPES
     : NOTE_TYPES.filter((candidate) => candidate !== "annotation")
 );
+
+/** The figure this note is about, if it is about one. */
+const target = computed(() => props.draft.target ?? null);
 
 /**
  * Whether there is anything to lose by closing.
@@ -107,9 +118,10 @@ const position = ref<{ left: number; top: number } | null>(null);
  *
  * The card is a floating popover by default, and that is the right default — the annotated text is
  * the context for what is being written, so it stays readable behind the card. But a note can be
- * long, and 340px is a cramped place to write several paragraphs. So the same window has a second
- * size, and this is it: centred, over a scrim, at the **source browser's own width**, because that
- * is the box this app already uses for "a window you read or write a lot in".
+ * long, and the floating size is a deliberate compromise rather than a place to write several
+ * paragraphs. So the same window has a second size, and this is it: centred, over a scrim, at the
+ * **source browser's own width**, because that is the box this app already uses for "a window you
+ * read or write a lot in".
  *
  * Not a separate modal component: the two are one window in two sizes, and the type selector, the
  * quote, the body and the actions are identical in both. A second component would be a second
@@ -343,14 +355,35 @@ function typeLabel(candidate: NoteType): string {
         </div>
       </div>
 
-      <!-- Only when something was annotated: a note the user typed has no original. -->
+      <!--
+        Only when something was annotated: a note the user typed has no original.
+
+        A quoted passage is bounded and scrolls rather than being clamped. Clamping was the
+        original shape and it is the wrong one here: the quote is what the note is *about*, so a
+        passage whose end is cut off is the one part of this window the reader most needs and
+        cannot reach. The body has its own box and its own scrollbar, so the two do not compete.
+      -->
       <div v-if="draft.quote" class="field">
         <label>{{ t("notes.editor.quoteLabel") }}</label>
-        <p class="note-quote clamp-4" data-testid="note-editor-quote">{{ draft.quote }}</p>
+        <p class="note-quote" data-testid="note-editor-quote">{{ draft.quote }}</p>
       </div>
 
-      <!-- `field-grow` is what takes the room a maximised window adds: the field is the flex
-           item, so growing the textarea inside it would do nothing on its own. -->
+      <!--
+        The other anchor, and it is read-only for the reason the quote is: what a note is about
+        is settled when it is written. An editable field here would offer to re-point a saved
+        note at a different diagram, which the API does not accept — `update` sends only the
+        type and the body — so the field would look live and do nothing.
+      -->
+      <div v-if="target" class="field">
+        <label>{{ t("notes.editor.targetLabel") }}</label>
+        <p class="note-target" data-testid="note-editor-target">
+          <Icon :name="target.kind === 'diagram' ? 'diagram' : 'table'" />
+          <span class="truncate">{{ target.label }}</span>
+        </p>
+      </div>
+
+      <!-- `field-grow` is what takes the room the card's floor and its larger size add: the field
+           is the flex item, so growing the textarea inside it would do nothing on its own. -->
       <div class="field field-grow">
         <label for="note-editor-content">{{ t("notes.editor.contentLabel") }}</label>
         <textarea
@@ -396,6 +429,21 @@ function typeLabel(candidate: NoteType): string {
         >
           <Icon name="target" /> {{ t("notes.editor.locate") }}
         </button>
+        <!--
+          Ask about this note, and only once it exists: a draft has no id, so there is nothing for
+          the agent to look up and the button would stage a reference that cannot resolve. Offered
+          whether or not there is a locate target — a note the reader typed from the panel has none to
+          scroll to and is still a perfectly good thing to ask about.
+        -->
+        <button
+          v-if="existing"
+          type="button"
+          class="btn"
+          data-testid="note-editor-ask"
+          @click="emit('ask')"
+        >
+          <Icon name="link" /> {{ t("turnRef.ask") }}
+        </button>
         <button
           type="button"
           class="btn primary"
@@ -420,11 +468,31 @@ function typeLabel(candidate: NoteType): string {
 .note-editor {
   position: fixed;
   z-index: var(--z-popover);
-  width: 340px;
-  max-width: calc(100vw - var(--space-8) * 2);
-  /* Capped rather than scrollable as a whole: the body field scrolls, so the actions stay
-     reachable however long the note gets. */
-  max-height: calc(100vh - var(--space-8) * 2);
+  /*
+   * Landscape, and the width is the source browser's own rather than a new number: it is the box
+   * this app already uses for a window with a body of text in it, and the two are read side by side
+   * often enough that agreeing is worth more than a bespoke measurement.
+   */
+  width: min(560px, calc(100vw - var(--space-8) * 2));
+  /*
+   * A *floor*, which is what makes this landscape before anything has been typed. The card's rows
+   * are a fixed stack of short things — head, kind, quote, body, actions — and their sum is a
+   * portrait box that the body field then has to share. The floor is above that sum, so the
+   * surplus lands on the body and stays there as the reader types.
+   *
+   * Not a definite `height`, which would be the same arithmetic at the wrong moment: an empty note
+   * would get a tall empty box, and the card's whole premise is that it floats beside the passage
+   * rather than over it.
+   */
+  min-height: min(400px, calc(100vh - var(--space-8) * 2));
+  /* The ceiling, and the one that keeps "landscape" true at the far end of the range. */
+  max-height: min(520px, calc(100vh - var(--space-8) * 2));
+  /*
+   * Kept as the last resort rather than removed. It does not engage in the ordinary case — the
+   * quote is bounded and the body is the flex item that absorbs the slack — but on a viewport too
+   * short to hold the card's own floor it is the only way the actions row stays reachable, and
+   * clipping them is the failure that would leave the window with no way out.
+   */
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -480,8 +548,8 @@ function typeLabel(candidate: NoteType): string {
   z-index: var(--z-overlay);
 }
 /*
- * The body gets the room: a grown note is written in a grown box, not in a five-line one with a
- * band of nothing under it.
+ * The body gets the room: the card's floor is above the sum of its rows, and this is what claims
+ * the difference — in the floating size and in the grown one alike.
  *
  * Both halves are needed. The field is the flex *item* of the card's column, so it is the one
  * that has to claim the free space — `flex: 1` on the textarea alone leaves the space collecting
@@ -489,13 +557,13 @@ function typeLabel(candidate: NoteType): string {
  * companion: without it a flex item refuses to shrink below its content and the note would push
  * the actions off the bottom instead of scrolling.
  */
-.note-editor.maximized .field-grow {
+.field-grow {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
-.note-editor.maximized .field-grow .note-body {
+.field-grow .note-body {
   flex: 1;
 }
 .note-editor-scrim {
@@ -509,6 +577,14 @@ function typeLabel(candidate: NoteType): string {
   font-size: var(--fs-3);
   color: var(--text-2);
 }
+/*
+ * Bounded and scrollable, where it used to be clamped to four lines.
+ *
+ * 7.5em is five lines of `--fs-3` at the body's own line height, rounded to the line: a quote
+ * shorter than that is shown whole, and a longer one scrolls rather than losing its end. The same
+ * figure `--lh-*` gives a five-line textarea, so the two boxes the window is made of are capped at
+ * the same storey count rather than at two numbers that happen to sit near each other.
+ */
 .note-quote {
   margin: 0;
   padding: var(--space-3) var(--space-4);
@@ -517,11 +593,53 @@ function typeLabel(candidate: NoteType): string {
   border-left: 2px solid var(--accent);
   font-size: var(--fs-3);
   color: var(--text-2);
+  max-height: 7.5em;
+  overflow-y: auto;
+  /*
+   * A quote is a run of text lifted out of a message, and it arrives with whatever the message
+   * had — a URL, a long identifier, a code token. `anywhere` because a single unbreakable run is
+   * exactly what would otherwise push the card wider than its own `width`.
+   */
+  overflow-wrap: anywhere;
 }
-/* The body grows, the card follows: a long note is written in a long box. */
+/*
+ * The figure a note is about — the quote block's counterpart, and deliberately the same
+ * treatment: a tinted surface with an accent edge, because the two are the same *slot* in the
+ * window (what this note is about) and differ only in what fills it. It does not scroll: a
+ * figure's name is one short string, and the box that can hold a paragraph is two declarations
+ * below.
+ *
+ * `truncate` on the inner span rather than here, so the icon keeps its size while the name
+ * ellipsises — the rule `style.css` gives for a truncated flex row.
+ */
+.note-target {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--panel-2);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--accent);
+  font-size: var(--fs-3);
+  color: var(--text-2);
+}
+.note-target .icon {
+  flex: none;
+}
+/*
+ * The body's box is set by the card, not by the reader.
+ *
+ * `resize: vertical` is gone rather than kept: the field above is the flex item that claims the
+ * card's free height and the textarea fills it, so a dragged height loses to `flex-basis: 0%` —
+ * the handle would move and the box would not. That was already true in the grown size, and
+ * promoting the flex pair to the base rule extends it to every size. A control that renders and
+ * does nothing is worse than no control, and the maximise button is this window's way to ask for
+ * more room.
+ */
 .note-body {
   font-family: inherit;
-  resize: vertical;
+  resize: none;
   min-height: 5.5em;
 }
 .note-editor-actions {

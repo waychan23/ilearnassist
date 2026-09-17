@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureMessageNote,
   claimMessageNotes,
+  currentSelectionActions,
   isMessageNotesActive,
   noteClaim,
   openNoteFromHighlight,
@@ -14,6 +15,7 @@ import {
   type MessageNotesController,
   type MessageNotesHost,
   type NoteCapture,
+  type SelectionAction,
 } from "../../src/composables/messageNotes";
 
 /**
@@ -53,9 +55,14 @@ function host(): MessageNotesHost & { marks: unknown[]; reveals: unknown[]; edit
   return record as never;
 }
 
-/** The widget's side, as the bridge sees it. */
-function controller(): MessageNotesController {
-  return { capture: vi.fn(), open: vi.fn() };
+/**
+ * The widget's side, as the bridge sees it.
+ *
+ * `actions` defaults to a stub rather than to a fixed pair: what the bar carries is each widget's
+ * business, and a case that cares about the buttons asks for its own — see the cases below.
+ */
+function controller(actions: SelectionAction[] = []): MessageNotesController {
+  return { capture: vi.fn(), open: vi.fn(), actions: () => actions };
 }
 
 const capture = (sessionId: string): NoteCapture => ({
@@ -183,5 +190,54 @@ describe("the message list's side", () => {
     expect(noteClaim.value).toEqual({ widgetId: HOST_WIDGET, sessionId: "s1" });
     setNoteHighlights([{ noteId: "n1", messageId: "m1", anchor: { quote: "a", occurrence: 0 } }]);
     expect(list.marks).toHaveLength(1);
+  });
+});
+
+/**
+ * The bar over a selection, which is the conversation's and not the widget's.
+ *
+ * The host composes it, so what this module has to answer is only *what the claiming widget
+ * contributes* — and the two properties that matter are that nothing claimed contributes nothing
+ * (so the bar is absent rather than empty) and that the question is re-asked rather than answered
+ * once, because an action's availability changes while the claim stands.
+ */
+describe("the selection bar's actions", () => {
+  const action = (id: string): SelectionAction => ({ id, label: "Mark", icon: "marker" });
+
+  it("is empty when nothing has claimed the conversation", () => {
+    // The bar is hidden on this, which is what keeps a conversation with no marking-up capability
+    // from showing a strip of nothing.
+    expect(currentSelectionActions()).toEqual([]);
+  });
+
+  it("is whatever the claim holder offers", () => {
+    claimMessageNotes(HOST_WIDGET, "s1", controller([action("annotate"), action("note")]));
+    expect(currentSelectionActions().map((a) => a.id)).toEqual(["annotate", "note"]);
+  });
+
+  it("goes back to empty when the claim is given up", () => {
+    claimMessageNotes(HOST_WIDGET, "s1", controller([action("annotate")]));
+    releaseMessageNotes(HOST_WIDGET);
+    expect(currentSelectionActions()).toEqual([]);
+  });
+
+  it("asks again every time, so an action can change while the claim stands", () => {
+    /*
+     * The reason `actions` is a function rather than a list. The notes widget derives its `disabled`
+     * from its own writability, and that changes under a claim that never moves — another client
+     * takes the conversation's lease, or gives it back. A list captured at claim time would leave
+     * both buttons live in a conversation this client cannot write to, and the press would fail
+     * with nothing on screen to explain it.
+     */
+    let disabled = false;
+    claimMessageNotes(HOST_WIDGET, "s1", {
+      capture: vi.fn(),
+      open: vi.fn(),
+      actions: () => [{ ...action("annotate"), disabled }],
+    });
+
+    expect(currentSelectionActions()[0]!.disabled).toBe(false);
+    disabled = true;
+    expect(currentSelectionActions()[0]!.disabled).toBe(true);
   });
 });

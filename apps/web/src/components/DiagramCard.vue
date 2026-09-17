@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ToolCall } from "../api/types";
+import { useAppStore } from "../stores/app";
 import MermaidDiagram from "./MermaidDiagram.vue";
 import DiagramDialog from "./dialogs/DiagramDialog.vue";
 import Icon from "./Icon.vue";
@@ -28,6 +29,7 @@ import Icon from "./Icon.vue";
 const props = defineProps<{ toolCall: ToolCall }>();
 
 const { t, te } = useI18n();
+const store = useAppStore();
 
 /** The shared `tools.name.*` namespace, resolved the same way the generic card does. */
 const label = computed(() => {
@@ -66,6 +68,22 @@ const failed = computed(() => (props.toolCall.output ?? "").startsWith("Tool err
 /** The source disclosure. Closed by default: the drawing is what this card is for. */
 const open = ref(false);
 const viewing = ref(false);
+
+/**
+ * Ask about the diagram this call drew.
+ *
+ * The name comes from the call's own arguments rather than from a fetch, which is the same reason
+ * the card needs no request to render: it is already here. Passed **raw**, because the server
+ * normalises it with `diagramFileName` — the same function the writer used — so the model's
+ * spelling and the canonical file name are one reference, and this card does not have to know
+ * which of the two it is holding.
+ */
+function askAbout(): void {
+  if (!fileName.value) return;
+  // The label is the diagram's own name, not the card's `label` — that one names the *tool*
+  // ("ila_diagram"), which is not what the chip should say the question is about.
+  store.stageReference({ kind: "diagram", ref: fileName.value, label: fileName.value });
+}
 </script>
 
 <template>
@@ -87,6 +105,21 @@ const viewing = ref(false);
         @click.stop="viewing = true"
       >
         <Icon name="expand" />
+      </button>
+      <!--
+        Ask about *this* diagram. In the head for the reason the expand button is, and `.stop` for
+        the reason that one is too: the head toggles the source disclosure, and a press aimed at
+        this is not a press aimed at that.
+      -->
+      <button
+        v-if="!failed"
+        class="icon-btn ask"
+        data-testid="diagram-ask"
+        :title="t('turnRef.ask')"
+        :aria-label="t('turnRef.ask')"
+        @click.stop="askAbout"
+      >
+        <Icon name="link" />
       </button>
       <Icon class="toggle" :name="open ? 'caret-down' : 'caret-right'" />
     </div>
@@ -111,6 +144,7 @@ const viewing = ref(false);
 
     <DiagramDialog
       v-if="viewing"
+      :figure="fileName ? { kind: 'diagram', ref: fileName, label: fileName } : undefined"
       :content="{ kind: 'diagram', source }"
       :name="fileName"
       :summary="summary"

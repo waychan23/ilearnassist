@@ -65,6 +65,8 @@ function seed(userId: string): void {
     quote: "hi",
     occurrence: 0,
     content: `${userId}'s own`,
+    targetKind: "text",
+    targetRef: null,
   });
 }
 

@@ -1,6 +1,7 @@
 import { ref, watch } from "vue";
 import type { CreateNoteInput, Note, NoteType } from "@ilearnassist/shared";
 import { api } from "../api/client";
+import { i18n } from "../i18n";
 import { useAppStore } from "../stores/app";
 import {
   claimMessageNotes,
@@ -10,6 +11,8 @@ import {
   setNoteHighlights,
   type ClaimResult,
   type NoteCapture,
+  type NoteEditorRequest,
+  type NoteFigureNote,
 } from "./messageNotes";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 
@@ -121,6 +124,25 @@ export function resetNotes(): void {
 /* -------------------------------- the claim --------------------------------- */
 
 /**
+ * What a bar button says.
+ *
+ * A `switch` over the closed pair with a literal `t("…")` per case, the shape `registry.ts`'s
+ * `widgetLabel` and `DiagramWidget`'s `kindLabel` follow, and it is the *only* shape that works
+ * here: this is a non-component module, so it translates through `i18n.global`, and
+ * `catalog.test.ts` finds the keys a module uses by scanning for `t("…")`. Returning a key for
+ * the host to resolve would leave both keys referenced by nothing the scan can see, and it would
+ * report them as dead — correctly, since nothing would be naming them.
+ */
+function toolbarLabel(action: "annotate" | "note"): string {
+  switch (action) {
+    case "annotate":
+      return i18n.global.t("notes.toolbar.annotate");
+    case "note":
+      return i18n.global.t("notes.toolbar.note");
+  }
+}
+
+/**
  * Take the conversation's marks. Called when the widget is installed for a session and again
  * on every session switch, so the claim follows the panel rather than the other way round.
  */
@@ -138,6 +160,33 @@ export function claimNotes(sessionId: string): void {
       const note = notes.value.find((candidate) => candidate.id === noteId);
       if (note) openNoteEditor(note);
     },
+    /*
+     * What this widget adds to the bar over a selection — the two things a marked passage can
+     * become, which is what the capability *is*.
+     *
+     * A function, and it reads `writable` each time it is called: the flag changes while the claim
+     * stands (another client takes the lease, releases it, takes it again), so a list frozen at
+     * claim time would leave both buttons live in a conversation this client cannot write to — and
+     * the press would fail with nothing on screen to say why. `disabledReason` rather than a bare
+     * disable, so the reason is in the button's title, the same "say which reason it is" the
+     * panel's own add button follows.
+     */
+    actions: () => [
+      {
+        id: "annotate",
+        label: toolbarLabel("annotate"),
+        icon: "marker",
+        disabled: !writable.value,
+        disabledReason: i18n.global.t("lock.other"),
+      },
+      {
+        id: "note",
+        label: toolbarLabel("note"),
+        icon: "note",
+        disabled: !writable.value,
+        disabledReason: i18n.global.t("lock.other"),
+      },
+    ],
   });
   claimRefusal.value = result.ok ? null : result;
   if (result.ok && loadedSessionId.value !== sessionId) void loadNotes(sessionId);
@@ -236,12 +285,19 @@ async function remove(sessionId: string, noteId: string): Promise<boolean> {
  * 标注 files the mark straight off — the whole point of the quick action is that it costs one
  * click, and a window would cost three. 笔记 opens the window first, because the reason to
  * choose it over the quick action is that there is something to say.
+ *
+ * The `intent` is matched against this widget's **own** action ids and an unknown one is refused
+ * rather than falling through to the default. That refusal is the whole reason the field is a
+ * string: the host passes the id through without interpreting it, so this is the only place that
+ * knows which ids exist — and a fall-through would file a 标注 for a button this widget never
+ * drew, which is a note the reader did not ask for.
  */
 async function handleCapture(capture: NoteCapture): Promise<void> {
   if (capture.intent === "note") {
     openEditorForCapture(capture);
     return;
   }
+  if (capture.intent !== "annotate") return;
   await create(capture.sessionId, {
     messageId: capture.messageId,
     quote: capture.quote,
@@ -282,7 +338,24 @@ export function openNoteEditor(note: Note, anchor?: { x: number; y: number } | n
   const sessionId = loadedSessionId.value;
   if (!sessionId) return;
   requestNoteEditor({
-    draft: { noteId: note.id, quote: note.quote, type: note.type, content: note.content },
+    draft: {
+      noteId: note.id,
+      quote: note.quote,
+      type: note.type,
+      content: note.content,
+      // Read-only context, not an editable field: `update` sends only the type and the body, so
+      // a note that has been saved always still points at what it was written about. Showing it
+      // is what keeps the window from being the one place that has forgotten.
+      ...(note.targetKind !== "text" && note.targetRef !== null
+        ? {
+            target: {
+              kind: note.targetKind as NoteFigureNote["kind"],
+              ref: note.targetRef,
+              label: note.targetRef,
+            },
+          }
+        : {}),
+    },
     anchor: anchor ?? null,
     // 定位 exists only when there is a place to go: an unanchored note never had one, and a
     // note whose message was deleted has lost it. Both are "no button" rather than a button
@@ -308,6 +381,43 @@ export function openNewNoteEditor(): void {
     save: (input) =>
       create(sessionId, { type: input.type, content: input.content }),
   });
+}
+
+/**
+ * The window over a 图 or a 表, opened from wherever that figure is shown.
+ *
+ * Built here rather than by the caller because a figure note is a *note* — it goes through the
+ * same `create`, the same claim and the same writability as any other — and the panel that
+ * draws the figure should not have to know how one is stored. What the caller supplies is the
+ * only thing it knows and this module does not: which figure the reader pointed at, and where
+ * on screen they pointed at it.
+ *
+ * `type` starts at `idea` rather than `annotation`, the same choice `openNewNoteEditor` makes
+ * for the same reason: 标注 means "this marks a passage", and there is no passage here. The
+ * window's own strip drops that kind for the same reason, so the two agree by construction
+ * rather than by both remembering.
+ *
+ * `locate` is null and `quote` is empty on purpose: a figure note has no message to scroll to
+ * and no text to highlight, so 定位 is not offered at all rather than offered and refused.
+ */
+export function figureNoteRequest(
+  target: NoteFigureNote,
+  anchor?: { x: number; y: number } | null
+): NoteEditorRequest | null {
+  const sessionId = loadedSessionId.value;
+  if (!sessionId) return null;
+  return {
+    draft: { quote: "", type: "idea", content: "", target },
+    locate: null,
+    anchor: anchor ?? null,
+    save: (input) =>
+      create(sessionId, {
+        targetKind: target.kind,
+        targetRef: target.ref,
+        type: input.type,
+        content: input.content,
+      }),
+  };
 }
 
 // A claim that moves to another conversation must stop marking the old one's messages, and

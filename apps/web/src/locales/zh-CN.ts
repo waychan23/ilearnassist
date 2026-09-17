@@ -697,9 +697,6 @@ export default {
       /** Only skipped questions can be made up. */
       makeupHint: "这道题当时没有作答（跳过或取消了小测），可以在这里补答，提交后助手会判分。",
       makeupSubmit: "提交补答",
-      followup: "追问",
-      followupPlaceholder: "针对这道题继续追问…",
-      followupSend: "发送追问",
       close: "关闭",
     },
     /**
@@ -714,9 +711,28 @@ export default {
       "可选选项：{options}\n" +
       "我的补答：{answer}\n" +
       "请针对我的补答判分：用完全一致的题目 ID 调用 ila_review_quiz，给出 verdict 和讲解。",
-    /** The follow-up user message; quotes the same global id. Params: id, qid, question, text. */
-    followupMessage:
-      "关于题目 {id}（编号 {qid}）的追问。\n题目：{question}\n我的追问：{text}\n请直接解答，不需要重新出题。",
+  },
+
+  /**
+   * The things a message can point at — the 追问 gesture's references.
+   *
+   * A namespace of its own rather than keys under `composer.` or `message.`, because the same
+   * four words are needed in three places that have nothing to do with each other: the chip in the
+   * composer, the block in the bubble the message was sent as, and the button that stages one.
+   */
+  turnRef: {
+    /** In `TURN_REFERENCE_KINDS` order, so a missing one is a gap where it should be. */
+    kind: {
+      message: "选中的内容",
+      diagram: "图",
+      table: "表",
+      note: "笔记",
+      quiz: "题目",
+    },
+    /** The composer's chip row, and the control that takes one back off. */
+    remove: "取消引用",
+    /** The button that turns a selection into a staged reference. */
+    ask: "追问",
   },
 
   message: {
@@ -1095,6 +1111,8 @@ export default {
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "定位到生成它的消息",
+      /** Writing a note about a figure. Offered only where the notes panel has a home. */
+      note: "为它记一条笔记",
       empty: "这个会话还没有画过图表，也没有记录过表格。",
       /** The panel's kind filter. Its empty value is the select's own "everything". */
       filterKind: "按类型筛选",
@@ -1193,10 +1211,25 @@ export default {
     /** A note with neither a body nor an annotation — the row still has to say something. */
     untitled: "（无内容）",
     open: "打开这条笔记",
+    /** The row's chip for a note written about a 图 or a 表 instead of a passage. */
+    target: {
+      label: "打开它写的那{kind}",
+      kinds: {
+        diagram: "图",
+        table: "表",
+      },
+      missing: "它写的{kind}已不存在",
+    },
     /** The conversation is marked up by a different widget. Deliberately nameless. */
     claimedByOther: "另一个控件正在使用本会话的标注能力，暂时无法在此标注。",
+    /**
+     * The bar that floats over a selection. Its **label is the bar's**, not a widget's: the bar
+     * belongs to the conversation and carries whatever the claiming widget offers, so naming it
+     * after one of them would be wrong the moment a second contributed. The two action labels
+     * below stay the notes widget's, because that is what those two buttons do.
+     */
     toolbar: {
-      label: "标注这条消息",
+      label: "选中内容的操作",
       annotate: "标注",
       note: "笔记",
     },
@@ -1205,6 +1238,8 @@ export default {
       newTitle: "新建笔记",
       editTitle: "编辑笔记",
       quoteLabel: "标注原文",
+      /** The counterpart of 标注原文, for a note about a 图 or a 表. */
+      targetLabel: "标注对象",
       contentLabel: "笔记内容",
       contentPlaceholder: "写下你的想法…",
       typeLabel: "笔记类型",
@@ -1407,6 +1442,8 @@ export default {
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
+    FIGURE_NOT_FOUND: "找不到这个图表，它可能已经被修改或删除了。",
+    REFERENCE_NOT_FOUND: "引用对象已经不存在了（可能已被删除或修改），请重新发送。",
     SYNC_IN_PROGRESS: "这个会话正在同步到资料库，请稍候。",
     INSIGHT_NOT_FOUND: "找不到这条洞察，可能已经被新一次总结替换了。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",

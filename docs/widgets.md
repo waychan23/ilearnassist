@@ -186,6 +186,22 @@ Registration order does not matter. The host registers on mount and the widget c
 `onActive`, in whichever order those happen, because the host *reads* the claim — a reactive value
 — rather than being told about it.
 
+**The bar over a selection is the conversation's; the claim contributes buttons to it.** Noticing a
+selection, and offering 追问 about it, are things every conversation does. What a widget adds is
+what may be *done* with the selection, so `ChatView` composes `[its own action,
+...claim.actions()]` and hides the bar when that list is empty — which is how a conversation with
+nothing installed shows no bar at all. Two consequences worth knowing before adding an action:
+
+- **`actions()` is a function and each action carries its own `disabled`.** A widget derives its
+  buttons' availability from state that changes while the claim stands (a lease taken by another
+  client, released, taken again), so a list frozen at claim time would leave them live in a
+  conversation the client cannot write to. And one flag for the whole strip would have to pick
+  between two unrelated causes — the widget's writability and the host's.
+- **An action's `label` arrives already translated.** A widget module is not a component, so it
+  reaches the catalog through `i18n.global.t` and must name its keys *literally* there. Returning a
+  key for the host to resolve is a key no scan can see, and `catalog.test.ts` reports that as dead —
+  correctly, because nothing is naming it.
+
 ## Invariants a widget must not break
 
 - **An uninstall is `enabled = 0`, not a delete.** The row's existence records that somebody

@@ -16,17 +16,20 @@ import {
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
 import {
   captureMessageNote,
+  currentSelectionActions,
   noteClaim,
   registerMessageNotesHost,
   type NoteEditorRequest,
   type NoteRevealTarget,
   type NoteSaveInput,
+  type SelectionAction,
 } from "../composables/messageNotes";
 import { notesWritable } from "../composables/notes";
 import { useMessageSelection } from "../composables/messageSelection";
 import { useWidgetActivation } from "../composables/widgetActivation";
 import { useSessionLock } from "../composables/sessionLock";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
+import { messageReference } from "../utils/turnRefs";
 import MessageItem from "./MessageItem.vue";
 import NoteSyncControl from "./NoteSyncControl.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
@@ -276,10 +279,53 @@ useSessionLock();
  *
  * This is the one place the reader can tell the capability is installed at all. The bridge's
  * claim names the conversation the *widget* controls, and this view is that conversation's
- * message list, so the two agreeing is what puts the toolbar on screen.
+ * message list, so the two agreeing is what puts that widget's buttons in the bar.
  */
 const notesActive = computed(() => noteClaim.value?.sessionId === store.activeSessionId);
-const { selection, clear: clearSelection } = useMessageSelection(messagesEl, notesActive);
+
+/*
+ * Noticing a selection is the *conversation's* capability, not any widget's: a reader can point at
+ * a passage in any conversation, and what may then be done with it is what varies. So the
+ * listeners are on whenever a conversation is open, and the bar is what the claim gates — see
+ * `selectionActions`.
+ */
+const { selection, clear: clearSelection } = useMessageSelection(
+  messagesEl,
+  computed(() => !!store.activeSessionId)
+);
+
+/**
+ * The buttons the bar carries: **this view's own first**, then whatever a claiming widget offers.
+ *
+ * The order is a decision rather than an accident. 追问 belongs to the conversation — it works in
+ * every one of them, whether or not anything is installed — while a widget's actions are extra
+ * things that capability makes possible. Putting the universal one first is what makes the bar
+ * readable as "ask about this, or mark it up" rather than as a widget's toolbar that happens to
+ * have something else on the left.
+ *
+ * The host's action is deliberately *not* part of the claim. A conversation with no widget
+ * installed has no marking-up and still has 追问; asking the claim for it would make the one
+ * universally available gesture disappear with the panel that is not about it.
+ *
+ * `currentSelectionActions` is a **function** read, so a widget whose own writability changed
+ * while the claim stood is reflected here without anything telling this view about it.
+ */
+const selectionActions = computed<SelectionAction[]>(() => [
+  {
+    id: "ask",
+    label: t("turnRef.ask"),
+    icon: "link",
+    /*
+     * Gated on the session lease, not on `notesWritable`. Staging a reference and sending the turn
+     * with it is a *write*, and the gate a write obeys is the server's lock — the flag the notes
+     * widget carries means "the notes capability may write here", which is true by default and
+     * only meaningful while that widget holds the claim.
+     */
+    disabled: store.isActiveSessionReadOnly,
+    disabledReason: t("lock.other"),
+  },
+  ...currentSelectionActions(),
+]);
 
 /** The marks to draw, as the widget last reported them. */
 const noteMarks = ref<readonly NoteHighlightMark[]>([]);
@@ -341,19 +387,40 @@ function revealNote(target: NoteRevealTarget): void {
   }, NOTE_FLASH_MS);
 }
 
-function onToolbarPick(intent: "annotation" | "note"): void {
+/**
+ * A button on the bar was pressed.
+ *
+ * Two halves, split by who owns the button. `ask` is this view's own — it stages the passage as a
+ * reference for the next turn, which is the conversation's gesture and needs no widget. Everything
+ * else is **passed through, not interpreted**: which actions a widget offers and what they mean is
+ * that widget's business, and this view's part is to name the selection and say which button was
+ * pressed on it. A `switch` over a widget's own ids would be the message list learning a
+ * capability's vocabulary one case at a time.
+ *
+ * What this view does own for both is the *place*: the note window opens off the bar's own corner —
+ * the selection's bottom-right vertex, where the reader's eye already is — because that is a fact
+ * about the layout, and the widget has never seen the selection's rectangle.
+ */
+function onToolbarPick(id: string): void {
   const current = selection.value;
   const sessionId = store.activeSessionId;
   if (!current || !sessionId) return;
-  // The window opens off the toolbar's own corner — the selection's bottom-right vertex, which is
-  // where the reader's eye already is — rather than off the middle of the selection.
+
+  if (id === "ask") {
+    store.stageReference(messageReference(current));
+    // No `pendingAnchor`: nothing opens. The composer takes the caret on its own when a
+    // reference arrives — see the watcher there, which every 追问 entry point shares.
+    clearSelection();
+    return;
+  }
+
   pendingAnchor.value = { x: current.place.right, y: current.place.bottom };
   captureMessageNote({
     sessionId,
     messageId: current.messageId,
     quote: current.anchor.quote,
     occurrence: current.anchor.occurrence,
-    intent,
+    intent: id,
   });
   clearSelection();
 }
@@ -386,6 +453,34 @@ async function onEditorRemove(): Promise<void> {
 function onEditorLocate(): void {
   const request = editorRequest.value;
   if (request?.locate) revealNote(request.locate);
+}
+
+/**
+ * Ask about the note the window is showing.
+ *
+ * The reference is built from the *request* rather than from a note row, because the window holds
+ * a draft and this view has never seen the note as a record — the whole point of
+ * `NoteEditorRequest` is that the message list can show a note window without knowing what a note
+ * is. What the draft does carry is the id, and an id is what a note reference is.
+ *
+ * **The window stays open**, which took a moment to settle. Closing it is what every other action
+ * in that window does, but 追问 is not *finishing* with the note — the reader may well want to
+ * carry on writing it after asking. And this window's close path raises a discard confirm when
+ * there are unsaved edits, so closing here would answer a press meant as "ask about this" with a
+ * question about throwing work away. The composer takes the caret on its own when the reference
+ * lands, which is the part that matters.
+ */
+function onEditorAsk(): void {
+  const request = editorRequest.value;
+  const noteId = request?.draft.noteId;
+  if (!request || !noteId) return;
+  // The same fallback the panel's row makes: a bare 标注 has no body, so the passage it marks is
+  // the only thing there is to show.
+  store.stageReference({
+    kind: "note",
+    ref: noteId,
+    label: request.draft.content.trim() || request.draft.quote,
+  });
 }
 
 /**
@@ -621,9 +716,9 @@ onBeforeUnmount(() => {
       carried away by its scroll.
     -->
     <MessageSelectionToolbar
-      v-if="selection"
+      v-if="selection && selectionActions.length > 0"
       :anchor="selection.place"
-      :read-only="!notesWritable"
+      :actions="selectionActions"
       @pick="onToolbarPick"
     />
     <NoteEditor
@@ -636,6 +731,7 @@ onBeforeUnmount(() => {
       @save="onEditorSave"
       @remove="onEditorRemove"
       @locate="onEditorLocate"
+      @ask="onEditorAsk"
       @close="closeEditor"
     />
 

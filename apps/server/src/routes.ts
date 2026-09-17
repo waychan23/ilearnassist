@@ -120,6 +120,11 @@ import { readNoteSync, runNoteSync } from "./notesExport.js";
 import { listDiagramViews, registerDiagram } from "./diagrams.js";
 import { listTableViews, registerTable } from "./tables.js";
 import {
+  parseTurnReferences,
+  referencesForHistory,
+  resolveReferences,
+} from "./turnReferences.js";
+import {
   dismissQuizQuestions,
   listQuizQuestionViews,
   makeupAnswer,
@@ -4413,9 +4418,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
     const { session, workspace } = found;
 
-    const message = body?.message?.trim();
+    /*
+     * `?? ""` rather than leaving it possibly-undefined, and it is load-bearing now that a turn
+     * may carry nothing but references: the user message is persisted and handed to the run as a
+     * *string*, and an absent one would reach `buildUserContent` as `undefined` and throw — a 500
+     * on the one shape of turn that has no words in it at all.
+     */
+    const message = body?.message?.trim() ?? "";
     const attachments = body?.attachments ?? [];
-    if (!message && attachments.length === 0) {
+    /*
+     * A turn may be nothing but references, and the composer allows it — `canSend` accepts a
+     * staged chip alone, in every conversation. So this guard has to know about them or the two
+     * sides disagree about what a sendable message is, and a question asked by pointing at
+     * something is refused by a server that never looked at what was pointed at.
+     */
+    const mayCarryRefs = Array.isArray(body?.refs) && body.refs.length > 0;
+    if (!message && attachments.length === 0 && !mayCarryRefs) {
       return reply.code(400).send(apiError("MESSAGE_REQUIRED", "message is required"));
     }
 
@@ -4527,6 +4545,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       timezone: body.timezone,
     });
 
+    /*
+     * What this turn points at — a diagram, a table, a note, or a passage the user selected.
+     *
+     * Resolved before anything is written, so a reference that cannot be found refuses the turn
+     * rather than producing an answer about nothing. Every target lives inside this conversation,
+     * which is what makes "it does not resolve" a client problem rather than an ordinary race.
+     */
+    const refs = parseTurnReferences(body?.refs);
+    if (refs === null) {
+      return reply.code(400).send(apiError("INVALID_FIELD", "refs must be a list"));
+    }
+    const resolution = resolveReferences(db, userId, id, refs);
+    if (!resolution.ok) {
+      return reply.code(resolution.status).send(apiError(resolution.code, "reference not found"));
+    }
+
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
     const history = db.listMessagesForUser(id, userId);
 
@@ -4537,6 +4571,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       content: message,
       attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
       sources: storedSources.length > 0 ? storedSources : undefined,
+      // The *client's* references rather than the resolved ones: a message describes the turn
+      // that was had, so the chip keeps the label and the quote it was shown with. What the model
+      // reads is re-derived on every run from these — see `referencesForHistory`.
+      refs: refs.length > 0 ? refs : undefined,
     });
 
     // Take over the response so we can stream Server-Sent Events.
@@ -4573,6 +4611,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           ...storedAttachments,
           ...storedSources,
         ]),
+        // This turn's, and every earlier message's — the same split `userMessage` and `history`
+        // make, and for the same reason: history was read before this turn was written.
+        references: resolution.resolved,
+        historicalReferences: referencesForHistory(db, userId, id, history),
         tools: ctx.tools,
         sessionDirPath: ctx.sessionDirPath,
         writeLocation: ctx.writeLocation,
@@ -4724,6 +4766,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         // No turn of its own, but the history it replays may reference files whose paths are
         // not derivable from their ids — see `sourcePathsFor`.
         sourcePaths: sourcePathsFor(db, treeFor(actor(request)), userId, history, []),
+        // And what those replayed turns pointed at. This is the route where it matters most:
+        // a regenerated answer is rebuilt entirely from history, so a reference that lived only
+        // in the original turn's prompt would leave the model asked about nothing.
+        historicalReferences: referencesForHistory(db, userId, id, history),
         tools: ctx.tools,
         sessionDirPath: ctx.sessionDirPath,
         writeLocation: ctx.writeLocation,
@@ -4856,6 +4902,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         // No turn of its own, but the history it replays may reference files whose paths are
         // not derivable from their ids — see `sourcePathsFor`.
         sourcePaths: sourcePathsFor(db, treeFor(actor(request)), userId, history, []),
+        // And what those replayed turns pointed at. This is the route where it matters most:
+        // a regenerated answer is rebuilt entirely from history, so a reference that lived only
+        // in the original turn's prompt would leave the model asked about nothing.
+        historicalReferences: referencesForHistory(db, userId, id, history),
         tools: ctx.tools,
         sessionDirPath: ctx.sessionDirPath,
         writeLocation: ctx.writeLocation,

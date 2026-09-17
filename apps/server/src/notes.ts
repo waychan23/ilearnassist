@@ -2,12 +2,17 @@ import { z } from "zod";
 import {
   NOTE_CONTENT_MAX,
   NOTE_QUOTE_MAX,
+  NOTE_TARGET_REF_MAX,
   isNoteType,
   type ApiErrorCode,
   type Note,
+  type NoteFigureKind,
+  type NoteTargetKind,
   type NoteType,
 } from "@ilearnassist/shared";
 import { newId, type AppDb } from "./db.js";
+import { diagramFileName } from "./diagrams.js";
+import { tableName } from "./tables.js";
 
 /**
  * The notes widget's records.
@@ -69,6 +74,8 @@ const createNoteSchema = z
     quote: z.string().max(NOTE_QUOTE_MAX).optional(),
     occurrence: z.number().int().min(0).optional(),
     content: z.string().max(NOTE_CONTENT_MAX).optional(),
+    targetKind: z.enum(["diagram", "table"]).optional(),
+    targetRef: z.string().min(1).max(NOTE_TARGET_REF_MAX).optional(),
   })
   .superRefine((value, ctx) => {
     const anchored = (value.quote ?? "").length > 0;
@@ -80,6 +87,24 @@ const createNoteSchema = z
     }
     if (!anchored && (value.occurrence ?? 0) > 0) {
       ctx.addIssue({ code: "custom", message: "an occurrence needs a quote to count in" });
+    }
+
+    // The figure pair travels together for the same reason, and each half without the other is
+    // worse than either: a kind with no name is a note about nothing in particular, and a name
+    // with no kind cannot be looked for — `diagramFileName` and `tableName` would each claim it.
+    if ((value.targetKind === undefined) !== (value.targetRef === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a figure target needs both targetKind and targetRef",
+      });
+    }
+    /*
+     * And a note has exactly one anchor. A 图 has no passage in it, so a request carrying both a
+     * figure and a quote is a client that assembled two different notes — refused rather than
+     * resolved, because either reading would throw away half of what was sent.
+     */
+    if (value.targetKind !== undefined && (anchored || value.messageId)) {
+      ctx.addIssue({ code: "custom", message: "a figure target cannot also be a passage" });
     }
   });
 
@@ -94,12 +119,48 @@ function readType(body: unknown, fallback: NoteType): NoteType {
 }
 
 /**
+ * The canonical name of a figure this conversation holds, or null.
+ *
+ * The client's spelling is normalised through the *same* function the writer used —
+ * `diagramFileName` for a diagram, `tableName` for a table — rather than compared as it arrived.
+ * The name is a server-side rule in both cases, so a caller that opened a dialog with
+ * `"Auth Flow.mmd"` and a caller that read the canonical `auth-flow.mmd` off the panel are asking
+ * about one figure. It is the same normalisation `ila_query` does on its `name` field, which is
+ * what keeps the chip a note shows and the string a follow-up hands the model the same string.
+ *
+ * There is no `getDiagramForUser`/`getTableForUser` to reach for: the row is looked up inside the
+ * conversation's own list, and that list is already scoped to the owner — so an id from another
+ * account's conversation is not refused here, it simply is not in the list.
+ */
+function canonicalFigure(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  kind: NoteFigureKind,
+  ref: string
+): string | null {
+  if (kind === "diagram") {
+    const wanted = diagramFileName(ref);
+    return db.listDiagramsForUser(userId, sessionId).some((d) => d.name === wanted)
+      ? wanted
+      : null;
+  }
+  const wanted = tableName(ref);
+  return db.listTablesForUser(userId, sessionId).some((t) => t.name === wanted) ? wanted : null;
+}
+
+/**
  * Record one note.
  *
  * An annotated note's message is checked rather than trusted, and checked the way the
  * delete-message route checks it — owner first, then session — because a `messageId` is a
  * client-supplied id: without it, a note could point at another account's conversation, and
  * `messageMissing` would then be answering about a message the reader can never see.
+ *
+ * A figure target is checked the same way and for the same reason, with one addition: what gets
+ * *stored* is the canonical name rather than the one that arrived. The name is this app's join
+ * key for a figure — the panel's label, `ila_query`'s handle, and the row's identity — so a note
+ * that kept the caller's spelling would be the one place it and the model disagreed.
  */
 export function createNote(
   db: AppDb,
@@ -119,6 +180,16 @@ export function createNote(
     }
   }
 
+  const figureKind = parsed.data.targetKind;
+  let targetKind: NoteTargetKind = "text";
+  let targetRef: string | null = null;
+  if (figureKind !== undefined) {
+    const canonical = canonicalFigure(db, userId, sessionId, figureKind, parsed.data.targetRef!);
+    if (canonical === null) return { ok: false, status: 404, code: "FIGURE_NOT_FOUND" };
+    targetKind = figureKind;
+    targetRef = canonical;
+  }
+
   return {
     ok: true,
     note: db.createNote({
@@ -129,6 +200,8 @@ export function createNote(
       quote: parsed.data.quote ?? "",
       occurrence: parsed.data.occurrence ?? 0,
       content: parsed.data.content ?? "",
+      targetKind,
+      targetRef,
     }),
   };
 }

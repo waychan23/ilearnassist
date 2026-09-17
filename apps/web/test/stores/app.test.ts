@@ -767,6 +767,65 @@ describe("sendMessage", () => {
     });
   });
 
+  it("sends a turn that is nothing but a reference", async () => {
+    /*
+     * "What about this?" needs no words: the chip is the question. Asserted at the store because
+     * this is where the two sides have to agree — the composer's `canSend` accepts a staged chip
+     * alone and the server's `MESSAGE_REQUIRED` guard knows about them, so a store that refused
+     * the send would make both of those checks unreachable.
+     */
+    const store = await readyStore();
+    streamOf({ type: "done" });
+    store.stageReference({ kind: "diagram", ref: "auth-flow.mmd", label: "auth-flow" });
+
+    await store.sendMessage("");
+
+    expect(mocks.streamChat).toHaveBeenCalledWith("s1", {
+      message: "",
+      copilotId: undefined,
+      attachments: [],
+      refs: [{ kind: "diagram", ref: "auth-flow.mmd", label: "auth-flow" }],
+    });
+  });
+
+  it("stages a reference once, folds two passages apart, and clears them on send", async () => {
+    /*
+     * The key rule, at the level it is enforced. Two chips for one diagram would be two
+     * references in one turn and the model told the same thing twice; two *passages* of the same
+     * words are two different things the reader pointed at, so the occurrence is part of the key
+     * and only for them.
+     */
+    const store = await readyStore();
+    streamOf({ type: "done" });
+
+    store.stageReference({ kind: "diagram", ref: "flow.mmd", label: "flow" });
+    store.stageReference({ kind: "diagram", ref: "flow.mmd", label: "flow" });
+    expect(store.pendingRefs).toHaveLength(1);
+
+    store.stageReference({
+      kind: "message",
+      ref: "m1",
+      label: "ATP",
+      quote: "ATP",
+      occurrence: 0,
+    });
+    store.stageReference({
+      kind: "message",
+      ref: "m1",
+      label: "ATP",
+      quote: "ATP",
+      occurrence: 1,
+    });
+    expect(store.pendingRefs).toHaveLength(3);
+
+    // And one comes back off without disturbing the others.
+    store.removePendingReference("diagram:flow.mmd");
+    expect(store.pendingRefs.map((r) => r.kind)).toEqual(["message", "message"]);
+
+    await store.sendMessage("go on");
+    expect(store.pendingRefs).toEqual([]);
+  });
+
   it("creates a session first when the workspace has none selected", async () => {
     const store = await readyStore();
     store.activeSessionId = null;

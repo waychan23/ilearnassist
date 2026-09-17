@@ -1094,6 +1094,34 @@ export interface NoteAnchor {
 }
 
 /**
+ * What a note is *about*, when it is not a passage in a message.
+ *
+ * A note has always been able to point at a message, and the pair it points with — `quote` and
+ * `occurrence` — only works for text. A 图 and a 表 have no passage to quote, so they are named
+ * instead: the whole object is the target, addressed by the canonical `name` the figure already
+ * carries (`session_diagrams.name`, `session_tables.name`), which is the same handle `ila_query`
+ * looks them up by and the same one a follow-up reference carries.
+ *
+ * A figure is never *partly* annotated. A mermaid diagram is rendered SVG with no addressable
+ * text nodes, and a table's cells are markdown the reader can see but the anchor arithmetic
+ * counts over rendered geometry — so "the whole figure" is the only unit that means the same
+ * thing on both sides of a reload.
+ *
+ * `text` is the default and what every row written before this existed means. It is a value
+ * rather than NULL because NULL would say "we do not know", which is false of those rows: they
+ * are text notes, all of them.
+ */
+export const NOTE_TARGET_KINDS = ["text", "diagram", "table"] as const;
+
+export type NoteTargetKind = (typeof NOTE_TARGET_KINDS)[number];
+
+/** The kinds a create may *choose*: `text` is what omitting the pair means, not a thing to send. */
+export type NoteFigureKind = Exclude<NoteTargetKind, "text">;
+
+/** Cap on a figure's name, matching what the figure tables themselves hold. */
+export const NOTE_TARGET_REF_MAX = 200;
+
+/**
  * Caps, exported as values rather than living in a validator alone, so the client can refuse
  * a paste before it becomes a 400 and the tests read the same numbers.
  *
@@ -1124,6 +1152,17 @@ export interface Note {
   /** Which occurrence of `quote` this was, counted over the message's visible text. */
   occurrence: number;
   content: string;
+  /** What this note is about. `text` for every note with a quote or nothing at all. */
+  targetKind: NoteTargetKind;
+  /**
+   * The figure's canonical name — `auth-flow.mmd` for a diagram, a bare slug for a table.
+   *
+   * Null for a text note, and that NULL is honest rather than a sentinel: there is no figure, so
+   * there is no name. The client shows it as the chip's label and the follow-up passes it on, so
+   * it is the *server's* name that travels — the one `diagramFileName`/`tableName` produced —
+   * rather than the spelling the client happened to open the dialog with.
+   */
+  targetRef: string | null;
   /**
    * The message this note points at is gone — soft-deleted by a regenerate or a tail delete.
    *
@@ -1136,6 +1175,14 @@ export interface Note {
    * it is gone" — an unanchored note never had a place to go back to.
    */
   messageMissing: boolean;
+  /**
+   * The figure `targetRef` names is gone from this conversation.
+   *
+   * The same rule as `messageMissing`, for the same reason and read the same way: a diagram's
+   * row is derived data that an edit can take away, and a chip that opens nothing is worse than
+   * no chip. False whenever `targetKind` is `text`, where there is nothing that could be missing.
+   */
+  targetMissing: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -1605,6 +1652,14 @@ export const API_ERROR_CODES = [
   // A `type` outside NOTE_TYPES. Refused rather than defaulted, for the reason `INVALID_FIELD`
   // gives: a note that silently became an annotation is a note the user did not write.
   "NOTE_TYPE_INVALID",
+  // A note names a 图 or a 表 this conversation does not hold. One code for the three, like
+  // NOTE_NOT_FOUND: unknown, another conversation's, or a row that has since been revised away
+  // are the same answer, so a name cannot be probed for existence.
+  "FIGURE_NOT_FOUND",
+  // One of a turn's attached references points at something this conversation does not hold.
+  // Refused rather than dropped, unlike a missing `sources` entry: a source is material the model
+  // reads, while a reference is the object of the question — losing it changes what was asked.
+  "REFERENCE_NOT_FOUND",
   // A note export is already running for this conversation. One at a time, so two presses
   // cannot interleave their writes into the same files or race each other's summary.
   "SYNC_IN_PROGRESS",
@@ -1902,6 +1957,21 @@ export interface Message {
    * afterwards still reads as referenced, and the chip keeps the name the composer showed.
    */
   sources?: Attachment[];
+  /**
+   * What the user pointed at when they sent this turn — the 追问 chips, as they were shown.
+   *
+   * A snapshot on the same rule `sources` follows, and for the same reason: a message describes
+   * the turn that was had, so a diagram referenced here and revised afterwards still reads as
+   * referenced, and the chip keeps the label the composer showed.
+   *
+   * **It is replayed to the model, and that is load-bearing rather than tidy.** `/regenerate`
+   * sends `userMessage: null` and rebuilds the turn from history; if a reference lived only in
+   * the turn's own prompt, regenerating an answer about a diagram would ask the model the same
+   * question with no idea what it was about. Replaying costs a re-resolution per stored reference
+   * per turn — the same trade `sourcePaths` already makes for attachments — and what comes back
+   * is current: a figure revised since is read as it is now, not as it was.
+   */
+  refs?: TurnReference[];
   usage?: MessageUsage;
   createdAt: string;
 }
@@ -2989,6 +3059,17 @@ export interface CreateNoteInput {
   quote?: string;
   occurrence?: number;
   content?: string;
+  /**
+   * What the note is about, when it is a figure rather than a passage.
+   *
+   * The pair travels together, the rule `quote`/`occurrence` already follows, and they are
+   * mutually exclusive with the message anchor: a note about a 图 has no passage in it. Omitting
+   * both halves is a `text` note, which is why `text` is not among the values here — it is what
+   * saying nothing means, not a thing to send.
+   */
+  targetKind?: NoteFigureKind;
+  /** The figure's name. Normalised server-side, so any spelling of it resolves. */
+  targetRef?: string;
 }
 
 /**
@@ -3111,6 +3192,75 @@ export interface SourceReference {
 }
 
 /**
+ * What a reference points at.
+ *
+ * Five, and each is addressed the way *that* thing can be addressed rather than by a uniform id:
+ * a message and a note and a quiz question by their ids, a figure by its canonical name (which is
+ * what `ila_query` takes and what the panel labels the row with). The asymmetry is the honest
+ * shape — a diagram has no id the model can use, and a note's name is not unique.
+ *
+ * `quiz` is the one that arrived last, migrating an older gesture onto this mechanism: the quiz
+ * widget used to compose a sentence naming the question and send that as the user's own message,
+ * which worked and was the only 追问 there was. It is a kind here for the same reason the other
+ * four are — so the chip, the block and the bubble are one implementation rather than five, and so
+ * the question reaches the agent as a question id rather than as prose it has to parse.
+ */
+export const TURN_REFERENCE_KINDS = ["message", "diagram", "table", "note", "quiz"] as const;
+
+export type TurnReferenceKind = (typeof TURN_REFERENCE_KINDS)[number];
+
+/**
+ * Something the user pointed at when they asked their question.
+ *
+ * The 追问 gesture, and what it is *not* matters as much as what it is. It is not an attachment:
+ * nothing is copied, nothing is sent twice, and the model is handed a **pointer** for everything
+ * that has one. A diagram, a table and a note are read through `ila_query`, which is the same tool
+ * the agent already uses to read this conversation's record — so the reference costs a few words
+ * on the wire and the agent fetches the current content, not a stale copy of what the user was
+ * looking at. A *passage* has no such handle — a text range inside a rendered message is not
+ * addressable by id — so its text travels, which is the one case where copying is the only option.
+ *
+ * `label` is display only, the split `SourceReference.name` makes: the chip shows what the
+ * composer showed, and the server re-reads everything it needs from `ref`.
+ */
+export interface TurnReference {
+  kind: TurnReferenceKind;
+  /**
+   * The handle, in the kind's own terms.
+   *
+   * `message`/`note`/`quiz` → the row's id. `diagram`/`table` → the figure's canonical name, which
+   * the server normalises again on the way in, so a client that opened a dialog with
+   * "Auth Flow.mmd" and one that read `auth-flow.mmd` off the panel are asking about one figure.
+   */
+  ref: string;
+  label: string;
+  /**
+   * The selected text, for `message` refs, and for them alone.
+   *
+   * It is what the model is shown, because there is nothing else to show it — see the note on
+   * `kind` above. The client measured it over the message's *rendered* text, which is not the
+   * markdown the server holds, so no side can re-derive it and the server does not try: it is
+   * taken as the user's own words about the passage they pointed at.
+   */
+  quote?: string;
+  /**
+   * Which occurrence of `quote` in that message — the same number `NoteAnchor.occurrence` carries,
+   * and the client's reason for sending it is the same: "ATP" appears many times in a reply about
+   * it. Display only, like `label`: it is not part of what the model reads.
+   */
+  occurrence?: number;
+}
+
+/**
+ * Cap on how many references one turn may carry.
+ *
+ * A number rather than no limit because the block below is *text in the prompt*: every reference
+ * is a paragraph and a quote, so a message with forty of them would crowd out the conversation it
+ * is part of. Eight is past what any real question attaches and well short of that.
+ */
+export const TURN_REFERENCE_MAX = 8;
+
+/**
  * What every request that starts or resumes a turn carries besides its own payload.
  *
  * One field, and it is here rather than in three places because the *reason* is the same three
@@ -3148,6 +3298,17 @@ export interface ChatInput extends TurnRequestMeta {
    * `read_document` it without the user referencing it again.
    */
   sources?: SourceReference[];
+  /**
+   * Things the user pointed at when they asked — the 追问 gesture, staged as chips in the
+   * composer.
+   *
+   * Distinct from `sources` even though both are "something the user referred to", because the
+   * two answer different questions. A source is *material to read*: the server links it to the
+   * conversation and the model may `read_document` it on any later turn, so it survives the turn
+   * it arrived on. A reference is **the object of this question**: the user is asking about *that
+   * diagram*, and the agent is told which one so it can look it up — see `TurnReference`.
+   */
+  refs?: TurnReference[];
   /**
    * Set only by the quiz widget's make-up flow: the global id of a question whose answer
    * was just posted and that this ordinary chat turn is meant to grade. The server verifies

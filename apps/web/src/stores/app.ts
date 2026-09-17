@@ -11,6 +11,7 @@ import {
 import { i18n } from "../i18n";
 import { translateApiError } from "../utils/apiError";
 import { flattenTree } from "../utils/fileTree";
+import { referenceKey } from "../utils/turnRefs";
 import {
   addAll,
   addWorkspace,
@@ -59,6 +60,7 @@ import type {
   SessionSettings,
   Source,
   ToolCall,
+  TurnReference,
   UpdateProviderInput,
   User,
   WidgetId,
@@ -304,6 +306,20 @@ export const useAppStore = defineStore("app", () => {
    * a reference to a document that is still being extracted is a chip that should say so.
    */
   const pendingSources = ref<Source[]>([]);
+
+  /**
+   * What the next turn will point at — the 追问 chips, staged and not yet sent.
+   *
+   * Beside `pendingSources` rather than merged with it, because the two are not the same kind of
+   * thing however similar the chips look: a source is material the model may read on any later
+   * turn, and it has to be parsed before it can be. A reference is the object of *this* question —
+   * a diagram, a table, a note, or a passage — and attaching one costs no request at all, because
+   * the agent fetches the content itself. Nothing here waits on anything.
+   *
+   * Deduped by `referenceKey`, so pointing at the same diagram from two rows is one chip and the
+   * same passage twice is two — see `utils/turnRefs.ts` for why the passage is the exception.
+   */
+  const pendingRefs = ref<TurnReference[]>([]);
 
   /**
    * Live parse state per source id, as the server last reported it.
@@ -2366,6 +2382,29 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Stage a reference for the next turn.
+   *
+   * Nothing is fetched and nothing is awaited, which is the difference from `referenceSource`
+   * and the whole reason 追问 is cheap: everything a reference names is already in this
+   * conversation. Already-staged is a no-op rather than a second chip — two chips for one
+   * diagram would be two references in one turn, and the model would be told the same thing
+   * twice.
+   */
+  function stageReference(ref: TurnReference): void {
+    const key = referenceKey(ref);
+    if (pendingRefs.value.some((staged) => referenceKey(staged) === key)) return;
+    pendingRefs.value = [...pendingRefs.value, ref];
+  }
+
+  function removePendingReference(key: string): void {
+    pendingRefs.value = pendingRefs.value.filter((ref) => referenceKey(ref) !== key);
+  }
+
+  function clearPendingReferences(): void {
+    pendingRefs.value = [];
+  }
+
+  /**
    * The workspaces this conversation has been opened to, or `null` for none.
    *
    * Read the same way the provider and model are — the conversation's own settings, falling back
@@ -2816,7 +2855,14 @@ export const useAppStore = defineStore("app", () => {
     // A reference counts as something to send, on the same footing as an attachment: pointing
     // at a file is a turn, even when the sentence around it is empty.
     const references = [...pendingSources.value];
-    if ((!content && attachments.length === 0 && references.length === 0) || streaming.value.active)
+    // And so does a 追问 chip: "what about this?" is a complete question, and the server's own
+    // `MESSAGE_REQUIRED` guard knows about them for the same reason — the two sides have to
+    // agree about what a sendable message is or a question asked by pointing is refused.
+    const refs = [...pendingRefs.value];
+    if (
+      (!content && attachments.length === 0 && references.length === 0 && refs.length === 0) ||
+      streaming.value.active
+    )
       return;
 
     // Auto-create a session if the user is on a fresh workspace.
@@ -2843,11 +2889,15 @@ export const useAppStore = defineStore("app", () => {
       content,
       attachments: attachments.length > 0 ? attachments : undefined,
       sources: references.length > 0 ? references : undefined,
+      // The bubble shows what was pointed at, so this is the client's own array — the same
+      // snapshot rule `sources` follows one line up.
+      refs: refs.length > 0 ? refs : undefined,
       createdAt: new Date().toISOString(),
     });
 
     clearPendingAttachments();
     clearPendingSources();
+    clearPendingReferences();
     streaming.value = { ...EMPTY_STREAMING(), active: true };
     emitWidgetEvent({ type: "turn.started", sessionId });
 
@@ -2860,6 +2910,7 @@ export const useAppStore = defineStore("app", () => {
         sources: references.length > 0
           ? references.map((source) => ({ id: source.id, name: source.name }))
           : undefined,
+        refs: refs.length > 0 ? refs : undefined,
         ...chatExtras,
       }),
       sessionId
@@ -2987,6 +3038,7 @@ export const useAppStore = defineStore("app", () => {
     draftSettings,
     pendingAttachments,
     pendingSources,
+    pendingRefs,
     parseStatus,
     parserKinds,
     streaming,
@@ -3081,6 +3133,9 @@ export const useAppStore = defineStore("app", () => {
     referenceSource,
     removePendingSource,
     clearPendingSources,
+    stageReference,
+    removePendingReference,
+    clearPendingReferences,
     workspaceScope,
     scopedWorkspaceIds,
     scopeIsAll,
