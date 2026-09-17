@@ -995,8 +995,9 @@ const en: typeof MessageSchema = {
       missing: "The {kind} it is about is gone",
     },
     claimedByOther: "Another widget is using this conversation's annotations, so marking is unavailable here.",
+    /** The bar's own label, not a widget's — see `zh-CN` for why it is the neutral one. */
     toolbar: {
-      label: "Annotate this message",
+      label: "Actions for the selection",
       annotate: "Mark",
       note: "Note",
     },

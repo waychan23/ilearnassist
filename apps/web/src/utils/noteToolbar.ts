@@ -15,9 +15,23 @@
  *   message list, and the space between that list and the window's edge is somebody else's.
  */
 
-/** The card's own size, and the same numbers `.note-toolbar`'s CSS states. */
-export const NOTE_TOOLBAR_WIDTH = 172;
+/** The card's own height, and the same number `.note-toolbar`'s CSS states. */
 export const NOTE_TOOLBAR_HEIGHT = 34;
+
+/**
+ * One button's width, in the strip the toolbar is built from.
+ *
+ * The **width is derived** rather than stated, and it has to be, because the number of buttons is
+ * not fixed: the toolbar is a host control that widgets contribute to, so a constant width would
+ * be wrong the moment a second widget offered an action. The module is therefore the one source
+ * and the component reads it back — where before the number lived here *and* in a CSS rule, with a
+ * comment asking the next person to change both.
+ */
+export const NOTE_TOOLBAR_BUTTON_WIDTH = 80;
+
+/** The strip's own padding and the gap between its buttons, both from the stylesheet. */
+const NOTE_TOOLBAR_PADDING = 4;
+const NOTE_TOOLBAR_BUTTON_GAP = 4;
 
 /** How far the card floats from the selection, on whichever side of it it lands. */
 export const NOTE_TOOLBAR_GAP = 8;
@@ -40,9 +54,34 @@ export interface NoteToolbarPosition {
   top: number;
 }
 
+export interface NoteToolbarSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * How big the strip is for a given number of actions — what the component sets inline and what
+ * the placement below reserves room for.
+ *
+ * Exported so the two cannot disagree: a card laid out at one width and dodging edges at another
+ * is a card half over the edge it was meant to clear, which is exactly the failure this module
+ * exists to make impossible to see only at one window width.
+ */
+export function toolbarSize(actionCount: number): NoteToolbarSize {
+  const count = Math.max(1, actionCount);
+  return {
+    width:
+      count * NOTE_TOOLBAR_BUTTON_WIDTH +
+      (count - 1) * NOTE_TOOLBAR_BUTTON_GAP +
+      NOTE_TOOLBAR_PADDING * 2,
+    height: NOTE_TOOLBAR_HEIGHT,
+  };
+}
+
 export function noteToolbarPosition(
   anchor: NoteToolbarAnchor,
-  viewport: { width: number; height: number }
+  viewport: { width: number; height: number },
+  size: NoteToolbarSize = toolbarSize(2)
 ): NoteToolbarPosition {
   // The edge the card's own right side must stay inside, less the margin. The message list's is
   // the one that matters — the space between it and the window belongs to whatever is beside the
@@ -53,7 +92,7 @@ export function noteToolbarPosition(
   // margin, which is the arm that holds when the list itself is narrower than the card.
   const left = Math.min(
     Math.max(NOTE_TOOLBAR_EDGE, anchor.right),
-    Math.max(NOTE_TOOLBAR_EDGE, bound - NOTE_TOOLBAR_WIDTH)
+    Math.max(NOTE_TOOLBAR_EDGE, bound - size.width)
   );
 
   const below = anchor.bottom + NOTE_TOOLBAR_GAP;
@@ -61,9 +100,9 @@ export function noteToolbarPosition(
   // ends first, because a card half past the bottom edge is one nobody can press — the same
   // reasoning the vertical flip has always had, with the preference the other way round.
   const top =
-    below + NOTE_TOOLBAR_HEIGHT <= viewport.height - NOTE_TOOLBAR_EDGE
+    below + size.height <= viewport.height - NOTE_TOOLBAR_EDGE
       ? below
-      : Math.max(NOTE_TOOLBAR_EDGE, anchor.top - NOTE_TOOLBAR_HEIGHT - NOTE_TOOLBAR_GAP);
+      : Math.max(NOTE_TOOLBAR_EDGE, anchor.top - size.height - NOTE_TOOLBAR_GAP);
 
   return { left, top };
 }

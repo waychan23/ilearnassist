@@ -16,11 +16,13 @@ import {
 import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap";
 import {
   captureMessageNote,
+  currentSelectionActions,
   noteClaim,
   registerMessageNotesHost,
   type NoteEditorRequest,
   type NoteRevealTarget,
   type NoteSaveInput,
+  type SelectionAction,
 } from "../composables/messageNotes";
 import { notesWritable } from "../composables/notes";
 import { useMessageSelection } from "../composables/messageSelection";
@@ -276,10 +278,29 @@ useSessionLock();
  *
  * This is the one place the reader can tell the capability is installed at all. The bridge's
  * claim names the conversation the *widget* controls, and this view is that conversation's
- * message list, so the two agreeing is what puts the toolbar on screen.
+ * message list, so the two agreeing is what puts that widget's buttons in the bar.
  */
 const notesActive = computed(() => noteClaim.value?.sessionId === store.activeSessionId);
-const { selection, clear: clearSelection } = useMessageSelection(messagesEl, notesActive);
+
+/*
+ * Noticing a selection is the *conversation's* capability, not any widget's: a reader can point at
+ * a passage in any conversation, and what may then be done with it is what varies. So the
+ * listeners are on whenever a conversation is open, and the bar is what the claim gates — see
+ * `selectionActions`.
+ */
+const { selection, clear: clearSelection } = useMessageSelection(
+  messagesEl,
+  computed(() => !!store.activeSessionId)
+);
+
+/**
+ * The buttons the bar carries: the claiming widget's, which is all of them today.
+ *
+ * A computed over a *function* read — `currentSelectionActions` re-asks the claim holder on every
+ * evaluation, so a widget whose own writability changed while the claim stood is reflected here
+ * without anything telling this view about it.
+ */
+const selectionActions = computed<SelectionAction[]>(() => currentSelectionActions());
 
 /** The marks to draw, as the widget last reported them. */
 const noteMarks = ref<readonly NoteHighlightMark[]>([]);
@@ -341,19 +362,29 @@ function revealNote(target: NoteRevealTarget): void {
   }, NOTE_FLASH_MS);
 }
 
-function onToolbarPick(intent: "annotation" | "note"): void {
+/**
+ * A button on the bar was pressed.
+ *
+ * The id is **passed through, not interpreted**: which actions exist and what they mean is the
+ * claiming widget's, and this view's whole part in the gesture is to name the selection and say
+ * which button was pressed on it. A `switch` here over the widget's own action ids would be the
+ * message list learning a capability's vocabulary one case at a time.
+ *
+ * What it does own is the *place*: the window opens off the bar's own corner — the selection's
+ * bottom-right vertex, where the reader's eye already is — because that is a fact about the
+ * layout, and the widget has never seen the selection's rectangle.
+ */
+function onToolbarPick(id: string): void {
   const current = selection.value;
   const sessionId = store.activeSessionId;
   if (!current || !sessionId) return;
-  // The window opens off the toolbar's own corner — the selection's bottom-right vertex, which is
-  // where the reader's eye already is — rather than off the middle of the selection.
   pendingAnchor.value = { x: current.place.right, y: current.place.bottom };
   captureMessageNote({
     sessionId,
     messageId: current.messageId,
     quote: current.anchor.quote,
     occurrence: current.anchor.occurrence,
-    intent,
+    intent: id,
   });
   clearSelection();
 }
@@ -621,9 +652,9 @@ onBeforeUnmount(() => {
       carried away by its scroll.
     -->
     <MessageSelectionToolbar
-      v-if="selection"
+      v-if="selection && selectionActions.length > 0"
       :anchor="selection.place"
-      :read-only="!notesWritable"
+      :actions="selectionActions"
       @pick="onToolbarPick"
     />
     <NoteEditor

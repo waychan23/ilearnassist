@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import type { NoteType, WidgetId } from "@ilearnassist/shared";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
+import type { IconName } from "../utils/icons";
 
 /**
  * The contract between the message list and whichever widget is allowed to mark it up.
@@ -36,8 +37,17 @@ export interface NoteCapture {
   quote: string;
   /** Which occurrence of that text, counted over the message's visible content. */
   occurrence: number;
-  /** The quick action marks it straight off; the other opens the window first. */
-  intent: "annotation" | "note";
+  /**
+   * Which button was pressed — the `SelectionAction.id` itself, passed through unchanged.
+   *
+   * A plain string, and the looseness is the honest shape rather than a shortcut: the ids belong
+   * to whichever widget offered the buttons, so the host has no union to narrow to and *must not*
+   * have one — a union here would be the message list learning a capability's vocabulary, and the
+   * first widget with a third button would edit the message list. What narrows it is the
+   * receiving side: `notes.ts` refuses an id it does not recognise, which is the same rule the
+   * server applies to a request field it cannot interpret.
+   */
+  intent: string;
 }
 
 /** What the window shows before anything is edited. */
@@ -127,6 +137,40 @@ export interface MessageNotesHost {
 }
 
 /**
+ * One button on the bar that floats over a selection.
+ *
+ * The bar belongs to the conversation and its buttons come from two sides: the message list's own
+ * actions, which exist whether or not anything claimed the conversation, and the ones the
+ * claiming widget offers. Both are this shape, deliberately — they are the same control with the
+ * same behaviour, and a distinct type for each would be inventing a hierarchy the reader has no
+ * reason to see.
+ *
+ * **`label` arrives translated, not as a key.** A widget that offers an action is a non-component
+ * module, so it reaches the catalog through `i18n.global.t` and has to name its keys *literally*
+ * there — a `labelKey` the host then resolved would be a key no scan can see, and
+ * `catalog.test.ts` reports an unreachable key as dead, which is exactly what it is. The same
+ * applies to `disabledReason`.
+ */
+export interface SelectionAction {
+  /** Becomes the button's test id: `note-toolbar-${id}`. */
+  id: string;
+  /** The ready-to-render label. */
+  label: string;
+  icon: IconName;
+  /**
+   * Whether the action can be taken right now.
+   *
+   * Per action rather than per bar, and this is a correctness point rather than a nicety: the
+   * notes widget's actions are refused while another client holds the conversation *and* the
+   * host's own may be refused for a reason of its own, so one flag for the strip would have to
+   * pick one of them and be wrong about the other.
+   */
+  disabled?: boolean;
+  /** Why it is disabled, ready to render. Shown as the button's `title`. */
+  disabledReason?: string;
+}
+
+/**
  * What the message list tells the widget about.
  *
  * Two ways in, and they are the two things a reader can do to a marked-up message: act on a
@@ -138,6 +182,15 @@ export interface MessageNotesController {
   capture(capture: NoteCapture): void;
   /** The reader clicked an existing highlight. */
   open(noteId: string): void;
+  /**
+   * The buttons this widget contributes to the selection bar, **asked for on every render**.
+   *
+   * A function rather than a list, and the difference is what an action's `disabled` means: the
+   * notes widget derives it from its own writability, which changes while the claim stands — a
+   * lease taken by another client, released, taken again. A list captured at claim time would
+   * freeze the bar on whatever was true when the panel was installed.
+   */
+  actions(): SelectionAction[];
 }
 
 /** A claim that was refused, naming the widget that got there first. */
@@ -226,6 +279,18 @@ export function captureMessageNote(capture: NoteCapture): void {
  */
 export function openNoteFromHighlight(noteId: string): void {
   claim.value?.controller.open(noteId);
+}
+
+/**
+ * What the claiming widget contributes to the bar over a selection, right now.
+ *
+ * A read of the claim rather than a subscription, the same shape `noteClaim` has and for the same
+ * reason: the host composes the bar during render, so there is nothing to be told about and no
+ * ordering to get wrong. Empty when nothing claimed — which is what makes the bar absent rather
+ * than empty in a conversation no widget controls.
+ */
+export function currentSelectionActions(): SelectionAction[] {
+  return claim.value?.controller.actions() ?? [];
 }
 
 /* ------------------------------- host operations ------------------------------ */

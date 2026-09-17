@@ -1,6 +1,7 @@
 import { ref, watch } from "vue";
 import type { CreateNoteInput, Note, NoteType } from "@ilearnassist/shared";
 import { api } from "../api/client";
+import { i18n } from "../i18n";
 import { useAppStore } from "../stores/app";
 import {
   claimMessageNotes,
@@ -123,6 +124,25 @@ export function resetNotes(): void {
 /* -------------------------------- the claim --------------------------------- */
 
 /**
+ * What a bar button says.
+ *
+ * A `switch` over the closed pair with a literal `t("…")` per case, the shape `registry.ts`'s
+ * `widgetLabel` and `DiagramWidget`'s `kindLabel` follow, and it is the *only* shape that works
+ * here: this is a non-component module, so it translates through `i18n.global`, and
+ * `catalog.test.ts` finds the keys a module uses by scanning for `t("…")`. Returning a key for
+ * the host to resolve would leave both keys referenced by nothing the scan can see, and it would
+ * report them as dead — correctly, since nothing would be naming them.
+ */
+function toolbarLabel(action: "annotate" | "note"): string {
+  switch (action) {
+    case "annotate":
+      return i18n.global.t("notes.toolbar.annotate");
+    case "note":
+      return i18n.global.t("notes.toolbar.note");
+  }
+}
+
+/**
  * Take the conversation's marks. Called when the widget is installed for a session and again
  * on every session switch, so the claim follows the panel rather than the other way round.
  */
@@ -140,6 +160,33 @@ export function claimNotes(sessionId: string): void {
       const note = notes.value.find((candidate) => candidate.id === noteId);
       if (note) openNoteEditor(note);
     },
+    /*
+     * What this widget adds to the bar over a selection — the two things a marked passage can
+     * become, which is what the capability *is*.
+     *
+     * A function, and it reads `writable` each time it is called: the flag changes while the claim
+     * stands (another client takes the lease, releases it, takes it again), so a list frozen at
+     * claim time would leave both buttons live in a conversation this client cannot write to — and
+     * the press would fail with nothing on screen to say why. `disabledReason` rather than a bare
+     * disable, so the reason is in the button's title, the same "say which reason it is" the
+     * panel's own add button follows.
+     */
+    actions: () => [
+      {
+        id: "annotate",
+        label: toolbarLabel("annotate"),
+        icon: "marker",
+        disabled: !writable.value,
+        disabledReason: i18n.global.t("lock.other"),
+      },
+      {
+        id: "note",
+        label: toolbarLabel("note"),
+        icon: "note",
+        disabled: !writable.value,
+        disabledReason: i18n.global.t("lock.other"),
+      },
+    ],
   });
   claimRefusal.value = result.ok ? null : result;
   if (result.ok && loadedSessionId.value !== sessionId) void loadNotes(sessionId);
@@ -238,12 +285,19 @@ async function remove(sessionId: string, noteId: string): Promise<boolean> {
  * 标注 files the mark straight off — the whole point of the quick action is that it costs one
  * click, and a window would cost three. 笔记 opens the window first, because the reason to
  * choose it over the quick action is that there is something to say.
+ *
+ * The `intent` is matched against this widget's **own** action ids and an unknown one is refused
+ * rather than falling through to the default. That refusal is the whole reason the field is a
+ * string: the host passes the id through without interpreting it, so this is the only place that
+ * knows which ids exist — and a fall-through would file a 标注 for a button this widget never
+ * drew, which is a note the reader did not ask for.
  */
 async function handleCapture(capture: NoteCapture): Promise<void> {
   if (capture.intent === "note") {
     openEditorForCapture(capture);
     return;
   }
+  if (capture.intent !== "annotate") return;
   await create(capture.sessionId, {
     messageId: capture.messageId,
     quote: capture.quote,

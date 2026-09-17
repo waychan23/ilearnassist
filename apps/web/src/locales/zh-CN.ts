@@ -1206,8 +1206,14 @@ export default {
     },
     /** The conversation is marked up by a different widget. Deliberately nameless. */
     claimedByOther: "另一个控件正在使用本会话的标注能力，暂时无法在此标注。",
+    /**
+     * The bar that floats over a selection. Its **label is the bar's**, not a widget's: the bar
+     * belongs to the conversation and carries whatever the claiming widget offers, so naming it
+     * after one of them would be wrong the moment a second contributed. The two action labels
+     * below stay the notes widget's, because that is what those two buttons do.
+     */
     toolbar: {
-      label: "标注这条消息",
+      label: "选中内容的操作",
       annotate: "标注",
       note: "笔记",
     },

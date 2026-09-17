@@ -113,7 +113,8 @@ const capture = (overrides: Partial<NoteCapture> = {}): NoteCapture => ({
   messageId: "m1",
   quote: "energy currency",
   occurrence: 0,
-  intent: "annotation",
+  // The button's own id, which is what the host passes through — see `NoteCapture.intent`.
+  intent: "annotate",
   ...overrides,
 });
 
