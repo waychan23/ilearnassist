@@ -718,6 +718,72 @@ test.describe("asking about something", () => {
   });
 });
 
+test("asking from a window closes it, so the composer is not covered", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The two windows that offer 追问 were the two that stayed up, and what that produced was
+   * reported as looking like a bug — correctly, because the composer takes the caret the moment a
+   * reference is staged, and on a phone the window is sitting on top of the field that caret went
+   * into. A full-screen overlay cannot move aside, so it dismisses; the reply streams into the
+   * message list it was covering, so it had to go before the answer arrived anyway.
+   *
+   * Both halves are asserted for each window: the reference survives the dismissal, and the
+   * window does not.
+   */
+  const name = unique("AskWindows");
+  /*
+   * Two scripted turns for **one** turn of the conversation, which is what a tool call costs: the
+   * loop makes a request per step, so the diagram is drawn on the first and the prose that answers
+   * it arrives on the second. Both land in the same assistant message, which is why the card and
+   * the passage `annotate` needs are in the same place.
+   */
+  await scriptLlm(request, {
+    turns: [
+      {
+        content: "画好了：",
+        toolCalls: [
+          {
+            id: "call_d1",
+            name: "ila_diagram",
+            args: { name: "auth-flow", source: "graph TD\n  A[开始] --> B[结束]", summary: "登录流程" },
+          },
+        ],
+      },
+      { content: REPLY },
+    ],
+    title: "光合作用",
+  });
+  await notesSession(page, name);
+  await send(page, "画个登录流程图");
+
+  // The diagram card's own enlarge control, which is the viewer's other front door.
+  await expect(page.getByTestId("diagram-card").first()).toBeVisible();
+  await page.getByTestId("diagram-expand").first().click();
+  await expect(page.getByTestId("diagram-viewer")).toBeVisible();
+
+  await page.getByTestId("diagram-viewer-ask").click();
+
+  await expect(page.getByTestId("diagram-viewer")).toHaveCount(0);
+  await expect(page.getByTestId("composer-refs")).toContainText("auth-flow");
+  await expect(page.getByTestId("composer-input")).toBeFocused();
+
+  // The note window, opened from the panel's own row. The note has to be *saved* first: the
+  // button needs an id, and a draft has none to offer.
+  await page.getByTestId("composer-ref-remove").click();
+  await annotate(page, replyContent(page), FIRST_PHRASE);
+  await page.getByTestId("notes-list").locator("li").first().click();
+
+  const editor = page.getByTestId("note-editor");
+  await expect(editor).toBeVisible();
+  await page.getByTestId("note-editor-ask").click();
+
+  await expect(editor).toBeHidden();
+  await expect(page.getByTestId("composer-refs")).toContainText("笔记");
+  await expect(page.getByTestId("composer-input")).toBeFocused();
+});
+
 /**
  * A note written about a 图 or a 表 rather than about a passage.
  *

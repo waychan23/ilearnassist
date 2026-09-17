@@ -208,6 +208,27 @@ function submit(): void {
   emit("save", { type: type.value, content: content.value });
 }
 
+/**
+ * Ask about this note — and get out of the way of the answer.
+ *
+ * **It closes, and that is the reverse of what this window first did.** The reason it changed is
+ * the same one the composer takes the caret for: the question is typed there, the field is
+ * covered by this card on a phone, and the *reply* streams into the message list this card is also
+ * sitting on. A window that has to be dismissed by hand before the answer can be read is a window
+ * that should have gone when the reader moved on — and staging the reference is exactly that
+ * moment. The note is in the chip now; the card was a second copy of the subject.
+ *
+ * **Emitted first, then closed**, so the two halves survive each other. `close()` is this window's
+ * own guarded path and raises the discard confirm when there is unsaved writing — and pressing
+ * 追问 with a half-written note should not be the one way to lose it. Cancelling that prompt
+ * therefore leaves the window open *and the reference staged*: the press was 追问, and the
+ * question outliving the prompt is the right way round.
+ */
+function ask(): void {
+  emit("ask");
+  void close();
+}
+
 async function close(): Promise<void> {
   if (dirty.value) {
     const ok = await confirm({
@@ -440,7 +461,7 @@ function typeLabel(candidate: NoteType): string {
           type="button"
           class="btn"
           data-testid="note-editor-ask"
-          @click="emit('ask')"
+          @click="ask"
         >
           <Icon name="link" /> {{ t("turnRef.ask") }}
         </button>
