@@ -80,6 +80,29 @@ test.describe("the thread widget", () => {
       page.getByTestId("widget-thread").getByText("可数集", { exact: true })
     ).toBeVisible();
 
+    /*
+     * The panel is a narrow column and a leaf's text is one `white-space: nowrap` line of up to
+     * 80 characters, so the tree's grid column used to take its width from that text rather than
+     * from the panel: the row grew to the full preview, `.widget-body` gained a horizontal
+     * scrollbar (`overflow-y: auto` computes `overflow-x: auto`, so the body is what scrolls),
+     * and every per-thread count was pushed off the right edge.
+     *
+     * Asserted as a pair, and the second half is what keeps the first from being vacuous: a body
+     * that does not scroll sideways proves nothing on its own — an empty panel satisfies it — so
+     * at least one leaf must also be *wider than its own box*, which is what an ellipsised line
+     * is and what the long replies here produce. (`some`, not `every`: a thread's first leaf is
+     * the user's own short message.) The `+ 1` is subpixel rounding, not slack.
+     */
+    const bodyWidths = await page
+      .getByTestId("widget-body")
+      .evaluate((el) => ({ content: el.clientWidth, scroll: el.scrollWidth }));
+    expect(bodyWidths.scroll).toBeLessThanOrEqual(bodyWidths.content + 1);
+
+    const leafWidths = await page
+      .locator('[data-testid^="thread-message-"] .leaf-text')
+      .evaluateAll((els) => els.map((el) => ({ box: el.clientWidth, text: el.scrollWidth })));
+    expect(leafWidths.some((leaf) => leaf.text > leaf.box)).toBe(true);
+
     // Clicking the first thread scrolls the (bottom-anchored) conversation back to its
     // first message.
     const messages = page.getByTestId("messages");
