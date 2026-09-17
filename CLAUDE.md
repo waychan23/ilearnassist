@@ -1177,8 +1177,19 @@ Fuller map in `docs/reference.md`.
   *words* stay at the call site, because `i18n/catalog.test.ts` scans for `t("…")` literals and a
   key reached through an object property is invisible to it — the dead-key scan would report it
   as unused. `admin.nav.` is the one dynamic prefix it adds, over the closed section-id union.
-  The narrow viewport turns the menu into a strip across the top rather than hiding it: there are
-  a handful of sections and they are the page's only navigation.
+  **The narrow viewport turns the menu into the same drawer the two rails are**, opened from a
+  toggle beside the section's own title. It used to be a strip across the top — "there are a
+  handful of sections and they are the page's only navigation, so hiding them would be a page you
+  cannot leave" — and the drawer answers that objection without a band of screen: the way out is
+  the toggle. It is `uiState.drawerOpen` like the others, so the backdrop, the Escape handler and
+  the focus watcher come with it, and choosing a section closes it (unlike `Sidebar.vue`'s tabs,
+  which deliberately keep it open — those choose between two views of one conversation, these
+  replace the whole pane). **Its width is the shared 900px, and that was a fix**: this block was
+  `720px`, a third breakpoint that existed nowhere else, in a `.vue` scoped block where
+  `style.test.ts` was not looking. The drawer needs the number in JavaScript too, so a third
+  constant would have followed; the guard now scans components, and the content rules that
+  genuinely reflow earlier moved to 560 — which is what the design system already says that width
+  is for.
 - **The console's entry points all ask `store.canAdmin`, never `roles.includes("superadmin")`.**
   Two tiers means the check is a *set* question, and the call sites (the rail menu, which both
   the home page and a conversation draw, and the account page) written as a one-role comparison

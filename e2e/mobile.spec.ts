@@ -240,6 +240,48 @@ test("layout: the closed home rail is not reachable by keyboard", async ({ page 
   }
 });
 
+test("layout: the console's section menu is a drawer too", async ({ page }) => {
+  /*
+   * The third panel that slides in from the left, and the one that used to be a different
+   * shape *and* a different width — a strip across the top, appearing at 720px where nothing
+   * else in the app changed. Both of those are the drawer's now.
+   *
+   * Reaching it exercises the other two: the console's row lives in the home rail, which is
+   * itself a drawer on this viewport.
+   */
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+  await page.getByTestId("nav-toggle").tap();
+  await page.getByTestId("open-admin").tap();
+  await expect(page.getByTestId("admin-console")).toBeVisible();
+
+  const menu = page.locator(".console-nav");
+  await expect(menu).toBeHidden();
+  // The section gets the whole width rather than sharing it with a column or a band.
+  expect((await page.locator(".console-main").boundingBox())!.width).toBeCloseTo(412, 0);
+
+  await page.getByTestId("nav-toggle").tap();
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId("drawer-backdrop")).toBeVisible();
+
+  // The menu's own column width — 220px, not the sidebar's 272 — full height and flush left.
+  const boxAt = async () => (await menu.boundingBox())!;
+  await expect.poll(async () => Math.round((await boxAt()).x)).toBe(0);
+  await expect.poll(async () => Math.round((await boxAt()).width)).toBe(220);
+  await expect
+    .poll(async () => Math.round((await boxAt()).height))
+    .toBe(Math.round(page.viewportSize()!.height));
+
+  /*
+   * Choosing a section closes it. The menu is an overlay across the left of the sections it is
+   * choosing between, so leaving it up would hide the screen the press was for — and the reader
+   * would be dismissing a drawer they had just finished with.
+   */
+  await page.getByTestId("admin-nav-providers").tap();
+  await expect(menu).toBeHidden();
+  await expect(page.getByTestId("admin-console")).toContainText("模型服务");
+});
+
 test("layout: focus enters the drawer and comes back to the toggle", async ({ page, request }) => {
   await converse(page, request, "你好");
 

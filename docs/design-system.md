@@ -333,7 +333,7 @@ Two breakpoints, and both are minimums rather than preferences:
 
 | Name | Query | What changes |
 | --- | --- | --- |
-| compact | `(max-width: 900px)` | The sidebar becomes a drawer; the widget panel becomes a drawer at the right; the minimap rail is hidden; a message drops its assistant avatar and narrows its gutters to `--space-6` |
+| compact | `(max-width: 900px)` | The sidebar, the workspace home's rail and the console's section menu all become drawers at the left; the widget panel becomes a drawer at the right; the minimap rail is hidden; a message drops its assistant avatar and narrows its gutters to `--space-6` |
 | narrow | `(max-width: 560px)` | The composer toolbar reflows; forms go single-column; dialogs become bottom sheets |
 
 The minimap's rule predates the drawer and set the value: below 900px its preview card has

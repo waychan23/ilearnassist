@@ -132,6 +132,8 @@ const en: typeof MessageSchema = {
 
   admin: {
     title: "Platform console",
+    /** The toggle that opens the section menu, on a viewport where it is a drawer. */
+    openMenu: "Open the menu",
     subtitle: {
       users: "Manage the accounts on this installation.",
       providers: "Configure the model services every account shares; ordinary users choose from what is configured here.",

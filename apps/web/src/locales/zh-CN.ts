@@ -193,6 +193,8 @@ export default {
   /** The platform console: the installation's own management screens. */
   admin: {
     title: "平台管理",
+    /** The toggle that opens the section menu, on a viewport where it is a drawer. */
+    openMenu: "打开菜单",
     /**
      * The line under each section's title. Keyed by section rather than one sentence for the
      * console, because the three sections answer three different questions and a shared line
