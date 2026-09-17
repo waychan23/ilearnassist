@@ -16,6 +16,7 @@ import type {
   ModelCapability,
   Note,
   NoteSyncStatus,
+  NoteTargetKind,
   NoteType,
   ParseErrorCode,
   ParseStatus,
@@ -291,9 +292,12 @@ interface NoteRow {
   quote: string;
   occurrence: number;
   content: string;
+  target_kind: string;
+  target_ref: string | null;
   created_at: string;
   updated_at: string;
   message_missing: number;
+  target_missing: number;
 }
 
 /** Input to `createNote`. The id is the caller's, as it is for every insert here. */
@@ -305,6 +309,8 @@ export interface NoteInsert {
   quote: string;
   occurrence: number;
   content: string;
+  targetKind: NoteTargetKind;
+  targetRef: string | null;
 }
 
 /**
@@ -1022,7 +1028,10 @@ const mapNote = (r: NoteRow): Note => ({
   quote: r.quote,
   occurrence: r.occurrence,
   content: r.content,
+  targetKind: r.target_kind as NoteTargetKind,
+  targetRef: r.target_ref,
   messageMissing: r.message_missing !== 0,
+  targetMissing: r.target_missing !== 0,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -2247,6 +2256,22 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "messages", "sources", "sources TEXT");
 
     /*
+     * What a note is *about*, for a note about a 图 or a 表 rather than a passage.
+     *
+     * `NOT NULL DEFAULT 'text'` rather than a nullable column, and the default is the whole point:
+     * every note written before this existed genuinely is a text note, so the default *preserves*
+     * what those rows already meant — the `copilots.all_tools NOT NULL DEFAULT 1` argument. NULL
+     * would say "we do not know", which is false about every one of them.
+     *
+     * `target_ref` is nullable, and there NULL is honest: a text note names no figure, so it has
+     * no name. The pair is stored beside `message_id`/`quote` rather than replacing them, because
+     * the two anchors are alternatives — a note names one thing, and which kind of thing it is, is
+     * what `target_kind` says.
+     */
+    ensureColumn(db, "notes", "target_kind", "target_kind TEXT NOT NULL DEFAULT 'text'");
+    ensureColumn(db, "notes", "target_ref", "target_ref TEXT");
+
+    /*
      * Accounts grew a credential, and the four columns are added rather than version-bumped
      * because none of them changes what an existing column means — `username` still names the
      * same person, and `slug` still names the same directory. See the note at the top of
@@ -3281,9 +3306,21 @@ export function createDb(dbPath: string): AppDb {
    * soft-deleted message reads as absent, which is exactly what the flag claims. Writing the
    * expression once is the point: the list and the single lookup have to agree about it or a
    * note the panel calls anchored would fail to scroll.
+   *
+   * `targetMissing` is the same question asked of the other two tables, and it is a pair of
+   * `NOT EXISTS` rather than a join because a note names exactly one figure and the two live in
+   * tables with nothing in common but the shape of their name column. Neither `session_diagrams`
+   * nor `session_tables` carries `deleted_at` — both are derived data whose rows are really
+   * removed — so absence is absence. The `target_kind` guard on each half is what keeps a table
+   * note from being reported missing because no *diagram* has that name.
    */
   const NOTE_VIEW_SELECT = `SELECT n.*,
-      (n.message_id IS NOT NULL AND m.id IS NULL) AS message_missing
+      (n.message_id IS NOT NULL AND m.id IS NULL) AS message_missing,
+      ((n.target_kind = 'diagram' AND NOT EXISTS (
+         SELECT 1 FROM session_diagrams d WHERE d.session_id = n.session_id AND d.name = n.target_ref
+       )) OR (n.target_kind = 'table' AND NOT EXISTS (
+         SELECT 1 FROM session_tables t WHERE t.session_id = n.session_id AND t.name = n.target_ref
+       ))) AS target_missing
      FROM notes n
      LEFT JOIN messages m ON m.id = n.message_id AND m.deleted_at IS NULL`;
   const stmtListNotesForUser = db.prepare(
@@ -3308,8 +3345,8 @@ export function createDb(dbPath: string): AppDb {
     `${NOTE_VIEW_SELECT} WHERE n.id = ? AND n.session_id = ? AND n.deleted_at IS NULL`
   );
   const stmtInsertNote = db.prepare(
-    `INSERT INTO notes (id, session_id, message_id, type, quote, occurrence, content, created_at, updated_at)
-     VALUES (@id, @sessionId, @messageId, @type, @quote, @occurrence, @content, @now, @now)`
+    `INSERT INTO notes (id, session_id, message_id, type, quote, occurrence, content, target_kind, target_ref, created_at, updated_at)
+     VALUES (@id, @sessionId, @messageId, @type, @quote, @occurrence, @content, @targetKind, @targetRef, @now, @now)`
   );
   const stmtUpdateNote = db.prepare(
     `UPDATE notes SET type = @type, content = @content, updated_at = @now
@@ -4467,6 +4504,8 @@ export function createDb(dbPath: string): AppDb {
         quote: input.quote,
         occurrence: input.occurrence,
         content: input.content,
+        targetKind: input.targetKind,
+        targetRef: input.targetRef,
         now: now(),
       });
       const row = stmtGetNote.get(input.id, input.sessionId) as NoteRow;

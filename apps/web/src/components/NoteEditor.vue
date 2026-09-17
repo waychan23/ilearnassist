@@ -77,9 +77,10 @@ const existing = computed(() => !!props.draft.noteId);
  * What kind this note may be — which is not always the whole list.
  *
  * 标注 means "this marks a passage", so offering it for a note with nothing marked is offering a
- * kind that cannot be true of the note being written. The window is opened with no quote in
- * exactly one case — the panel's own 新建笔记 — and that is the case this excludes it from. The
- * four that remain are stances on the material, and none of them needs a passage to be about.
+ * kind that cannot be true of the note being written. The window is opened with no passage in two
+ * cases — the panel's own 新建笔记, and a note about a 图 or a 表 — and it is those this excludes
+ * it from. The four that remain are stances on the material, and none of them needs a passage to
+ * be about.
  *
  * The second clause is for a row this window did not create: a note that *is* a 标注 keeps its own
  * kind in the strip even with an empty quote. Only the API can produce that (the server defaults
@@ -92,6 +93,9 @@ const offeredTypes = computed(() =>
     ? NOTE_TYPES
     : NOTE_TYPES.filter((candidate) => candidate !== "annotation")
 );
+
+/** The figure this note is about, if it is about one. */
+const target = computed(() => props.draft.target ?? null);
 
 /**
  * Whether there is anything to lose by closing.
@@ -362,6 +366,20 @@ function typeLabel(candidate: NoteType): string {
         <p class="note-quote" data-testid="note-editor-quote">{{ draft.quote }}</p>
       </div>
 
+      <!--
+        The other anchor, and it is read-only for the reason the quote is: what a note is about
+        is settled when it is written. An editable field here would offer to re-point a saved
+        note at a different diagram, which the API does not accept — `update` sends only the
+        type and the body — so the field would look live and do nothing.
+      -->
+      <div v-if="target" class="field">
+        <label>{{ t("notes.editor.targetLabel") }}</label>
+        <p class="note-target" data-testid="note-editor-target">
+          <Icon :name="target.kind === 'diagram' ? 'diagram' : 'table'" />
+          <span class="truncate">{{ target.label }}</span>
+        </p>
+      </div>
+
       <!-- `field-grow` is what takes the room the card's floor and its larger size add: the field
            is the flex item, so growing the textarea inside it would do nothing on its own. -->
       <div class="field field-grow">
@@ -566,6 +584,31 @@ function typeLabel(candidate: NoteType): string {
    * exactly what would otherwise push the card wider than its own `width`.
    */
   overflow-wrap: anywhere;
+}
+/*
+ * The figure a note is about — the quote block's counterpart, and deliberately the same
+ * treatment: a tinted surface with an accent edge, because the two are the same *slot* in the
+ * window (what this note is about) and differ only in what fills it. It does not scroll: a
+ * figure's name is one short string, and the box that can hold a paragraph is two declarations
+ * below.
+ *
+ * `truncate` on the inner span rather than here, so the icon keeps its size while the name
+ * ellipsises — the rule `style.css` gives for a truncated flex row.
+ */
+.note-target {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--panel-2);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--accent);
+  font-size: var(--fs-3);
+  color: var(--text-2);
+}
+.note-target .icon {
+  flex: none;
 }
 /*
  * The body's box is set by the card, not by the reader.

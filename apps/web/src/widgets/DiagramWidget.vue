@@ -5,6 +5,8 @@ import { api } from "../api/client";
 import { relativeTime } from "../composables/relativeTime";
 import { useAppStore } from "../stores/app";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
+import { isMessageNotesActive, requestNoteEditor } from "../composables/messageNotes";
+import { figureNoteRequest } from "../composables/notes";
 import type { Diagram, Table } from "../api/types";
 import {
   FIGURE_FILTERS,
@@ -139,6 +141,37 @@ function openRow(row: FigureRow): void {
   }
   viewing.value = row;
 }
+
+/**
+ * Whether a note can be written here at all.
+ *
+ * The notes panel is what owns notes-as-records, and it announces itself through the message
+ * list's claim — so a conversation that never installed it has nothing to file a note into, and
+ * this button is not drawn rather than drawn and refused. `isMessageNotesActive` is the same gate
+ * the message list uses for its own marking-up, which is what keeps the two from disagreeing
+ * about whether notes exist in this conversation.
+ */
+const canNote = computed(() => isMessageNotesActive(store.activeSessionId));
+
+/**
+ * Write a note about this figure.
+ *
+ * The request is built by `notes.ts` and shown by the message list's host, which is the same
+ * window, the same save path and the same writability as a note made from a selection — this
+ * panel knows only which figure the reader pointed at and where they pointed at it. A figure
+ * whose file is missing is still offered: the note is *about the figure*, and the figure's row
+ * is what both the note and the chip need — the file it cannot render is a separate problem the
+ * row already reports.
+ */
+function noteAbout(row: FigureRow, event: MouseEvent): void {
+  const ref = row.fileName ?? row.name;
+  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+  const request = figureNoteRequest(
+    { kind: row.kind, ref, label: row.name },
+    rect ? { x: rect.right, y: rect.top + rect.height / 2 } : null
+  );
+  if (request) requestNoteEditor(request);
+}
 </script>
 
 <template>
@@ -210,6 +243,21 @@ function openRow(row: FigureRow): void {
                 </span>
               </span>
             </span>
+          </button>
+          <!--
+            Writing a note about a figure, a sibling of the locate button rather than part of the
+            row button: one opens the figure, the other files something about it, and neither
+            modifies the other. Not drawn where notes have no home — see `canNote`.
+          -->
+          <button
+            v-if="canNote"
+            class="icon-btn diagram-note"
+            data-testid="diagram-note"
+            :title="t('widgets.diagram.note')"
+            :aria-label="t('widgets.diagram.note')"
+            @click="noteAbout(row, $event)"
+          >
+            <Icon name="note" />
           </button>
           <button
             v-if="row.toolCallId"
@@ -333,7 +381,8 @@ function openRow(row: FigureRow): void {
 .diagram-missing {
   color: var(--danger-text);
 }
-.diagram-locate {
+.diagram-locate,
+.diagram-note {
   flex: none;
 }
 </style>

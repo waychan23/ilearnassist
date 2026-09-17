@@ -67,6 +67,8 @@ beforeEach(() => {
     quote: "",
     occurrence: 0,
     content: "这里不太懂",
+    targetKind: "text",
+    targetRef: null,
   });
 });
 

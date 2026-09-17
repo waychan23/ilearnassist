@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import type { Note, NoteType } from "@ilearnassist/shared";
+import type { Note, NoteTargetKind, NoteType } from "@ilearnassist/shared";
 import { useAppStore } from "../stores/app";
 import {
   claimNotes,
@@ -13,6 +13,8 @@ import {
   openNewNoteEditor,
   openNoteEditor,
 } from "../composables/notes";
+import { useFigureViewer } from "../composables/figureViewer";
+import DiagramDialog from "../components/dialogs/DiagramDialog.vue";
 import Icon from "../components/Icon.vue";
 
 /**
@@ -82,6 +84,72 @@ function openRow(note: Note, event: MouseEvent): void {
   openNoteEditor(note, rect ? { x: rect.left, y: rect.top + rect.height / 2 } : null);
 }
 
+/** The two kinds a note can be *about*: `text` is the absence of a figure, not a figure. */
+type FigureKind = Exclude<NoteTargetKind, "text">;
+
+/** Whether this note is about a figure rather than a passage. Narrows, so the callers can. */
+function isFigure(kind: NoteTargetKind): kind is FigureKind {
+  return kind !== "text";
+}
+
+/**
+ * What a figure kind is called.
+ *
+ * A `switch` over the closed union with a literal `t("…")` per case, the shape `registry.ts` uses
+ * for widget labels, and it has to be written this way rather than as a key looked up later:
+ * `catalog.test.ts` finds the keys a component uses by scanning the source for `t("…")`, so a key
+ * that only ever appears as a *string literal* is reported as dead — and reaching for
+ * `t(\`notes.target.kinds.${kind}\`)` instead would put a bare `notes.target.kinds.` entry into
+ * that guard's allowlist of dynamic prefixes, which is where a typo hides. A third kind is then a
+ * missing-return compile error rather than a blank chip.
+ */
+function figureKindLabel(kind: FigureKind): string {
+  switch (kind) {
+    case "diagram":
+      return t("notes.target.kinds.diagram");
+    case "table":
+      return t("notes.target.kinds.table");
+  }
+}
+
+/**
+ * One row, with its figure link already resolved.
+ *
+ * The narrowing is here rather than in the template because a template cannot do it: `v-if` on an
+ * element and that element's other bindings are separate expressions, so `note.targetRef` would
+ * still be `string | null` at the point the chip needs a `string`. Resolving once per row is also
+ * what stops the chip, its label and its title from each testing the same three conditions and
+ * eventually disagreeing about them.
+ *
+ * What it holds is the *kind*, not a translated label: this is a `computed`, and a label baked in
+ * here would be a snapshot of the locale it was built under. The template calls
+ * `figureKindLabel` itself, which is what re-runs on a language change.
+ */
+interface NoteRow {
+  note: Note;
+  /** The figure to offer, when there is one to open. */
+  figure: { kind: FigureKind; ref: string } | null;
+  /** The figure is gone: the chip is replaced by a sentence rather than drawn dead. */
+  goneKind: FigureKind | null;
+}
+
+const rows = computed<NoteRow[]>(() =>
+  notes.value.map((note) => {
+    if (!isFigure(note.targetKind) || note.targetRef === null) {
+      return { note, figure: null, goneKind: null };
+    }
+    return note.targetMissing
+      ? { note, figure: null, goneKind: note.targetKind }
+      : { note, figure: { kind: note.targetKind, ref: note.targetRef }, goneKind: null };
+  })
+);
+
+const { viewing, open: openFigure, close: closeFigure } = useFigureViewer();
+
+function openTarget(figure: { kind: FigureKind; ref: string }): void {
+  void openFigure(figure.kind, figure.ref, figure.ref);
+}
+
 function retry(): void {
   const sessionId = store.activeSessionId;
   if (sessionId) void loadNotes(sessionId);
@@ -146,17 +214,17 @@ function retryClaim(): void {
       </div>
 
       <ul v-else class="notes-list" data-testid="notes-list">
-        <li v-for="note in notes" :key="note.id">
+        <li v-for="row in rows" :key="row.note.id">
           <button
             type="button"
             class="note-row"
-            :data-testid="`note-row-${note.id}`"
+            :data-testid="`note-row-${row.note.id}`"
             :title="t('notes.open')"
-            @click="openRow(note, $event)"
+            @click="openRow(row.note, $event)"
           >
             <span class="note-row-head">
-              <span class="badge" :class="{ muted: note.type === 'other' }">
-                {{ typeLabel(note.type) }}
+              <span class="badge" :class="{ muted: row.note.type === 'other' }">
+                {{ typeLabel(row.note.type) }}
               </span>
               <!--
                 A marker for the rows that can be found again. Shown on the row because that is
@@ -164,18 +232,50 @@ function retryClaim(): void {
                 window, where there is room to say what it will do.
               -->
               <span
-                v-if="note.messageId && !note.messageMissing"
+                v-if="row.note.messageId && !row.note.messageMissing"
                 class="note-locatable"
                 :title="t('notes.editor.locate')"
               >
                 <Icon name="target" />
               </span>
             </span>
-            <span class="note-row-text clamp-2">{{ rowText(note) }}</span>
+            <span class="note-row-text clamp-2">{{ rowText(row.note) }}</span>
           </button>
+
+          <!--
+            What a figure note is about, as a **sibling** of the row button rather than a chip
+            inside it. A control inside a button is invalid HTML and unreachable by keyboard, and
+            the figure panel already settled the shape: its locate button sits beside the row
+            button for exactly this reason.
+
+            Not drawn at all when the figure is gone — `targetMissing` is the server's answer, and
+            a control that opens nothing is worse than an absent one.
+          -->
+          <button
+            v-if="row.figure"
+            type="button"
+            class="note-target"
+            :data-testid="`note-target-${row.note.id}`"
+            :title="t('notes.target.label', { kind: figureKindLabel(row.figure.kind) })"
+            @click="openTarget(row.figure)"
+          >
+            <Icon :name="row.figure.kind === 'diagram' ? 'diagram' : 'table'" />
+            <span class="truncate">{{ row.figure.ref }}</span>
+          </button>
+          <span v-else-if="row.goneKind" class="note-target-gone">
+            {{ t("notes.target.missing", { kind: figureKindLabel(row.goneKind) }) }}
+          </span>
         </li>
       </ul>
     </template>
+
+    <DiagramDialog
+      v-if="viewing?.content"
+      :content="viewing.content"
+      :name="viewing.name"
+      :summary="viewing.summary"
+      @close="closeFigure"
+    />
   </div>
 </template>
 
@@ -240,5 +340,43 @@ function retryClaim(): void {
   line-height: var(--lh-base);
   /* Long unbroken runs — a URL, a formula, a pasted paragraph — must not widen the panel. */
   overflow-wrap: anywhere;
+}
+/*
+ * The figure link under the row, and it deliberately does not look like a second row button: it
+ * is a caption saying *what this note is about*, and it happens to be pressable. Drawn lighter
+ * and unbordered so the two stacked controls are not mistaken for each other — the same
+ * distinction `.mention-pill` makes beside `.segment`.
+ */
+.note-target {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur-fast);
+}
+.note-target:hover {
+  color: var(--accent);
+}
+.note-target .icon {
+  flex: none;
+}
+/* The sentence that replaces the chip once the figure is gone. Same place, same size — the row
+   should not change height depending on whether the figure survived. */
+.note-target-gone {
+  display: block;
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  font-size: var(--fs-2);
+  color: var(--text-3);
 }
 </style>

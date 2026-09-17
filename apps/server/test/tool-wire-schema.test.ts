@@ -3,6 +3,7 @@ import { z } from "zod";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import type { ProviderDef } from "../src/config.js";
 import { EXPLORE_KINDS, PLAN_TOOL_NAMES, QUERY_KINDS } from "@ilearnassist/shared";
+import { ALLOWED_FIELDS } from "../src/tools/query.js";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
@@ -139,6 +140,35 @@ describe("the tools a provider is sent", () => {
     // discriminator survives as an enum, not that it has five or six members.
     expect(properties.kind?.enum).toEqual([...QUERY_KINDS]);
     expect(parameters.required).toEqual(["kind"]);
+  });
+
+  it("lets every field ila_query's schema offers be reachable by some kind", async () => {
+    /*
+     * The other half of `checkFields`, and the half nothing was watching.
+     *
+     * `checkFields` refuses a field that belongs to *another* kind. It does not notice a field
+     * that belongs to **no** kind — and that is the silent direction: the schema advertises it to
+     * the model, the model sends it, zod parses it, `checkFields` finds it allowed-or-absent,
+     * and the handler ignores it. Nothing errors and the caller is told a filter was applied.
+     *
+     * Read off the **wire** rather than off the zod object, because the wire is what the model
+     * is answering: a field added to the schema but not to `ALLOWED_FIELDS` is advertised and
+     * unreadable, and only the sent schema shows that.
+     */
+    const query = sentTools(await sendOneTurn()).find((t) => t.function?.name === "ila_query");
+    const parameters = query!.function!.parameters!;
+    const advertised = Object.keys(parameters.properties as Record<string, unknown>);
+    const reachable = new Set<string>(
+      Object.values(ALLOWED_FIELDS).flat() as readonly string[]
+    );
+
+    // `kind` is the discriminator: it is required and read by every branch, so it is on no
+    // kind's *optional* list by design.
+    expect(advertised.filter((field) => field !== "kind" && !reachable.has(field))).toEqual([]);
+
+    // And the same in the other direction: a name in the table that the schema does not carry
+    // is a rule about a field nobody can send.
+    expect([...reachable].filter((field) => !advertised.includes(field))).toEqual([]);
   });
 
   it("names every tool it offers, so a schema-less entry cannot hide", async () => {

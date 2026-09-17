@@ -1094,6 +1094,34 @@ export interface NoteAnchor {
 }
 
 /**
+ * What a note is *about*, when it is not a passage in a message.
+ *
+ * A note has always been able to point at a message, and the pair it points with — `quote` and
+ * `occurrence` — only works for text. A 图 and a 表 have no passage to quote, so they are named
+ * instead: the whole object is the target, addressed by the canonical `name` the figure already
+ * carries (`session_diagrams.name`, `session_tables.name`), which is the same handle `ila_query`
+ * looks them up by and the same one a follow-up reference carries.
+ *
+ * A figure is never *partly* annotated. A mermaid diagram is rendered SVG with no addressable
+ * text nodes, and a table's cells are markdown the reader can see but the anchor arithmetic
+ * counts over rendered geometry — so "the whole figure" is the only unit that means the same
+ * thing on both sides of a reload.
+ *
+ * `text` is the default and what every row written before this existed means. It is a value
+ * rather than NULL because NULL would say "we do not know", which is false of those rows: they
+ * are text notes, all of them.
+ */
+export const NOTE_TARGET_KINDS = ["text", "diagram", "table"] as const;
+
+export type NoteTargetKind = (typeof NOTE_TARGET_KINDS)[number];
+
+/** The kinds a create may *choose*: `text` is what omitting the pair means, not a thing to send. */
+export type NoteFigureKind = Exclude<NoteTargetKind, "text">;
+
+/** Cap on a figure's name, matching what the figure tables themselves hold. */
+export const NOTE_TARGET_REF_MAX = 200;
+
+/**
  * Caps, exported as values rather than living in a validator alone, so the client can refuse
  * a paste before it becomes a 400 and the tests read the same numbers.
  *
@@ -1124,6 +1152,17 @@ export interface Note {
   /** Which occurrence of `quote` this was, counted over the message's visible text. */
   occurrence: number;
   content: string;
+  /** What this note is about. `text` for every note with a quote or nothing at all. */
+  targetKind: NoteTargetKind;
+  /**
+   * The figure's canonical name — `auth-flow.mmd` for a diagram, a bare slug for a table.
+   *
+   * Null for a text note, and that NULL is honest rather than a sentinel: there is no figure, so
+   * there is no name. The client shows it as the chip's label and the follow-up passes it on, so
+   * it is the *server's* name that travels — the one `diagramFileName`/`tableName` produced —
+   * rather than the spelling the client happened to open the dialog with.
+   */
+  targetRef: string | null;
   /**
    * The message this note points at is gone — soft-deleted by a regenerate or a tail delete.
    *
@@ -1136,6 +1175,14 @@ export interface Note {
    * it is gone" — an unanchored note never had a place to go back to.
    */
   messageMissing: boolean;
+  /**
+   * The figure `targetRef` names is gone from this conversation.
+   *
+   * The same rule as `messageMissing`, for the same reason and read the same way: a diagram's
+   * row is derived data that an edit can take away, and a chip that opens nothing is worse than
+   * no chip. False whenever `targetKind` is `text`, where there is nothing that could be missing.
+   */
+  targetMissing: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -1605,6 +1652,10 @@ export const API_ERROR_CODES = [
   // A `type` outside NOTE_TYPES. Refused rather than defaulted, for the reason `INVALID_FIELD`
   // gives: a note that silently became an annotation is a note the user did not write.
   "NOTE_TYPE_INVALID",
+  // A note names a 图 or a 表 this conversation does not hold. One code for the three, like
+  // NOTE_NOT_FOUND: unknown, another conversation's, or a row that has since been revised away
+  // are the same answer, so a name cannot be probed for existence.
+  "FIGURE_NOT_FOUND",
   // A note export is already running for this conversation. One at a time, so two presses
   // cannot interleave their writes into the same files or race each other's summary.
   "SYNC_IN_PROGRESS",
@@ -2989,6 +3040,17 @@ export interface CreateNoteInput {
   quote?: string;
   occurrence?: number;
   content?: string;
+  /**
+   * What the note is about, when it is a figure rather than a passage.
+   *
+   * The pair travels together, the rule `quote`/`occurrence` already follows, and they are
+   * mutually exclusive with the message anchor: a note about a 图 has no passage in it. Omitting
+   * both halves is a `text` note, which is why `text` is not among the values here — it is what
+   * saying nothing means, not a thing to send.
+   */
+  targetKind?: NoteFigureKind;
+  /** The figure's name. Normalised server-side, so any spelling of it resolves. */
+  targetRef?: string;
 }
 
 /**

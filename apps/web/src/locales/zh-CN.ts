@@ -1095,6 +1095,8 @@ export default {
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "定位到生成它的消息",
+      /** Writing a note about a figure. Offered only where the notes panel has a home. */
+      note: "为它记一条笔记",
       empty: "这个会话还没有画过图表，也没有记录过表格。",
       /** The panel's kind filter. Its empty value is the select's own "everything". */
       filterKind: "按类型筛选",
@@ -1193,6 +1195,15 @@ export default {
     /** A note with neither a body nor an annotation — the row still has to say something. */
     untitled: "（无内容）",
     open: "打开这条笔记",
+    /** The row's chip for a note written about a 图 or a 表 instead of a passage. */
+    target: {
+      label: "打开它写的那{kind}",
+      kinds: {
+        diagram: "图",
+        table: "表",
+      },
+      missing: "它写的{kind}已不存在",
+    },
     /** The conversation is marked up by a different widget. Deliberately nameless. */
     claimedByOther: "另一个控件正在使用本会话的标注能力，暂时无法在此标注。",
     toolbar: {
@@ -1205,6 +1216,8 @@ export default {
       newTitle: "新建笔记",
       editTitle: "编辑笔记",
       quoteLabel: "标注原文",
+      /** The counterpart of 标注原文, for a note about a 图 or a 表. */
+      targetLabel: "标注对象",
       contentLabel: "笔记内容",
       contentPlaceholder: "写下你的想法…",
       typeLabel: "笔记类型",
@@ -1407,6 +1420,7 @@ export default {
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
+    FIGURE_NOT_FOUND: "找不到这个图表，它可能已经被修改或删除了。",
     SYNC_IN_PROGRESS: "这个会话正在同步到资料库，请稍候。",
     INSIGHT_NOT_FOUND: "找不到这条洞察，可能已经被新一次总结替换了。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
