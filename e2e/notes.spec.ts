@@ -53,6 +53,18 @@ async function send(page: Page, text: string): Promise<void> {
   await page.getByTestId("composer-input").fill(text);
   await page.getByTestId("composer-send").click();
   await expect(page.getByText(FIRST_PHRASE).last()).toBeVisible({ timeout: 15_000 });
+  /*
+   * Then wait for the turn to *finish*, which the first line above does not do: the text appears
+   * as it streams, so that wait is satisfied by the streaming bubble. Everything below works on
+   * the rendered DOM, and `message_done` replaces that bubble with the persisted message — a fresh
+   * set of text nodes, so any `Range` into the old ones collapses and the selection toolbar is
+   * dismissed by the app's own handler. Selecting in that window is what made this file fail
+   * intermittently under a full-suite run and pass alone.
+   *
+   * Send replacing Stop is the app's own signal that the turn is over, and three other specs
+   * already wait on it.
+   */
+  await expect(page.getByTestId("composer-send")).toBeVisible({ timeout: 20_000 });
 }
 
 /** The assistant's rendered content — where a selection is made. */
@@ -136,6 +148,15 @@ test.describe("the notes widget", () => {
     });
 
     await selectText(page, replyContent(page), FIRST_PHRASE);
+
+    /*
+     * The bar mounts on the `mouseup` `selectText` dispatches, which is a render later — so this
+     * waits for it rather than reading the DOM in the same tick. `annotate()` in `e2e/notes.ts`
+     * has always waited; this test measured straight away, which reads the same as long as the
+     * mount wins the race and throws a bare `TypeError` when it does not — a full-suite run, where
+     * the machine is busy, is where it does not.
+     */
+    await expect(page.getByTestId("note-toolbar")).toBeVisible();
 
     const box = await page.evaluate(() => {
       const range = document.getSelection()?.getRangeAt(0).getBoundingClientRect();

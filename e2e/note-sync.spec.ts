@@ -94,8 +94,34 @@ test("exports a conversation's notes, and the library shows them as sources", as
   await openConversation(page, workspace);
   await expect(page.getByTestId("note-sync-status")).toHaveText("已同步 2 条笔记");
 
-  // Pressing again is safe: the ids are stable, so nothing churns. The summary is regenerated, so
-  // the files are rewritten and the count is the same two.
+  /*
+   * Pressing again with nothing changed reports **zero**, and that is the count's meaning rather
+   * than a bug: it is what the run *did*, and a rendered file is a pure function of the note and
+   * the summary (`renderNoteExport`). A note whose file already says exactly that is neither added
+   * nor updated. The same rule is pinned server-side — `note-sync-routes.test.ts` asserts
+   * `{ added: 0, updated: 0 }` for an unchanged export and `{ updated: 2 }` for a resummarised one.
+   */
+  await page.getByTestId("note-sync").click();
+  await expect(page.getByTestId("note-sync-status")).toHaveText("已同步 0 条笔记", {
+    timeout: 20_000,
+  });
+
+  /*
+   * So the rewrite is driven by the one input that can move. Scripting a different summary before
+   * pressing again is what makes this deterministic, and it is also the honest shape of the claim
+   * being tested: a second export *reconciles* rather than appends.
+   *
+   * This used to script the model once and assert "the same two" on the second press, which held
+   * only when the fixture's answer happened to differ between the two runs — the spec never
+   * controlled that, so the assertion passed or failed on the fixture's behaviour rather than on
+   * the app's. It was the note-export suite's own intermittent failure, before the write lock
+   * existed.
+   */
+  const RESUMED = "这次会话讨论了递归，并补充了基准情形的作用。";
+  await scriptLlm(request, {
+    turns: [],
+    matches: [{ includes: "<session_transcript>", content: RESUMED }],
+  });
   await page.getByTestId("note-sync").click();
   await expect(page.getByTestId("note-sync-status")).toHaveText("已同步 2 条笔记", {
     timeout: 20_000,
