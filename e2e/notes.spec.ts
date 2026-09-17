@@ -25,13 +25,22 @@ const unique = (prefix: string): string => `${prefix} ${Date.now()}`;
  * a reply that fits on screen has nothing to scroll, and the mark would sit wherever it
  * happened to be rather than five lines down from the top.
  */
-const REPLY =
-  "光合作用发生在叶绿体中，其中光反应阶段产生 ATP，暗反应固定二氧化碳。生成的 ATP 用于后续的合成反应。".repeat(
-    14
-  );
+const SENTENCE =
+  "光合作用发生在叶绿体中，其中光反应阶段产生 ATP，暗反应固定二氧化碳。生成的 ATP 用于后续的合成反应。";
+
+const REPLY = SENTENCE.repeat(14);
 
 const FIRST_PHRASE = "光反应阶段";
 const SECOND_PHRASE = "暗反应";
+
+/**
+ * A passage long enough that the window's quote cannot show all of it.
+ *
+ * Five sentences is the shortest run that clears the quote's own five-line box at the floating
+ * size, and it is a run of *consecutive* sentences — the only shape `selectText` can address,
+ * since it finds its offsets by searching the message's visible text for the quote.
+ */
+const LONG_QUOTE = SENTENCE.repeat(5);
 
 /** A conversation with the notes widget installed, and the panel open on its empty state. */
 async function notesSession(page: Page, name: string): Promise<void> {
@@ -375,11 +384,16 @@ test.describe("the notes widget", () => {
     const bodyHeight = (await page.getByTestId("note-editor-content").boundingBox())!.height;
     const viewport = page.viewportSize()!;
     /*
-     * Small on purpose, and the scrim is the difference that matters: this is a floating card
-     * beside the text it is annotating, and the text stays readable behind it. Growing it is a
-     * deliberate act with its own control.
+     * Floating, and the scrim is the difference that matters: this is a card beside the text it is
+     * annotating, and the text stays readable behind it. Growing it is a deliberate act with its
+     * own control.
+     *
+     * **Wider than it is tall**, which is the shape and not a size. The card's rows are three short
+     * things stacked, so it is height that runs out first; a portrait card would also have to grow
+     * downward across the passage it is annotating.
      */
-    expect(small.width).toBeLessThan(400);
+    expect(small.width).toBeGreaterThan(small.height);
+    expect(small.width).toBeGreaterThan(400);
     await expect(page.getByTestId("note-editor-scrim")).toHaveCount(0);
     await expect(page.getByTestId("note-editor-maximize")).toHaveAttribute("aria-pressed", "false");
 
@@ -424,6 +438,67 @@ test.describe("the notes widget", () => {
     expect(Math.round(restored.x)).toBe(Math.round(small.x));
     expect(Math.round(restored.y)).toBe(Math.round(small.y));
     await expect(page.getByTestId("note-editor-content")).toHaveValue("这是一段很长的笔记。");
+  });
+
+  test("scrolls a long quote rather than cutting it off", async ({ page, request }) => {
+    /*
+     * The quote is what the note is *about*, so its end is the one part of the window the reader
+     * most needs and the one a clamp takes away. `scrollHeight > clientHeight` is the assertion
+     * that separates a scroller from a clamp: both hide the overflow, and only one of them can
+     * reach it.
+     *
+     * The card around it must *not* scroll — otherwise the quote is reachable only by scrolling
+     * the window past its own actions row, which is the same defect wearing a different hat.
+     */
+    const name = unique("Notes");
+    await scriptLlm(request, { turns: [{ content: REPLY }], title: "光合作用" });
+    await notesSession(page, name);
+    await send(page, "讲讲光合作用");
+
+    await annotate(page, replyContent(page), LONG_QUOTE, "note");
+
+    const quote = page.getByTestId("note-editor-quote");
+    await expect(quote).toBeVisible();
+    await expect(quote).toContainText(FIRST_PHRASE);
+
+    const scrolls = await quote.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(scrolls.scrollHeight).toBeGreaterThan(scrolls.clientHeight);
+
+    const card = await page.getByTestId("note-editor").evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(card.scrollHeight).toBeLessThanOrEqual(card.clientHeight);
+
+    /*
+     * And the body still has a box of its own below it. A quote that pushed the writing area to
+     * nothing would satisfy both measurements above while making the window useless.
+     */
+    await expect(page.getByTestId("note-editor-content")).toBeVisible();
+    expect((await page.getByTestId("note-editor-content").boundingBox())!.height).toBeGreaterThan(
+      60
+    );
+  });
+
+  test("shows a short quote whole, without a scrollbar", async ({ page, request }) => {
+    // The other half of the pair above: bounded must not mean "always scrolling".
+    const name = unique("Notes");
+    await scriptLlm(request, { turns: [{ content: REPLY }], title: "光合作用" });
+    await notesSession(page, name);
+    await send(page, "讲讲光合作用");
+
+    await annotate(page, replyContent(page), SECOND_PHRASE, "note");
+
+    const quote = page.getByTestId("note-editor-quote");
+    await expect(quote).toHaveText(SECOND_PHRASE);
+    const sizes = await quote.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(sizes.scrollHeight).toBeLessThanOrEqual(sizes.clientHeight);
   });
 
   test("backs out of the grown window with Escape before it closes", async ({ page, request }) => {
