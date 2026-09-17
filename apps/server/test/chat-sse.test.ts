@@ -798,6 +798,80 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(system).toContain(serverTimeZone()!);
   });
 
+  it("gives the model the account's own introduction", async () => {
+    /*
+     * End to end, because the whole value of the introduction is that it *arrives*: it is written
+     * on the account page, stored on `users.about`, resolved by `turnContext` and assembled into
+     * the prompt by `buildSystemPrompt`. Any one of those can be right on its own while the
+     * feature does nothing in use — which is what the `ila_collect_page` guidance did for a while.
+     */
+    const { session } = await freshSession();
+    await env.inject({
+      method: "PATCH",
+      url: "/api/auth/me",
+      payload: { about: "I write Java and am learning linear algebra." },
+    });
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi" });
+
+    const system = streamedTurn().system;
+    expect(system).toContain("I write Java and am learning linear algebra.");
+    // Fenced and labelled, because it is the user's own prose: a sentence in it that reads like a
+    // command has to arrive as something they wrote rather than as an instruction.
+    expect(system).toContain("<about_the_learner>");
+  });
+
+  it("says nothing at all about a learner who has not written one", async () => {
+    /*
+     * The block is dropped whole — heading and fence with it — rather than arriving empty. An
+     * empty `<about_the_learner></about_the_learner>` would spend a paragraph of every turn's
+     * prompt telling the model that the user said nothing.
+     *
+     * Cleared explicitly rather than left alone: this file shares one account across its tests, so
+     * a test that only *omits* to set an introduction would pass or fail on the order they ran in.
+     */
+    const { session } = await freshSession();
+    await env.inject({ method: "PATCH", url: "/api/auth/me", payload: { about: "" } });
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, { message: "hi" });
+
+    expect(streamedTurn().system).not.toContain("about_the_learner");
+  });
+
+  it("reaches a regenerated turn too, which is a third route into the same prompt", async () => {
+    /*
+     * `/chat`, `/answers` and `/regenerate` each build their own `turnContext` and each call
+     * `runAgentStream`, so a field threaded into one and not the others disappears on exactly the
+     * turns nobody thought about. This covers the third; `/answers` is the ask-user file's.
+     */
+    const { session } = await freshSession();
+    await env.inject({
+      method: "PATCH",
+      url: "/api/auth/me",
+      payload: { about: "Spatial thinker, weak at notation." },
+    });
+
+    llm.setTurns([{ content: "first" }, { content: "second" }]);
+    await chat(session.id, { message: "hi" });
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/regenerate`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+
+    // The regenerate is the *second* streamed request; the first was the turn it replaces.
+    const streamed = llm.requests().filter((r) => r.stream === true);
+    expect(streamed).toHaveLength(2);
+    const system = JSON.stringify(
+      (streamed[1]!.messages as { content: unknown }[])[0]!.content
+    );
+    expect(system).toContain("Spatial thinker, weak at notation.");
+  });
+
   it("answers with the Copilot's prompt as it was at creation, not as it is now", async () => {
     const { copilot, session } = await sessionFromCopilot({
       name: "Coach",

@@ -68,6 +68,7 @@ import {
   MIN_UPLOAD_LIMIT_BYTES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
+  PROFILE_ABOUT_MAX,
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   PLATFORM_ADMIN_ROLES,
@@ -835,6 +836,45 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const user = currentUser(request, db);
     if (!user) return reply.code(401).send(apiError("UNAUTHENTICATED", "sign in to continue"));
     return toWireUser(user);
+  });
+
+  /**
+   * Edit your own record — which today means the introduction.
+   *
+   * **`about` is the one field of its own record an account may write**, and the reason this route
+   * is not the console's is the split the console is built on: the console configures what every
+   * account shares, and this is a thing one account says about itself. The username is out on
+   * purpose (a rename is display-only and the `slug` never moves), and the roles and the disabled
+   * flag are an administrator's.
+   *
+   * Deliberately **not** `allowPendingPassword`: an account owing a password change is refused
+   * every route but the three that get it out of that state, and writing a profile is not one of
+   * them.
+   *
+   * Trimmed before storing, unlike a workspace description. The two look alike and are not:
+   * a description is prose somebody wrote for other people to read back, and this is an input to a
+   * prompt, where leading and trailing whitespace is only ever an accident of the textarea.
+   */
+  app.patch("/api/auth/me", async (request, reply) => {
+    const user = actor(request);
+    const body = request.body as { about?: unknown } | undefined;
+    const about = body?.about;
+    if (typeof about !== "string") {
+      // Never coerced: `String(undefined)` would store "undefined" into every turn's prompt.
+      return reply
+        .code(400)
+        .send(apiError("INVALID_FIELD", "about must be a string", { field: "about" }));
+    }
+    const trimmed = about.trim();
+    if (trimmed.length > PROFILE_ABOUT_MAX) {
+      return reply.code(400).send(
+        apiError("INVALID_FIELD", "the introduction is too long", {
+          field: "about",
+          max: PROFILE_ABOUT_MAX,
+        })
+      );
+    }
+    return toWireUser(db.setUserAbout(user.id, trimmed)!);
   });
 
   /**
@@ -3927,6 +3967,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     vision: boolean;
     toolUse: boolean;
     /**
+     * The account's own description of itself, which reaches the model as prompt context on every
+     * turn — see `chat.system.about` in the catalog. Copied from the request's account rather
+     * than re-read, and `""` when they have not written one.
+     */
+    about: string;
+    /**
      * The two things the loop needs to describe where files may go: the conversation's own
      * directory, and the folder an unqualified write lands in. They come from here rather
      * than being recomputed in the loop, so the prompt names exactly the paths the tools
@@ -3992,6 +4038,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       userId: string;
       /** Whose sources tree `read_document` reads from. */
       user: UserLayout;
+      /**
+       * The account's own description of itself, from `users.about`.
+       *
+       * A property of the *account* rather than of the conversation, so it arrives here with the
+       * other per-request facts: changing it changes every conversation at once, which is what
+       * "in my profile" means to the person who wrote it. `""` when they have not written one.
+       */
+      about: string;
       /**
        * The IANA zone the browser reported, or absent when it reported none.
        *
@@ -4211,6 +4265,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       tools,
       vision: isVisionModel(provider, modelId),
       toolUse: isToolUseModel(provider, modelId),
+      about: input.about,
       sessionDirPath: ownDir,
       writeLocation,
       clock,
@@ -4551,6 +4606,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       model: body.model,
       userId,
       user: treeFor(actor(request)),
+      about: actor(request).about,
       timezone: body.timezone,
     });
 
@@ -4627,6 +4683,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         tools: ctx.tools,
         sessionDirPath: ctx.sessionDirPath,
         writeLocation: ctx.writeLocation,
+        about: ctx.about,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
@@ -4740,6 +4797,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const ctx = turnContext(session, workspace, {
       userId,
       user: treeFor(actor(request)),
+      about: actor(request).about,
       timezone: body.timezone,
     });
 
@@ -4782,6 +4840,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         tools: ctx.tools,
         sessionDirPath: ctx.sessionDirPath,
         writeLocation: ctx.writeLocation,
+        about: ctx.about,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
@@ -4878,6 +4937,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const ctx = turnContext(session, workspace, {
       userId,
       user: treeFor(actor(request)),
+      about: actor(request).about,
       // A regenerate is a turn like any other and gets the clock like any other: the client
       // posts a body for this one field alone.
       timezone: (request.body as TurnRequestMeta | undefined)?.timezone,
@@ -4918,6 +4978,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         tools: ctx.tools,
         sessionDirPath: ctx.sessionDirPath,
         writeLocation: ctx.writeLocation,
+        about: ctx.about,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,

@@ -917,6 +917,44 @@ describe("schema versioning", () => {
     }
   });
 
+  it("gains the account introduction column, reading an old row as empty", () => {
+    /*
+     * `ensureColumn`, the rule the two cases above state: the column is additive, and `NOT NULL
+     * DEFAULT ''` is what makes a row written before it existed read as "nobody wrote one" rather
+     * than as NULL. That distinction is load-bearing here rather than tidy — the value is sent to
+     * the model on every turn, so a NULL would either crash the prompt builder or, worse, be
+     * stringified into it.
+     */
+    const path = join(root, "pre-about.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    const raw = new Database(path);
+    raw.exec(
+      `CREATE TABLE users (
+         id TEXT PRIMARY KEY, username TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+         password_hash TEXT, roles TEXT NOT NULL DEFAULT '["user"]',
+         must_change_password INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
+         created_at TEXT NOT NULL
+       )`
+    );
+    raw
+      .prepare(
+        "INSERT INTO users VALUES ('u1', 'Ada', 'ada', NULL, '[\"user\"]', 0, 0, '2024-01-01')"
+      )
+      .run();
+    raw.close();
+
+    const opened = createDb(path);
+    try {
+      const columns = (
+        opened.raw.prepare("PRAGMA table_info(users)").all() as { name: string }[]
+      ).map((c) => c.name);
+      expect(columns).toContain("about");
+      expect(opened.getUser("u1")?.about).toBe("");
+    } finally {
+      opened.raw.close();
+    }
+  });
+
   it("gains the counters table on an existing file of the current version", () => {
     // The claim that a new *table* needs no `SCHEMA_VERSION` bump — the DDL runs on every
     // open, so a database created before the table existed simply gains it. The bump rule

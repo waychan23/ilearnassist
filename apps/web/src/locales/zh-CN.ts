@@ -36,6 +36,8 @@ export default {
      */
     listSeparator: "、",
     save: "保存",
+    /** The same verb while the request is in flight — the button's pending label. */
+    saving: "保存中…",
     close: "关闭",
     edit: "编辑",
     /*
@@ -178,6 +180,25 @@ export default {
     identity: "账号",
     passwordLead: "修改密码后，这个账号在其他设备上的登录会全部失效。",
     passwordChanged: "密码已修改。",
+    /**
+     * The introduction, which is prompt input rather than a profile page's decoration.
+     *
+     * The lead sentence is the one place a user is told where this text goes. It is not a detail
+     * to leave implicit: the account is writing something that reaches a model on every turn, and
+     * finding that out afterwards is how a field meant to help becomes a surprise.
+     */
+    about: {
+      title: "个人介绍",
+      lead: "可选。写下你的背景、领域、擅长和兴趣，助手会在每一次对话中参考它，从而把讲解的深浅调到合适的位置。",
+      label: "关于我",
+      placeholder: "例如：我是做后端开发的，熟悉 Java 和分布式系统；正在自学机器学习，线性代数是薄弱环节，喜欢从具体例子入手。",
+      /** `{used}` and `{max}` are character counts. */
+      count: "{used} / {max} 字",
+      save: "保存介绍",
+      saved: "介绍已保存。",
+      /** The save button's tooltip while there is nothing to save. */
+      noChanges: "还没有修改",
+    },
   },
 
   /**

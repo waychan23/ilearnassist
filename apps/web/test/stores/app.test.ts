@@ -95,6 +95,7 @@ const mocks = vi.hoisted(() => ({
     logout: vi.fn(),
     me: vi.fn(),
     changePassword: vi.fn(),
+    updateProfile: vi.fn(),
     listAccounts: vi.fn(),
     createAccount: vi.fn(),
     updateAccount: vi.fn(),
@@ -146,6 +147,7 @@ const ACCOUNT: User = {
   slug: "ada",
   roles: ["superadmin"],
   mustChangePassword: false,
+  about: "",
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -587,6 +589,35 @@ describe("signing in and out", () => {
     expect(store.account?.mustChangePassword).toBe(false);
     expect(store.activeWorkspaceId).toBe("w1");
     expect(mocks.api.listWorkspaces).toHaveBeenCalled();
+  });
+
+  it("adopts the server's own wording when the introduction is saved", async () => {
+    /*
+     * The route trims, so echoing the textarea's value back would leave the field showing
+     * whitespace the record does not hold — and a reload would then look like it had changed the
+     * text. The store takes the answer rather than the input, which is the only version of this
+     * that cannot drift.
+     */
+    mocks.api.updateProfile.mockResolvedValue(
+      structuredClone({ ...ACCOUNT, about: "Backend dev, learning ML." } as User)
+    );
+    const store = await readyStore();
+
+    await store.saveProfile("   Backend dev, learning ML.   ");
+
+    expect(mocks.api.updateProfile).toHaveBeenCalledWith("   Backend dev, learning ML.   ");
+    expect(store.account?.about).toBe("Backend dev, learning ML.");
+  });
+
+  it("lets a failed save be reported rather than swallowing it", async () => {
+    // Deliberately unlike the fire-and-forget passes in this store: this is a write the user
+    // pressed a button for and is watching, so the card has to be able to say it did not land.
+    mocks.api.updateProfile.mockRejectedValue(new Error("nope"));
+    const store = await readyStore();
+    const before = store.account?.about;
+
+    await expect(store.saveProfile("anything")).rejects.toThrow("nope");
+    expect(store.account?.about).toBe(before);
   });
 
   it("forgets everything on the way out", async () => {

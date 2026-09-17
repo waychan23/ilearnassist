@@ -816,6 +816,21 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Save the signed-in account's own introduction.
+   *
+   * Adopts the server's answer rather than the string that was typed: the route trims, so echoing
+   * the textarea's value back would leave the field showing whitespace the record does not hold —
+   * and a reload would then appear to have changed it.
+   *
+   * A failure is thrown rather than swallowed. This is a write the user asked for and is watching
+   * for, so the card reports it — unlike the fire-and-forget passes elsewhere in this store, which
+   * have nobody waiting on them.
+   */
+  async function saveProfile(about: string): Promise<void> {
+    account.value = await api.updateProfile(about);
+  }
+
+  /**
    * Sign out, and land on the login screen whatever the server says.
    *
    * The cookie is HttpOnly, so clearing it is the server's job and a logout that fails cannot
@@ -3139,6 +3154,7 @@ export const useAppStore = defineStore("app", () => {
     syncNotesToLibrary,
     signIn,
     changePassword,
+    saveProfile,
     signOut,
     loadSources,
     deleteSource,

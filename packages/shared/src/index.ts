@@ -2105,8 +2105,41 @@ export interface User {
    * can make a request could skip the screen.
    */
   mustChangePassword: boolean;
+  /**
+   * The account's own description of itself, in its own words — background, field, strengths,
+   * interests. Optional to fill in; `""` means it has not been.
+   *
+   * It reaches the model as system-prompt context on **every** turn of every conversation, the way
+   * a persona does, and is what lets an agent pitch an explanation at the right level without
+   * being told again each time. It is the account's own record of itself and the only field of it
+   * the account may write — see `PATCH /api/auth/me`.
+   */
+  about: string;
   createdAt: string;
 }
+
+/**
+ * The body of `PATCH /api/auth/me` — the account editing its own record.
+ *
+ * One field, because one is all an account owns: the username is the console's (renaming is
+ * display-only and a `slug` never moves), and the roles and the disabled flag are an
+ * administrator's. Sending the whole record back would invite a client to believe otherwise.
+ */
+export interface UpdateProfileInput {
+  /** The new introduction. Trimmed by the store, and `""` clears it. */
+  about: string;
+}
+
+/**
+ * The longest an introduction may be, in characters.
+ *
+ * A real ceiling rather than a formality, and the reason is that this text is sent to the model on
+ * **every turn of every conversation**: an unbounded introduction would be a per-turn token cost
+ * the account never sees, paid in every conversation it has. Two thousand characters is a couple of
+ * paragraphs — comfortably more than a description of one's background and interests needs — and
+ * it is a *shared* constant so the field can say what the limit is before a request is made.
+ */
+export const PROFILE_ABOUT_MAX = 2000;
 
 /**
  * An account as the platform console lists it.
