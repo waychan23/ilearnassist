@@ -54,6 +54,15 @@ export type WidgetEvent =
    */
   | { type: "diagram.changed"; sessionId: string }
   /**
+   * An `ila_table` call recorded its row, so the 图表 panel refetches mid-turn.
+   *
+   * Its own event rather than a share of `diagram.changed`, although both feed one panel: the
+   * emission site is keyed on the tool's name, so sharing would make each panel fetch on the
+   * other's calls, and the docblock above would become false — a table's result is a row and not
+   * a file on disk, which is the sentence that makes the diagram's event worth having.
+   */
+  | { type: "table.changed"; sessionId: string }
+  /**
    * The note export finished and changed something in the library, so the sources panel
    * refetches.
    *

@@ -22,6 +22,7 @@ import type {
   GetPlanResponse,
   GetQuizQuestionsResponse,
   GetSessionDiagramsResponse,
+  GetSessionTablesResponse,
   GetSessionInsightsResponse,
   GetNoteSyncResponse,
   GetSessionNotesResponse,
@@ -688,6 +689,15 @@ export const api = {
    */
   listSessionDiagrams: (sessionId: string) =>
     request<GetSessionDiagramsResponse>(`/sessions/${sessionId}/diagrams`),
+  /**
+   * The tables a conversation recorded, as rows carrying the markdown itself.
+   *
+   * A sibling of `listSessionDiagrams` rather than a field on it, and the difference is the one
+   * that matters to a caller: a diagram row names a file that has to be opened separately, while
+   * a table row *is* the content — which is why the panel can hand one straight to the viewer.
+   */
+  listSessionTables: (sessionId: string) =>
+    request<GetSessionTablesResponse>(`/sessions/${sessionId}/tables`),
 
   listSessions: (workspaceId: string) =>
     request<Session[]>(`/workspaces/${workspaceId}/sessions`),

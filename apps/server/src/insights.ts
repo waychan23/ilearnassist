@@ -103,6 +103,14 @@ export interface InsightPromptInput {
   threads: ReturnType<typeof buildThreadViews>;
   notes: Array<{ type: string; quote: string; content: string }>;
   diagrams: Array<{ name: string; summary: string; threadTitle: string | null }>;
+  /**
+   * The conversation's tables, name and summary only.
+   *
+   * Never the markdown: a table's content is thousands of characters, which is exactly why
+   * `MAX_DIAGRAM_SUMMARY_CHARS` exists one line up — the pass is about the *learner*, and what a
+   * table is about is in its summary.
+   */
+  tables: Array<{ name: string; summary: string; threadTitle: string | null }>;
   /** Adopted items from earlier passes, so the model does not propose them again. */
   kept: Insight[];
 }
@@ -199,6 +207,15 @@ export function buildInsightPrompt(input: InsightPromptInput): string {
       out.push(`- ${clip(d.name, MAX_THREAD_PREVIEW_CHARS)}: ${clip(d.summary, MAX_DIAGRAM_SUMMARY_CHARS)}`);
     }
     out.push("</diagrams>");
+  }
+
+  const tables = input.tables.slice(0, MAX_DIAGRAMS);
+  if (tables.length > 0) {
+    out.push("<tables>");
+    for (const t of tables) {
+      out.push(`- ${clip(t.name, MAX_THREAD_PREVIEW_CHARS)}: ${clip(t.summary, MAX_DIAGRAM_SUMMARY_CHARS)}`);
+    }
+    out.push("</tables>");
   }
 
   /*
@@ -355,6 +372,9 @@ function gatherSources(db: AppDb, userId: string, sessionId: string): InsightPro
     diagrams: db
       .listDiagramsForUser(userId, sessionId)
       .map((d) => ({ name: d.name, summary: d.summary, threadTitle: d.threadTitle })),
+    tables: db
+      .listTablesForUser(userId, sessionId)
+      .map((t) => ({ name: t.name, summary: t.summary, threadTitle: t.threadTitle })),
     kept: db.listInsightsForUser(userId, sessionId).filter((i) => i.adopted),
   };
 }
@@ -537,7 +557,7 @@ function logPass(input: PassLog): void {
       `  小测：${sources.questions.length} 题（已作答 ${sources.questions.filter((q) => q.status !== "pending").length}）`,
       `  脉络：${sources.threads.threads.length} 条（未分类消息 ${sources.threads.unassigned}）`,
       `  笔记：${sources.notes.length} 条`,
-      `  图表：${sources.diagrams.length} 张`,
+      `  图表：${sources.diagrams.length} 张｜表格：${sources.tables.length} 张`,
       `  已采纳（已在提示中要求不要重复）：${input.kept} 条`,
       `提示词：${input.prompt.length} 字符`,
       ...(skipped

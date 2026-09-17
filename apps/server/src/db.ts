@@ -323,6 +323,19 @@ interface DiagramRow {
   thread_title?: string | null;
 }
 
+interface TableRow {
+  id: string;
+  session_id: string;
+  thread_id: string | null;
+  name: string;
+  summary: string;
+  content: string;
+  tool_call_id: string | null;
+  created_at: string;
+  updated_at: string;
+  thread_title?: string | null;
+}
+
 interface InsightItemRow {
   id: string;
   session_id: string;
@@ -432,6 +445,37 @@ export interface DiagramUpsert {
   /** The canonical file name — `auth-flow.mmd`, not the model's "Auth Flow". */
   name: string;
   summary: string;
+  toolCallId: string | null;
+}
+
+/**
+ * A table as the rest of the server reads it.
+ *
+ * The twin of `DiagramRecord`, with one field in place of the other's file: `content` holds the
+ * markdown, because there is no file for the bytes to live in. See the `session_tables` DDL for
+ * why that is the right inversion rather than an inconsistency.
+ */
+export interface TableRecord {
+  id: string;
+  sessionId: string;
+  threadId: string | null;
+  name: string;
+  summary: string;
+  content: string;
+  toolCallId: string | null;
+  threadTitle: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Input to `upsertSessionTable`, from the tool. The id is the caller's. */
+export interface TableUpsert {
+  id: string;
+  sessionId: string;
+  /** The slug the row is keyed by — no extension, because there is no file. */
+  name: string;
+  summary: string;
+  content: string;
   toolCallId: string | null;
 }
 
@@ -984,6 +1028,19 @@ const mapDiagram = (r: DiagramRow): DiagramRecord => ({
   threadId: r.thread_id,
   name: r.name,
   summary: r.summary,
+  toolCallId: r.tool_call_id,
+  threadTitle: r.thread_title ?? null,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const mapTable = (r: TableRow): TableRecord => ({
+  id: r.id,
+  sessionId: r.session_id,
+  threadId: r.thread_id,
+  name: r.name,
+  summary: r.summary,
+  content: r.content,
   toolCallId: r.tool_call_id,
   threadTitle: r.thread_title ?? null,
   createdAt: r.created_at,
@@ -1986,6 +2043,42 @@ export interface AppDb {
    * clears `thread_id` so the new shape is judged.
    */
   upsertDiagram(input: DiagramUpsert): DiagramRecord;
+
+  /**
+   * A conversation's tables, by session, newest first. Bare session id, `listDiagramsBySession`'s
+   * argument exactly: every caller has resolved the session through a `ForUser` read.
+   *
+   * Includes `content`, so this is the *route's* read as well as the tool's.
+   */
+  listTablesBySession(sessionId: string): TableRecord[];
+  /**
+   * The same rows with `content` blanked, for the thread classifier.
+   *
+   * A separate statement rather than a flag on the one above, and the reason is size: a table's
+   * markdown is thousands of characters, the classifier is shown a name and a summary, and
+   * reading what it cannot be shown into memory once per turn is the cost this avoids. The empty
+   * string is deliberate — `TableRecord.content` is a required field, and the callers of this
+   * read are the two that never look at it.
+   */
+  listTableBriefsBySession(sessionId: string): TableRecord[];
+  /**
+   * Owner-scoped list, the API view's own read. Owner in the `WHERE`, not only in the resolution
+   * the route performs first.
+   */
+  listTablesForUser(userId: string, sessionId: string): TableRecord[];
+  /**
+   * Insert, or revise in place when the conversation already has a table with this name.
+   *
+   * The same rule as `upsertDiagram`, plus the field this row has and that one does not: a revise
+   * moves `content` as well as `summary`, because the row *is* the artifact.
+   */
+  upsertSessionTable(input: TableUpsert): TableRecord;
+  /**
+   * Place a table in a thread, once. Returns the rows changed, which is 0 for one already
+   * placed — the `thread_id IS NULL` guard is the statement's own, so this is idempotent
+   * without a read.
+   */
+  assignTableToThread(sessionId: string, tableId: string, threadId: string): number;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
@@ -3159,6 +3252,13 @@ export function createDb(dbPath: string): AppDb {
     `UPDATE session_diagrams SET thread_id = ?
        WHERE id = ? AND session_id = ? AND thread_id IS NULL`
   );
+  // The table's twin, with the same `thread_id IS NULL` guard: it is the whole of the
+  // idempotency, so a second sync re-places nothing while a revise (which clears the column)
+  // is judged again.
+  const stmtAssignTableToThread = db.prepare(
+    `UPDATE session_tables SET thread_id = ?
+       WHERE id = ? AND session_id = ? AND thread_id IS NULL`
+  );
 
   /* --------------------------------- notes --------------------------------- */
   /*
@@ -3321,6 +3421,55 @@ export function createDb(dbPath: string): AppDb {
      VALUES (@id, @sessionId, NULL, @name, @summary, @toolCallId, @now, @now)
      ON CONFLICT(session_id, name) DO UPDATE SET
        summary = @summary,
+       tool_call_id = @toolCallId,
+       thread_id = NULL,
+       updated_at = @now`
+  );
+
+  /* ------------------------------- session tables ---------------------------- */
+  // The three diagram statements, one field wider: `content` is in the projection here because
+  // the row *is* the artifact (there is no file to read it from), and it is absent from the
+  // thread sync's own read for the same reason the classifier never sees a diagram's source —
+  // a table's markdown is large, and placing it in a thread needs only its name and summary.
+  const stmtListTablesBySession = db.prepare(
+    `SELECT t2.*, t.title AS thread_title
+       FROM session_tables t2
+       LEFT JOIN session_threads t ON t.id = t2.thread_id
+      WHERE t2.session_id = ?
+      ORDER BY t2.updated_at DESC, t2.rowid DESC`
+  );
+  /** The classifier's read: name and summary, never the markdown. */
+  const stmtListTableBriefsBySession = db.prepare(
+    `SELECT id, session_id, thread_id, name, summary, '' AS content, tool_call_id,
+            created_at, updated_at
+       FROM session_tables
+      WHERE session_id = ?`
+  );
+  // Read back by the conflict key, because a revise keeps the original id.
+  const stmtGetTableBySessionName = db.prepare(
+    `SELECT t2.*, t.title AS thread_title
+       FROM session_tables t2
+       LEFT JOIN session_threads t ON t.id = t2.thread_id
+      WHERE t2.session_id = ? AND t2.name = ?`
+  );
+  const stmtListTablesForUser = db.prepare(
+    `SELECT t2.*, t.title AS thread_title
+       FROM session_tables t2
+       JOIN sessions s   ON s.id = t2.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+       LEFT JOIN session_threads t ON t.id = t2.thread_id
+      WHERE t2.session_id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY t2.updated_at DESC, t2.rowid DESC`
+  );
+  // `session_diagrams`' upsert with `content` alongside `summary`, and the same revise rule:
+  // the id and created_at are kept, and thread_id is cleared so the new shape is judged again.
+  const stmtUpsertSessionTable = db.prepare(
+    `INSERT INTO session_tables (id, session_id, thread_id, name, summary, content, tool_call_id, created_at, updated_at)
+     VALUES (@id, @sessionId, NULL, @name, @summary, @content, @toolCallId, @now, @now)
+     ON CONFLICT(session_id, name) DO UPDATE SET
+       summary = @summary,
+       content = @content,
        tool_call_id = @toolCallId,
        thread_id = NULL,
        updated_at = @now`
@@ -4428,6 +4577,37 @@ export function createDb(dbPath: string): AppDb {
       // Read back by the conflict key rather than by id — a revise preserves the original id.
       const row = stmtGetDiagramBySessionName.get(input.sessionId, input.name) as DiagramRow;
       return mapDiagram(row);
+    },
+
+    listTablesBySession(sessionId) {
+      return (stmtListTablesBySession.all(sessionId) as TableRow[]).map(mapTable);
+    },
+
+    listTableBriefsBySession(sessionId) {
+      return (stmtListTableBriefsBySession.all(sessionId) as TableRow[]).map(mapTable);
+    },
+
+    listTablesForUser(userId, sessionId) {
+      return (stmtListTablesForUser.all({ userId, sessionId }) as TableRow[]).map(mapTable);
+    },
+
+    upsertSessionTable(input) {
+      stmtUpsertSessionTable.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        name: input.name,
+        summary: input.summary,
+        content: input.content,
+        toolCallId: input.toolCallId,
+        now: now(),
+      });
+      // Read back by the conflict key rather than by id — a revise preserves the original id.
+      const row = stmtGetTableBySessionName.get(input.sessionId, input.name) as TableRow;
+      return mapTable(row);
+    },
+
+    assignTableToThread(sessionId, tableId, threadId) {
+      return stmtAssignTableToThread.run(threadId, tableId, sessionId).changes;
     },
 
     statsForWorkspace(userId, workspaceId) {

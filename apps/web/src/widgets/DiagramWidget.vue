@@ -1,50 +1,83 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
 import { relativeTime } from "../composables/relativeTime";
 import { useAppStore } from "../stores/app";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
-import type { Diagram } from "../api/types";
+import type { Diagram, Table } from "../api/types";
+import {
+  FIGURE_FILTERS,
+  filterFigures,
+  figureRows,
+  presentKinds,
+  type FigureFilter,
+  type FigureKind,
+  type FigureRow,
+} from "../utils/figures";
+import DiagramDialog from "../components/dialogs/DiagramDialog.vue";
 import Icon from "../components/Icon.vue";
 
 /**
- * The conversation's diagrams, as rows.
+ * The conversation's 图表: the diagrams it has drawn and the tables it has recorded, as rows.
  *
- * A **viewer** that brings no tools. Its data is the `session_diagrams` rows `ila_diagram`
- * writes beside each file — name, the model's summary, the call that drew it, and the
- * thread it belongs to. This is deliberately NOT the folder listing: the conversation-files
- * dialog is that, and a `.mmd` copied into the folder by hand has no summary and no call, so
- * it belongs there rather than on this list.
+ * A **viewer** that brings no tools. Its data is the rows the two tools write — `ila_diagram`
+ * writes a file plus a `session_diagrams` row, `ila_table` writes a `session_tables` row that
+ * *is* the table. This is deliberately NOT a folder listing: the source browser is that, and a
+ * `.mmd` copied into the folder by hand has no summary and no call, so it belongs there rather
+ * than on this list.
  *
- * Opening a row goes through the ordinary file preview (the row's `name` is the canonical
- * file name), the same one the file tree opens — it already renders a diagram and offers the
- * enlarged viewer. The one thing this panel adds is 定位, scrolling the conversation to the
- * call; the row carries that id, so there is no client-side join.
+ * **Two kinds, two ways in, and the difference is not an inconsistency.** A diagram's row names a
+ * file, so opening it goes through the ordinary preview — which already renders a diagram, offers
+ * the source and has the enlarged view — exactly as the file tree opens it. A table has no file:
+ * its row holds the markdown, so opening it hands that straight to the same enlarged viewer, with
+ * no request and nothing for a preview to read. What both rows carry is 定位: the call that
+ * produced them, which scrolls the conversation back to it.
  *
  * There is deliberately no "browse the whole folder" control here. This panel is the *filtered,
- * model-drawn* view, and the workspace's material is one control away in the chat header — a
+ * model-made* view, and the workspace's material is one control away in the sidebar's menu — a
  * second entry point to the same files, from a panel, was a duplicate rather than a shortcut.
  */
 
 const { t } = useI18n();
 const store = useAppStore();
 
-const rows = ref<Diagram[]>([]);
+const diagrams = ref<Diagram[]>([]);
+const tables = ref<Table[]>([]);
 const failed = ref(false);
+const filter = ref<FigureFilter>("");
+/** The table this panel is showing enlarged, if any. A diagram opens the file preview instead. */
+const viewing = ref<FigureRow | null>(null);
+
+const rows = computed(() => figureRows(diagrams.value, tables.value));
+const visible = computed(() => filterFigures(rows.value, filter.value));
+const kinds = computed(() => presentKinds(rows.value));
 
 async function load(): Promise<void> {
   const sessionId = store.activeSessionId;
   if (!sessionId) {
-    rows.value = [];
+    diagrams.value = [];
+    tables.value = [];
     failed.value = false;
     return;
   }
   try {
-    const res = await api.listSessionDiagrams(sessionId);
-    // A switch mid-request must not list one conversation's diagrams under another's.
+    /*
+     * Both reads at once, because the panel shows one list: two sequential requests would be two
+     * loading states for one screen, and the second would be waiting on nothing.
+     *
+     * A conversation can hold one kind and not the other, so neither empty answer is an error —
+     * the panel's empty state is "this conversation has made nothing", which is the two lists
+     * being empty together.
+     */
+    const [drawn, recorded] = await Promise.all([
+      api.listSessionDiagrams(sessionId),
+      api.listSessionTables(sessionId),
+    ]);
+    // A switch mid-request must not list one conversation's figures under another's.
     if (sessionId !== store.activeSessionId) return;
-    rows.value = res.diagrams;
+    diagrams.value = drawn.diagrams;
+    tables.value = recorded.tables;
     failed.value = false;
   } catch {
     if (sessionId !== store.activeSessionId) return;
@@ -55,8 +88,10 @@ async function load(): Promise<void> {
 watch(
   () => store.activeSessionId,
   () => {
-    rows.value = [];
+    diagrams.value = [];
+    tables.value = [];
     failed.value = false;
+    viewing.value = null;
     void load();
   },
   { immediate: true }
@@ -65,10 +100,10 @@ watch(
 let unsubscribe: (() => void) | null = null;
 onMounted(() => {
   unsubscribe = subscribeWidgetEvents((event) => {
-    // The row is written by the tool mid-turn, so `diagram.changed` refreshes immediately;
-    // `turn.finished` catches a diagram a later step drew. Its thread title arrives with the
-    // best-effort classifier after that, and shows on the next load.
-    if (event.type === "diagram.changed" || event.type === "turn.finished") {
+    // The rows are written by the tools mid-turn, so their own events refresh immediately;
+    // `turn.finished` catches one a later step wrote. A thread title arrives with the best-effort
+    // classifier after that, and shows on the next load.
+    if (event.type === "diagram.changed" || event.type === "table.changed" || event.type === "turn.finished") {
       if (event.sessionId === store.activeSessionId) void load();
     }
   });
@@ -78,10 +113,31 @@ onBeforeUnmount(() => {
   unsubscribe = null;
 });
 
-/** `flow.mmd` → `flow`. The extension is the one thing every row shares. */
-function stem(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(0, dot) : name;
+/**
+ * What a kind is called in the filter's own menu.
+ *
+ * A `switch` over the closed union with a literal key per case, rather than
+ * `` t(`widgets.diagram.kinds.${kind}`) `` — the choice `widgetLabel` in the widget registry and
+ * `formatLabel` in the figure viewer both make, and for the same reason: a template literal would
+ * force a bare `widgets.diagram.kinds.` entry into `catalog.test.ts`'s allowlist of dynamic
+ * prefixes, and a prefix that broad is where a typo hides.
+ */
+function kindLabel(kind: FigureKind): string {
+  switch (kind) {
+    case "diagram":
+      return t("widgets.diagram.kinds.diagram");
+    case "table":
+      return t("widgets.diagram.kinds.table");
+  }
+}
+
+/** Open a row: a diagram through the file preview, a table through the viewer. */
+function openRow(row: FigureRow): void {
+  if (row.kind === "diagram") {
+    if (row.fileName && !row.fileMissing) void store.openFile(row.fileName, "session");
+    return;
+  }
+  viewing.value = row;
 }
 </script>
 
@@ -99,24 +155,50 @@ function stem(name: string): string {
     </div>
 
     <template v-else>
+      <!--
+        The strip appears only once there is something to narrow, and it offers only the kinds
+        that are there: an option that can only ever produce the empty state is a control that
+        does nothing. The count is the same one `SourcesWidget` carries, for the same reason —
+        it is what makes a filter honest about what it is hiding.
+      -->
+      <div v-if="rows.length > 0 && kinds.length > 1" class="figure-filter">
+        <select
+          v-model="filter"
+          class="input figure-kind"
+          data-testid="figure-filter"
+          :aria-label="t('widgets.diagram.filterKind')"
+        >
+          <option v-for="option in FIGURE_FILTERS" :key="option" :value="option">
+            {{ option === "" ? t("widgets.diagram.allKinds") : kindLabel(option) }}
+          </option>
+        </select>
+        <span class="badge muted" data-testid="figure-count">{{ visible.length }}</span>
+      </div>
+
       <div v-if="rows.length === 0" class="widget-empty" data-testid="diagram-empty">
         {{ t("widgets.diagram.empty") }}
       </div>
+      <!-- A filter that matches nothing is a different sentence from a list that is empty. -->
+      <div v-else-if="visible.length === 0" class="widget-empty" data-testid="figure-no-match">
+        {{ t("widgets.diagram.noMatch") }}
+      </div>
 
       <ul v-else class="diagram-list" data-testid="diagram-list">
-        <li v-for="row in rows" :key="row.id" class="diagram-row">
+        <li v-for="row in visible" :key="row.key" class="diagram-row" :data-kind="row.kind">
           <button
             class="diagram-open"
             :class="{ 'is-missing': row.fileMissing }"
             data-testid="diagram-row"
             type="button"
             :disabled="row.fileMissing"
-            :title="row.name"
-            @click="store.openFile(row.name, 'session')"
+            :title="row.fileName ?? row.name"
+            @click="openRow(row)"
           >
-            <span class="diagram-icon"><Icon name="diagram" /></span>
+            <span class="diagram-icon">
+              <Icon :name="row.kind === 'diagram' ? 'diagram' : 'table'" />
+            </span>
             <span class="diagram-meta">
-              <span class="diagram-name truncate">{{ stem(row.name) }}</span>
+              <span class="diagram-name truncate">{{ row.name }}</span>
               <span class="diagram-summary">{{ row.summary }}</span>
               <span class="diagram-when">
                 <span>{{ relativeTime(row.updatedAt) }}</span>
@@ -142,6 +224,17 @@ function stem(name: string): string {
         </li>
       </ul>
     </template>
+
+    <!-- The table's own viewer, at panel level rather than per row: one dialog, and the row it
+         shows is a value rather than a position. A diagram has no equivalent here — it opens the
+         file preview, which is the same dialog the file tree uses. -->
+    <DiagramDialog
+      v-if="viewing?.content"
+      :content="{ kind: 'table', markdown: viewing.content }"
+      :name="viewing.name"
+      :summary="viewing.summary"
+      @close="viewing = null"
+    />
   </div>
 </template>
 
@@ -150,6 +243,16 @@ function stem(name: string): string {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+.figure-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 0 var(--space-3);
+}
+.figure-kind {
+  flex: 1;
+  min-width: 0;
 }
 .diagram-list {
   display: flex;
@@ -196,6 +299,11 @@ function stem(name: string): string {
   flex: none;
   margin-top: 1px;
   color: var(--accent);
+}
+/* A table's mark is the other half of the panel's idea, so it is the quieter of the two — the
+   drawing is the thing the panel was built for and the table is what joined it. */
+.diagram-row[data-kind="table"] .diagram-icon {
+  color: var(--text-3);
 }
 .diagram-meta {
   display: flex;

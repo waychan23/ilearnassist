@@ -46,6 +46,7 @@ export const ALL_TOOL_NAMES = [
   "ila_read_plan",
   "ila_update_plan_progress",
   "ila_diagram",
+  "ila_table",
   "ila_query",
   "ila_explore",
 ] as const;
@@ -90,7 +91,15 @@ export type ExploreKind = (typeof EXPLORE_KINDS)[number];
  * to read, and a thread is a thing this tool returns while never being a thing the model can
  * name as a widget. The two lists answer different questions and are free to differ.
  */
-export const QUERY_KINDS = ["plan", "quiz", "thread", "note", "diagram", "source"] as const;
+export const QUERY_KINDS = [
+  "plan",
+  "quiz",
+  "thread",
+  "note",
+  "diagram",
+  "table",
+  "source",
+] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
@@ -107,6 +116,23 @@ export type QueryKind = (typeof QUERY_KINDS)[number];
  * panel that lists it. See `WidgetTools`.
  */
 export const DIAGRAM_TOOL_NAME = "ila_diagram";
+
+/**
+ * The table tool's name.
+ *
+ * Shared for the same reason `DIAGRAM_TOOL_NAME` is: the client switches on it, to pick the
+ * table's own card out of an assistant message's tool calls.
+ *
+ * It rides the **diagram widget** — `WIDGETS.diagram` names both tools — because 图表 is the
+ * panel that shows what a conversation has drawn and a table is the other half of that. Like the
+ * diagram tool it is `auto-install`: ordinary, pickable in a Copilot, and making one installs the
+ * panel that lists it.
+ *
+ * What it is *not* is a file. A diagram's bytes have to be a file (the agent's own tools can write
+ * `.mmd`, and the library browses it); a table's display is the reply itself, so the row holds the
+ * markdown and the conversation holds the rendering. See `Table`.
+ */
+export const TABLE_TOOL_NAME = "ila_table";
 
 /**
  * The plan tools' names. Declared here rather than in the plan section below because the
@@ -565,20 +591,27 @@ export const WIDGETS: readonly WidgetDefinition[] = [
    */
   { id: "notes", scopes: ["session"] },
   /*
-   * The diagram widget declares `ila_diagram` in `auto-install` mode, which is the plan widget's
-   * shape applied to a viewer. The tool had to be reachable in an ordinary conversation for the
-   * feature to exist at all — a diagram the model cannot draw is not a diagram — and `required`
-   * would have made it reachable only where the panel already was. So the tool is ordinary, the
-   * allow-list can add or remove it, and it is pickable in a Copilot; what the mode adds is that
-   * drawing one installs the panel that lists it.
+   * The diagram widget declares `ila_diagram` and `ila_table` in `auto-install` mode, which is the
+   * plan widget's shape applied to a viewer. The tools had to be reachable in an ordinary
+   * conversation for the features to exist at all — a diagram the model cannot draw is not a
+   * diagram — and `required` would have made them reachable only where the panel already was. So
+   * the tools are ordinary, the allow-list can add or remove them, and they are pickable in a
+   * Copilot; what the mode adds is that drawing a diagram or recording a table installs the panel
+   * that lists it.
    *
-   * The panel is still only a *viewer*: it lists the diagrams this conversation has drawn and
-   * draws the one you pick. The drawing itself is a file in the conversation's own directory plus
-   * its row, so the two are independent — a `.mmd` copied in by hand reaches the library and the
-   * file tree without a panel, and a diagram drawn in a conversation whose panel was explicitly
-   * uninstalled is still drawn.
+   * Two kinds in one panel because 图表 is one idea with two halves — 图 and 表 — and because the
+   * ids are persisted rows: `session_widgets.widget_id` is `"diagram"`, so renaming it to something
+   * that covers both would leave every existing install pointing at a widget this build no longer
+   * has. The panel is still only a *viewer*: it lists what this conversation has drawn and shows
+   * the one you pick. A diagram is a file in the conversation's own directory plus its row, so the
+   * two are independent — a `.mmd` copied in by hand reaches the library and the file tree without
+   * a panel — while a table is the row alone.
    */
-  { id: "diagram", scopes: ["session"], tools: { names: [DIAGRAM_TOOL_NAME], mode: "auto-install" } },
+  {
+    id: "diagram",
+    scopes: ["session"],
+    tools: { names: [DIAGRAM_TOOL_NAME, TABLE_TOOL_NAME], mode: "auto-install" },
+  },
   /*
    * The insight panel names no tools either, and for a stronger reason than the diagram's: the
    * pass it drives is an **out-of-band model call**, the `agent/title.ts` / `agent/threads.ts`
@@ -962,6 +995,49 @@ export interface Diagram {
 /** `GET /api/sessions/:id/diagrams`. */
 export interface GetSessionDiagramsResponse {
   diagrams: Diagram[];
+}
+
+/**
+ * A table the conversation has recorded, as a row.
+ *
+ * The sibling of `Diagram`, and the differences are all one decision: **a table is not a file, so
+ * this row holds the markdown**. A diagram's bytes live in `sessions/<id>/<name>.mmd` because a
+ * diagram is a file — the file tools can write one, the library browses it, `@` can reference it —
+ * and its row deliberately holds only what the file cannot answer. A table's display is the reply
+ * itself (the requirement is explicit that it renders inline as Markdown, not in a card), so there
+ * is nothing for a second copy on disk to be the source of; `notes` stores its body in a column
+ * for the same reason.
+ *
+ * No `fileMissing`, because there is no file to be missing. That absence is the assertion worth
+ * having in the tests, rather than an oversight.
+ */
+export interface Table {
+  id: string;
+  sessionId: string;
+  /** The thread the classifier put this table in; null until its turn is classified. */
+  threadId: string | null;
+  threadTitle: string | null;
+  /**
+   * The canonical name — a slug, with no extension.
+   *
+   * No extension because there is no file: the name is only the row's identity and the label the
+   * panel shows. It is the join key for a revise all the same, which is what makes calling the
+   * tool again with the same name correct the table rather than add a second one.
+   */
+  name: string;
+  /** The model's one- or two-sentence description of what the table is about. */
+  summary: string;
+  /** The markdown table source. The row is the only copy — see the note above. */
+  content: string;
+  /** The tool call that wrote, or last revised, it; null when none was stamped. */
+  toolCallId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/sessions/:id/tables`. */
+export interface GetSessionTablesResponse {
+  tables: Table[];
 }
 
 /* ------------------------------------ notes ------------------------------------ */

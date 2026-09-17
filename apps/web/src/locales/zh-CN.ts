@@ -564,6 +564,9 @@ export default {
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
       ila_diagram: "图表",
+      /* 表 rather than 图表: the panel is 图表 (both halves), and this is the half that records a
+         table — the word the card's own hint and the panel's filter both use. */
+      ila_table: "表格",
       ila_query: "查询学习记录",
       ila_explore: "浏览其他工作区",
     },
@@ -571,6 +574,11 @@ export default {
     running: "运行中",
     args: "参数",
     result: "结果",
+    table: {
+      /** Said on the card itself, because a reader who expected the table to be *there* would
+       *  otherwise think the call had shown them nothing. The table is in the reply. */
+      inlineHint: "表格已写在回复里",
+    },
     /**
      * A run of consecutive tool calls, folded into one card. `count` is how many calls the
      * run holds; `name` is a `tools.name.*` label for the call still in flight.
@@ -1074,7 +1082,15 @@ export default {
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "定位到生成它的消息",
-      empty: "这个会话还没有画过图表。",
+      empty: "这个会话还没有画过图表，也没有记录过表格。",
+      /** The panel's kind filter. Its empty value is the select's own "everything". */
+      filterKind: "按类型筛选",
+      allKinds: "全部",
+      kinds: {
+        diagram: "图",
+        table: "表",
+      },
+      noMatch: "没有符合筛选条件的图表。",
       failed: "读取图表失败。",
       /** The thread the classifier put this diagram in. */
       inThread: "属于：{title}",

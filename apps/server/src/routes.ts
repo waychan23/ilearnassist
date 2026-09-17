@@ -72,6 +72,7 @@ import {
   QUIZ_TOOL_NAMES,
   SESSION_LOCK_TTL_SECONDS,
   SUPERADMIN_ROLE,
+  TABLE_TOOL_NAME,
   USERNAME_MAX_LENGTH,
 } from "@ilearnassist/shared";
 import {
@@ -112,6 +113,7 @@ import { buildInsightViews, generateInsights } from "./insights.js";
 import { createNote, deleteNote, updateNote } from "./notes.js";
 import { readNoteSync, runNoteSync } from "./notesExport.js";
 import { listDiagramViews, registerDiagram } from "./diagrams.js";
+import { listTableViews, registerTable } from "./tables.js";
 import {
   dismissQuizQuestions,
   listQuizQuestionViews,
@@ -134,6 +136,7 @@ import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { COLLECT_PAGE_GUIDANCE } from "./tools/collectPage.js";
+import { TABLE_GUIDANCE } from "./tools/table.js";
 import { exploreGuidance } from "./tools/explore.js";
 import { PLAN_GUIDANCE } from "./tools/planTools.js";
 import { QUIZ_GUIDANCE } from "./tools/quizReview.js";
@@ -2562,6 +2565,28 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { diagrams };
   });
 
+  /*
+   * The conversation's tables.
+   *
+   * Its own route rather than a `tables` field on the one above, because they are two resources
+   * with two identities and one joins to a file: a reader asking for diagrams is not asking for
+   * tables, and a payload that carried both would make every diagram read pay for a table read it
+   * did not want. The panel asks for both, in parallel, because it is the one caller that shows
+   * them together.
+   *
+   * Object-not-widget like the row above, and an empty list is a 200: a table is the row alone,
+   * so — unlike a diagram, whose file can be gone — being listed and being readable are the same
+   * thing here.
+   */
+  app.get("/api/sessions/:id/tables", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return { tables: listTableViews(db, userId, id) };
+  });
+
   /* ----------------------------------- notes ----------------------------------- */
 
   /*
@@ -3851,6 +3876,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * Not a widget — this one is on by default, which is exactly why it needed the guidance.
      */
     collectPageGuidance?: string;
+    /** See the assembly site: the positive half of `ila_table`'s contract. */
+    tableGuidance?: string;
     /**
      * Present when the conversation holds an `@` grant **and** `ila_explore` survived assembly.
      * Its presence is what flips the workspace note's read prohibition — see `buildSystemPrompt`.
@@ -4048,6 +4075,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           });
         },
       },
+      /*
+       * A table is one row and nothing else, and deliberately **no transaction**.
+       *
+       * The diagram callback above needs one because two rows have to land together — its file
+       * and its source row — and a diagram whose file exists but whose rows half-landed is a file
+       * the conversation draws and the registry cannot name. There is one write here, and a
+       * transaction around a single statement reads as if a second write existed.
+       */
+      table: {
+        save: (saved) => {
+          registerTable(db, session.id, saved);
+        },
+      },
       // Not gated on anything: the conversation's own record exists from the moment the
       // conversation does, whether or not any widget is installed to show it.
       query: {
@@ -4123,6 +4163,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       exploreGuidance: tools.some((t) => t.name === EXPLORE_TOOL_NAME)
         ? exploreGuidance(scope)
         : undefined,
+      /*
+       * `ila_table`'s half, and it is load-bearing in a way the others are not: nothing on the
+       * server can write into a model's reply, so "the table also appears inline, as ordinary
+       * Markdown" is a prompt instruction or it is nothing at all. The tool's own description is
+       * necessarily a restriction — "not every table" — and a model that was never told the
+       * positive half reads a restriction as "usually do not", which is the failure
+       * `COLLECT_PAGE_GUIDANCE` documents one tool over.
+       *
+       * Asked of the assembled array, like the two above it: a Copilot whose allow-list excludes
+       * the tool is never taught a call it cannot make.
+       */
+      tableGuidance: tools.some((t) => t.name === TABLE_TOOL_NAME) ? TABLE_GUIDANCE : undefined,
       /*
        * The `auto-install` side effect, and the only reason the loop takes a callback for it: the
        * loop knows which tool ran, and this closure knows whose conversation it ran in. It
@@ -4457,6 +4509,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        tableGuidance: ctx.tableGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
@@ -4607,6 +4660,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        tableGuidance: ctx.tableGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
@@ -4738,6 +4792,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        tableGuidance: ctx.tableGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,

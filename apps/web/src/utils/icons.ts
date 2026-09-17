@@ -230,6 +230,15 @@ export const ICON_PATHS = {
     "M5.75 10.5H10.25",
   ],
 
+  /* 表: a grid — the header rule plus two rows, which is what tells a table apart from a plain
+   * document at 14px. Deliberately not a spreadsheet glyph: nothing here computes. It is the
+   * second half of the 图表 pair, and reads as one beside `diagram`'s boxes and arrows. */
+  table: [
+    "M2.75 3.5H13.25V12.5H2.75Z",
+    "M2.75 6.5H13.25",
+    "M8 6.5V12.5",
+  ],
+
   /* 置顶: a pushpin, drawn straight on rather than at the diagonal a paper pin sits at, because
    * the diagonal reads as a *slanted* bar at 14px. Head, shoulder, needle — the three parts are
    * what tell it apart from `lock` (a body with a closed shackle) and from `marker` (a diagonal

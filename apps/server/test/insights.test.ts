@@ -188,6 +188,7 @@ describe("buildInsightPrompt", () => {
     threads: { threads: [], unassigned: 0 },
     notes: [],
     diagrams: [],
+    tables: [],
     kept: [],
   };
 

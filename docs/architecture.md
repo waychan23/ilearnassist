@@ -360,6 +360,25 @@ what makes a diagram's `thread_id` null iff its turn is unclassified, since the 
 list is pending messages and never revisits an assigned turn. A revise clears `thread_id`; the
 next sync re-judges the new shape.
 
+### Tables (`tables.ts`, `tools/table.ts`)
+
+A table is **one row and no file**, and that inversion of the rule above is the whole of its
+design. `session_tables` (`name`, the model's `summary`, `content`, `tool_call_id`, `thread_id`)
+is upserted on `(session_id, name)` like a diagram's, so calling the tool again with the same name
+corrects that table rather than adding a second. It holds the markdown because there is no file
+for the bytes to live in and nothing for a second copy to disagree with; `session_diagrams`' row
+holds only what its file cannot answer, which is the opposite arrangement for the opposite reason.
+No `sources` row either — a source's `rel_path` is non-NULL for both sandbox storages, and every
+consumer is path-driven — and no `deleted_at`, like the derived rows above.
+
+The **display** is the assistant's reply: `ila_table`'s guidance asks the model to write the same
+table as ordinary Markdown, because nothing on the server can put text into a model's output. The
+row is what the 图表 panel lists and the viewport re-renders, so a regenerated message does not
+lose the table. `GET /api/sessions/:id/tables` is the panel's read model; `ila_query(kind:
+"table")` is the model's, which is what lets it revise one past the history window. Tables ride the
+thread classifier exactly as diagrams do — the same ref-keyed array pattern under their own wire
+key — and `docs/tables.md` is the full reference.
+
 ### Notes (`notes.ts`)
 
 What the learner marked and what they wrote about it, one row per note, reached at
@@ -451,8 +470,10 @@ removes `dirPath`.
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
 | `read_document` | page through an uploaded file's extracted text | per-turn whitelist: the conversation's sources ∪ its workspace's ∪ any `@`-granted workspaces' |
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
-| `ila_query`     | read the conversation's own record (plan / quizzes / threads / notes / diagrams) | owner-scoped by the turn's account |
+| `ila_query`     | read the conversation's own record (plan / quizzes / threads / notes / diagrams / tables) | owner-scoped by the turn's account |
 | `ila_explore`   | read the workspaces the user opened with `@`: their files, and their conversations' messages | the resolved `@` grant, and read-only |
+| `ila_diagram`   | draw a diagram: a `.mmd` in the conversation's folder plus its row | off with `fileTools.enabled` |
+| `ila_table`     | record a table: one row, whose display is the reply's own Markdown | not gated by `fileTools.enabled` — it writes no file |
 
 `buildTools({ workspaceDir, webSearch, webFetch, fileToolsEnabled, allowedNames, documents })`
 returns the active set for a run, honoring config switches and the conversation's own
