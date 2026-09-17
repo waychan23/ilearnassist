@@ -125,7 +125,9 @@ describe("renderMarkdown", () => {
       // UI. A model writes an empty fence often enough for it to be worth the branch.
       const html = renderMarkdown("```js\n```", { copy: "复制", copied: "已复制" });
       expect(html).not.toContain("data-copy-code");
-      expect(html).toContain('<pre class="hljs"><code>');
+      expect(html).not.toContain("code-block");
+      // The language is still recorded — the branch is about the control, not the marker.
+      expect(html).toContain('data-lang="js"');
     });
 
     it("escapes a label rather than letting it close the attribute", () => {
@@ -134,6 +136,71 @@ describe("renderMarkdown", () => {
       const html = renderMarkdown("```js\nx\n```", { copy: '"><script>', copied: "ok" });
       expect(html).not.toContain("<script>");
       expect(html).toContain("&quot;&gt;&lt;script&gt;");
+    });
+  });
+
+  describe("the header a code block can carry", () => {
+    const labels = { copy: "复制", copied: "已复制" };
+
+    it("shows the file and the language from the fence's info string", () => {
+      /*
+       * markdown-it already splits the info string: `langName` is the first word and everything
+       * after it is handed to the highlight hook as its third argument. The app used to declare
+       * `highlight(str, lang)` and drop it, so a filename the model wrote was parsed and thrown
+       * away on every render.
+       */
+      const html = renderMarkdown("```python app.py\nprint(1)\n```", labels);
+      expect(html).toContain('<span class="code-head" data-note-skip>');
+      expect(html).toContain('<span class="code-file">app.py</span>');
+      expect(html).toContain('<span class="code-lang">python</span>');
+      // …and the code is still highlighted as Python, not as the filename.
+      expect(html).toContain("hljs-built_in");
+    });
+
+    it("shows a language with no file, which is the ordinary case", () => {
+      const html = renderMarkdown("```ts\nconst a = 1;\n```", labels);
+      expect(html).toContain('<span class="code-lang">ts</span>');
+      expect(html).not.toContain("code-file");
+    });
+
+    it("claims no language it cannot colour", () => {
+      /*
+       * An info word nothing recognises is not a language, and a pill repeating it would be the
+       * app inventing a fact — ` ```app.py ` and ` ```foobar ` are the same thing to highlight.js.
+       * The block renders as it always did: escaped text, no header.
+       */
+      for (const info of ["app.py", "foobar"]) {
+        const html = renderMarkdown("```" + info + "\nbody\n```", labels);
+        expect(html, info).not.toContain("code-head");
+        expect(html).not.toContain("code-lang");
+      }
+    });
+
+    it("renders exactly as before when the fence names nothing", () => {
+      const html = renderMarkdown("```\nplain\n```", labels);
+      expect(html).not.toContain("code-head");
+      expect(html).toContain("plain");
+    });
+
+    it("escapes both halves rather than letting them open a tag", () => {
+      // The info string is model-authored, and these values become markup — in element content
+      // and in the marker's own attributes.
+      const html = renderMarkdown('```python "><img src=x>\nbody\n```', labels);
+      expect(html).not.toContain("<img");
+      expect(html).toContain("&quot;&gt;&lt;img src=x&gt;");
+    });
+
+    it("keeps the header out of the text a note anchor counts over", () => {
+      // The strip is the renderer's chrome, like the copy control beside it. Counted as message
+      // text it would shift the occurrence arithmetic for every note anchored below it —
+      // including notes written before the strip existed.
+      const html = renderMarkdown("```python app.py\nbody\n```", labels);
+      expect(html).toContain("data-note-skip");
+    });
+
+    it("puts the header before the control, which is positioned over the corner", () => {
+      const html = renderMarkdown("```python app.py\nbody\n```", labels);
+      expect(html.indexOf("code-head")).toBeLessThan(html.indexOf("data-copy-code"));
     });
   });
 
