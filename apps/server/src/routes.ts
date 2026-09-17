@@ -64,11 +64,14 @@ import {
   isPlatformAdmin,
   isUserRole,
   MAX_ATTACHMENT_BYTES,
+  type MessageUsage,
+  type UsageStats,
   MAX_UPLOAD_CEILING_BYTES,
   MIN_UPLOAD_LIMIT_BYTES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   PROFILE_ABOUT_MAX,
+  type UsagePurpose,
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   PLATFORM_ADMIN_ROLES,
@@ -116,6 +119,14 @@ import { makeThreadClassifier } from "./agent/threads.js";
 import { makeInsightGenerator } from "./agent/insights.js";
 import { makeNoteSummarizer } from "./agent/notesSummary.js";
 import { buildInsightViews, generateInsights } from "./insights.js";
+import {
+  bucketBy,
+  buildSessionRows,
+  buildStats,
+  recordUsage,
+  usageFilter,
+  type StatsQuery,
+} from "./usage.js";
 import { createNote, deleteNote, updateNote } from "./notes.js";
 import { readNoteSync, runNoteSync } from "./notesExport.js";
 import { listDiagramViews, registerDiagram } from "./diagrams.js";
@@ -136,8 +147,9 @@ import {
 } from "./quizzes.js";
 import type { DocumentService } from "./documents/service.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { turnClock, type TurnClock } from "./agent/clock.js";
+import { serverTimeZone, turnClock, type TurnClock } from "./agent/clock.js";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
+import { describeModel } from "./agent/model.js";
 import { classifyProviderError } from "./agent/providerErrors.js";
 import { fallbackTitle, generateTitle } from "./agent/title.js";
 import { uniqueSessionTitle } from "./sessionTitles.js";
@@ -2617,7 +2629,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       await syncThreads(
         db,
         id,
-        makeThreadClassifier({ provider, modelId, reasoning: threadReasoning }),
+        makeThreadClassifier({
+          provider,
+          modelId,
+          reasoning: threadReasoning,
+          onUsage: passRecorder({
+            userId,
+            workspaceId: owned.session.workspaceId,
+            sessionId: id,
+            provider,
+            modelId,
+            purpose: "thread",
+          }),
+        }),
         "sync",
         modelId
       );
@@ -2806,7 +2830,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       sessionId: id,
       sessionDir: sessionDir(owned.workspace.dirPath, id),
       sessionTitle: owned.session.title,
-      summarize: makeNoteSummarizer({ provider, modelId, reasoning: noteSyncReasoning }),
+      summarize: makeNoteSummarizer({
+        provider,
+        modelId,
+        reasoning: noteSyncReasoning,
+        onUsage: passRecorder({
+          userId,
+          workspaceId: owned.workspace.id,
+          sessionId: id,
+          provider,
+          modelId,
+          purpose: "summary.notes",
+        }),
+      }),
       model: modelId,
     }).catch(() => undefined);
 
@@ -2861,7 +2897,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       db,
       userId,
       id,
-      makeInsightGenerator({ provider, modelId, reasoning: insightReasoning }),
+      makeInsightGenerator({
+        provider,
+        modelId,
+        reasoning: insightReasoning,
+        onUsage: passRecorder({
+          userId,
+          workspaceId: owned.session.workspaceId,
+          sessionId: id,
+          provider,
+          modelId,
+          purpose: "insight",
+        }),
+      }),
       modelId
     );
   });
@@ -2895,6 +2943,83 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(404).send(apiError("INSIGHT_NOT_FOUND", "insight not found"));
     }
     return { ok: true };
+  });
+
+
+  /* -------------------------------- usage stats -------------------------------- */
+  /*
+   * What the installation's model calls cost, three ways.
+   *
+   * Two routes over one query module, and the split is the permission model rather than a
+   * preference: an account reads its own ledger, and an administrator reads anybody's. Neither
+   * needs a new concept — the same "an account's own data is its own" rule the workspace and
+   * session routes already follow, and the same `requirePlatformAdmin` the console's other
+   * screens use.
+   *
+   * All three are **scope-only**: the ledger is derived observability data, so there is nothing
+   * here to write, nothing to own and nothing a delete could invalidate.
+   */
+
+  /** The query every one of them takes, read off the URL. */
+  function statsQuery(
+    request: FastifyRequest,
+    override?: { userId?: string }
+  ): StatsQuery {
+    const q = request.query as Record<string, unknown> | undefined;
+    const str = (key: string): string | undefined => {
+      const value = q?.[key];
+      return typeof value === "string" && value.trim() ? value.trim() : undefined;
+    };
+    const query: StatsQuery = {};
+    const from = str("from");
+    const to = str("to");
+    const timezone = str("timezone");
+    const workspaceId = str("workspaceId");
+    if (from) query.from = from;
+    if (to) query.to = to;
+    if (timezone) query.timezone = timezone;
+    if (workspaceId) query.workspaceId = workspaceId;
+    // The account, when one was resolved for us — an administrator's `?userId=` filter, or the
+    // caller's own id. Set last so a body cannot name somebody else's ledger on the self route.
+    if (override?.userId) query.userId = override.userId;
+    return query;
+  }
+
+  /** Every figure one statistics page shows, from one read of the ledger. */
+  function statsFor(query: StatsQuery): UsageStats {
+    const filter = usageFilter(query, serverTimeZone() ?? "UTC");
+    return buildStats(db.listUsageRows(filter), filter, db.usageSince(query.userId));
+  }
+
+  app.get("/api/stats", async (request) => statsFor(statsQuery(request, { userId: actor(request).id })));
+
+  app.get("/api/stats/sessions", async (request) => {
+    const user = actor(request);
+    const filter = usageFilter(statsQuery(request, { userId: user.id }), serverTimeZone() ?? "UTC");
+    return { sessions: buildSessionRows(db.listUsageRows(filter)) };
+  });
+
+  /**
+   * The console's view, which may name an account and otherwise reports the whole installation.
+   *
+   * `byUser` is added here and nowhere else: it is the one field whose *presence* is a permission,
+   * so a self-scoped response never carries a breakdown of other people's spend.
+   */
+  app.get("/api/admin/stats", async (request, reply) => {
+    const admin = requirePlatformAdmin(request, reply);
+    if (!admin) return reply;
+    const q = request.query as Record<string, unknown> | undefined;
+    const asked = typeof q?.["userId"] === "string" ? (q["userId"] as string).trim() : "";
+    const query = statsQuery(request, asked ? { userId: asked } : undefined);
+    const filter = usageFilter(query, serverTimeZone() ?? "UTC");
+    const rows = db.listUsageRows(filter);
+    const stats = buildStats(rows, filter, db.usageSince(query.userId || undefined));
+    stats.byUser = bucketBy(
+      rows,
+      (row) => row.userId,
+      (row) => row.userName ?? undefined
+    );
+    return stats;
   });
 
   /* ------------------------------- session files ------------------------------- */
@@ -3814,6 +3939,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   async function summarizeTurnImages(input: {
     provider: ProviderRecord | undefined;
     modelId: string;
+    /** This pass's own ledger reporter — see `passRecorder`. */
+    onUsage?: (usage: MessageUsage, durationMs: number) => void;
     /**
      * Whether the model can see at all.
      *
@@ -3849,6 +3976,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           modelId: input.modelId,
           dataUrl,
           sample: input.sample,
+          // One row per image described, because that is one model call: the loop is over the
+          // turn's images, and a single row for the batch would hide how many calls it took.
+          ...(input.onUsage ? { onUsage: input.onUsage } : {}),
         });
         if (!summary) continue;
 
@@ -3879,6 +4009,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     modelId: string;
     userMessage: string;
     assistantMessage: string;
+    /** This pass's own ledger reporter — see `passRecorder`. */
+    onUsage?: (usage: MessageUsage, durationMs: number) => void;
   }): Promise<{ title: string; state: TitleState } | undefined> {
     try {
       return { title: await generateTitle(input), state: "model" };
@@ -3903,7 +4035,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     userId: string,
     sessionId: string,
     provider: ProviderRecord | undefined,
-    modelId: string
+    modelId: string,
+    /** This pass's own ledger reporter — see `passRecorder`. */
+    onUsage: (usage: MessageUsage, durationMs: number) => void
   ): void {
     let installed = false;
     try {
@@ -3917,7 +4051,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     void syncThreads(
       db,
       sessionId,
-      makeThreadClassifier({ provider, modelId, reasoning: threadReasoning }),
+      makeThreadClassifier({ provider, modelId, reasoning: threadReasoning, onUsage }),
       "turn",
       modelId
     ).catch((err) => {
@@ -4381,8 +4515,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       user: UserLayout;
       /** What this turn sent, so the images among them can be described — see below. */
       attachments?: readonly Attachment[];
+      /** How long the turn took, for the usage ledger. Measured by the caller. */
+      durationMs?: number;
     }
   ): Promise<void> {
+    /*
+     * Which model wrote this message, resolved once and used twice — on the row and on the ledger
+     * entry below. One resolution is what keeps the transcript and the statistics from ever
+     * disagreeing about which model ran a turn.
+     */
+    const model = describeModel(ctx.provider, ctx.modelId);
     const assistantMessage = db.createMessage({
       id: newId(),
       sessionId: id,
@@ -4391,9 +4533,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       reasoning: result.reasoning || undefined,
       toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
       usage: Object.keys(result.usage).length > 0 ? result.usage : undefined,
+      model,
       stopped: result.stopped,
     });
     db.touchSession(id);
+
+    /*
+     * The turn, in the ledger. One row per finished turn — not per ReAct step — because the model
+     * was billed for the turn and `result.usage` is already the sum across its steps.
+     *
+     * A stopped turn reports no usage at all (see `runAgentStream`), so `recordUsage` writes
+     * nothing: a half-finished step's figures are not a number worth summing, and an all-zero row
+     * would drag every average toward it.
+     */
+    recordUsage(db, {
+      userId,
+      workspaceId: session.workspaceId,
+      sessionId: id,
+      messageId: assistantMessage.id,
+      purpose: "chat",
+      model,
+      usage: result.usage,
+      durationMs: opts.durationMs ?? null,
+    });
 
     sse.send({ type: "message_done", message: assistantMessage });
 
@@ -4412,6 +4574,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       userId,
       attachments: opts.attachments ?? [],
       sample: opts.userMessage ?? session.title,
+      onUsage: passRecorder({
+        userId,
+        workspaceId: session.workspaceId,
+        sessionId: id,
+        provider: ctx.provider,
+        modelId: ctx.modelId,
+        purpose: "summary.media",
+      }),
     });
 
     // Name the conversation from its first exchange, unless the user already typed a
@@ -4430,6 +4600,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         modelId: ctx.modelId,
         userMessage: opts.userMessage,
         assistantMessage: result.content,
+        onUsage: passRecorder({
+          userId,
+          workspaceId: session.workspaceId,
+          sessionId: id,
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          purpose: "title",
+        }),
       });
       if (titled) {
         /*
@@ -4453,11 +4631,64 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     // Topic classification runs after every finished turn while the widget is installed —
     // not awaited, so it never delays `done`, and swallowed internally on failure.
-    triggerThreadSync(userId, id, ctx.provider, ctx.modelId);
+    triggerThreadSync(
+      userId,
+      id,
+      ctx.provider,
+      ctx.modelId,
+      passRecorder({
+        userId,
+        workspaceId: session.workspaceId,
+        sessionId: id,
+        provider: ctx.provider,
+        modelId: ctx.modelId,
+        purpose: "thread",
+      })
+    );
+  }
+
+
+  /**
+   * A recorder for one out-of-band pass: the attribution all of them share.
+   *
+   * Built here rather than inside each pass, because the passes differ only in their *purpose* —
+   * every one of them runs inside an account's turn or an account's session, and resolving the ids
+   * in one place is what stops a new pass from being wired with a different idea of whose call it
+   * was. The model is resolved once, at build time, so a ledger row and the transcript cannot
+   * disagree about which model ran.
+   *
+   * The returned callback goes straight to a pass's `onUsage`, which calls it only when the
+   * provider reported something — see `recordUsage` for why an unreported call writes no row.
+   */
+  function passRecorder(input: {
+    userId: string;
+    workspaceId?: string | null;
+    sessionId?: string | null;
+    provider: ProviderRecord | undefined;
+    modelId: string;
+    purpose: UsagePurpose;
+  }): (usage: MessageUsage, durationMs: number) => void {
+    const model = describeModel(input.provider, input.modelId);
+    return (usage, durationMs) => {
+      recordUsage(db, {
+        userId: input.userId,
+        workspaceId: input.workspaceId ?? null,
+        sessionId: input.sessionId ?? null,
+        purpose: input.purpose,
+        model,
+        usage,
+        durationMs,
+      });
+    };
   }
 
   /** Report a failed turn and keep history well-formed. */
-  function failTurn(id: string, err: unknown, sse: ReturnType<typeof createSseWriter>): void {
+  function failTurn(
+    id: string,
+    ctx: TurnContext,
+    err: unknown,
+    sse: ReturnType<typeof createSseWriter>
+  ): void {
     const errorText = err instanceof Error ? err.message : String(err);
     // The code is additive and lives only on the event: `errorText` below is persisted
     // verbatim, because that `⚠️` line is replayed to the model next turn. Rewriting the
@@ -4470,6 +4701,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       sessionId: id,
       role: "assistant",
       content: `⚠️ ${errorText}`,
+      // Attributed like any other assistant message: "which model failed" is the first question
+      // anybody asks about a failed turn, and a row with no model cannot answer it.
+      model: describeModel(ctx.provider, ctx.modelId),
     });
   }
 
@@ -4654,6 +4888,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const turn = beginTurn(request, id);
 
     try {
+      // Wall-clock time for the call, which is the ledger's one non-token figure. Measured
+      // around the whole run rather than around the provider request: a turn that spends four
+      // seconds in tools and one in the model is a turn that took five.
+      const turnStartedAt = Date.now();
       const result = await runAgentStream({
         provider: ctx.provider,
         modelId: ctx.modelId,
@@ -4697,6 +4935,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       });
 
       await finishTurn(id, userId, session, ctx, result, sse, {
+        durationMs: Date.now() - turnStartedAt,
         historyLength: history.length,
         userMessage: message,
         user: treeFor(actor(request)),
@@ -4705,7 +4944,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         attachments: [...storedAttachments, ...storedSources],
       });
     } catch (err) {
-      failTurn(id, err, sse);
+      failTurn(id, ctx, err, sse);
     } finally {
       // Before `sse.end()`: closing the socket is exactly the event the disconnect listener
       // is watching for, and it must not read as the client having gone away.
@@ -4816,6 +5055,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     try {
       // Read history *after* the answer was written, so the resumed run sees it.
       const history = db.listMessagesForUser(id, userId);
+      // Wall-clock time for the call, which is the ledger's one non-token figure. Measured
+      // around the whole run rather than around the provider request: a turn that spends four
+      // seconds in tools and one in the model is a turn that took five.
+      const turnStartedAt = Date.now();
       const result = await runAgentStream({
         provider: ctx.provider,
         modelId: ctx.modelId,
@@ -4853,12 +5096,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       });
 
       await finishTurn(id, userId, session, ctx, result, sse, {
+        durationMs: Date.now() - turnStartedAt,
         historyLength: history.length,
         userMessage: null,
         user: treeFor(actor(request)),
       });
     } catch (err) {
-      failTurn(id, err, sse);
+      failTurn(id, ctx, err, sse);
     } finally {
       turn.finish();
       sse.send({ type: "done" });
@@ -4956,6 +5200,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const turn = beginTurn(request, id);
 
     try {
+      // Wall-clock time for the call, which is the ledger's one non-token figure. Measured
+      // around the whole run rather than around the provider request: a turn that spends four
+      // seconds in tools and one in the model is a turn that took five.
+      const turnStartedAt = Date.now();
       const result = await runAgentStream({
         provider: ctx.provider,
         modelId: ctx.modelId,
@@ -4991,12 +5239,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       });
 
       await finishTurn(id, userId, session, ctx, result, sse, {
+        durationMs: Date.now() - turnStartedAt,
         historyLength: history.length,
         userMessage: null,
         user: treeFor(actor(request)),
       });
     } catch (err) {
-      failTurn(id, err, sse);
+      failTurn(id, ctx, err, sse);
     } finally {
       turn.finish();
       sse.send({ type: "done" });

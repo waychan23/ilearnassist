@@ -57,6 +57,9 @@ import type {
   UpdateUploadSettingsInput,
   UpdateUserInput,
   UploadAttachmentInput,
+  UsageQuery,
+  UsageSessionsResponse,
+  UsageStats,
   User,
   UserCredentials,
   WidgetId,
@@ -511,6 +514,17 @@ export const api = {
    * Accounts, for a superadmin. Every one of these answers 403 for anybody else, which is the
    * server's rule and not a screen's: a hidden button is not a permission.
    */
+
+  /*
+   * Usage statistics. Three routes over one shape: an account's own ledger, its per-conversation
+   * breakdown, and the console's installation-wide view. The query is built here rather than by
+   * the callers so the three cannot encode the range differently — and so an absent bound is
+   * genuinely *absent* from the URL rather than sent as an empty string the server has to ignore.
+   */
+  usage: (query: UsageQuery = {}) => request<UsageStats>(`/stats${usageParams(query)}`),
+  usageSessions: (query: UsageQuery = {}) =>
+    request<UsageSessionsResponse>(`/stats/sessions${usageParams(query)}`),
+  adminUsage: (query: UsageQuery = {}) => request<UsageStats>(`/admin/stats${usageParams(query)}`),
 
   listAccounts: () => request<{ users: AdminUser[] }>("/admin/users"),
   createAccount: (input: CreateUserInput) =>
@@ -1282,4 +1296,20 @@ export function streamAnswers(
 export function streamRegenerate(sessionId: string): AsyncGenerator<ChatStreamEvent> {
   // The only body field: a regenerate is a turn, so it states the time like one.
   return streamPost(`/sessions/${sessionId}/regenerate`, { timezone: browserTimeZone() });
+}
+
+/**
+ * A statistics query as a query string, with the empty fields left out.
+ *
+ * Omitting is the only way to say nothing here: the server reads an unparseable bound as
+ * "unbounded" (deliberately — see `usage.ts`), so an empty string would be a malformed date it had
+ * to be defensive about, and a blank `timezone` would read as a zone the reader never sent.
+ */
+function usageParams(query: UsageQuery): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === "string" && value) params.set(key, value);
+  }
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : "";
 }

@@ -39,6 +39,13 @@ const DYNAMIC_PREFIXES = [
   "settings.policy.",
   /* `t(`admin.nav.${id}`)`, the console's left menu, over the closed section-id union. */
   "admin.nav.",
+  /*
+   * `t(`usage.purpose.${key}`)` in the stats panel, over the closed `USAGE_PURPOSES` union in
+   * `packages/shared`. The id is the *server's* — it arrives on a ledger row — so unlike every
+   * other label on that page there is nothing to spell literally, and a `switch` would be six
+   * `t()` calls whose only job is to name six purposes correctly.
+   */
+  "usage.purpose.",
   /* `t(`widgets.insight.types.${type}`)` in the insight panel, over the closed `INSIGHT_TYPES`
      union. Five segments for eight kinds: the alternative is a `switch` with eight literal keys
      whose only job would be to spell eight strings correctly, and this prefix cannot hide a typo

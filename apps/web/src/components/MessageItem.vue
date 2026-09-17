@@ -300,6 +300,17 @@ async function regenerate(): Promise<void> {
 }
 
 const usage = computed(() => props.message?.usage ?? null);
+
+/**
+ * Which model wrote this reply, when it was recorded.
+ *
+ * A model is a generation parameter the user can change mid-conversation, so a transcript can hold
+ * two of them — and a message that does not say which produced it makes the token figures beside it
+ * unattributable. Absent on every message written before the column existed, and on user messages,
+ * which is why this renders nothing rather than a placeholder.
+ */
+const modelName = computed(() => props.message?.model?.modelName ?? "");
+
 const usageText = computed(() => {
   const u = usage.value;
   if (!u) return "";
@@ -437,6 +448,19 @@ const usageText = computed(() => {
         >
           <Icon name="trash" />
         </button>
+        <!--
+          The model first, then the figures: the numbers mean nothing without knowing which model
+          produced them, and a conversation that switched models is exactly when a reader looks at
+          this line. Two spans rather than one joined string so the model keeps its own testid.
+        -->
+        <span
+          v-if="modelName"
+          class="model-line"
+          data-testid="message-model"
+          :title="props.message?.model?.providerName ?? ''"
+        >
+          {{ modelName }}
+        </span>
         <span v-if="usageText" class="usage-line" :title="t('message.contextTokens', { count: formatTokens(usage?.contextTokens ?? 0) })">
           {{ usageText }}
         </span>
@@ -546,6 +570,23 @@ const usageText = computed(() => {
   padding: var(--space-1) var(--space-3);
   color: var(--text-3);
 }
+/* The model's own line, quieter than the figures beside it: a reader looking at this row is
+ * usually reading the tokens, and the name is what makes them attributable. `cursor: default`
+ * for the same reason as the line below — it is a label, not a control, and the tooltip on each
+ * is the pointer's only reward. */
+.model-line {
+  font-size: var(--fs-1);
+  color: var(--text-3);
+  cursor: default;
+}
+
+/* A separator between the two, drawn rather than typed: a `·` in the markup would be content the
+ * note-anchor walk counts, and the two spans are conditional so a hard-coded one would dangle. */
+.model-line + .usage-line::before {
+  content: "·";
+  margin-right: var(--space-2);
+}
+
 .usage-line {
   font-size: var(--fs-1);
   color: var(--text-3);

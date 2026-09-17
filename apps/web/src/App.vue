@@ -194,7 +194,7 @@ watch(
          password-change screen shares with the sign-in screen: both are one centred card with
          no sidebar, which is a layout rather than a session state. The `home` class is the
          same rule for the pages that do have a header — see `style.css`. */
-      home: view === 'home' || view === 'account' || view === 'admin',
+      home: view === 'home' || view === 'account' || view === 'admin' || view === 'usage',
       auth: view === 'login' || view === 'password',
       /* The rail is a grid *track*, not a width on the sidebar. See `sidebarRail` for the
          two conditions inside it, and `style.css` for why the track is the element that

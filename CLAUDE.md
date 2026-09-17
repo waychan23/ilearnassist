@@ -263,6 +263,7 @@ apps/server/src/
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
   agent/clock.ts          # what time it is where the user is, for the turn's prompt
+  agent/callUsage.ts      # the one place usage_metadata becomes a MessageUsage
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
   agent/mediaSummary.ts   # one line about an image, from the model that saw it
@@ -288,6 +289,7 @@ apps/server/src/
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   widgets.ts              # sumUsage + the widget-selection validator (pure)
+  usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
   notes.ts                # the notes widget's records: what a body may become a note (pure)
   insights.ts             # the insight pass: prompt, defensive parse, the wipe-then-insert write
 apps/web/src/
@@ -315,7 +317,9 @@ apps/web/src/
   utils/locale.ts         # browser-language detection + the alias table
   utils/mermaid.ts        # the lazy mermaid chunk: theme variables, parse, render
   utils/noteAnchor.ts     # selection → quote + occurrence, and back (pure, DOM-only)
+  utils/charts.ts         # the lazy Chart.js chunk + the palette read from the live stylesheet
   utils/widgetTabs.ts     # the tab strip's fit arithmetic (pure)
+  components/stats/       # StatsPanel (both statistics pages) + UsageChart (the canvas)
   widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
@@ -326,14 +330,14 @@ apps/web/src/
   utils/referencePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
   utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
   utils/sourceTree.ts     # the source browser's tree: group by origin, flatten by open set
-  components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
+  components/…            # App, LoginView, WorkspaceHome, UsageView, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
                           #   AskUserCard, Composer, SourceMentionPicker, WriteLocationField,
                           #   FileTree, WidgetPanel, AppMenu,
                           #   WidgetTabStrip, GenerationParams, NoteEditor,
                           #   MessageSelectionToolbar,
-                          #   dialogs (Settings, WorkspaceSettings, SourceBrowser, AddSource,
-                          #   FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
+                          #   ProfileForm, dialogs (Settings, WorkspaceSettings, SourceBrowser,
+                          #   AddSource, FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -984,6 +988,34 @@ Fuller map in `docs/reference.md`.
   accessors that *do* take a bare session id (`touchSession`, `createMessage`,
   `skipAwaitingToolCalls`, …) are documented as such in `AppDb`: every caller reaches them
   after a scoped read has already resolved the session.
+- **Every model call writes one row to a ledger, and a message records the model that wrote it.**
+  `usage_events` is what answers "what did this cost, and for what"; `messages.provider_*`/`model_*`
+  is what answers "which model wrote this". Four things are load-bearing:
+  - **The ledger is not a sum over `messages`.** Only a *turn* writes a message, and five other calls
+    the server makes on its own — the auto-titler, the turn classifier, the insight pass, the image
+    describer, the note-export summariser — cost real tokens no transcript holds. A purpose breakdown
+    is only expressible because all six meet in one table. It is a pure DDL addition, so no
+    `SCHEMA_VERSION` bump.
+  - **`agent/callUsage.ts` is the one place `usage_metadata` becomes a `MessageUsage`**, used by the
+    main loop and all five passes. Two mappings would be two chances for a transcript and a ledger
+    row to disagree about what a provider reported. Each pass reports through an optional `onUsage`,
+    and `passRecorder` in `routes.ts` resolves the attribution once — a new pass wired by hand is one
+    wired with a different idea of whose call it was.
+  - **`recordUsage` cannot fail the call it describes and writes nothing for an unreported one.** An
+    all-zero row would claim a free call and drag every average toward it.
+  - **Cache-miss input is derived, never stored**: `cached_input_tokens` is a *subset* of
+    `input_tokens`, so a third column could contradict the other two with nothing to arbitrate.
+    `duration_ms` is nullable and zero is *not* the same as NULL — "nobody timed this" versus "it came
+    back instantly" — which is why the panel shows an em dash for a bucket whose `durationMs` is 0.
+  The date range is cut in **the reader's zone**, per day via `Intl` rather than a fixed offset (a
+  DST boundary makes the latter wrong), and days inside a named range are filled with zeroes so a
+  quiet week does not draw as a busy line. The ledger is **forward-only** — no backfill from
+  `messages` — so the pages state when counting began rather than implying a history they lack.
+  `byUser` is present **only** on the console's route; its absence on the other two *is* the
+  permission. Charts are a **lazy chunk** (`utils/charts.ts`) whose palette is read from the live
+  stylesheet as **concrete colours, never `var()`** — a canvas has no cascading context, so a `var()`
+  is a string it silently ignores, which is mermaid's `themeVariables` problem verbatim. See
+  `docs/usage.md`.
 - **A Copilot is owned, and "platform" is not a tier — it is a published one.** `copilots` carries
   `user_id` and a `visibility` of `private` or `public`, not an admin role, so a Copilot the
   operator wants every account to have is simply one they published, and "ordinary users cannot
@@ -1917,6 +1949,7 @@ Fuller map in `docs/reference.md`.
 
 For the full architecture and configuration reference, see `docs/`. Those files that are working
 references rather than background: `docs/design-system.md` for anything visual, `docs/prompts.md`
-before changing any system prompt or adding one, `docs/widgets.md` before adding a widget to the
-right sidebar, and `docs/session-locks.md` before touching anything that writes to a conversation
-from more than one client.
+before changing any system prompt or adding one, `docs/usage.md` before touching the token ledger or
+the statistics pages, `docs/widgets.md` before adding a widget to the right sidebar, and
+`docs/session-locks.md` before touching anything that writes to a conversation from more than one
+client.
