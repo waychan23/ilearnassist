@@ -15,7 +15,7 @@ import {
   parseDiagramDecisions,
   parseTableDecisions,
   parseThreadDecisions,
-  THREAD_SYSTEM_PROMPT,
+  threadSystemPrompt,
   progressNodeForTurn,
   segmentTurns,
   syncThreads,
@@ -273,9 +273,9 @@ describe("buildThreadPrompt", () => {
   it("tells the model how to answer for a table, and that a table starts no thread", () => {
     // The rule is in the system prompt rather than the user one, so it is stated once for every
     // chunk — and the "no new thread" half is the part a model would otherwise try.
-    expect(THREAD_SYSTEM_PROMPT).toContain("<table ref=");
-    expect(THREAD_SYSTEM_PROMPT).toContain('"tables"');
-    expect(THREAD_SYSTEM_PROMPT).toContain("never starts its own thread");
+    expect(threadSystemPrompt()).toContain("<table ref=");
+    expect(threadSystemPrompt()).toContain('"tables"');
+    expect(threadSystemPrompt()).toContain("never starts its own thread");
   });
 
   it("is byte-identical when no diagram map is given", () => {

@@ -21,6 +21,7 @@ import {
   type Workspace,
 } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
+import { renderPrompt } from "../prompts.js";
 import type { UserLayout } from "../paths.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
 import type { ResolvedReference } from "../turnReferences.js";
@@ -101,7 +102,7 @@ export interface RunAgentInput {
    * says when to reach for it.
    */
   collectPageGuidance?: string;
-  /** `ila_table`'s positive half — see `TABLE_GUIDANCE`. */
+  /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
   /**
    * What the user opened to this conversation with `@`, on turns where `ila_explore` is
@@ -300,7 +301,7 @@ export interface SystemPromptInput {
   planGuidance?: string;
   quizGuidance?: string;
   collectPageGuidance?: string;
-  /** `ila_table`'s positive half — see `TABLE_GUIDANCE`. */
+  /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
   /**
    * What the user has opened to this conversation with `@`.
@@ -315,106 +316,81 @@ export interface SystemPromptInput {
   quizMakeupNote?: string;
 }
 
-function buildSystemPrompt(input: SystemPromptInput): string {
-  const base =
-    input.persona.trim() ||
-    "You are a helpful, precise AI assistant. You can use file tools to read and write files inside the user's active workspace, a web_search tool to look up current information, and a web_fetch tool to read the contents of a specific URL. When a choice is genuinely the user's to make — several defensible options and no way to tell which they want — use ask_user to put the options to them rather than guessing. Do the same once you have produced a plan or another substantial artifact: put it to them for confirmation rather than assuming it is accepted. Prefer giving the answer directly, and only use tools when they are genuinely needed.";
+/**
+ * The turn's system prompt: the catalog's skeleton, with each block rendered into it.
+ *
+ * The **text** is all in `prompts.json` — `chat.system` is the skeleton, and each `{{name}}` in it
+ * is another entry in that file. This function holds only the **conditions**: which blocks apply
+ * to this turn, and which of the two sandbox sentences the workspace block gets. That split is the
+ * whole point — a reader can see and reorder the entire prompt without opening this file, and a
+ * deployment can rewrite any block through `<dataRoot>/config.patch.json` without a rebuild.
+ *
+ * Two rules worth knowing when editing either side:
+ *
+ * - **A block is prefixed with its own blank line here, not in the catalog.** A patch written by
+ *   hand is then plain prose with no separator to remember, and an absent block takes its
+ *   separator with it — which is what keeps a turn with no widgets byte-identical to one written
+ *   with the blocks inline.
+ * - **A block's condition is never in the catalog**, because a catalog entry is text and a
+ *   condition is not. The clock's unconditional presence, for instance, is deliberate rather than
+ *   incidental: the failure it fixes is a model that does not know it should have asked for the
+ *   date, so it cannot be conditioned on the question being about time.
+ */
+export function buildSystemPrompt(input: SystemPromptInput): string {
+  /** A block, with the blank line that separates it from whatever precedes it. */
+  const block = (text: string | undefined): string => (text ? `\n\n${text}` : "");
 
-  /*
-   * The date, on every turn, stated rather than left to be worked out.
-   *
-   * Not a courtesy and not decoration: a model asked about "today" without being told the date
-   * answers from the most recent date in its training data, and does it with the same confidence
-   * it answers anything else. There is nothing in such a reply to reveal that it is wrong, which
-   * is what makes this worth a fixed cost on every turn in every conversation — including the
-   * ones that have nothing to do with time, where it is only context.
-   *
-   * It goes *second*, right after the persona and before the workspace: it is a fact about the
-   * world the answer is being written in, and the folders are facts about where files go. The
-   * session's own persona, when there is one, is the `base` above and is not displaced.
-   *
-   * There is deliberately no "if the user asks about time" condition. The failure being fixed is
-   * a model that does not know it should have asked, so the instruction has to be unconditional
-   * and has to name the cases rather than wait to be relevant.
-   */
-  const timeNote =
-    `\n\nRight now it is ${input.clock.local} for the user (${input.clock.zone}).\n` +
-    `Your training data ends before this, so this is the only source of truth for the current ` +
-    `date and time: never infer them from the most recent date you remember. Any request that ` +
-    `depends on when it is — today, yesterday, this week, how long ago something happened, ` +
-    `what is coming up, what the latest version is, whether something is out of date — is ` +
-    `answered from the line above.`;
+  // The session's own prompt when it has one, the catalog's default persona otherwise.
+  const persona = input.persona.trim() || renderPrompt("chat.system.persona");
 
-  /*
-   * Two folders, named, with the default spelled out.
-   *
-   * The sentence this replaces said "All file tools are sandboxed to this directory", which
-   * stopped being true the moment a file could be written into the conversation's own folder.
-   * A prompt that understates what the tools can do is not safer than one that overstates it —
-   * it is a model that never uses half of a feature, and an instructor that is wrong about the
-   * app it is running in.
-   *
-   * `workdirPath`, not `dirPath`, for the reason it always was: naming the workspace's parent
-   * would say `sessions/` is inside the sandbox, which the tools would then refuse to honour.
-   */
-  const workspaceNote =
-    `\n\nThe user is working inside a workspace. Two folders are writable:\n` +
-    `${input.workspace.workdirPath}\n` +
-    `  shared by every conversation in this workspace — use it for material the whole ` +
-    `workspace is about (a project, a codebase, a corpus), and for files the user says belong ` +
-    `to the workspace.\n` +
-    `${input.sessionDirPath}\n` +
-    `  this conversation's own folder — nothing else sees it. Use it for material that is about ` +
-    `this conversation, including anything you produce for the user to read here.\n` +
-    `File paths are relative to whichever of the two you are working in.\n` +
-    `A write with no stated location goes to the ${
-      input.writeLocation === "workspace" ? "shared workspace folder" : "conversation folder"
-    }. Pass location:"workspace" or location:"session" to choose deliberately, and follow an ` +
-    `explicit instruction from the user over this default. When a file belongs beside another ` +
-    `file the user referred to, write it into that file's folder. If you cannot tell which ` +
-    `folder a file belongs in, ask with ask_user rather than guessing. ` +
-    /*
-     * The last sentence changes when the user has opened other workspaces, and it changes by
-     * *half*: the read prohibition stops being true, the write one does not. A sentence that
-     * simply vanished would read as "the sandbox is gone", and one left alone would have the
-     * model refusing a tool it was just handed — so the pair is stated together and explicitly,
-     * which is the only form that cannot be read as either.
-     */
-    (input.exploreGuidance !== undefined
-      ? `Reading outside them is allowed only inside the workspaces named below, and only ` +
-        `through the tool that reads them. Never **write** or delete outside these two folders, ` +
-        `and never read outside them by any other route.`
-      : `Never attempt to access files outside these two folders.`);
-
-  // Present while the plan widget is installed, whether or not a plan exists yet — the
-  // rhythm starts the moment one is made.
-  const planNote = input.planGuidance ? `\n\n${input.planGuidance}` : "";
-  // Likewise for the quiz widget: installed or not is the whole switch.
-  const quizNote = input.quizGuidance ? `\n\n${input.quizGuidance}` : "";
-  // Not a widget this time — the switch is whether the tool itself was assembled, which is
-  // what "an installation with web fetching off" looks like from here.
-  const collectNote = input.collectPageGuidance ? `\n\n${input.collectPageGuidance}` : "";
-  // `ila_table`'s positive half, on the same switch as the line above: the tool is assembled, so
-  // the model is told to write the table into its reply as well as record it.
-  const tableNote = input.tableGuidance ? `\n\n${input.tableGuidance}` : "";
-  // The same switch again: assembled, so the conversation holds an `@` grant. It sits after the
-  // workspace note it qualifies, and before the make-up key, which is the most specific
-  // instruction in the prompt and belongs last.
-  const exploreNote = input.exploreGuidance ? `\n\n${input.exploreGuidance}` : "";
-  // One make-up turn's answer key, last: it is the most specific instruction in the prompt.
-  const makeupNote = input.quizMakeupNote ? `\n\n${input.quizMakeupNote}` : "";
-
-  return (
-    base +
-    timeNote +
-    workspaceNote +
-    planNote +
-    quizNote +
-    collectNote +
-    tableNote +
-    exploreNote +
-    makeupNote
+  const clock = block(
+    renderPrompt("chat.system.clock", { local: input.clock.local, zone: input.clock.zone })
   );
+
+  /*
+   * The sandbox sentence changes when the user has opened other workspaces, and it changes by
+   * *half*: the read prohibition stops being true, the write one does not. A sentence that simply
+   * vanished would read as "the sandbox is gone", and one left alone would have the model refusing
+   * a tool it was just handed — so the pair is stated together and explicitly, which is the only
+   * form that cannot be read as either. Both variants are catalog entries; the *choice* is here.
+   */
+  const rule = renderPrompt(
+    input.exploreGuidance !== undefined ? "chat.system.grantedRead" : "chat.system.noEscape"
+  );
+  const workspace = block(
+    renderPrompt("chat.system.workspace", {
+      workdirPath: input.workspace.workdirPath,
+      sessionDirPath: input.sessionDirPath,
+      writeLocation:
+        input.writeLocation === "workspace" ? "shared workspace folder" : "conversation folder",
+      rule,
+    })
+  );
+
+  // The plan block is present while the plan widget is installed, whether or not a plan exists
+  // yet — the rhythm starts the moment one is made. The quiz block's switch is installation too.
+  // The next three are not widgets: their switch is whether the *tool* survived assembly, which
+  // is what "an installation with web fetching off" looks like from here.
+  const plan = block(input.planGuidance);
+  const quiz = block(input.quizGuidance);
+  const collectPage = block(input.collectPageGuidance);
+  const table = block(input.tableGuidance);
+  // The `@` grant, which qualifies the workspace block above it.
+  const explore = block(input.exploreGuidance);
+  // One make-up turn's answer key, last: the most specific instruction in the prompt.
+  const makeup = block(input.quizMakeupNote);
+
+  return renderPrompt("chat.system", {
+    persona,
+    clock,
+    workspace,
+    plan,
+    quiz,
+    collectPage,
+    table,
+    explore,
+    makeup,
+  });
 }
 
 /**

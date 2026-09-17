@@ -18,6 +18,7 @@ import {
   renderReadResult,
 } from "../plans.js";
 import { Suspension } from "./suspension.js";
+import { renderPrompt } from "../prompts.js";
 
 /**
  * What the plan tools need from the turn they run in: the database and the server-bound
@@ -99,17 +100,17 @@ const PROGRESS_DESCRIPTION = [
  * discipline). It carries the protocol the tool descriptions cannot enforce: mark the node
  * before teaching, stay on the plan at node boundaries, and hand control back when a side
  * topic pulled the conversation off it.
+ *
+ * The guidance lives in the catalog (`chat.guidance.plan`) so it can be tuned without a rebuild.
+ *
+ * A function rather than a constant, and that is load-bearing: the catalog is patched by the
+ * process entry point (`<dataRoot>/config.patch.json`), which runs *after* every module has been
+ * evaluated. A module-level constant would be the bundled text forever, so a tuned prompt would
+ * silently do nothing.
  */
-export const PLAN_GUIDANCE = [
-  "This conversation has a study plan, tracked through the plan tools and shown in the user's plan panel.",
-  "",
-  "Follow this rhythm while working through it:",
-  "- Before teaching a node, call ila_update_plan_progress to mark it in_progress FIRST, then produce the content. Do not teach a node's content before the call.",
-  "- Teach roughly the current node's scope; if you need the exact state, call ila_read_plan.",
-  "- When a node is done, mark it completed with one progress call (the same call can batch related nodes), then continue with the next node.",
-  "- At node boundaries, check the conversation is still following the plan. If a side question or side topic took over, finish that detour and then ask the user whether to return to the planned track — do not silently drift, and do not force the plan back mid-answer.",
-  "- If the user explicitly wants to change the plan, edit it with ila_make_plan (existing nodes carry their ids).",
-].join("\n");
+export function planGuidance(): string {
+  return renderPrompt("chat.guidance.plan");
+}
 
 export function buildPlanTools(ctx: PlanToolContext) {
   const make = tool(

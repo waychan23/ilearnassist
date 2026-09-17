@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ModelCapability, ProviderModel } from "@ilearnassist/shared";
 import { makeThreadClassifier } from "../../src/agent/threads.js";
-import { THREAD_SYSTEM_PROMPT } from "../../src/threads.js";
+import { threadSystemPrompt } from "../../src/threads.js";
 import type { ProviderRecord } from "../../src/db.js";
 import type { OutOfBandReasoningSetting } from "../../src/config.js";
 import { startFakeLlm, type FakeLlm } from "../helpers/fakeLlm.js";
@@ -55,7 +55,7 @@ describe("makeThreadClassifier", () => {
     modelId = "fake-reasoner",
     reasoning?: OutOfBandReasoningSetting
   ): Promise<void> {
-    await makeThreadClassifier({ provider, modelId, reasoning })(THREAD_SYSTEM_PROMPT, "1. user: hi");
+    await makeThreadClassifier({ provider, modelId, reasoning })(threadSystemPrompt(), "1. user: hi");
   }
 
   /** The thinking field on the most recent request body, if any. */
@@ -107,7 +107,7 @@ describe("makeThreadClassifier", () => {
 
   it("still streams and returns the assembled answer with the switch on", async () => {
     const text = await makeThreadClassifier({ provider: reasoner, modelId: "fake-reasoner", reasoning: "off" })(
-      THREAD_SYSTEM_PROMPT,
+      threadSystemPrompt(),
       "1. user: hi"
     );
     const sent = llm.requests().at(-1) as Record<string, unknown>;
@@ -117,16 +117,16 @@ describe("makeThreadClassifier", () => {
 
   it("rejects a missing provider, model or API key", async () => {
     const run = makeThreadClassifier({ provider: undefined, modelId: "x" });
-    await expect(run(THREAD_SYSTEM_PROMPT, "x")).rejects.toThrow(/No provider configured/);
+    await expect(run(threadSystemPrompt(), "x")).rejects.toThrow(/No provider configured/);
 
     await expect(
-      makeThreadClassifier({ provider: providerWith(), modelId: "" })(THREAD_SYSTEM_PROMPT, "x")
+      makeThreadClassifier({ provider: providerWith(), modelId: "" })(threadSystemPrompt(), "x")
     ).rejects.toThrow(/No model configured/);
 
     const keyless: ProviderRecord = { ...reasoner, apiKey: undefined };
     await expect(
       makeThreadClassifier({ provider: keyless, modelId: "fake-reasoner", reasoning: "off" })(
-        THREAD_SYSTEM_PROMPT,
+        threadSystemPrompt(),
         "x"
       )
     ).rejects.toThrow(/API key/);

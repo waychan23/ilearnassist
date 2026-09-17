@@ -1,6 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { ProviderRecord } from "../db.js";
+import { renderPrompt } from "../prompts.js";
 
 /**
  * One line about an image, written by the model that can see it.
@@ -35,16 +36,6 @@ const MAX_SUMMARY_CHARS = 400;
 /** Output budget, generous for `generateTitle`'s reason: a reasoning model spends it thinking. */
 const MAX_OUTPUT_TOKENS = 512;
 
-const SYSTEM_PROMPT =
-  "You describe images for a study assistant. You receive one image and output a short " +
-  "description of it — nothing else.\n" +
-  "Rules:\n" +
-  "- Write in the same language as the conversation.\n" +
-  "- One to three sentences: what the image shows, and any text in it worth keeping (a " +
-  "diagram's labels, a table's headers, a screenshot's key values).\n" +
-  "- Describe only what is there. Never guess at what is cut off, and never answer a " +
-  "question the image might be asking.\n" +
-  "- Output the description alone: no preamble, no 'This image shows', no quotes.";
 
 export interface SummarizeImageInput {
   provider: ProviderRecord | undefined;
@@ -86,8 +77,12 @@ export async function summarizeImage(input: SummarizeImageInput): Promise<string
     timeout: 30_000,
   });
 
+  // Read here rather than captured in a module constant, so a `<dataRoot>/config.patch.json`
+  // override takes effect: the patch is applied by the process entry point, which runs after this
+  // module has been evaluated.
+  const systemPrompt = renderPrompt("mediaSummary.system");
   const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPT),
+    new SystemMessage(systemPrompt),
     new HumanMessage({
       content: [
         {

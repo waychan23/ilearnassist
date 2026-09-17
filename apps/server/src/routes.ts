@@ -145,11 +145,11 @@ import { needsSummary, summarizeImage } from "./agent/mediaSummary.js";
 import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
-import { COLLECT_PAGE_GUIDANCE } from "./tools/collectPage.js";
-import { TABLE_GUIDANCE } from "./tools/table.js";
+import { collectPageGuidance } from "./tools/collectPage.js";
+import { tableGuidance } from "./tools/table.js";
 import { exploreGuidance } from "./tools/explore.js";
-import { PLAN_GUIDANCE } from "./tools/planTools.js";
-import { QUIZ_GUIDANCE } from "./tools/quizReview.js";
+import { planGuidance } from "./tools/planTools.js";
+import { quizGuidance } from "./tools/quizReview.js";
 import { SUSPENDING_TOOLS } from "./tools/suspending.js";
 import {
   readAsDataUrl,
@@ -4222,7 +4222,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * being an assumption.
        */
       planGuidance: tools.some((t) => (PLAN_TOOL_NAMES as readonly string[]).includes(t.name))
-        ? PLAN_GUIDANCE
+        ? planGuidance()
         : undefined,
       /*
        * Still gated on the install, and the difference from the line above is the mode: the quiz
@@ -4230,7 +4230,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * question. Asking the array here would answer yes whenever the widget is installed and
        * no otherwise, which is the same answer by a longer route.
        */
-      quizGuidance: quizInstalled ? QUIZ_GUIDANCE : undefined,
+      quizGuidance: quizInstalled ? quizGuidance() : undefined,
       /*
        * Read off the assembled set rather than off the config, and that is the whole of the
        * condition: a Copilot whose allow-list excludes `ila_collect_page` gets no guidance for a
@@ -4239,7 +4239,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * question that cannot disagree with the answer.
        */
       collectPageGuidance: tools.some((t) => t.name === "ila_collect_page")
-        ? COLLECT_PAGE_GUIDANCE
+        ? collectPageGuidance()
         : undefined,
       // The same form of the question as the line above: a Copilot whose allow-list excludes
       // `ila_explore` gets no guidance for a call it cannot make, while the grant itself is
@@ -4253,12 +4253,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * Markdown" is a prompt instruction or it is nothing at all. The tool's own description is
        * necessarily a restriction — "not every table" — and a model that was never told the
        * positive half reads a restriction as "usually do not", which is the failure
-       * `COLLECT_PAGE_GUIDANCE` documents one tool over.
+       * `collectPageGuidance` documents one tool over.
        *
        * Asked of the assembled array, like the two above it: a Copilot whose allow-list excludes
        * the tool is never taught a call it cannot make.
        */
-      tableGuidance: tools.some((t) => t.name === TABLE_TOOL_NAME) ? TABLE_GUIDANCE : undefined,
+      tableGuidance: tools.some((t) => t.name === TABLE_TOOL_NAME) ? tableGuidance() : undefined,
       /*
        * The `auto-install` side effect, and the only reason the loop takes a callback for it: the
        * loop knows which tool ran, and this closure knows whose conversation it ran in. It
