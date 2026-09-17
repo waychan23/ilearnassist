@@ -9,7 +9,7 @@ import type { ReferenceChoice } from "../utils/referencePicker";
 import type { Source } from "../api/types";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
-import { openSessionSettings, showAdmin } from "../composables/ui";
+import { closeWidgetDrawer, openSessionSettings, showAdmin } from "../composables/ui";
 import { autosizeTextarea } from "../utils/autosize";
 import { kindLabel, referenceKey } from "../utils/turnRefs";
 import Icon from "./Icon.vue";
@@ -45,7 +45,7 @@ const canSend = computed(
 );
 
 /**
- * Take the caret when a reference is staged.
+ * Take the caret when a reference is staged — and clear whatever is covering this box.
  *
  * **One rule here rather than a call at every entry point**, and that is the point: 追问 is
  * offered from the selection bar, the figure panel, the figure card, the enlarged viewer and the
@@ -54,13 +54,30 @@ const canSend = computed(
  * and the result of forgetting is a chip that has been staged with the caret still somewhere the
  * reader has to move by hand.
  *
+ * **Clearing the widget drawer is the same rule's other half**, and on a phone it is the half that
+ * matters: below 900px that panel is a 320px overlay across the right of a 412px screen, so a
+ * 追问 from one of its rows focuses exactly the field it is sitting on. It is here rather than in
+ * `stageReference` because it is a fact about *this box* — the composer is where the question is
+ * typed, so the composer is what has to be reachable — and because the store has no business
+ * knowing about drawers. A no-op above the breakpoint, where that flag is never set.
+ *
+ * **The `await` is not tidiness, and without it none of this works.** While that panel is open,
+ * `ChatView` — which is to say every ancestor of this textarea — carries `inert`, so focusing the
+ * box does *nothing at all*: it fails silently, the caret stays where it was, and the drawer closes
+ * around it. The flag has to be flipped and the render allowed to land before the focus is worth
+ * asking for. Which also means the caret promise this rule was written for was already broken on a
+ * phone in any conversation with the panel open — nobody had looked.
+ *
  * Watching the *length* rather than the array: a removal is the reader taking a chip back, and
  * pulling their caret to the composer then would be the opposite of what they asked for.
  */
 watch(
   () => store.pendingRefs.length,
-  (count, previous) => {
-    if (count > (previous ?? 0)) textarea.value?.focus();
+  async (count, previous) => {
+    if (count <= (previous ?? 0)) return;
+    closeWidgetDrawer();
+    await nextTick();
+    textarea.value?.focus();
   }
 );
 

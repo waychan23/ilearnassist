@@ -187,6 +187,20 @@
   --z-popover: 60;
   --z-backdrop: 70;
   --z-drawer: 80;
+  /*
+   * A **window**: a floating surface the reader opened and is working in, which is not a menu
+   * and not a modal.
+   *
+   * The gap it fills is the one between the drawer and the modal, and it is not cosmetic. A
+   * popover is *about* the control it hangs off, so the drawer covering it is correct — you
+   * dismiss the menu to use the drawer. A window is not: on a compact viewport the widget panel
+   * is a 320px overlay across the right of a 412px screen, so a note window at `--z-popover` was
+   * almost entirely behind the panel it had just been opened from, with the panel's drawer
+   * painting over it. Below the modal layer rather than level with it, because a window has no
+   * scrim and a dialog raised from one has to cover it — which is `--z-confirm`'s lesson about
+   * ties, one layer down.
+   */
+  --z-window: 90;
   --z-overlay: 100;
   /*
    * The confirmation prompt, above every other overlay rather than level with them.

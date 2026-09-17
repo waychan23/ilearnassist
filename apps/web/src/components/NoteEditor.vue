@@ -482,13 +482,21 @@ function typeLabel(candidate: NoteType): string {
 
 <style scoped>
 /*
- * A floating card, not a modal: no scrim, `--z-popover` (above the page, below every dialog
- * and the mobile drawer), and `position: fixed` so the coordinates the placement math works
- * in are the ones it is drawn in.
+ * A floating card, not a modal: no scrim, `--z-window` — above the page *and above the two
+ * drawers*, below every dialog — and `position: fixed` so the coordinates the placement math
+ * works in are the ones it is drawn in.
+ *
+ * **`--z-popover` was the mistake here**, and it only showed on a phone. A popover is about the
+ * control it hangs off, so a drawer covering it is right; a window is not. This card is opened
+ * *from* the widget panel — a note's row, or the chip that opens the figure a note is about — and
+ * on a compact viewport that panel is an overlay across the right of the screen, so the card was
+ * behind the thing it came from. The maximized size below had already been given the reasoning
+ * (it is at `--z-overlay`, "above the mobile drawer so a grown window is not covered by a rail the
+ * reader opened before it") — the floating size was simply never given the same thought.
  */
 .note-editor {
   position: fixed;
-  z-index: var(--z-popover);
+  z-index: var(--z-window);
   /*
    * Landscape, and the width is the source browser's own rather than a new number: it is the box
    * this app already uses for a window with a body of text in it, and the two are read side by side

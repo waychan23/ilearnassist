@@ -159,7 +159,10 @@ an audit of every `transition` in the app.
 | `--z-popover` | 60 | Menus and popovers above the composer |
 | `--z-backdrop` | 70 | The drawer's scrim |
 | `--z-drawer` | 80 | The drawer itself |
+| `--z-window` | 90 | A floating window the reader is working in (the note window). Its difference from `--z-popover` is what it is *about*: a menu belongs to the control it hangs off, so a drawer covering it is right, while a window opened **from** a drawer must be reachable over it |
 | `--z-overlay` | 100 | Modal overlays |
+| `--z-preview` | 105 | The file preview, which is opened from things (the file tree, the source browser, a figure row) |
+| `--z-confirm` | 110 | The confirmation prompt. Above every other overlay rather than level with them, because two at the same index stack by DOM order and `ConfirmDialog` is mounted first |
 | `--z-toast` | 200 | The error toast |
 
 The ordering is load-bearing, not arbitrary. The drawer sits **above popovers** (its own
