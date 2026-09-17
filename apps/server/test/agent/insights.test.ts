@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ModelCapability, ProviderModel } from "@ilearnassist/shared";
 import { makeInsightGenerator } from "../../src/agent/insights.js";
-import { INSIGHT_SYSTEM_PROMPT } from "../../src/insights.js";
+import { insightSystemPrompt } from "../../src/insights.js";
 import type { ProviderRecord } from "../../src/db.js";
 import type { OutOfBandReasoningSetting } from "../../src/config.js";
 import { startFakeLlm, type FakeLlm } from "../helpers/fakeLlm.js";
@@ -59,7 +59,7 @@ describe("makeInsightGenerator", () => {
     reasoning?: OutOfBandReasoningSetting
   ): Promise<string> {
     return makeInsightGenerator({ provider, modelId, reasoning })(
-      INSIGHT_SYSTEM_PROMPT,
+      insightSystemPrompt(),
       "<plan>…</plan>"
     );
   }
@@ -115,17 +115,17 @@ describe("makeInsightGenerator", () => {
 
   it("rejects a missing provider, model or API key", async () => {
     await expect(
-      makeInsightGenerator({ provider: undefined, modelId: "x" })(INSIGHT_SYSTEM_PROMPT, "x")
+      makeInsightGenerator({ provider: undefined, modelId: "x" })(insightSystemPrompt(), "x")
     ).rejects.toThrow(/No provider configured/);
 
     await expect(
-      makeInsightGenerator({ provider: providerWith(), modelId: "" })(INSIGHT_SYSTEM_PROMPT, "x")
+      makeInsightGenerator({ provider: providerWith(), modelId: "" })(insightSystemPrompt(), "x")
     ).rejects.toThrow(/No model configured/);
 
     const keyless: ProviderRecord = { ...reasoner, apiKey: undefined };
     await expect(
       makeInsightGenerator({ provider: keyless, modelId: "fake-reasoner" })(
-        INSIGHT_SYSTEM_PROMPT,
+        insightSystemPrompt(),
         "x"
       )
     ).rejects.toThrow(/API key/);

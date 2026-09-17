@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QUIZ_GUIDANCE, buildQuizReviewTool } from "../../src/tools/quizReview.js";
+import { quizGuidance, buildQuizReviewTool } from "../../src/tools/quizReview.js";
 import { renderReviewResult } from "../../src/quizzes.js";
 
 /**
@@ -48,8 +48,8 @@ describe("quiz review description", () => {
 
 describe("quiz guidance", () => {
   it("does not let an all-correct quiz collapse into a summary", () => {
-    expect(QUIZ_GUIDANCE).toMatch(/EVERY question gets one, correct answers included/);
-    expect(QUIZ_GUIDANCE).toMatch(
+    expect(quizGuidance()).toMatch(/EVERY question gets one, correct answers included/);
+    expect(quizGuidance()).toMatch(
       /an all-correct quiz is a per-question rundown, not a one-line congratulations/
     );
   });

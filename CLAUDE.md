@@ -242,8 +242,10 @@ apps/server/src/
   cli.ts                  # the administrator CLI entry (argv/stdin/exit codes; rules in adminCli.ts)
   adminCli.ts             # status/create-admin/reset-admin rules, no process access; the boot gate too
   webApp.ts               # serves the built frontend beside the API, when there is one
-  config.ts               # YAML + ${ENV} resolution + .env loader + resolveDataRoot
+  config.ts               # YAML + ${ENV} + .env + resolveDataRoot + the config.patch.json overlay
   paths.ts                # the on-disk layout: data root → users/<slug> → workspaces, sources, db
+  prompts.json            # every system prompt and guidance block, keyed — see docs/prompts.md
+  prompts.ts              # the catalog: rendering, {{placeholders}}, and config.patch.json overrides
   schema.ts               # the DDL, schemaProblem, and the user_version guard (one transaction)
   apiError.ts             # the { error: { code, message, params } } envelope, shared with the CLI
   auth.ts                 # accounts: scrypt passwords, credential policy, bearer tokens, the gate
@@ -1527,6 +1529,29 @@ Fuller map in `docs/reference.md`.
     the right one for the desktop app where the two are the same machine.
   `clock.ts` is pure and takes `now` and the zone as arguments, which is what lets the format be
   tested at a pinned instant rather than at whatever day the suite runs.
+- **Every system prompt lives in one catalog, and is read at call time — never captured in a
+  constant.** `apps/server/src/prompts.json` is a **keyed object** (not an array), so a deployment's
+  `<dataRoot>/config.patch.json` overriding `prompts["title.system"]` replaces exactly that entry
+  through the already-exported `deepMerge`. Three things are load-bearing:
+  - **`renderPrompt(key, vars)`, never `export const`.** The catalog is patched by the *process entry
+    point*, which runs after every module has been evaluated, so a module-level constant would be the
+    bundled text for the process's whole life and a tuned prompt would silently do nothing — the
+    failure this repo names most often. That is why `THREAD_SYSTEM_PROMPT` became
+    `threadSystemPrompt()` and friends. `buildSystemPrompt` keeps only the **conditions** (which
+    blocks apply, which of two sandbox sentences); every **word** comes from the catalog.
+  - **A missing placeholder throws; an empty one renders as nothing.** The split is what lets a block
+    be dropped (an uninstalled widget supplies `""`) while a missing value is loud. The placeholder
+    name is restricted to an identifier so the classifier's `{"decisions":[…]}` schema cannot be
+    mistaken for one, and a test scans every entry for a `{{` the pattern does not match.
+  - **`test/helpers/fakeLlm.ts` identifies out-of-band calls by a substring of their prompt prose**
+    (`"topic-classification function"`, `"reflective study coach"`, `"short summary of a study
+    conversation"`, `"titling function"`). Reflowing one of those four sentences breaks the *test
+    harness* rather than the app, and the failure lands somewhere unrelated — so a test asserts each
+    marker is still in its catalog entry, and changing such a sentence means updating the marker too.
+  `config.patch.json` is **not a prompt feature**: it is deep-merged over the whole config tree, an
+  unreadable file throws naming the path, and a typo'd prompt key warns at boot rather than doing
+  nothing quietly. Tool descriptions and the out-of-band *user*-prompt templates stay in code — they
+  are bound to schemas and to data assembly, not free-standing prompt text. See `docs/prompts.md`.
 - **A referenced source is *linked*, not copied.** `ChatInput.sources` names ids; the server
   links each to the conversation (`session_sources`) and records the snapshot in
   **`messages.sources`**, a column of its own beside `attachments`. The link is what lets a later

@@ -98,6 +98,33 @@ TAVILY_API_KEY=…     # only if webSearch.provider = tavily
 
 Copy `.env.example` to `.env` to get started.
 
+## `config.patch.json` — the deployment's overlay
+
+`config/config.yaml` belongs to the *install*: for a packed desktop build it lives inside the
+application bundle and is replaced wholesale on every update. A deployment that needs to change a
+value without forking the install writes `<dataRoot>/config.patch.json` instead — beside the
+database and the workspaces, and surviving an update for the same reason they do.
+
+```json
+{
+  "server": { "port": 3720 },
+  "tools": { "webFetch": { "maxChars": 12000 } },
+  "prompts": { "chat.system.persona": "You are a patient physics tutor. …" }
+}
+```
+
+- **Read once per process**, so a change takes effect on the next restart.
+- **Deep-merged over the YAML by key.** Arrays replace rather than concatenate, which is what makes
+  "this list, not that one" expressible — a patched `providers` list is the whole list.
+- **`${ENV_VAR}` is resolved inside a patch**, the same as in `config.yaml`.
+- **The result goes through the ordinary validation.** A patch cannot smuggle in a broken install:
+  a `defaultProvider` that names nothing is refused at boot, exactly as it would be from the YAML.
+- **Malformed JSON throws, naming the file.** A patch that silently does nothing is the failure this
+  mechanism exists to prevent.
+- **The `prompts` key is read by the prompt catalog**, not by the config layer — see
+  [prompts.md](prompts.md). It is one key among any others; the file is a general overlay, not a
+  prompt feature with a config-shaped wrapper.
+
 ## Where the data lives
 
 `ILA_DATA_DIR` names the data root — the sqlite database, every account's workspaces, and the

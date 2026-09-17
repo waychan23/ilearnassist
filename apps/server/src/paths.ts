@@ -88,6 +88,23 @@ export function noteSyncLogPath(dataRoot: string): string {
   return join(dataRoot, "logs", "notes.log");
 }
 
+/**
+ * The deployment's own configuration overlay: `<dataRoot>/config.patch.json`.
+ *
+ * At the data root rather than beside `config.yaml`, and the distinction is the whole point of it.
+ * `config/config.yaml` is the *install's* bootstrap — inside the application bundle for a packed
+ * build, and replaced wholesale on every update. This file is the *deployment's*, next to the
+ * database and the workspaces, and it survives an update for the reason those do.
+ *
+ * Named `config.patch.json` rather than anything prompt-shaped because it is not a prompt
+ * feature: it is merged over the whole configuration by key, and the prompt catalog
+ * (`prompts.json`) is simply one of the trees it can reach. Read once per process, so a change
+ * takes effect on the next restart.
+ */
+export function configPatchPath(dataRoot: string): string {
+  return join(dataRoot, "config.patch.json");
+}
+
 /** One user's tree. `userSlug` is `users.slug`, which a rename does not change. */
 export interface UserLayout {
   userRoot: string;

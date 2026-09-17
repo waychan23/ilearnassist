@@ -19,6 +19,7 @@ import {
   type QuizRegisteredQuestion,
 } from "./tools/quiz.js";
 import { newId, type AppDb, type QuizQuestionInsert, type QuizQuestionRecord } from "./db.js";
+import { renderPrompt } from "./prompts.js";
 
 /**
  * The quiz widget's persisted questions.
@@ -208,19 +209,23 @@ export function renderMakeupKeyNote(row: QuizQuestionRecord): string | null {
   const explanation = row.explanation ?? null;
   if (!reference && !explanation) return null;
 
-  const lines = [
-    `The user's just-sent message is a make-up answer (补答) for this conversation's quiz ` +
-      `question ${row.qid} (quiz_id: ${row.id}), one they originally left unanswered. Grade that ` +
-      "answer now and record it with ONE ila_review_quiz call naming this exact quiz_id — do not " +
-      "call ila_quiz again and do not treat it as a new question.",
-    "What follows is the question's grading key. It was never shown to the user, so judge against " +
-      "it without reproducing it verbatim; give the user your own explanation in their language.",
-    "",
-    `Question: ${row.question}`,
-  ];
+  /*
+   * The key lines carry their own leading newline, and that is what keeps the assembled note
+   * byte-identical to the hand-built version it replaces: a question posed without a key supplies
+   * "" here and leaves no blank line behind, while one with a key gets the newline it needs. The
+   * prose itself lives in the catalog — see `chat.guidance.quizMakeup`.
+   */
+  const lines: string[] = [];
   if (reference) lines.push(`Reference answer: ${reference.join("; ")}`);
   if (explanation) lines.push(`Explanation: ${explanation}`);
-  return lines.join("\n");
+  const key = lines.map((line) => `\n${line}`).join("");
+
+  return renderPrompt("chat.guidance.quizMakeup", {
+    qid: row.qid,
+    id: row.id,
+    question: row.question,
+    key,
+  });
 }
 
 /* ------------------------------------ reads ------------------------------------ */

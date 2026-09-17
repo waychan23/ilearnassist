@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppDb } from "../db.js";
 import { captureWebPage, type PageCache } from "../webCapture.js";
 import type { UserLayout } from "../paths.js";
+import { renderPrompt } from "../prompts.js";
 
 /**
  * `ila_collect_page` — keeping a page the agent read, as a **source**.
@@ -42,25 +43,29 @@ export type { PageCache };
 /**
  * Appended to the system prompt on any turn where `ila_collect_page` is in the tool set.
  *
- * Model input, so deliberately English and untranslated, the same discipline `PLAN_GUIDANCE`
- * and `QUIZ_GUIDANCE` follow. **It exists because nothing else in the prompt mentions the
+ * Model input, so deliberately English and untranslated, the same discipline `planGuidance`
+ * and `quizGuidance` follow. **It exists because nothing else in the prompt mentions the
  * tool.** The description below is a *restriction* — "do this only for pages this conversation
  * is actually about" — and a model that was never told to keep anything reads a restriction as
  * "usually do not", so an implemented feature behaved as if it were not there. Telling the
  * model when to keep is the whole of the fix; the tool, the wiring and the storage were already
  * right, which is why this is a prompt string and not a code path.
  *
- * The conditionals are `buildTools`'s, not this constant's: `routes.ts` appends it by asking
+ * The conditionals are `buildTools`'s, not this entry's: `routes.ts` appends it by asking
  * whether the tool survived assembly, so a Copilot restricted to a list without it is never
  * given guidance for a call it could not make.
+ *
+ * The guidance lives in the catalog (`chat.guidance.collectPage`) so it can be tuned without a
+ * rebuild.
+ *
+ * A function rather than a constant, and that is load-bearing: the catalog is patched by the
+ * process entry point (`<dataRoot>/config.patch.json`), which runs *after* every module has been
+ * evaluated. A module-level constant would be the bundled text forever, so a tuned prompt would
+ * silently do nothing.
  */
-export const COLLECT_PAGE_GUIDANCE = [
-  "This conversation can keep the web pages it reads. `ila_collect_page` saves one as a source of this conversation: the user sees it in their material list, and a later turn can read_document it instead of fetching it again.",
-  "",
-  "Keep a page that turned out to be one the conversation is about — you quoted it, a figure or a claim in your answer came from it, or it is what the user's question is answered by. Call it in the turn you read it, once you can see that it matters: not in advance, not for every result a search returned, and not for one you skimmed and set aside. One or two a turn is the normal number, and a page you fetched earlier in the same turn needs no second request.",
-  "",
-  "The summary is what everything else shows, so make it one line in the user's language saying what the page is and why it matters here.",
-].join("\n");
+export function collectPageGuidance(): string {
+  return renderPrompt("chat.guidance.collectPage");
+}
 
 /**
  * `cache` is supplied by `buildTools` rather than by the caller: it is the *turn's* cache, and

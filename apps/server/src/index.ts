@@ -1,8 +1,9 @@
 import { assertHasAdministrator, NoAdministratorError } from "./adminCli.js";
-import { loadConfig, PROJECT_PATHS, resolveDataRoot } from "./config.js";
+import { loadConfig, PROJECT_PATHS, readConfigPatch, resolveDataRoot } from "./config.js";
 import { buildServer } from "./server.js";
-import { insightLogPath, noteSyncLogPath, threadLogPath } from "./paths.js";
+import { configPatchPath, insightLogPath, noteSyncLogPath, threadLogPath } from "./paths.js";
 import { configureModelLog } from "./modelLog.js";
+import { setPromptOverrides } from "./prompts.js";
 
 /**
  * Process entry point. All the wiring lives in `buildServer`; this module only resolves
@@ -24,7 +25,36 @@ async function main(): Promise<void> {
     notes: noteSyncLogPath(dataRoot),
   });
 
-  const config = loadConfig();
+  /*
+   * The deployment's configuration overlay, read once and handed to the two things that can use
+   * it. Both parts are here rather than inside the modules for the same reason the log paths above
+   * are: the unit suite points `ILA_DATA_DIR` at a real directory, so anything that resolved this
+   * itself would make tests depend on the machine they run on.
+   *
+   *   - the prompt catalog, which takes its own `prompts` section by key;
+   *   - `loadConfig`, which merges the whole thing over the YAML — so any configuration value can
+   *     be patched, not just a prompt.
+   *
+   * Order matters: the prompts must be patched before `buildServer`, since every prompt is read at
+   * call time and a turn would otherwise send the bundled text for the process's whole lifetime.
+   */
+  const patch = readConfigPatch(configPatchPath(dataRoot));
+  for (const problem of setPromptOverrides(patch["prompts"])) {
+    /*
+     * A warning rather than a refusal: the patch file is generic, and a key this build does not
+     * know may simply be newer than it. Silently ignoring one is what must not happen — a typo'd
+     * prompt key would otherwise change nothing at all and look like it had worked.
+     */
+    console.warn(
+      problem.reason === "unknown"
+        ? `[ilearnassist] config.patch.json sets prompts["${problem.key}"], which is not a prompt ` +
+            `key in this build — it had no effect. See apps/server/src/prompts.json for the keys.`
+        : `[ilearnassist] config.patch.json sets prompts["${problem.key}"] to something unreadable ` +
+            `— it must be a string, or an object with a "text" string. It had no effect.`
+    );
+  }
+
+  const config = loadConfig(patch);
   const { app, db } = await buildServer({
     config,
     dataRoot,
