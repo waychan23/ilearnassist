@@ -29,6 +29,7 @@ import type {
   QuizAnswers,
   Session,
   SessionSettings,
+  SetSessionPinnedInput,
   Source,
   SourceOrigin,
   SourceOwner,
@@ -41,6 +42,7 @@ import type {
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
   UpdateProviderInput,
+  UpdateUploadSettingsInput,
   UpdateSessionInput,
   UpdateUserInput,
   UpdateWorkspaceInput,
@@ -62,6 +64,8 @@ import {
   isPlatformAdmin,
   isUserRole,
   MAX_ATTACHMENT_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   EXPLORE_TOOL_NAME,
@@ -71,6 +75,7 @@ import {
   QUIZ_TOOL_NAMES,
   SESSION_LOCK_TTL_SECONDS,
   SUPERADMIN_ROLE,
+  TABLE_TOOL_NAME,
   USERNAME_MAX_LENGTH,
 } from "@ilearnassist/shared";
 import {
@@ -83,12 +88,14 @@ import {
   DEFAULT_SESSION_TITLE,
   newId,
   readDocumentParsing,
+  readMaxUploadBytes,
   SETTING_DEFAULT_MODEL,
   SETTING_DEFAULT_PROVIDER,
   SETTING_DOCUMENT_DEFAULT_PARSER,
   SETTING_DOCUMENT_FALLBACK,
   SETTING_DOCUMENT_LOCAL_ENABLED,
   SETTING_DOCUMENT_POLICY,
+  SETTING_MAX_UPLOAD_BYTES,
   type AppDb,
   type ProviderRecord,
   type SourceRecord,
@@ -111,6 +118,7 @@ import { buildInsightViews, generateInsights } from "./insights.js";
 import { createNote, deleteNote, updateNote } from "./notes.js";
 import { readNoteSync, runNoteSync } from "./notesExport.js";
 import { listDiagramViews, registerDiagram } from "./diagrams.js";
+import { listTableViews, registerTable } from "./tables.js";
 import {
   dismissQuizQuestions,
   listQuizQuestionViews,
@@ -133,6 +141,7 @@ import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { COLLECT_PAGE_GUIDANCE } from "./tools/collectPage.js";
+import { TABLE_GUIDANCE } from "./tools/table.js";
 import { exploreGuidance } from "./tools/explore.js";
 import { PLAN_GUIDANCE } from "./tools/planTools.js";
 import { QUIZ_GUIDANCE } from "./tools/quizReview.js";
@@ -272,8 +281,31 @@ interface RoutesOptions {
   layout: DataLayout;
 }
 
-/** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
-const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 64 * 1024;
+/**
+ * The route's own body limit: base64 inflates bytes by 4/3, and the JSON envelope adds a little
+ * more.
+ *
+ * Derived from the **ceiling**, not from the configured limit, and that is forced rather than
+ * chosen: `bodyLimit` is a number fixed when the route is registered, so a limit an administrator
+ * can change at runtime cannot be what this reads. The handler compares against the value in force
+ * (`effectiveUploadLimit`), so the two agree for every setting an administrator can save — and a
+ * request past the ceiling is refused by Fastify before the handler runs, which is the one
+ * refusal on this path that does not carry `FILE_TOO_LARGE`. `MAX_UPLOAD_CEILING_BYTES` says why
+ * the ceiling is where it is.
+ */
+const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_UPLOAD_CEILING_BYTES * 4) / 3) + 64 * 1024;
+
+/**
+ * The `FILE_TOO_LARGE` refusal, built from the limit in force.
+ *
+ * A function because the number is no longer a constant: the message and its `limitMb` parameter
+ * both have to name the cap that actually applied, and a sentence compiled against the old
+ * constant is how a user is told "10 MB" by a server that refused at 50.
+ */
+function fileTooLarge(limit: number): ApiErrorBody {
+  const limitMb = Math.round(limit / 1024 / 1024);
+  return apiError("FILE_TOO_LARGE", `File is larger than the ${limitMb} MB limit`, { limitMb });
+}
 
 /** The parse-failure envelope: the code is the taxonomy value, the sentence a fallback. */
 function parseApiError(err: unknown): ApiErrorBody {
@@ -1238,6 +1270,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       webSearchProvider: config.tools.webSearch.provider,
       documentParsers: documentParserConfigs(),
       documentParsing: documentParsing(),
+      // Read per request rather than cached: it is one `app_settings` lookup, and a cached value
+      // would be a second copy free to disagree with the one the upload routes enforce.
+      maxUploadBytes: readMaxUploadBytes(db),
     };
   }
 
@@ -1553,9 +1588,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * like the chat upload route, which is what keeps this dependency-free (`@fastify/multipart`
    * is not installed) at the cost of a ~33% larger body — hence the raised `bodyLimit`.
    *
-   * The cap is the attachment cap rather than something larger, deliberately: two numbers would
-   * be two answers to "how big a file may I put in this app", and the message names the limit so
-   * raising it is a visible change rather than a guess.
+   * The cap is the same one the chat upload uses rather than something larger, deliberately: two
+   * numbers would be two answers to "how big a file may I put in this app", and both now name the
+   * limit they applied so raising it is a visible change rather than a guess.
    */
   app.post(
     "/api/workspaces/:workspaceId/files/upload",
@@ -1577,8 +1612,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       if (bytes.length === 0) {
         return reply.code(400).send(apiError("INVALID_BASE64", "file data could not be decoded"));
       }
-      if (bytes.length > MAX_ATTACHMENT_BYTES) {
-        return reply.code(413).send(apiError("FILE_TOO_LARGE", "file is too large"));
+      const uploadLimit = readMaxUploadBytes(db);
+      if (bytes.length > uploadLimit) {
+        // With the `limitMb` the other route has always carried, and which this one used to omit:
+        // the number is a setting now, so a refusal that does not name it leaves the user to
+        // guess which of two numbers they hit.
+        return reply.code(413).send(fileTooLarge(uploadLimit));
       }
 
       const dir = (body.dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
@@ -1995,6 +2034,43 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       allTools: body?.allTools,
       tools: body?.tools,
     });
+  });
+
+  /**
+   * Pin a conversation to the top of the sidebar's list, or take it back out.
+   *
+   * A route of its own rather than a field on the PATCH above, for two reasons. Pinning must not
+   * count as activity — the statement it writes deliberately leaves `updated_at` alone, or
+   * unpinning would drop the conversation at the top of the other group — and the update route
+   * writes that column on every call. And it is one column: routing it through the settings and
+   * persona path would be three reads and a JSON round trip to move a row in a list.
+   *
+   * `requiresSessionLock` like every other session-scoped write: a pin is visible to the other
+   * clients of this account, so it is exactly the kind of change the lease exists to serialise.
+   */
+  app.patch("/api/sessions/:id/pin", { config: { requiresSessionLock: true } }, async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const body = request.body as SetSessionPinnedInput;
+
+    /*
+     * A real boolean or nothing. `"false"` is truthy, so a coerced body would *pin* a
+     * conversation whose caller asked for the opposite — the mistake
+     * `PATCH /api/admin/users/:id` refuses to make with `disabled`, and refused here for the same
+     * reason rather than for symmetry: the two states are both deliberate, so there is no absent
+     * field that could mean either.
+     */
+    if (typeof body?.pinned !== "boolean") {
+      return reply.code(400).send(apiError("INVALID_FIELD", "pinned must be a boolean"));
+    }
+
+    // "Not yours" and "does not exist" are one answer here too: the accessor's own `WHERE` holds
+    // the owner, so a refused write and a missing session are the same `undefined`.
+    const updated = db.setSessionPinnedForUser(id, userId, body.pinned);
+    if (!updated) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return updated;
   });
 
   /**
@@ -2524,6 +2600,28 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { diagrams };
   });
 
+  /*
+   * The conversation's tables.
+   *
+   * Its own route rather than a `tables` field on the one above, because they are two resources
+   * with two identities and one joins to a file: a reader asking for diagrams is not asking for
+   * tables, and a payload that carried both would make every diagram read pay for a table read it
+   * did not want. The panel asks for both, in parallel, because it is the one caller that shows
+   * them together.
+   *
+   * Object-not-widget like the row above, and an empty list is a 200: a table is the row alone,
+   * so — unlike a diagram, whose file can be gone — being listed and being readable are the same
+   * thing here.
+   */
+  app.get("/api/sessions/:id/tables", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return { tables: listTableViews(db, userId, id) };
+  });
+
   /* ----------------------------------- notes ----------------------------------- */
 
   /*
@@ -2963,13 +3061,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         return reply.code(400).send(apiError("INVALID_BASE64", "data is not valid base64"));
       }
       if (bytes.byteLength === 0) return reply.code(400).send(apiError("EMPTY_FILE", "file is empty"));
-      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
-        const limitMb = Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024);
-        return reply
-          .code(413)
-          .send(
-            apiError("FILE_TOO_LARGE", `File is larger than the ${limitMb} MB limit`, { limitMb })
-          );
+      // Read here rather than at registration, because this is the number an administrator can
+      // change and the `bodyLimit` above is not.
+      const uploadLimit = readMaxUploadBytes(db);
+      if (bytes.byteLength > uploadLimit) {
+        return reply.code(413).send(fileTooLarge(uploadLimit));
       }
 
       /*
@@ -3588,6 +3684,43 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return documentParsing();
   });
 
+  /**
+   * The upload limit, which is an installation-wide setting like the parsers above and an
+   * administrator's to change for the same reason.
+   *
+   * Its own route rather than a field on `PUT /api/defaults`, which is about which model turns run
+   * against: this one changes what every account may *send*, and the two share nothing but a gate.
+   * The value must be a whole number of bytes within the floor and the ceiling — refused rather
+   * than clamped, because a number outside that range is a request that did not mean what it said,
+   * and silently storing the nearest legal limit would report success and deliver something else.
+   */
+  app.put("/api/upload-settings", async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return reply;
+
+    const body = request.body as UpdateUploadSettingsInput;
+    const value = body?.maxUploadBytes;
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < MIN_UPLOAD_LIMIT_BYTES ||
+      value > MAX_UPLOAD_CEILING_BYTES
+    ) {
+      return reply
+        .code(400)
+        .send(
+          apiError(
+            "INVALID_FIELD",
+            `maxUploadBytes must be a whole number between ${MIN_UPLOAD_LIMIT_BYTES} and ${MAX_UPLOAD_CEILING_BYTES}`
+          )
+        );
+    }
+
+    db.setSetting(SETTING_MAX_UPLOAD_BYTES, String(value));
+    // The whole config back, like `PUT /api/defaults`: the console's state is `store.config`, and
+    // returning only the field would give it two ways to hold the same fact.
+    return publicConfig(actor(request));
+  });
+
   /* --------------------------------- app defaults ------------------------------ */
 
   app.put("/api/defaults", async (request, reply) => {
@@ -3813,6 +3946,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * Not a widget — this one is on by default, which is exactly why it needed the guidance.
      */
     collectPageGuidance?: string;
+    /** See the assembly site: the positive half of `ila_table`'s contract. */
+    tableGuidance?: string;
     /**
      * Present when the conversation holds an `@` grant **and** `ila_explore` survived assembly.
      * Its presence is what flips the workspace note's read prohibition — see `buildSystemPrompt`.
@@ -4010,6 +4145,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           });
         },
       },
+      /*
+       * A table is one row and nothing else, and deliberately **no transaction**.
+       *
+       * The diagram callback above needs one because two rows have to land together — its file
+       * and its source row — and a diagram whose file exists but whose rows half-landed is a file
+       * the conversation draws and the registry cannot name. There is one write here, and a
+       * transaction around a single statement reads as if a second write existed.
+       */
+      table: {
+        save: (saved) => {
+          registerTable(db, session.id, saved);
+        },
+      },
       // Not gated on anything: the conversation's own record exists from the moment the
       // conversation does, whether or not any widget is installed to show it.
       query: {
@@ -4085,6 +4233,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       exploreGuidance: tools.some((t) => t.name === EXPLORE_TOOL_NAME)
         ? exploreGuidance(scope)
         : undefined,
+      /*
+       * `ila_table`'s half, and it is load-bearing in a way the others are not: nothing on the
+       * server can write into a model's reply, so "the table also appears inline, as ordinary
+       * Markdown" is a prompt instruction or it is nothing at all. The tool's own description is
+       * necessarily a restriction — "not every table" — and a model that was never told the
+       * positive half reads a restriction as "usually do not", which is the failure
+       * `COLLECT_PAGE_GUIDANCE` documents one tool over.
+       *
+       * Asked of the assembled array, like the two above it: a Copilot whose allow-list excludes
+       * the tool is never taught a call it cannot make.
+       */
+      tableGuidance: tools.some((t) => t.name === TABLE_TOOL_NAME) ? TABLE_GUIDANCE : undefined,
       /*
        * The `auto-install` side effect, and the only reason the loop takes a callback for it: the
        * loop knows which tool ran, and this closure knows whose conversation it ran in. It
@@ -4419,6 +4579,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        tableGuidance: ctx.tableGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
@@ -4569,6 +4730,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        tableGuidance: ctx.tableGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
@@ -4700,6 +4862,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
+        tableGuidance: ctx.tableGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,

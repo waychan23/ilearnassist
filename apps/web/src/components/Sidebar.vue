@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
@@ -111,6 +111,52 @@ function selectSession(id: string) {
  */
 function lockOf(sessionId: string): SessionLockView | undefined {
   return store.sessionLocks[sessionId];
+}
+
+/* ---------------------------------- pinning --------------------------------- */
+
+/**
+ * The list, in the two groups it is drawn as.
+ *
+ * Partitioned on the flag rather than by finding where the order changes, for the reason
+ * `stmtListSessionsForUser` states on the other side: the server's `ORDER BY` is what puts the
+ * pinned rows first, and a boundary inferred from the array would be a second, silent answer to
+ * the same question — one that a single misordered row would turn into a conversation shown under
+ * the wrong heading. The flag is the fact; the order is only how the groups are sequenced.
+ */
+const pinnedSessions = computed(() => store.sessions.filter((s) => s.pinned));
+const otherSessions = computed(() => store.sessions.filter((s) => !s.pinned));
+
+/**
+ * What the list actually draws: only the groups that have rows in them.
+ *
+ * Empty groups are dropped here rather than hidden at the template's `v-if`, because the divider
+ * is placed by *position* — a heading and a rule above an empty group is the same bug whether the
+ * group is filtered out or merely not drawn, and doing it once means the template has no second
+ * place to get it wrong.
+ */
+const sessionGroups = computed(() => {
+  const groups: { key: string; title: string | null; rows: Session[] }[] = [];
+  if (pinnedSessions.value.length) {
+    groups.push({ key: "pinned", title: t("sidebar.pinnedGroup"), rows: pinnedSessions.value });
+  }
+  if (otherSessions.value.length) {
+    groups.push({ key: "other", title: null, rows: otherSessions.value });
+  }
+  return groups;
+});
+
+/**
+ * Pinned or not, from the row.
+ *
+ * No optimistic flip: the sidebar re-groups from what the server returns, and a row that moved
+ * before the write landed would be a row that moves back if the write is refused — the flicker
+ * `deleteSession` avoids the same way, by waiting.
+ */
+async function togglePin(session: Session): Promise<void> {
+  await store.setSessionPinned(session.id, !session.pinned).catch((e) => {
+    store.setError(e instanceof Error ? e.message : String(e));
+  });
 }
 
 /* --------------------------------- rename ---------------------------------- */
@@ -315,65 +361,101 @@ async function onDeleteSession(session: Session) {
     </div>
 
     <div v-if="tab === 'sessions'" class="side-scroll" data-testid="session-list">
-      <div
-        v-for="s in store.sessions"
-        :key="s.id"
-        class="session-item"
-        data-testid="session-item"
-        :data-session-id="s.id"
-        :class="{ active: s.id === store.activeSessionId }"
-        @click="renamingId === s.id ? undefined : selectSession(s.id)"
-      >
-        <input
-          v-if="renamingId === s.id"
-          :ref="(el) => (renameInput = el as HTMLInputElement | null)"
-          v-model="renameText"
-          class="input rename-input"
-          @click.stop
-          @keydown.enter.prevent="commitRename"
-          @keydown.esc.prevent="cancelRename"
-          @blur="commitRename"
-        />
-        <template v-else>
-          <!--
-            Who may write to this conversation. Present only while somebody holds it: a free
-            conversation has no mark, which is what keeps a single client's list looking exactly
-            as it did before this feature existed.
+      <!--
+        Two groups, drawn from one `v-for` so the row markup exists once.
 
-            Green is this client's (typing works here), orange is another's (this one is
-            read-only). The `title` carries the sentence, since a dot is not self-explanatory —
-            and it is what the browser suite asserts on, a colour being awkward to test and easy
-            to get wrong.
-          -->
-          <span
-            v-if="lockOf(s.id)"
-            class="session-lock-dot"
-            data-testid="session-lock-dot"
-            :data-lock="lockOf(s.id)?.mine ? 'mine' : 'other'"
-            :title="lockOf(s.id)?.mine ? t('lock.mine') : t('lock.other')"
-          ></span>
-          <span class="label" :title="t('sidebar.renameHint')" @dblclick.stop="startRename(s)">
-            {{ s.title || t("session.fallbackTitle") }}
-          </span>
-          <button class="icon-btn" :title="t('common.rename')"
-            :aria-label="t('common.rename')" @click.stop="startRename(s)"><Icon name="edit" /></button>
-          <!--
-            The parameters, between the two edits to the row itself. It selects the conversation
-            first, because the dialog is about the conversation on screen (`store.activeSession`)
-            and there is no second object to point it at — clicking a row already selects it, so
-            this is the same navigation with a dialog on the end.
-          -->
-          <button
-            class="icon-btn"
-            data-testid="session-row-settings"
-            :title="t('sessionSettings.open')"
-            :aria-label="t('sessionSettings.open')"
-            @click.stop="openRowSettings(s)"
-          ><Icon name="sliders" /></button>
-          <button class="icon-btn danger" :title="t('common.delete')"
-            :aria-label="t('common.delete')" @click.stop="onDeleteSession(s)"><Icon name="trash" /></button>
-        </template>
-      </div>
+        The heading and the divider are the *caller's* here rather than something a group
+        component owns, and the condition on each is the whole of the rule: the heading belongs to
+        the pinned group alone — a heading over the ordinary group would announce a division the
+        list does not have — and the divider belongs *between* the groups, so it is drawn before
+        every group but the first. That draws it exactly when both groups are non-empty, and never
+        when one of them is.
+      -->
+      <template v-for="(group, index) in sessionGroups" :key="group.key">
+        <div v-if="index > 0" class="side-divider" data-testid="session-group-divider"></div>
+        <div v-if="group.title" class="session-group" data-testid="session-group-pinned">
+          {{ group.title }}
+        </div>
+        <div
+          v-for="s in group.rows"
+          :key="s.id"
+          class="session-item"
+          data-testid="session-item"
+          :data-session-id="s.id"
+          :class="{ active: s.id === store.activeSessionId }"
+          @click="renamingId === s.id ? undefined : selectSession(s.id)"
+        >
+          <input
+            v-if="renamingId === s.id"
+            :ref="(el) => (renameInput = el as HTMLInputElement | null)"
+            v-model="renameText"
+            class="input rename-input"
+            @click.stop
+            @keydown.enter.prevent="commitRename"
+            @keydown.esc.prevent="cancelRename"
+            @blur="commitRename"
+          />
+          <template v-else>
+            <!--
+              Who may write to this conversation. Present only while somebody holds it: a free
+              conversation has no mark, which is what keeps a single client's list looking exactly
+              as it did before this feature existed.
+
+              Green is this client's (typing works here), orange is another's (this one is
+              read-only). The `title` carries the sentence, since a dot is not self-explanatory —
+              and it is what the browser suite asserts on, a colour being awkward to test and easy
+              to get wrong.
+            -->
+            <span
+              v-if="lockOf(s.id)"
+              class="session-lock-dot"
+              data-testid="session-lock-dot"
+              :data-lock="lockOf(s.id)?.mine ? 'mine' : 'other'"
+              :title="lockOf(s.id)?.mine ? t('lock.mine') : t('lock.other')"
+            ></span>
+            <!--
+              The title, and the only rename control on the row: a double-click opens the inline
+              editor. The pencil button that used to sit beside it was a second entry to the same
+              editor, and the label's own tooltip is where that gesture is taught.
+            -->
+            <span class="label" :title="t('sidebar.renameHint')" @dblclick.stop="startRename(s)">
+              {{ s.title || t("session.fallbackTitle") }}
+            </span>
+            <!--
+              Pin. Always drawn, in both states, because its *state* is the column's and the icon
+              would otherwise have to say both "this is pinned" and "you could pin this" with its
+              presence — which is a control that is either invisible or a lie.
+
+              `aria-pressed` carries the state and the accent colour paints it; the tooltip names
+              the action, since a pin already set has only the opposite one to offer.
+            -->
+            <button
+              class="icon-btn session-pin"
+              :class="{ on: s.pinned }"
+              data-testid="session-pin"
+              :aria-pressed="s.pinned"
+              :title="s.pinned ? t('sidebar.unpin') : t('sidebar.pin')"
+              :aria-label="s.pinned ? t('sidebar.unpin') : t('sidebar.pin')"
+              @click.stop="togglePin(s)"
+            ><Icon name="pin" /></button>
+            <!--
+              The parameters. It selects the conversation first, because the dialog is about the
+              conversation on screen (`store.activeSession`) and there is no second object to point
+              it at — clicking a row already selects it, so this is the same navigation with a
+              dialog on the end.
+            -->
+            <button
+              class="icon-btn"
+              data-testid="session-row-settings"
+              :title="t('sessionSettings.open')"
+              :aria-label="t('sessionSettings.open')"
+              @click.stop="openRowSettings(s)"
+            ><Icon name="sliders" /></button>
+            <button class="icon-btn danger" :title="t('common.delete')"
+              :aria-label="t('common.delete')" @click.stop="onDeleteSession(s)"><Icon name="trash" /></button>
+          </template>
+        </div>
+      </template>
       <div v-if="store.sessions.length === 0" class="muted">{{ t("sidebar.noSessions") }}</div>
     </div>
 

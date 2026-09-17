@@ -7,6 +7,7 @@ import { isWidgetBoundTool } from "@ilearnassist/shared";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
+import { buildTableTool, type TableToolContext } from "./table.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildExploreTool, type ExploreToolContext } from "./explore.js";
 import { buildFileTools, type FileToolContext } from "./fileTools.js";
@@ -40,6 +41,14 @@ import { buildQuizReviewTool, type QuizReviewToolContext } from "./quizReview.js
  * writing files has no bearing on it. The pair is worth keeping in view — "outside the
  * workspace" is not the test, because one of these reads and one of these writes.
  *
+ * `ila_table` is here on `ila_query`'s argument, and the comparison that decides it is **not**
+ * the diagram's. That list answers one question — "does this installation's agent write files" —
+ * and a table writes no file: the row holds the markdown and nothing reaches a sandbox. Leaving it
+ * out would mean an operator's `fileTools.enabled: false` silently removing the ability to record
+ * a table at all, which is the "control that renders but does nothing" failure this list exists to
+ * prevent. The contrast with `ila_diagram` beside it is deliberate: a diagram *is* half a feature
+ * without its file, and a table is whole without one.
+ *
  * `ila_explore` is here on `ila_query`'s argument, and it is the stronger case of the two: it
  * reads granted workspaces' shared folders, and it writes nothing — the module contains no
  * write call at all. Leaving it out would mean a `fileTools.enabled: false` installation
@@ -61,6 +70,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "ila_update_plan_progress",
   "ila_query",
   "ila_explore",
+  "ila_table",
 ]);
 
 export interface BuildToolsInput {
@@ -133,6 +143,14 @@ export interface BuildToolsInput {
    */
   diagram?: DiagramToolContext;
   /**
+   * Present whenever a session context exists — always, in practice; the field is optional so a
+   * test can pin what its absence assembles (nothing).
+   *
+   * `ila_table` is `auto-install` mode like the diagram tool, and — unlike it — a member of
+   * `NON_FILE_TOOLS`, because there is no file: see that list.
+   */
+  table?: TableToolContext;
+  /**
    * Present whenever a session context exists — always, in practice; the field is optional so
    * a test can pin what its absence assembles (nothing).
    *
@@ -204,6 +222,8 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   // Gated by `fileToolsEnabled` like the file tools — see `NON_FILE_TOOLS` above for why that is
   // the decision rather than an oversight.
   if (input.diagram) all.push(buildDiagramTool(input.diagram));
+  // Not gated by `fileToolsEnabled`, unlike the line above: it writes a row and no file.
+  if (input.table) all.push(buildTableTool(input.table));
   // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
   // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
   if (input.query) all.push(buildQueryTool(input.query));

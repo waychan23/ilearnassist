@@ -28,6 +28,20 @@ const props = defineProps<{
    * exactly what it says it does.
    */
   hint?: string;
+  /**
+   * The same thing as markup, offered alongside the text.
+   *
+   * A table is where this exists, and the two flavours are for two targets rather than two
+   * preferences: pasted into a document the reader wants the table, and pasted into a source file
+   * or a chat box the markdown is what they want. So one press writes both and the *target*
+   * decides — which is the behaviour every rich-text editor's clipboard already has, and the
+   * reason this is not a second button.
+   *
+   * `write()` with a `ClipboardItem` needs a secure context and a browser that has `ClipboardItem`
+   * at all; where it is missing, the text is what gets written, because a copy that half-worked is
+   * worse than one that took the plainer of the two.
+   */
+  html?: string;
 }>();
 const { t } = useI18n();
 
@@ -37,7 +51,17 @@ let reset: ReturnType<typeof setTimeout> | null = null;
 
 async function copy(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(props.value);
+    const { html } = props;
+    if (html && typeof ClipboardItem !== "undefined" && navigator.clipboard.write) {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([props.value], { type: "text/plain" }),
+        }),
+      ]);
+    } else {
+      await navigator.clipboard.writeText(props.value);
+    }
     state.value = "copied";
   } catch {
     state.value = "failed";

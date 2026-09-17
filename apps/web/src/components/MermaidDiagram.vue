@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useTheme } from "../composables/theme";
 import { MAX_DIAGRAM_CHARS } from "../api/types";
-import { diagramTooLarge, renderMermaid } from "../utils/mermaid";
+import { diagramTooLarge, renderMermaid, svgSize, type SvgSize } from "../utils/mermaid";
 
 /**
  * A diagram, drawn.
@@ -38,6 +38,22 @@ const state = ref<State>("rendering");
 const svg = ref("");
 /** Mermaid's own message, which is untranslated dynamic text — see the note in the template. */
 const detail = ref("");
+/**
+ * The drawing's own size, as its `viewBox` declares it. Null until it is drawn, and null for a
+ * drawing that declares none — see `svgSize`, which is also where the argument for reading this
+ * rather than measuring the element lives.
+ */
+const size = ref<SvgSize | null>(null);
+
+/**
+ * The drawn SVG and its size, for the two callers that need them.
+ *
+ * `DiagramDialog` is both: it scales the drawing by the size it declares (the whole reason a
+ * zoom works there), and it exports it (the SVG string *is* the file). Exposed rather than
+ * emitted, because both are read at render time rather than in response to an event — the
+ * dialog's sizing is a computed over `size`, and it must follow a redraw.
+ */
+defineExpose({ svg, size });
 
 /**
  * Which render is allowed to write the state.
@@ -65,12 +81,14 @@ async function run(): Promise<void> {
     state.value = "failed";
     detail.value = "";
     svg.value = "";
+    size.value = null;
     return;
   }
   if (diagramTooLarge(source)) {
     state.value = "tooLarge";
     detail.value = "";
     svg.value = "";
+    size.value = null;
     return;
   }
 
@@ -80,11 +98,13 @@ async function run(): Promise<void> {
     const drawn = await renderMermaid(source, theme.resolved.value);
     if (mine !== token || disposed) return;
     svg.value = drawn;
+    size.value = svgSize(drawn);
     state.value = "ready";
   } catch (err) {
     if (mine !== token || disposed) return;
     // Whatever was drawn before is dropped rather than left up: it belongs to the old source.
     svg.value = "";
+    size.value = null;
     detail.value = err instanceof Error ? err.message : String(err);
     state.value = "failed";
   }

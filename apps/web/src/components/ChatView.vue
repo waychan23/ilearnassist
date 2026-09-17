@@ -157,6 +157,15 @@ async function revealToolCall(container: HTMLElement, id: string): Promise<HTMLE
   const direct = container.querySelector<HTMLElement>(attribute(id));
   if (direct) return direct;
 
+  /*
+   * A call that renders no card anchors on the message holding it instead — `ila_table`'s table
+   * is in the reply, so the block to land on is that block. `~=` matches the id inside the
+   * whitespace-separated list `MessageItem` writes, which keeps this to one selector rather than
+   * a scan and a `split`.
+   */
+  const anchored = container.querySelector<HTMLElement>(`[data-tool-call-anchor~="${id}"]`);
+  if (anchored) return anchored;
+
   for (const group of container.querySelectorAll<HTMLElement>("[data-tool-call-ids]")) {
     if (!group.dataset.toolCallIds?.split(" ").includes(id)) continue;
     expandToolGroup(group.dataset.groupKey ?? "");
@@ -459,21 +468,14 @@ onBeforeUnmount(() => {
               {{ store.activeSession?.title || store.activeWorkspace?.name || t("app.title") }}
             </span>
             <!--
-              Two icon-only controls rather than a labelled button and an icon: the title
-              block is the bar's most crowded spot, and both actions are about the same
-              thing. The label is still there for a screen reader and a tooltip, which is
-              where a one-word control belongs.
+              The title *is* the rename control — clicking it opens the inline editor — so
+              there is no pencil button beside it. The pencil was a second entry to the same
+              editor on the bar's most crowded spot, and the title's own tooltip
+              (`chat.editTitleHint`) is where the gesture is taught.
+
+              The parameters button is icon-only, with its word for a screen reader and a
+              tooltip, which is where a one-word control belongs.
             -->
-            <button
-              v-if="store.activeSession"
-              class="icon-btn"
-              data-testid="edit-session-title"
-              :title="t('chat.editTitle')"
-              :aria-label="t('chat.editTitle')"
-              @click="startTitleEdit"
-            >
-              <Icon name="edit" />
-            </button>
             <button
               v-if="store.activeSession"
               class="icon-btn"
@@ -507,8 +509,8 @@ onBeforeUnmount(() => {
       <!--
         The conversation's own action, between the title it acts on and the browser's properties —
         locale and theme belong to the browser, so they keep the outer edge. Its own group rather
-        than a third control inside the title block, which is that block's own comment's "most
-        crowded spot" and would have to absorb a label that grows and shrinks with the export.
+        than a control inside the title block: that block is the bar's most crowded spot, and this
+        one carries a label that grows and shrinks with the export.
       -->
       <NoteSyncControl v-if="store.activeSession" />
 

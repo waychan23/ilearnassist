@@ -69,6 +69,7 @@ import type {
 } from "../api/types";
 import {
   DIAGRAM_TOOL_NAME,
+  TABLE_TOOL_NAME,
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
   isPlatformAdmin,
@@ -1368,6 +1369,20 @@ export const useAppStore = defineStore("app", () => {
     emitWidgetEvent({ type: "session.renamed", sessionId: id, title: updated.title });
   }
 
+  /**
+   * Pin or unpin a conversation.
+   *
+   * No re-read and no new event: the sidebar computes its two groups from `pinned` on the rows it
+   * already holds, so replacing the row is the whole of what the list needs, and no widget lists
+   * conversations in an order this decides. The one thing it must *not* do is move the row within
+   * the array — the server leaves `updated_at` alone for exactly that reason, and the two groups
+   * are drawn from the flag rather than from the position of a boundary.
+   */
+  async function setSessionPinned(id: string, pinned: boolean): Promise<void> {
+    const updated = await api.setSessionPinned(id, pinned);
+    replaceSession(updated);
+  }
+
   /* --------------------------------- widgets --------------------------------- */
 
   /**
@@ -1782,8 +1797,30 @@ export const useAppStore = defineStore("app", () => {
     applyProvider(await api.deleteModel(providerId, modelId));
   }
 
+  /**
+   * The upload cap the server reported, or the shared constant before `/api/config` has landed.
+   *
+   * The fallback matters for the one press that can happen first: a file dropped on the composer
+   * while the config request is still in flight. It is the same number the server would fall back
+   * to, so the check is never *more* permissive than the route behind it.
+   */
+  function uploadLimitBytes(): number {
+    return config.value?.maxUploadBytes ?? MAX_ATTACHMENT_BYTES;
+  }
+
   async function setDefaults(input: { providerId?: string; modelId?: string }): Promise<void> {
     config.value = await api.updateDefaults(input);
+  }
+
+  /**
+   * Save the installation's upload limit.
+   *
+   * The whole config comes back and replaces what the store holds, which is the same shape
+   * `setDefaults` uses and the reason the upload pre-check below can read one field: there is one
+   * `store.config`, not a settings copy beside it.
+   */
+  async function setUploadSettings(maxUploadBytes: number): Promise<void> {
+    config.value = await api.updateUploadSettings({ maxUploadBytes });
   }
 
   /* -------------------------- document parsers ----------------------------- */
@@ -2154,11 +2191,16 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function uploadAttachment(file: File): Promise<Attachment | null> {
-    if (file.size > MAX_ATTACHMENT_BYTES) {
+    /*
+     * The cap in force, which is a setting now rather than the constant — `MAX_ATTACHMENT_BYTES`
+     * is what it falls back to when nothing has been configured, and the fallback lives on the
+     * server so the two cannot disagree about the default.
+     */
+    if (file.size > uploadLimitBytes()) {
       setError(
         i18n.global.t("attachments.tooLarge", {
           name: file.name,
-          limitMb: Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024),
+          limitMb: Math.round(uploadLimitBytes() / 1024 / 1024),
         })
       );
       return null;
@@ -2504,6 +2546,16 @@ export const useAppStore = defineStore("app", () => {
         if (ev.toolCall.name === DIAGRAM_TOOL_NAME) {
           emitWidgetEvent({
             type: "diagram.changed",
+            sessionId: activeSessionId.value ?? "",
+          });
+        }
+        // A table call has written its row by now, and the same argument holds one level over:
+        // the message's tool calls name the *call*, and nothing local turns one into the row the
+        // panel lists. Two events rather than one because the panels filter on them by name, so
+        // sharing would wake the other on every call.
+        if (ev.toolCall.name === TABLE_TOOL_NAME) {
+          emitWidgetEvent({
+            type: "table.changed",
             sessionId: activeSessionId.value ?? "",
           });
         }
@@ -3002,6 +3054,7 @@ export const useAppStore = defineStore("app", () => {
     selectSession,
     createSession,
     renameSession,
+    setSessionPinned,
     updateSettings,
     deleteSession,
     loadWorkspaceWidgets,
@@ -3017,6 +3070,8 @@ export const useAppStore = defineStore("app", () => {
     deleteProvider,
     deleteModel,
     setDefaults,
+    setUploadSettings,
+    uploadLimitBytes,
     loadParserKinds,
     saveDocumentParser,
     deleteDocumentParser,

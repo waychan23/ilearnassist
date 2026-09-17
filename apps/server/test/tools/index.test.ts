@@ -9,12 +9,14 @@ import {
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   QUIZ_TOOL_NAMES,
+  TABLE_TOOL_NAME,
 } from "@ilearnassist/shared";
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
 import type { QuizToolContext } from "../../src/tools/quiz.js";
 import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
 import type { DiagramToolContext } from "../../src/tools/diagram.js";
+import type { TableToolContext } from "../../src/tools/table.js";
 import type { CollectPageContext } from "../../src/tools/collectPage.js";
 import type { QueryToolContext } from "../../src/tools/query.js";
 import { fileToolsFor } from "../helpers/fileTools.js";
@@ -37,6 +39,17 @@ const webFetch: WebFetchConfig = { enabled: true, maxChars: 20_000 };
  */
 function diagram(): DiagramToolContext {
   return { sessionDir: join(workspace, "sessions", "s1"), save: () => undefined };
+}
+
+/**
+ * The table context, present for the same reason the diagram's is: `turnContext` always supplies
+ * one, because a conversation can record a table from the moment it exists.
+ *
+ * It is *unlike* the diagram context in one respect that has its own case below — the tool it
+ * assembles survives `fileToolsEnabled: false`, because it writes no file. See `NON_FILE_TOOLS`.
+ */
+function table(): TableToolContext {
+  return { save: () => undefined };
 }
 
 /**
@@ -97,6 +110,7 @@ function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] 
     webFetch,
     fileToolsEnabled: true,
     diagram: diagram(),
+    table: table(),
     query: query(),
     collectPage: collectPage(),
     ...input,
@@ -195,9 +209,13 @@ describe("buildTools", () => {
     // `ask_user`'s reason and one more: it reads the conversation's own record and writes
     // nothing, so a switch about writing files has no bearing on it — which is exactly where
     // it differs from `ila_diagram`, absent from this list on purpose.
+    //
+    // `ila_table` is the fifth, and it is `ila_query`'s case rather than the diagram's: the
+    // switch means "this agent does not write files", and a table writes a row and no file.
     expect(names({ fileToolsEnabled: false }).sort()).toEqual([
       "ask_user",
       "ila_query",
+      "ila_table",
       "web_fetch",
       "web_search",
     ]);
@@ -382,6 +400,36 @@ describe("buildTools", () => {
      * written is half the feature, since the file is what the browser half exists to open.
      */
     expect(names({ fileToolsEnabled: false })).not.toContain(DIAGRAM_TOOL_NAME);
+  });
+
+  /* ---------------------------- table (auto-install) ---------------------------- */
+
+  it("assembles ila_table by default, like the diagram tool", () => {
+    expect(names()).toContain(TABLE_TOOL_NAME);
+  });
+
+  it("assembles no table tool without a context", () => {
+    // Optional so this half is pinnable: the route always passes one, and a test that could not
+    // take it away could not tell "assembled" from "assembled by accident".
+    expect(names({ table: undefined })).not.toContain(TABLE_TOOL_NAME);
+  });
+
+  it("treats the table tool as allow-listable in all three states", () => {
+    // `auto-install`, like its sibling: a Copilot can turn tables off without turning the 图表
+    // panel off, and recording one installs the panel that lists it.
+    expect(names({ allowedNames: [TABLE_TOOL_NAME] })).toEqual([TABLE_TOOL_NAME]);
+    expect(names({ allowedNames: ["read_file"] })).not.toContain(TABLE_TOOL_NAME);
+    expect(names({ allowedNames: [] })).toEqual([]);
+  });
+
+  it("keeps the table tool when the file tools are disabled", () => {
+    /*
+     * The contrast with `ila_diagram` one case up, and the comparison that decides it is
+     * `ila_query`'s rather than the diagram's: the switch means "this agent does not write
+     * files", a table writes a database row and nothing else, and dropping it would mean an
+     * operator's file-tools switch silently removing a capability that never touched a file.
+     */
+    expect(names({ fileToolsEnabled: false })).toContain(TABLE_TOOL_NAME);
   });
 
   it("binds the file tools to the workspace they were built for", async () => {

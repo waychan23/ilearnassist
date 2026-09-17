@@ -23,6 +23,47 @@ export function diagramTooLarge(source: string): boolean {
   return source.length > MAX_DIAGRAM_CHARS;
 }
 
+/** A drawing's own size in CSS pixels, as its `viewBox` declares it. */
+export interface SvgSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * What size a drawing *wants* to be, read off the SVG text.
+ *
+ * This exists for the one thing mermaid's output cannot tell anyone: **how big the drawing is**.
+ * Under `useMaxWidth: true` — its default, and the setting this app keeps for the message card,
+ * where a diagram must shrink to fit the bubble — every SVG it emits is `width="100%"` with an
+ * inline `max-width`, which makes the element's laid-out size a function of its container rather
+ * than a property of the drawing. The viewer needs the drawing's own size to scale it honestly:
+ * zooming a box whose content refits itself is how `zoom` came to look like a control that did
+ * nothing (see `DiagramDialog`).
+ *
+ * `viewBox` is the authority because it is the coordinate system the drawing was laid out in, so
+ * it is what "100% of this picture" means. Null when there is nothing to read: an SVG without one
+ * is a drawing whose size nobody declared, and the caller falls back to mermaid's own behaviour
+ * rather than guessing a number.
+ *
+ * Pure, and takes the string rather than an element, so the arithmetic is unit-testable — the same
+ * seam `diagramThemeVariables` takes its reader through.
+ */
+export function svgSize(svg: string): SvgSize | null {
+  const box = /\bviewBox\s*=\s*"([^"]*)"/.exec(svg)?.[1];
+  if (!box) return null;
+
+  const parts = box.trim().split(/[\s,]+/).map(Number);
+  if (parts.length !== 4) return null;
+  const [, , width, height] = parts;
+  // `noUncheckedIndexedAccess` makes every one of those `number | undefined`, and a `viewBox` of
+  // `0 0 0 0` is a real thing mermaid emits for an empty graph — neither is a size.
+  if (width === undefined || height === undefined) return null;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+
+  return { width, height };
+}
+
 /**
  * The mermaid `themeVariables` this app's palette implies.
  *

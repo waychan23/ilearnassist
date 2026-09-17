@@ -475,6 +475,45 @@ Fuller map in `docs/reference.md`.
   a missing/unusable answer, and any diagram in a deterministically-forced plan turn, collapses
   to the turn's thread. The invariant is one sentence and testable: a diagram's `thread_id` is
   null iff the turn owning its latest call has no thread yet.
+- **A table is a row and nothing else, and the 图表 panel shows both kinds.** The requirement is
+  explicit that a table's display is the **reply's own Markdown**, never a tool container — so the
+  feature splits in two and each half holds one copy: the reply is what a person reads, and
+  `session_tables.content` is what the panel, the viewer and the clipboard read. Nothing can make
+  the two agree, so the drift is *reported rather than prevented* (the rule the two diagram drifts
+  already follow): the tool's result says what was **saved** and asks for the inline copy
+  separately, and `TABLE_GUIDANCE` is the only mechanism that can ask — no server-side code path
+  writes into a model's reply, and the tool's own description is necessarily a restriction. Four
+  things are load-bearing:
+  - **The row holds the content**, which inverts `session_diagrams`' rule and is the one place to
+    read before "fixing" it: a diagram's bytes are a *file*, so a second copy in the row would be
+    two copies free to disagree; a table has no file, so the row is the only copy. `notes.body` is
+    the same shape for the same reason. It writes **no `sources` row** either — a source's
+    `rel_path` is non-NULL for both sandbox storages and every consumer is path-driven, so an
+    honest one is impossible — and no `.md` file in `sessions/<id>/`, which would put two full
+    copies of one source on disk.
+  - **`ila_table` is `NON_FILE_TOOLS`.** The switch means "this agent does not write files", and
+    the comparison is `ila_query`'s, not `ila_diagram`'s: a table writes a database row. Leaving it
+    out would let an operator's file-tools switch silently remove a capability that never touched a
+    file.
+  - **Its call renders no card at all.** `ila_table`'s artifact is the reply, so a card could only
+    repeat the summary and the generic disclosure would show the whole markdown as JSON in a fold —
+    the shape the requirement rules out. The rule is `CARDLESS_TOOL_NAMES` and `ToolCallCard` is its
+    only reader. What that costs is the jump anchor: 定位 emits `chat.jump` with a tool-call id,
+    which used to resolve to the card, so `MessageItem` writes those ids on the message row as
+    `data-tool-call-anchor` and `revealToolCall` matches one with a CSS `~=`. Do not delete either
+    half without moving the anchor — a control that renders and does nothing is the failure this
+    repo names most often.
+  - **A table keeps the one content check this repo takes on** — a header separator row, refused
+    before the write so a refused revise cannot wipe the row the panel holds. Only that row: a full
+    parse would be a second renderer free to disagree with the `markdown-it` that draws it, which is
+    the argument against validating mermaid. And because there is no file, the model's way back to a
+    table it wrote is `ila_query(kind: "table")` — without it, "call again with the same name" is
+    advice it cannot follow past the history window.
+  - **The classifier places tables through the same machinery**, with two wire keys (`diagrams` /
+    `tables`) over one parameterised parser, `d1` / `t1` refs as the discriminant, and a **separate
+    `MAX_TABLES_PER_PROMPT`**. The one thing that must not be duplicated is the ref allocation: it
+    is one loop over the same `modelTurns`, which is what makes a forced turn's table collapse
+    exactly as its diagram does. See `docs/tables.md`.
 - **Mermaid renders in its own component, never through `renderMarkdown`.** `renderMarkdown` is a
   synchronous `string → string` on purpose — that is the reason KaTeX was chosen over MathJax —
   and mermaid's API is async, so a diagram cannot go through the markdown path, and making the
@@ -794,17 +833,21 @@ Fuller map in `docs/reference.md`.
   content, `finalContent` is *replaced* by just that step's text. So the live view shows
   narration + answer while `messages.content` holds only the answer, and a reload drops the
   narration. Pinned by a test in `apps/server/test/agent/loop.test.ts` — changing it is a
-  product decision, not a bug fix. **`ila_review_quiz` is the one exception:** text streamed
-  beside a grading call is the per-question verdict walkthrough — the turn's actual answer —
-  not narration, so `gradingUtterances` keeps it and `composeWithGradingUtterances` rejoins
-  it ahead of the last utterance at every normal ending (final answer, suspension, exhausted
-  budget); an utterance the last step repeats verbatim is dropped rather than doubled. The
-  reason it exists: a grading turn typically runs grading → `ila_update_plan_progress` → a
-  final "shall we move to the next chapter?" step, and the last-utterance rule used to make
-  the verdicts vanish from the persisted message at `message_done` after streaming them live.
-  The prompts push the model toward the safe shape too (all bookkeeping tool calls before
-  the prose; the full rundown in the final message), but the loop rule is the deterministic
-  backstop — do not delete one believing the other makes it redundant.
+  product decision, not a bug fix. **The exception is a call whose artifact *is* that text**,
+  and `ANSWER_BEARING_TOOLS` names both: text streamed beside `ila_review_quiz` is the
+  per-question verdict walkthrough, and text streamed beside `ila_table` is the table itself —
+  `ila_table` renders nothing, so the prose beside the call is the whole of what the reader
+  sees. `answerUtterances` keeps those and `composeWithAnswerUtterances` rejoins them ahead of
+  the last utterance at every normal ending (final answer, suspension, exhausted budget); an
+  utterance the last step repeats verbatim is dropped rather than doubled. The reason it
+  exists is the same failure twice: a grading turn typically runs grading →
+  `ila_update_plan_progress` → a final "shall we move to the next chapter?" step, and a table
+  turn is the table → "需要展开哪一项？", so in both the last-utterance rule made the artifact
+  vanish from the persisted message at `message_done` after streaming it live. A diagram is
+  deliberately **not** in the set: its artifact is the drawing, rendered from the tool call, so
+  its prose really is narration. The prompts push the model toward the safe shape too (all
+  bookkeeping tool calls before the prose; the full rundown in the final message), but the loop
+  rule is the deterministic backstop — do not delete one believing the other makes it redundant.
 - **A message holds the model's most recent utterance, never every step's run together.**
   `finalContent` *accumulates* each step's text as it streams, and it is the `lastUtterance`
   tracked per step that every ending actually reads from — the final answer, the suspension,
@@ -1214,6 +1257,16 @@ Fuller map in `docs/reference.md`.
   `create-admin` makes — the person at the machine is the superadmin — so no random password is
   generated or shown and the success envelope carries no password back; the terminal path keeps
   `--generate`. `cli reset-admin` requires exactly one of the two flags.
+- **The upload limit is an installation-wide setting, and its ceiling is a fact about routes.**
+  `MAX_ATTACHMENT_BYTES` (10 MB) is the *default*; the value in force lives in `app_settings`
+  (`upload.maxFileBytes`), is written by `PUT /api/upload-settings`, and reaches the client as
+  `PublicConfig.maxUploadBytes` so the composer refuses past it before a request is made. The
+  ceiling (100 MB) is not a policy choice: Fastify's `bodyLimit` is fixed when a route is
+  registered, so the route carries the ceiling and the *handler* compares against the setting.
+  Two consequences worth keeping: a body past the ceiling is refused by Fastify without our
+  envelope, and every `FILE_TOO_LARGE` refusal must name the limit that actually applied
+  (`fileTooLarge(limit)`) — a sentence compiled against the constant would tell a user "10 MB" while
+  refusing at 50.
 - **A setting every account shares is an administrator's to change, and the split is
   "configure vs choose".** Providers and models, document parsers, the parsing policy and the app
   defaults are **installation-wide**; their *writes* carry `requirePlatformAdmin` (either tier)
@@ -1596,17 +1649,21 @@ Fuller map in `docs/reference.md`.
 - **Widget-bound tools are switched by the install, and bypass the tool allow-list.** A `WIDGETS` entry may name `boundTools`; `turnContext()` reads the session's installed widgets per turn and assembles those tools (context-gated like `read_document`) regardless of the `allTools`/`tools` snapshot in all three states, including the empty "no tools" list. They are filtered out of the Copilot tool checklist (`isWidgetBoundTool`), since a box there can neither enable nor remove them. The plan widget binds `ila_make_plan` / `ila_read_plan` / `ila_update_plan_progress` (session scope only).
   **A tool whose widget is a *viewer* must not be bound, and `ila_diagram` is the case that
   settles it.** Binding is the right answer only when the widget is the capability's home — a
-  quiz nobody can answer, a plan nobody can see. `WIDGETS.diagram` deliberately names no
-  `boundTools`, because a bound tool is assembled *only* when its widget is installed and nothing
-  installs a widget by default (`DEFAULT_WIDGET_IDS` is empty): binding diagrams would leave the
-  model with no way to draw one in an ordinary conversation, which is the complaint the tool
-  exists to answer, and `isWidgetBoundTool` would keep the name out of the allow-list so it could
-  not even be switched on. It is an ordinary allow-listable tool, and it is deliberately **not** in
-  `NON_FILE_TOOLS` either — so `fileTools.enabled: false` means no diagrams, because a diagram
-  whose file was never written is half the feature. The panel is a viewer: it lists the
-  conversation's diagram rows (name, summary, thread) and opens the one you pick; the whole
-  folder is the source browser, which the sidebar's library row opens pre-filtered to this
-  workspace — see `docs/diagrams.md`.
+  quiz nobody can answer, a plan nobody can see. `WIDGETS.diagram` declares its two tools
+  `auto-install` rather than binding them, because a bound tool is assembled *only* when its
+  widget is installed and the only widgets installed by default are the notes and sources panels:
+  binding diagrams would leave the model with no way to draw one in an ordinary conversation,
+  which is the complaint the tool exists to answer, and `isWidgetBoundTool` would keep the name
+  out of the allow-list so it could not even be switched on. They are ordinary allow-listable
+  tools, and they differ from each other on `NON_FILE_TOOLS`: `ila_diagram` is deliberately **not**
+  in it — `fileTools.enabled: false` means no diagrams, because a diagram whose file was never
+  written is half the feature — while `ila_table` **is**, because its comparison is `ila_query`'s
+  rather than the diagram's: a table writes a row and no file, so the switch about *files* has no
+  bearing on it. The panel is a viewer over **both**: it lists the conversation's diagrams (name,
+  summary, thread) and its tables (name, summary, the markdown), and opens the one you pick — a
+  diagram through the ordinary file preview, a table through the viewer directly, since only one of
+  the two has a file. The whole folder is the source browser, which the sidebar's library row opens
+  pre-filtered to this workspace — see `docs/diagrams.md` and `docs/tables.md`.
   **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
   comes from an out-of-band model call a button triggers, so there is nothing to bind — and
   binding would be wrong anyway, because a bound tool is something the *agent* can call and the

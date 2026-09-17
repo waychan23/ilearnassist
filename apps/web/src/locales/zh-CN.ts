@@ -85,9 +85,35 @@ export default {
     /** The viewer. `expand` is its trigger, on the card and in the file preview. */
     expand: "放大查看",
     viewTitle: "查看图表",
+    /** The viewer's own heading when it is showing a table rather than a drawing. */
+    tableTitle: "查看表格",
     zoomIn: "放大",
     zoomOut: "缩小",
-    fit: "适应窗口",
+    /**
+     * Clicking the percentage returns to 100 %. Named for the state rather than for the gesture
+     * because that is what the button shows — it is the readout that is clickable.
+     */
+    fit: "恢复到 100%",
+    maximize: "放大窗口",
+    restore: "缩小窗口",
+    /** The viewer's download control, for a drawing. */
+    download: "下载图片",
+    /**
+     * The three formats, named as a person would ask for them rather than as MIME types — and the
+     * parenthetical is the one thing they differ by that a reader cannot see from the name: what
+     * happens where the picture has no ink. JPG says "the current theme's background" rather than
+     * "white" because that is what it does, and a dark-palette diagram on white is illegible.
+     */
+    formats: {
+      png: "PNG 图片（透明背景）",
+      jpg: "JPG 图片（带主题背景色）",
+      svg: "SVG 矢量图",
+    },
+    /** A download that produced nothing. Loud on purpose: the dialog closes either way, so
+     *  silence would look exactly like a file that was saved. */
+    downloadFailed: "下载失败，这张图没能导出为文件。",
+    /** What the table's copy control writes, said once because the button cannot say both. */
+    copyHint: "复制为 HTML 表格，粘贴到纯文本编辑器时则为 Markdown",
     /** The label on the card's disclosure, which shows the source rather than the drawing. */
     source: "源码",
     /** The label before the model's description in the viewer and file preview. */
@@ -176,12 +202,30 @@ export default {
       users: "管理这个实例上的账号。",
       providers: "配置所有账号共用的模型服务；普通用户只能在已配置的模型中选择使用。",
       documents: "配置所有账号共用的文档解析方式。",
+      uploads: "所有账号共用的上传限制。",
     },
     /** The left menu. One entry per section; the key is the section id. */
     nav: {
       users: "用户管理",
       providers: "模型服务",
       documents: "文档解析",
+      uploads: "上传设置",
+    },
+    /**
+     * The upload limit. The unit is MB here and bytes on the wire, and the conversion lives in
+     * `UploadsSection` — the one boundary where a person types a number.
+     */
+    uploads: {
+      maxSize: "单个文件大小上限（MB）",
+      range: "可设置 {min}–{max} MB。",
+      saving: "保存中…",
+      saved: "已保存",
+      /**
+       * The half of the rule a number cannot state: what happens to a file past the limit. Said
+       * here rather than discovered, because "why can't I upload this" is the question the setting
+       * exists to answer, and the refusal arrives before the file is sent.
+       */
+      note: "超过上限的文件会在上传前被拒绝，并提示实际上限。附件与工作区文件共用这一个限制。",
     },
     create: "新建用户",
     roles: "角色",
@@ -258,8 +302,11 @@ export default {
   chat: {
     titleHint: "标题由 AI 自动生成，修改后将不再自动更新",
     titlePlaceholder: "会话标题",
+    /**
+     * The whole of the rename affordance on the topbar, and it is a tooltip rather than a
+     * button: the title itself is the control, so this is where the gesture is taught.
+     */
     editTitleHint: "点击编辑标题",
-    editTitle: "编辑标题",
     autoBadgeTitle: "标题由 AI 根据第一轮对话自动生成",
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
@@ -361,6 +408,12 @@ export default {
     newSession: "新建会话",
     renameHint: "双击重命名",
     noSessions: "暂无会话",
+    /** The heading over the pinned group. Only ever drawn when that group has rows in it. */
+    pinnedGroup: "置顶的",
+    /** The two halves of one toggle, named as actions: a pin already set has only the
+     *  opposite one to offer, and the button's title says which it will do. */
+    pin: "置顶",
+    unpin: "取消置顶",
     openNav: "打开导航",
     /** The header toggle's label, which names the *action* — so it changes with the state
      *  rather than describing the button, and there is no second "current state" string. */
@@ -529,6 +582,9 @@ export default {
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
       ila_diagram: "图表",
+      /* 表 rather than 图表: the panel is 图表 (both halves), and this is the half that records a
+         table — the word the card's own hint and the panel's filter both use. */
+      ila_table: "表格",
       ila_query: "查询学习记录",
       ila_explore: "浏览其他工作区",
     },
@@ -1039,7 +1095,15 @@ export default {
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "定位到生成它的消息",
-      empty: "这个会话还没有画过图表。",
+      empty: "这个会话还没有画过图表，也没有记录过表格。",
+      /** The panel's kind filter. Its empty value is the select's own "everything". */
+      filterKind: "按类型筛选",
+      allKinds: "全部",
+      kinds: {
+        diagram: "图",
+        table: "表",
+      },
+      noMatch: "没有符合筛选条件的图表。",
       failed: "读取图表失败。",
       /** The thread the classifier put this diagram in. */
       inThread: "属于：{title}",

@@ -193,6 +193,39 @@ diagram whose file was never written is half the feature, so the switch that mea
 deliberate entry in the tool assembly rather than an oversight: see the
 `NON_FILE_TOOLS` note in `apps/server/src/tools/index.ts`.
 
+**`ila_table` does not, and the difference is the line this switch is drawn on.**
+The question is not "does this tool touch the workspace" but "does this agent write
+files", and a table writes a database row and nothing else — its display is the
+reply's own Markdown. So it stays, like `ila_query` and `ila_explore`, both of which
+read without writing. Turning the file tools off removes diagrams and not tables;
+`docs/tables.md` has the rest.
+
+## The upload limit
+
+The largest file an account may upload is an installation-wide setting an administrator owns, not
+a constant. It lives in `app_settings` under `upload.maxFileBytes` and is edited from the console's
+**上传设置** section; `PUT /api/upload-settings` writes it, `GET /api/config` carries it back as
+`PublicConfig.maxUploadBytes`, and the client refuses past it *before* a request is made — which is
+the point of making it a setting, since a raised limit that is still refused by the browser at the
+old constant is worse than no setting at all.
+
+Nothing in `config.yaml` seeds it, deliberately: the default is `MAX_ATTACHMENT_BYTES` (10 MB),
+which both sides already share, so an installation that has never been touched behaves exactly as
+it did before the setting existed. The range is `MIN_UPLOAD_LIMIT_BYTES`–`MAX_UPLOAD_CEILING_BYTES`
+(1–100 MB), refused rather than clamped at either end.
+
+**The ceiling is a consequence of how routes are built, and it is worth knowing.** Fastify's
+`bodyLimit` is a number fixed when a route is registered, so the value in force cannot be what the
+route reads. The route therefore carries the *ceiling* and the handler compares against the setting
+— the two agree for everything an administrator can save, and a body past the ceiling is refused by
+Fastify before the handler runs, which is the one refusal on this path that does not carry
+`FILE_TOO_LARGE`. The same route/`limitMb` pairing is why both upload routes now name the limit
+they applied: the workspace-upload route used to omit it, which was harmless while the number was
+a constant and is not now.
+
+`MAX_FILE_PREVIEW_BYTES` (32 MB) is untouched and unrelated: what may be *uploaded* and what may
+be *previewed* are different questions, and the second is a memory bound on the tab.
+
 ## Copilots
 
 A Copilot is a reusable persona: a system prompt, a tool allow-list and default

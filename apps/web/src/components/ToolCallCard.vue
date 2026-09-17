@@ -8,6 +8,7 @@ import {
   isInteractiveTool,
   type ToolCall,
 } from "../api/types";
+import { CARDLESS_TOOL_NAMES } from "../utils/toolCallCards";
 import AskUserCard from "./AskUserCard.vue";
 import DiagramCard from "./DiagramCard.vue";
 import PlanConflictCard from "./PlanConflictCard.vue";
@@ -49,6 +50,17 @@ const card = computed<"ask" | "quiz" | "plan" | null>(() => {
  */
 const isDiagram = computed(() => props.toolCall.name === DIAGRAM_TOOL_NAME);
 
+/**
+ * A call the conversation shows nothing for.
+ *
+ * `ila_table`'s artifact is the table the model wrote into the reply, so there is nothing for a
+ * card to add and no box to draw — and *not* drawing one matters for the generic card's reason
+ * in reverse: its disclosure would render the whole markdown under "参数", which is the
+ * table-inside-a-tool-container shape this feature rules out. See `CARDLESS_TOOL_NAMES`, which
+ * is also where the jump anchor this call no longer provides has moved to.
+ */
+const cardless = computed(() => CARDLESS_TOOL_NAMES.has(props.toolCall.name));
+
 const open = ref(false);
 const { t, te } = useI18n();
 
@@ -88,7 +100,13 @@ const prettyInput = computed(() => {
 </script>
 
 <template>
-  <DiagramCard v-if="isDiagram" :tool-call="toolCall" />
+  <!--
+    First in the chain, and a `v-if`/`v-else-if` rather than a wrapper: a rendered `<template>`
+    around the whole thing would be a block element in the message column, and an empty one still
+    costs whatever the column's `gap` charges for a sibling.
+  -->
+  <template v-if="cardless"></template>
+  <DiagramCard v-else-if="isDiagram" :tool-call="toolCall" />
   <AskUserCard v-else-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
   <PlanConflictCard v-else-if="card === 'plan'" :tool-call="toolCall" />

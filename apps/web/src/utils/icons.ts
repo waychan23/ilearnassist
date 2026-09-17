@@ -207,6 +207,12 @@ export const ICON_PATHS = {
    * horizontal bar reads as a floor rather than as a border. */
   upload: ["M8 12.25V3.5", "M4.5 7L8 3.5L11.5 7", "M3.5 12.75H12.5"],
 
+  /* `upload`'s arrow, turned round: taking something out of the app is the inverse of putting it
+   * in, so the pair is one drawing in two directions. The line it lands on is the same line the
+   * upload arrow rises from, and it sits *below* the point rather than behind the stem — which is
+   * the whole of what makes the direction readable without a colour or a second glyph. */
+  download: ["M8 2.75V10.5", "M4.75 7.25L8 10.5L11.25 7.25", "M3.5 13.25H12.5"],
+
   image: [
     "M2.5 3.5H13.5V12.5H2.5Z",
     "M2.5 9.75L5.5 6.75L8.5 9.75L10.25 8L13.5 11.25",
@@ -222,6 +228,25 @@ export const ICON_PATHS = {
     "M9.5 2.5V5.5H12.5",
     "M5.75 8H10.25",
     "M5.75 10.5H10.25",
+  ],
+
+  /* 表: a grid — the header rule plus two rows, which is what tells a table apart from a plain
+   * document at 14px. Deliberately not a spreadsheet glyph: nothing here computes. It is the
+   * second half of the 图表 pair, and reads as one beside `diagram`'s boxes and arrows. */
+  table: [
+    "M2.75 3.5H13.25V12.5H2.75Z",
+    "M2.75 6.5H13.25",
+    "M8 6.5V12.5",
+  ],
+
+  /* 置顶: a pushpin, drawn straight on rather than at the diagonal a paper pin sits at, because
+   * the diagonal reads as a *slanted* bar at 14px. Head, shoulder, needle — the three parts are
+   * what tell it apart from `lock` (a body with a closed shackle) and from `marker` (a diagonal
+   * nib), which is what this would otherwise be mistaken for in a row of icon buttons. */
+  pin: [
+    "M6.5 2.75H9.5V6.25H6.5Z",
+    "M4.5 6.25H11.5",
+    "M8 6.25V13.25",
   ],
 
   bulb: [

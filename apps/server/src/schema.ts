@@ -713,6 +713,48 @@ export const DDL = `
     ON session_diagrams(session_id, name);
   CREATE INDEX IF NOT EXISTS idx_diagrams_call ON session_diagrams(tool_call_id);
 
+  -- A conversation's tables: one row per markdown table the model recorded, and the first
+  -- derived row in this schema that holds **the artifact's own content**.
+  --
+  -- That inversion of the rule above is the whole argument for this table, so it is worth
+  -- stating rather than leaving to be discovered: session_diagrams.summary is the precedent
+  -- for "what the bytes cannot answer, stored beside them rather than in them", and there are no
+  -- bytes here to store beside. A diagram's source is a *file* — the file tools can write one,
+  -- the library browses it, @ can reference it — so a second copy in the row would be two
+  -- copies free to disagree, which is the drift the whole split exists to prevent. A table has no
+  -- file: its display is the assistant's own reply, rendered inline as Markdown (see
+  -- docs/tables.md), and content is the copy the panel, the viewer and the clipboard read.
+  -- Nothing can disagree with it because there is nothing else. notes.body is the same shape
+  -- for the same reason.
+  --
+  -- No deleted_at, no message_id, and no FK on thread_id: all three are session_diagrams'
+  -- argument unchanged. Derived data the model wrote in a turn, nothing in the product deletes a
+  -- table, and the assistant message does not exist when the tool runs — the classifier assigns
+  -- the thread directly, in the same transaction as the turn's own.
+  --
+  -- name is a slug with NO extension, unlike a diagram's, because there is no file name for it to
+  -- match: it is the row's identity and the label the panel shows. (session_id, name) is
+  -- therefore the revise rule — calling the tool again with the same name corrects that table
+  -- rather than adding a second one — and ON CONFLICT is where that lives.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS session_tables (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    thread_id TEXT,
+    name TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tool_call_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  -- The two indexes session_diagrams has, for the same two reads: the list is by session, and a
+  -- tool call is looked up by the thread classifier's own join.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tables_session_name
+    ON session_tables(session_id, name);
+  CREATE INDEX IF NOT EXISTS idx_tables_call ON session_tables(tool_call_id);
+
   -- The insight panel's observations: typed things a pass over the conversation noticed.
   --
   -- Derived data, and the FIRST derived table here with a delete control — which is why the

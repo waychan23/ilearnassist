@@ -1,4 +1,9 @@
-import { DIAGRAM_TOOL_NAME, isInteractiveTool, type ToolCall } from "../api/types";
+import {
+  DIAGRAM_TOOL_NAME,
+  TABLE_TOOL_NAME,
+  isInteractiveTool,
+  type ToolCall,
+} from "../api/types";
 
 /**
  * Runs of consecutive action tool calls, as the message list renders them.
@@ -28,12 +33,19 @@ export type ToolCallRun =
  *     function, and saying so here keeps that true if a call site changes.
  *   - `ila_diagram` renders a drawing. Folding it into a count hides the artifact behind a
  *     number, which is the opposite of what that card is for.
+ *   - `ila_table` renders nothing at all, so the reason is not "its card deserves to be seen"
+ *     but the count: a group's line says "3 个工具调用", and folding one in that has no card to
+ *     show on expand would be a number with nothing behind it.
  *
  * A non-groupable call *breaks* a run rather than sitting inside one: `[a, diagram, b]` becomes
  * three singles, never a group with a picture hidden in it.
  */
 export function isGroupableToolCall(call: ToolCall): boolean {
-  return !isInteractiveTool(call.name) && call.name !== DIAGRAM_TOOL_NAME;
+  return (
+    !isInteractiveTool(call.name) &&
+    call.name !== DIAGRAM_TOOL_NAME &&
+    call.name !== TABLE_TOOL_NAME
+  );
 }
 
 /** Split the action calls into what to render, in order. */

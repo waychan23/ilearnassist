@@ -9,6 +9,7 @@ import {
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
   QUIZ_REVIEW_TOOL_NAME,
+  TABLE_TOOL_NAME,
   QUIZ_TOOL_NAME,
   type Attachment,
   type ChatStreamEvent,
@@ -99,6 +100,8 @@ export interface RunAgentInput {
    * says when to reach for it.
    */
   collectPageGuidance?: string;
+  /** `ila_table`'s positive half — see `TABLE_GUIDANCE`. */
+  tableGuidance?: string;
   /**
    * What the user opened to this conversation with `@`, on turns where `ila_explore` is
    * assembled. Absent on every ordinary conversation, and it does more than add a paragraph —
@@ -279,6 +282,8 @@ export interface SystemPromptInput {
   planGuidance?: string;
   quizGuidance?: string;
   collectPageGuidance?: string;
+  /** `ila_table`'s positive half — see `TABLE_GUIDANCE`. */
+  tableGuidance?: string;
   /**
    * What the user has opened to this conversation with `@`.
    *
@@ -371,6 +376,9 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   // Not a widget this time — the switch is whether the tool itself was assembled, which is
   // what "an installation with web fetching off" looks like from here.
   const collectNote = input.collectPageGuidance ? `\n\n${input.collectPageGuidance}` : "";
+  // `ila_table`'s positive half, on the same switch as the line above: the tool is assembled, so
+  // the model is told to write the table into its reply as well as record it.
+  const tableNote = input.tableGuidance ? `\n\n${input.tableGuidance}` : "";
   // The same switch again: assembled, so the conversation holds an `@` grant. It sits after the
   // workspace note it qualifies, and before the make-up key, which is the most specific
   // instruction in the prompt and belongs last.
@@ -379,7 +387,15 @@ function buildSystemPrompt(input: SystemPromptInput): string {
   const makeupNote = input.quizMakeupNote ? `\n\n${input.quizMakeupNote}` : "";
 
   return (
-    base + timeNote + workspaceNote + planNote + quizNote + collectNote + exploreNote + makeupNote
+    base +
+    timeNote +
+    workspaceNote +
+    planNote +
+    quizNote +
+    collectNote +
+    tableNote +
+    exploreNote +
+    makeupNote
   );
 }
 
@@ -485,18 +501,41 @@ function trimHistory(history: Message[], settings: SessionSettings): Message[] {
 }
 
 /**
- * Put the quiz grading rundown back in front of the turn's last utterance.
+ * The tools whose artifact **is the text the model streams beside the call**.
  *
- * Text a model streams beside an ordinary tool call is narration and is deliberately not
- * persisted (only the final step's text is). Text beside `ila_review_quiz` is different: it
- * is the per-question verdict walkthrough — the turn's actual answer — and a later step that
- * only updates the plan and asks whether to continue used to replace it wholesale, so the
- * verdicts streamed live vanished at `message_done`. An utterance the last step already
- * repeats verbatim is dropped rather than shown twice; with nothing preserved this is the
- * identity function, so every non-grading turn keeps the last-utterance rule exactly.
+ * The distinction the persistence rule turns on. Text beside an ordinary tool call is narration —
+ * "I will write that file now" — and replacing it with the final step's answer is what keeps a
+ * message to one utterance. These two are the other case, and each is the other case for its own
+ * reason that lands in the same place:
+ *
+ * - `ila_review_quiz` streams the per-question verdict walkthrough, which *is* the turn's answer.
+ * - `ila_table` renders nothing at all. Its whole contract is that the table is written into the
+ *   reply as ordinary Markdown, so the prose beside the call is the artifact — and the step after
+ *   it is typically a closing question ("需要展开哪一项？"), which used to replace the table
+ *   wholesale. The table streamed live and then vanished at `message_done`, which is the one
+ *   thing the feature exists to prevent.
+ *
+ * Deliberately **not** `ila_diagram`, and the difference is the same one: a diagram's artifact is
+ * the drawing, rendered from the tool call itself, so its prose really is narration.
+ *
+ * The exception is the utterance *beside* the call, and that is as far as it goes: a table written
+ * in an earlier step that made no call is narration by the general rule and is dropped with it.
+ * That ordering is the one the guidance rules out — it tells the model to record the table it is
+ * writing — and `ila_table`'s own result covers the remainder by asking for the inline copy "if you
+ * have not already", so the model is told rather than the loop guessing. The second layer is not a
+ * substitute for the first: this rule is what makes the shape a real model produces deterministic.
  */
-function composeWithGradingUtterances(gradingUtterances: string[], last: string): string {
-  const prior = gradingUtterances.filter((u) => u.trim() && !last.includes(u));
+const ANSWER_BEARING_TOOLS: ReadonlySet<string> = new Set([QUIZ_REVIEW_TOOL_NAME, TABLE_TOOL_NAME]);
+
+/**
+ * Put the utterances that carried an answer back in front of the turn's last utterance.
+ *
+ * An utterance the last step already repeats verbatim is dropped rather than shown twice; with
+ * nothing preserved this is the identity function, so every other turn keeps the last-utterance
+ * rule exactly.
+ */
+function composeWithAnswerUtterances(answerUtterances: string[], last: string): string {
+  const prior = answerUtterances.filter((u) => u.trim() && !last.includes(u));
   if (prior.length === 0) return last;
   return last.trim() ? `${prior.join("\n\n")}\n\n${last}` : prior.join("\n\n");
 }
@@ -543,6 +582,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
         collectPageGuidance: input.collectPageGuidance,
+        tableGuidance: input.tableGuidance,
         exploreGuidance: input.exploreGuidance,
         quizMakeupNote: input.quizMakeupNote,
       })
@@ -578,9 +618,9 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   let lastUtterance = "";
   /**
    * Text streamed beside `ila_review_quiz` calls, in step order. Unlike ordinary tool
-   * narration it survives the last-utterance replacement — see `composeWithGradingUtterances`.
+   * narration it survives the last-utterance replacement — see `composeWithAnswerUtterances`.
    */
-  const gradingUtterances: string[] = [];
+  const answerUtterances: string[] = [];
   /** Set when a step asked the user something; the turn ends once the step finishes. */
   let awaiting = false;
   /**
@@ -653,20 +693,21 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
       const calls = aiMessage.tool_calls ?? [];
 
-      // The verdict walkthrough streamed alongside a grading call is answer content, not
-      // narration: keep it even when a later step only updates the plan or asks what's next.
+      // Text streamed alongside a call whose artifact *is* that text is answer content, not
+      // narration: keep it even when a later step only moves the plan or asks what is next.
+      // See `ANSWER_BEARING_TOOLS`.
       if (
-        calls.some((c) => c.name === QUIZ_REVIEW_TOOL_NAME) &&
+        calls.some((c) => ANSWER_BEARING_TOOLS.has(c.name)) &&
         stepText.trim() &&
-        !gradingUtterances.includes(stepText)
+        !answerUtterances.includes(stepText)
       ) {
-        gradingUtterances.push(stepText);
+        answerUtterances.push(stepText);
       }
 
       if (calls.length === 0) {
         // No tool calls: the model's final answer is this message's content.
-        finalContent = composeWithGradingUtterances(
-          gradingUtterances,
+        finalContent = composeWithAnswerUtterances(
+          answerUtterances,
           chunkText(aiMessage) || lastUtterance
         );
         ended = true;
@@ -781,7 +822,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         // what keeps a silent suspending step from re-joining everything after all. A
         // verdict walkthrough from an earlier grading call is answer content, so it survives.
         finalContent =
-          composeWithGradingUtterances(gradingUtterances, lastUtterance) || finalContent;
+          composeWithAnswerUtterances(answerUtterances, lastUtterance) || finalContent;
         ended = true;
         break;
       }
@@ -804,7 +845,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   // user asked for the turn to end there.
   if (!ended && !stopped) {
     const kept = lastUtterance
-      ? composeWithGradingUtterances(gradingUtterances, lastUtterance)
+      ? composeWithAnswerUtterances(answerUtterances, lastUtterance)
       : "";
     finalContent = kept ? `${kept}\n\n${OUT_OF_STEPS}` : OUT_OF_STEPS;
   }

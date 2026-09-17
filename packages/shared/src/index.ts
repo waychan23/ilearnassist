@@ -46,6 +46,7 @@ export const ALL_TOOL_NAMES = [
   "ila_read_plan",
   "ila_update_plan_progress",
   "ila_diagram",
+  "ila_table",
   "ila_query",
   "ila_explore",
 ] as const;
@@ -90,7 +91,15 @@ export type ExploreKind = (typeof EXPLORE_KINDS)[number];
  * to read, and a thread is a thing this tool returns while never being a thing the model can
  * name as a widget. The two lists answer different questions and are free to differ.
  */
-export const QUERY_KINDS = ["plan", "quiz", "thread", "note", "diagram", "source"] as const;
+export const QUERY_KINDS = [
+  "plan",
+  "quiz",
+  "thread",
+  "note",
+  "diagram",
+  "table",
+  "source",
+] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
@@ -107,6 +116,23 @@ export type QueryKind = (typeof QUERY_KINDS)[number];
  * panel that lists it. See `WidgetTools`.
  */
 export const DIAGRAM_TOOL_NAME = "ila_diagram";
+
+/**
+ * The table tool's name.
+ *
+ * Shared for the same reason `DIAGRAM_TOOL_NAME` is: the client switches on it, to pick the
+ * table's own card out of an assistant message's tool calls.
+ *
+ * It rides the **diagram widget** — `WIDGETS.diagram` names both tools — because 图表 is the
+ * panel that shows what a conversation has drawn and a table is the other half of that. Like the
+ * diagram tool it is `auto-install`: ordinary, pickable in a Copilot, and making one installs the
+ * panel that lists it.
+ *
+ * What it is *not* is a file. A diagram's bytes have to be a file (the agent's own tools can write
+ * `.mmd`, and the library browses it); a table's display is the reply itself, so the row holds the
+ * markdown and the conversation holds the rendering. See `Table`.
+ */
+export const TABLE_TOOL_NAME = "ila_table";
 
 /**
  * The plan tools' names. Declared here rather than in the plan section below because the
@@ -565,20 +591,27 @@ export const WIDGETS: readonly WidgetDefinition[] = [
    */
   { id: "notes", scopes: ["session"] },
   /*
-   * The diagram widget declares `ila_diagram` in `auto-install` mode, which is the plan widget's
-   * shape applied to a viewer. The tool had to be reachable in an ordinary conversation for the
-   * feature to exist at all — a diagram the model cannot draw is not a diagram — and `required`
-   * would have made it reachable only where the panel already was. So the tool is ordinary, the
-   * allow-list can add or remove it, and it is pickable in a Copilot; what the mode adds is that
-   * drawing one installs the panel that lists it.
+   * The diagram widget declares `ila_diagram` and `ila_table` in `auto-install` mode, which is the
+   * plan widget's shape applied to a viewer. The tools had to be reachable in an ordinary
+   * conversation for the features to exist at all — a diagram the model cannot draw is not a
+   * diagram — and `required` would have made them reachable only where the panel already was. So
+   * the tools are ordinary, the allow-list can add or remove them, and they are pickable in a
+   * Copilot; what the mode adds is that drawing a diagram or recording a table installs the panel
+   * that lists it.
    *
-   * The panel is still only a *viewer*: it lists the diagrams this conversation has drawn and
-   * draws the one you pick. The drawing itself is a file in the conversation's own directory plus
-   * its row, so the two are independent — a `.mmd` copied in by hand reaches the library and the
-   * file tree without a panel, and a diagram drawn in a conversation whose panel was explicitly
-   * uninstalled is still drawn.
+   * Two kinds in one panel because 图表 is one idea with two halves — 图 and 表 — and because the
+   * ids are persisted rows: `session_widgets.widget_id` is `"diagram"`, so renaming it to something
+   * that covers both would leave every existing install pointing at a widget this build no longer
+   * has. The panel is still only a *viewer*: it lists what this conversation has drawn and shows
+   * the one you pick. A diagram is a file in the conversation's own directory plus its row, so the
+   * two are independent — a `.mmd` copied in by hand reaches the library and the file tree without
+   * a panel — while a table is the row alone.
    */
-  { id: "diagram", scopes: ["session"], tools: { names: [DIAGRAM_TOOL_NAME], mode: "auto-install" } },
+  {
+    id: "diagram",
+    scopes: ["session"],
+    tools: { names: [DIAGRAM_TOOL_NAME, TABLE_TOOL_NAME], mode: "auto-install" },
+  },
   /*
    * The insight panel names no tools either, and for a stronger reason than the diagram's: the
    * pass it drives is an **out-of-band model call**, the `agent/title.ts` / `agent/threads.ts`
@@ -962,6 +995,49 @@ export interface Diagram {
 /** `GET /api/sessions/:id/diagrams`. */
 export interface GetSessionDiagramsResponse {
   diagrams: Diagram[];
+}
+
+/**
+ * A table the conversation has recorded, as a row.
+ *
+ * The sibling of `Diagram`, and the differences are all one decision: **a table is not a file, so
+ * this row holds the markdown**. A diagram's bytes live in `sessions/<id>/<name>.mmd` because a
+ * diagram is a file — the file tools can write one, the library browses it, `@` can reference it —
+ * and its row deliberately holds only what the file cannot answer. A table's display is the reply
+ * itself (the requirement is explicit that it renders inline as Markdown, not in a card), so there
+ * is nothing for a second copy on disk to be the source of; `notes` stores its body in a column
+ * for the same reason.
+ *
+ * No `fileMissing`, because there is no file to be missing. That absence is the assertion worth
+ * having in the tests, rather than an oversight.
+ */
+export interface Table {
+  id: string;
+  sessionId: string;
+  /** The thread the classifier put this table in; null until its turn is classified. */
+  threadId: string | null;
+  threadTitle: string | null;
+  /**
+   * The canonical name — a slug, with no extension.
+   *
+   * No extension because there is no file: the name is only the row's identity and the label the
+   * panel shows. It is the join key for a revise all the same, which is what makes calling the
+   * tool again with the same name correct the table rather than add a second one.
+   */
+  name: string;
+  /** The model's one- or two-sentence description of what the table is about. */
+  summary: string;
+  /** The markdown table source. The row is the only copy — see the note above. */
+  content: string;
+  /** The tool call that wrote, or last revised, it; null when none was stamped. */
+  toolCallId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/sessions/:id/tables`. */
+export interface GetSessionTablesResponse {
+  tables: Table[];
 }
 
 /* ------------------------------------ notes ------------------------------------ */
@@ -2647,6 +2723,16 @@ export interface Session {
    * description is not a name, so writing one neither offers nor costs the auto-titler its turn.
    */
   description: string;
+  /**
+   * Pinned to the top of the sidebar's list.
+   *
+   * A boolean rather than a pin *timestamp*, and the difference is a decision rather than an
+   * economy: the ordering inside the pinned group is the ordinary most-recently-updated one, so
+   * pinning decides which group a conversation is in and nothing about where it sits in it.
+   * A timestamp would be a second ordering rule to keep in step with `updatedAt` for no reader
+   * who asked for one.
+   */
+  pinned: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -2765,6 +2851,14 @@ export interface PublicConfig {
   webSearchProvider: string;
   documentParsers: DocumentParserConfig[];
   documentParsing: DocumentParsingConfig;
+  /**
+   * The largest file an account may upload, in bytes.
+   *
+   * On the wire because the *client* refuses past it before a request is made — which is the whole
+   * point of raising the limit from a constant to a setting: a 60 MB file must be refused without
+   * being sent. `MAX_ATTACHMENT_BYTES` is the value behind it when nothing has been set.
+   */
+  maxUploadBytes: number;
 }
 
 /* ----------------------------------- API payloads ----------------------------------- */
@@ -2864,6 +2958,23 @@ export interface UpdateSessionInput {
 }
 
 /**
+ * Payload for `PATCH /api/sessions/:id/pin`.
+ *
+ * Required, and required to be a real boolean on the server, because the two states are not a
+ * default and a value: `false` is how a conversation is unpinned, so an absent field and a
+ * `"false"` are both a request that does not say what it wants. A route that guessed would turn
+ * `{"pinned": "false"}` — truthy in JavaScript — into a pin, which is the mistake
+ * `PATCH /api/admin/users/:id` refuses to make with `disabled`.
+ *
+ * Its own route rather than a field on `UpdateSessionInput` for two reasons: pinning must not
+ * touch `updatedAt` (see the statement in `db.ts`), and the update route returns through the
+ * whole settings/persona path for a change that only moves a row in a list.
+ */
+export interface SetSessionPinnedInput {
+  pinned: boolean;
+}
+
+/**
  * Payload for `POST /api/sessions/:id/notes`.
  *
  * `quote` and `occurrence` travel together or not at all: a quote with no occurrence has no
@@ -2960,6 +3071,18 @@ export interface UpdateDocumentParsingInput {
   policy?: DocumentParsePolicy;
   fallbackEnabled?: boolean;
   defaultParserId?: string | null;
+}
+
+/**
+ * Payload for `PUT /api/upload-settings`.
+ *
+ * `maxUploadBytes` is required rather than optional, and required to be an integer within
+ * `MIN_UPLOAD_LIMIT_BYTES`–`MAX_UPLOAD_CEILING_BYTES`. There is one field here, so an absent one
+ * is a request that does not say what it wants rather than a partial update — and a limit is a
+ * number a typo can make absurd in either direction.
+ */
+export interface UpdateUploadSettingsInput {
+  maxUploadBytes: number;
 }
 
 /**
@@ -3087,8 +3210,40 @@ export type ChatStreamEvent =
 
 /* ------------------------------------ constants ------------------------------------ */
 
-/** Uploads are capped at 10 MB per file (also enforced server-side). */
+/**
+ * The upload cap an installation starts with, and the fallback for one that has never been told
+ * otherwise: 10 MB per file.
+ *
+ * It stopped being the whole rule when an administrator gained the ability to set it — see
+ * `MAX_UPLOAD_CEILING_BYTES` — but it stays the *default*, and it is still what both sides fall
+ * back to, because nothing in `config.yaml` seeds it: the value lives in `app_settings` and an
+ * unset install behaves exactly as it always did. `PublicConfig.maxUploadBytes` is the number a
+ * client should use; this one is behind it.
+ */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * The most an administrator may raise the upload limit to, and the smallest.
+ *
+ * The ceiling is not a policy choice so much as a consequence of how a Fastify route is built:
+ * `bodyLimit` is a fixed number per route, fixed when the route is registered, so a limit that is
+ * editable at runtime cannot be the thing the body limit reads. The route therefore carries this
+ * number and the *handler* compares against the configured value — which means an administrator
+ * can set anything up to here and the two agree, while a body past this is refused by Fastify
+ * before the handler sees it. Stated rather than hidden, because that is the one case where the
+ * refusal does not carry `FILE_TOO_LARGE`.
+ *
+ * 100 MB of upload means roughly 133 MB in the server's memory for one request, since the body
+ * arrives base64-encoded inside JSON. That is the real cost of the ceiling, and it is why this is
+ * an administrator's setting rather than an unbounded one.
+ *
+ * Shared because both sides check it: the console refuses to save past it, and the route above
+ * derives its body limit from it.
+ */
+export const MAX_UPLOAD_CEILING_BYTES = 100 * 1024 * 1024;
+
+/** The least an administrator may set, so the limit cannot be made useless. */
+export const MIN_UPLOAD_LIMIT_BYTES = 1 * 1024 * 1024;
 
 /**
  * How large a file may be and still be handed to the preview viewer whole.

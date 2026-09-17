@@ -922,6 +922,36 @@ body {
   white-space: nowrap;
 }
 
+/*
+ * The pinned group's heading, and the rule between the two groups.
+ *
+ * Small, quiet and aligned with the rows' own inset, because it labels a group rather than being
+ * an item in it — it is the sidebar's third heading and the other two (`workspace-head`'s name,
+ * the tab strip) are the size this is. The rule carries the same inset so it reads as a break in
+ * the *list* rather than as the edge of a panel, which is what the menu's own top border is.
+ */
+.session-group {
+  padding: var(--space-4) var(--space-6) var(--space-2);
+  margin: 0 var(--space-3);
+  color: var(--text-3);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.side-divider {
+  height: 1px;
+  margin: var(--space-4) var(--space-6);
+  background: var(--border);
+}
+
+/* The pinned row's own state. Colour rather than a second glyph: the pin is the same object in
+   both states, and `aria-pressed` is where the difference is stated for anything not looking at
+   it. */
+.session-pin.on {
+  color: var(--accent);
+}
+
 .copilot-item {
   display: flex;
   align-items: center;
@@ -2546,6 +2576,18 @@ pre.code-block {
   bottom: auto;
   top: calc(100% + var(--space-2));
   min-width: 160px;
+}
+
+/*
+ * The figure viewer's download menu, which anchors the same way for the same reason: it hangs off
+ * a control in a dialog header, and a menu that opened *upwards* from the top of the screen would
+ * leave the window. Declared here, immediately after `.widget-menu`, because `.overlay-popover`
+ * sets `bottom` three rules up and this has to beat it on source order.
+ */
+.figure-menu {
+  bottom: auto;
+  top: calc(100% + var(--space-2));
+  min-width: 140px;
 }
 
 .modal-overlay {

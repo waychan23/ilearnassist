@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     listSessions: vi.fn(),
     createSession: vi.fn(),
     updateSession: vi.fn(),
+    setSessionPinned: vi.fn(),
     deleteSession: vi.fn(),
     reportSessionLeave: vi.fn().mockResolvedValue({ status: "skipped" }),
     /**
@@ -164,6 +165,9 @@ const CONFIG: PublicConfig = {
     fallbackEnabled: true,
     defaultParserId: null,
   },
+  // The installation's upload cap. Present because a config without it is not one the store ever
+  // sees, and `uploadLimitBytes` reads it.
+  maxUploadBytes: 10 * 1024 * 1024,
   providers: [
     {
       id: "p1",
@@ -198,6 +202,7 @@ function session(overrides: Partial<Session> = {}): Session {
     titleSource: "auto",
     settings: {},
     description: "",
+    pinned: false,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -1033,6 +1038,21 @@ describe("sessions", () => {
     mocks.api.updateSession.mockClear();
     await store.renameSession("s1", "   ");
     expect(mocks.api.updateSession).not.toHaveBeenCalled();
+  });
+
+  it("pins a conversation by replacing the row in place", async () => {
+    const store = await readyStore();
+    mocks.api.setSessionPinned.mockResolvedValue(session({ pinned: true }));
+
+    await store.setSessionPinned("s1", true);
+    expect(mocks.api.setSessionPinned).toHaveBeenCalledWith("s1", true);
+    expect(store.sessions[0]?.pinned).toBe(true);
+
+    // Unpinned comes back the same way — the row is replaced, never optimistically flipped, so a
+    // refused write leaves the list exactly as it was.
+    mocks.api.setSessionPinned.mockResolvedValue(session({ pinned: false }));
+    await store.setSessionPinned("s1", false);
+    expect(store.sessions[0]?.pinned).toBe(false);
   });
 
   it("clears the active state when the selected session is deleted", async () => {
@@ -2198,6 +2218,33 @@ describe("attachments", () => {
     await expect(store.uploadAttachment(oversized)).resolves.toBeNull();
     expect(store.error).toContain("超过");
     expect(mocks.api.uploadAttachment).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured limit rather than the constant", async () => {
+    /*
+     * The reason the cap is on the wire at all: an administrator who raised it to 60 MB expects a
+     * 30 MB file to be *sent*, and one who lowered it to 2 MB expects a 3 MB file to be refused
+     * without being sent. Both halves are asserted, because the failure that matters is a client
+     * whose check disagrees with the route behind it in either direction.
+     */
+    const store = await readyStore();
+    store.config = { ...store.config!, maxUploadBytes: 2 * 1024 * 1024 };
+
+    const big = new File([new Uint8Array(1)], "big.bin");
+    Object.defineProperty(big, "size", { value: 3 * 1024 * 1024 });
+    await expect(store.uploadAttachment(big)).resolves.toBeNull();
+    expect(mocks.api.uploadAttachment).not.toHaveBeenCalled();
+
+    mocks.api.uploadAttachment.mockResolvedValue({
+      id: "a2",
+      name: "ok.txt",
+      mimeType: "text/plain",
+      size: 1,
+      kind: "file" as const,
+    });
+    const allowed = new File([new Uint8Array(1)], "ok.txt");
+    Object.defineProperty(allowed, "size", { value: 1024 * 1024 });
+    await expect(store.uploadAttachment(allowed)).resolves.toMatchObject({ id: "a2" });
   });
 
   it("uploads and stages the attachment", async () => {

@@ -53,6 +53,9 @@ import {
   isEnabledSuperadmin,
   isUserRole,
   isWidgetId,
+  MAX_ATTACHMENT_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
 } from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
 import { migrateIfNeeded } from "./migrations.js";
@@ -323,6 +326,19 @@ interface DiagramRow {
   thread_title?: string | null;
 }
 
+interface TableRow {
+  id: string;
+  session_id: string;
+  thread_id: string | null;
+  name: string;
+  summary: string;
+  content: string;
+  tool_call_id: string | null;
+  created_at: string;
+  updated_at: string;
+  thread_title?: string | null;
+}
+
 interface InsightItemRow {
   id: string;
   session_id: string;
@@ -432,6 +448,37 @@ export interface DiagramUpsert {
   /** The canonical file name — `auth-flow.mmd`, not the model's "Auth Flow". */
   name: string;
   summary: string;
+  toolCallId: string | null;
+}
+
+/**
+ * A table as the rest of the server reads it.
+ *
+ * The twin of `DiagramRecord`, with one field in place of the other's file: `content` holds the
+ * markdown, because there is no file for the bytes to live in. See the `session_tables` DDL for
+ * why that is the right inversion rather than an inconsistency.
+ */
+export interface TableRecord {
+  id: string;
+  sessionId: string;
+  threadId: string | null;
+  name: string;
+  summary: string;
+  content: string;
+  toolCallId: string | null;
+  threadTitle: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Input to `upsertSessionTable`, from the tool. The id is the caller's. */
+export interface TableUpsert {
+  id: string;
+  sessionId: string;
+  /** The slug the row is keyed by — no extension, because there is no file. */
+  name: string;
+  summary: string;
+  content: string;
   toolCallId: string | null;
 }
 
@@ -545,6 +592,8 @@ interface SessionRow {
   title: string;
   title_source: string | null;
   title_state: string | null;
+  /** SQLite's integer spelling of a boolean; see `Session.pinned`. */
+  pinned: number | null;
   settings: string | null;
   /** The user's own note about this conversation. Always written; empty means none. */
   description: string;
@@ -643,6 +692,17 @@ export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId"
  * the user deliberately deleted.
  */
 export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
+
+/**
+ * The largest file an account may upload, in bytes, as an administrator set it.
+ *
+ * A row rather than a `config.yaml` key, unlike the document-parsing limits: this one is a
+ * *setting* an administrator edits from the console, and `config.yaml` is a bootstrap file whose
+ * values are read once. Nothing seeds it, deliberately — the default is `MAX_ATTACHMENT_BYTES`,
+ * which both sides already share, so an installation that has never been touched behaves exactly
+ * as it did before the setting existed.
+ */
+export const SETTING_MAX_UPLOAD_BYTES = "upload.maxFileBytes";
 /*
  * `SETTING_AUTH_SECRET` ("auth.secret") is gone, and the *row* it wrote is deliberately left
  * alone rather than cleaned up. It signed the session cookie, which a bearer token replaced —
@@ -885,6 +945,9 @@ const mapSession = (r: SessionRow): Session => ({
   // which is the safe direction, since the only thing the answer decides is whether a retry is
   // worth making.
   titleState: r.title_state === "model" || r.title_state === "fallback" ? r.title_state : undefined,
+  // `=== 1`, not a truthiness test: a row written before the column existed reads `NULL`, and
+  // `Boolean(null)` would be the right answer by accident rather than by rule.
+  pinned: r.pinned === 1,
   settings: safeParseObject<SessionSettings>(r.settings),
   description: r.description ?? "",
   createdAt: r.created_at,
@@ -979,6 +1042,19 @@ const mapDiagram = (r: DiagramRow): DiagramRecord => ({
   threadId: r.thread_id,
   name: r.name,
   summary: r.summary,
+  toolCallId: r.tool_call_id,
+  threadTitle: r.thread_title ?? null,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const mapTable = (r: TableRow): TableRecord => ({
+  id: r.id,
+  sessionId: r.session_id,
+  threadId: r.thread_id,
+  name: r.name,
+  summary: r.summary,
+  content: r.content,
   toolCallId: r.tool_call_id,
   threadTitle: r.thread_title ?? null,
   createdAt: r.created_at,
@@ -1544,6 +1620,14 @@ export interface AppDb {
    * it here is what takes them out of view.
    */
   softDeleteSessionForUser(id: string, userId: string): boolean;
+  /**
+   * Pin or unpin the conversation, and return the row as it now reads.
+   *
+   * One statement whose own `WHERE` carries the owner, like `setAutoTitleForUser`, so `undefined`
+   * means exactly one thing: no live session of this account has that id. There is deliberately
+   * **no** `updated_at` write — see the statement for why pinning is not activity.
+   */
+  setSessionPinnedForUser(id: string, userId: string, pinned: boolean): Session | undefined;
 
   /*
    * The session-id-only accessors below — `touchSession`, and `createMessage`,
@@ -1974,6 +2058,42 @@ export interface AppDb {
    */
   upsertDiagram(input: DiagramUpsert): DiagramRecord;
 
+  /**
+   * A conversation's tables, by session, newest first. Bare session id, `listDiagramsBySession`'s
+   * argument exactly: every caller has resolved the session through a `ForUser` read.
+   *
+   * Includes `content`, so this is the *route's* read as well as the tool's.
+   */
+  listTablesBySession(sessionId: string): TableRecord[];
+  /**
+   * The same rows with `content` blanked, for the thread classifier.
+   *
+   * A separate statement rather than a flag on the one above, and the reason is size: a table's
+   * markdown is thousands of characters, the classifier is shown a name and a summary, and
+   * reading what it cannot be shown into memory once per turn is the cost this avoids. The empty
+   * string is deliberate — `TableRecord.content` is a required field, and the callers of this
+   * read are the two that never look at it.
+   */
+  listTableBriefsBySession(sessionId: string): TableRecord[];
+  /**
+   * Owner-scoped list, the API view's own read. Owner in the `WHERE`, not only in the resolution
+   * the route performs first.
+   */
+  listTablesForUser(userId: string, sessionId: string): TableRecord[];
+  /**
+   * Insert, or revise in place when the conversation already has a table with this name.
+   *
+   * The same rule as `upsertDiagram`, plus the field this row has and that one does not: a revise
+   * moves `content` as well as `summary`, because the row *is* the artifact.
+   */
+  upsertSessionTable(input: TableUpsert): TableRecord;
+  /**
+   * Place a table in a thread, once. Returns the rows changed, which is 0 for one already
+   * placed — the `thread_id IS NULL` guard is the statement's own, so this is idempotent
+   * without a read.
+   */
+  assignTableToThread(sessionId: string, tableId: string, threadId: string): number;
+
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
   /** The same numbers for one conversation. `undefined` when it is not the caller's. */
@@ -2220,6 +2340,16 @@ export function createDb(dbPath: string): AppDb {
      * attempt" and is offered a retry rather than trusted.
      */
     ensureColumn(db, "sessions", "title_state", "title_state TEXT");
+
+    /*
+     * Whether the reader pinned this conversation to the top of the sidebar's list.
+     *
+     * A boolean column rather than a `pinned_at` timestamp, because the ordering inside the
+     * pinned group is the ordinary `updated_at DESC` one — pinning lifts a conversation into the
+     * group, it does not decide where it sits in it, and pinning is not activity, so it must not
+     * move the row within a group either. See `stmtSetSessionPinnedForUser`.
+     */
+    ensureColumn(db, "sessions", "pinned", "pinned INTEGER NOT NULL DEFAULT 0");
 
     /*
      * The one-off that `ensureColumn`'s return value exists for, and it runs on the single boot
@@ -2686,11 +2816,18 @@ export function createDb(dbPath: string): AppDb {
    * second thing that has to stay in agreement, and the day the two disagree is the day one
    * account reads another's conversation.
    */
+  /*
+   * Pinned first, then by recency — and the two keys have to agree with the split the sidebar
+   * makes, or a list rendered in this order would interleave the groups it draws. The sidebar
+   * partitions on `pinned` rather than trusting the position of the boundary, so this is the
+   * order *within* each group and the partition is the flag; the two are one answer stated twice
+   * because a consumer reading this array in order must see the same thing.
+   */
   const stmtListSessionsForUser = db.prepare(
     `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
      WHERE s.workspace_id = ? AND w.user_id = ?
        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
-     ORDER BY s.updated_at DESC`
+     ORDER BY s.pinned DESC, s.updated_at DESC`
   );
   const stmtGetSessionForUser = db.prepare(
     `SELECT s.* FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
@@ -2729,6 +2866,25 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtSoftDeleteSessionForUser = db.prepare(
     `UPDATE sessions SET deleted_at = ?
+      WHERE id = ? AND deleted_at IS NULL
+        AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
+  );
+  /*
+   * The pin toggle, and `updated_at` is absent from the `SET` on purpose.
+   *
+   * Every other session write bumps it, because every other one is somebody touching the
+   * conversation. A pin is a statement about where the row should be listed, not about the
+   * conversation having moved — and if it bumped the timestamp, then unpinning would drop the
+   * conversation at the *top* of the other group, so the two halves of one toggle would produce
+   * an ordering neither of them asked for. The list is sorted on `updated_at`, so leaving it
+   * alone is the whole of "pinning does not reorder anything but the group".
+   *
+   * The owner is in this statement's own `WHERE` rather than behind a read, the
+   * `setAutoTitleForUser` argument: `changes === 0` is then the answer to "was there a live
+   * session of yours", and no caller can forget to ask.
+   */
+  const stmtSetSessionPinnedForUser = db.prepare(
+    `UPDATE sessions SET pinned = ?
       WHERE id = ? AND deleted_at IS NULL
         AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
   );
@@ -3110,6 +3266,13 @@ export function createDb(dbPath: string): AppDb {
     `UPDATE session_diagrams SET thread_id = ?
        WHERE id = ? AND session_id = ? AND thread_id IS NULL`
   );
+  // The table's twin, with the same `thread_id IS NULL` guard: it is the whole of the
+  // idempotency, so a second sync re-places nothing while a revise (which clears the column)
+  // is judged again.
+  const stmtAssignTableToThread = db.prepare(
+    `UPDATE session_tables SET thread_id = ?
+       WHERE id = ? AND session_id = ? AND thread_id IS NULL`
+  );
 
   /* --------------------------------- notes --------------------------------- */
   /*
@@ -3272,6 +3435,55 @@ export function createDb(dbPath: string): AppDb {
      VALUES (@id, @sessionId, NULL, @name, @summary, @toolCallId, @now, @now)
      ON CONFLICT(session_id, name) DO UPDATE SET
        summary = @summary,
+       tool_call_id = @toolCallId,
+       thread_id = NULL,
+       updated_at = @now`
+  );
+
+  /* ------------------------------- session tables ---------------------------- */
+  // The three diagram statements, one field wider: `content` is in the projection here because
+  // the row *is* the artifact (there is no file to read it from), and it is absent from the
+  // thread sync's own read for the same reason the classifier never sees a diagram's source —
+  // a table's markdown is large, and placing it in a thread needs only its name and summary.
+  const stmtListTablesBySession = db.prepare(
+    `SELECT t2.*, t.title AS thread_title
+       FROM session_tables t2
+       LEFT JOIN session_threads t ON t.id = t2.thread_id
+      WHERE t2.session_id = ?
+      ORDER BY t2.updated_at DESC, t2.rowid DESC`
+  );
+  /** The classifier's read: name and summary, never the markdown. */
+  const stmtListTableBriefsBySession = db.prepare(
+    `SELECT id, session_id, thread_id, name, summary, '' AS content, tool_call_id,
+            created_at, updated_at
+       FROM session_tables
+      WHERE session_id = ?`
+  );
+  // Read back by the conflict key, because a revise keeps the original id.
+  const stmtGetTableBySessionName = db.prepare(
+    `SELECT t2.*, t.title AS thread_title
+       FROM session_tables t2
+       LEFT JOIN session_threads t ON t.id = t2.thread_id
+      WHERE t2.session_id = ? AND t2.name = ?`
+  );
+  const stmtListTablesForUser = db.prepare(
+    `SELECT t2.*, t.title AS thread_title
+       FROM session_tables t2
+       JOIN sessions s   ON s.id = t2.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+       LEFT JOIN session_threads t ON t.id = t2.thread_id
+      WHERE t2.session_id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY t2.updated_at DESC, t2.rowid DESC`
+  );
+  // `session_diagrams`' upsert with `content` alongside `summary`, and the same revise rule:
+  // the id and created_at are kept, and thread_id is cleared so the new shape is judged again.
+  const stmtUpsertSessionTable = db.prepare(
+    `INSERT INTO session_tables (id, session_id, thread_id, name, summary, content, tool_call_id, created_at, updated_at)
+     VALUES (@id, @sessionId, NULL, @name, @summary, @content, @toolCallId, @now, @now)
+     ON CONFLICT(session_id, name) DO UPDATE SET
+       summary = @summary,
+       content = @content,
        tool_call_id = @toolCallId,
        thread_id = NULL,
        updated_at = @now`
@@ -3779,6 +3991,12 @@ export function createDb(dbPath: string): AppDb {
     },
     softDeleteSessionForUser(id, userId) {
       return stmtSoftDeleteSessionForUser.run(now(), id, userId).changes > 0;
+    },
+    setSessionPinnedForUser(id, userId, pinned) {
+      const { changes } = stmtSetSessionPinnedForUser.run(pinned ? 1 : 0, id, userId);
+      if (changes === 0) return undefined;
+      const r = stmtGetSession.get(id) as SessionRow;
+      return mapSession(r);
     },
     touchSession(id) {
       stmtTouchSession.run(now(), id);
@@ -4375,6 +4593,37 @@ export function createDb(dbPath: string): AppDb {
       return mapDiagram(row);
     },
 
+    listTablesBySession(sessionId) {
+      return (stmtListTablesBySession.all(sessionId) as TableRow[]).map(mapTable);
+    },
+
+    listTableBriefsBySession(sessionId) {
+      return (stmtListTableBriefsBySession.all(sessionId) as TableRow[]).map(mapTable);
+    },
+
+    listTablesForUser(userId, sessionId) {
+      return (stmtListTablesForUser.all({ userId, sessionId }) as TableRow[]).map(mapTable);
+    },
+
+    upsertSessionTable(input) {
+      stmtUpsertSessionTable.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        name: input.name,
+        summary: input.summary,
+        content: input.content,
+        toolCallId: input.toolCallId,
+        now: now(),
+      });
+      // Read back by the conflict key rather than by id — a revise preserves the original id.
+      const row = stmtGetTableBySessionName.get(input.sessionId, input.name) as TableRow;
+      return mapTable(row);
+    },
+
+    assignTableToThread(sessionId, tableId, threadId) {
+      return stmtAssignTableToThread.run(threadId, tableId, sessionId).changes;
+    },
+
     statsForWorkspace(userId, workspaceId) {
       const workspace = workspaceForUser(workspaceId, userId);
       if (!workspace) return undefined;
@@ -4715,6 +4964,21 @@ export function readDocumentParsing(
     defaultParserId:
       db.getSetting(SETTING_DOCUMENT_DEFAULT_PARSER) || defaults.defaultParserId || null,
   };
+}
+
+/**
+ * The upload limit currently in force.
+ *
+ * Falls back to `MAX_ATTACHMENT_BYTES` for anything unset, unparseable or out of range — the
+ * "an unknown value reads as the default" rule `title_state` and the parsing policy both follow,
+ * and here it also means a hand-edited database row cannot turn the cap off. A value below the
+ * floor reads as the floor and one above the ceiling as the ceiling, because both are states the
+ * console cannot produce and the *route* must not be the place that discovers it.
+ */
+export function readMaxUploadBytes(db: AppDb): number {
+  const stored = Number(db.getSetting(SETTING_MAX_UPLOAD_BYTES));
+  if (!Number.isFinite(stored) || stored <= 0) return MAX_ATTACHMENT_BYTES;
+  return Math.min(MAX_UPLOAD_CEILING_BYTES, Math.max(MIN_UPLOAD_LIMIT_BYTES, Math.floor(stored)));
 }
 
 function isParsePolicy(value: string | undefined): value is DocumentParsePolicy {

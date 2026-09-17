@@ -7,12 +7,21 @@ import {
   createDb,
   DEFAULT_SESSION_TITLE,
   guessCapabilities,
+  readMaxUploadBytes,
   seedFromConfig,
   SETTING_DEFAULT_MODEL,
   SETTING_DEFAULT_PROVIDER,
+  SETTING_MAX_UPLOAD_BYTES,
   type AppDb,
 } from "../src/db.js";
-import { DEFAULT_WIDGET_IDS, type Session, type ToolCall } from "@ilearnassist/shared";
+import {
+  DEFAULT_WIDGET_IDS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
+  type Session,
+  type ToolCall,
+} from "@ilearnassist/shared";
 import { SCHEMA_VERSION } from "../src/schema.js";
 
 let root: string;
@@ -332,6 +341,30 @@ describe("sessions", () => {
     expect(db.setAutoTitleForUser("nope", OWNER, "x", "model")).toBeUndefined();
   });
 
+  it("reads the upload limit, falling back and clamping", () => {
+    /*
+     * The three answers this can give, and the third is the one worth having: a hand-edited row
+     * cannot turn the cap off or make it absurd, because the *route* must not be the place that
+     * discovers a bad value. An unset install behaves exactly as it did before the setting
+     * existed, which is what makes it safe to ship without a config seed.
+     */
+    expect(readMaxUploadBytes(db)).toBe(MAX_ATTACHMENT_BYTES);
+
+    db.setSetting(SETTING_MAX_UPLOAD_BYTES, String(3 * 1024 * 1024));
+    expect(readMaxUploadBytes(db)).toBe(3 * 1024 * 1024);
+
+    for (const [stored, expected] of [
+      ["0", MAX_ATTACHMENT_BYTES],
+      ["-5", MAX_ATTACHMENT_BYTES],
+      ["not a number", MAX_ATTACHMENT_BYTES],
+      [String(MAX_UPLOAD_CEILING_BYTES * 4), MAX_UPLOAD_CEILING_BYTES],
+      ["1000", MIN_UPLOAD_LIMIT_BYTES],
+    ] as const) {
+      db.setSetting(SETTING_MAX_UPLOAD_BYTES, stored);
+      expect(readMaxUploadBytes(db), stored).toBe(expected);
+    }
+  });
+
   it("returns undefined from updateSession for a missing session", () => {
     expect(db.updateSessionForUser("nope", OWNER, { title: "x" })).toBeUndefined();
   });
@@ -349,6 +382,45 @@ describe("sessions", () => {
 
     db.touchSession("s1"); // bumps s1 to now, which is later than both
     expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s1", "s2"]);
+  });
+
+  it("pins a conversation, and lists pinned ones first without reordering either group", () => {
+    addSession("s1", { title: "one" });
+    addSession("s2", { title: "two" });
+    const stamp = db.raw.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?");
+    stamp.run("2026-01-01T00:00:00.000Z", "s1");
+    stamp.run("2026-01-02T00:00:00.000Z", "s2");
+    // `s3` is the recency control: the *older* of the two pinned rows, so a list ordered by the
+    // flag alone would put it last and one ordered by recency alone would put it second.
+    addSession("s3", { title: "three" });
+    stamp.run("2025-12-31T00:00:00.000Z", "s3");
+
+    expect(db.setSessionPinnedForUser("s1", OWNER, true)?.pinned).toBe(true);
+    expect(db.setSessionPinnedForUser("s3", OWNER, true)?.pinned).toBe(true);
+
+    // Pinned group by recency, then the rest by recency — the array the sidebar partitions.
+    expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s1", "s3", "s2"]);
+
+    /*
+     * The write that must *not* happen: pinning leaves `updated_at` alone, so `s3` stays the
+     * oldest row. If it bumped the timestamp, `s3` would sort first among the pinned and the
+     * order asserted above would come out ["s3", "s1", "s2"] — which is why this is asserted
+     * rather than left to the list order above, where one bump and one tie could hide it.
+     */
+    const updatedAt = (id: string): string =>
+      (db.raw.prepare("SELECT updated_at FROM sessions WHERE id = ?").get(id) as { updated_at: string })
+        .updated_at;
+    expect(updatedAt("s3")).toBe("2025-12-31T00:00:00.000Z");
+
+    expect(db.setSessionPinnedForUser("s1", OWNER, false)?.pinned).toBe(false);
+    expect(db.listSessionsForUser("w1", OWNER).map((s) => s.id)).toEqual(["s3", "s2", "s1"]);
+  });
+
+  it("refuses to pin a session that is not yours, or that is gone", () => {
+    addSession("s1", { title: "one" });
+    expect(db.setSessionPinnedForUser("s1", "someone-else", true)).toBeUndefined();
+    expect(db.listSessionsForUser("w1", OWNER)[0]?.pinned).toBe(false);
+    expect(db.setSessionPinnedForUser("nope", OWNER, true)).toBeUndefined();
   });
 
   it("holds a Copilot's snapshot independently of the Copilot", () => {

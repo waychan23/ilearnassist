@@ -41,6 +41,9 @@ const DECLARATIONS = [
  */
 const MUST_BE_GATED = [
   "PATCH /api/sessions/:id",
+  // A pin is visible to the account's other clients the moment it lands, which is the same claim
+  // a rename makes — so it holds the same lock.
+  "PATCH /api/sessions/:id/pin",
   "DELETE /api/sessions/:id",
   "DELETE /api/sessions/:id/messages/:messageId",
   "PUT /api/sessions/:id/widgets/:widgetId",
@@ -86,6 +89,7 @@ const EXEMPT = [
   "GET /api/sessions/:id/quizzes",
   "GET /api/sessions/:id/threads",
   "GET /api/sessions/:id/diagrams",
+  "GET /api/sessions/:id/tables",
   "GET /api/sessions/:id/notes",
   "GET /api/sessions/:id/notes/sync",
   "GET /api/sessions/:id/insights",

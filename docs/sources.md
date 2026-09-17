@@ -459,9 +459,20 @@ deliberately; whatever the cap leaves out is still reachable, because the file t
 directory the moment it is listed. It is idempotent — `registerFileSource` upserts on the place —
 which is what lets it be a plain call rather than a cache with an invalidation policy.
 
+## What is deliberately *not* a source
+
+A **table** (the 图表 panel's other half) is a `session_tables` row and nothing else. The rule this
+file states — every file the app holds is a source row — is a rule about *files*, and a table's
+display is the assistant's reply rather than a file: there are no bytes for a `rel_path` to
+point at, and every consumer of a source is path-driven. Writing a `.md` in `sessions/<id>/`
+instead would put two full copies of one artifact on disk, which is the drift `docs/diagrams.md`
+names as the one the architecture cannot represent. So a table is invisible to the browser,
+`@`-reference and `read_document`, deliberately — and `docs/tables.md` says what replaces each.
+
 ## Related
 
 - `docs/diagrams.md` — a diagram is a file, a `session_diagrams` row **and** a source row.
+- `docs/tables.md` — a table is a `session_tables` row, and deliberately not this.
 - `docs/file-preview.md` — how a source becomes a preview, and the one dialog all three come
   through.
 - `docs/architecture.md` — where this sits in the request path.

@@ -8,7 +8,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_BYTES, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_FILE_PREVIEW_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
+} from "@ilearnassist/shared";
 import { sourceRawPath } from "../src/sourcePaths.js";
 import { captureWebPage } from "../src/webCapture.js";
 import { DEFAULT_SESSION_TITLE } from "../src/db.js";
@@ -20,6 +25,7 @@ import type {
   DirectoryListing,
   FileContent,
   ProviderConfig,
+  PublicConfig,
   Source,
   Session,
   Workspace,
@@ -400,6 +406,84 @@ describe("workspace files", () => {
     expect(res.json<ApiErrorBody>().error.code).toBe("FILE_TOO_LARGE");
   });
 
+  it("refuses a file past the configured upload limit, naming it", async () => {
+    /*
+     * The setting in force rather than a constant, and the *sentence* is asserted as well as the
+     * status: the message used to be compiled against `MAX_ATTACHMENT_BYTES`, so a server that
+     * refused at 1 MB while saying "10 MB" is exactly the failure a dynamic limit introduces.
+     */
+    const admin = await inject({ method: "PUT", url: "/api/upload-settings", payload: { maxUploadBytes: 1024 * 1024 } });
+    expect(admin.statusCode).toBe(200);
+    expect(admin.json<PublicConfig>().maxUploadBytes).toBe(1024 * 1024);
+
+    const workspace = await seededWorkspace();
+    const session = await newSession(env, workspace.id);
+    const res = await inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/sources`,
+      payload: {
+        name: "big.txt",
+        mimeType: "text/plain",
+        data: Buffer.alloc(2 * 1024 * 1024).toString("base64"),
+      },
+    });
+
+    expect(res.statusCode).toBe(413);
+    const error = res.json<ApiErrorBody>().error;
+    expect(error.code).toBe("FILE_TOO_LARGE");
+    expect(error.params).toMatchObject({ limitMb: 1 });
+
+    // And the workspace upload route, which used to answer the same refusal *without* the number.
+    const viaWorkspace = await inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/files/upload`,
+      payload: { name: "big.txt", data: Buffer.alloc(2 * 1024 * 1024).toString("base64") },
+    });
+    expect(viaWorkspace.statusCode).toBe(413);
+    expect(viaWorkspace.json<ApiErrorBody>().error.params).toMatchObject({ limitMb: 1 });
+
+    // Put it back, or every later test in this file inherits a 1 MB cap.
+    await inject({ method: "PUT", url: "/api/upload-settings", payload: { maxUploadBytes: MAX_ATTACHMENT_BYTES } });
+  });
+
+  it("refuses an upload limit outside the range, and one that is not a whole number", async () => {
+    for (const maxUploadBytes of [
+      MAX_UPLOAD_CEILING_BYTES + 1,
+      MIN_UPLOAD_LIMIT_BYTES - 1,
+      1024 * 1024 + 0.5,
+      "1048576",
+      undefined,
+    ]) {
+      const res = await inject({ method: "PUT", url: "/api/upload-settings", payload: { maxUploadBytes } });
+      expect(res.statusCode, String(maxUploadBytes)).toBe(400);
+      expect(res.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+    }
+    // Refused rather than clamped: a number outside the range is a request that did not mean
+    // what it said, and storing the nearest legal value would report success and deliver
+    // something else.
+    expect((await inject({ method: "GET", url: "/api/config" })).json<PublicConfig>().maxUploadBytes).toBe(
+      MAX_ATTACHMENT_BYTES
+    );
+  });
+
+  it("keeps the upload setting to administrators", async () => {
+    // An ordinary account may *read* the cap — its composer needs it — and may not set it.
+    const bob = await env.asUser("UploadBob");
+    expect(
+      (await bob.inject({ method: "GET", url: "/api/config" })).json<PublicConfig>().maxUploadBytes
+    ).toBe(MAX_ATTACHMENT_BYTES);
+
+    const res = await bob.inject({
+      method: "PUT",
+      url: "/api/upload-settings",
+      payload: { maxUploadBytes: 5 * 1024 * 1024 },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((await inject({ method: "GET", url: "/api/config" })).json<PublicConfig>().maxUploadBytes).toBe(
+      MAX_ATTACHMENT_BYTES
+    );
+  });
+
   it("refuses a raw path that escapes the workspace", async () => {
     const workspace = await seededWorkspace();
 
@@ -628,6 +712,71 @@ describe("sessions", () => {
       (await inject({ method: "PATCH", url: `/api/sessions/${session.id}`, payload: { title: "   " } })).statusCode
     ).toBe(400);
     expect((await inject({ method: "PATCH", url: "/api/sessions/nope", payload: { title: "x" } })).statusCode).toBe(404);
+  });
+
+  it("pins and unpins a conversation", async () => {
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+
+    const pinned = (
+      await inject({ method: "PATCH", url: `/api/sessions/${session.id}/pin`, payload: { pinned: true } })
+    ).json<Session>();
+    expect(pinned.pinned).toBe(true);
+    // Returned as the row now reads rather than as an acknowledgement, so the sidebar can
+    // replace what it holds without a second read.
+    expect(pinned.id).toBe(session.id);
+    expect(pinned.updatedAt).toBe(session.updatedAt);
+
+    const unpinned = (
+      await inject({ method: "PATCH", url: `/api/sessions/${session.id}/pin`, payload: { pinned: false } })
+    ).json<Session>();
+    expect(unpinned.pinned).toBe(false);
+  });
+
+  it("refuses a pin that is not a boolean, and a session that is not there", async () => {
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+
+    /*
+     * `"false"` is the case this exists for. Coerced, it is truthy — so a body that asked to
+     * *unpin* would pin, which is the same trap `disabled` is spelled out against on the admin
+     * routes. An absent field is refused too: the two states are both deliberate, so there is no
+     * absent value that could mean either.
+     */
+    for (const payload of [{ pinned: "false" }, { pinned: 1 }, {}]) {
+      const res = await inject({ method: "PATCH", url: `/api/sessions/${session.id}/pin`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<{ error: { code: string } }>().error.code).toBe("INVALID_FIELD");
+    }
+    expect(
+      (await inject({ method: "PATCH", url: "/api/sessions/nope/pin", payload: { pinned: true } })).statusCode
+    ).toBe(404);
+  });
+
+  it("refuses to pin another account's conversation", async () => {
+    const workspace = await newWorkspace(env);
+    const session = await newSession(env, workspace.id);
+    // A name of its own: `asUser` creates the account on first use and refuses a second under the
+    // same name, so a spec that shared "Bob" with the sources test would pass or fail depending
+    // on which of the two ran first.
+    const bob = await env.asUser("PinBob");
+
+    /*
+     * "Not yours" and "does not exist" are one answer — a 404 either way — so an id cannot be
+     * probed for existence by the status it comes back with. Asserted against the *same* id
+     * twice, once by Bob and once with an id nobody has, because a route that answered 403 for
+     * the first would tell Bob the conversation is real.
+     */
+    const theirs = await bob.inject({
+      method: "PATCH",
+      url: `/api/sessions/${session.id}/pin`,
+      payload: { pinned: true },
+    });
+    expect(theirs.statusCode).toBe(404);
+    expect((await inject({ method: "PATCH", url: "/api/sessions/nope/pin", payload: { pinned: true } })).statusCode).toBe(404);
+
+    // And nothing was written on the way out.
+    expect((await inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json<Session[]>()[0]?.pinned).toBe(false);
   });
 
   it("numbers a duplicate title at creation rather than refusing it", async () => {

@@ -22,6 +22,7 @@ import type {
   GetPlanResponse,
   GetQuizQuestionsResponse,
   GetSessionDiagramsResponse,
+  GetSessionTablesResponse,
   GetSessionInsightsResponse,
   GetNoteSyncResponse,
   GetSessionNotesResponse,
@@ -41,6 +42,7 @@ import type {
   SessionLockView,
   SessionStats,
   SessionWidgets,
+  SetSessionPinnedInput,
   Source,
   StartNoteSyncInput,
   TitleRetryResult,
@@ -51,6 +53,7 @@ import type {
   UpdateNoteInput,
   UpdateProviderInput,
   UpdateSessionInput,
+  UpdateUploadSettingsInput,
   UpdateUserInput,
   UploadAttachmentInput,
   User,
@@ -687,6 +690,15 @@ export const api = {
    */
   listSessionDiagrams: (sessionId: string) =>
     request<GetSessionDiagramsResponse>(`/sessions/${sessionId}/diagrams`),
+  /**
+   * The tables a conversation recorded, as rows carrying the markdown itself.
+   *
+   * A sibling of `listSessionDiagrams` rather than a field on it, and the difference is the one
+   * that matters to a caller: a diagram row names a file that has to be opened separately, while
+   * a table row *is* the content — which is why the panel can hand one straight to the viewer.
+   */
+  listSessionTables: (sessionId: string) =>
+    request<GetSessionTablesResponse>(`/sessions/${sessionId}/tables`),
 
   listSessions: (workspaceId: string) =>
     request<Session[]>(`/workspaces/${workspaceId}/sessions`),
@@ -697,6 +709,15 @@ export const api = {
     }),
   updateSession: (id: string, input: UpdateSessionInput) =>
     request<Session>(`/sessions/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  /**
+   * Pin or unpin a conversation. Its own route rather than an `updateSession` field: see
+   * `SetSessionPinnedInput`, which also says why `pinned` has no "absent means leave it" state.
+   */
+  setSessionPinned: (id: string, pinned: boolean) =>
+    request<Session>(`/sessions/${id}/pin`, {
+      method: "PATCH",
+      body: JSON.stringify({ pinned } satisfies SetSessionPinnedInput),
+    }),
   /**
    * The reader has left this conversation. An event rather than a data change: the answer is
    * usually `skipped`, and the call exists because only the browser knows the reader has gone —
@@ -895,6 +916,12 @@ export const api = {
   deleteModel: (providerId: string, modelId: string) =>
     request<ProviderConfig>(`/providers/${providerId}/models/${modelId}`, { method: "DELETE" }),
 
+  /**
+   * Save the installation's upload limit. Returns the whole config, like `updateDefaults` — the
+   * console's state is `store.config`, and a partial answer would be a second place holding it.
+   */
+  updateUploadSettings: (input: UpdateUploadSettingsInput) =>
+    request<PublicConfig>("/upload-settings", { method: "PUT", body: JSON.stringify(input) }),
   updateDefaults: (input: { providerId?: string; modelId?: string }) =>
     request<PublicConfig>("/defaults", { method: "PUT", body: JSON.stringify(input) }),
 
