@@ -1144,11 +1144,24 @@ Fuller map in `docs/reference.md`.
   sidebar header's `all-workspaces` row already names it more precisely — the price, stated rather
   than hidden, is that a **collapsed** rail hides that row too, so leaving a workspace from a 52px
   rail is expand-then-click. What
-  the home page *does* keep in its header is the language and the theme: those are properties of
-  this browser rather than of the account, and they have nowhere else to live.
-  The rail is a 272px column on a wide viewport and a strip across the top below 900px — the admin
-  console's rule for the same shape of menu, a handful of rows that are the page's only navigation,
-  where hiding them would put the account's own menu out of reach on a phone. Two consequences of
+  the home page *does* keep in its header is the language and the theme — properties of this browser
+  rather than of the account, with nowhere else to live — and now the **nav toggle** too, because
+  the rail below 900px is a drawer and something has to open it.
+  **The rail is a 272px column on a wide viewport and the same drawer the sidebar is below 900px.**
+  It used to be a strip across the top there — the admin console's rule for a handful of rows that
+  are the page's only navigation — and that was wrong for the reason the two rails are one
+  component: the *same* rows were getting two presentations according to which page you happened to
+  be standing on. The drawer is the one that survives the comparison. It is `uiState.drawerOpen`,
+  the sidebar's own flag, because the two pages never render together; the backdrop is one element
+  in `App.vue` outside the view branch for the same reason; the Escape handler and the focus
+  watcher already keyed off that flag and now serve both. Two things did have to be added: the
+  pane behind it is `inert` from `WorkspaceHome.vue` itself (an attribute falling through from
+  `App.vue` would land on the page root and make the drawer inert too), and the focus watcher's
+  open-target selector gained `AppMenu`'s row ids — which works because the ids are the same on
+  both rails, so on a conversation the panel actions win on document order and on the home page,
+  where neither exists, the first menu row does. What that costs: `showChat` now closes the drawer,
+  since the home page has one to carry over — a flag that used to be unreachable there.
+  Two consequences of
   one component: the *rows* had to come out of `Sidebar.vue`'s scoped block (Vue attaches a
   parent's scope id to a child's root element and to nothing inside it, so a rule left there would
   have stopped applying the moment the home page drew the same row, silently), and a **collapsed**

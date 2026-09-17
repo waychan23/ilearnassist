@@ -109,6 +109,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
  * so naming only the first would leave the drawer opening with focus nowhere when the files
  * panel is the one showing.
  *
+ * The menu rows carry the same ids on **both** rails, and that is what lets one selector serve
+ * two pages: on the conversation they come after `new-session` in document order and lose to it,
+ * and on the workspace home — where neither panel action exists — the first of them wins. Listed
+ * in the order `AppMenu` draws them, because `querySelector` returns the first match in the
+ * document and the upper group's rows are individually conditional.
+ *
  * Together with the backdrop, the `inert` on the pane behind it and the Escape handler this
  * is the whole focus story — a hand-rolled trap would be a state machine doing what `inert`
  * already does.
@@ -119,7 +125,14 @@ watch(
     if (!isCompact.value) return;
     await nextTick();
     const selector = open
-      ? "[data-testid='new-session'], [data-testid='files-refresh']"
+      ? [
+          "[data-testid='new-session']",
+          "[data-testid='files-refresh']",
+          "[data-testid='open-sources']",
+          "[data-testid='open-workspace-settings']",
+          "[data-testid='open-copilots']",
+          "[data-testid='open-admin']",
+        ].join(", ")
       : '[data-testid="nav-toggle"]';
     document.querySelector<HTMLElement>(selector)?.focus();
   }
@@ -187,13 +200,6 @@ watch(
 
         <WidgetPanel v-if="showWidgetPanel" />
 
-        <div
-          v-if="isCompact && uiState.drawerOpen"
-          class="drawer-backdrop"
-          data-testid="drawer-backdrop"
-          aria-hidden="true"
-          @click="closeDrawer"
-        />
         <!-- A backdrop of its own rather than a shared one, so a click can only dismiss the
              drawer it was pointing at. -->
         <div
@@ -204,6 +210,20 @@ watch(
           @click="closeWidgetDrawer"
         />
       </template>
+
+      <!--
+        The left drawer's backdrop, outside the branch above because **two pages have that
+        drawer**: the conversation's sidebar and the workspace home's rail, which is the same
+        column holding the same menu. One element, one flag — the two never render together, so
+        there is nothing for a second backdrop to disambiguate.
+      -->
+      <div
+        v-if="isCompact && uiState.drawerOpen"
+        class="drawer-backdrop"
+        data-testid="drawer-backdrop"
+        aria-hidden="true"
+        @click="closeDrawer"
+      />
     </template>
 
     <!-- Hosted once so every `confirm()` call from anywhere lands in the same prompt. -->

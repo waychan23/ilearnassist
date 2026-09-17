@@ -2932,6 +2932,14 @@ pre.code-block {
   .composer .attach-btn,
   .composer .params-btn,
   .topbar .nav-toggle,
+  /*
+   * The same control on the workspace home's header, which is a header of its own rather than
+   * the topbar — and compact-only for the same reason, so it too is a touch target on
+   * essentially every screen it appears on. Naming it by its own header rather than widening
+   * the selector is deliberate: `.nav-toggle` unscoped would also catch the sidebar's own
+   * toggle, which is a different button with a different job.
+   */
+  .home-head .nav-toggle,
   /* Compact-only, so this one is a touch target on essentially every screen it appears on —
      leaving it out would be the one topbar control that stayed small under a finger. */
   .topbar .widget-toggle {

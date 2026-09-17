@@ -78,6 +78,87 @@ test("layout: the sidebar is a drawer, and the pane gets the whole width", async
   await expect(sidebar).toBeHidden();
 });
 
+test("layout: the workspace home's rail is the same drawer", async ({ page }) => {
+  /*
+   * The two rails draw the *same* menu from the same component, and on a phone they used to be
+   * two different things: a drawer on a conversation and a strip across the top on the home page.
+   * Which presentation you got depended on the page you happened to be standing on.
+   *
+   * The rail is the column it is at a wide width — 272px, off-canvas — and the cards get the rest,
+   * which is the assertion that would fail if it had merely been hidden: a hidden rail and a rail
+   * still occupying a grid track look identical from `toBeHidden` alone.
+   */
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+
+  const rail = page.locator(".home-rail");
+  await expect(rail).toBeHidden();
+  expect((await page.locator(".home-main").boundingBox())?.width).toBeCloseTo(412, 0);
+
+  await page.getByTestId("nav-toggle").tap();
+  await expect(rail).toBeVisible();
+  await expect(page.getByTestId("drawer-backdrop")).toBeVisible();
+  // The account's rows are the rail's content, and they are on the drawer rather than in a band.
+  await expect(page.getByTestId("menu-group-account")).toBeVisible();
+
+  /*
+   * The sidebar's own box, from the edge it is anchored to: 272px wide, the full height, flush
+   * against the left. A drawer that slid in from the wrong edge or stopped short of the top
+   * would satisfy every assertion above.
+   *
+   * Polled, because `toBeVisible` is satisfied by the `visibility` flip and the slide is still
+   * running under it — measured straight away, `x` reads mid-transform. The height is compared
+   * against the *viewport* rather than a device constant, which is what the rest of this file
+   * does: the emulated viewport is the layout viewport, and 915 is the screen.
+   */
+  const boxAt = async () => (await rail.boundingBox())!;
+  await expect.poll(async () => Math.round((await boxAt()).x)).toBe(0);
+  await expect.poll(async () => Math.round((await boxAt()).width)).toBe(272);
+  await expect.poll(async () => Math.round((await boxAt()).height)).toBe(
+    Math.round(page.viewportSize()!.height)
+  );
+
+  await page.getByTestId("drawer-backdrop").tap({ position: { x: 380, y: 400 } });
+  await expect(rail).toBeHidden();
+});
+
+test("layout: focus enters the home drawer, and Escape brings it back", async ({ page }) => {
+  /*
+   * `App.vue`'s focus watcher names its open target by test id, and the chat page's targets do
+   * not exist here — so this is the case that fails silently if the menu rows are not in that
+   * selector: the drawer slides open with the caret left behind on the page underneath it.
+   */
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+
+  await page.getByTestId("nav-toggle").tap();
+  expect(
+    await page.evaluate(() => document.activeElement?.closest(".home-rail") !== null),
+  ).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".home-rail")).toBeHidden();
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))).toBe(
+    "nav-toggle",
+  );
+});
+
+test("layout: the closed home rail is not reachable by keyboard", async ({ page }) => {
+  // The same `visibility: hidden` the sidebar relies on, and the same failure without it: the
+  // brand and every menu row focusable, off-screen and announced.
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+  await expect(page.locator(".home-rail")).toBeHidden();
+
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press("Tab");
+    const inside = await page.evaluate(
+      () => document.activeElement?.closest(".home-rail") !== null,
+    );
+    expect(inside, `focus entered the closed drawer after ${i + 1} tabs`).toBe(false);
+  }
+});
+
 test("layout: focus enters the drawer and comes back to the toggle", async ({ page, request }) => {
   await converse(page, request, "你好");
 
