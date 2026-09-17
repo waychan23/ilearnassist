@@ -274,6 +274,7 @@ function retryClaim(): void {
       :content="viewing.content"
       :name="viewing.name"
       :summary="viewing.summary"
+      :figure="viewing.figure"
       @close="closeFigure"
     />
   </div>

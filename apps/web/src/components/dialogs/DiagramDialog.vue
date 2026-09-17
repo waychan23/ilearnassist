@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { isNarrow } from "../../composables/breakpoints";
+import { useAppStore } from "../../stores/app";
+import type { FigureTurnReference } from "../../utils/turnRefs";
 import { renderMarkdown } from "../../utils/markdown";
 import { tableHtmlForClipboard } from "../../utils/tableClipboard";
 import {
@@ -80,11 +82,36 @@ const props = defineProps<{
   name?: string;
   /** The model's one-line description, shown above the figure. */
   summary?: string;
+  /**
+   * The figure this dialog is showing, when there is a row behind it to refer to.
+   *
+   * Absent for one that is merely a *file* — a `.mmd` opened from the file tree has no
+   * `session_diagrams` row, so it has no name the agent could look up and the 追问 control is not
+   * drawn. That is the same distinction the panel makes throughout: a diagram the conversation
+   * *drew* is addressable, a `.mmd` somebody copied in is a file.
+   */
+  figure?: FigureTurnReference;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
+const store = useAppStore();
+
+/**
+ * Ask about the figure on screen.
+ *
+ * The dialog is where a reader is when they have a question about what they are looking at, and
+ * the card that opened it is behind this overlay — so the same control has to exist here or the
+ * enlarged view is the one place a question cannot be asked.
+ *
+ * The dialog stays open: the composer behind it is where the question is typed, and closing here
+ * would hide the figure the question is about. The viewer is not modal in that sense — it does not
+ * trap anything, and the chip is already staged.
+ */
+function askAbout(): void {
+  if (props.figure) store.stageReference(props.figure);
+}
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
@@ -396,6 +423,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           <h3 class="truncate">{{ title }}</h3>
 
           <div class="viewer-controls">
+            <!--
+              First in the row: it is the one control here that is about the *conversation* rather
+              than about the drawing, and the ones after it are a reader adjusting what they see.
+            -->
+            <button
+              v-if="figure"
+              class="icon-btn"
+              data-testid="diagram-viewer-ask"
+              :title="t('turnRef.ask')"
+              :aria-label="t('turnRef.ask')"
+              @click="askAbout"
+            >
+              <Icon name="link" />
+            </button>
             <button
               class="icon-btn"
               data-testid="diagram-zoom-out"

@@ -1656,6 +1656,10 @@ export const API_ERROR_CODES = [
   // NOTE_NOT_FOUND: unknown, another conversation's, or a row that has since been revised away
   // are the same answer, so a name cannot be probed for existence.
   "FIGURE_NOT_FOUND",
+  // One of a turn's attached references points at something this conversation does not hold.
+  // Refused rather than dropped, unlike a missing `sources` entry: a source is material the model
+  // reads, while a reference is the object of the question — losing it changes what was asked.
+  "REFERENCE_NOT_FOUND",
   // A note export is already running for this conversation. One at a time, so two presses
   // cannot interleave their writes into the same files or race each other's summary.
   "SYNC_IN_PROGRESS",
@@ -1953,6 +1957,21 @@ export interface Message {
    * afterwards still reads as referenced, and the chip keeps the name the composer showed.
    */
   sources?: Attachment[];
+  /**
+   * What the user pointed at when they sent this turn — the 追问 chips, as they were shown.
+   *
+   * A snapshot on the same rule `sources` follows, and for the same reason: a message describes
+   * the turn that was had, so a diagram referenced here and revised afterwards still reads as
+   * referenced, and the chip keeps the label the composer showed.
+   *
+   * **It is replayed to the model, and that is load-bearing rather than tidy.** `/regenerate`
+   * sends `userMessage: null` and rebuilds the turn from history; if a reference lived only in
+   * the turn's own prompt, regenerating an answer about a diagram would ask the model the same
+   * question with no idea what it was about. Replaying costs a re-resolution per stored reference
+   * per turn — the same trade `sourcePaths` already makes for attachments — and what comes back
+   * is current: a figure revised since is read as it is now, not as it was.
+   */
+  refs?: TurnReference[];
   usage?: MessageUsage;
   createdAt: string;
 }
@@ -3173,6 +3192,69 @@ export interface SourceReference {
 }
 
 /**
+ * What a reference points at.
+ *
+ * Four, and each is addressed the way *that* thing can be addressed rather than by a uniform id:
+ * a message by its id, a figure by its canonical name (which is what `ila_query` takes and what
+ * the panel labels the row with), a note by its id. The asymmetry is the honest shape — a
+ * diagram has no id the model can use, and a note's name is not unique.
+ */
+export const TURN_REFERENCE_KINDS = ["message", "diagram", "table", "note"] as const;
+
+export type TurnReferenceKind = (typeof TURN_REFERENCE_KINDS)[number];
+
+/**
+ * Something the user pointed at when they asked their question.
+ *
+ * The 追问 gesture, and what it is *not* matters as much as what it is. It is not an attachment:
+ * nothing is copied, nothing is sent twice, and the model is handed a **pointer** for everything
+ * that has one. A diagram, a table and a note are read through `ila_query`, which is the same tool
+ * the agent already uses to read this conversation's record — so the reference costs a few words
+ * on the wire and the agent fetches the current content, not a stale copy of what the user was
+ * looking at. A *passage* has no such handle — a text range inside a rendered message is not
+ * addressable by id — so its text travels, which is the one case where copying is the only option.
+ *
+ * `label` is display only, the split `SourceReference.name` makes: the chip shows what the
+ * composer showed, and the server re-reads everything it needs from `ref`.
+ */
+export interface TurnReference {
+  kind: TurnReferenceKind;
+  /**
+   * The handle, in the kind's own terms.
+   *
+   * `message` → the message id. `diagram`/`table` → the figure's canonical name, which the server
+   * normalises again on the way in, so a client that opened a dialog with "Auth Flow.mmd" and one
+   * that read `auth-flow.mmd` off the panel are asking about one figure. `note` → the note id.
+   */
+  ref: string;
+  label: string;
+  /**
+   * The selected text, for `message` refs, and for them alone.
+   *
+   * It is what the model is shown, because there is nothing else to show it — see the note on
+   * `kind` above. The client measured it over the message's *rendered* text, which is not the
+   * markdown the server holds, so no side can re-derive it and the server does not try: it is
+   * taken as the user's own words about the passage they pointed at.
+   */
+  quote?: string;
+  /**
+   * Which occurrence of `quote` in that message — the same number `NoteAnchor.occurrence` carries,
+   * and the client's reason for sending it is the same: "ATP" appears many times in a reply about
+   * it. Display only, like `label`: it is not part of what the model reads.
+   */
+  occurrence?: number;
+}
+
+/**
+ * Cap on how many references one turn may carry.
+ *
+ * A number rather than no limit because the block below is *text in the prompt*: every reference
+ * is a paragraph and a quote, so a message with forty of them would crowd out the conversation it
+ * is part of. Eight is past what any real question attaches and well short of that.
+ */
+export const TURN_REFERENCE_MAX = 8;
+
+/**
  * What every request that starts or resumes a turn carries besides its own payload.
  *
  * One field, and it is here rather than in three places because the *reason* is the same three
@@ -3210,6 +3292,17 @@ export interface ChatInput extends TurnRequestMeta {
    * `read_document` it without the user referencing it again.
    */
   sources?: SourceReference[];
+  /**
+   * Things the user pointed at when they asked — the 追问 gesture, staged as chips in the
+   * composer.
+   *
+   * Distinct from `sources` even though both are "something the user referred to", because the
+   * two answer different questions. A source is *material to read*: the server links it to the
+   * conversation and the model may `read_document` it on any later turn, so it survives the turn
+   * it arrived on. A reference is **the object of this question**: the user is asking about *that
+   * diagram*, and the agent is told which one so it can look it up — see `TurnReference`.
+   */
+  refs?: TurnReference[];
   /**
    * Set only by the quiz widget's make-up flow: the global id of a question whose answer
    * was just posted and that this ordinary chat turn is meant to grade. The server verifies

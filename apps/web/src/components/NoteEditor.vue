@@ -61,6 +61,8 @@ const emit = defineEmits<{
   save: [input: { type: NoteType; content: string }];
   remove: [];
   locate: [];
+  /** Ask the agent about this note. The host knows what a note *is*; this window does not. */
+  ask: [];
   close: [];
 }>();
 
@@ -426,6 +428,21 @@ function typeLabel(candidate: NoteType): string {
           @click="emit('locate')"
         >
           <Icon name="target" /> {{ t("notes.editor.locate") }}
+        </button>
+        <!--
+          Ask about this note, and only once it exists: a draft has no id, so there is nothing for
+          the agent to look up and the button would stage a reference that cannot resolve. Offered
+          whether or not there is a locate target — a note the reader typed from the panel has none to
+          scroll to and is still a perfectly good thing to ask about.
+        -->
+        <button
+          v-if="existing"
+          type="button"
+          class="btn"
+          data-testid="note-editor-ask"
+          @click="emit('ask')"
+        >
+          <Icon name="link" /> {{ t("turnRef.ask") }}
         </button>
         <button
           type="button"

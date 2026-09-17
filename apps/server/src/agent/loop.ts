@@ -23,6 +23,7 @@ import {
 import type { ProviderRecord } from "../db.js";
 import type { UserLayout } from "../paths.js";
 import { buildUserContent, type UserContentBlock } from "../attachments.js";
+import type { ResolvedReference } from "../turnReferences.js";
 import { Suspension } from "../tools/suspension.js";
 import { redactQuizInput } from "../tools/quiz.js";
 import type { TurnClock } from "./clock.js";
@@ -114,6 +115,23 @@ export interface RunAgentInput {
    * on every ordinary turn.
    */
   quizMakeupNote?: string;
+  /**
+   * What this turn's own message pointed at — the 追问 chips, resolved by the caller.
+   *
+   * Absent on every ordinary turn. Separate from `historicalReferences` because the live user
+   * message is not yet in `history` — the route reads history *before* persisting the new turn, so
+   * it isn't replayed twice — and the two therefore have no shared key to be found under.
+   */
+  references?: readonly ResolvedReference[];
+  /**
+   * The stored references of every earlier message that has any, by message id.
+   *
+   * Built by the caller exactly as `sourcePaths` is, and for the same reason: resolving one is a
+   * database read, and both places below build user content — the live turn and every replayed
+   * one — would otherwise repeat it per message. Replayed rather than skipped, because
+   * `/regenerate` rebuilds a turn from history and would otherwise lose what it was about.
+   */
+  historicalReferences?: ReadonlyMap<string, readonly ResolvedReference[]>;
   /** Whose sources tree the attachment bytes live in. Derived per request, never held. */
   user: UserLayout;
   sessionId: string;
@@ -436,6 +454,10 @@ async function buildHistoryMessages(
           vision: input.vision,
           toolUse: input.toolUse,
           sourcePaths: input.sourcePaths,
+          // Resolved by the caller from the message's stored refs — see the field's note. A turn
+          // that pointed at a diagram is rebuilt with that pointer in it, which is the whole
+          // reason `/regenerate` can ask the same question twice.
+          references: input.historicalReferences?.get(m.id),
         }
       );
       out.push(new HumanMessage(content as string | UserContentBlock[]));
@@ -598,6 +620,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       vision: input.vision,
       toolUse: input.toolUse,
       sourcePaths: input.sourcePaths,
+      references: input.references,
     });
     messages.push(new HumanMessage(userContent as string | UserContentBlock[]));
   }

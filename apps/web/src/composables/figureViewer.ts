@@ -2,6 +2,7 @@ import { ref, type Ref } from "vue";
 import { api } from "../api/client";
 import { useAppStore } from "../stores/app";
 import type { FigureContent } from "../components/dialogs/DiagramDialog.vue";
+import type { FigureTurnReference } from "../utils/turnRefs";
 
 /**
  * Showing one 图 or 表, from wherever the reader pointed at it.
@@ -27,6 +28,15 @@ export interface PendingFigure {
   content: FigureContent;
   name: string;
   summary?: string;
+  /**
+   * The figure itself, as a turn reference — so the dialog can offer to ask about it.
+   *
+   * Carried rather than re-derived by the caller, because the caller is what *opened* the figure
+   * and only it knows the handle: a note's target name, a panel row's file name, a call's own
+   * argument. Re-deriving one from the label would be a second answer to "what is this figure
+   * called" and would be wrong for exactly the names that are awkward.
+   */
+  figure: FigureTurnReference;
 }
 
 export interface FigureViewer {
@@ -73,6 +83,9 @@ export function useFigureViewer(): FigureViewer {
         content: { kind: "table", markdown: found.content },
         name: label,
         summary: summary ?? found.summary,
+        // The *canonical* name off the row rather than the one that was asked for: it is what the
+        // server normalised to, and therefore what a reference has to carry.
+        figure: { kind: "table", ref: found.name, label },
       };
     } catch {
       // Swallowed, for the reason above: the reader asked to look at something the panel had

@@ -5,6 +5,7 @@ import type { Attachment } from "@ilearnassist/shared";
 import { isDocumentMime } from "./documents/formats.js";
 import { readParsedTextHead } from "./documents/store.js";
 import { sourceRawPath } from "./sourcePaths.js";
+import { renderReferenceBlock, type ResolvedReference } from "./turnReferences.js";
 import type { UserLayout } from "./paths.js";
 
 /**
@@ -93,6 +94,15 @@ export interface BuildContentOptions {
    * pointed at a tool it will never invoke.
    */
   toolUse?: boolean;
+  /**
+   * What this turn's message pointed at — the 追问 chips, already resolved.
+   *
+   * Rendered *into the text* rather than sent as blocks of its own, because that is where it
+   * belongs: the block reads as the user's own words about what they are asking about, and it
+   * sits above the question exactly as a quoted passage does in the market-standard shape. See
+   * `turnReferences.ts` for why a passage is copied and a figure is only named.
+   */
+  references?: readonly ResolvedReference[];
 }
 
 /**
@@ -104,6 +114,8 @@ export interface BuildContentOptions {
  * - Documents (PDF, Office) are inlined from their extracted text, truncated to a preview
  *   once they get long — the model is told how to page through the rest with
  *   `read_document`. Anything still unparsed is named rather than silently dropped.
+ * - References are prepended to the text, so a message that points at a diagram asks its
+ *   question *after* saying what it is about.
  *
  * Returns a plain string when there are no attachments, which keeps the common path
  * byte-identical to before.
@@ -113,10 +125,19 @@ export async function buildUserContent(
   attachments: Attachment[] | undefined,
   opts: BuildContentOptions
 ): Promise<string | UserContentBlock[]> {
-  if (!attachments || attachments.length === 0) return text;
+  const referenceBlock = renderReferenceBlock(opts.references ?? []);
+  // Above the question, and joined rather than a block of its own: to the model this is the user
+  // talking about what they are asking about, and a separate block would read as a second turn.
+  const body = referenceBlock
+    ? text.trim()
+      ? `${referenceBlock}\n\n${text}`
+      : referenceBlock
+    : text;
+
+  if (!attachments || attachments.length === 0) return body;
 
   const blocks: UserContentBlock[] = [];
-  if (text.trim()) blocks.push({ type: "text", text });
+  if (body.trim()) blocks.push({ type: "text", text: body });
 
   for (const att of attachments) {
     /*

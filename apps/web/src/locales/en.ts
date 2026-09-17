@@ -541,6 +541,18 @@ const en: typeof MessageSchema = {
       "A follow-up about question {id} ({qid}).\nQuestion: {question}\nMy follow-up: {text}\nPlease answer directly; no new quiz is needed.",
   },
 
+  /** What a message can point at. See `zh-CN` for why this is a namespace of its own. */
+  turnRef: {
+    kind: {
+      message: "Selected text",
+      diagram: "Diagram",
+      table: "Table",
+      note: "Note",
+    },
+    remove: "Remove this reference",
+    ask: "Ask about it",
+  },
+
   message: {
     copyReply: "Copy the reply",
     stopped: "Stopped",
@@ -1175,6 +1187,8 @@ const en: typeof MessageSchema = {
     NOTE_NOT_FOUND: "That note cannot be found — it may already have been deleted.",
     NOTE_TYPE_INVALID: "That kind of note does not exist.",
     FIGURE_NOT_FOUND: "That diagram or table cannot be found — it may have changed or been deleted.",
+    REFERENCE_NOT_FOUND:
+      "Something this message refers to is gone — it may have been deleted or changed. Please send it again.",
     SYNC_IN_PROGRESS: "This conversation is already being exported to the library.",
     INSIGHT_NOT_FOUND:
       "That observation cannot be found — a later pass may have replaced it.",

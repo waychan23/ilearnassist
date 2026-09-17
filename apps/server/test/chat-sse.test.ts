@@ -352,6 +352,121 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(persisted[0]!.sources).toBeUndefined();
   });
 
+  it("records what the turn pointed at, and hands the model a way to read it", async () => {
+    /*
+     * The whole of the reference mechanism at the level only a route can check: what the client
+     * sent is **stored** on the message (so the chip survives a reload), and what the model gets
+     * is a **pointer** rather than a copy — a figure is named with the exact call that fetches it,
+     * which is the same string that works unchanged when the turn is replayed later.
+     */
+    const { session } = await freshSession();
+    env.server.db.upsertDiagram({
+      id: "d-ref",
+      sessionId: session.id,
+      name: "auth-flow.mmd",
+      summary: "登录流程",
+      toolCallId: null,
+    });
+
+    llm.setTurns([{ content: "看起来是这样" }]);
+    const { res } = await chat(session.id, {
+      message: "这一步是什么意思？",
+      refs: [{ kind: "diagram", ref: "Auth Flow", label: "auth-flow" }],
+    });
+    expect(res.statusCode).toBe(200);
+
+    const user = (await messagesOf(session.id))[0]!;
+    // The client's own spelling and label, not the resolved ones: a message describes the turn
+    // that was had, and the chip shows what the composer showed.
+    expect(user.refs).toEqual([{ kind: "diagram", ref: "Auth Flow", label: "auth-flow" }]);
+
+    const sent = JSON.stringify(turnRequest("这一步是什么意思？").messages);
+    expect(sent).toContain('ila_query(kind: \\"diagram\\", name: \\"auth-flow.mmd\\")');
+    /*
+     * What travels is the *pointer* and the one-line summary — never the content. The summary is
+     * there so the model has the gist even if it decides not to look; the mermaid source is not,
+     * because the agent fetches it and gets the figure as it is now rather than as it was when
+     * the reader was looking at it.
+     */
+    expect(sent).toContain("登录流程");
+  });
+
+  it("does not put a table's content in the prompt, only how to get it", async () => {
+    // The counterpart, where there *is* content to leak: a table's row holds the markdown, so a
+    // reference that spliced it would be the copy the mechanism exists to avoid — and a long
+    // table would crowd the turn that is asking about it.
+    const { session } = await freshSession();
+    env.server.db.upsertSessionTable({
+      id: "t-body",
+      sessionId: session.id,
+      name: "scores",
+      summary: "两季度对比",
+      content: "| 项目 | 数值 |\n| --- | --- |\n| 速度 | 3 |",
+      toolCallId: null,
+    });
+
+    llm.setTurns([{ content: "ok" }]);
+    await chat(session.id, {
+      message: "这个表怎么看？",
+      refs: [{ kind: "table", ref: "scores", label: "scores" }],
+    });
+
+    const sent = JSON.stringify(turnRequest("这个表怎么看？").messages);
+    expect(sent).toContain('ila_query(kind: \\"table\\", name: \\"scores\\")');
+    expect(sent).not.toContain("| 项目 | 数值 |");
+  });
+
+  it("sends a turn that is nothing but a reference", async () => {
+    // "What about this?" is a complete question. The client's `canSend` accepts a staged chip
+    // alone, so the server's own guard has to agree or the two sides disagree about what a
+    // sendable message is — and a question asked by pointing at something is refused by a server
+    // that never looked at what was pointed at.
+    const { session } = await freshSession();
+    env.server.db.upsertSessionTable({
+      id: "t-ref",
+      sessionId: session.id,
+      name: "scores",
+      summary: "",
+      content: "| a |\n| - |\n| 1 |",
+      toolCallId: null,
+    });
+
+    llm.setTurns([{ content: "这是成绩表" }]);
+    const { res } = await chat(session.id, {
+      refs: [{ kind: "table", ref: "scores", label: "scores" }],
+    });
+    expect(res.statusCode).toBe(200);
+    expect((await messagesOf(session.id))[0]!.refs).toHaveLength(1);
+  });
+
+  it("refuses an unresolvable reference without writing the turn", async () => {
+    /*
+     * Refused rather than dropped, unlike `sources` two cases above. A source is *material the
+     * model may read*, so one that has gone narrows the turn and the answer is still an answer; a
+     * reference is **the object of the question**, so losing it changes what was asked. And the
+     * message is not written, because a row recording a question the server refused to run would
+     * be a turn in the conversation that never happened.
+     */
+    const { session } = await freshSession();
+    llm.setTurns([{ content: "should not run" }]);
+
+    const { res } = await chat(session.id, {
+      message: "这是什么？",
+      refs: [{ kind: "diagram", ref: "no-such-diagram", label: "x" }],
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json<{ error: { code: string } }>().error.code).toBe("REFERENCE_NOT_FOUND");
+    expect(await messagesOf(session.id)).toHaveLength(0);
+  });
+
+  it("refuses a refs field that is not a list", async () => {
+    const { session } = await freshSession();
+    const { res } = await chat(session.id, { message: "hi", refs: "nope" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: { code: string } }>().error.code).toBe("INVALID_FIELD");
+  });
+
   it("names the conversation from the first exchange", async () => {
     const { session } = await freshSession();
     llm.setTurns([{ content: "Sure." }]);

@@ -39,6 +39,7 @@ import type {
   ThreadBranch,
   TitleState,
   ToolCall,
+  TurnReference,
   User,
   UserRole,
   WidgetId,
@@ -624,6 +625,8 @@ interface MessageRow {
   attachments: string | null;
   /** JSON, nullable: absent on every row written before the `@`-reference existed. */
   sources: string | null;
+  /** JSON, nullable for the same reason: written only by a turn that pointed at something. */
+  refs: string | null;
   usage: string | null;
   /** SQLite has no boolean: 0/1, and `null` on rows written before the column existed. */
   stopped: number | null;
@@ -983,6 +986,7 @@ const mapMessage = (r: MessageRow): Message => ({
   toolCalls: r.tool_calls ? safeParseArray<ToolCall>(r.tool_calls) : undefined,
   attachments: r.attachments ? safeParseArray<Attachment>(r.attachments) : undefined,
   sources: r.sources ? safeParseArray<Attachment>(r.sources) : undefined,
+  refs: r.refs ? safeParseArray<TurnReference>(r.refs) : undefined,
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
   stopped: r.stopped ? true : undefined,
   createdAt: r.created_at,
@@ -1706,6 +1710,8 @@ export interface AppDb {
     attachments?: Attachment[];
     /** The sources this turn *referenced* rather than attached. See `ChatInput.sources`. */
     sources?: Attachment[];
+    /** What the turn pointed at, as the client sent it. See `ChatInput.refs`. */
+    refs?: TurnReference[];
     usage?: MessageUsage;
     /** The user cut this turn short; `content` is whatever had streamed by then. */
     stopped?: boolean;
@@ -2254,6 +2260,14 @@ export function createDb(dbPath: string): AppDb {
      * column existed means, and `[]` would have claimed somebody chose an empty list.
      */
     ensureColumn(db, "messages", "sources", "sources TEXT");
+    /*
+     * What the turn *pointed at* — a diagram, a table, a note, or a passage selected in an earlier
+     * message. Beside `sources` rather than merged with it because the two answer different
+     * questions: a source is material the model may read on any later turn, a reference is the
+     * object of the one question that was asked. Nullable for the same reason: NULL is "this turn
+     * pointed at nothing", which is what every message written before the column means.
+     */
+    ensureColumn(db, "messages", "refs", "refs TEXT");
 
     /*
      * What a note is *about*, for a note about a 图 or a 表 rather than a passage.
@@ -3017,8 +3031,8 @@ export function createDb(dbPath: string): AppDb {
   /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, sources, usage, stopped, created_at)
-     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @sources, @usage, @stopped, @createdAt)`
+    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, sources, refs, usage, stopped, created_at)
+     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @sources, @refs, @usage, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
   /*
@@ -4103,6 +4117,7 @@ export function createDb(dbPath: string): AppDb {
         // Stored only when there is something to store, like the column beside it: a JSON
         // `[]` would make "referenced nothing" a value rather than an absence.
         sources: input.sources?.length ? JSON.stringify(input.sources) : null,
+        refs: input.refs?.length ? JSON.stringify(input.refs) : null,
         usage: input.usage ? JSON.stringify(input.usage) : null,
         stopped: input.stopped ? 1 : 0,
         createdAt: now(),

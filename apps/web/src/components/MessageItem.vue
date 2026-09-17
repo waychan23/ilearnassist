@@ -11,6 +11,7 @@ import { formatTokens } from "../utils/format";
 import { applyNoteHighlights, noteIdAt, type NoteHighlightMark } from "../utils/noteAnchor";
 import { groupToolCalls } from "../utils/toolCallGroups";
 import { CARDLESS_TOOL_NAMES } from "../utils/toolCallCards";
+import { kindLabel, referenceKey } from "../utils/turnRefs";
 import ToolCallCard from "./ToolCallCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import AttachmentChips from "./AttachmentChips.vue";
@@ -120,6 +121,16 @@ const stopped = computed(() => props.message?.stopped === true);
  * a fresh load but stale as soon as the user re-parses from the chip — the message row
  * itself never changes after the fact.
  */
+/**
+ * What the turn pointed at, as it was shown when it was sent.
+ *
+ * Read straight off the message with no overlay, unlike `attachments` beside it: a reference
+ * carries no parse state and nothing about it is re-read live. The chip is a record of what was
+ * pointed at, and the message is the snapshot — the live state is whatever the agent fetches
+ * when it looks the object up, which is not this row's business.
+ */
+const refs = computed(() => props.message?.refs ?? []);
+
 const attachments = computed(() =>
   (props.message?.attachments ?? []).map((a) => {
     // The message's own snapshot is a *source* — the server reassembled it when the turn was
@@ -311,6 +322,27 @@ const usageText = computed(() => {
         v-if="attachments.length"
         :attachments="attachments"
       />
+
+      <!--
+        What this turn was about, above the question — the shape a quoted message takes
+        everywhere it exists, and the reason the passage is rendered rather than named: a reader
+        checking whether the model answered the right question needs to see the words, not a
+        label saying which words they were.
+
+        A **sibling** of `data-note-root`, exactly as the chips above are. The anchor arithmetic
+        counts a note's offsets over the message's visible text, so a block inside the bubble
+        would shift every passage by its own height the moment a reference was added — the same
+        reason an avatar may not live in there.
+      -->
+      <div v-if="refs.length" class="msg-refs" data-testid="message-refs">
+        <div v-for="ref in refs" :key="referenceKey(ref)" class="msg-ref">
+          <span class="msg-ref-kind">{{ kindLabel(ref.kind) }}</span>
+          <!-- A passage shows its words; a named object shows what it was called, because the
+               agent looks the content up and a copy here would be a copy that can go stale. -->
+          <span v-if="ref.kind === 'message'" class="msg-ref-quote">{{ ref.quote }}</span>
+          <span v-else class="msg-ref-name">{{ ref.label }}</span>
+        </div>
+      </div>
       <!-- `data-note-root` marks the element an annotation is measured against: the anchor's
            offsets are counted over this element's visible text, so it has to be the content
            and not the whole message (an avatar or a tool card would silently change what
@@ -423,6 +455,47 @@ const usageText = computed(() => {
 }
 .user-stack .bubble {
   max-width: 100%;
+}
+/*
+ * What the turn was about, drawn as a quote rather than as a chip: the reader is checking
+ * whether the answer is about the passage they meant, and that question is answered by the words.
+ * Right-aligned with the bubble it sits above, so the pair reads as one utterance — the user
+ * quoting something and then asking.
+ */
+.msg-refs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+.msg-ref {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  background: var(--panel-2);
+  /* The bubble's own corner in reverse: this is the user speaking, so the flat corner is the
+     one nearest them. */
+  border-radius: var(--radius-lg) var(--radius-2xs) var(--radius-lg) var(--radius-lg);
+  font-size: var(--fs-3);
+}
+.msg-ref-kind {
+  font-size: var(--fs-1);
+  color: var(--text-3);
+}
+.msg-ref-quote {
+  color: var(--text-2);
+  border-left: 2px solid var(--border);
+  padding-left: var(--space-4);
+  /* A long passage is the reader's own selection, so it is worth reading — but it is context for
+     the question below, not the question, and it must not push the bubble off the screen. */
+  max-height: 7.5em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.msg-ref-name {
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 /* Actions stay out of the way until the message is hovered, as in chatbox. */
 .actions {

@@ -7,6 +7,7 @@ import { useAppStore } from "../stores/app";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
 import { isMessageNotesActive, requestNoteEditor } from "../composables/messageNotes";
 import { figureNoteRequest } from "../composables/notes";
+import { figureReference } from "../utils/turnRefs";
 import type { Diagram, Table } from "../api/types";
 import {
   FIGURE_FILTERS,
@@ -245,6 +246,20 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
             </span>
           </button>
           <!--
+            Asking about a figure. Offered in every conversation, unlike the note control below
+            it: a reference to a figure is resolved by the agent's own tools, so it needs no
+            panel to hold it — the chip is the whole of the state.
+          -->
+          <button
+            class="icon-btn diagram-ask"
+            data-testid="diagram-row-ask"
+            :title="t('turnRef.ask')"
+            :aria-label="t('turnRef.ask')"
+            @click="store.stageReference(figureReference(row))"
+          >
+            <Icon name="link" />
+          </button>
+          <!--
             Writing a note about a figure, a sibling of the locate button rather than part of the
             row button: one opens the figure, the other files something about it, and neither
             modifies the other. Not drawn where notes have no home — see `canNote`.
@@ -281,6 +296,7 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
       :content="{ kind: 'table', markdown: viewing.content }"
       :name="viewing.name"
       :summary="viewing.summary"
+      :figure="figureReference(viewing)"
       @close="viewing = null"
     />
   </div>
@@ -382,7 +398,8 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
   color: var(--danger-text);
 }
 .diagram-locate,
-.diagram-note {
+.diagram-note,
+.diagram-ask {
   flex: none;
 }
 </style>

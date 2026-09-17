@@ -719,6 +719,26 @@ export default {
       "关于题目 {id}（编号 {qid}）的追问。\n题目：{question}\n我的追问：{text}\n请直接解答，不需要重新出题。",
   },
 
+  /**
+   * The things a message can point at — the 追问 gesture's references.
+   *
+   * A namespace of its own rather than keys under `composer.` or `message.`, because the same
+   * four words are needed in three places that have nothing to do with each other: the chip in the
+   * composer, the block in the bubble the message was sent as, and the button that stages one.
+   */
+  turnRef: {
+    kind: {
+      message: "选中的内容",
+      diagram: "图",
+      table: "表",
+      note: "笔记",
+    },
+    /** The composer's chip row, and the control that takes one back off. */
+    remove: "取消引用",
+    /** The button that turns a selection into a staged reference. */
+    ask: "追问",
+  },
+
   message: {
     copyReply: "复制回复",
     stopped: "已停止",
@@ -1427,6 +1447,7 @@ export default {
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
     FIGURE_NOT_FOUND: "找不到这个图表，它可能已经被修改或删除了。",
+    REFERENCE_NOT_FOUND: "引用对象已经不存在了（可能已被删除或修改），请重新发送。",
     SYNC_IN_PROGRESS: "这个会话正在同步到资料库，请稍候。",
     INSIGHT_NOT_FOUND: "找不到这条洞察，可能已经被新一次总结替换了。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
