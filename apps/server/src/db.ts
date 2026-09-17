@@ -53,6 +53,9 @@ import {
   isEnabledSuperadmin,
   isUserRole,
   isWidgetId,
+  MAX_ATTACHMENT_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
 } from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
 import { migrateIfNeeded } from "./migrations.js";
@@ -689,6 +692,17 @@ export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId"
  * the user deliberately deleted.
  */
 export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
+
+/**
+ * The largest file an account may upload, in bytes, as an administrator set it.
+ *
+ * A row rather than a `config.yaml` key, unlike the document-parsing limits: this one is a
+ * *setting* an administrator edits from the console, and `config.yaml` is a bootstrap file whose
+ * values are read once. Nothing seeds it, deliberately — the default is `MAX_ATTACHMENT_BYTES`,
+ * which both sides already share, so an installation that has never been touched behaves exactly
+ * as it did before the setting existed.
+ */
+export const SETTING_MAX_UPLOAD_BYTES = "upload.maxFileBytes";
 /*
  * `SETTING_AUTH_SECRET` ("auth.secret") is gone, and the *row* it wrote is deliberately left
  * alone rather than cleaned up. It signed the session cookie, which a bearer token replaced —
@@ -4950,6 +4964,21 @@ export function readDocumentParsing(
     defaultParserId:
       db.getSetting(SETTING_DOCUMENT_DEFAULT_PARSER) || defaults.defaultParserId || null,
   };
+}
+
+/**
+ * The upload limit currently in force.
+ *
+ * Falls back to `MAX_ATTACHMENT_BYTES` for anything unset, unparseable or out of range — the
+ * "an unknown value reads as the default" rule `title_state` and the parsing policy both follow,
+ * and here it also means a hand-edited database row cannot turn the cap off. A value below the
+ * floor reads as the floor and one above the ceiling as the ceiling, because both are states the
+ * console cannot produce and the *route* must not be the place that discovers it.
+ */
+export function readMaxUploadBytes(db: AppDb): number {
+  const stored = Number(db.getSetting(SETTING_MAX_UPLOAD_BYTES));
+  if (!Number.isFinite(stored) || stored <= 0) return MAX_ATTACHMENT_BYTES;
+  return Math.min(MAX_UPLOAD_CEILING_BYTES, Math.max(MIN_UPLOAD_LIMIT_BYTES, Math.floor(stored)));
 }
 
 function isParsePolicy(value: string | undefined): value is DocumentParsePolicy {

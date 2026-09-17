@@ -1797,8 +1797,30 @@ export const useAppStore = defineStore("app", () => {
     applyProvider(await api.deleteModel(providerId, modelId));
   }
 
+  /**
+   * The upload cap the server reported, or the shared constant before `/api/config` has landed.
+   *
+   * The fallback matters for the one press that can happen first: a file dropped on the composer
+   * while the config request is still in flight. It is the same number the server would fall back
+   * to, so the check is never *more* permissive than the route behind it.
+   */
+  function uploadLimitBytes(): number {
+    return config.value?.maxUploadBytes ?? MAX_ATTACHMENT_BYTES;
+  }
+
   async function setDefaults(input: { providerId?: string; modelId?: string }): Promise<void> {
     config.value = await api.updateDefaults(input);
+  }
+
+  /**
+   * Save the installation's upload limit.
+   *
+   * The whole config comes back and replaces what the store holds, which is the same shape
+   * `setDefaults` uses and the reason the upload pre-check below can read one field: there is one
+   * `store.config`, not a settings copy beside it.
+   */
+  async function setUploadSettings(maxUploadBytes: number): Promise<void> {
+    config.value = await api.updateUploadSettings({ maxUploadBytes });
   }
 
   /* -------------------------- document parsers ----------------------------- */
@@ -2169,11 +2191,16 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function uploadAttachment(file: File): Promise<Attachment | null> {
-    if (file.size > MAX_ATTACHMENT_BYTES) {
+    /*
+     * The cap in force, which is a setting now rather than the constant — `MAX_ATTACHMENT_BYTES`
+     * is what it falls back to when nothing has been configured, and the fallback lives on the
+     * server so the two cannot disagree about the default.
+     */
+    if (file.size > uploadLimitBytes()) {
       setError(
         i18n.global.t("attachments.tooLarge", {
           name: file.name,
-          limitMb: Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024),
+          limitMb: Math.round(uploadLimitBytes() / 1024 / 1024),
         })
       );
       return null;
@@ -3043,6 +3070,8 @@ export const useAppStore = defineStore("app", () => {
     deleteProvider,
     deleteModel,
     setDefaults,
+    setUploadSettings,
+    uploadLimitBytes,
     loadParserKinds,
     saveDocumentParser,
     deleteDocumentParser,

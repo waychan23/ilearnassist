@@ -53,6 +53,7 @@ import type {
   UpdateNoteInput,
   UpdateProviderInput,
   UpdateSessionInput,
+  UpdateUploadSettingsInput,
   UpdateUserInput,
   UploadAttachmentInput,
   User,
@@ -915,6 +916,12 @@ export const api = {
   deleteModel: (providerId: string, modelId: string) =>
     request<ProviderConfig>(`/providers/${providerId}/models/${modelId}`, { method: "DELETE" }),
 
+  /**
+   * Save the installation's upload limit. Returns the whole config, like `updateDefaults` — the
+   * console's state is `store.config`, and a partial answer would be a second place holding it.
+   */
+  updateUploadSettings: (input: UpdateUploadSettingsInput) =>
+    request<PublicConfig>("/upload-settings", { method: "PUT", body: JSON.stringify(input) }),
   updateDefaults: (input: { providerId?: string; modelId?: string }) =>
     request<PublicConfig>("/defaults", { method: "PUT", body: JSON.stringify(input) }),
 

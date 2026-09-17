@@ -2851,6 +2851,14 @@ export interface PublicConfig {
   webSearchProvider: string;
   documentParsers: DocumentParserConfig[];
   documentParsing: DocumentParsingConfig;
+  /**
+   * The largest file an account may upload, in bytes.
+   *
+   * On the wire because the *client* refuses past it before a request is made — which is the whole
+   * point of raising the limit from a constant to a setting: a 60 MB file must be refused without
+   * being sent. `MAX_ATTACHMENT_BYTES` is the value behind it when nothing has been set.
+   */
+  maxUploadBytes: number;
 }
 
 /* ----------------------------------- API payloads ----------------------------------- */
@@ -3066,6 +3074,18 @@ export interface UpdateDocumentParsingInput {
 }
 
 /**
+ * Payload for `PUT /api/upload-settings`.
+ *
+ * `maxUploadBytes` is required rather than optional, and required to be an integer within
+ * `MIN_UPLOAD_LIMIT_BYTES`–`MAX_UPLOAD_CEILING_BYTES`. There is one field here, so an absent one
+ * is a request that does not say what it wants rather than a partial update — and a limit is a
+ * number a typo can make absurd in either direction.
+ */
+export interface UpdateUploadSettingsInput {
+  maxUploadBytes: number;
+}
+
+/**
  * One turn's request. `provider`/`model` are one-turn overrides; anything absent comes from
  * the session's own settings.
  *
@@ -3190,8 +3210,40 @@ export type ChatStreamEvent =
 
 /* ------------------------------------ constants ------------------------------------ */
 
-/** Uploads are capped at 10 MB per file (also enforced server-side). */
+/**
+ * The upload cap an installation starts with, and the fallback for one that has never been told
+ * otherwise: 10 MB per file.
+ *
+ * It stopped being the whole rule when an administrator gained the ability to set it — see
+ * `MAX_UPLOAD_CEILING_BYTES` — but it stays the *default*, and it is still what both sides fall
+ * back to, because nothing in `config.yaml` seeds it: the value lives in `app_settings` and an
+ * unset install behaves exactly as it always did. `PublicConfig.maxUploadBytes` is the number a
+ * client should use; this one is behind it.
+ */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * The most an administrator may raise the upload limit to, and the smallest.
+ *
+ * The ceiling is not a policy choice so much as a consequence of how a Fastify route is built:
+ * `bodyLimit` is a fixed number per route, fixed when the route is registered, so a limit that is
+ * editable at runtime cannot be the thing the body limit reads. The route therefore carries this
+ * number and the *handler* compares against the configured value — which means an administrator
+ * can set anything up to here and the two agree, while a body past this is refused by Fastify
+ * before the handler sees it. Stated rather than hidden, because that is the one case where the
+ * refusal does not carry `FILE_TOO_LARGE`.
+ *
+ * 100 MB of upload means roughly 133 MB in the server's memory for one request, since the body
+ * arrives base64-encoded inside JSON. That is the real cost of the ceiling, and it is why this is
+ * an administrator's setting rather than an unbounded one.
+ *
+ * Shared because both sides check it: the console refuses to save past it, and the route above
+ * derives its body limit from it.
+ */
+export const MAX_UPLOAD_CEILING_BYTES = 100 * 1024 * 1024;
+
+/** The least an administrator may set, so the limit cannot be made useless. */
+export const MIN_UPLOAD_LIMIT_BYTES = 1 * 1024 * 1024;
 
 /**
  * How large a file may be and still be handed to the preview viewer whole.

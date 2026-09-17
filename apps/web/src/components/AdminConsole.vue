@@ -12,6 +12,7 @@ import CopyButton from "./CopyButton.vue";
 import Icon from "./Icon.vue";
 import ProvidersSection from "./admin/ProvidersSection.vue";
 import DocumentsSection from "./admin/DocumentsSection.vue";
+import UploadsSection from "./admin/UploadsSection.vue";
 import type { IconName } from "../utils/icons";
 
 /**
@@ -70,6 +71,7 @@ const SECTIONS: Section[] = [
   { id: "users", icon: "user" },
   { id: "providers", icon: "sliders" },
   { id: "documents", icon: "file" },
+  { id: "uploads", icon: "upload" },
 ];
 
 /**
@@ -103,6 +105,8 @@ const sectionSubtitle = computed(() => {
       return t("admin.subtitle.providers");
     case "documents":
       return t("admin.subtitle.documents");
+    case "uploads":
+      return t("admin.subtitle.uploads");
   }
 });
 
@@ -410,6 +414,10 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
 
       <div v-else-if="section === 'documents'" class="console-body" data-testid="admin-documents">
         <DocumentsSection />
+      </div>
+
+      <div v-else-if="section === 'uploads'" class="console-body" data-testid="admin-uploads-panel">
+        <UploadsSection />
       </div>
 
       <div v-else class="console-body">

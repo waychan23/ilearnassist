@@ -241,7 +241,7 @@ watch(
          the way back to the workspace home. -->
     <FilePreviewDialog />
     <Transition name="fade">
-      <div v-if="store.error" class="toast">
+      <div v-if="store.error" class="toast" data-testid="toast">
         <span>{{ store.error }}</span>
         <button
           class="icon-btn"
