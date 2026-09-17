@@ -3,7 +3,14 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
-import { showWorkspaceHome, uiState, type AdminSection } from "../composables/ui";
+import { isCompact } from "../composables/breakpoints";
+import {
+  closeDrawer,
+  openDrawer,
+  showWorkspaceHome,
+  uiState,
+  type AdminSection,
+} from "../composables/ui";
 import { api } from "../api/client";
 import type { AdminUser, UserRole } from "../api/types";
 import { ADMIN_ROLE, CONSOLE_GRANTABLE_ROLES, isPlatformAdmin, isSuperadmin } from "../api/types";
@@ -85,6 +92,24 @@ const section = computed({
     uiState.adminSection = next;
   },
 });
+
+/**
+ * Choose a section, and get out of the way of the one just chosen.
+ *
+ * The second half is the drawer's, and it is why this is not the `v-model` it used to be. On a
+ * phone the menu is an overlay across the left of the section it is choosing between, so leaving
+ * it up would hide the screen the press was for — and the reader would have to dismiss a drawer
+ * they had just finished with. It is the rule the rails follow, with one difference worth
+ * stating: `Sidebar.vue` deliberately keeps its drawer open while its *tabs* are switched, and
+ * the console's menu is not that. Those tabs choose between two views of one conversation; these
+ * replace the whole pane.
+ *
+ * A no-op above the breakpoint, where the menu is a column and the flag is already false.
+ */
+function selectSection(id: AdminSection): void {
+  section.value = id;
+  closeDrawer();
+}
 
 /**
  * The one line under the title, per section.
@@ -343,7 +368,7 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
       leaving the console is about the console and not about the section you happen to be in —
       and because that is where a management back end puts it.
     -->
-    <aside class="console-nav">
+    <aside id="console-nav" class="console-nav" :class="{ open: uiState.drawerOpen }">
       <div class="console-nav-head">
         <button
           class="icon-btn"
@@ -365,7 +390,7 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
           :class="{ active: section === item.id }"
           :aria-current="section === item.id ? 'page' : undefined"
           :data-testid="`admin-nav-${item.id}`"
-          @click="section = item.id"
+          @click="selectSection(item.id)"
         >
           <Icon :name="item.icon" />
           <span>{{ t(`admin.nav.${item.id}`) }}</span>
@@ -386,7 +411,13 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
       </div>
     </aside>
 
-    <main class="console-main">
+    <!--
+      Covered by the menu's drawer on a compact viewport, so it is taken out of the tab order and
+      the accessibility tree for as long as the drawer is over it. Bound here rather than passed
+      down from `App.vue` for the reason the workspace home's is: an attribute falling through
+      would land on the page root and make the drawer itself inert.
+    -->
+    <main class="console-main" :inert="isCompact && uiState.drawerOpen">
       <!--
         One header for the shell, with the section's own action on the right. The accounts
         section is the only one with a primary action, so the button is conditional rather than
@@ -394,6 +425,23 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
         that drifts.
       -->
       <header class="console-head">
+        <!--
+          The way back to the menu, on a compact viewport where the menu is off-canvas. At the
+          left, which is the edge the drawer comes from — the same rule the sidebar's toggle and
+          the workspace home's follow.
+        -->
+        <button
+          v-if="isCompact"
+          class="icon-btn nav-toggle"
+          data-testid="nav-toggle"
+          :title="t('admin.openMenu')"
+          :aria-label="t('admin.openMenu')"
+          :aria-expanded="uiState.drawerOpen"
+          aria-controls="console-nav"
+          @click="openDrawer"
+        >
+          <Icon name="menu" />
+        </button>
         <div>
           <h2 class="console-title">{{ t(`admin.nav.${section}`) }}</h2>
           <p class="console-sub">{{ sectionSubtitle }}</p>
@@ -912,38 +960,76 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
 }
 
 /*
- * The narrow screen collapses the menu to a strip across the top rather than hiding it: there
- * are a handful of sections and they are the page's only navigation, so a hidden menu would be
- * a page you cannot leave. The rules live at the end of this block for the reason the sheet's
- * responsive rules do — a media query does not raise specificity, so an override written above
- * the rule it means to override loses on source order alone.
+ * The narrow screen makes the menu a **drawer**, off-canvas and opened from the section header.
+ *
+ * It used to collapse to a strip across the top — "there are a handful of sections and they are
+ * the page's only navigation, so a hidden menu would be a page you cannot leave" — and the drawer
+ * answers that same objection without spending a band of the screen on it: the way out is the
+ * toggle, which is in the header where the section's own title is. It is also what the app's
+ * other two rails do at this width, and three panels that all slide in from the left is one thing
+ * to learn rather than three.
+ *
+ * **The width is the sheet's, and that is a change.** This block was `720px` — a number that
+ * existed nowhere else in the app, not in `composables/breakpoints.ts` and not in the design
+ * system's table — so the console switched layout at a width nothing else knew about. A drawer
+ * needs the number in JavaScript as well (the toggle is `v-if="isCompact"`) and a *second*
+ * breakpoint constant is exactly the two-copies-of-one-value problem the shared one exists to
+ * prevent. The content rules below stay at their own width, since a user row going single-column
+ * is a different question from what the menu is.
+ *
+ * The rules live at the end of this block for the reason the sheet's responsive rules do — a
+ * media query does not raise specificity, so an override written above the rule it means to
+ * override loses on source order alone.
  */
-@media (max-width: 720px) {
+@media (max-width: 900px) {
+  /*
+   * One column and one explicit row: the menu is out of the grid entirely, so the section is the
+   * only in-flow child, and the explicit row is what keeps it filling the height rather than
+   * being sized to its content. `.app`'s rule for the same moment.
+   */
   .console {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: 1fr;
   }
 
   .console-nav {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    /* The menu's own column width, which is what it is at a wide width and what it slides back
+       to — the sidebar's 272px and this 220px are two panels, each its own size. */
+    width: 220px;
+    z-index: var(--z-drawer);
+    transform: translateX(-100%);
+    /* Load-bearing for the reason the sidebar's is: without it the closed panel's back button,
+       brand, four section links and two footer controls stay in the tab order — focusable,
+       off-screen and announced. The delay keeps it visible until the slide finishes. */
+    visibility: hidden;
+    transition:
+      transform var(--dur-slow) var(--ease-drawer),
+      visibility 0s linear var(--dur-slow);
   }
 
-  .console-menu {
-    flex-direction: row;
-    overflow-x: auto;
+  .console-nav.open {
+    transform: none;
+    visibility: visible;
+    transition-delay: 0s, 0s;
   }
 
-  .console-menu-item {
-    width: auto;
-    flex-shrink: 0;
+  /* The toggle sits beside the title, so the header keeps its shape and only gains a control. */
+  .console-head {
+    align-items: center;
   }
+}
 
-  .console-nav-foot {
-    border-top: none;
-    padding-top: 0;
-  }
-
+/*
+ * The content reflows at the *narrow* breakpoint, which is a different question from where the
+ * menu is — and 560 rather than a number of its own, because what these rules do is exactly what
+ * the design system's table gives that width: a form goes single-column. A user's row of fields
+ * stacking is that, and the 720 this block used to be at was the only value in the app outside
+ * the two documented ones.
+ */
+@media (max-width: 560px) {
   .console-head {
     padding: var(--space-6);
     flex-wrap: wrap;

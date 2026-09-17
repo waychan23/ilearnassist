@@ -109,11 +109,20 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
  * so naming only the first would leave the drawer opening with focus nowhere when the files
  * panel is the one showing.
  *
- * The menu rows carry the same ids on **both** rails, and that is what lets one selector serve
- * two pages: on the conversation they come after `new-session` in document order and lose to it,
- * and on the workspace home — where neither panel action exists — the first of them wins. Listed
- * in the order `AppMenu` draws them, because `querySelector` returns the first match in the
- * document and the upper group's rows are individually conditional.
+ * **Three pages draw that drawer now**, and the selector is one expression for all of them
+ * because `querySelector` returns the first match in *document order*: on a conversation the
+ * panel actions come first and win, on the workspace home the menu rows do, and on the console
+ * the section links do. The individual entries are therefore alternatives rather than a
+ * sequence — order within the list does not matter, only where each lands in the DOM.
+ *
+ * The prefix selector is the console's, and a prefix is deliberate there: the section ids are
+ * `SECTIONS`' own and a list of four would be a fifth thing to keep in step with it. It matches
+ * nothing outside `AdminConsole.vue`, which is what keeps it narrow enough to be safe.
+ *
+ * The menu rows are listed individually because they *are* individually conditional — the
+ * console for the accounts that have it, the workspace settings on a page inside a workspace —
+ * so naming only the first would leave the drawer opening with focus nowhere on the pages where
+ * it is not drawn.
  *
  * Together with the backdrop, the `inert` on the pane behind it and the Escape handler this
  * is the whole focus story — a hand-rolled trap would be a state machine doing what `inert`
@@ -132,6 +141,7 @@ watch(
           "[data-testid='open-workspace-settings']",
           "[data-testid='open-copilots']",
           "[data-testid='open-admin']",
+          "[data-testid^='admin-nav-']",
         ].join(", ")
       : '[data-testid="nav-toggle"]';
     document.querySelector<HTMLElement>(selector)?.focus();

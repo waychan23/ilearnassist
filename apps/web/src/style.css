@@ -2991,6 +2991,9 @@ pre.code-block {
    * toggle, which is a different button with a different job.
    */
   .home-head .nav-toggle,
+  /* And the third, which opens the console's section menu. The three are one control drawn on
+     three headers, and all three are compact-only. */
+  .console-head .nav-toggle,
   /* Compact-only, so this one is a touch target on essentially every screen it appears on —
      leaving it out would be the one topbar control that stayed small under a finger. */
   .topbar .widget-toggle {

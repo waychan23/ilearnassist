@@ -399,16 +399,33 @@ describe("style.css palette", () => {
   });
 
   it("uses only the documented breakpoints", () => {
-    // The CSS half of the lock-step in `composables/breakpoints.ts`: the JS half asserts the
-    // strings that reach `matchMedia`, this asserts the sheet's media queries are the same
-    // values. Media queries cannot read custom properties, so the number is spelt out in
-    // both languages and this is the only place the two are compared.
-    //
-    // It has nothing to check yet — no layout media query exists — and is written now so
-    // that the responsive work cannot introduce a stray 768px by habit.
-    const noted = [...CSS.matchAll(/@media\s*\(max-width:\s*(\d+)px\)/g)].map((m) => m[1]);
+    /*
+     * The CSS half of the lock-step in `composables/breakpoints.ts`: the JS half asserts the
+     * strings that reach `matchMedia`, this asserts the media queries are the same values. Media
+     * queries cannot read custom properties, so the number is spelt out in both languages and
+     * this is the only place the two are compared.
+     *
+     * **Components are scanned too, and that half was missing for a while.** The console's menu
+     * collapsed at `720px` — a value in neither `breakpoints.ts` nor the design system's table,
+     * so a page that switched layout at a width nothing else in the app knew about, and a number
+     * that would have had to be added as a third constant the moment a `v-if` needed it in
+     * JavaScript. Scoped styles are where a stray breakpoint is easiest to write and hardest to
+     * see, which is the opposite of where the guard was looking.
+     */
+    const documented = ["900", "560"];
+    const values = (source: string) =>
+      [...source.matchAll(/@media\s*\(max-width:\s*(\d+)px\)/g)].map((m) => m[1]!);
 
-    expect(noted.filter((px) => !["900", "560"].includes(px!))).toEqual([]);
+    expect(values(CSS).filter((px) => !documented.includes(px))).toEqual([]);
+    expect(
+      Object.entries(COMPONENTS)
+        .flatMap(([path, source]) =>
+          values(source)
+            .filter((px) => !documented.includes(px))
+            .map((px) => `${shortName(path)}: ${px}px`),
+        )
+        .sort(),
+    ).toEqual([]);
   });
 
   it("keeps every breakpoint after the rules it overrides", () => {
