@@ -56,6 +56,87 @@ test("touch: one tap opens the token popover, and it stays open", async ({ page,
   await expect(popover).toBeHidden();
 });
 
+test("layout: the message column reserves both scrollbar gutters", async ({ page, request }) => {
+  /*
+   * A long conversation scrolls, and the sheet's `::-webkit-scrollbar` is a **classic** bar — so
+   * in a real browser it takes 8px of layout off the right-hand edge and every message gutter
+   * comes out unequal: 12px on the left, 20px on the right.
+   *
+   * What that costs a test is worth stating, because the assertion below is not the one you would
+   * expect: **headless Chromium gives overlay scrollbars here** — `offsetWidth` and `clientWidth`
+   * agree even with the list overflowing — so the visible asymmetry cannot be reproduced at all.
+   * Deleting the declaration therefore has to fail this case some other way, and that way is the
+   * computed value. The gap check is kept beside it as the invariant the declaration is for.
+   */
+  await converse(page, request, "很长的一句话。".repeat(200));
+  const scroller = page.locator(".messages");
+  await expect(scroller).toBeVisible();
+
+  const measured = await scroller.evaluate((el) => {
+    const body = document.querySelector(".msg .body") as HTMLElement;
+    const sr = el.getBoundingClientRect();
+    const br = body.getBoundingClientRect();
+    return {
+      overflows: el.scrollHeight > el.clientHeight,
+      gutter: getComputedStyle(el).scrollbarGutter,
+      leftGap: Math.round(br.left - sr.left),
+      rightGap: Math.round(sr.right - br.right),
+    };
+  });
+
+  // The case is real: without overflow there is no scrollbar and nothing to be asymmetric about.
+  expect(measured.overflows).toBe(true);
+  expect(measured.gutter).toBe("stable both-edges");
+  expect(measured.leftGap).toBe(measured.rightGap);
+});
+
+test("layout: the reply gives up its avatar and its gutters, and takes them back", async ({
+  page,
+  request,
+}) => {
+  /*
+   * A reply carried a 30px avatar, a 12px gap and 24px of padding on each side — 90px of a 412px
+   * screen, spent before a word was set. Both halves are asserted, because "more compact" has a
+   * direction: the avatar has to be *gone* and the text has to be *wider*, and a rule that only
+   * shrank the avatar would satisfy neither the ask nor the width.
+   */
+  await converse(page, request, "你好");
+
+  const reply = page.getByTestId("message-assistant").last();
+  await expect(reply.locator(".avatar")).toBeHidden();
+
+  /*
+   * 412 less the column's two gutters — `--space-6` of padding and an 8px reserved scrollbar
+   * gutter, on each side. The body is the flex item, so with the avatar gone it is the whole of
+   * that width, which makes this a statement about both changes at once.
+   *
+   * The reserve is what the case above is about and it is not free: it costs 16px of the 66px
+   * this change won, so the column lands at 372 rather than 388. Spending part of a compactness
+   * gain on symmetry is the decision; the sheet's 8px scrollbar is the bar it is spent on.
+   */
+  const body = (await reply.locator(".body").boundingBox())!;
+  expect(body.width).toBeCloseTo(412 - 2 * (12 + 8), 0);
+
+  // The user's own turn keeps its avatar-free shape for a different reason — it never had one —
+  // and its bubble still stops short of the edge rather than being stretched by the new gutter.
+  const bubble = (await page.getByTestId("message-user").last().locator(".bubble").boundingBox())!;
+  expect(bubble.width).toBeLessThan(388);
+
+  /*
+   * And it is a rule about this width, not about the app. Read after a resize rather than in a
+   * desktop spec, which is where the rest of this file's "state that is only read once" cases
+   * live: `display: none` cannot get stuck the way a JavaScript flag can, and the assertion is
+   * here to say so.
+   */
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(reply.locator(".avatar")).toBeVisible();
+  // Back, and taking room again: the body is the row's flex item, so it is narrower than the row
+  // by the avatar and its gap. Asserted as that relationship rather than against a number, since
+  // the desktop column's width is a different question from this one.
+  const row = (await reply.boundingBox())!;
+  expect((await reply.locator(".body").boundingBox())!.width).toBeLessThan(row.width);
+});
+
 test("layout: the sidebar is a drawer, and the pane gets the whole width", async ({
   page,
   request,

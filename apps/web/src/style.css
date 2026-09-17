@@ -526,6 +526,24 @@ body {
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-8) 0;
+  /*
+   * Both gutters, so the column is centred in the *visible* width rather than in a box the
+   * scrollbar has already eaten into.
+   *
+   * The sheet styles `::-webkit-scrollbar` at 8px, and styling it is what opts Blink out of
+   * overlay scrollbars — so in a real browser the bar is a classic one that takes layout space,
+   * off the **inline-end** edge. Every message gutter is therefore unequal: `--space-6` on the
+   * left and `--space-6` + 8px on the right, which reads as the text being pushed off-centre.
+   * `stable` reserves the space whether or not the bar is showing, so the column does not jump
+   * sideways when a short conversation grows into a long one; `both-edges` mirrors it, which is
+   * what makes the two sides equal. It has to be both: `stable` alone just makes a *consistent*
+   * asymmetry, and `both-edges` alone is not a valid value.
+   *
+   * Note that this device's headless Chromium gives overlay scrollbars — `offsetWidth` and
+   * `clientWidth` agree even with the list overflowing — so the asymmetry cannot be reproduced in
+   * a browser test here. The declaration is the fix, and the test pins that.
+   */
+  scrollbar-gutter: stable both-edges;
 }
 
 /* Gutter so the rail does not sit on top of the messages. */
@@ -2823,6 +2841,39 @@ pre.code-block {
      commit, which is what makes this a single line rather than four. */
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  /*
+   * The messages get the width instead of the gutters.
+   *
+   * A message carried 24px of padding on each side at every width, and an assistant message
+   * carried a 30px avatar and a 12px gap in front of its body — 90px of a 412px screen, 22% of
+   * the line, spent before a word is set. On a desk that reads as a comfortable measure; on a
+   * phone it is the difference between a paragraph and a column.
+   *
+   * **The avatar is dropped rather than shrunk**, and what makes that safe is the bubble: a
+   * reply is the message without one, sitting at the left edge, and a 30px robot in front of it
+   * is confirming something the layout already says. (The user's own turn keeps its shape — the
+   * bubble is the mark — so only the assistant's is hidden.)
+   *
+   * `display: none` and not a `v-if`, the rule `.sidebar.collapsed` follows: this is a
+   * presentation decision at one width, and driving it from JavaScript would re-render every
+   * message in the conversation on a resize to accomplish what one declaration does. It takes
+   * the mark out of the accessibility tree too, which is the right answer for an `aria-hidden`
+   * glyph that says nothing.
+   *
+   * Keyed on the width breakpoint rather than on `orientation: portrait`, which was the ask.
+   * Orientation is not a fact this sheet can act on: a phone held sideways is 915px and would
+   * take the *desktop* rules for everything else, so a portrait-only rule here would give one
+   * width two layouts according to how the device was held. Every other responsive rule in this
+   * app is a `max-width` query and `style.test.ts` pins the set.
+   */
+  .msg {
+    padding-inline: var(--space-6);
+  }
+
+  .msg .avatar {
+    display: none;
   }
 }
 
