@@ -20,6 +20,15 @@ import { noteToolbarPosition, type NoteToolbarAnchor } from "../utils/noteToolba
 const props = defineProps<{
   /** The selection's bottom-right vertex, and the message list's right edge. Viewport coords. */
   anchor: NoteToolbarAnchor;
+  /**
+   * The conversation is being written to from another client, so neither action can be saved.
+   *
+   * Both buttons go inert rather than the toolbar going away: the card is how the reader learns
+   * that marking is a *write* — silently not appearing would read as the feature being broken or
+   * absent, the same reasoning the file browser uses for an entry it cannot open. The reason is in
+   * each button's `title`.
+   */
+  readOnly?: boolean;
 }>();
 
 const emit = defineEmits<{ pick: [intent: "annotation" | "note"] }>();
@@ -45,6 +54,8 @@ const position = computed(() =>
         type="button"
         class="note-toolbar-btn"
         data-testid="note-toolbar-annotate"
+        :disabled="readOnly"
+        :title="readOnly ? t('lock.other') : ''"
         @click="emit('pick', 'annotation')"
       >
         <Icon name="marker" />
@@ -54,6 +65,8 @@ const position = computed(() =>
         type="button"
         class="note-toolbar-btn"
         data-testid="note-toolbar-note"
+        :disabled="readOnly"
+        :title="readOnly ? t('lock.other') : ''"
         @click="emit('pick', 'note')"
       >
         <Icon name="note" />

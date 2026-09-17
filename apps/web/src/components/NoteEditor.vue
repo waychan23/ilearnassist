@@ -40,6 +40,16 @@ const props = defineProps<{
   anchor?: { x: number; y: number } | null;
   /** A save is in flight — the buttons are held, not disabled away. */
   busy?: boolean;
+  /**
+   * The conversation is being written to from another client, so this note cannot be saved.
+   *
+   * A prop rather than something this component works out, on the same rule the notes widget
+   * follows: whoever knows about write locks says so, and the component obeys. The window can also
+   * be *already open* when a lease changes hands, which is why its buttons react rather than the
+   * window being closed from underneath the reader — a draft half-written is not something to
+   * throw away because somebody else opened the conversation.
+   */
+  readOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -366,11 +376,17 @@ function typeLabel(candidate: NoteType): string {
           type="button"
           class="btn danger"
           data-testid="note-editor-remove"
+          :disabled="readOnly"
+          :title="readOnly ? t('lock.other') : t('notes.remove.action')"
           @click="remove"
         >
           <Icon name="trash" />
         </button>
         <span v-if="existing && locate" class="between-danger" aria-hidden="true"></span>
+        <!--
+          Locate is *not* gated: it scrolls to the message, which is a read. A read-only reader
+          still wants to find what they marked.
+        -->
         <button
           v-if="locate"
           type="button"
@@ -384,7 +400,8 @@ function typeLabel(candidate: NoteType): string {
           type="button"
           class="btn primary"
           data-testid="note-editor-save"
-          :disabled="busy"
+          :disabled="busy || readOnly"
+          :title="readOnly ? t('lock.other') : ''"
           @click="submit"
         >
           {{ busy ? t("notes.editor.saving") : t("notes.editor.save") }}

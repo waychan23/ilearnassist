@@ -38,12 +38,34 @@ function savedToken(): string | undefined {
   return undefined;
 }
 
+/**
+ * Who an `APIRequestContext` is, for the session write lock.
+ *
+ * Spelled here as well as in `packages/shared`, for `auth.ts`'s reason: the root tsconfig does not
+ * resolve the workspace package, so the suite is the second place the literal appears — and the
+ * two are held in step by an assertion in `session-lock.spec.ts` rather than by this comment.
+ *
+ * A header rather than anything about the token: the server's write gate is held to a lease, and a
+ * request that never says which client it is can never hold one — so a spec that writes to a
+ * conversation through `request` has to name a client, exactly as the browser does.
+ *
+ * One fixed id, so the suite is one client by default and the ~40 specs that write to a
+ * conversation say nothing about locks. A spec that needs a *second* client — which is what the
+ * lock is about — passes its own; see `e2e/session-lock.spec.ts`, and `asClient` in the server
+ * suite's harness for the same idea one layer down.
+ */
+export const CLIENT_ID_HEADER = "x-client-id";
+export const TEST_CLIENT_ID = "e2e-client";
+
 export const test = base.extend<{ request: APIRequestContext }>({
   request: async ({ playwright, baseURL }, use) => {
     const accessToken = savedToken();
     const context = await playwright.request.newContext({
       baseURL,
-      extraHTTPHeaders: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      extraHTTPHeaders: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        [CLIENT_ID_HEADER]: TEST_CLIENT_ID,
+      },
     });
     await use(context);
     await context.dispose();
@@ -51,4 +73,4 @@ export const test = base.extend<{ request: APIRequestContext }>({
 });
 
 export { expect } from "@playwright/test";
-export type { APIRequestContext, Page, Locator, BrowserContext } from "@playwright/test";
+export type { APIRequestContext, Browser, Page, Locator, BrowserContext } from "@playwright/test";

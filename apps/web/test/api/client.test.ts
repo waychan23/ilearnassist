@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLIENT_ID_HEADER } from "@ilearnassist/shared";
 import type { ChatInput, ChatStreamEvent } from "@ilearnassist/shared";
 import {
   api,
@@ -896,5 +897,114 @@ describe("streamChat", () => {
         "error",
       ]);
     });
+  });
+});
+
+/**
+ * The client id, and the three session-lock calls.
+ *
+ * The id is what the server's write gate keys on, and it rides *every* request rather than only
+ * the lock ones — a `/chat` sent without it would arrive as a client that holds nothing and be
+ * refused. So the first test here is about a call that has nothing to do with locks.
+ */
+describe("the client id", () => {
+  beforeEach(() => {
+    // `sessionStorage` is per tab and jsdom keeps it for the whole file, so a test asserting "a
+    // new tab gets a new id" has to be able to produce one.
+    sessionStorage.clear();
+  });
+
+  it("rides every request, not only the lock calls", async () => {
+    const fetchMock = stubFetch(() => jsonResponse([]));
+    await api.listWorkspaces();
+
+    const id = headerOf(fetchMock as never, 0).get(CLIENT_ID_HEADER);
+    expect(id).toBeTruthy();
+  });
+
+  it("is the same id for every request in a tab, and a different one in a new tab", async () => {
+    // The two halves of the design at once. Stable within a tab is what makes a lease
+    // recognisable as this client's own across a reload; a new tab being a new client is what
+    // keeps two tabs of one browser from both writing into the same conversation.
+    const fetchMock = stubFetch(() => jsonResponse([]));
+    await api.listWorkspaces();
+    await api.listSessions("w1");
+    expect(headerOf(fetchMock as never, 1).get(CLIENT_ID_HEADER)).toBe(
+      headerOf(fetchMock as never, 0).get(CLIENT_ID_HEADER)
+    );
+
+    // A new tab: the storage it reads is empty again.
+    sessionStorage.clear();
+    await api.listWorkspaces();
+    expect(headerOf(fetchMock as never, 2).get(CLIENT_ID_HEADER)).not.toBe(
+      headerOf(fetchMock as never, 0).get(CLIENT_ID_HEADER)
+    );
+  });
+
+  it("exists where `crypto.randomUUID` does not", async () => {
+    /*
+     * The regression this is here for, and it is not hypothetical: `randomUUID` is available only
+     * in a *secure context*, and the address a phone reaches this app at over LAN sharing is
+     * `http://192.168.x.x:3720` — not one. Taking the app's client id from it would have made
+     * every write from the second client (the one the lock exists for) impossible, with a
+     * `TypeError` in a header builder as the only trace.
+     */
+    const original = crypto.randomUUID;
+    // @ts-expect-error — deliberately removing what an insecure context does not provide.
+    delete crypto.randomUUID;
+    try {
+      const fetchMock = stubFetch(() => jsonResponse([]));
+      await api.listWorkspaces();
+      expect(headerOf(fetchMock as never, 0).get(CLIENT_ID_HEADER)).toMatch(/^[0-9a-f]{32}$/);
+    } finally {
+      crypto.randomUUID = original;
+    }
+  });
+});
+
+describe("session locks", () => {
+  it("takes a conversation's lock and reads the lease back", async () => {
+    const lock = {
+      sessionId: "s1",
+      clientId: "c1",
+      mine: true,
+      acquiredAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:02:00.000Z",
+    };
+    const fetchMock = stubFetch(() => jsonResponse({ lock }));
+
+    await expect(api.acquireSessionLock("s1")).resolves.toEqual({ lock });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s1/lock");
+    expect(fetchMock.mock.calls[0]![1]?.method).toBe("POST");
+  });
+
+  it("surfaces a refusal as the coded error, so callers can tell it apart", async () => {
+    // The read-only state is keyed on this code, so a refusal has to arrive as an `ApiError` with
+    // it rather than as a string that a caller would have to match on.
+    stubFetch(() =>
+      jsonResponse(
+        { error: { code: "SESSION_LOCKED", message: "held by another client" } },
+        { status: 409 }
+      )
+    );
+
+    await expect(api.acquireSessionLock("s1")).rejects.toMatchObject({
+      code: "SESSION_LOCKED",
+      status: 409,
+    });
+  });
+
+  it("releases, and reports whether there was anything of its own to release", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ released: false }));
+
+    await expect(api.releaseSessionLock("s1")).resolves.toEqual({ released: false });
+    expect(fetchMock.mock.calls[0]![1]?.method).toBe("DELETE");
+  });
+
+  it("reads every lock in the workspace in one request", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ locks: [] }));
+
+    await expect(api.listWorkspaceLocks("w1")).resolves.toEqual({ locks: [] });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/workspaces/w1/locks");
   });
 });

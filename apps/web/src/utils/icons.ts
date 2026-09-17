@@ -115,6 +115,17 @@ export const ICON_PATHS = {
 
   warning: ["M8 2.6L14.4 13.4H1.6Z", "M8 6.6V9.7", "M8 11.6V11.61"],
 
+  /* A padlock: shackle, body, keyhole. Drawn for the session write lock — one client may
+   * write to a conversation, so it is held rather than shared. The shackle's arc sits on the
+   * grid's own centre line (8) with radius 2.5, which is what puts its crown at y=3.0 — clear
+   * of the 2..14 the style asks for once the 1.5 stroke is drawn. The keyhole is the same
+   * zero-length-line dot `warning` uses for its own, rather than a filled circle. */
+  lock: [
+    "M3.5 7.5H12.5V13.5H3.5Z",
+    "M5.5 7.5V5.5a2.5 2.5 0 0 1 5 0V7.5",
+    "M8 10.5V10.51",
+  ],
+
   attach: [
     "M14.29 7.37l-6.13 6.13a4 4 0 0 1-5.66-5.66l6.13-6.13a2.67 2.67 0 0 1 3.77 3.77l-6.13 6.13a1.33 1.33 0 0 1-1.89-1.89l5.66-5.65",
   ],

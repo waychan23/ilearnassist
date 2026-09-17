@@ -1069,6 +1069,21 @@ const en: typeof MessageSchema = {
     reset: "Reset",
   },
 
+  /**
+   * The session write lock: which client may write to a conversation.
+   *
+   * A domain of its own rather than keys under `session` or `sidebar`, because the same two facts
+   * are drawn in three places — the dot on a session row, the banner over the conversation, and
+   * the composer's disabled send button — and none of those is where the concept lives.
+   * `docs/session-locks.md` is the concept.
+   */
+  lock: {
+    /** The dot's own words, and the row's `title`: this client holds it, so typing works here. */
+    mine: "This conversation is being edited from this client — you can send messages",
+    /** The other client's dot — orange, and the reason the conversation is read-only here. */
+    other: "Another client is editing this conversation, so it is read-only here",
+  },
+
   errors: {
     NAME_REQUIRED: "A name is required.",
     WORKSPACE_NOT_FOUND: "That workspace no longer exists.",
@@ -1123,6 +1138,7 @@ const en: typeof MessageSchema = {
     NO_REPLY_TO_REGENERATE:
       "There is no reply to regenerate (the last message is not a reply, or it is waiting for your answer).",
     TURN_IN_PROGRESS: "The previous reply is still being generated. Stop it or wait for it to finish.",
+    SESSION_LOCKED: "This conversation is being edited from another client, so it is read-only here.",
 
     INVALID_CREDENTIALS: "That username or password is not right.",
     ACCOUNT_DISABLED: "This account is disabled. Ask an administrator to re-enable it.",

@@ -77,6 +77,16 @@
   --warning-bg: rgba(230, 179, 60, 0.12);
   --warning-border: rgba(230, 179, 60, 0.35);
   --success: #4cc38a;
+  /*
+   * The conversation is being written to from another client, so this one is read-only.
+   *
+   * Its own token rather than `--warning`, and the reason is semantic rather than visual:
+   * `--warning` means "this needs your attention and you can do something about it" — the config
+   * banner and `.hint.warn` — while this is a *status*, in the same family as `--success`'s "in
+   * force". Sharing one colour would make two unrelated ideas look like the same message, and the
+   * dot this paints is drawn beside conversations where nothing is wrong at all.
+   */
+  --lock-held: #f0883e;
   --code-bg: #0d1117;
   --code-fg: #c9d1d9;
   --code-fg-2: #9aa0a6;
@@ -224,6 +234,10 @@
   --warning-bg: rgba(138, 92, 0, 0.08);
   --warning-border: rgba(138, 92, 0, 0.3);
   --success: #187733;
+  /* Darkened like `--warning` and `--success` beside it: `--lock-held`'s dark value is a
+     foreground orange, and the dark one on white is about 2:1 — the same trap `--warning` was
+     caught in. */
+  --lock-held: #9a4a00;
   --code-bg: #f6f8fa;
   --code-fg: #24292e;
   --code-fg-2: #57606a;
@@ -267,6 +281,7 @@
     --warning-bg: rgba(138, 92, 0, 0.08);
     --warning-border: rgba(138, 92, 0, 0.3);
     --success: #187733;
+    --lock-held: #9a4a00;
     --code-bg: #f6f8fa;
     --code-fg: #24292e;
     --code-fg-2: #57606a;
@@ -2350,6 +2365,31 @@ pre.code-block {
 /* Nothing is in force — the dot still reserves its space so the label does not shift. */
 .status-dot.off {
   background: var(--text-3);
+}
+
+/*
+ * The session write lock, on a conversation in the session list.
+ *
+ * Two states and no third, which is what makes it quiet: a conversation nobody is writing to has
+ * no dot at all. Green is this client's (typing works here), orange is another client's (this one
+ * reads). A *glow* rather than a ring, because the requirement asks for one and because a solid
+ * dot at 6px beside a title is easy to mistake for a bullet in the text.
+ *
+ * Global rather than scoped to `Sidebar.vue`, where it is drawn: the sidebar is not the only
+ * place a locked conversation will want marking, and a rule that only exists inside one component
+ * is a rule the next surface cannot use. `--lock-held` was minted for it in `:root`.
+ */
+.session-lock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--lock-held);
+  box-shadow: 0 0 5px var(--lock-held);
+}
+.session-lock-dot[data-lock="mine"] {
+  background: var(--success);
+  box-shadow: 0 0 5px var(--success);
 }
 
 /*

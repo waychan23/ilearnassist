@@ -22,8 +22,10 @@ import {
   type NoteRevealTarget,
   type NoteSaveInput,
 } from "../composables/messageNotes";
+import { notesWritable } from "../composables/notes";
 import { useMessageSelection } from "../composables/messageSelection";
 import { useWidgetActivation } from "../composables/widgetActivation";
+import { useSessionLock } from "../composables/sessionLock";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 import MessageItem from "./MessageItem.vue";
 import NoteSyncControl from "./NoteSyncControl.vue";
@@ -245,6 +247,16 @@ watch(
  * transition the effect inside cannot see, and this scope is what reports it.
  */
 useWidgetActivation();
+
+/*
+ * The session write lock, for as long as this view is on screen.
+ *
+ * Same reasoning as the line above and the same scope: this component is mounted exactly while a
+ * conversation is open inside a workspace, so it is also the answer to "should this client be
+ * holding a lock and watching the others" — and leaving is what releases it and stops every
+ * check. See `composables/sessionLock.ts`.
+ */
+useSessionLock();
 
 /* ---------------------------------- notes ---------------------------------- */
 /*
@@ -532,6 +544,19 @@ onBeforeUnmount(() => {
       {{ t("app.configBanner.after") }}
     </div>
 
+    <!--
+      Somebody else holds this conversation, so this client reads it and cannot write to it.
+      Stated as a banner and not merely a disabled button, because a disabled control with no
+      explanation is indistinguishable from a broken one — and the two banners can both be up at
+      once, which is why this one is its own class and its own colour rather than a second
+      `.config-banner` (a locator that matched both would be ambiguous, and the reader would have
+      two identical-looking warnings about unrelated things).
+    -->
+    <div v-if="store.isActiveSessionReadOnly" class="readonly-banner" data-testid="readonly-banner">
+      <Icon name="lock" />
+      {{ t("lock.other") }}
+    </div>
+
     <!-- The rail is a sibling of the scroller, not a child: inside it would scroll away. -->
     <div class="messages-wrap">
       <div
@@ -593,13 +618,19 @@ onBeforeUnmount(() => {
       whatever opened it. Inside `.messages-wrap` they would be clipped by the scroller and
       carried away by its scroll.
     -->
-    <MessageSelectionToolbar v-if="selection" :anchor="selection.place" @pick="onToolbarPick" />
+    <MessageSelectionToolbar
+      v-if="selection"
+      :anchor="selection.place"
+      :read-only="!notesWritable"
+      @pick="onToolbarPick"
+    />
     <NoteEditor
       v-if="editorRequest"
       :draft="editorRequest.draft"
       :locate="editorRequest.locate"
       :anchor="editorAnchor"
       :busy="editorBusy"
+      :read-only="!notesWritable"
       @save="onEditorSave"
       @remove="onEditorRemove"
       @locate="onEditorLocate"
@@ -671,6 +702,27 @@ onBeforeUnmount(() => {
   color: var(--warning);
   font-size: var(--fs-3);
   flex-shrink: 0;
+}
+
+/*
+ * The other client is editing this conversation, so this one is read-only.
+ *
+ * The same banner shape as the config warning, and deliberately not the same colours: this one
+ * keeps the neutral surface and lets `--lock-held` carry the meaning, because nothing here needs
+ * the reader's attention the way an unconfigured app does — it is a statement of who may write.
+ * A tinted surface would make the two banners look like one message when both are up.
+ */
+.readonly-banner {
+  margin: 0;
+  padding: var(--space-4) var(--space-7);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--lock-held);
+  font-size: var(--fs-3);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 .empty-state button {
   margin-top: var(--space-4);

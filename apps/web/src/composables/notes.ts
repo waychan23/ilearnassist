@@ -48,6 +48,28 @@ const claimRefusal = ref<ClaimResult | null>(null);
 export const notesClaimRefused = claimRefusal;
 
 /**
+ * Whether the conversation on screen accepts writes from this client.
+ *
+ * **Told, not looked up.** It arrives as a parameter on the widget context
+ * (`WidgetContext.writable`), set by the registry's `onActive`, and everything in this module and
+ * the notes UI obeys it — the panel's add button, the editor's save and delete, the selection
+ * toolbar. Nothing on this path reaches into the session's state to find out why, which is what
+ * keeps a widget from having to know what a write lock is: the session decides, the widget is told,
+ * the widget acts.
+ *
+ * Defaults to `true`, which is the honest reading of "nothing has told me otherwise yet" — the
+ * brief window before the context arrives, where the alternative would be a panel that renders
+ * disabled and then enables itself a tick later.
+ */
+const writable = ref(true);
+export const notesWritable = writable;
+
+/** What the widget context says about writing. Called from the registry, never from a component. */
+export function setNotesWritable(next: boolean): void {
+  writable.value = next;
+}
+
+/**
  * A failed user action goes to the toast, not to the panel.
  *
  * The panel is the wrong place for it twice over: the action may have been started from the
@@ -125,6 +147,9 @@ export function claimNotes(sessionId: string): void {
 export function releaseNotes(): void {
   releaseMessageNotes("notes");
   claimRefusal.value = null;
+  // Back to the default, because nothing is installed to be forbidden: a read-only flag left
+  // standing after the capability went would be a control disabled for no reason.
+  writable.value = true;
   resetNotes();
 }
 

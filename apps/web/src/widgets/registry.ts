@@ -10,7 +10,7 @@ import NotesWidget from "./NotesWidget.vue";
 import DiagramWidget from "./DiagramWidget.vue";
 import InsightWidget from "./InsightWidget.vue";
 import SourcesWidget from "./SourcesWidget.vue";
-import { claimNotes, releaseNotes } from "../composables/notes";
+import { claimNotes, releaseNotes, setNotesWritable } from "../composables/notes";
 
 /**
  * What a widget is on the client: its component, its catalog strings, and its lifecycle.
@@ -30,7 +30,31 @@ export interface WidgetContext {
   scope: WidgetScope;
   scopeId: string;
   widgetId: WidgetId;
+  /**
+   * Whether the object this widget is live on accepts writes from this client right now.
+   *
+   * A **parameter rather than a lookup**, and that is the whole point of it: a widget that needs
+   * to know must not reach into the session's state to find out, or every widget ends up coupled to
+   * whatever the host happens to be doing — the notes widget asking about write locks, the next one
+   * about streaming turns. The session decides; the widget is told; the widget obeys.
+   *
+   * False for a conversation another client is writing to (see `docs/session-locks.md`), which is
+   * why the notes widget disables its editor rather than letting a save come back as a refusal.
+   * True for a workspace, which has no such lock — a workspace-scoped widget has nothing to be
+   * read-only about.
+   */
+  writable: boolean;
 }
+
+/**
+ * The context an install hook gets: the same object, without `writable`.
+ *
+ * Not an omission to be tolerated — the field has no meaning here. `writable` answers "may this
+ * client write to the object *now*", which is a fact about what is on screen, and an install is a
+ * write that has already landed. A widget that wants to know whether writing is possible asks in
+ * `onActive`, where the answer is a fact rather than a guess about a request that just succeeded.
+ */
+export type WidgetInstall = Pick<WidgetContext, "scope" | "scopeId" | "widgetId">;
 
 /** A translator, as `useI18n()` hands it over. */
 type Translate = (key: string) => string;
@@ -136,14 +160,14 @@ export interface WidgetModule {
    * after the write, and having a hook whose body existed only to prove hooks work would be worse
    * than an absent one. It is covered where it can be: a store test with a stubbed module.
    */
-  onInstall?(ctx: WidgetContext): void | Promise<void>;
+  onInstall?(ctx: WidgetInstall): void | Promise<void>;
   /**
    * Run after the record says this widget is uninstalled. For cleaning up.
    *
    * Must tolerate never having been installed: "not installed" is where a fresh object already
    * starts, so this can be the first hook a widget ever sees.
    */
-  onUninstall?(ctx: WidgetContext): void | Promise<void>;
+  onUninstall?(ctx: WidgetInstall): void | Promise<void>;
   /**
    * Fired when the widget becomes — or stops being — the installed widget of the object
    * currently on screen. `null` means "not installed on what is on screen", which is also the
@@ -178,10 +202,19 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
      * owns a conversation's *marks*, not just its tab, and those have to keep working while
      * another tab is in front. Uninstalling releases it, both through `onActive(null)` on the
      * way out and here, so a widget the panel never mounts still gives the claim up.
+     *
+     * `writable` rides along with the claim because both are the same kind of news — this is the
+     * context the session hands the widget, and the widget acts on it. It goes to the notes module
+     * rather than to the component because the marking-up path (the selection toolbar, the editor
+     * the message list opens) runs whether or not the panel is on screen.
      */
     onActive: (ctx) => {
-      if (ctx?.scope === "session") claimNotes(ctx.scopeId);
-      else releaseNotes();
+      if (ctx?.scope === "session") {
+        claimNotes(ctx.scopeId);
+        setNotesWritable(ctx.writable);
+      } else {
+        releaseNotes();
+      }
     },
     onUninstall: () => releaseNotes(),
   },
