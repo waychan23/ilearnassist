@@ -28,9 +28,12 @@ const props = defineProps<{
   /**
    * The workspace to add to, when the caller has already decided.
    *
-   * Present when the browser was opened from a conversation, which is already scoped: the dialog
-   * then shows no picker, because a control for a choice that has been made is a control that
-   * does nothing.
+   * Present when the browser that opened this dialog has a workspace *chosen* — which is what its
+   * list is showing, so it is where the material is meant to land. The dialog then shows no
+   * picker, because a control for a choice that has been made is a control that does nothing.
+   * Absent when the browser is showing the whole account, where the destination is a question
+   * again; it is passed the browser's live filter rather than the scope it opened on, so moving
+   * the list moves this with it.
    */
   lockedWorkspaceId?: string;
   /** The directories this workspace is known to have, for the file tab's suggestion list. */

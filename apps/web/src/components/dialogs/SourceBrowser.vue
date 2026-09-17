@@ -22,13 +22,22 @@ import Icon from "../Icon.vue";
  * question this answers, and neither half of it was answerable before: the old dialog could
  * not see a workspace file at all, and the file tree could not see an upload.
  *
- * ### One component, several front doors
+ * ### One component, and a front door differs only in what it opens *on*
  *
- * It opens from the workspace home (unfiltered — the boundary is the account) and from a
- * conversation (pre-filtered to that workspace). The caller says what it wants with two props:
- * `initial` is the filter set to open with, and `hidden` is the option groups that front door
- * has no business offering. That is deliberately *data* rather than a mode flag: a `mode`
- * would have to enumerate the combinations, and the third front door would be a third mode.
+ * It opens from the workspace home (on the whole account) and from a conversation (on that
+ * workspace). The caller says which with one prop: `initial` is the filter set to open with,
+ * and everything below it is reachable from either door.
+ *
+ * It used to take a second prop — `hidden`, the option groups a front door had taken away — and
+ * the workspace picker was the only group anybody ever removed, on the argument that a dialog
+ * opened from inside a workspace, for that workspace, had no business offering a scope it would
+ * not honour. The argument is wrong, and the cost was the reader's: the conversation's door is a
+ * *shortcut* to its own workspace, not a statement that the rest do not exist. Material this
+ * account holds and no workspace does — every upload — is one click away from here, and the
+ * picker that reaches another workspace's files was the control the same click needed. The
+ * picker is therefore always drawn, the door is what the list opens *on*, and the prop went with
+ * the mistake (as did `hasScope`, the derived "is there a scope control at all", which the
+ * template had already stopped asking).
  *
  * ### Filtering is the server's
  *
@@ -41,24 +50,11 @@ import Icon from "../Icon.vue";
  */
 
 const props = defineProps<{
-  /** The filter to open with. `workspaceId` is what pre-filters the conversation's front door. */
-  initial?: SourceFilterQuery;
   /**
-   * Option groups this caller does not offer. Anything not listed is shown.
-   *
-   * `workspace`/`session` matter most: a dialog opened from inside one workspace, for that
-   * workspace, has no business offering a scope it will not honour.
+   * The filter to open with. `workspaceId` is what opens the conversation's front door on its
+   * workspace — a default, not a lock: the picker below is drawn either way.
    */
-  hidden?: readonly (
-    | "search"
-    | "workspace"
-    | "session"
-    | "category"
-    | "origin"
-    | "mime"
-    | "view"
-    | "add"
-  )[];
+  initial?: SourceFilterQuery;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
@@ -105,10 +101,6 @@ const expanded = ref<string[]>([]);
 const addOpen = ref(false);
 
 const sessions = ref<Session[]>([]);
-
-const shows = (option: string): boolean => !props.hidden?.includes(option as never);
-
-const hasScope = computed(() => shows("workspace") || shows("session"));
 
 /* --------------------------------- loading --------------------------------- */
 
@@ -481,7 +473,7 @@ function expandAll(): void {
             The view switcher and the tree's expand control, beside the title rather than in the
             filter row — the widths are what decide it, and the filters need all of theirs.
           -->
-          <div v-if="shows('view')" class="head-actions">
+          <div class="head-actions">
             <button
               v-if="view === 'tree' && lines.length > 0"
               class="btn small"
@@ -533,13 +525,12 @@ function expandAll(): void {
             it, and six of them fit on one line; the `<select>`'s `aria-label` is what keeps that
             from costing the screen-reader name.
 
-            A caller can still take a group away — that is the `hidden` prop, and it is a
-            different thing from the user folding the bar: a front door that has already decided
-            the scope has no business offering it.
+            Every control is always drawn. A front door sets what the list opens *on*; it does
+            not take the control away, which is what it used to do with the workspace picker —
+            see the note at the top for why that was the wrong trade.
           -->
           <div class="browser-toolbar" data-testid="sources-toolbar">
             <input
-              v-if="shows('search')"
               v-model="filters.name"
               class="input search"
               :aria-label="t('sources.search')"
@@ -548,7 +539,6 @@ function expandAll(): void {
             />
 
             <select
-              v-if="shows('workspace')"
               v-model="filters.workspaceId"
               class="input"
               :aria-label="t('sources.filterWorkspace')"
@@ -565,7 +555,7 @@ function expandAll(): void {
               is a control that reads as broken rather than as unavailable.
             -->
             <select
-              v-if="shows('session') && filters.workspaceId"
+              v-if="filters.workspaceId"
               v-model="filters.sessionId"
               class="input"
               :aria-label="t('sources.filterSession')"
@@ -578,7 +568,6 @@ function expandAll(): void {
             </select>
 
             <select
-              v-if="shows('category')"
               v-model="filters.category"
               class="input"
               :aria-label="t('sources.filterCategory')"
@@ -591,7 +580,6 @@ function expandAll(): void {
             </select>
 
             <select
-              v-if="shows('origin')"
               v-model="filters.origin"
               class="input"
               :aria-label="t('sources.filterOrigin')"
@@ -604,7 +592,6 @@ function expandAll(): void {
             </select>
 
             <select
-              v-if="shows('mime')"
               v-model="filters.mime"
               class="input"
               :aria-label="t('sources.filterMime')"
@@ -741,17 +728,15 @@ function expandAll(): void {
         </div>
 
         <div class="modal-foot">
-          <template v-if="shows('add')">
-            <!--
-              One door for both kinds. The dialog that opens asks *what* is being added — a file
-              or a link — which is the question a knowledge base asks, and then collects
-              everything before anything is sent. See `AddSourceDialog`.
-            -->
-            <button class="btn" data-testid="sources-add" @click="addOpen = true">
-              <Icon name="plus" />
-              {{ t("sources.add") }}
-            </button>
-          </template>
+          <!--
+            One door for both kinds. The dialog that opens asks *what* is being added — a file
+            or a link — which is the question a knowledge base asks, and then collects
+            everything before anything is sent. See `AddSourceDialog`.
+          -->
+          <button class="btn" data-testid="sources-add" @click="addOpen = true">
+            <Icon name="plus" />
+            {{ t("sources.add") }}
+          </button>
           <button class="btn primary" data-testid="sources-done" @click="emit('close')">
             {{ t("common.close") }}
           </button>
@@ -760,12 +745,17 @@ function expandAll(): void {
     </div>
 
     <!--
-      Adding, as one dialog with a tab per kind. It is told the scope when this browser was
-      opened already scoped, and shows no picker then.
+      Adding, as one dialog with a tab per kind. What it is told is the workspace the list is
+      *showing* — `filters.workspaceId` rather than the `initial` the browser opened on, and the
+      difference is the whole point of the picker above: material is added where the reader is
+      looking, so widening the list to the whole account (or moving it to another workspace) has
+      to move the destination with it. Left as the prop it used to read, an upload aimed at the
+      workspace you had just navigated away from would land where the *dialog* was opened, which
+      is the silent kind of wrong.
     -->
     <AddSourceDialog
       v-if="addOpen"
-      :locked-workspace-id="props.initial?.workspaceId"
+      :locked-workspace-id="filters.workspaceId"
       :directories="knownDirectories"
       @close="addOpen = false"
       @added="onAdded"

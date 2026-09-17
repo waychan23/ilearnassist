@@ -1663,7 +1663,8 @@ Fuller map in `docs/reference.md`.
   summary, thread) and its tables (name, summary, the markdown), and opens the one you pick — a
   diagram through the ordinary file preview, a table through the viewer directly, since only one of
   the two has a file. The whole folder is the source browser, which the sidebar's library row opens
-  pre-filtered to this workspace — see `docs/diagrams.md` and `docs/tables.md`.
+  *on* this workspace — a default its own workspace picker moves, since the browser is drawn from
+  that rail with every control it has — see `docs/diagrams.md` and `docs/tables.md`.
   **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
   comes from an out-of-band model call a button triggers, so there is nothing to bind — and
   binding would be wrong anyway, because a bound tool is something the *agent* can call and the

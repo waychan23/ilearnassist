@@ -29,11 +29,11 @@ import Icon from "./Icon.vue";
  * The one row that is not always there is **workspace settings**, which belongs to a workspace
  * rather than to an account — a rail on a page that is *about the list of workspaces* has no
  * workspace to configure, so the row is behind a prop rather than drawn and disabled. That same
- * prop is what the library row reads to decide its *scope*: entered from a conversation it opens
- * pre-filtered to that workspace — the shortcut the removed header button used to be — while
- * entered from the front door there is no workspace in view and it opens on the whole account.
- * One fact ("this rail is drawn inside a workspace") with two consequences, rather than two
- * props that could disagree.
+ * prop is what the library row reads to decide what its list opens *on*: entered from a
+ * conversation it opens on that workspace — the shortcut the removed header button used to be —
+ * while entered from the front door there is no workspace in view and it opens on the whole
+ * account. One fact ("this rail is drawn inside a workspace") with two consequences, rather than
+ * two props that could disagree.
  *
  * The test ids are shared with the surfaces, and that is safe for a reason worth stating: the
  * two rails are never mounted at once. `uiState.view` picks `WorkspaceHome` *or* the
@@ -69,8 +69,13 @@ function onOpenWorkspaceSettings(): void {
  * `props.inWorkspace` is what decides the scope, and the guard is on the *id* rather than on the
  * flag: a rail that believes it is inside a workspace while the store has not settled on one yet
  * opens the whole account, which is the wider of the two answers and the safe one to be wrong
- * with. The browser's own workspace filter is then one click away, which is why this is a
- * shortcut rather than a restriction.
+ * with.
+ *
+ * That scope is a **shortcut, not a restriction**, and the browser now says so: it opens on this
+ * workspace with its own workspace picker drawn and set, so anywhere else — another workspace, or
+ * the whole account including the uploads no workspace holds — is one selection away. It used to
+ * be a restriction as well (the picker was hidden when there was a scope to honour), which left
+ * leaving the conversation as the only way to look at anything else.
  */
 function onOpenSources(): void {
   const id = props.inWorkspace ? store.activeWorkspaceId : null;

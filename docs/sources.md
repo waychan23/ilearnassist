@@ -337,10 +337,16 @@ Three bounds on the cost, each deliberate:
 ## The browser
 
 `SourceBrowser.vue` is one component with two front doors: the workspace home's rail opens it
-over the whole account, and a conversation opens it pre-filtered to its workspace. The caller says which
-with two props — `initial` (the filter set) and `hidden` (the option groups that front door has no
-business offering, e.g. a workspace picker inside that workspace). Data rather than a mode flag: a
-`mode` would have to enumerate the combinations, and a third front door would be a third mode.
+over the whole account, and a conversation opens it *on* its workspace. The caller says which with
+one prop — `initial`, the filter set to open with — and every control is drawn from either door.
+
+The workspace picker used to be the exception: a second prop (`hidden`) took option groups away,
+and a dialog opened from inside a workspace, for that workspace, "had no business offering" a
+scope it would not honour. That is the wrong trade. The conversation's door is a *shortcut* to its
+own workspace, not a claim that the rest do not exist — the account's uploads live outside every
+workspace, and another workspace's material was reachable only by closing the dialog and leaving
+the conversation. So the scope a door passes is the list's **default**; `hidden` is gone, and with
+it `hasScope`, which the template had already stopped asking.
 
 Filtering is the **server's**, including the scope filters, because a workspace with a
 `node_modules` has tens of thousands of rows. The one thing the server cannot answer is *which
