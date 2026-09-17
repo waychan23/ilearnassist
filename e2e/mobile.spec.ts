@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
 import { scriptLlm } from "./llm";
+import { annotate } from "./notes";
 import { enterWorkspace } from "./workspaces";
 
 /**
@@ -280,6 +281,105 @@ test("layout: the console's section menu is a drawer too", async ({ page }) => {
   await page.getByTestId("admin-nav-providers").tap();
   await expect(menu).toBeHidden();
   await expect(page.getByTestId("admin-console")).toContainText("模型服务");
+});
+
+test("layout: a note window opens over the widget panel, not behind it", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The panel is a 320px overlay across the right of a 412px screen, and the note window is
+   * opened *from* it — a note's row. The card is anchored to that row and flips left, so the two
+   * overlap by about 300px, and what this case is about is which one is on top.
+   *
+   * It was the panel. The card carried `--z-popover`, which is the layer for a menu that belongs
+   * to the control it hangs off — where being covered by the drawer is correct, because you
+   * dismiss the menu to use the drawer. A window is not that, and the same window's *maximized*
+   * size had already been given the reasoning and put above the drawer.
+   *
+   * Asserted with `elementFromPoint` rather than by comparing z-index numbers, because "who is on
+   * top" is the actual claim and a computed style is one step removed from it.
+   */
+  await scriptLlm(request, {
+    turns: [{ content: "光合作用发生在叶绿体中，其中光反应阶段产生 ATP。".repeat(4) }],
+  });
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("composer-input").fill("讲讲光合作用");
+  await page.getByTestId("composer-send").click();
+  await page.getByTestId("message-assistant").last().locator(".actions").waitFor();
+
+  // A note to have a row to open. The quick action files it without a window.
+  await annotate(page, page.getByTestId("message-content").last(), "光反应阶段");
+
+  await page.getByTestId("widget-toggle").tap();
+  await expect(page.getByTestId("widget-panel")).toBeVisible();
+  await page.getByTestId("widget-tab-notes").tap();
+  await page.getByTestId("notes-list").locator("li").first().tap();
+  await expect(page.getByTestId("note-editor")).toBeVisible();
+
+  const card = (await page.getByTestId("note-editor").boundingBox())!;
+  const topAt = (x: number, y: number) =>
+    page.evaluate(
+      ([px, py]) =>
+        document.elementFromPoint(px as number, py as number)?.closest('[data-testid="note-editor"]') !==
+        null,
+      [x, y],
+    );
+
+  // The card's own middle, and a point as far right as the card reaches — which is the part the
+  // panel was painting over.
+  expect(await topAt(card.x + card.width / 2, card.y + card.height / 2)).toBe(true);
+  expect(await topAt(card.x + card.width - 8, card.y + card.height / 2)).toBe(true);
+});
+
+test("layout: 追问 from the panel closes it, so the composer is reachable", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The other half of the same problem. A 追问 from one of the panel's rows hands off to the
+   * composer and puts the caret in it — and the panel is a drawer sitting on that field, so the
+   * reader was being asked to type into a box they could not see most of.
+   *
+   * The rule lives in `Composer.vue`, next to the caret it is about, which is what makes it one
+   * place rather than one per entry point.
+   */
+  const workspaces = (await (await request.get("/api/workspaces")).json()) as { id: string }[];
+  await request.put(`/api/workspaces/${workspaces[0]!.id}/widgets/diagram`, {
+    data: { enabled: true },
+  });
+
+  await scriptLlm(request, {
+    turns: [
+      {
+        content: "画好了：",
+        toolCalls: [
+          {
+            id: "call_d1",
+            name: "ila_diagram",
+            args: { name: "auth-flow", source: "graph TD\n  A-->B", summary: "登录流程" },
+          },
+        ],
+      },
+      { content: "还需要补充吗？" },
+    ],
+  });
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("composer-input").fill("画个登录流程图");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("composer-send")).toBeVisible({ timeout: 20_000 });
+
+  await page.getByTestId("widget-toggle").tap();
+  await page.getByTestId("widget-tab-diagram").tap();
+  await expect(page.getByTestId("diagram-row").first()).toBeVisible();
+
+  await page.getByTestId("diagram-row-ask").first().tap();
+
+  await expect(page.getByTestId("widget-panel")).toBeHidden();
+  await expect(page.getByTestId("composer-refs")).toBeVisible();
+  await expect(page.getByTestId("composer-input")).toBeFocused();
 });
 
 test("layout: focus enters the drawer and comes back to the toggle", async ({ page, request }) => {
