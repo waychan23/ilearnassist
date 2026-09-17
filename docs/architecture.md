@@ -1060,6 +1060,14 @@ attachments, providers and app defaults.
 | `POST /api/sessions/:id/answers` | answer a suspended `ask_user` call, and stream the resumed turn |
 | `POST /api/sessions/:id/stop` | interrupt the turn streaming for this session; `{ ok }` says whether one was running |
 | `POST /api/sessions/:id/leave` | the reader has gone — try the titler again; `{ status: "titled" \| "skipped" \| "failed", title? }`, always 200 |
+| `POST /api/sessions/:id/lock` | take or renew this conversation's write lock; 409 `SESSION_LOCKED` when another client holds it |
+| `DELETE /api/sessions/:id/lock` | give it back; always 200, `{ released }` says whether there was anything of this client's to give back |
+| `GET /api/workspaces/:workspaceId/locks` | every **live** lease in the workspace, `mine` computed from the caller's client id — one request, not one per conversation |
+
+The three lock routes are documented in `docs/session-locks.md`, which also states what the lease
+deliberately does not guarantee. Every session-scoped write carries the `requiresSessionLock` route
+config and is checked by a shared hook; the routes that deliberately do not are asserted by
+`test/route-lock-coverage.test.ts`.
 
 Provider responses **never** include `apiKey` — only `hasApiKey: boolean`. `PUT`
 treats an absent `apiKey` field as "leave unchanged" (an empty string clears it),
