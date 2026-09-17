@@ -113,6 +113,27 @@ they do.
 
 Overriding an **out-of-band** prompt works the same way, but note the next section first.
 
+## The learner's own introduction
+
+`chat.system.about` is the one catalog block whose text comes from a **user** rather than from this
+repository: the account writes it on the account page, it is stored on `users.about`, and it is sent
+as prompt context on every turn of every conversation.
+
+- **It is dropped whole when empty.** The heading, the `<about_the_learner>` fence and the sentence
+  after it are all inside the block, so an account that has not written one costs a turn nothing —
+  rather than a paragraph explaining that the user said nothing.
+- **It is fenced and labelled as context, not instruction**, the rule `renderReferenceBlock` and the
+  notes tool follow for every other piece of user-authored text. It is the user's own prose, so a
+  sentence in it that reads like a command has to arrive as something they wrote.
+- **It sits after the persona and before the clock** — who the assistant is, then who the learner
+  is, then facts about the world. Reordering the skeleton moves it.
+- **`PROFILE_ABOUT_MAX` (2000 characters) is a real ceiling**, and the reason is this block's cost:
+  it is sent on every turn, so an unbounded introduction would be a per-turn token bill the account
+  never sees.
+- **`PATCH /api/auth/me` is the only route that writes it**, deliberately with no
+  `allowPendingPassword`: an account owing a password change is refused everything but the three
+  routes that get it out of that state.
+
 ## The fake LLM's markers
 
 `apps/server/test/helpers/fakeLlm.ts` decides whether a request is an out-of-band call by looking for

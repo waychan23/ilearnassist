@@ -116,6 +116,8 @@ export interface RunAgentInput {
    * on every ordinary turn.
    */
   quizMakeupNote?: string;
+  /** The account's own description of itself — see `SystemPromptInput.about`. */
+  about?: string;
   /**
    * What this turn's own message pointed at — the 追问 chips, resolved by the caller.
    *
@@ -298,6 +300,14 @@ export interface SystemPromptInput {
   /** Where an unqualified write goes, already resolved down the settings chain. */
   writeLocation: FileLocation;
   persona: string;
+  /**
+   * The account's own description of itself, or `""` when it has not written one.
+   *
+   * A property of the *user*, not of the conversation, which is why it arrives from the route
+   * rather than from the session: changing it changes every conversation at once, which is what
+   * "in my profile" means to the person who wrote it.
+   */
+  about?: string;
   planGuidance?: string;
   quizGuidance?: string;
   collectPageGuidance?: string;
@@ -343,6 +353,15 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   // The session's own prompt when it has one, the catalog's default persona otherwise.
   const persona = input.persona.trim() || renderPrompt("chat.system.persona");
 
+  /*
+   * Who the learner is, when they have said. Placed here rather than at the end with the other
+   * optional blocks: who the assistant is and who the person is belong together, and both come
+   * before facts about the world. The block is fenced and labelled in the catalog — the text is
+   * the user's own, so a sentence in it that reads like a command has to arrive as something they
+   * wrote rather than as an instruction.
+   */
+  const about = block(input.about ? renderPrompt("chat.system.about", { about: input.about }) : "");
+
   const clock = block(
     renderPrompt("chat.system.clock", { local: input.clock.local, zone: input.clock.zone })
   );
@@ -382,6 +401,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
 
   return renderPrompt("chat.system", {
     persona,
+    about,
     clock,
     workspace,
     plan,
@@ -577,6 +597,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         sessionDirPath: input.sessionDirPath,
         writeLocation: input.writeLocation,
         persona: input.systemPrompt,
+        about: input.about,
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
         collectPageGuidance: input.collectPageGuidance,

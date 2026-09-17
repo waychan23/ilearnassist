@@ -24,6 +24,8 @@ const en: typeof MessageSchema = {
     copy: "Copy",
     listSeparator: ", ",
     save: "Save",
+    /** The same verb while the request is in flight — the button's pending label. */
+    saving: "Saving…",
     close: "Close",
     edit: "Edit",
     rename: "Rename",
@@ -122,6 +124,26 @@ const en: typeof MessageSchema = {
     identity: "Account",
     passwordLead: "Changing your password signs this account out everywhere else.",
     passwordChanged: "Your password has been changed.",
+    /**
+     * The introduction, which is prompt input rather than a profile page's decoration.
+     *
+     * The lead sentence is the one place a user is told where this text goes — the account is
+     * writing something that reaches a model on every turn, and finding that out afterwards is
+     * how a field meant to help becomes a surprise.
+     */
+    about: {
+      title: "About you",
+      lead: "Optional. Describe your background, field, strengths and interests, and the assistant will take it into account in every conversation — so it can pitch an explanation at the right level.",
+      label: "About me",
+      placeholder:
+        "For example: I work in backend development, mostly Java and distributed systems. I am teaching myself machine learning; linear algebra is my weak spot, and I learn best from concrete examples.",
+      /** `{used}` and `{max}` are character counts. */
+      count: "{used} / {max} characters",
+      save: "Save introduction",
+      saved: "Your introduction has been saved.",
+      /** The save button's tooltip while there is nothing to save. */
+      noChanges: "No changes yet",
+    },
   },
 
   roles: {

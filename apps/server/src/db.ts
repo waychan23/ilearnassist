@@ -119,6 +119,7 @@ interface UserRow {
   roles: string;
   must_change_password: number;
   disabled: number;
+  about: string;
   created_at: string;
 }
 
@@ -814,6 +815,7 @@ const mapUser = (r: UserRow): UserRecord => ({
   slug: r.slug,
   roles: parseStoredRoles(r.roles),
   mustChangePassword: r.must_change_password !== 0,
+  about: r.about,
   createdAt: r.created_at,
   passwordHash: r.password_hash,
   disabled: r.disabled !== 0,
@@ -1208,6 +1210,13 @@ export interface AppDb {
   setUserRoles(id: string, roles: UserRole[]): UserRecord | undefined;
   /** Disable or re-enable an account. Never a delete: the row owns workspaces and history. */
   setUserDisabled(id: string, disabled: boolean): UserRecord | undefined;
+  /**
+   * The account's own description of itself — the one field of its own record it may write.
+   *
+   * Not scoped to an actor and not an admin operation: this is the account writing about itself,
+   * which is why it is the only mutator here with no console route behind it.
+   */
+  setUserAbout(id: string, about: string): UserRecord | undefined;
   /**
    * Whether anybody on this installation can sign in at all.
    *
@@ -2308,6 +2317,10 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "users", "roles", `roles TEXT NOT NULL DEFAULT '["user"]'`);
     ensureColumn(db, "users", "must_change_password", "must_change_password INTEGER NOT NULL DEFAULT 0");
     ensureColumn(db, "users", "disabled", "disabled INTEGER NOT NULL DEFAULT 0");
+    // The account's self-description, which reaches the model as `chat.system.about`. A column
+    // rather than a row in `app_settings` because it is per account, and `CREATE TABLE IF NOT
+    // EXISTS` skips a table that already exists — so the DDL above only ever reaches a new install.
+    ensureColumn(db, "users", "about", "about TEXT NOT NULL DEFAULT ''");
 
     /*
      * Copilots became owned and publishable, and a conversation now snapshots the Copilot it was
@@ -2473,6 +2486,7 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtSetUserRoles = db.prepare("UPDATE users SET roles = @roles WHERE id = @id");
   const stmtSetUserDisabled = db.prepare("UPDATE users SET disabled = @disabled WHERE id = @id");
+  const stmtSetUserAbout = db.prepare("UPDATE users SET about = @about WHERE id = @id");
   // `EXISTS` rather than a count: the question is yes or no, and the plan stops at the first
   // row instead of walking an index over every account.
   const stmtHasPasswordAccounts = db.prepare(
@@ -3720,6 +3734,11 @@ export function createDb(dbPath: string): AppDb {
     },
     setUserDisabled(id, disabled) {
       stmtSetUserDisabled.run({ id, disabled: disabled ? 1 : 0 });
+      const r = stmtGetUser.get(id) as UserRow | undefined;
+      return r ? mapUser(r) : undefined;
+    },
+    setUserAbout(id, about) {
+      stmtSetUserAbout.run({ id, about });
       const r = stmtGetUser.get(id) as UserRow | undefined;
       return r ? mapUser(r) : undefined;
     },

@@ -145,6 +145,11 @@ export const DDL = `
     roles TEXT NOT NULL DEFAULT '["user"]',
     must_change_password INTEGER NOT NULL DEFAULT 0,
     disabled INTEGER NOT NULL DEFAULT 0,
+    -- The account's own description of itself, in its own words, sent to the model as context on
+    -- every turn. '' rather than NULL: every account written before this column existed genuinely
+    -- *has* no introduction, so the default preserves what those rows already meant where NULL
+    -- would say "we do not know". See chat.system.about in the prompt catalog.
+    about TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username COLLATE NOCASE);

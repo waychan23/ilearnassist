@@ -70,6 +70,7 @@ describe("the catalog", () => {
     const names = [...skeleton.matchAll(/\{\{([a-z][A-Za-z0-9]*)\}\}/g)].map((m) => m[1]);
     expect(names).toEqual([
       "persona",
+      "about",
       "clock",
       "workspace",
       "plan",
@@ -290,6 +291,36 @@ describe("buildSystemPrompt", () => {
   it("names the shared folder as the default when the write location says so", () => {
     const prompt = buildSystemPrompt(promptInput({ writeLocation: "workspace" }));
     expect(prompt).toContain("A write with no stated location goes to the shared workspace folder.");
+  });
+
+  it("places the learner's own introduction between the persona and the clock", () => {
+    const prompt = buildSystemPrompt(promptInput({ about: "Backend dev, learning ML." }));
+    const personaAt = prompt.indexOf("You are a helpful, precise AI assistant.");
+    const aboutAt = prompt.indexOf("<about_the_learner>");
+    const clockAt = prompt.indexOf("Right now it is");
+    expect(personaAt).toBeGreaterThanOrEqual(0);
+    expect(aboutAt).toBeGreaterThan(personaAt);
+    expect(clockAt).toBeGreaterThan(aboutAt);
+    expect(prompt).toContain("Backend dev, learning ML.");
+  });
+
+  it("omits the whole block when there is no introduction", () => {
+    // Not just the value: the heading, the fence and the trailing sentence go with it. A block
+    // left behind would be a paragraph of every turn spent saying the user said nothing.
+    for (const about of [undefined, ""]) {
+      const prompt = buildSystemPrompt(promptInput({ about }));
+      expect(prompt, `about = ${JSON.stringify(about)}`).not.toContain("about_the_learner");
+      expect(prompt).not.toContain("describes themselves");
+      expect(prompt).not.toContain("\n\n\n");
+    }
+  });
+
+  it("keeps the introduction after the session's own persona, not the default one", () => {
+    const prompt = buildSystemPrompt(
+      promptInput({ persona: "You are a physics tutor.", about: "Knows calculus." })
+    );
+    expect(prompt.startsWith("You are a physics tutor.")).toBe(true);
+    expect(prompt).toContain("Knows calculus.");
   });
 
   it("reflects a patched block, which is the whole point of reading at call time", () => {

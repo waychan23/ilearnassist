@@ -52,6 +52,7 @@ import type {
   UpdateInsightInput,
   UpdateNoteInput,
   UpdateProviderInput,
+  UpdateProfileInput,
   UpdateSessionInput,
   UpdateUploadSettingsInput,
   UpdateUserInput,
@@ -495,6 +496,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ oldPassword, newPassword }),
     }),
+
+  /**
+   * Edit your own introduction — the one field of your own record you may write.
+   *
+   * Answers the whole updated `User`, like `me()`, so the caller can adopt the trimmed value the
+   * server actually stored rather than the one the textarea held.
+   */
+  updateProfile: (about: string) =>
+    request<User>("/auth/me", { method: "PATCH", body: JSON.stringify({ about } satisfies UpdateProfileInput) }),
 
   /* ------------------------------ platform console ----------------------------- */
   /*
