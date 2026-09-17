@@ -386,6 +386,16 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     })
   );
 
+  /*
+   * How to present a file's contents, right after the folder note it depends on.
+   *
+   * **Unconditional**, alone among the blocks below it: this one is about the *format* of a reply
+   * rather than about a capability, so there is no tool to ask the assembled array about. It is
+   * also the only thing that makes the renderer's file name appear at all — the client shows what
+   * the fence's info string carries, and a model that was never told would never write it.
+   */
+  const codeFence = block(renderPrompt("chat.guidance.codeFence"));
+
   // The plan block is present while the plan widget is installed, whether or not a plan exists
   // yet — the rhythm starts the moment one is made. The quiz block's switch is installation too.
   // The next three are not widgets: their switch is whether the *tool* survived assembly, which
@@ -404,6 +414,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     about,
     clock,
     workspace,
+    codeFence,
     plan,
     quiz,
     collectPage,

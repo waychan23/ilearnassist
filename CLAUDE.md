@@ -546,6 +546,29 @@ Fuller map in `docs/reference.md`.
   colouring. Past `MAX_HIGHLIGHT_CHARS` the text is escaped rather than tokenised — the cap
   exists because a minified bundle at the 256 KB preview cap costs a third of a second in
   `hljs` alone.
+- **A code block's file name and language ride the fence's info string, and the header is
+  chrome rather than content.** markdown-it already splits ` ```python app.py ` and hands the
+  filename to the `highlight` hook as its **third argument**; the hook used to declare
+  `(str, lang)` and drop it, so a name the model wrote was parsed and thrown away on every
+  render. Both halves therefore reach the post-pass as **escaped attributes on the unforgeable
+  marker** — escaped with the same `md.utils.escapeHtml`, which is what keeps a model-supplied
+  info string from forging one. Three things are load-bearing:
+  - **The header is `data-note-skip`.** It is the only renderer-added element that carries
+    *text*, and `utils/noteAnchor.ts` counts a quote's occurrences over the message's visible
+    text — so counting it would shift the arithmetic for every note anchored below it, including
+    notes written before the header existed. (The copy control beside it takes the other route:
+    no text nodes at all.)
+  - **The copy control reads `querySelector("code")`**, so a copy yields the code alone, with no
+    filename line. That is the whole reason the info string was chosen over a leading comment —
+    and it is why the header is built from `<span>`s. `codeCopy.test.ts` asserts it against
+    `renderMarkdown`'s real output, because wrapping a name in a `<code>` would silently start
+    copying it.
+  - **A language is claimed only when `hljs.getLanguage` knows it**, and an unrecognised info
+    word produces no header at all. ` ```app.py ` is not a language, and a pill repeating a
+    filename back as one would be the app inventing a fact.
+  The other half is the prompt: `chat.guidance.codeFence` tells the model to name the file, and
+  it is the one **unconditional** guidance block, because it is about the *format* of a reply
+  rather than about a capability. Without it the renderer would be drawing data nothing produces.
 - **The file tree's freshness is the refresh button plus the end of a turn.** The post-turn
   re-read hangs off `consume()`'s `finally` in `stores/app.ts`, which is the one point every
   turn ends at, and it is gated on a tree having been loaded at all — a panel nobody opened
@@ -1892,7 +1915,8 @@ Fuller map in `docs/reference.md`.
   staged in `dist/resources/web` and leaves it alone. Run `pnpm desktop:build` (or
   `pnpm build`) once if the panel's server has nothing to serve.
 
-For the full architecture and configuration reference, see `docs/`. Three of those files are working
-references rather than background: `docs/design-system.md` for anything visual,
-`docs/widgets.md` before adding a widget to the right sidebar, and `docs/session-locks.md` before
-touching anything that writes to a conversation from more than one client.
+For the full architecture and configuration reference, see `docs/`. Those files that are working
+references rather than background: `docs/design-system.md` for anything visual, `docs/prompts.md`
+before changing any system prompt or adding one, `docs/widgets.md` before adding a widget to the
+right sidebar, and `docs/session-locks.md` before touching anything that writes to a conversation
+from more than one client.

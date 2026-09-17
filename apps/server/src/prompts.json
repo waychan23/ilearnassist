@@ -3,7 +3,7 @@
   "prompts": {
     "chat.system": {
       "description": "The chat turn's whole system prompt, as an ordered list of blocks. Each {{name}} is another entry in this file; deleting one drops that block from every turn, and reordering them reorders the prompt. Only the persona is always present — every other block is supplied only when it applies, and an empty block contributes nothing.",
-      "text": "{{persona}}{{about}}{{clock}}{{workspace}}{{plan}}{{quiz}}{{collectPage}}{{table}}{{explore}}{{makeup}}"
+      "text": "{{persona}}{{about}}{{clock}}{{workspace}}{{codeFence}}{{plan}}{{quiz}}{{collectPage}}{{table}}{{explore}}{{makeup}}"
     },
     "chat.system.persona": {
       "description": "The default persona, used for a conversation with no system prompt of its own. A session's own prompt (set on the Copilot it came from, or edited in the conversation) replaces this entirely. Blocks like chat.guidance.* are appended AFTER it either way.",
@@ -28,6 +28,10 @@
     "chat.system.grantedRead": {
       "description": "The sandbox sentence used when the user HAS opened other workspaces with @. Substituted into chat.system.workspace as {{rule}}. It states both halves deliberately: a sentence that simply vanished would read as \"the sandbox is gone\", and one left alone would have the model refusing a tool it was just handed. Do not drop the read half.",
       "text": "Reading outside them is allowed only inside the workspaces named below, and only through the tool that reads them. Never **write** or delete outside these two folders, and never read outside them by any other route."
+    },
+    "chat.guidance.codeFence": {
+      "description": "Always present, unlike the widget guidance below it: this is about how a reply is *formatted* rather than about a capability, so it has no condition to gate on. It exists because the renderer shows a code block's file name and language only when the fence's info string carries them — markdown-it parses ```` ```python app.py ```` into a language and a file, and a fence that names neither renders exactly as it always did. Without this sentence the data would simply never exist. No variables.",
+      "text": "When your reply shows the contents of a file, name that file in the code fence's info string, after the language: write ```python app.py and then the code — the app shows the name beside the block, so the reader can tell which file they are looking at. Use the file's name alone, not its full path. A block that is not a file's contents — a command to run, a snippet you are illustrating — needs its language and nothing more."
     },
     "chat.guidance.plan": {
       "description": "Appended to the system prompt while the conversation has the plan widget installed. Carries the protocol the tool descriptions cannot enforce: mark the node in_progress BEFORE teaching it, stay on the plan at node boundaries, and hand control back when a side topic pulled the conversation off it. Presence is the switch — the route asks whether the plan tools survived assembly, so a Copilot whose allow-list excludes them is never told about them.",

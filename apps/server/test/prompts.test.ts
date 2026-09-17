@@ -73,6 +73,7 @@ describe("the catalog", () => {
       "about",
       "clock",
       "workspace",
+      "codeFence",
       "plan",
       "quiz",
       "collectPage",
@@ -245,6 +246,19 @@ describe("buildSystemPrompt", () => {
     // No widget guidance leaked in, and no block left a gap behind it.
     expect(prompt).not.toContain("study plan, tracked through the plan tools");
     expect(prompt).not.toContain("\n\n\n");
+  });
+
+  it("always says how to name a file in a code fence", () => {
+    /*
+     * The one unconditional block among the guidance: it is about the *format* of a reply rather
+     * than about a capability, so there is no assembled tool to ask about it. And it is
+     * load-bearing in a way the others are not — the client renders a code block's file name from
+     * the fence's info string, so a model that was never told would never write one, and the
+     * feature would be a renderer for data nothing produces.
+     */
+    const prompt = buildSystemPrompt(promptInput());
+    expect(prompt).toContain("name that file in the code fence's info string");
+    expect(prompt).toContain("app.py");
   });
 
   it("appends each applicable block once, in the skeleton's order", () => {
