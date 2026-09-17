@@ -405,7 +405,9 @@ describe("init", () => {
     // The widget list is **omitted**, not sent empty, and that is the distinction the API is
     // built on: this workspace was created by the app rather than by the dialog, so nobody made a
     // choice about it and it takes the server's default rather than asserting "none".
-    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("默认工作区", undefined);
+    // The description is `""` rather than absent: the two are the same claim there, and a
+    // workspace nobody described is stored as an empty string either way.
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("默认工作区", undefined, "");
     expect(store.workspaces).toHaveLength(1);
   });
 
@@ -1513,6 +1515,35 @@ describe("widgets", () => {
     } finally {
       WIDGET_MODULES.workspace_stats.onInstall = original;
     }
+  });
+
+  it("carries the description into the create request rather than a write after it", async () => {
+    /*
+     * One request, and the assertion is on the *request*: the dialog fills a description in
+     * before the workspace exists, so a follow-up `PATCH` would leave the card on screen
+     * without it — and a failure between the two leaves it that way for good.
+     */
+    const store = await readyStore();
+    mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
+
+    await store.createWorkspace("Fresh", ["workspace_stats"], "线性代数的习题");
+
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith(
+      "Fresh",
+      ["workspace_stats"],
+      "线性代数的习题"
+    );
+  });
+
+  it("sends an empty description when the form did not ask for one", async () => {
+    // The default, so a caller with no opinion — the first-run workspace — writes no column of
+    // its own rather than tripping the server's "missing named parameter".
+    const store = await readyStore();
+    mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
+
+    await store.createWorkspace("Fresh");
+
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Fresh", undefined, "");
   });
 
   it("runs the install hook for what a new conversation actually got", async () => {

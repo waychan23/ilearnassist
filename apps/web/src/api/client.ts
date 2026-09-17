@@ -534,12 +534,19 @@ export const api = {
 
   listWorkspaces: () => request<Workspace[]>("/workspaces"),
   /**
-   * `widgets` is the whole workspace-scope selection, chosen before the workspace existed —
-   * the create dialog ticks boxes for an object that does not exist yet, so this is the one
-   * write that carries them all. Omitted means the server's defaults.
+   * Create a workspace, with everything chosen before it exists.
+   *
+   * Both optional arguments are the create dialog's, and both are here rather than as writes
+   * afterwards for the same reason: the dialog fills in a name, a description and a set of
+   * widgets for an object that is not there yet, so a follow-up call would leave a workspace on
+   * screen without one of them — for good, if the second request failed. `widgets` omitted means
+   * the server's defaults; a description omitted or empty is no description.
    */
-  createWorkspace: (name: string, widgets?: WidgetId[]) =>
-    request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify({ name, widgets }) }),
+  createWorkspace: (name: string, widgets?: WidgetId[], description?: string) =>
+    request<Workspace>("/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ name, widgets, description }),
+    }),
   renameWorkspace: (id: string, name: string) =>
     request<Workspace>(`/workspaces/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   /**

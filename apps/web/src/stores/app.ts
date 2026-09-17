@@ -895,14 +895,19 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * Create a workspace, optionally with widgets already chosen.
+   * Create a workspace, optionally with its description and widgets already chosen.
    *
-   * The selection is a parameter rather than a follow-up call because a workspace does not exist
-   * when its boxes are ticked — so this is the one write that carries them all, and it is what
-   * makes installing a widget a moment rather than a sequence of flips.
+   * Both are parameters rather than follow-up calls because a workspace does not exist when its
+   * form is filled in — so this is the one write that carries everything the create dialog
+   * asked for, which is what makes installing a widget a moment rather than a sequence of flips,
+   * and what keeps a description somebody typed from depending on a second request landing.
    */
-  async function createWorkspace(name: string, widgets?: WidgetId[]): Promise<void> {
-    const ws = await api.createWorkspace(name, widgets);
+  async function createWorkspace(
+    name: string,
+    widgets?: WidgetId[],
+    description = ""
+  ): Promise<void> {
+    const ws = await api.createWorkspace(name, widgets, description);
     workspaces.value.push(ws);
     if (!activeWorkspaceId.value) {
       activeWorkspaceId.value = ws.id;

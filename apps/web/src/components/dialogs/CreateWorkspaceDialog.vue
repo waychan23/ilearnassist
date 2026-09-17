@@ -11,6 +11,14 @@ const store = useAppStore();
 const emit = defineEmits<{ close: []; created: [] }>();
 
 const name = ref("");
+/**
+ * The workspace's own note about itself. Optional, and empty is the ordinary answer.
+ *
+ * A `<textarea>` rather than an input, matching the settings dialog's, which is where the same
+ * field lives afterwards: a description is a sentence and the box it is typed into should not
+ * pretend it is a label.
+ */
+const description = ref("");
 const saving = ref(false);
 
 /**
@@ -42,7 +50,7 @@ async function submit() {
   if (!n || saving.value) return;
   saving.value = true;
   try {
-    await store.createWorkspace(n, [...widgets.value]);
+    await store.createWorkspace(n, [...widgets.value], description.value);
     emit("created");
   } catch (e) {
     store.setError(e instanceof Error ? e.message : String(e));
@@ -86,6 +94,24 @@ async function submit() {
               @keydown.enter="submit"
             />
             <div class="hint">{{ t("workspace.new.hint") }}</div>
+          </div>
+
+          <!--
+            Beside the name rather than behind the disclosure the new-session dialog uses for
+            its advanced parameters: a workspace has two things worth writing down at the moment
+            somebody makes one, and the description is what the card in the list behind this
+            dialog will show — so offering it here is what keeps the grid from being a row of
+            bare names. Empty is the ordinary answer, which is why the label says optional.
+          -->
+          <div class="field">
+            <label>{{ t("workspace.new.descriptionLabel") }}</label>
+            <textarea
+              v-model="description"
+              class="textarea"
+              data-testid="workspace-description-input"
+              :placeholder="t('workspace.new.descriptionPlaceholder')"
+            ></textarea>
+            <div class="hint">{{ t("workspace.new.descriptionHint") }}</div>
           </div>
 
           <!--

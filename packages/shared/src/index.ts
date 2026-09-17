@@ -2943,6 +2943,17 @@ export interface CreateWorkspaceInput {
    * of flips. **Absent** means `DEFAULT_WIDGET_IDS`; an explicit empty list means none.
    */
   widgets?: WidgetId[];
+  /**
+   * The workspace's own note about itself, if one was written.
+   *
+   * Here rather than as a `PATCH` afterwards, for the reason `widgets` is: the field is filled
+   * in before the object exists, so a second write is a window in which the workspace is on
+   * screen without the description somebody just typed — and a failure between the two leaves
+   * it that way for good. Absent and empty are the same claim, and the column is `''` either
+   * way; `PATCH`'s absent/empty distinction has nothing to distinguish on a row that does not
+   * exist yet.
+   */
+  description?: string;
 }
 
 export interface UpdateWorkspaceInput {

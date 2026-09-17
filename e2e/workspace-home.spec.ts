@@ -215,6 +215,44 @@ test("deleting a workspace asks first, and cancelling changes nothing", async ({
   await expect(card).toHaveCount(0);
 });
 
+test("a workspace is created with its description, and the card shows it", async ({ page }) => {
+  /*
+   * The description has two homes now — this form and the settings dialog — and this is the one
+   * that matters for a first run: the create dialog is where a workspace gets everything about
+   * it that somebody chose, and the card behind it is what the description is *for*.
+   *
+   * Through the real dialog rather than the API, because the field is the feature. What the
+   * assertion pins beyond "the text arrived" is that it did so in **one** write: the card is
+   * read after a reload, so it is the stored row rather than the create reply echoed into the
+   * list.
+   */
+  await page.goto("/");
+  const name = uniqueName("Created");
+
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(name);
+  await page.getByTestId("workspace-description-input").fill("线性代数的习题与讲义");
+  await page.getByTestId("workspace-create-submit").click();
+
+  const card = page.getByTestId("workspace-card").filter({ hasText: name }).first();
+  await expect(card.getByTestId("workspace-description-text")).toHaveText("线性代数的习题与讲义");
+
+  await page.reload();
+  await expect(card.getByTestId("workspace-description-text")).toHaveText("线性代数的习题与讲义");
+});
+
+test("a workspace created with no description carries none", async ({ page }) => {
+  // The field is optional and empty is the ordinary answer: an empty string is stored, and the
+  // card then draws no second line at all rather than a blank one.
+  await page.goto("/");
+  const name = uniqueName("Bare");
+  await createWorkspace(page, name);
+
+  const card = page.getByTestId("workspace-card").filter({ hasText: name }).first();
+  await expect(card).toBeVisible();
+  await expect(card.getByTestId("workspace-description-text")).toHaveCount(0);
+});
+
 test("a workspace's name and description are edited in its settings dialog", async ({ page }) => {
   /*
    * The second door to the name. The card's inline rename is still the shortcut for someone

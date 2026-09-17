@@ -530,6 +530,15 @@ export default {
       title: "新建工作区",
       namePlaceholder: "例如：My Project",
       hint: "将在工作区根目录自动创建对应的子目录。",
+      /*
+       * The same three sentences as the settings dialog's description field, and repeated
+       * rather than shared: `session.descriptionHint` is already the same sentence a second
+       * time, and each surface's copy is free to move on its own — which is exactly what
+       * a shared key would stop.
+       */
+      descriptionLabel: "描述（可选）",
+      descriptionPlaceholder: "这个工作区用来做什么？",
+      descriptionHint: "仅供你自己参考，不会发送给模型。",
     },
     delete: {
       title: "删除工作区",

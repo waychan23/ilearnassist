@@ -398,6 +398,11 @@ const en: typeof MessageSchema = {
       title: "New workspace",
       namePlaceholder: "e.g. My Project",
       hint: "A matching subdirectory will be created under the workspaces root.",
+      // See the note in the zh-CN catalog: the same sentences as the settings dialog's, kept
+      // apart on purpose.
+      descriptionLabel: "Description (optional)",
+      descriptionPlaceholder: "What is this workspace for?",
+      descriptionHint: "For your own reference; never sent to the model.",
     },
     delete: {
       title: "Delete workspace",
