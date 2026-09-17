@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   PLAN_PROGRESS_TOOL_NAME,
   QUIZ_REVIEW_TOOL_NAME,
+  TABLE_TOOL_NAME,
   type Attachment,
   type ChatStreamEvent,
   type Message,
@@ -833,6 +834,74 @@ describe("runAgentStream — quiz grading rundown survives later steps", () => {
     expect(result.content).toContain(RUNDOWN);
     expect(result.content).toContain("还在继续批改。");
     expect(result.content).toContain("ran out of steps");
+  });
+});
+
+describe("runAgentStream — a recorded table survives later steps", () => {
+  /*
+   * The same exception as the grading rundown above, for the other tool that has it, and this
+   * one is the whole feature rather than a nicety: `ila_table` renders **nothing**. Its contract
+   * is that the table is written into the reply as ordinary Markdown, so the prose beside the
+   * call is the artifact — and the shape a real model produces is the table in the step that
+   * records it, followed by a closing question. Under the last-utterance rule the table streamed
+   * live and then vanished at `message_done`, so the panel listed a table the conversation no
+   * longer showed. See `ANSWER_BEARING_TOOLS`.
+   */
+  const TABLE = "| 项目 | 数值 |\n| --- | --- |\n| 速度 | 3 |";
+
+  const tableTool = (): StructuredToolInterface =>
+    tool(async () => JSON.stringify({ saved: "季度对比" }), {
+      name: TABLE_TOOL_NAME,
+      description: "record a table",
+      schema: z.object({ name: z.string(), table: z.string(), summary: z.string() }),
+    });
+
+  it("keeps the table when a later step only asks what to expand", async () => {
+    const { result } = await run({
+      tools: [tableTool()],
+      turns: [
+        {
+          content: `好的，对比表如下：\n\n${TABLE}`,
+          toolCalls: [{ name: TABLE_TOOL_NAME, args: { name: "季度对比", table: TABLE, summary: "三项" } }],
+        },
+        { content: "已记录，需要展开哪一项？" },
+      ],
+    });
+
+    expect(result.content).toBe(`好的，对比表如下：\n\n${TABLE}\n\n已记录，需要展开哪一项？`);
+  });
+
+  it("does not duplicate a table the final step repeats verbatim", async () => {
+    // The other half of the rule: a model that re-writes the table in its final answer must not
+    // produce it twice.
+    const { result } = await run({
+      tools: [tableTool()],
+      turns: [
+        {
+          content: TABLE,
+          toolCalls: [{ name: TABLE_TOOL_NAME, args: { name: "季度对比", table: TABLE, summary: "三项" } }],
+        },
+        { content: `${TABLE}\n\n需要展开哪一项？` },
+      ],
+    });
+
+    expect(result.content).toBe(`${TABLE}\n\n需要展开哪一项？`);
+    expect(result.content.split("| 速度 | 3 |")).toHaveLength(2);
+  });
+
+  it("still drops narration beside an ordinary tool call", async () => {
+    // The general rule is untouched, and the control is a call that is *not* answer-bearing: a
+    // write's preamble is still narration, which is what keeps a message to one utterance.
+    const files = fileToolsFor(join(scratch, "ws2"), { defaultLocation: "workspace" }).tools;
+    const { result } = await run({
+      tools: [files.writeFile, tableTool()],
+      turns: [
+        { content: "我先把这份说明写进文件。", toolCalls: [{ name: "write_file", args: { path: "n.md", content: "x" } }] },
+        { content: "写好了。" },
+      ],
+    });
+
+    expect(result.content).toBe("写好了。");
   });
 });
 

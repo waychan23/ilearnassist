@@ -38,9 +38,14 @@ async function figureSession(page: Page, name: string): Promise<string> {
 }
 
 /**
- * A turn that records a table and *also writes it in the reply*, which is the shape the tool's
- * guidance asks for. A real model does both; scripting only the call would test a conversation
- * nobody will have.
+ * A turn that records a table the way a real model does it: the table is written in the step that
+ * records it, and the closing step is a question about what to do next.
+ *
+ * That shape matters — it is the shape that was broken. Scripting the table into the *final* step
+ * instead is what this spec used to do, and it passed while the feature was broken in the app: the
+ * loop persists the last step's utterance, so a table written beside the call streamed live and
+ * then vanished at `message_done`. `apps/server/test/agent/loop.test.ts` is where that rule is
+ * pinned now, and this is the conversation that has to hold up in a browser because of it.
  */
 function scriptTable(
   request: APIRequestContext,
@@ -49,7 +54,7 @@ function scriptTable(
   return scriptLlm(request, {
     turns: [
       {
-        content: "对比一下：",
+        content: `对比一下：\n\n${args.table ?? TABLE}`,
         toolCalls: [
           {
             id: "call_t1",
@@ -62,7 +67,7 @@ function scriptTable(
           },
         ],
       },
-      { content: `下面是结果。\n\n${args.table ?? TABLE}\n\n需要展开哪一项？` },
+      { content: "需要展开哪一项？" },
     ],
   });
 }
@@ -73,7 +78,7 @@ async function send(page: Page, text: string): Promise<void> {
 }
 
 test("a recorded table renders in the reply, not in a tool container", async ({ page, request }) => {
-  await figureSession(page, unique("表格内联"));
+  const workspace = await figureSession(page, unique("表格内联"));
   await scriptTable(request, { name: "季度对比" });
   await send(page, "帮我做一个对比表");
 
@@ -86,6 +91,20 @@ test("a recorded table renders in the reply, not in a tool container", async ({ 
   const body = page.getByTestId("message-content").last();
   await expect(body.locator("table")).toBeVisible();
   await expect(body.locator("table")).toContainText("速度");
+
+  /*
+   * And it is still there after a reload, which is the half that was broken: the streamed live
+   * view showed the table while the *persisted* message held only the closing question, so a
+   * reload — or the next visit — lost it. Asserted through the API as well as the DOM, because a
+   * table that only survives in this tab is the bug, not the feature.
+   */
+  await page.reload();
+  // By name: a reload lands on the workspace home, and `enterWorkspace(page)` with no name opens
+  // the suite's *first* card — which is the seeded default workspace, not this one.
+  await enterWorkspace(page, workspace);
+  await page.getByTestId("session-item").first().click();
+  await expect(page.getByTestId("message-content").last().locator("table")).toBeVisible();
+  await expect(page.getByTestId("message-content").last()).toContainText("速度");
 
   // And it is *outside* every tool card: the card is a line, and the table is not in it.
   const card = page.getByTestId("table-card").last();
