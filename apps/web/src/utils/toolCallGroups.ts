@@ -33,10 +33,9 @@ export type ToolCallRun =
  *     function, and saying so here keeps that true if a call site changes.
  *   - `ila_diagram` renders a drawing. Folding it into a count hides the artifact behind a
  *     number, which is the opposite of what that card is for.
- *   - `ila_table` renders one line and no table — its artifact is in the *reply*. So the reason
- *     is a different one and is worth stating rather than borrowing: what a collapsed group would
- *     hide is the row the panel's 定位 jumps to, and a table one click further from its own
- *     record is the one affordance that card carries.
+ *   - `ila_table` renders nothing at all, so the reason is not "its card deserves to be seen"
+ *     but the count: a group's line says "3 个工具调用", and folding one in that has no card to
+ *     show on expand would be a number with nothing behind it.
  *
  * A non-groupable call *breaks* a run rather than sitting inside one: `[a, diagram, b]` becomes
  * three singles, never a group with a picture hidden in it.

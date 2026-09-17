@@ -157,6 +157,15 @@ async function revealToolCall(container: HTMLElement, id: string): Promise<HTMLE
   const direct = container.querySelector<HTMLElement>(attribute(id));
   if (direct) return direct;
 
+  /*
+   * A call that renders no card anchors on the message holding it instead — `ila_table`'s table
+   * is in the reply, so the block to land on is that block. `~=` matches the id inside the
+   * whitespace-separated list `MessageItem` writes, which keeps this to one selector rather than
+   * a scan and a `split`.
+   */
+  const anchored = container.querySelector<HTMLElement>(`[data-tool-call-anchor~="${id}"]`);
+  if (anchored) return anchored;
+
   for (const group of container.querySelectorAll<HTMLElement>("[data-tool-call-ids]")) {
     if (!group.dataset.toolCallIds?.split(" ").includes(id)) continue;
     expandToolGroup(group.dataset.groupKey ?? "");

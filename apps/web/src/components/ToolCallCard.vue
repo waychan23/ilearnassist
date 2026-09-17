@@ -5,13 +5,12 @@ import {
   DIAGRAM_TOOL_NAME,
   PLAN_MAKE_TOOL_NAME,
   QUIZ_TOOL_NAME,
-  TABLE_TOOL_NAME,
   isInteractiveTool,
   type ToolCall,
 } from "../api/types";
+import { CARDLESS_TOOL_NAMES } from "../utils/toolCallCards";
 import AskUserCard from "./AskUserCard.vue";
 import DiagramCard from "./DiagramCard.vue";
-import TableCard from "./TableCard.vue";
 import PlanConflictCard from "./PlanConflictCard.vue";
 import QuizCard from "./QuizCard.vue";
 import Icon from "./Icon.vue";
@@ -52,13 +51,15 @@ const card = computed<"ask" | "quiz" | "plan" | null>(() => {
 const isDiagram = computed(() => props.toolCall.name === DIAGRAM_TOOL_NAME);
 
 /**
- * A recorded table, which is the second specialized card that is not a question.
+ * A call the conversation shows nothing for.
  *
- * Gated on the name alone like the diagram's, and it is *not* the generic disclosure: that one
- * would render the whole markdown under "参数", which is the table-inside-a-tool-container shape
- * the feature deliberately avoids. See `TableCard` for the three things this card is for.
+ * `ila_table`'s artifact is the table the model wrote into the reply, so there is nothing for a
+ * card to add and no box to draw — and *not* drawing one matters for the generic card's reason
+ * in reverse: its disclosure would render the whole markdown under "参数", which is the
+ * table-inside-a-tool-container shape this feature rules out. See `CARDLESS_TOOL_NAMES`, which
+ * is also where the jump anchor this call no longer provides has moved to.
  */
-const isTable = computed(() => props.toolCall.name === TABLE_TOOL_NAME);
+const cardless = computed(() => CARDLESS_TOOL_NAMES.has(props.toolCall.name));
 
 const open = ref(false);
 const { t, te } = useI18n();
@@ -99,8 +100,13 @@ const prettyInput = computed(() => {
 </script>
 
 <template>
-  <DiagramCard v-if="isDiagram" :tool-call="toolCall" />
-  <TableCard v-else-if="isTable" :tool-call="toolCall" />
+  <!--
+    First in the chain, and a `v-if`/`v-else-if` rather than a wrapper: a rendered `<template>`
+    around the whole thing would be a block element in the message column, and an empty one still
+    costs whatever the column's `gap` charges for a sibling.
+  -->
+  <template v-if="cardless"></template>
+  <DiagramCard v-else-if="isDiagram" :tool-call="toolCall" />
   <AskUserCard v-else-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
   <PlanConflictCard v-else-if="card === 'plan'" :tool-call="toolCall" />

@@ -106,17 +106,28 @@ test("a recorded table renders in the reply, not in a tool container", async ({ 
   await expect(page.getByTestId("message-content").last().locator("table")).toBeVisible();
   await expect(page.getByTestId("message-content").last()).toContainText("速度");
 
-  // And it is *outside* every tool card: the card is a line, and the table is not in it.
-  const card = page.getByTestId("table-card").last();
-  await expect(card).toBeVisible();
-  await expect(card.locator("table")).toHaveCount(0);
-  // The card names what it recorded — the canonical name, which is what a revise has to match —
-  // and says where the table itself is.
-  await expect(card.getByTestId("table-head")).toContainText("季度对比");
-  await expect(card.getByTestId("table-head")).toContainText("表格已写在回复里");
+  /*
+   * And there is **no card for the call at all**. `ila_table` renders nothing: the table is the
+   * reply, so a box beside it could only repeat the summary — and the generic card would be worse
+   * than redundant, since its disclosure renders the whole markdown as JSON inside a fold. This
+   * is asserted on the absence of every card shape rather than on one testid: a call that fell
+   * through to the generic disclosure is exactly the regression to catch.
+   */
+  const message = page.getByTestId("message-assistant").last();
+  // `[data-tool-call-id]` is on *every* card shape, so this is "no card of any kind" rather than
+  // a list of the ones that exist today — and the generic one is named separately because that
+  // is the fallback a call with no branch of its own silently lands in.
+  await expect(message.locator("[data-tool-call-id]")).toHaveCount(0);
+  await expect(message.getByTestId("tool-call")).toHaveCount(0);
+  // The name the model gave it is not on screen at all — it lives in the panel, which is where a
+  // table is found again.
+  await expect(message).not.toContainText("季度对比");
 
-  // The card carries the jump anchor the panel's 定位 scrolls to.
-  await expect(card).toHaveAttribute("data-tool-call-id", "call_t1");
+  /*
+   * The **anchor** the panel's 定位 needs, since the card that used to carry it is gone. It is on
+   * the message, which is the block the table is actually in.
+   */
+  await expect(message).toHaveAttribute("data-tool-call-anchor", "call_t1");
 });
 
 test("the panel lists it, opens it in the viewer, and copies it as HTML", async ({
@@ -171,6 +182,29 @@ test("the panel lists it, opens it in the viewer, and copies it as HTML", async 
 
   await viewer.getByTestId("diagram-viewer-close").click();
   await expect(viewer).toBeHidden();
+
+  /*
+   * 定位, which is the panel's one carried affordance and the thing that had to keep working when
+   * the card went: with no card to land on, the anchor is the message the table is in.
+   *
+   * Three more exchanges first, because a jump is only *observable* when its target is off-screen
+   * — the first version of this asserted the message was in the viewport on a conversation short
+   * enough that it already was, and so passed with the anchor removed entirely. The assertion that
+   * discriminates is the pair: out of view before the press, in view after it.
+   */
+  for (const n of [1, 2, 3]) {
+    await scriptLlm(request, { turns: [{ content: `${n}. ` + "这是一段补充说明。".repeat(24) }] });
+    await send(page, `继续 ${n}`);
+    await expect(page.getByTestId("message-assistant")).toHaveCount(n + 1);
+  }
+
+  const tableMessage = page.getByTestId("message-assistant").filter({ has: page.locator("table") });
+  await expect(tableMessage).toHaveCount(1);
+  // The turn ended at the bottom of the list, which is where the table is not.
+  await expect(tableMessage).not.toBeInViewport();
+
+  await page.getByTestId("diagram-locate").first().click();
+  await expect(tableMessage).toBeInViewport();
 });
 
 test("the panel filters the two kinds, and offers a kind only when it has one", async ({

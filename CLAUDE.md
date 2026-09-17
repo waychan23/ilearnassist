@@ -495,6 +495,14 @@ Fuller map in `docs/reference.md`.
     the comparison is `ila_query`'s, not `ila_diagram`'s: a table writes a database row. Leaving it
     out would let an operator's file-tools switch silently remove a capability that never touched a
     file.
+  - **Its call renders no card at all.** `ila_table`'s artifact is the reply, so a card could only
+    repeat the summary and the generic disclosure would show the whole markdown as JSON in a fold —
+    the shape the requirement rules out. The rule is `CARDLESS_TOOL_NAMES` and `ToolCallCard` is its
+    only reader. What that costs is the jump anchor: 定位 emits `chat.jump` with a tool-call id,
+    which used to resolve to the card, so `MessageItem` writes those ids on the message row as
+    `data-tool-call-anchor` and `revealToolCall` matches one with a CSS `~=`. Do not delete either
+    half without moving the anchor — a control that renders and does nothing is the failure this
+    repo names most often.
   - **A table keeps the one content check this repo takes on** — a header separator row, refused
     before the write so a refused revise cannot wipe the row the panel holds. Only that row: a full
     parse would be a second renderer free to disagree with the `markdown-it` that draws it, which is

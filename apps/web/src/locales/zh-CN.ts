@@ -592,11 +592,6 @@ export default {
     running: "运行中",
     args: "参数",
     result: "结果",
-    table: {
-      /** Said on the card itself, because a reader who expected the table to be *there* would
-       *  otherwise think the call had shown them nothing. The table is in the reply. */
-      inlineHint: "表格已写在回复里",
-    },
     /**
      * A run of consecutive tool calls, folded into one card. `count` is how many calls the
      * run holds; `name` is a `tools.name.*` label for the call still in flight.

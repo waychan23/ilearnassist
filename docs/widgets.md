@@ -429,10 +429,10 @@ What that changes relative to the widgets above:
 - **One carried affordance.** 定位 scrolls the conversation to the tool call that drew a diagram,
   emitting the existing `chat.jump` with the row's `tool_call_id` — no client-side join. A row
   whose call no longer exists (a regenerated message) simply has no button, and the jump no-ops on
-  a missing target. It is also why `TableCard` exists at all: the *generic* card already carries
-  `[data-tool-call-id]`, so what the table's own card is for is that the generic card's disclosure
-  would render the whole table as JSON in a fold — inside a tool container, which is the one shape
-  the table feature rules out.
+  a missing target. A table's row is the case that tests it: `ila_table` renders no card at all —
+  its artifact is the reply — so its call carries no `[data-tool-call-id]` anywhere, and the anchor
+  moves to the message row (`data-tool-call-anchor`, matched with a CSS `~=`). `docs/tables.md` has
+  the reasoning; what matters here is that the panel's button still lands somewhere.
 - **No `onActive` and no install hook.** It claims no host capability and needs no cooperation for
   as long as it is installed — it draws itself and nothing else. `docs/widgets.md`'s step 8 asks
   the question; this is the answer for a widget that owns only its own tab.

@@ -445,9 +445,6 @@ const en: typeof MessageSchema = {
     running: "Running",
     args: "Arguments",
     result: "Result",
-    table: {
-      inlineHint: "The table is written out in the reply",
-    },
     /** A run of consecutive tool calls, folded into one card. See `zh-CN` for the shapes. */
     group: {
       count: "{count} tool call | {count} tool calls",

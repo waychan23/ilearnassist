@@ -54,7 +54,7 @@ apps/server/src/threads.ts       places each table in a thread
 apps/server/src/tools/query.ts   ila_query(kind: "table")   the model's read of its own table
 apps/web/src/utils/figures.ts    the panel's arithmetic: merge, sort, filter
 apps/web/src/widgets/DiagramWidget.vue                    the panel: rows of both kinds
-apps/web/src/components/TableCard.vue                     the call, as one line
+apps/web/src/utils/toolCallCards.ts                      the calls that render no card at all
 apps/web/src/components/dialogs/DiagramDialog.vue         the viewer, two kinds
 apps/web/src/utils/tableClipboard.ts                      what a paste receives
 ```
@@ -183,13 +183,22 @@ Three consequences worth naming:
 - **`table.changed` is its own widget event.** The emission site is keyed on the tool's name, so
   sharing `diagram.changed` would make each panel refetch on the other's calls.
 
-`TableCard.vue` renders the call as **one line**, and it exists for a reason that has to be written
-down or the next reader deletes it: `chat.jump` targets `[data-tool-call-id]`, which the *generic*
-card already carries, so 定位 is not why. The reason is that the generic card's disclosure renders
-`JSON.stringify(args, null, 2)` — the whole table, in a fold, inside a tool container, which is the
-one shape the requirement rules out. The card also carries the copy control and a sentence saying
-where the table actually is, because a reader who expected a frame would otherwise think the call
-had shown them nothing.
+**The call renders no card at all**, and that is the rule rather than an omission —
+`CARDLESS_TOOL_NAMES` in `utils/toolCallCards.ts` is the whole of it. The table is the reply, so a
+box beside it could only repeat the summary; the generic disclosure would be worse than redundant,
+since it renders the whole markdown as JSON inside a fold, which is the one shape the requirement
+rules out. An earlier version drew a one-line card instead, and it was deleted: the sentence it
+carried ("the table is written out in the reply") existed only to explain a box that should not
+have been drawn.
+
+**The card was also the jump anchor, and that is the part removing it had to answer.** 定位 emits
+`chat.jump` with a tool-call id, which resolved to `[data-tool-call-id]` on the card; with no card
+there, `MessageItem` puts the ids of a message's cardless calls on the message row as
+`data-tool-call-anchor`, and `revealToolCall` matches one id with a CSS `~=` selector. The message
+is the better target anyway — the table really is in that block — and it is the one that always
+exists, since a model that recorded a table and wrote no prose still leaves a message. That last
+case is worth naming: with no card and no prose there is nothing on screen for the call at all,
+which is the accepted cost of the rule above.
 
 The viewer is the diagram viewer, with a `kind` on its content: `{ kind: "table"; markdown }`
 renders through the **same** `renderMarkdown` the reply uses, so the panel's table and the

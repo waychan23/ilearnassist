@@ -10,6 +10,7 @@ import { renderMarkdown } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
 import { applyNoteHighlights, noteIdAt, type NoteHighlightMark } from "../utils/noteAnchor";
 import { groupToolCalls } from "../utils/toolCallGroups";
+import { CARDLESS_TOOL_NAMES } from "../utils/toolCallCards";
 import ToolCallCard from "./ToolCallCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import AttachmentChips from "./AttachmentChips.vue";
@@ -76,6 +77,23 @@ const toolCalls = computed(() =>
  */
 const actionToolCalls = computed(() => toolCalls.value.filter((tc) => !isInteractiveTool(tc.name)));
 const questionToolCalls = computed(() => toolCalls.value.filter((tc) => isInteractiveTool(tc.name)));
+
+/**
+ * The calls this message makes that render nothing at all — `ila_table`'s, whose artifact is the
+ * table in the reply rather than anything a card could show.
+ *
+ * They are the message's **jump anchor**, and that is why they are collected rather than merely
+ * skipped: the 图表 panel's 定位 emits `chat.jump` with a tool-call id, so a call with no card
+ * has to be reachable some other way or that button would be a control that does nothing. The
+ * message row is both the honest target — the table really is in this block — and the one that
+ * always exists, since a model that recorded a table and wrote no prose still leaves a message.
+ *
+ * `data-tool-call-anchor` holds them space-separated, which is what lets `ChatView` match one id
+ * with a CSS `~=` selector instead of splitting the list in JavaScript.
+ */
+const anchorToolCallIds = computed(() =>
+  toolCalls.value.filter((tc) => CARDLESS_TOOL_NAMES.has(tc.name)).map((tc) => tc.id)
+);
 
 /**
  * The actions, with runs of consecutive calls collapsed into one entry each.
@@ -324,6 +342,7 @@ const usageText = computed(() => {
     class="msg assistant"
     data-testid="message-assistant"
     :data-message-id="props.message?.id"
+    :data-tool-call-anchor="anchorToolCallIds.join(' ') || undefined"
   >
     <div class="avatar"><Icon name="robot" /></div>
     <div class="body">
