@@ -454,3 +454,139 @@ test.describe("the notes widget", () => {
     await expect(page.getByTestId("confirm-accept")).toBeVisible();
   });
 });
+
+/**
+ * A note written about a 图 or a 表 rather than about a passage.
+ *
+ * The whole of what a browser can add here is the *route*: the panel is where a figure lives, the
+ * note is written from there, and the two records have to meet afterwards — the note's row has to
+ * name the figure, and the name it shows has to be one the panel can open. Every step in between
+ * is unit-tested; what is not is that they are connected.
+ */
+test.describe("a note about a figure", () => {
+  /** The table a scripted model records, and the name its row will carry. */
+  const TABLE_NAME = "季度对比";
+  const TABLE = "| 项目 | 数值 |\n| --- | --- |\n| 速度 | 3 |";
+
+  /**
+   * One turn that records a table — the same shape `e2e/table.spec.ts` uses, because the loop
+   * persists the last step's utterance, so a table written beside the call survives and one
+   * written in the closing step does not.
+   */
+  function scriptTable(request: Parameters<typeof scriptLlm>[0]): Promise<void> {
+    return scriptLlm(request, {
+      turns: [
+        {
+          content: `对比一下：\n\n${TABLE}`,
+          toolCalls: [
+            {
+              id: "call_t1",
+              name: "ila_table",
+              args: { name: TABLE_NAME, table: TABLE, summary: "两个季度的对比" },
+            },
+          ],
+        },
+        { content: "需要展开哪一项？" },
+      ],
+    });
+  }
+
+  test("is written from the panel, and its row opens what it is about", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("FigureNote");
+    await scriptTable(request);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-new").click();
+    await page.getByTestId("workspace-name-input").fill(name);
+    await page.getByTestId("workspace-create-submit").click();
+    await enterWorkspace(page, name);
+
+    // Both panels: the figure is what the note is about, the notes panel is what can file one —
+    // and its absence is why the 记笔记 button is not drawn at all.
+    await page.getByTestId("new-session").click();
+    await page.getByTestId("new-session-widget-check-notes").check();
+    await page.getByTestId("new-session-widget-check-diagram").check();
+    await page.getByTestId("create-session").click();
+    await page.getByTestId("widget-tab-diagram").click();
+
+    // The composer directly, not this file's `send` helper: that one waits for the
+    // photosynthesis reply's own phrase, which no turn here produces.
+    await page.getByTestId("composer-input").fill("帮我做一个对比表");
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("composer-send")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("diagram-row").first()).toBeVisible();
+
+    // Write the note from the figure's own row. No selection was made and no message is involved.
+    await page.getByTestId("diagram-note").first().click();
+    const editor = page.getByTestId("note-editor");
+    await expect(editor).toBeVisible();
+    // The window shows what it is about — the counterpart of 标注原文 for a note with no passage.
+    await expect(page.getByTestId("note-editor-target")).toContainText(TABLE_NAME);
+    // …and it offers no 定位, because a figure note names no message to scroll to.
+    await expect(page.getByTestId("note-editor-locate")).toHaveCount(0);
+
+    await page.getByTestId("note-editor-content").fill("第二列的数字是什么意思？");
+    await page.getByTestId("note-editor-save").click();
+    await expect(editor).toBeHidden();
+
+    // The row names the figure it is about, and the name is the one the panel opens by.
+    await page.getByTestId("widget-tab-notes").click();
+    await expect(page.getByTestId("notes-list").locator("li")).toHaveCount(1);
+    const chip = page.locator('[data-testid^="note-target-"]');
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText(TABLE_NAME);
+
+    // Pressing it shows the figure — which is the whole point of the chip existing rather than
+    // the name being a label: a control that renders and does nothing is the failure this repo
+    // names most often.
+    await chip.click();
+    await expect(page.getByTestId("diagram-viewer")).toBeVisible();
+    await expect(page.getByTestId("diagram-viewer-body")).toContainText("速度");
+    await page.getByTestId("diagram-viewer-close").click();
+
+    // And it survives a reload, with the same name — the target is stored, not derived client-side.
+    await page.reload();
+    await enterWorkspace(page, name);
+    await page.getByTestId("session-item").first().click();
+    await page.getByTestId("widget-tab-notes").click();
+    await expect(page.locator('[data-testid^="note-target-"]')).toContainText(TABLE_NAME);
+  });
+
+  test("offers the note control only where a note can be filed", async ({ page, request }) => {
+    /*
+     * The notes panel owns notes-as-records, so a conversation without it has nowhere to put one.
+     * Asserted as an *absence* rather than as a refusal, for the reason the whole app gives: a
+     * control that renders and then fails is worse than no control.
+     *
+     * The notes panel is on by default, so this conversation has to *give it up* — which is also
+     * the more interesting direction: it is the only way to reach a figure with no note control.
+     */
+    const name = unique("FigureNoNotes");
+    await scriptTable(request);
+
+    await page.goto("/");
+    await page.getByTestId("workspace-new").click();
+    await page.getByTestId("workspace-name-input").fill(name);
+    await page.getByTestId("workspace-create-submit").click();
+    await enterWorkspace(page, name);
+
+    await page.getByTestId("new-session").click();
+    await page.getByTestId("new-session-widget-check-notes").uncheck();
+    await page.getByTestId("new-session-widget-check-diagram").check();
+    await page.getByTestId("create-session").click();
+    await page.getByTestId("widget-tab-diagram").click();
+
+    // The composer directly, not this file's `send` helper: that one waits for the
+    // photosynthesis reply's own phrase, which no turn here produces.
+    await page.getByTestId("composer-input").fill("帮我做一个对比表");
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("composer-send")).toBeVisible({ timeout: 20_000 });
+    // The row is there and 定位 with it; only the note control is missing.
+    await expect(page.getByTestId("diagram-row").first()).toBeVisible();
+    await expect(page.getByTestId("diagram-locate").first()).toBeVisible();
+    await expect(page.getByTestId("diagram-note")).toHaveCount(0);
+  });
+});

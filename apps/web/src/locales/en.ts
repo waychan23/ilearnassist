@@ -884,6 +884,8 @@ const en: typeof MessageSchema = {
       /** The panel's own link to the whole folder, which holds more than diagrams. */
       /** A row the conversation has a tool call for — the button that scrolls back to it. */
       locate: "Go to the reply that drew it",
+      /** Writing a note about a figure. Offered only where the notes panel has a home. */
+      note: "Write a note about it",
       empty: "This conversation has not drawn a diagram or recorded a table yet.",
       filterKind: "Filter by kind",
       allKinds: "All",
@@ -983,6 +985,15 @@ const en: typeof MessageSchema = {
     empty: "No notes yet. Select something in a message to mark it or write about it.",
     untitled: "(empty)",
     open: "Open this note",
+    /** The row's control for a note written about a 图 or a 表 instead of a passage. */
+    target: {
+      label: "Open the {kind} it is about",
+      kinds: {
+        diagram: "diagram",
+        table: "table",
+      },
+      missing: "The {kind} it is about is gone",
+    },
     claimedByOther: "Another widget is using this conversation's annotations, so marking is unavailable here.",
     toolbar: {
       label: "Annotate this message",
@@ -994,6 +1005,8 @@ const en: typeof MessageSchema = {
       newTitle: "New note",
       editTitle: "Edit note",
       quoteLabel: "Marked text",
+      /** The counterpart of `quoteLabel`, for a note about a 图 or a 表. */
+      targetLabel: "About",
       contentLabel: "Your note",
       contentPlaceholder: "What are you thinking?",
       typeLabel: "Kind of note",
@@ -1160,6 +1173,7 @@ const en: typeof MessageSchema = {
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
     NOTE_NOT_FOUND: "That note cannot be found — it may already have been deleted.",
     NOTE_TYPE_INVALID: "That kind of note does not exist.",
+    FIGURE_NOT_FOUND: "That diagram or table cannot be found — it may have changed or been deleted.",
     SYNC_IN_PROGRESS: "This conversation is already being exported to the library.",
     INSIGHT_NOT_FOUND:
       "That observation cannot be found — a later pass may have replaced it.",

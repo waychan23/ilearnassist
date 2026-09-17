@@ -1094,6 +1094,8 @@ describe("schema versioning", () => {
         quote: "hello",
         occurrence: 0,
         content: "",
+        targetKind: "text",
+        targetRef: null,
       });
       expect(note).toMatchObject({ messageMissing: false, type: "annotation", quote: "hello" });
       expect(opened.listNotesForUser(OWNER, "s1").map((n) => n.id)).toEqual(["n1"]);
@@ -1150,6 +1152,8 @@ describe("schema versioning", () => {
         quote: "hello",
         occurrence: 0,
         content: "",
+        targetKind: "text",
+        targetRef: null,
       });
       expect(note).toMatchObject({ messageMissing: false, type: "annotation", quote: "hello" });
       expect(opened.listNotesForUser(OWNER, "s1").map((n) => n.id)).toEqual(["n1"]);

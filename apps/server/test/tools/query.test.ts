@@ -123,6 +123,8 @@ function addNote(content: string, quote = ""): void {
     quote,
     occurrence: 0,
     content,
+    targetKind: "text",
+    targetRef: null,
   };
   db.createNote(note);
 }
@@ -258,6 +260,115 @@ describe("ila_query — notes", () => {
       (second.items as Record<string, unknown>[])[0]!.content
     );
     expect(second).toMatchObject({ total: 2, offset: 1 });
+  });
+
+  it("carries each note's id, so one can be asked for by name", async () => {
+    // The ids are what make a note *addressable*: a reference the user attached carries one, and
+    // without it in the listing the model could only ever search by text it was guessing at.
+    addNote("第一条");
+    const answer = await ask({ kind: "note" });
+    const [item] = answer.items as Record<string, unknown>[];
+    expect(typeof item!.id).toBe("string");
+    expect(item!.id).toBe(db.listNotesForUser(OWNER, SESSION)[0]!.id);
+  });
+
+  it("reads the one note its id names, without a search", async () => {
+    addNote("不要这条");
+    addNote("要这条");
+    const wanted = db.listNotesForUser(OWNER, SESSION).find((n) => n.content === "要这条")!;
+
+    const answer = await ask({ kind: "note", id: wanted.id });
+    // The single-object shape the diagram and table kinds use, not a one-item page: a caller who
+    // named a note asked a question, and `items`/`total` would answer a different one.
+    expect(answer).toMatchObject({ kind: "note" });
+    expect(answer.item).toMatchObject({ id: wanted.id, content: "要这条" });
+    expect(answer.items).toBeUndefined();
+  });
+
+  it("does not reach another conversation's note by id", async () => {
+    /*
+     * The lookup runs inside this conversation's own list, which is already owner-scoped — so an
+     * id from elsewhere is not "refused", it simply is not found, and the answer says which of
+     * the two it is by handing back a null rather than a note.
+     */
+    const otherNote = db.createNote({
+      id: newId(),
+      sessionId: OTHER_SESSION,
+      messageId: null,
+      type: "idea",
+      quote: "",
+      occurrence: 0,
+      content: "别的会话",
+      targetKind: "text",
+      targetRef: null,
+    });
+
+    const answer = await ask({ kind: "note", id: otherNote.id });
+    expect(answer.item).toBeNull();
+    expect(JSON.stringify(answer)).not.toContain("别的会话");
+    // The way back to something readable, since a page of uuids would not be.
+    expect(answer.note as string).toContain("without `id`");
+  });
+
+  it("says what a note is about when it is about a figure", async () => {
+    db.upsertDiagram({
+      id: "d1",
+      sessionId: SESSION,
+      name: "auth-flow.mmd",
+      summary: "登录流程",
+      toolCallId: null,
+    });
+    db.createNote({
+      id: newId(),
+      sessionId: SESSION,
+      messageId: null,
+      type: "idea",
+      quote: "",
+      occurrence: 0,
+      content: "这一步没看懂",
+      targetKind: "diagram",
+      targetRef: "auth-flow.mmd",
+    });
+
+    const answer = await ask({ kind: "note" });
+    const [item] = answer.items as Record<string, unknown>[];
+    // The kind says which table to look in; the name is the handle, and it is the same one
+    // `kind: "diagram"` takes — which is what makes a note a route to the figure itself.
+    expect(item).toMatchObject({ target: { kind: "diagram", name: "auth-flow.mmd" } });
+
+    // A text note carries no `target` at all, rather than one saying "text": the field is the
+    // presence of a figure, so its absence is the honest spelling.
+    addNote("普通笔记");
+    const withText = await ask({ kind: "note", query: "普通" });
+    expect((withText.items as Record<string, unknown>[])[0]).not.toHaveProperty("target");
+  });
+
+  it("says when the figure a note is about has gone", async () => {
+    db.upsertDiagram({
+      id: "d1",
+      sessionId: SESSION,
+      name: "gone.mmd",
+      summary: "",
+      toolCallId: null,
+    });
+    db.createNote({
+      id: newId(),
+      sessionId: SESSION,
+      messageId: null,
+      type: "idea",
+      quote: "",
+      occurrence: 0,
+      content: "看这张图",
+      targetKind: "diagram",
+      targetRef: "gone.mmd",
+    });
+    db.raw.prepare("DELETE FROM session_diagrams WHERE id = ?").run("d1");
+
+    const answer = await ask({ kind: "note" });
+    const [item] = answer.items as Record<string, unknown>[];
+    // Named rather than omitted: the name is still what the note is about, and a reader who
+    // follows it to `kind: "diagram"` gets the handler's own "no such diagram" answer.
+    expect(item).toMatchObject({ target: { kind: "diagram", name: "gone.mmd" }, targetMissing: true });
   });
 });
 

@@ -48,6 +48,30 @@ export interface NoteEditorDraft {
   quote: string;
   type: NoteType;
   content: string;
+  /**
+   * What the note is about, when it is a 图 or a 表 rather than a passage.
+   *
+   * It sits beside `quote` rather than replacing it because the two are alternatives, not a
+   * pair: a note names one thing, and which kind of thing that is decides which of these is
+   * filled in. `label` is what the window shows — the figure's name, already canonical, since
+   * the server is what resolves a note's target and hands it back.
+   */
+  target?: NoteFigureNote;
+}
+
+/**
+ * A figure a note can be written about.
+ *
+ * `kind` names the table to look in and `ref` is the handle the server stores, so the two are
+ * one value travelling together — a ref without a kind cannot be resolved, since both
+ * `diagramFileName` and `tableName` would claim it.
+ */
+export interface NoteFigureNote {
+  kind: "diagram" | "table";
+  /** The canonical name: `auth-flow.mmd` for a diagram, a bare slug for a table. */
+  ref: string;
+  /** What the window and the panel row show. Display only. */
+  label: string;
 }
 
 /** Where the window's 定位 goes. */

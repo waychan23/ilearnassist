@@ -40,6 +40,7 @@ vi.mock("../../src/api/client", () => ({
 import { useAppStore } from "../../src/stores/app";
 import {
   claimNotes,
+  figureNoteRequest,
   noteList,
   notesClaimRefused,
   notesError,
@@ -66,7 +67,10 @@ function note(overrides: Partial<Note> = {}): Note {
     quote: "energy currency",
     occurrence: 0,
     content: "",
+    targetKind: "text",
+    targetRef: null,
     messageMissing: false,
+    targetMissing: false,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -306,5 +310,82 @@ describe("a note with no annotation", () => {
       type: "other",
       content: "revise this",
     });
+  });
+});
+
+/**
+ * A note about a 图 or a 表, whose window is built from the figure rather than from a selection.
+ *
+ * Three things are the entity's rules rather than incidental plumbing: the pair travels together
+ * to the API, the kind starts at a stance rather than at 标注 (there is no passage to mark), and
+ * there is nothing to locate — a figure note names no message, so a 定位 button would scroll
+ * nowhere while looking exactly like one that works.
+ */
+describe("a note about a figure", () => {
+  it("sends the target pair, and offers no 定位", async () => {
+    await claimed();
+    const request = figureNoteRequest({
+      kind: "diagram",
+      ref: "auth-flow.mmd",
+      label: "auth-flow",
+    })!;
+
+    expect(request.draft).toMatchObject({
+      quote: "",
+      type: "idea",
+      content: "",
+      target: { kind: "diagram", ref: "auth-flow.mmd", label: "auth-flow" },
+    });
+    expect(request.locate).toBeNull();
+
+    mocks.api.createNote.mockResolvedValue(
+      note({ id: "n10", messageId: null, quote: "", targetKind: "diagram", targetRef: "auth-flow.mmd" })
+    );
+    await expect(request.save({ type: "idea", content: "这一步没看懂" })).resolves.toBe(true);
+    expect(mocks.api.createNote).toHaveBeenCalledWith(SESSION, {
+      targetKind: "diagram",
+      targetRef: "auth-flow.mmd",
+      type: "idea",
+      content: "这一步没看懂",
+    });
+  });
+
+  it("carries a table the same way, with the kind that says which table to look in", async () => {
+    await claimed();
+    const request = figureNoteRequest({ kind: "table", ref: "scores", label: "scores" })!;
+    mocks.api.createNote.mockResolvedValue(note({ id: "n11", targetKind: "table", targetRef: "scores" }));
+    await request.save({ type: "question", content: "第二列是什么？" });
+    expect(mocks.api.createNote).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ targetKind: "table", targetRef: "scores" })
+    );
+  });
+
+  it("hands the editor the target when an existing figure note is opened, and nothing for a text note", async () => {
+    // The window has to keep showing what the note is about — it is the one place that would
+    // otherwise have forgotten, since the note's own row is behind the card.
+    await claimed([
+      note({ id: "n12", messageId: null, quote: "", targetKind: "table", targetRef: "scores" }),
+      note({ id: "n13", messageId: null, quote: "", targetKind: "text", targetRef: null }),
+    ]);
+
+    openNoteEditor(noteList.value.find((n) => n.id === "n12")!);
+    expect(list.editors.at(-1)!.draft.target).toMatchObject({ kind: "table", ref: "scores" });
+
+    // And a text note gets none, so the window draws no 标注对象 field for a note that has no
+    // figure — the absence is the field, not a value saying "text".
+    openNoteEditor(noteList.value.find((n) => n.id === "n13")!);
+    expect(list.editors.at(-1)!.draft.target).toBeUndefined();
+  });
+
+  it("builds no window at all when there is no conversation loaded", () => {
+    /*
+     * `figureNoteRequest` reads the loaded session, so a figure row drawn before a conversation
+     * is on screen — which the panel renders for a moment on every switch — cannot file a note
+     * against whichever conversation happens to be loaded next. Null is the caller's answer not
+     * to offer the control.
+     */
+    resetNotes();
+    expect(figureNoteRequest({ kind: "diagram", ref: "x.mmd", label: "x" })).toBeNull();
   });
 });

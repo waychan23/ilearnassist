@@ -10,6 +10,8 @@ import {
   setNoteHighlights,
   type ClaimResult,
   type NoteCapture,
+  type NoteEditorRequest,
+  type NoteFigureNote,
 } from "./messageNotes";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 
@@ -282,7 +284,24 @@ export function openNoteEditor(note: Note, anchor?: { x: number; y: number } | n
   const sessionId = loadedSessionId.value;
   if (!sessionId) return;
   requestNoteEditor({
-    draft: { noteId: note.id, quote: note.quote, type: note.type, content: note.content },
+    draft: {
+      noteId: note.id,
+      quote: note.quote,
+      type: note.type,
+      content: note.content,
+      // Read-only context, not an editable field: `update` sends only the type and the body, so
+      // a note that has been saved always still points at what it was written about. Showing it
+      // is what keeps the window from being the one place that has forgotten.
+      ...(note.targetKind !== "text" && note.targetRef !== null
+        ? {
+            target: {
+              kind: note.targetKind as NoteFigureNote["kind"],
+              ref: note.targetRef,
+              label: note.targetRef,
+            },
+          }
+        : {}),
+    },
     anchor: anchor ?? null,
     // 定位 exists only when there is a place to go: an unanchored note never had one, and a
     // note whose message was deleted has lost it. Both are "no button" rather than a button
@@ -308,6 +327,43 @@ export function openNewNoteEditor(): void {
     save: (input) =>
       create(sessionId, { type: input.type, content: input.content }),
   });
+}
+
+/**
+ * The window over a 图 or a 表, opened from wherever that figure is shown.
+ *
+ * Built here rather than by the caller because a figure note is a *note* — it goes through the
+ * same `create`, the same claim and the same writability as any other — and the panel that
+ * draws the figure should not have to know how one is stored. What the caller supplies is the
+ * only thing it knows and this module does not: which figure the reader pointed at, and where
+ * on screen they pointed at it.
+ *
+ * `type` starts at `idea` rather than `annotation`, the same choice `openNewNoteEditor` makes
+ * for the same reason: 标注 means "this marks a passage", and there is no passage here. The
+ * window's own strip drops that kind for the same reason, so the two agree by construction
+ * rather than by both remembering.
+ *
+ * `locate` is null and `quote` is empty on purpose: a figure note has no message to scroll to
+ * and no text to highlight, so 定位 is not offered at all rather than offered and refused.
+ */
+export function figureNoteRequest(
+  target: NoteFigureNote,
+  anchor?: { x: number; y: number } | null
+): NoteEditorRequest | null {
+  const sessionId = loadedSessionId.value;
+  if (!sessionId) return null;
+  return {
+    draft: { quote: "", type: "idea", content: "", target },
+    locate: null,
+    anchor: anchor ?? null,
+    save: (input) =>
+      create(sessionId, {
+        targetKind: target.kind,
+        targetRef: target.ref,
+        type: input.type,
+        content: input.content,
+      }),
+  };
 }
 
 // A claim that moves to another conversation must stop marking the old one's messages, and
