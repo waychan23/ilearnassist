@@ -108,6 +108,20 @@ async function submit(): Promise<void> {
     } else {
       const pending = [...files.value];
       for (const file of pending) {
+        /*
+         * Checked here as well as on the server, and the *order* is the point: a limit an
+         * administrator has raised to 60 MB is one a user should be able to use, and a file past
+         * it should be refused without being sent. Same sentence as the composer's, since it is
+         * the same rule.
+         */
+        const limit = store.uploadLimitBytes();
+        if (file.size > limit) {
+          error.value = `${file.name}: ${t("attachments.tooLarge", {
+            name: file.name,
+            limitMb: Math.round(limit / 1024 / 1024),
+          })}`;
+          return;
+        }
         try {
           await api.uploadWorkspaceFile(workspaceId.value, {
             dir: dir.value.trim().replace(/^\.?\/+|\/+$/g, ""),

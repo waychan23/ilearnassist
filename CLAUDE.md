@@ -1245,6 +1245,16 @@ Fuller map in `docs/reference.md`.
   `create-admin` makes — the person at the machine is the superadmin — so no random password is
   generated or shown and the success envelope carries no password back; the terminal path keeps
   `--generate`. `cli reset-admin` requires exactly one of the two flags.
+- **The upload limit is an installation-wide setting, and its ceiling is a fact about routes.**
+  `MAX_ATTACHMENT_BYTES` (10 MB) is the *default*; the value in force lives in `app_settings`
+  (`upload.maxFileBytes`), is written by `PUT /api/upload-settings`, and reaches the client as
+  `PublicConfig.maxUploadBytes` so the composer refuses past it before a request is made. The
+  ceiling (100 MB) is not a policy choice: Fastify's `bodyLimit` is fixed when a route is
+  registered, so the route carries the ceiling and the *handler* compares against the setting.
+  Two consequences worth keeping: a body past the ceiling is refused by Fastify without our
+  envelope, and every `FILE_TOO_LARGE` refusal must name the limit that actually applied
+  (`fileTooLarge(limit)`) — a sentence compiled against the constant would tell a user "10 MB" while
+  refusing at 50.
 - **A setting every account shares is an administrator's to change, and the split is
   "configure vs choose".** Providers and models, document parsers, the parsing policy and the app
   defaults are **installation-wide**; their *writes* carry `requirePlatformAdmin` (either tier)

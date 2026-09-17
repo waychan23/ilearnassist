@@ -378,6 +378,65 @@ test("the documents section is the console's, not Settings'", async ({ page }) =
   await expect(page.getByTestId("parse-policy")).toHaveValue("local-first");
 });
 
+test("an administrator sets the upload limit, and it refuses a file past it", async ({ page }) => {
+  /*
+   * The whole loop, and it has to be a browser because the claim spans three surfaces that a unit
+   * test cannot put in one room: the console writes the setting, `/api/config` carries it into the
+   * *store*, and the composer's pre-check reads it there. A test on the route alone would pass
+   * with a client that still refused at the old constant.
+   */
+  await openConsole(page);
+  await page.getByTestId("admin-nav-uploads").click();
+  await expect(page.getByTestId("admin-uploads")).toBeVisible();
+
+  // The default, and the range it is allowed to sit in.
+  const field = page.getByTestId("admin-upload-mb");
+  await expect(field).toHaveValue("10");
+  await expect(page.getByTestId("admin-uploads")).toContainText("1–100");
+
+  await field.fill("1");
+  await page.getByTestId("admin-upload-save").click();
+  await expect(page.getByTestId("admin-upload-saved")).toBeVisible();
+
+  // A file past it is refused *before* it is sent, with the limit named — and the sentence is the
+  // catalog's, so the number in it comes from the server's own answer rather than a constant.
+  //
+  // Back out through the console's own control rather than a reload: it is the path a person
+  // takes, and it is what makes the store keep the config it just saved.
+  await page.getByTestId("admin-back").click();
+
+  /*
+   * A workspace of its own, and that is not tidiness — `enterWorkspace(page)` with no name opens
+   * the suite's shared default workspace, which `chat.spec.ts` asserts holds exactly one
+   * conversation. A spec that made a second one there would fail that assertion whenever the two
+   * ran in parallel, which is a failure pointing at the wrong file entirely.
+   */
+  const workspace = `upload-limit ${Date.now()}`;
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(workspace);
+  await page.getByTestId("workspace-create-submit").click();
+  await enterWorkspace(page, workspace);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await page.getByTestId("composer-input").fill("hi");
+
+  await page.getByTestId("composer-file-input").setInputFiles({
+    name: "big.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.alloc(2 * 1024 * 1024),
+  });
+  await expect(page.getByTestId("toast")).toContainText("1 MB");
+  // Nothing was uploaded: the composer has no chip for it.
+  await expect(page.getByTestId("attachment-chip")).toHaveCount(0);
+
+  // Put it back, so a later spec in this file does not inherit a 1 MB cap.
+  await openConsole(page);
+  await page.getByTestId("admin-nav-uploads").click();
+  await page.getByTestId("admin-upload-mb").fill("10");
+  await page.getByTestId("admin-upload-save").click();
+  await expect(page.getByTestId("admin-upload-saved")).toBeVisible();
+});
+
 test("an ordinary account is offered no way to configure models", async ({ page, request }) => {
   const password = await ensureUser(request, "chooser");
 

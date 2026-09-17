@@ -8,7 +8,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_BYTES, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_FILE_PREVIEW_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
+} from "@ilearnassist/shared";
 import { sourceRawPath } from "../src/sourcePaths.js";
 import { captureWebPage } from "../src/webCapture.js";
 import { DEFAULT_SESSION_TITLE } from "../src/db.js";
@@ -20,6 +25,7 @@ import type {
   DirectoryListing,
   FileContent,
   ProviderConfig,
+  PublicConfig,
   Source,
   Session,
   Workspace,
@@ -398,6 +404,84 @@ describe("workspace files", () => {
     // asking differently, and the only status here that is not a bad request or a missing file.
     expect(res.statusCode).toBe(413);
     expect(res.json<ApiErrorBody>().error.code).toBe("FILE_TOO_LARGE");
+  });
+
+  it("refuses a file past the configured upload limit, naming it", async () => {
+    /*
+     * The setting in force rather than a constant, and the *sentence* is asserted as well as the
+     * status: the message used to be compiled against `MAX_ATTACHMENT_BYTES`, so a server that
+     * refused at 1 MB while saying "10 MB" is exactly the failure a dynamic limit introduces.
+     */
+    const admin = await inject({ method: "PUT", url: "/api/upload-settings", payload: { maxUploadBytes: 1024 * 1024 } });
+    expect(admin.statusCode).toBe(200);
+    expect(admin.json<PublicConfig>().maxUploadBytes).toBe(1024 * 1024);
+
+    const workspace = await seededWorkspace();
+    const session = await newSession(env, workspace.id);
+    const res = await inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/sources`,
+      payload: {
+        name: "big.txt",
+        mimeType: "text/plain",
+        data: Buffer.alloc(2 * 1024 * 1024).toString("base64"),
+      },
+    });
+
+    expect(res.statusCode).toBe(413);
+    const error = res.json<ApiErrorBody>().error;
+    expect(error.code).toBe("FILE_TOO_LARGE");
+    expect(error.params).toMatchObject({ limitMb: 1 });
+
+    // And the workspace upload route, which used to answer the same refusal *without* the number.
+    const viaWorkspace = await inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/files/upload`,
+      payload: { name: "big.txt", data: Buffer.alloc(2 * 1024 * 1024).toString("base64") },
+    });
+    expect(viaWorkspace.statusCode).toBe(413);
+    expect(viaWorkspace.json<ApiErrorBody>().error.params).toMatchObject({ limitMb: 1 });
+
+    // Put it back, or every later test in this file inherits a 1 MB cap.
+    await inject({ method: "PUT", url: "/api/upload-settings", payload: { maxUploadBytes: MAX_ATTACHMENT_BYTES } });
+  });
+
+  it("refuses an upload limit outside the range, and one that is not a whole number", async () => {
+    for (const maxUploadBytes of [
+      MAX_UPLOAD_CEILING_BYTES + 1,
+      MIN_UPLOAD_LIMIT_BYTES - 1,
+      1024 * 1024 + 0.5,
+      "1048576",
+      undefined,
+    ]) {
+      const res = await inject({ method: "PUT", url: "/api/upload-settings", payload: { maxUploadBytes } });
+      expect(res.statusCode, String(maxUploadBytes)).toBe(400);
+      expect(res.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+    }
+    // Refused rather than clamped: a number outside the range is a request that did not mean
+    // what it said, and storing the nearest legal value would report success and deliver
+    // something else.
+    expect((await inject({ method: "GET", url: "/api/config" })).json<PublicConfig>().maxUploadBytes).toBe(
+      MAX_ATTACHMENT_BYTES
+    );
+  });
+
+  it("keeps the upload setting to administrators", async () => {
+    // An ordinary account may *read* the cap — its composer needs it — and may not set it.
+    const bob = await env.asUser("UploadBob");
+    expect(
+      (await bob.inject({ method: "GET", url: "/api/config" })).json<PublicConfig>().maxUploadBytes
+    ).toBe(MAX_ATTACHMENT_BYTES);
+
+    const res = await bob.inject({
+      method: "PUT",
+      url: "/api/upload-settings",
+      payload: { maxUploadBytes: 5 * 1024 * 1024 },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((await inject({ method: "GET", url: "/api/config" })).json<PublicConfig>().maxUploadBytes).toBe(
+      MAX_ATTACHMENT_BYTES
+    );
   });
 
   it("refuses a raw path that escapes the workspace", async () => {

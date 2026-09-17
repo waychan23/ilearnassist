@@ -202,12 +202,30 @@ export default {
       users: "管理这个实例上的账号。",
       providers: "配置所有账号共用的模型服务；普通用户只能在已配置的模型中选择使用。",
       documents: "配置所有账号共用的文档解析方式。",
+      uploads: "所有账号共用的上传限制。",
     },
     /** The left menu. One entry per section; the key is the section id. */
     nav: {
       users: "用户管理",
       providers: "模型服务",
       documents: "文档解析",
+      uploads: "上传设置",
+    },
+    /**
+     * The upload limit. The unit is MB here and bytes on the wire, and the conversion lives in
+     * `UploadsSection` — the one boundary where a person types a number.
+     */
+    uploads: {
+      maxSize: "单个文件大小上限（MB）",
+      range: "可设置 {min}–{max} MB。",
+      saving: "保存中…",
+      saved: "已保存",
+      /**
+       * The half of the rule a number cannot state: what happens to a file past the limit. Said
+       * here rather than discovered, because "why can't I upload this" is the question the setting
+       * exists to answer, and the refusal arrives before the file is sent.
+       */
+      note: "超过上限的文件会在上传前被拒绝，并提示实际上限。附件与工作区文件共用这一个限制。",
     },
     create: "新建用户",
     roles: "角色",

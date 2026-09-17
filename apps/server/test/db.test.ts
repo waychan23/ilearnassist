@@ -7,12 +7,21 @@ import {
   createDb,
   DEFAULT_SESSION_TITLE,
   guessCapabilities,
+  readMaxUploadBytes,
   seedFromConfig,
   SETTING_DEFAULT_MODEL,
   SETTING_DEFAULT_PROVIDER,
+  SETTING_MAX_UPLOAD_BYTES,
   type AppDb,
 } from "../src/db.js";
-import { DEFAULT_WIDGET_IDS, type Session, type ToolCall } from "@ilearnassist/shared";
+import {
+  DEFAULT_WIDGET_IDS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
+  type Session,
+  type ToolCall,
+} from "@ilearnassist/shared";
 import { SCHEMA_VERSION } from "../src/schema.js";
 
 let root: string;
@@ -330,6 +339,30 @@ describe("sessions", () => {
 
   it("returns undefined from setAutoTitle for a missing session", () => {
     expect(db.setAutoTitleForUser("nope", OWNER, "x", "model")).toBeUndefined();
+  });
+
+  it("reads the upload limit, falling back and clamping", () => {
+    /*
+     * The three answers this can give, and the third is the one worth having: a hand-edited row
+     * cannot turn the cap off or make it absurd, because the *route* must not be the place that
+     * discovers a bad value. An unset install behaves exactly as it did before the setting
+     * existed, which is what makes it safe to ship without a config seed.
+     */
+    expect(readMaxUploadBytes(db)).toBe(MAX_ATTACHMENT_BYTES);
+
+    db.setSetting(SETTING_MAX_UPLOAD_BYTES, String(3 * 1024 * 1024));
+    expect(readMaxUploadBytes(db)).toBe(3 * 1024 * 1024);
+
+    for (const [stored, expected] of [
+      ["0", MAX_ATTACHMENT_BYTES],
+      ["-5", MAX_ATTACHMENT_BYTES],
+      ["not a number", MAX_ATTACHMENT_BYTES],
+      [String(MAX_UPLOAD_CEILING_BYTES * 4), MAX_UPLOAD_CEILING_BYTES],
+      ["1000", MIN_UPLOAD_LIMIT_BYTES],
+    ] as const) {
+      db.setSetting(SETTING_MAX_UPLOAD_BYTES, stored);
+      expect(readMaxUploadBytes(db), stored).toBe(expected);
+    }
   });
 
   it("returns undefined from updateSession for a missing session", () => {

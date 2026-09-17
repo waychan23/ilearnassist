@@ -48,7 +48,7 @@ export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
  * A section id is also what the console's left menu is built from, so the flag and the menu
  * cannot disagree about what exists.
  */
-export type AdminSection = "users" | "providers" | "documents";
+export type AdminSection = "users" | "providers" | "documents" | "uploads";
 
 export const uiState = reactive({
   /** The account's own Copilots, opened from the menu either rail draws. */

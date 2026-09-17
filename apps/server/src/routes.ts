@@ -42,6 +42,7 @@ import type {
   UpdateDocumentParserInput,
   UpdateDocumentParsingInput,
   UpdateProviderInput,
+  UpdateUploadSettingsInput,
   UpdateSessionInput,
   UpdateUserInput,
   UpdateWorkspaceInput,
@@ -63,6 +64,8 @@ import {
   isPlatformAdmin,
   isUserRole,
   MAX_ATTACHMENT_BYTES,
+  MAX_UPLOAD_CEILING_BYTES,
+  MIN_UPLOAD_LIMIT_BYTES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   EXPLORE_TOOL_NAME,
@@ -85,12 +88,14 @@ import {
   DEFAULT_SESSION_TITLE,
   newId,
   readDocumentParsing,
+  readMaxUploadBytes,
   SETTING_DEFAULT_MODEL,
   SETTING_DEFAULT_PROVIDER,
   SETTING_DOCUMENT_DEFAULT_PARSER,
   SETTING_DOCUMENT_FALLBACK,
   SETTING_DOCUMENT_LOCAL_ENABLED,
   SETTING_DOCUMENT_POLICY,
+  SETTING_MAX_UPLOAD_BYTES,
   type AppDb,
   type ProviderRecord,
   type SourceRecord,
@@ -276,8 +281,31 @@ interface RoutesOptions {
   layout: DataLayout;
 }
 
-/** Base64 inflates bytes by 4/3, and the JSON envelope adds a little more. */
-const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 64 * 1024;
+/**
+ * The route's own body limit: base64 inflates bytes by 4/3, and the JSON envelope adds a little
+ * more.
+ *
+ * Derived from the **ceiling**, not from the configured limit, and that is forced rather than
+ * chosen: `bodyLimit` is a number fixed when the route is registered, so a limit an administrator
+ * can change at runtime cannot be what this reads. The handler compares against the value in force
+ * (`effectiveUploadLimit`), so the two agree for every setting an administrator can save — and a
+ * request past the ceiling is refused by Fastify before the handler runs, which is the one
+ * refusal on this path that does not carry `FILE_TOO_LARGE`. `MAX_UPLOAD_CEILING_BYTES` says why
+ * the ceiling is where it is.
+ */
+const ATTACHMENT_BODY_LIMIT = Math.ceil((MAX_UPLOAD_CEILING_BYTES * 4) / 3) + 64 * 1024;
+
+/**
+ * The `FILE_TOO_LARGE` refusal, built from the limit in force.
+ *
+ * A function because the number is no longer a constant: the message and its `limitMb` parameter
+ * both have to name the cap that actually applied, and a sentence compiled against the old
+ * constant is how a user is told "10 MB" by a server that refused at 50.
+ */
+function fileTooLarge(limit: number): ApiErrorBody {
+  const limitMb = Math.round(limit / 1024 / 1024);
+  return apiError("FILE_TOO_LARGE", `File is larger than the ${limitMb} MB limit`, { limitMb });
+}
 
 /** The parse-failure envelope: the code is the taxonomy value, the sentence a fallback. */
 function parseApiError(err: unknown): ApiErrorBody {
@@ -1242,6 +1270,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       webSearchProvider: config.tools.webSearch.provider,
       documentParsers: documentParserConfigs(),
       documentParsing: documentParsing(),
+      // Read per request rather than cached: it is one `app_settings` lookup, and a cached value
+      // would be a second copy free to disagree with the one the upload routes enforce.
+      maxUploadBytes: readMaxUploadBytes(db),
     };
   }
 
@@ -1557,9 +1588,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * like the chat upload route, which is what keeps this dependency-free (`@fastify/multipart`
    * is not installed) at the cost of a ~33% larger body — hence the raised `bodyLimit`.
    *
-   * The cap is the attachment cap rather than something larger, deliberately: two numbers would
-   * be two answers to "how big a file may I put in this app", and the message names the limit so
-   * raising it is a visible change rather than a guess.
+   * The cap is the same one the chat upload uses rather than something larger, deliberately: two
+   * numbers would be two answers to "how big a file may I put in this app", and both now name the
+   * limit they applied so raising it is a visible change rather than a guess.
    */
   app.post(
     "/api/workspaces/:workspaceId/files/upload",
@@ -1581,8 +1612,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       if (bytes.length === 0) {
         return reply.code(400).send(apiError("INVALID_BASE64", "file data could not be decoded"));
       }
-      if (bytes.length > MAX_ATTACHMENT_BYTES) {
-        return reply.code(413).send(apiError("FILE_TOO_LARGE", "file is too large"));
+      const uploadLimit = readMaxUploadBytes(db);
+      if (bytes.length > uploadLimit) {
+        // With the `limitMb` the other route has always carried, and which this one used to omit:
+        // the number is a setting now, so a refusal that does not name it leaves the user to
+        // guess which of two numbers they hit.
+        return reply.code(413).send(fileTooLarge(uploadLimit));
       }
 
       const dir = (body.dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
@@ -3026,13 +3061,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         return reply.code(400).send(apiError("INVALID_BASE64", "data is not valid base64"));
       }
       if (bytes.byteLength === 0) return reply.code(400).send(apiError("EMPTY_FILE", "file is empty"));
-      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
-        const limitMb = Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024);
-        return reply
-          .code(413)
-          .send(
-            apiError("FILE_TOO_LARGE", `File is larger than the ${limitMb} MB limit`, { limitMb })
-          );
+      // Read here rather than at registration, because this is the number an administrator can
+      // change and the `bodyLimit` above is not.
+      const uploadLimit = readMaxUploadBytes(db);
+      if (bytes.byteLength > uploadLimit) {
+        return reply.code(413).send(fileTooLarge(uploadLimit));
       }
 
       /*
@@ -3649,6 +3682,43 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       db.setSetting(SETTING_DOCUMENT_DEFAULT_PARSER, pin);
     }
     return documentParsing();
+  });
+
+  /**
+   * The upload limit, which is an installation-wide setting like the parsers above and an
+   * administrator's to change for the same reason.
+   *
+   * Its own route rather than a field on `PUT /api/defaults`, which is about which model turns run
+   * against: this one changes what every account may *send*, and the two share nothing but a gate.
+   * The value must be a whole number of bytes within the floor and the ceiling — refused rather
+   * than clamped, because a number outside that range is a request that did not mean what it said,
+   * and silently storing the nearest legal limit would report success and deliver something else.
+   */
+  app.put("/api/upload-settings", async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return reply;
+
+    const body = request.body as UpdateUploadSettingsInput;
+    const value = body?.maxUploadBytes;
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < MIN_UPLOAD_LIMIT_BYTES ||
+      value > MAX_UPLOAD_CEILING_BYTES
+    ) {
+      return reply
+        .code(400)
+        .send(
+          apiError(
+            "INVALID_FIELD",
+            `maxUploadBytes must be a whole number between ${MIN_UPLOAD_LIMIT_BYTES} and ${MAX_UPLOAD_CEILING_BYTES}`
+          )
+        );
+    }
+
+    db.setSetting(SETTING_MAX_UPLOAD_BYTES, String(value));
+    // The whole config back, like `PUT /api/defaults`: the console's state is `store.config`, and
+    // returning only the field would give it two ways to hold the same fact.
+    return publicConfig(actor(request));
   });
 
   /* --------------------------------- app defaults ------------------------------ */
