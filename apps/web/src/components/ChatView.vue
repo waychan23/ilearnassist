@@ -463,12 +463,12 @@ function onEditorLocate(): void {
  * `NoteEditorRequest` is that the message list can show a note window without knowing what a note
  * is. What the draft does carry is the id, and an id is what a note reference is.
  *
- * **The window stays open**, which took a moment to settle. Closing it is what every other action
- * in that window does, but 追问 is not *finishing* with the note — the reader may well want to
- * carry on writing it after asking. And this window's close path raises a discard confirm when
- * there are unsaved edits, so closing here would answer a press meant as "ask about this" with a
- * question about throwing work away. The composer takes the caret on its own when the reference
- * lands, which is the part that matters.
+ * **Staging only — the window closes itself.** `NoteEditor` emits `ask` and then runs its own
+ * guarded `close()`, which is where the discard confirm for unsaved writing lives; routing that
+ * through here would be a second close path in a component that has exactly one, and the guard is
+ * what keeps a half-written note from being the price of asking a question. The order is
+ * deliberate on that side too: the reference is staged before the prompt, so cancelling it leaves
+ * the question intact.
  */
 function onEditorAsk(): void {
   const request = editorRequest.value;

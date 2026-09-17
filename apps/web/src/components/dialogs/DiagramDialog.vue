@@ -99,18 +99,26 @@ const { t } = useI18n();
 const store = useAppStore();
 
 /**
- * Ask about the figure on screen.
+ * Ask about the figure on screen — and get out of the way of the answer.
  *
  * The dialog is where a reader is when they have a question about what they are looking at, and
  * the card that opened it is behind this overlay — so the same control has to exist here or the
  * enlarged view is the one place a question cannot be asked.
  *
- * The dialog stays open: the composer behind it is where the question is typed, and closing here
- * would hide the figure the question is about. The viewer is not modal in that sense — it does not
- * trap anything, and the chip is already staged.
+ * **It closes**, which it did not at first, and the reason it must is the one the quiz dialog
+ * already gives: the composer is behind this overlay, so a chip staged underneath it is a chip the
+ * reader cannot see, and the field that has just taken the caret is covered by the thing that put
+ * it there. A full-screen overlay cannot move aside — there is nowhere to move to — so dismissing
+ * is the only way it can stop being in the way, and it is the shape every other 追问 source
+ * already has.
+ *
+ * What closes is the *viewer*, not the question: the figure is in the reference now, where the
+ * agent reads it, and the chip names it. Nothing is lost but a second copy of the subject.
  */
 function askAbout(): void {
-  if (props.figure) store.stageReference(props.figure);
+  if (!props.figure) return;
+  store.stageReference(props.figure);
+  emit("close");
 }
 
 const MIN_ZOOM = 0.25;
