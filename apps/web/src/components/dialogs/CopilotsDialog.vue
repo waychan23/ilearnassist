@@ -3,7 +3,6 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import { confirm } from "../../composables/confirm";
-import { showAdmin } from "../../composables/ui";
 import type { Copilot } from "../../api/types";
 import type { CopilotDraft } from "../../stores/app";
 import CopilotDialog from "./CopilotDialog.vue";

@@ -101,6 +101,15 @@ const mocks = vi.hoisted(() => ({
     resetAccountPassword: vi.fn(),
     revokeAccountSessions: vi.fn(),
   },
+  /**
+   * The router, which the store pushes to in the two places a *write* moves the app — a
+   * conversation it just made, and the fork a plan edit opens. There is no component to push
+   * from in either case, which is why the store holds it at all.
+   *
+   * Mocked rather than built: this file tests the store, and a real router would drag the lazy
+   * route components (and their own imports) into a suite that has no browser.
+   */
+  router: { push: vi.fn(), replace: vi.fn() },
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
   streamRegenerate: vi.fn(),
@@ -113,6 +122,8 @@ const mocks = vi.hoisted(() => ({
    */
   setUnauthenticatedHandler: vi.fn(),
 }));
+
+vi.mock("../../src/router", () => ({ router: mocks.router }));
 
 vi.mock("../../src/api/client", () => ({
   api: mocks.api,
@@ -285,6 +296,19 @@ function widgetState(...enabled: WidgetId[]): WidgetState[] {
   ];
 }
 
+/**
+ * What used to be `store.init()`, as the two questions it turned out to be.
+ *
+ * `probeAccount` answers *who is asking* and `ensureLoaded` answers *what they get*, and the
+ * split is the router's: whether to load anything at all depends on which page the URL names,
+ * so the decision lives in `router/guards.ts` and the store answers the two halves. A test
+ * that is not about a refused page wants both, in this order.
+ */
+async function enterApp(store: ReturnType<typeof useAppStore>): Promise<void> {
+  await store.probeAccount();
+  await store.ensureLoaded();
+}
+
 /** Put the store in a state where a session is selected and ready to chat. */
 async function readyStore(
   options: { sessions?: Session[]; messages?: Message[]; widgets?: WidgetId[] } = {}
@@ -302,7 +326,7 @@ async function readyStore(
   );
 
   const store = useAppStore();
-  await store.init();
+  await enterApp(store);
   await store.selectSession("s1");
   mocks.api.listSessions.mockClear();
   mocks.api.listMessages.mockClear();
@@ -348,6 +372,10 @@ beforeEach(() => {
   mocks.api.releaseSessionLock.mockResolvedValue({ released: true });
   mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [] });
   mocks.fileToBase64.mockResolvedValue("aGk=");
+  // Re-established here for the same reason as the locks above: a navigation *resolves*, and
+  // the store awaits one before it goes on to name a widget tab.
+  mocks.router.push.mockResolvedValue(undefined);
+  mocks.router.replace.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -359,7 +387,7 @@ afterEach(() => {
 describe("init", () => {
   it("loads config, workspaces, copilots and sessions", async () => {
     const store = useAppStore();
-    await store.init();
+    await enterApp(store);
 
     expect(mocks.api.listCopilots).toHaveBeenCalled();
     expect(store.config).toEqual(CONFIG);
@@ -372,12 +400,14 @@ describe("init", () => {
     mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
 
     const store = useAppStore();
-    await store.init();
+    await enterApp(store);
 
     // The widget list is **omitted**, not sent empty, and that is the distinction the API is
     // built on: this workspace was created by the app rather than by the dialog, so nobody made a
     // choice about it and it takes the server's default rather than asserting "none".
-    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("默认工作区", undefined);
+    // The description is `""` rather than absent: the two are the same claim there, and a
+    // workspace nobody described is stored as an empty string either way.
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("默认工作区", undefined, "");
     expect(store.workspaces).toHaveLength(1);
   });
 
@@ -385,11 +415,10 @@ describe("init", () => {
     // Order matters, and not as a style point: everything below is scoped to an account, so
     // loading first would be a set of requests that are about to 401.
     const store = useAppStore();
-    await store.init();
+    await enterApp(store);
 
     expect(mocks.api.me).toHaveBeenCalled();
     expect(store.account).toEqual(ACCOUNT);
-    expect(uiState.view).toBe("home");
     expect(uiState.authReady).toBe(true);
   });
 
@@ -399,10 +428,10 @@ describe("init", () => {
     mocks.api.me.mockRejectedValue(new ApiError("UNAUTHENTICATED", "no session", 401));
 
     const store = useAppStore();
-    await store.init();
+    await store.probeAccount();
 
     expect(store.account).toBeNull();
-    expect(uiState).toMatchObject({ view: "login", authReady: true });
+    expect(uiState.authReady).toBe(true);
     expect(store.error).toBeNull();
     expect(mocks.api.getConfig).not.toHaveBeenCalled();
     expect(mocks.api.listWorkspaces).not.toHaveBeenCalled();
@@ -413,7 +442,7 @@ describe("uploaded files", () => {
   it("loads the account's files on demand, not with everything else", async () => {
     // `init` must not fetch the whole library: this is a dialog most sessions never open.
     const store = useAppStore();
-    await store.init();
+    await enterApp(store);
     expect(mocks.api.listSources).not.toHaveBeenCalled();
 
     mocks.api.listSources.mockResolvedValue([sourceOf({ id: "a1", name: "one.pdf" })]);
@@ -471,7 +500,16 @@ describe("uploaded files", () => {
 });
 
 describe("signing in and out", () => {
-  it("loads the app for whoever just signed in", async () => {
+  it("takes the account, and loads nothing of its own accord", async () => {
+    /*
+     * The split that a first-run account made concrete. An account an administrator created owes
+     * a password change, and the server refuses everything but three routes until it is settled —
+     * so a load attempted on the way in is a page of 403s, and from the *form* it reads as "that
+     * password is wrong", which is the one thing a sign-in failure must not say by accident.
+     *
+     * Where to land is the guard's call (it reads the `redirect` a refusal carried) and so is
+     * whether to load (it asks about the password first). The store's half is the account.
+     */
     mocks.api.login.mockResolvedValue({ user: structuredClone(ACCOUNT), tokens: TOKENS });
 
     const store = useAppStore();
@@ -481,8 +519,38 @@ describe("signing in and out", () => {
     // the account the user means to sign in as is the one without it.
     expect(mocks.api.login).toHaveBeenCalledWith("Ada", "hunter2");
     expect(store.account).toEqual(ACCOUNT);
-    expect(uiState.view).toBe("home");
-    expect(mocks.api.listWorkspaces).toHaveBeenCalled();
+    expect(mocks.api.listWorkspaces).not.toHaveBeenCalled();
+    expect(store.activeWorkspaceId).toBeNull();
+
+    // And the load is still there to be asked for, which is what the guard does next.
+    await store.ensureLoaded();
+    expect(store.activeWorkspaceId).toBe("w1");
+  });
+
+  it("loads once, however many navigations ask", async () => {
+    // `ensureLoaded` answers with one memoised promise, and the guard runs on every navigation
+    // into a signed-in page — so a reload that lands on a conversation must not fetch the
+    // account's config on the way past each hop.
+    const store = useAppStore();
+    await enterApp(store);
+    await store.ensureLoaded();
+    await store.ensureLoaded();
+
+    expect(mocks.api.getConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads again for the next account", async () => {
+    // Signing out forgets the *promise*, not merely its results — otherwise the next account is
+    // handed a load that happened for somebody else, and an empty workspace list with nothing on
+    // the way to fill it.
+    mocks.api.login.mockResolvedValue({ user: structuredClone(ACCOUNT), tokens: TOKENS });
+    const store = await readyStore();
+
+    await store.signOut();
+    await store.signIn("Ada", "hunter2");
+    await store.ensureLoaded();
+
+    expect(mocks.api.getConfig).toHaveBeenCalledTimes(2);
   });
 
   it("holds an account that still owes a password on the change screen", async () => {
@@ -493,9 +561,11 @@ describe("signing in and out", () => {
     );
 
     const store = useAppStore();
-    await store.init();
+    await store.probeAccount();
 
-    expect(uiState.view).toBe("password");
+    // Held by the *guard*, which reads this flag and refuses every other route — and the server
+    // refuses them too. What the store owes is to have loaded nothing behind the screen.
+    expect(store.account?.mustChangePassword).toBe(true);
     expect(mocks.api.getConfig).not.toHaveBeenCalled();
     expect(mocks.api.listWorkspaces).not.toHaveBeenCalled();
   });
@@ -510,12 +580,12 @@ describe("signing in and out", () => {
     });
 
     const store = useAppStore();
-    await store.init();
+    await enterApp(store);
     await store.changePassword("issued-password", "chosen-password");
-    await store.enterApp();
+    await store.ensureLoaded();
 
     expect(store.account?.mustChangePassword).toBe(false);
-    expect(uiState.view).toBe("home");
+    expect(store.activeWorkspaceId).toBe("w1");
     expect(mocks.api.listWorkspaces).toHaveBeenCalled();
   });
 
@@ -534,7 +604,6 @@ describe("signing in and out", () => {
     expect(store.sessions).toEqual([]);
     expect(store.messages).toEqual([]);
     expect(store.activeWorkspaceId).toBeNull();
-    expect(uiState.view).toBe("login");
   });
 
   it("lands on the login screen even when the logout request fails", async () => {
@@ -549,7 +618,6 @@ describe("signing in and out", () => {
 
     expect(store.account).toBeNull();
     expect(store.workspaces).toEqual([]);
-    expect(uiState.view).toBe("login");
     expect(store.error).toBeTruthy();
   });
 
@@ -580,7 +648,6 @@ describe("signing in and out", () => {
 
     expect(store.streaming.content).toBe("");
     expect(store.messages).toEqual([]);
-    expect(uiState.view).toBe("login");
   });
 
   it("explains an expired session and clears the account when a request 401s", async () => {
@@ -594,7 +661,6 @@ describe("signing in and out", () => {
 
     expect(store.account).toBeNull();
     expect(store.workspaces).toEqual([]);
-    expect(uiState.view).toBe("login");
     expect(store.error).toBe(i18n.global.t("errors.UNAUTHENTICATED"));
   });
 });
@@ -1449,6 +1515,35 @@ describe("widgets", () => {
     } finally {
       WIDGET_MODULES.workspace_stats.onInstall = original;
     }
+  });
+
+  it("carries the description into the create request rather than a write after it", async () => {
+    /*
+     * One request, and the assertion is on the *request*: the dialog fills a description in
+     * before the workspace exists, so a follow-up `PATCH` would leave the card on screen
+     * without it — and a failure between the two leaves it that way for good.
+     */
+    const store = await readyStore();
+    mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
+
+    await store.createWorkspace("Fresh", ["workspace_stats"], "线性代数的习题");
+
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith(
+      "Fresh",
+      ["workspace_stats"],
+      "线性代数的习题"
+    );
+  });
+
+  it("sends an empty description when the form did not ask for one", async () => {
+    // The default, so a caller with no opinion — the first-run workspace — writes no column of
+    // its own rather than tripping the server's "missing named parameter".
+    const store = await readyStore();
+    mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
+
+    await store.createWorkspace("Fresh");
+
+    expect(mocks.api.createWorkspace).toHaveBeenCalledWith("Fresh", undefined, "");
   });
 
   it("runs the install hook for what a new conversation actually got", async () => {
@@ -3666,7 +3761,7 @@ describe("session write locks", () => {
     // One request for the whole list is the shape's whole point: the marks are drawn on the
     // session list, so a per-conversation check would be N requests on every entry.
     const store = useAppStore();
-    await store.init();
+    await enterApp(store);
     await store.selectWorkspace("w1");
     await vi.advanceTimersByTimeAsync(0);
 
@@ -3679,7 +3774,7 @@ describe("session write locks", () => {
     // first instead of starting its own, which is the auto-titler's "joined rather than
     // duplicated" rule.
     const store = useAppStore();
-    await store.init();
+    await enterApp(store);
     await store.selectWorkspace("w1");
     mocks.api.listWorkspaceLocks.mockClear();
 

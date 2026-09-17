@@ -92,9 +92,9 @@ export function noteSession(session: Session | null): void {
 /**
  * The reader left the conversation without another one taking its place.
  *
- * Going back to the workspace home is exactly that: `uiState.view` changes and `activeSessionId`
+ * Going back to the workspace home is exactly that: the route changes and `activeSessionId`
  * deliberately does not, so `noteSession` sees nothing to report and only an explicit call can say
- * the reader went.
+ * the reader went. `router/guards.ts` makes it, on the way out of any conversation route.
  */
 export function reportLeave(): void {
   if (current) schedule(current);

@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import {
   closeDrawer,
   openCopilots,
   openSources,
   openWorkspaceSettings,
-  showAccount,
-  showAdmin,
 } from "../composables/ui";
 import Icon from "./Icon.vue";
 
@@ -36,12 +35,14 @@ import Icon from "./Icon.vue";
  * two props that could disagree.
  *
  * The test ids are shared with the surfaces, and that is safe for a reason worth stating: the
- * two rails are never mounted at once. `uiState.view` picks `WorkspaceHome` *or* the
- * `Sidebar + ChatView` pair, so a spec that asks for `open-copilots` finds exactly one.
+ * two rails are never mounted at once. The route picks `WorkspaceHome` *or* the `Sidebar +
+ * ChatView` pair — `App.vue` draws the shell around whichever page the URL named — so a spec
+ * that asks for `open-copilots` finds exactly one.
  */
 
 const { t } = useI18n();
 const store = useAppStore();
+const router = useRouter();
 const props = defineProps<{
   /** This rail is drawn inside a workspace: it has settings to name, and a library to scope. */
   inWorkspace?: boolean;
@@ -51,7 +52,8 @@ const props = defineProps<{
  * Every dialog opened from here closes the drawer on the way out, because this menu is drawn
  * *inside* it on a compact viewport: leaving it open would carry the flag into the page behind,
  * which greets the user with a drawer they did not ask for. The two view switches
- * (`showAccount`, `showAdmin`) already do this themselves, which is why they are not here.
+ * the account and console rows do not need it: moving to another *page* is what
+ * `router/guards.ts` closes the drawer for.
  */
 function onOpenCopilots(): void {
   closeDrawer();
@@ -151,7 +153,7 @@ function onOpenSources(): void {
         class="menu-item side-menu-row"
         :title="t('admin.title')"
         data-testid="open-admin"
-        @click="showAdmin()"
+        @click="router.push({ name: 'admin' })"
       >
         <span class="gear"><Icon name="shield" /></span>
         <span class="label">{{ t("admin.title") }}</span>
@@ -169,7 +171,7 @@ function onOpenSources(): void {
         class="menu-item side-menu-row"
         :title="t('account.title')"
         data-testid="open-account"
-        @click="showAccount()"
+        @click="router.push({ name: 'account' })"
       >
         <span class="gear"><Icon name="user" /></span>
         <span class="label">{{ t("account.title") }}</span>

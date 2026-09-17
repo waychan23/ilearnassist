@@ -1,16 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import { confirm } from "../composables/confirm";
 import { isCompact } from "../composables/breakpoints";
-import {
-  closeDrawer,
-  openDrawer,
-  showWorkspaceHome,
-  uiState,
-  type AdminSection,
-} from "../composables/ui";
+import { closeDrawer, openDrawer, uiState, type AdminSection } from "../composables/ui";
 import { api } from "../api/client";
 import type { AdminUser, UserRole } from "../api/types";
 import { ADMIN_ROLE, CONSOLE_GRANTABLE_ROLES, isPlatformAdmin, isSuperadmin } from "../api/types";
@@ -55,6 +50,8 @@ import type { IconName } from "../utils/icons";
 
 const store = useAppStore();
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 
 /**
  * What the menu offers.
@@ -82,16 +79,19 @@ const SECTIONS: Section[] = [
 ];
 
 /**
- * Read from `uiState` rather than held here, because one entry point outside the console opens
- * it on a particular section — the composer's "manage models…" means providers, and landing on
- * the accounts list would answer a different question.
+ * Which section is on screen — the route, and the whole of it.
+ *
+ * Read from the URL rather than held here, because one entry point outside the console opens it
+ * on a particular section — the composer's "manage models…" means providers, and landing on the
+ * accounts list would answer a different question. It is also what makes `/admin/providers`
+ * survive a reload, which a `uiState` field could not: the section is a place in the console, so
+ * it belongs in the address of one.
+ *
+ * The guard has already narrowed `:section` to a real id by the time this runs, so the fallback
+ * is belt to that pair of braces rather than the mechanism — the initial value before the first
+ * navigation resolves is the one case it covers.
  */
-const section = computed({
-  get: () => uiState.adminSection,
-  set: (next) => {
-    uiState.adminSection = next;
-  },
-});
+const section = computed<AdminSection>(() => (route.params.section as AdminSection) ?? "users");
 
 /**
  * Choose a section, and get out of the way of the one just chosen.
@@ -107,7 +107,7 @@ const section = computed({
  * A no-op above the breakpoint, where the menu is a column and the flag is already false.
  */
 function selectSection(id: AdminSection): void {
-  section.value = id;
+  void router.push({ name: "admin", params: { section: id } });
   closeDrawer();
 }
 
@@ -375,7 +375,7 @@ async function act(user: AdminUser, run: () => Promise<unknown>): Promise<void> 
           data-testid="admin-back"
           :title="t('common.back')"
           :aria-label="t('common.back')"
-          @click="showWorkspaceHome()"
+          @click="router.push({ name: 'home' })"
         >
           <Icon name="arrow-left" />
         </button>

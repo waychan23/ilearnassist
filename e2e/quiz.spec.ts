@@ -188,7 +188,8 @@ test("answers a three-question quiz through the tabs, and the record survives a 
   // --- reload: the whole exchange must come back from the database ---
   await page.reload();
 
-  // Neither the workspace nor the session is remembered across a reload, so walk back in.
+  // The reload would leave the reader in the conversation (a page is a URL now); walking in
+  // from the front door instead reads the session again the way a new reader would.
   await enterWorkspace(page, workspace);
   await page.getByTestId("session-item").first().click();
 

@@ -1449,6 +1449,11 @@ export interface AppDb {
     name: string;
     slug: string;
     dirPath: string;
+    /**
+     * The workspace's own note about itself. Optional, and absent means `''` — the column is
+     * `NOT NULL DEFAULT ''`, so a caller that has nothing to say says nothing.
+     */
+    description?: string;
   }): Workspace;
   /**
    * The two text fields a workspace carries, either or both.
@@ -2782,9 +2787,14 @@ export function createDb(dbPath: string): AppDb {
      LEFT JOIN sessions s ON s.workspace_id = w.id AND s.deleted_at IS NULL
      WHERE w.id = ? AND w.user_id = ? AND w.deleted_at IS NULL GROUP BY w.id`
   );
+  /*
+   * `description` is written here rather than left to the column's default for the reason the
+   * route gives: the field is filled in before the workspace exists, so the description is part
+   * of what is being created rather than a correction to it.
+   */
   const stmtCreateWorkspace = db.prepare(
-    `INSERT INTO workspaces (id, user_id, name, slug, dir_path, created_at)
-     VALUES (@id, @userId, @name, @slug, @dirPath, @createdAt)`
+    `INSERT INTO workspaces (id, user_id, name, slug, dir_path, description, created_at)
+     VALUES (@id, @userId, @name, @slug, @dirPath, @description, @createdAt)`
   );
   /*
    * `COALESCE`, so "not mentioned" and "set to the empty string" stay different answers — the
@@ -3897,7 +3907,9 @@ export function createDb(dbPath: string): AppDb {
       return workspaceForUser(id, userId);
     },
     createWorkspace(input) {
-      stmtCreateWorkspace.run({ ...input, createdAt: now() });
+      // `description` first, so an input that omits it still binds the named parameter: better-
+      // sqlite3 refuses a missing one, and `description?: string` is what the callers show.
+      stmtCreateWorkspace.run({ description: "", ...input, createdAt: now() });
       const r = stmtGetWorkspaceForUser.get(input.id, input.userId) as WorkspaceRow;
       return mapWorkspace(r);
     },

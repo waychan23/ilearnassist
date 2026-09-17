@@ -30,8 +30,9 @@ import { WIDGET_MODULES, type WidgetContext } from "../widgets/registry";
  * creating a workspace or a session, deleting one, toggling a widget, toggling a whole group,
  * signing out, the 401 handler, and the cold load all move one of the inputs.
  *
- * The one transition none of them covers is leaving the chat view — `leaveWorkspace` sets
- * `uiState.view` and nothing else — and that is exactly the transition the scope owns.
+ * The one transition none of them covers is leaving a conversation for a page that has no
+ * widget panel — the route changes and `activeSessionId` deliberately does not — and that is
+ * exactly the transition the scope owns.
  */
 
 /** Which widget is live on the object on screen, or null when it is not installed there. */

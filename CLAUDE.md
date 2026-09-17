@@ -290,10 +290,13 @@ apps/server/src/
   insights.ts             # the insight pass: prompt, defensive parse, the wipe-then-insert write
 apps/web/src/
   stores/app.ts           # Pinia store (all state + actions)
+  router/index.ts         # the route table + the RouterMeta augmentation (lazy view imports)
+  router/guards.ts        # the only bridge between a URL and the store: gate, load, teardown
   api/client.ts           # fetch helpers + SSE parser (normalizes errors → ApiError)
   i18n.ts                 # vue-i18n instance + the localStorage key
   locales/                # zh-CN.ts (source of truth) + en.ts (typed against it)
   composables/confirm.ts  # promise-returning confirm() for destructive UI actions
+  composables/openSession.ts  # "open this conversation": address it, or re-read the one already open
   composables/locale.ts   # language selection (sibling of theme.ts, not a store)
   composables/messageNotes.ts   # the message list ↔ notes widget capability + its claim
   composables/messageSelection.ts  # noticing a selection inside one message
@@ -571,7 +574,9 @@ Fuller map in `docs/reference.md`.
   password to forget, a misclick costs typing a name again — and it lands on the login screen even
   when the logout request fails, because the stored token is cleared either way and leaving someone
   looking signed in is the worse of the two outcomes (the failure is surfaced, since a reload will
-  sign them back in).
+  sign them back in). That landing is now **structural rather than a line in `signOut`**: the
+  store only clears the account, and `router/guards.ts`'s watcher takes the reader to `/login` —
+  which is also what covers the 401 that arrives with nobody having navigated at all.
 - **A `source` is any material the account holds, indexed by the database and owned by a
   workspace or a conversation.** Its bytes live where they *are* — an upload at
   `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose so chat uploads
@@ -1106,18 +1111,56 @@ Fuller map in `docs/reference.md`.
   empty list for an account that had files. A `watch` on the flag with `immediate: true` is the
   shape; `SettingsDialog` is `v-if`'d and so never had the problem, which is exactly why the
   difference is easy to miss.
+- **The page is a URL, and `router/guards.ts` is the only bridge between it and the store.**
+  `apps/web/src/router/index.ts` is the route table — `/`, `/login`, `/password`, `/account`,
+  `/admin/:section?`, `/w/:workspaceId`, `/w/:workspaceId/s/:sessionId`, and a catch-all to the
+  front door — and `meta.view` on each record is the successor to `uiState.view`, typed as the
+  same `View` union so a route added without one is a `vue-tsc` error. This replaced a six-valued
+  flag on a module singleton, which was a deliberate choice when it was made ("six views do not
+  need a dependency and a route table nobody types") and the wrong one once a refresh threw the
+  reader back to the front door: a page is a *place*, and places have addresses. What follows
+  from it is load bearing:
+  - **The guard is the only thing that crosses.** The route says where you are, the store says
+    what is loaded, and `beforeEach` is what calls `selectWorkspace` / `selectSession`. Nothing
+    else may assign `activeWorkspaceId` / `activeSessionId` — `selectSession` is what gives back
+    the previous conversation's write lease and takes the next one's, and `ChatView` is *reused*
+    when only the session changes, so `sessionLock.ts`'s own teardown never fires. Assigning an id
+    directly leaves the old lease held, takes no new one, and stops the heartbeat: a conversation
+    that quietly goes read-only.
+  - **The four hooks, and what each is for.** `probeAccount()` (memoised) answers *who is asking*
+    before anything is decided; the signed-out and password-owed refusals are redirects carrying
+    `?redirect=`, which is what makes a bookmark survive the sign-in it turns out to need;
+    `ensureLoaded()` fetches the account's config and lists **once**, on navigation into a
+    signed-in page, and deliberately **not** in `signIn` — an account owing a password change is
+    refused every route but three, and a load attempted on the way in surfaces as "that password is
+    wrong" on the form. `afterEach` is the overlay teardown six `show*` helpers used to do, written
+    once as a rule and skipped when `meta.view` does not change, so switching conversation does not
+    dismiss an open settings dialog. A module-level `watch` on `store.account` moves the reader to
+    the sign-in screen when the account goes away — the one transition no navigation causes, and
+    the reason the store no longer imports the router to sign anybody out.
+  - **Route components are lazy imports, and the graph depends on it.** `stores/app.ts` imports
+    the router for the two navigations a *write* causes (a conversation it just created, and the
+    fork a plan edit opens); a route that statically imported a view would close a cycle through
+    the store. Vue reuses the instance when the vnode type is the same object, which is why both
+    chat paths name the same `ChatView` import — a remount between them would drop the composer's
+    textarea. `e2e/routing.spec.ts` asserts that on the DOM node.
+  - **A push to the address you are already at does nothing, and one action means "read it
+    again".** `composables/openSession.ts` is that rule, and it is shared by the two lists that
+    offer a conversation (`Sidebar.vue`, the workspace stats widget): clicking the row you are
+    already in re-reads it, which is also how a second client picks up a lease the first has just
+    let go.
+  - **The server needs one thing for this and only one.** `webApp.ts` answers a page-shaped
+    request it has no file for with `index.html` — `Accept: text/html` and no file extension, GET
+    and HEAD only, and `/api/…` still a JSON 404 — which is `registerWebApp`'s third promise now.
+    Vite needs nothing: `appType: "spa"` has been its default for years.
 - **The app opens on the workspace home, and a card there is the only way into a
-  conversation.** There is still no router: `App.vue` renders `LoginView`,
-  `WorkspaceHome` *or* the `Sidebar + ChatView` pair, chosen by `uiState.view` in
-  `composables/ui.ts` — a six-valued flag, where six views do not need a dependency
-  and a route table nobody types. The sidebar's old workspace `<select>` went in the same
+  conversation.** The sidebar's old workspace `<select>` went in the same
   change as the home page: with the home page as the switcher it was a second, duplicate
   way to change workspace, and it could name the workspaces without saying anything about
-  them. `selectWorkspace` is now reached only through a card, and neither the workspace nor
-  the session is persisted — the app landing directly in a conversation is the regression,
-  not the feature. Navigation goes through `showLogin()` / `showWorkspaceHome()` /
-  `showChat()`, never a component-local flag. `e2e/workspaces.ts` is the same rule for the
-  specs; a spec that skips it fails on a composer that never renders.
+  them. `selectWorkspace` is now reached through a card or through a URL that names a
+  workspace — and nowhere else, which is what a landing directly in a conversation needs to
+  mean. `e2e/workspaces.ts` is the same rule for the specs; a spec that skips it fails on a
+  composer that never renders.
 
 - **Both rails draw the same menu, from one component, and the home page now keeps only what is a
   property of the browser.** `AppMenu.vue` holds the account's rows in **two groups**, and the

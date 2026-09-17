@@ -215,6 +215,44 @@ test("deleting a workspace asks first, and cancelling changes nothing", async ({
   await expect(card).toHaveCount(0);
 });
 
+test("a workspace is created with its description, and the card shows it", async ({ page }) => {
+  /*
+   * The description has two homes now — this form and the settings dialog — and this is the one
+   * that matters for a first run: the create dialog is where a workspace gets everything about
+   * it that somebody chose, and the card behind it is what the description is *for*.
+   *
+   * Through the real dialog rather than the API, because the field is the feature. What the
+   * assertion pins beyond "the text arrived" is that it did so in **one** write: the card is
+   * read after a reload, so it is the stored row rather than the create reply echoed into the
+   * list.
+   */
+  await page.goto("/");
+  const name = uniqueName("Created");
+
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(name);
+  await page.getByTestId("workspace-description-input").fill("线性代数的习题与讲义");
+  await page.getByTestId("workspace-create-submit").click();
+
+  const card = page.getByTestId("workspace-card").filter({ hasText: name }).first();
+  await expect(card.getByTestId("workspace-description-text")).toHaveText("线性代数的习题与讲义");
+
+  await page.reload();
+  await expect(card.getByTestId("workspace-description-text")).toHaveText("线性代数的习题与讲义");
+});
+
+test("a workspace created with no description carries none", async ({ page }) => {
+  // The field is optional and empty is the ordinary answer: an empty string is stored, and the
+  // card then draws no second line at all rather than a blank one.
+  await page.goto("/");
+  const name = uniqueName("Bare");
+  await createWorkspace(page, name);
+
+  const card = page.getByTestId("workspace-card").filter({ hasText: name }).first();
+  await expect(card).toBeVisible();
+  await expect(card.getByTestId("workspace-description-text")).toHaveCount(0);
+});
+
 test("a workspace's name and description are edited in its settings dialog", async ({ page }) => {
   /*
    * The second door to the name. The card's inline rename is still the shortcut for someone
@@ -262,4 +300,38 @@ test("a workspace's name and description are edited in its settings dialog", asy
   await card.getByTestId("workspace-settings-open").click();
   await expect(dialog.getByTestId("workspace-name")).toHaveValue(renamed);
   await expect(dialog.getByTestId("workspace-description")).toHaveValue("线性代数的习题与讲义");
+
+  /*
+   * And a description longer than two lines is *two lines* — the row it is given, with the
+   * rest behind `title`.
+   *
+   * Asserted on the rendered box rather than on the class, because "two lines" is a claim
+   * about a laid-out paragraph: `-webkit-line-clamp` has no effect at all without
+   * `display: -webkit-box`, and a width-dependent count is exactly what a test can only ask
+   * of the browser. The paragraph below is deliberately far past two lines, so an unclamped
+   * card would be four or five tall and this would catch it.
+   */
+  const long =
+    "线性代数的习题与讲义：矩阵与线性方程组、向量空间与子空间、特征值与特征向量、" +
+    "正交性与最小二乘、二次型与正定矩阵，以及每一章的课后练习与期末复习提纲。";
+  await dialog.getByTestId("workspace-description").fill(long);
+  await dialog.getByTestId("workspace-description").blur();
+  await page.getByTestId("workspace-settings-done").click();
+
+  const box = await card
+    .getByTestId("workspace-description-text")
+    .evaluate((el) => {
+      const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+      return {
+        lines: Math.round(el.clientHeight / lineHeight),
+        // The overflow the clamp is hiding, which is what separates "two lines of text" from
+        // "a two-line box that happens to fit".
+        clipped: el.scrollHeight > el.clientHeight,
+      };
+    });
+  expect(box).toEqual({ lines: 2, clipped: true });
+
+  // The whole sentence is still reachable, which is what makes clamping it a presentation
+  // choice rather than a loss.
+  await expect(card.getByTestId("workspace-description-text")).toHaveAttribute("title", long);
 });

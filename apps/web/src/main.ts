@@ -1,7 +1,10 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";
+import { useAppStore } from "./stores/app";
 import { i18n } from "./i18n";
+import { router } from "./router";
+import { installGuards } from "./router/guards";
 import { useLocale } from "./composables/locale";
 // The highlight.js theme is not imported here: syntax colours have to follow the resolved
 // theme, so `composables/theme.ts` swaps the matching stylesheet in (and importing one
@@ -20,4 +23,18 @@ import "./style.css";
 // safe — same as the inline script's `data-theme` counterpart.
 useLocale();
 
-createApp(App).use(createPinia()).use(i18n).mount("#app");
+const pinia = createPinia();
+
+/*
+ * The guards go on **before** the router is installed, and that order is the whole of "a
+ * reload lands where you were": installing a router is what starts the first navigation, so a
+ * guard registered afterwards would miss it — and the first navigation is the one that decides
+ * which page this tab opens on.
+ *
+ * The store is built here rather than reached for inside the guards because Pinia's store has
+ * to be active to be looked up, and the app is not mounted yet. Same store either way: this is
+ * the instance every component will resolve to.
+ */
+installGuards(router, useAppStore(pinia));
+
+createApp(App).use(pinia).use(i18n).use(router).mount("#app");

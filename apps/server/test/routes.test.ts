@@ -130,6 +130,36 @@ describe("workspaces", () => {
     expect(existsSync(workspace.dirPath)).toBe(true);
   });
 
+  it("writes the description the create form was filled in with", async () => {
+    /*
+     * In the create request rather than a `PATCH` after it, which is the whole point: the
+     * description is typed before the workspace exists, so a second write would be a window in
+     * which the card is on screen without it — and a failure between the two leaves it that way
+     * for good. Asserted through a *re-read* as well as the reply, because the reply is the row
+     * the insert just produced and the list is what the card grid actually renders from.
+     */
+    const res = await inject({
+      method: "POST",
+      url: "/api/workspaces",
+      payload: { name: "Described", description: "线性代数的习题与讲义" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<Workspace>().description).toBe("线性代数的习题与讲义");
+
+    const listed = await inject({ method: "GET", url: "/api/workspaces" });
+    expect(
+      listed.json<Workspace[]>().find((w) => w.name === "Described")?.description
+    ).toBe("线性代数的习题与讲义");
+  });
+
+  it("leaves the description empty when the form did not ask for one", async () => {
+    // The column is `NOT NULL DEFAULT ''` and the two are the same claim: a workspace nobody
+    // described reads as an empty string rather than as a missing row field.
+    const res = await inject({ method: "POST", url: "/api/workspaces", payload: { name: "Plain" } });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<Workspace>().description).toBe("");
+  });
+
   it("de-duplicates a colliding slug", async () => {
     const first = (await inject({ method: "POST", url: "/api/workspaces", payload: { name: "Dup" } })).json<Workspace>();
     const second = (await inject({ method: "POST", url: "/api/workspaces", payload: { name: "Dup" } })).json<Workspace>();

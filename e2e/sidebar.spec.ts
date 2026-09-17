@@ -215,8 +215,8 @@ test("pinning a conversation lifts it into its own group, and it survives a relo
 
   /*
    * Read back from the server rather than remembered by this tab. A reload is the only honest
-   * way to ask it, and the app lands on the workspace home again — so the way back in is the
-   * same call the spec started with.
+   * way to ask it — and it lands back in the conversation now, which is why the `enterWorkspace`
+   * below normalises to the front door first rather than assuming it is already there.
    */
   await page.reload();
   await enterWorkspace(page);

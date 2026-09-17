@@ -1310,7 +1310,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // agent to work in, `sessions/` for its conversations. One call, so neither can be
     // forgotten and a workspace is never half-made.
     const dirPath = createWorkspaceDir(treeFor(user).workspacesRoot, slug);
-    const workspace = db.createWorkspace({ id: newId(), userId: user.id, name, slug, dirPath });
+    // Verbatim, like the `PATCH` route's description and unlike the name above: a description is
+    // prose somebody wrote, and trimming it would be this app editing their sentence.
+    const workspace = db.createWorkspace({
+      id: newId(),
+      userId: user.id,
+      name,
+      slug,
+      dirPath,
+      description: body?.description ?? "",
+    });
 
     /*
      * The widget selection lands here, in one go, because a workspace does not exist when its

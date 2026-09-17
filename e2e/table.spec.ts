@@ -99,8 +99,8 @@ test("a recorded table renders in the reply, not in a tool container", async ({ 
    * table that only survives in this tab is the bug, not the feature.
    */
   await page.reload();
-  // By name: a reload lands on the workspace home, and `enterWorkspace(page)` with no name opens
-  // the suite's *first* card — which is the seeded default workspace, not this one.
+  // By name: `enterWorkspace(page)` with no name opens the suite's *first* card, and this test
+  // made a workspace of its own.
   await enterWorkspace(page, workspace);
   await page.getByTestId("session-item").first().click();
   await expect(page.getByTestId("message-content").last().locator("table")).toBeVisible();

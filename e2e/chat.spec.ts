@@ -68,9 +68,10 @@ test("a conversation round trip survives a reload", async ({ page, request }) =>
   // --- reload: everything must come back from the database, not from memory ---
   await page.reload();
 
-  // The app remembers neither the active workspace nor the active session across a reload —
-  // it opens on the workspace list, deliberately. Walk back in, then reopen the conversation
-  // from the sidebar: everything after this must come from the database, not the store.
+  // Walk back in from the front door and reopen the conversation from the sidebar. A reload
+  // would leave the reader *in* the conversation — the page is a URL now, which is what
+  // `routing.spec.ts` asserts — and going the long way round is what makes this about the
+  // database rather than about the address the tab kept.
   await enterWorkspace(page);
   // `.first()`: sessions are ordered most-recently-updated first, and this test's
   // session was just created and touched, so it is the topmost item.

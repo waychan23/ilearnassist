@@ -265,6 +265,15 @@ describe("widgets and statistics", () => {
     );
   });
 
+  it("sends the description the create form was filled in with", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ id: "w1" }));
+    await api.createWorkspace("Notes", ["workspace_stats"], "线性代数的习题");
+
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe(
+      '{"name":"Notes","widgets":["workspace_stats"],"description":"线性代数的习题"}'
+    );
+  });
+
   it("omits the widget field when no selection was made", async () => {
     // The distinction the API is built on: an absent field means "nobody decided" and takes the
     // server's default, while `[]` means none.
