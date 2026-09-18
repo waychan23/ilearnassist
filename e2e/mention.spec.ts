@@ -170,7 +170,7 @@ test("the tabs filter by kind, and the pills filter by source type", async ({ pa
   await expect(page.getByTestId("mention-option")).toHaveCount(0);
   await expect(page.getByTestId("mention-pill-image")).toHaveCount(0);
 
-  await page.getByTestId("mention-tab-source").click();
+  await page.getByTestId("mention-tab-resource").click();
   await expect(page.getByTestId("mention-option")).toHaveCount(3);
 
   // 图片 narrows to the one image. The pill is a toggle, so clicking it again clears it — which

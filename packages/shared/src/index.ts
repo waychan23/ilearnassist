@@ -1555,7 +1555,7 @@ export type ParseErrorCode = (typeof PARSE_ERROR_CODES)[number];
  * A workspace's `workdir/` is shared by every conversation in that workspace; a session's own
  * directory is not. The default is `session` — a conversation's own material is the common
  * case, and a shared directory every conversation writes into turns into a junk drawer without
- * deliberate organisation. See `docs/sources.md`.
+ * deliberate organisation. See `docs/resources.md`.
  */
 export const FILE_LOCATIONS = ["workspace", "session"] as const;
 export type FileLocation = (typeof FILE_LOCATIONS)[number];

@@ -30,7 +30,7 @@ import type { FileLocation, SessionSettings, WorkspaceSettings } from "@ilearnas
  *
  * The cost of the choice is stated rather than hidden: the sidebar's file tab browses
  * `workdir/`, so with this default most new files do not appear there — they appear under the
- * conversation that made them. See `docs/sources.md`.
+ * conversation that made them. See `docs/resources.md`.
  */
 export const DEFAULT_WRITE_LOCATION: FileLocation = "session";
 

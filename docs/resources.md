@@ -394,9 +394,9 @@ What a grant opens, and each half is needed:
 
 | | How | Why it needs its own mechanism |
 | --- | --- | --- |
-| the granted workspaces' **references** | arms 2 and 3 of `listReadableWorkResources` | a reference carries the parse state, and only a parsed reference has readable text |
+| the granted workspaces' **references** | arms 2 and 3 of `listReadableWorkResources` | `read_document` is addressed by a reference id, and that row is where the parse state — the readable text — lives |
 | the material their **conversations** hold | arm 3 | a conversation's own reference is owned by the conversation, so a reader scoped to the workspace alone would not see it |
-| their **files** | `ila_explore`'s `files`/`file` kinds | a workspace file is a path, and a path is not a reference id: `read_document` cannot address one |
+| their **files** | `ila_explore`'s `files`/`file` kinds | a workspace file no reference was ever made for is a *path*, and a path is not a reference id: `read_document` cannot address one |
 
 `ila_explore` is assembled **only when the grant is non-empty**, the `read_document` rule — a tool
 that could only refuse is a step the model wastes discovering that. Its `messages` kind strips
@@ -597,11 +597,11 @@ something more useful: **a row in the library is a reference**, and four things 
   material, and a bound tool would make them invisible in every conversation that had not installed
   the panel.
 - **Any file with no reference.** This is the category the split created, and it is the general
-  case behind the three above. A diagram's `.mmd` and a parse result
-  (`sources/parsed/<id>.txt`, reached through a reference's `parsed_file_id`) are both real,
-  registered, addressable by path — and neither is something a user works from directly, so both
-  would be noise in a list of the material a conversation is about. A `.mmd` nobody drew is the
-  same case reached from the other side: a file, a row, and no reference anywhere.
+  case behind the three above. A diagram's `.mmd` and a parse result (`sources/parsed/<id>.txt`,
+  reached through the reference that owns it) are both real and both registered — one is addressed
+  by path, the other by id — and neither is something a user works from directly, so both would be
+  noise in a list of the material a conversation is about. A `.mmd` nobody drew is the same case
+  reached from the other side: a file, a row, and no reference anywhere.
 
 ## Related
 

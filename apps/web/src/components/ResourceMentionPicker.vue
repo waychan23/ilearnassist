@@ -159,7 +159,7 @@ function tabLabel(id: ReferenceTab): string {
       return t("composer.tabAll");
     case "workspace":
       return t("composer.tabWorkspace");
-    case "source":
+    case "resource":
       return t("composer.tabSource");
   }
 }
@@ -307,7 +307,7 @@ defineExpose({ handleKey });
 
     <div v-for="group in groups" :key="group.kind" class="mention-group">
       <div class="mention-heading" data-testid="mention-heading">
-        {{ tabLabel(group.kind === "workspace" ? "workspace" : "source") }}
+        {{ tabLabel(group.kind === "workspace" ? "workspace" : "resource") }}
       </div>
       <button
         v-for="row in group.options"

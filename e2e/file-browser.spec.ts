@@ -124,7 +124,7 @@ test("the tree picks up a change on refresh, and after a turn", async ({ page, r
   /*
    * `location: "workspace"` is named, and it has to be. This tree browses `workdir/`, and the
    * default an unqualified write gets is the **conversation's** folder — a product decision, not
-   * an accident (see `docs/sources.md`). The subject here is the post-turn re-read, so the file
+   * an accident (see `docs/resources.md`). The subject here is the post-turn re-read, so the file
    * the turn writes is the one this panel shows; the default is covered by the server's own
    * tests, and by the case below.
    */

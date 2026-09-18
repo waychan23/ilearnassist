@@ -35,11 +35,11 @@ description of that tree:
     workspaces/<wsSlug>/
       workdir/                 the agent's file-tool sandbox and the file browser's root
       sessions/<sessionId>/    a conversation's own files — diagrams, and anything else
-      trash/<sourceId>/        a file deleted from the file manager, bytes kept
+      trash/<fileId>/          a file deleted from the file manager, bytes kept
     sources/
-      raw/<sourceId>.<ext>     an uploaded file, one per distinct content per account
-      web/<sourceId>.<ext>     a page the agent fetched and kept
-      parsed/<sourceId>.txt    its extracted text, for every kind of source
+      raw/<fileId>.<ext>       an uploaded file, one per distinct content per account
+      web/<fileId>.<ext>       a page's fetched body
+      parsed/<fileId>.txt      extracted text — a registered file of its own
   db/sqlite/ilearnassist.sqlite
 ```
 
@@ -49,14 +49,17 @@ tools, when a write is aimed there (or when it is where the conversation's defau
 workdir is the tree every conversation in the workspace shares, and a conversation's own files
 are not the same kind of thing. The rule that used to stand here — "nothing in it that a typed
 tool did not write", argued from `write_file` being unable to *reach* it — is restated rather
-than kept: what matters is that **every file in it is a source row**, addressable by id, which
-is what `sourcePaths.ts` refusing the traversal still guarantees in the other direction (a
-workspace-relative path cannot climb into `sessions/`). See `docs/sources.md`, `docs/diagrams.md`.
+than kept: what matters is that **every file in it is a `files` row**, addressable by id, which
+is what `resolveFilePath` refusing the traversal still guarantees in the other direction (a
+workspace-relative path cannot climb into `sessions/`). See `docs/resources.md`,
+`docs/diagrams.md`.
 
-**Every file and every page is a `source`** — one table, one id space, one registry
-(`sources.ts`). An upload, a fetched page, a file the agent wrote into either sandbox: all four
-carry `origin` (how it came to exist), `storage` (which root its bytes are under) and `category`
-(what it is). `docs/sources.md` is the reference.
+**A file is the material; a work resource is a reference to it.** `files.ts`/`resources.ts`
+record the bytes at a path, owned by the account; `work_resources` says that this workspace or
+conversation is working from it, and is what the library lists and `@` picks. `web_pages` is the
+other entity, whose identity is its *reading* rather than its bytes. A file may have **no**
+reference at all — a diagram's `.mmd`, a document's parse result — and that is a designed state
+rather than a gap. `docs/resources.md` is the reference.
 
 ## Commands
 
@@ -253,9 +256,9 @@ apps/server/src/
   workspace.ts            # resolveInWorkspace sandboxing + dir mgmt + slug rules
   files.ts                # the file browser's read side, for both roots: one level, one file
   attachments.ts          # multimodal content building (the MIME vocabulary moved out)
-  sourcePaths.ts          # where a source's bytes are, the MIME table, the blob derivations
-  sourceCategory.ts       # what a file is: one MIME type and one category, from a name
-  sources.ts              # the registry: registerFileSource/rename/reconcile, the page row
+  resourcePaths.ts        # where a file's bytes are, the MIME table, the blob derivations
+  fileCategory.ts         # what a file is: one MIME type and one category, from a name
+  resources.ts            # registerFile / ensureWorkResource / rename / reconcile
   fileOps.ts              # the file manager's writes: create, upload, move, delete-to-trash
   migrations.ts           # the version walk (v2 -> v3), canMigrate, openRefusal
   writeLocation.ts        # the four-level chain deciding which sandbox a write goes to
@@ -277,11 +280,11 @@ apps/server/src/
   documents/drivers/      # one file per wire protocol (sync / mineru / llamaparse)
   tools/index.ts          # tool assembly + ALL_TOOL_NAMES
   tools/fileTools.ts      # list/read/write/create_dir/delete_file (sandboxed)
-  tools/documentTools.ts  # read_document — pages through a source's text, by whitelist
+  tools/documentTools.ts  # read_document — pages through a reference's text, by whitelist
   tools/webSearch.ts      # bing / duckduckgo / tavily / searxng
   tools/webFetch.ts       # fetch a URL as text (SSRF-guarded)
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
-  tools/collectPage.ts    # ila_collect_page — keeps a fetched page as a source
+  tools/collectPage.ts    # ila_collect_page — keeps a fetched page, as a reference
   tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
   tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
   tools/explore.ts        # ila_explore — the agent reads the `@`-granted workspaces: files, messages
@@ -324,20 +327,20 @@ apps/web/src/
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
   widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
-  widgets/SourcesWidget.vue # the sources panel: what this conversation holds, filtered by category
+  widgets/ResourcesWidget.vue # the material panel: what this conversation holds, filtered by category
   widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
   utils/mention.ts        # the `@`-mention: is the caret in one, and where the name goes
-  utils/referencePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
+  utils/resourcePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
   utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
-  utils/sourceTree.ts     # the source browser's tree: group by origin, flatten by open set
+  utils/resourceTree.ts   # the library's tree: group by owner, flatten by open set
   components/…            # App, LoginView, WorkspaceHome, UsageView, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
-                          #   AskUserCard, Composer, SourceMentionPicker, WriteLocationField,
+                          #   AskUserCard, Composer, ResourceMentionPicker, WriteLocationField,
                           #   FileTree, WidgetPanel, AppMenu,
                           #   WidgetTabStrip, GenerationParams, NoteEditor,
                           #   MessageSelectionToolbar,
-                          #   ProfileForm, dialogs (Settings, WorkspaceSettings, SourceBrowser,
-                          #   AddSource, FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
+                          #   ProfileForm, dialogs (Settings, WorkspaceSettings, LibraryBrowser,
+                          #   AddResource, FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -378,7 +381,7 @@ Fuller map in `docs/reference.md`.
   `PLAN_GUIDANCE` shape, not a code path. Two consequences are load-bearing rather than
   incidental: the *default* is `session` because a workspace directory every conversation writes
   into is a junk drawer nobody organised, and that means most new files no longer appear in the
-  sidebar's file tab, which browses `workdir/`. See `docs/sources.md`.
+  sidebar's file tab, which browses `workdir/`. See `docs/resources.md`.
   The read and delete rules differ on purpose: a **read** with no `location` tries the default
   and then the other root and says which it used (a model that cannot find a file it wrote last
   turn stops trusting the tools), while a **delete** refuses when the path exists in both —
@@ -437,7 +440,7 @@ Fuller map in `docs/reference.md`.
   source lives outside every workspace. All three end in `readPreviewFile`, which exists so that
   *what is this file* is answered once: the sandboxes differ per root and must, but two copies of
   the extension tables is how a `.mmd` gets drawn in one dialog and shown as code in another.
-  Uploads are reached from `SourcesDialog`, whose rows carry an open control — the only place an
+  Uploads are reached from `LibraryBrowser`, whose rows carry an open control — the only place an
   upload's contents were ever reachable, since the file tree cannot list them.
   **The viewer is a lazy chunk and must stay one.** `@open-file-viewer/core` is a single entry
   point with no `sideEffects` field, so a static import anywhere on the eager path drags ~25
@@ -453,28 +456,29 @@ Fuller map in `docs/reference.md`.
   `.bin` would render an empty box instead of the unsupported panel. `textPlugin` is omitted
   (unreachable — every format it claims is already `text`/`markdown`), and the CAD peers are
   omitted because `@mlightcad/libredwg-web` is GPL-3.0. See `docs/file-preview.md`.
-- **A diagram is a file plus two rows — each holding what the others cannot.** The contract used
-  to be stated as "one writer, and a file plus a row"; it is now two writers (the file tools can
-  be aimed at `sessions/<sessionId>/` too) and three records, because a diagram is also a
-  *source* like every other file. `sessions/<sessionId>/` is read by the session-files routes. The `.mmd`
-  is the source of the bytes; `session_diagrams` holds only what the file cannot answer: the
-  canonical `name` (the join key, so the client never derives one), the model's `summary`, the
-  `tool_call_id` that wrote or last revised it, and the `thread_id` the classifier put it in.
-  The one drift still unrepresentable is two copies of the bytes disagreeing — the row holds no
-  source and no `source_path` (a pure function of the session and the name). Drift is bounded and
-  reported at both ends: a `.mmd` nobody drew has a file but no row (the source
-  browser shows it, the diagram panel does not), a row whose file is gone reads `fileMissing`. The row
-  has no `deleted_at` (derived data, like `session_threads`) and no `message_id` (the assistant
-  message does not exist when the tool runs). A revise upserts on `(session_id, name)`: one file,
-  one row, new summary and call id, `thread_id` cleared so the new shape is judged again. The
-  naming rule (`diagramFileName`, `slugify`) is server-side in `diagrams.ts`/`workspace.ts` — it
-  used to be shared because the client derived a name to find the call, and the row retired that
-  derivation; only `isDiagramFile` and the size/tool-name constants stay shared. The third record
-  is the **source row** (`storage: "session"`, `origin: "agent_session"`, `category: "diagram"`,
-  with the model's summary), written in the same transaction as the other two — without it a
-  diagram would be the one file in the app that the registry, the source browser and
-  `@`-reference could not see, which is exactly the split this change exists to close. See
-  `docs/diagrams.md`.
+- **A diagram is a file, a row, and a pointer — and its file is deliberately *not* in the
+  library.** The contract used to be stated as "a file plus two rows", when a diagram also wrote a
+  `sources` row so the browser could see it. That is the muddle the v4 split removes: the `.mmd` is
+  a `files` row, `session_diagrams.file_id` points at it, and it gets **no** work resource — so a
+  diagram is in the 图表 panel and not in the library, which is what "cancel one source per
+  diagram" means. It is also the one real use of the file/reference split that is not a workaround:
+  a file that is not externally referenceable. `sessions/<sessionId>/` is read by the session-files
+  routes. The `.mmd` is the source of the bytes; `session_diagrams` holds only what the file cannot
+  answer: the canonical `name` (the join key, so the client never derives one), the model's
+  `summary`, the `tool_call_id` that wrote or last revised it, and the `thread_id` the classifier
+  put it in. The one drift still unrepresentable is two copies of the bytes disagreeing — the row
+  holds no `source_path` (a pure function of the session and the name). Drift is bounded and
+  reported at both ends: a `.mmd` nobody drew has a file but no row (the file tree shows it, the
+  diagram panel does not), a row whose file is gone reads `fileMissing`. The row has no `deleted_at`
+  (derived data, like `session_threads`) and no `message_id` (the assistant message does not exist
+  when the tool runs). A revise upserts on `(session_id, name)`: one file, one row, new summary and
+  call id, `thread_id` cleared so the new shape is judged again. The naming rule (`diagramFileName`,
+  `slugify`) is server-side in `diagrams.ts`/`workspace.ts` — it used to be shared because the
+  client derived a name to find the call, and the row retired that derivation; only `isDiagramFile`
+  and the size/tool-name constants stay shared. The file and the row are written in **one
+  transaction**, and what that transaction protects has changed: it is no longer two rows landing
+  together but a row and its pointer — a `session_diagrams` row whose `file_id` is null is one the
+  panel can list and cannot open. See `docs/diagrams.md`.
   **A diagram rides the turn classification.** The thread is assigned after the turn, so the tool
   writes `thread_id = null` and `threads.ts` places each diagram inside the same transaction as
   its turn's messages, shown to the classifier under the message whose call drew it (name and
@@ -496,10 +500,11 @@ Fuller map in `docs/reference.md`.
   - **The row holds the content**, which inverts `session_diagrams`' rule and is the one place to
     read before "fixing" it: a diagram's bytes are a *file*, so a second copy in the row would be
     two copies free to disagree; a table has no file, so the row is the only copy. `notes.body` is
-    the same shape for the same reason. It writes **no `sources` row** either — a source's
-    `rel_path` is non-NULL for both sandbox storages and every consumer is path-driven, so an
-    honest one is impossible — and no `.md` file in `sessions/<id>/`, which would put two full
-    copies of one source on disk.
+    the same shape for the same reason. It writes **no `work_resources` row** either, and no
+    `.md` file in `sessions/<id>/` — the second would put two full copies of one thing on disk,
+    and the first would be a reference to an entity that does not exist (a table is not a file, so
+    there is no `files` row to point at). It is excluded from the library for the same reason a
+    diagram's `.mmd` is, by a different route: a table was never a file at all.
   - **`ila_table` is `NON_FILE_TOOLS`.** The switch means "this agent does not write files", and
     the comparison is `ila_query`'s, not `ila_diagram`'s: a table writes a database row. Leaving it
     out would let an operator's file-tools switch silently remove a capability that never touched a
@@ -606,38 +611,51 @@ Fuller map in `docs/reference.md`.
   sign them back in). That landing is now **structural rather than a line in `signOut`**: the
   store only clears the account, and `router/guards.ts`'s watcher takes the reader to `/login` —
   which is also what covers the 401 that arrives with nobody having navigated at all.
-- **A `source` is any material the account holds, indexed by the database and owned by a
-  workspace or a conversation.** Its bytes live where they *are* — an upload at
-  `<userRoot>/sources/raw/<sourceId>.<ext>`, outside every workspace on purpose so chat uploads
-  never show up in the agent's `list_files`; a file where the file is, in `workdir/` or
-  `sessions/<id>/`. That last part is the change: "outside every workspace by construction" is
-  still exactly true of `upload` and `web` storage, which is what `read_document`'s
-  cross-boundary argument rests on, and a `workspace`-storage source *is* a file in the sandbox —
-  which is what unification means, and no more privileged than the file already was. See
-  `docs/sources.md`. Three things follow, and each is load bearing:
-  - **Two identity rules, as two partial unique indexes.** Identical *uploaded bytes* are one row
-    (`idx_sources_blob`, on `(user_id, sha256) WHERE sha256 IS NOT NULL`, and deliberately not
-    filtered by `deleted_at` — that is what makes re-uploading a deleted file *revive* its row).
-    A *file* is placed by `(user_id, owner_kind, owner_id, rel_path)` while live
-    (`idx_sources_place`), so a rename is an UPDATE that keeps the id, the summary and the parse
-    state, and two identical files in two directories are two sources. A file row's `sha256` is
-    NULL, which is why the two indexes can never contend. The hash is *scoped* —
-    `findSourceByHash(userId, hash)`, never by hash alone, or the second account to upload the
-    same file would be handed the first one's bytes.
+- **A `work_resource` is a reference; a `files` (or `web_pages`) row is the material.** The
+  account owns the *entity* — bytes at a stored path, or a page at a URL — and a workspace or a
+  conversation holds a **reference** to it. The library browses references, `@` picks one,
+  `read_document` takes one's id. See `docs/resources.md`. Three things follow, and each is load
+  bearing:
+  - **Three identity rules, as partial unique indexes.** Identical *uploaded bytes* are one file
+    (`idx_files_blob`, on `(user_id, sha256) WHERE sha256 IS NOT NULL AND source_type IN
+    ('upload','attachment')`, deliberately not filtered by `deleted_at` — that is what makes
+    re-uploading a deleted file *revive* its row). **The source-type clause is not decoration:**
+    parse results are files too, and two documents whose extracted text comes out byte-identical
+    would otherwise collide, which is a parse dying on a UNIQUE violation. A *file* is placed by
+    `(user_id, path)` while live (`idx_files_path`), so a rename is an UPDATE that keeps the id
+    and every reference to it. A *reference* is placed by
+    `(user_id, owner_type, owner_id, resource_type, resource_id)` while live (`idx_wr_place`), so
+    re-referencing is idempotent and one owner cannot hold the same entity twice. A file row's
+    `sha256` is NULL, which is why the blob and path indexes can never contend. The hash is
+    *scoped* — `findFileByHash(userId, hash)`, never by hash alone, or the second account to
+    upload the same file would be handed the first one's bytes.
   - **No path is stored absolutely, and every one is re-validated on every read** through
-    `resolveSourceBytes` in `sourcePaths.ts`. `storage` picks the root and `rel_path` says where
-    in it; a blob stores neither, because its filename is `<id>.<ext>` — derived from the id and
-    the MIME type, which is what `raw_path` always was a cache of, and the one stored fact a
-    copied data root silently broke. It is re-validated because a database row is not a trust
-    boundary: it travels through backups, and a future bug that wrote one column would otherwise
-    become an arbitrary file read.
-  - **Parse state is columns on the row**, not a `<id>.json` sidecar. A reparse is then
-    visible in every conversation at once, and a source shared by two conversations is parsed
-    once. Only the extracted *text* stays a file. `attachments.ts` has no root constant: the
-    tree belongs to a user under a data directory the process chose at launch, so every
-    function takes the layout — which is also what keeps any data path out of import time.
+    `resolveFilePath` in `resourcePaths.ts`. What changed from v3 is *where* the path lives and
+    *why*: it is one stored `files.path` relative to `<userRoot>`, replacing `storage` +
+    `rel_path` + the owner columns — because v3's resolver looked the owner up to find the root,
+    and a file with two owners has no single owner to ask. A blob's name is still `<id>.<ext>`
+    from the MIME table, written into the row rather than recomputed, because the bytes are where
+    they are and a MIME type can be corrected later. It is re-validated because a database row is
+    not a trust boundary: it travels through backups, and a future bug that wrote one column
+    would otherwise become an arbitrary file read.
+  - **Parse state is columns on the *reference*, and `parsed_file_id` points at the text.**
+    Deliberate on both counts: a file may have **no** reference at all (a diagram's `.mmd`, a
+    document's extracted text), so parse columns on the entity would be columns that are usually
+    NULL; and the cost is stated rather than hidden — **the same file referenced by two owners is
+    parsed twice**, where v3 parsed once and showed the reparse to both. Only the extracted
+    *text* stays a file, and it is a registered `files` row like any other.
+    `attachments.ts` has no root constant: the tree belongs to a user under a data directory the
+    process chose at launch, so every function takes the layout — which is also what keeps any
+    data path out of import time.
+  - **Two writes, and they are separate on purpose.** `registerFile` records bytes at a path and
+    **never** creates a reference; `ensureWorkResource` creates the reference. The rule that falls
+    out of the pair, and the one to remember: **reconciliation adds a reference only for a file it
+    itself discovered.** A file that already has a row keeps its writer's decision about whether
+    it is externally referenceable — without the rule, a `.mmd` nobody drew would appear in the
+    library the moment somebody walked the directory it is in.
 - **Every application entity is soft-deleted, and `deleted_at` is the whole of it.** Workspaces,
-  sources, copilots, sessions, messages, providers, models and document parsers each carry a
+  files, web pages, work resources, copilots, sessions, messages, providers, models and document
+  parsers each carry a
   nullable `deleted_at`, added by `ensureColumn` (`CREATE TABLE IF NOT EXISTS` skips a table that
   is already there, so the DDL alone would only reach new installs). Set means gone: **every read,
   join and count filters `IS NULL`** — that is the rule, and a SELECT added without it is the one
@@ -646,17 +664,20 @@ Fuller map in `docs/reference.md`.
   (`sessions`/`messages` reach their owner through `workspaces`, which is why filtering one
   workspace hides a whole tree), quiz and plan rows keep their `tool_call_id` anchors, and
   `softDeleteProvider` marks its models in the same transaction because nothing else will.
-  **On-disk bytes are kept too** — workspace and session directories, a source's raw and parsed
-  files — so a delete costs no disk and a future restore has something to restore. Two hard
+  **On-disk bytes are kept too** — workspace and session directories, a file's bytes and the
+  extracted text — so a delete costs no disk and a future restore has something to restore. Two hard
   `DELETE`s survive on purpose: `pruneAuthTokens`' housekeeping, and one-time migrations (the
   `DELETE FROM copilots` that drops rows written before ownership existed). The agent's
   `delete_file` tool is *not* an application deletion — it is a real filesystem operation inside
-  the workspace sandbox, and it stays one. A source is the one entity with a rule of its own:
-  `UNIQUE (user_id, sha256)` means identical bytes can never be two rows, so re-uploading a
-  deleted file *revives* that row (`findDeletedSourceByHash` + `reviveSourceForUser`) rather than
-  inserting beside it — and because its links survived, the file comes back everywhere it was
-  used. `DocumentService.cancelSource` is per *source* rather than per session for the older
-  reason: cancelling by session would abort a parse another conversation is waiting on.
+  the workspace sandbox, and it stays one. **A file is the entity with a rule of its own, and the
+  rule now has two halves.** `idx_files_blob` means identical *user-supplied* bytes can never be
+  two rows, so re-uploading a deleted file revives that row (`findDeletedFileByHash` +
+  `reviveFileForUser`) rather than inserting beside it. And **the delete people reach for removes a
+  reference, not a file**: `DELETE /api/resources/:id` soft-deletes the `work_resources` row and
+  leaves the bytes, the file row and every *other* owner's reference alone — which is why a
+  conversation can go on reading a file through a sibling's reference after "deleting" it. Removing
+  the bytes is the file manager's job, and it moves them to the trash. `DocumentService.cancelResource`
+  is per *reference* rather than per session because a reference outlives the conversation.
 - **One conversation has one writer, and the lease is keyed on a client id the browser makes up.**
   A client that opens a conversation holds its write lock; every other client of the same account
   reads it read-only. `docs/session-locks.md` is the reference, including the tolerances the
@@ -717,13 +738,18 @@ Fuller map in `docs/reference.md`.
   Both routes refuse while a turn is streaming (`TURN_IN_PROGRESS`); `/chat` deliberately has no
   such guard, which is a pre-existing hole and not a pattern to copy.
 - **A message's attachment is a snapshot, and its two halves come from different sides.** The
-  **name** is the client's, because it is the one that message used — a shared source can only
-  remember the first name it ever saw. The **parse state** is the server's, re-read from the
-  source row when the turn is persisted: a tab that has been open for an hour would otherwise
+  **name** is the client's, because it is the one that message used — a shared file can only
+  remember the first title it ever saw. The **parse state** is the server's, re-read from the
+  *reference* when the turn is persisted: a tab that has been open for an hour would otherwise
   write whatever it last saw into the record of a turn, and a document that failed to parse
   would reach the model as "still parsing". The snapshot is never rewritten, so a later
   reparse does not alter history; the *live* state is the overlay `stores/app.ts` keeps and
-  `/api/sessions/:id/sources` feeds.
+  `/api/sessions/:id/resources` feeds.
+  **An attachment carries three ids**, and each answers a different question: `id` is the **file**
+  the bytes are fetched by, `resourceId` is the **reference** the model reads and whose parse
+  state is current, and `parsedFileId` is where the **extracted text** is. They are not
+  interchangeable, and the content builder must use each for its own — `read_document` refuses a
+  file id, and the parsed text is a file of its own whose id is neither of the other two.
 - **`web_fetch` SSRF guard is a security boundary.** It is the only tool that
   makes the server issue an arbitrary outbound request. Keep the scheme check,
   the check on *every DNS-resolved address*, and the manual per-hop redirect
@@ -977,6 +1003,14 @@ Fuller map in `docs/reference.md`.
   `PRAGMA user_version`, which is in the file header and therefore readable *before* anything
   is created; a version row in `app_settings` cannot be, because reading it means having
   already touched the file you meant to refuse.
+  **There are no migrations at all right now, and that is a decision rather than an omission.**
+  v4 splits one table into three and changes what the bytes' locator means; no pure function of
+  the rows produces the new shape honestly, because a v3 row's owner would have to be guessed
+  wherever its links disagree — and a wrong owner is worse than a file that will not open, since
+  nothing downstream can tell it is wrong. So `MIGRATIONS` is empty and a v3 data root is
+  **refused**; the upgrade is deleting it, and the workspaces, sessions and every file on disk
+  survive that untouched. `canMigrate` keeps its loop over `MIGRATIONS` rather than collapsing to
+  `from === SCHEMA_VERSION`, so the next migration is an entry in the array and nothing else.
 - **Every user-owned read takes the owner and puts it in the `WHERE`.** `getWorkspaceForUser`,
   `getSessionForUser`, `listMessagesForUser` — the `ForUser` suffix is the rule, and another
   account's id returns `undefined` rather than a row. Looking a row up and *then* comparing
@@ -1118,31 +1152,34 @@ Fuller map in `docs/reference.md`.
   the server is still handed a path a human agreed to. The picker starts in that same folder, so
   there is one "suggested" location rather than two that disagree — see `docs/desktop.md`.
 - **Documents cross a sandbox boundary that files cannot, and that asymmetry is deliberate.**
-  `read_document` is bound to a whitelist resolved per turn — a conversation's own sources
+  `read_document` is bound to a whitelist resolved per turn — a conversation's own references
   **unioned with its workspace's** — rather than to any root, so a guessed id fails a `Map`
-  lookup before a path is touched. The file tools are sandboxed by `resolveInWorkspace`
-  instead, and can never reach an *upload or a page*: those live outside every workspace by
-  construction. So a document uploaded in one conversation is readable from another in the same
-  workspace, while no path in that workspace could reach it as a file.
+  lookup before a path is touched. The file tools are sandboxed by `resolveInWorkspace` instead,
+  and can never reach an *upload or a page*: a file's `path` is relative to the account's root,
+  and an upload's is under no workspace at all. So a document uploaded in one conversation is
+  readable from another in the same workspace, while no path in that workspace could reach it as
+  a file.
   **The whitelist stays what it always was, and the registry is not one.** A file inside a
   sandbox is readable *by path* through the file tools, so it is deliberately **not** folded
-  into `listReadableSources`: a workspace with a `node_modules` in it would otherwise put
-  thousands of rows into the model's context as named sources. `read_document` keeps meaning
-  "material from outside the sandbox"; a file the model should read is read with `read_file`,
-  and cross-workspace referencing rides `session_sources` — a link created when a user actually
-  references something.
+  into `listReadableWorkResources`: a workspace with a `node_modules` in it would otherwise put
+  thousands of rows into the model's context as named material. `read_document` keeps meaning
+  "material from outside the sandbox"; a file the model should read is read with `read_file`, and
+  cross-workspace referencing rides a **reference of this conversation's own**, created by the
+  chat route when a user actually points at something.
   That is defensible because a workspace is *already* a shared sandbox — every conversation in
   it can `read_file` the same tree — so a document there is not more privileged than a file
   there; and it is the whole point of the tool, since a model shown a 200-page PDF in turn one
   could not previously page through it in turn three. It rests on a workspace never being
   shared between accounts, which the `ForUser` scoping is what guarantees. Two corollaries:
-  `/api/sessions/:id/sources` returns **the same union**, because the model and the chips must
+  `/api/sessions/:id/resources` returns **the same union**, because the model and the chips must
   not disagree about what is available; and `buildTools` gates the tool on "the whitelist is
   non-empty" rather than "this turn has attachments", so a turn that attaches nothing can still
   read last week's file.
-- **Destructive UI actions confirm first.** Session, Copilot, workspace, provider and source
+- **Destructive UI actions confirm first.** Session, Copilot, workspace, provider and material
   deletes go through `confirm()` from `composables/confirm.ts`. The agent's own `delete_file`
-  tool is deliberately *not* gated.
+  tool is deliberately *not* gated. What a library delete *says* matters more than it used to:
+  it removes this owner's reference and leaves the file and every other owner's reference alone,
+  so the dialog's copy must not promise to destroy the file.
 - **A canned reply is the sentence, and the button sends what it shows.** The composer's chips
   (继续 / 是的 / 可以, `composer.quick.*`) send their own rendered label rather than a second
   string beside it, so the words on the button and the words in the conversation cannot drift —
@@ -1162,7 +1199,7 @@ Fuller map in `docs/reference.md`.
   dialog that asked for it, with its buttons visible and unclickable by pointer. `--z-confirm`
   is what fixes it; do not "tidy" the component back to sharing `--z-overlay`, and do not rely
   on where a component happens to sit in `App.vue` for paint order.
-- **A dialog that is always mounted loads on *open*, not on mount.** `SourcesDialog` renders
+- **A dialog that is always mounted loads on *open*, not on mount.** `LibraryBrowser` renders
   nothing while closed and `App.vue` has no `v-if` on it, so `onMounted` fires once at app
   start — loading there left the list as it was at boot, and the dialog opened on a correct
   empty list for an account that had files. A `watch` on the flag with `immediate: true` is the
@@ -1493,11 +1530,11 @@ Fuller map in `docs/reference.md`.
   declared further down.
 - **A hidden `<input type="file">` is `.hidden-input`, a *scoped* rule, not a utility class.**
   There is no global `.visually-hidden` in `style.css`, and writing one produced two file pickers
-  (`FileTree`, `SourceBrowser`) that rendered as a visible "Choose File" strip in a toolbar and a
+  (`FileTree`, `LibraryBrowser`) that rendered as a visible "Choose File" strip in a toolbar and a
   dialog footer. The composer's is the convention to copy: `display: none`, because the button
   above it is the control and an input that stayed focusable would be a second tab stop on a
   control nobody sees.
-- **A list that two things can reload concurrently needs a sequence number.** The source browser
+- **A list that two things can reload concurrently needs a sequence number.** The library browser
   starts a load when it opens and another when a filter changes; responses do not arrive in order,
   so the older reply used to overwrite the newer and the list settled on the *unfiltered* answer
   while the controls said otherwise. `loadRows`/`loadScope` drop a reply that is not the latest —
@@ -1506,7 +1543,7 @@ Fuller map in `docs/reference.md`.
 - **Adding material is one door with a tab per kind, not one button per kind.** The browser's footer
   used to hold 上传资料 and 添加链接 side by side: two idioms for one *operation*, one of which fired
   a file picker the instant it was pressed, and neither of which said where the result would land.
-  `AddSourceDialog` asks what is being added first, draws that kind's fields, and sends nothing
+  `AddResourceDialog` asks what is being added first, draws that kind's fields, and sends nothing
   until it is submitted — which is what a knowledge base does, and what makes "a workspace and a
   folder" expressible at all. The tabs share **where it goes** (the workspace, plus the directory
   for a file) and nothing else, which is why they are tabs of one dialog rather than two; `TABS` is
@@ -1536,10 +1573,13 @@ Fuller map in `docs/reference.md`.
   passed the whole catalog suite, and left the composer blank on every page. The escape is
   `{'@'}`, the same shape a literal `|` needs in a plural, and `catalog.test.ts` now fails on a
   bare one.
-- **The registry is an index of the filesystem, and it is refreshed before a source listing.**
+- **The registry is an index of the filesystem, and it is refreshed before a library listing.**
   Two mechanisms answering different questions: `reconcileListing` registers what a *directory
   listing* finds (the file browser's routes), and `reconcileFilesystem` walks the scopes a
-  **source listing** is about, bounded by depth and a file cap, at the top of `GET /api/sources`.
+  **library listing** is about, bounded by depth and a file cap, at the top of `GET /api/resources`.
+  Each writes **two rows** — the file and a reference — and **only for files it itself
+  discovered**: a file that already has a row keeps its writer's decision about whether it is
+  externally referenceable, which is what keeps a diagram's `.mmd` out of the library.
   The second exists because the browser lists *rows*, not directories — so a file that appeared
   with no writer at all (cloned in, restored, dropped from the Finder) was invisible until
   somebody happened to open the file tree on that folder. A boot-time scan would answer "what was
@@ -1607,15 +1647,22 @@ Fuller map in `docs/reference.md`.
   unreadable file throws naming the path, and a typo'd prompt key warns at boot rather than doing
   nothing quietly. Tool descriptions and the out-of-band *user*-prompt templates stay in code — they
   are bound to schemas and to data assembly, not free-standing prompt text. See `docs/prompts.md`.
-- **A referenced source is *linked*, not copied.** `ChatInput.sources` names ids; the server
-  links each to the conversation (`session_sources`) and records the snapshot in
-  **`messages.sources`**, a column of its own beside `attachments`. The link is what lets a later
-  turn `read_document` a file the user pointed at once — and it is the same row an upload writes.
-  The two columns are one array in the prompt, because to the model a reference and an attachment
-  are the same thing; the split exists so a chip can say which is which.
+- **A reference is *linked*, not copied — and `@` and 追问 are one mechanism now.** Both send a
+  `TurnReference`, and a resource one carries a **reference id**. The link is a `work_resources`
+  row of this conversation's own, pointing at the same entity: **`/chat` writes it**, which is
+  what lets a later turn `read_document` what the user pointed at once — and what puts it in the
+  read whitelist from then on. That side effect is deliberately *not* in `resolveReferences`,
+  which stays read-only because replay resolves references on every later turn and a replay that
+  wrote would resurrect rows a user had deleted. The same call **schedules a parse** for a
+  reference that has never been parsed; without it the model reads "still parsing" for ever, and
+  the feature looks right in the UI while failing exactly where it is used.
+  `messages.attachments` stays a separate column, because an upload and a pointer are different
+  things and the chips say so. v3's `messages.sources` is gone: the ref *is* the message's record
+  of what it pointed at, and a second copy would be a second thing to keep in agreement.
 - **An image gets one summary, written by the model that saw it.** `agent/mediaSummary.ts` runs
-  fire-and-forget from `finishTurn`, writes to the `summary` column *and* `parsed/<id>.txt` (a
-  summary in the column alone would be a file the model still could not read), and is gated three
+  fire-and-forget from `finishTurn`, writes to the file's `summary` column *and* a text file of
+  its own (a summary in the column alone would be a file the model still could not read), and is
+  gated three
   ways: `needsSummary` skips an image that already has one, `ctx.vision` skips a model with no
   vision — a description would be a claim about a picture nothing looked at, and the request
   would be an `image_url` a non-vision endpoint rejects — and every failure is swallowed, like
@@ -1626,7 +1673,7 @@ Fuller map in `docs/reference.md`.
   `position: relative` — without a positioning context the menu renders off-screen, visible to
   the DOM and not to the person typing. Its query is debounced, and not only for the bandwidth:
   a fetch per keystroke replaces the rows, so a click aimed at one lands on a detached node.
-- **The picker holds two kinds of reference, and the list's arithmetic is `utils/referencePicker.ts`.**
+- **The picker holds two kinds of reference, and the list's arithmetic is `utils/resourcePicker.ts`.**
   A tab strip (`全部` | `工作区` | `资料`) filters by kind and doubles as the group headings, and a row
   of type pills (`图片` | `文本` | `代码` | `网页链接` | `其他文件`) filters the sources. Three rules are
   load-bearing rather than cosmetic. The pills are a **coarse grouping over the eight categories**,
@@ -1634,7 +1681,7 @@ Fuller map in `docs/reference.md`.
   because the picker fetches the account's whole match set and caps *per group*, so a server-side
   filter would cap before filtering and show fewer matches than exist. Selecting any pill **drops
   the workspace group**, and the pill row is **hidden** on the 工作区 tab rather than disabled: a
-  workspace has no source type, and a control that provably cannot change the list is a lie.
+  workspace has no material type, and a control that provably cannot change the list is a lie.
   **Enter belongs to the picker while it is open, rows or not** — the frame is drawn before the
   debounced fetch lands, and the composer's Enter *sends*, so a guard on "are there rows" puts a
   half-typed `@repo` into the conversation. `Tab` is the exception and is taken only when there is
@@ -1646,13 +1693,13 @@ Fuller map in `docs/reference.md`.
   never both meaningful. `apps/server/src/workspaceScope.ts` is the whole of its authority and the
   only reader of the stored value: it re-derives against the account's live workspaces on every
   turn, so a stored id is a *request*, not an access — a foreign or deleted one resolves to
-  nothing. `turnContext()` calls it once and is the only caller of `listReadableSources`, so a
-  fourth turn route that built its tools some other way loses `read_document` loudly rather than
+  nothing. `turnContext()` calls it once and is the only caller of `listReadableWorkResources`, so
+  a fourth turn route that built its tools some other way loses `read_document` loudly rather than
   under-granting quietly. The write path validates **shape only** and deliberately not ownership:
   a workspace can be deleted between the chip being drawn and the save landing.
-  What it opens is three things, and each needs its own mechanism — a granted workspace's linked
-  uploads and pages (the `workspace_sources` arm), the material its *conversations* hold (a third
-  arm, because `registerFileSource` writes a row and **no link row**), and its **files**
+  What it opens is three things, and each needs its own mechanism — a granted workspace's own
+  references (the workspace arm), the material its *conversations* hold (a third arm, because a
+  reference owned by a conversation is not the workspace's), and its **files**
   (`ila_explore`, because a file is a path and `read_document` addresses ids). Read-only
   throughout: `ila_explore` contains no write call, and it is the one place that **`realpath`s
   every path** — `resolveInWorkspace` is lexical on purpose, justified by "the model has no tool
@@ -1754,8 +1801,8 @@ Fuller map in `docs/reference.md`.
   Electron. Flip `npmRebuild` only if a dependency ships a non-N-API native module.
   Rationale in full in `docs/desktop.md`.
 - **Extracted text lives in `parsed/`, beside the bytes but never mixed with them.** A
-  source's derived data goes to `<userRoot>/sources/parsed/<sourceId>.txt`, never
-  `sources/raw/<sourceId>.txt`. The split used to be *load-bearing* — `findStoredAttachment()`
+  file's derived data goes to `<userRoot>/sources/parsed/<fileId>.txt`, never
+  `sources/raw/<fileId>.txt`. The split used to be *load-bearing* — `findStoredAttachment()`
   globbed `<id>.*` and `txt` is a valid extension in the MIME table, so a flat sibling could
   be served in place of the original PDF. That hazard is gone: nothing globs any more, because
   the path is a column. The split stays because raw bytes and derived text are different kinds
@@ -1838,22 +1885,34 @@ Fuller map in `docs/reference.md`.
   event it takes: a turn is what links a reference and what a tool writes a file through, and
   there is deliberately no `source.added`, since the client is what asked for every addition.
 - **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget, and `/sessions/:id/quizzes/:qid/answer` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: the make-up POST does a status-guarded UPDATE of the SAME row (never an insert, clearing stale grading), then the client drives an ordinary `/chat` turn quoting the UUID so the model grades it instead of posing a new quiz. An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in a system-prompt-only note (`renderMakeupKeyNote`, gated by `ChatInput.makeupQuizId` naming an owned **answered** row) for a make-up. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
-- **A note is about a passage, or about a 图 or a 表.** `notes.target_kind` is `text` | `diagram` |
-  `table` and `target_ref` holds the figure's canonical `name` — the same handle `ila_query` takes
-  and the same one a 追问 reference carries. The whole object is the target and never part of it:
-  a mermaid diagram renders no addressable text nodes, and a table's cells are markdown the reader
-  sees but the anchor arithmetic counts over rendered geometry. `NOT NULL DEFAULT 'text'` rather
-  than a nullable column, because every note written before it existed genuinely *is* a text note —
-  the default preserves what those rows already meant, where NULL would say "we do not know".
-  `targetMissing` mirrors `messageMissing`, and it is a pair of `NOT EXISTS` each guarded by
-  `target_kind`: a diagram and a table may share a name, so without the guard one row's presence
-  would make the other's absence read as present — removing it fails three tests.
+- **A note is about a passage, or about a 图、表, or the material the conversation works from.**
+  `table` | `resource`, and `target_ref` holds a figure's canonical `name` — the same handle
+  `ila_query` takes and the same one a 追问 reference carries — or, for a resource, a **reference
+  id**. The whole object is the target and never part of it: a mermaid diagram renders no
+  addressable text nodes, a table's cells are markdown the reader sees but the anchor arithmetic
+  counts over rendered geometry, and a file is addressed by an id rather than a range.
+  `NOT NULL DEFAULT 'text'` rather than a nullable column, because every note written before it
+  existed genuinely *is* a text note — the default preserves what those rows already meant, where
+  NULL would say "we do not know".
+  **`canonicalTarget` is an exhaustive `switch` with a `never` arm, and that is not style.** It
+  used to fall through to `tableName` for anything that was not a diagram — correct with two
+  kinds, and a silent 404 for every resource-targeted note with three, because a uuid run through
+  the table slug rule matches nothing and no type error says so. The `never` arm is what makes a
+  fourth kind a compile error instead.
+  **Its validation is scoped differently from the other two arms**: a diagram and a table are
+  found inside this conversation, while a resource is looked up **owner-scoped**, because a
+  reference held by another workspace is a legitimate target — the `@` picker offers exactly that.
+  `targetMissing` mirrors `messageMissing`, and its three arms are each guarded by `target_kind`:
+  a diagram and a table may share a name, so without the guard one row's presence would make the
+  other's absence read as present. **The resource arm reaches the owner through
+  `notes → sessions → workspaces` and is not scoped by the conversation** — scoping it that way
+  would report a live cross-workspace reference as gone and quietly cost the chip its 定位 control.
 - **A note belongs to a conversation, and to a message only when something was annotated.** `notes.session_id` is `NOT NULL` and `message_id` is nullable, which is what makes a note the user typed from the panel the same kind of thing as one made by dragging over a sentence. `message_id` carries **no foreign key** on purpose: a regenerate or a tail delete soft-deletes a message, and the note is the user's own writing, so it survives with the quote it recorded — `messageMissing`, resolved by a `LEFT JOIN messages … AND m.deleted_at IS NULL` in the read that fetches the note, is how a read says so (never a client guess from a message list that only holds the conversation on screen). **An anchor is a text quote plus which occurrence of it**, counted over the message's **visible** text — never character offsets, which are offsets into rendered HTML and mean nothing after the next `v-html` assignment, and never a raw text walk, which sees every formula twice because KaTeX emits glyphs *and* hidden MathML. **The model reads notes and cannot write them.** No tool creates or edits one — that half of the original rule is the half that carries the product weight, since a turn must never rewrite what the learner wrote. The read arrives through the ordinary `ila_query(kind: "note")`, deliberately not through a tool bound to the notes widget: a bound tool is assembled only while its widget is installed, and nothing installs a widget by default, so binding the read would make the learner's own notes invisible in every conversation that had not opted into the panel. What the two sides gain: a plan, a quiz and an insight pass are all richer for knowing what the learner underlined, and a note that reads like an instruction is handed over as data about the learner, never as an instruction — the tool result says so in those words.
 - **A widget can own a capability of the host, and exactly one holds it at a time.** The message list implements marking-up (selection, the floating bar, `<mark>`, the window) and knows nothing about notes as records; the notes widget owns the records and knows nothing about `Range`. `composables/messageNotes.ts` is the whole of what they share: a **claim**, per *conversation* rather than per widget (the message list on screen belongs to one session while the widget is installed in a different set of them), with a refusal that names the holder. The host registers on mount and the widget claims from `WidgetModule.onActive`, in either order, because the host **reads** the claim rather than being told about it. `onActive` is not `onMount`: `WidgetPanel` mounts only the active tab, so a claim owned by the component would drop the moment the reader looked at the plan, taking every highlight with it. It is called by `composables/widgetActivation.ts` — an effect owned by `ChatView`'s setup, because the panel being rendered *is* the answer to "is a widget live", and leaving the view (the one transition no reactive input expresses) is reported by that scope stopping. It is deliberately not a store `watch`: a store's setup belongs to no lifetime, and in a test suite every abandoned store instance keeps watching module-level singletons.
   **The floating bar is the conversation's, and the claim contributes *buttons* to it.** Noticing a selection and offering 追问 on it are things every conversation does; what varies is what a widget adds. So `useMessageSelection` is enabled whenever a conversation is open, `ChatView` composes `[its own action, ...claim.actions()]`, and the bar is hidden when that list is empty — which is what keeps a conversation with nothing installed from showing a strip of nothing. The host's action is deliberately **not** part of the claim: asking the claim for it would make the one universally available gesture disappear with the panel that is not about it. `actions()` is a **function** and each action carries its own `disabled`, both for the same reason — the notes widget derives its buttons' availability from its own writability, which changes while the claim stands, so a list frozen at claim time would leave them live in a conversation this client cannot write to, and one flag for the strip would have to pick which of two unrelated causes to be wrong about. An action's `label` arrives **translated**, not as a key: a widget is a non-component module, so it names its keys literally through `i18n.global.t`, and a key the host resolved would be invisible to `catalog.test.ts`'s scan — reported as dead, correctly. The element ids keep the `note-` prefix they were born with (`messageSelection.ts` skips a `mouseup` on `[data-testid="note-toolbar"]`, without which the press that uses a button dismisses the bar) — a rename would be three silent ways to break a working control in exchange for a word.
-- **A 追问 is a pointer, and only a passage is a copy.** The gesture — select a passage, or point at a diagram, a table, a note or a quiz question — stages a chip in the composer and puts the caret there; the reader types their question and sends it. `TurnReference` is what the client sends, `turnReferences.ts` resolves it against the conversation, and `renderReferenceBlock` is the one renderer that turns it into prompt text. Four things are load-bearing:
-  - **A diagram, a table and a note are *named*, never copied.** The agent reads them with `ila_query`, the tool it already uses for this conversation's own record. That costs a few words and buys currency — the answer is about the figure as it is now, not as it was when the reader was looking at it — and a long table never crowds out the turn asking about it. A **passage** has no handle (a text range inside a rendered message is not addressable) so its text travels; a **quiz question** travels too, deliberately unlike a figure, because fourteen words a round trip would fetch anyway are cheaper carried, and the sentence asking for no new quiz came across from the prose template this replaced.
-  - **The block goes in the user turn's content, not the system prompt.** `/regenerate` sends `userMessage: null` and rebuilds the turn from history, so a block living only in the prompt would be lost there and the model asked the same question again with no antecedent. One renderer serves the live turn and every replayed one; `referencesForHistory` resolves the stored references per run, exactly as `sourcePaths` does for attachments and for the same reason.
+- **A 追问 is a pointer, and only a passage is a copy.** The gesture — select a passage, or point at a diagram, a table, a note, a quiz question or a reference — stages a chip in the composer and puts the caret there; the reader types their question and sends it. `TurnReference` is what the client sends, `turnReferences.ts` resolves it against the conversation, and `renderReferenceBlock` is the one renderer that turns it into prompt text. The `@` picker produces the **same** kind of object (`kind: "resource"`), which is what retired `messages.sources` and left one mechanism instead of two. Four things are load-bearing:
+  - **A diagram, a table, a note and a resource are *named*, never copied.** The agent reads them with `ila_query`, the tool it already uses for this conversation's own record. That costs a few words and buys currency — the answer is about the figure as it is now, not as it was when the reader was looking at it — and a long table never crowds out the turn asking about it. A **passage** has no handle (a text range inside a rendered message is not addressable) so its text travels; a **quiz question** travels too, deliberately unlike a figure, because fourteen words a round trip would fetch anyway are cheaper carried, and the sentence asking for no new quiz came across from the prose template this replaced.
+  - **The block goes in the user turn's content, not the system prompt.** `/regenerate` sends `userMessage: null` and rebuilds the turn from history, so a block living only in the prompt would be lost there and the model asked the same question again with no antecedent. One renderer serves the live turn and every replayed one; `referencesForHistory` resolves the stored references per run, exactly as `resourcePaths` does for attachments and for the same reason.
   - **Refused, never dropped, on the live path** — the inverse of `body.sources`, and the difference is what the two are. A source is material the model may *read*, so losing it narrows the turn and the answer is still an answer; a reference is **the object of the question**, so losing it changes what was asked. The message is not written on a refusal either: a row recording a question the server declined to run would be a turn in the conversation that never happened. On the **replay** path the rule inverts — a target that has since gone is *reported*, never refused — because a turn that happened cannot be un-happened, and a history that failed to load over a deleted diagram would break every later turn.
   - **A passage's quote is not verified against the message.** The client measured it over the *rendered* DOM, the server holds markdown, and this repo will not grow a second renderer to check itself against — so a quote that does not appear verbatim is normal rather than suspicious. What the server does verify is ownership and session, which is the part a client-supplied id must never be trusted for. The block labels the passage as the learner's own selection and as data rather than instruction, the sentence `ila_query`'s note handler already carries.
   A turn may be **nothing but references** — "what about this?" is a complete question — so the store's send guard and the route's `MESSAGE_REQUIRED` check both know about them; the two disagreeing is how a question asked by pointing gets refused by a server that never looked. `ila_query(kind: "note"|"quiz")` and the figure kind's `name` are what a reference resolves *through*, so a kind the model cannot look up is a kind it cannot be given: the quiz listing carried only the `Qn` for as long as nothing resolved the global id the old template quoted.

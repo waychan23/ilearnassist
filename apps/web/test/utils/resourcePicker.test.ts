@@ -113,7 +113,7 @@ const groupKinds = (input: Partial<BuildOptionsInput> = {}): string[] =>
 
 describe("the tabs", () => {
   it("shows both kinds on 全部, workspaces first", () => {
-    expect(groupKinds()).toEqual(["workspace", "source"]);
+    expect(groupKinds()).toEqual(["workspace", "resource"]);
     expect(namesOf()[0]).toBe(ALL_LABEL);
   });
 
@@ -123,8 +123,8 @@ describe("the tabs", () => {
   });
 
   it("shows only sources on 资料", () => {
-    expect(groupKinds({ tab: "source" })).toEqual(["source"]);
-    expect(namesOf({ tab: "source" })).not.toContain(ALL_LABEL);
+    expect(groupKinds({ tab: "resource" })).toEqual(["resource"]);
+    expect(namesOf({ tab: "resource" })).not.toContain(ALL_LABEL);
   });
 });
 
@@ -159,7 +159,7 @@ describe("the type pills", () => {
   it("drops the workspace group entirely", () => {
     // A workspace has no source type, so a list still showing workspaces after you asked for
     // images reads as a filter that did not work.
-    expect(groupKinds({ pill: "image" })).toEqual(["source"]);
+    expect(groupKinds({ pill: "image" })).toEqual(["resource"]);
     expect(namesOf({ pill: "image" })).not.toContain(ALL_LABEL);
   });
 
@@ -196,7 +196,7 @@ describe("matching", () => {
 describe("caps", () => {
   it("caps a group and reports what did not fit", () => {
     const many = Array.from({ length: GROUP_LIMIT + 5 }, (_, i) => source(`x${i}`, `file-${i}.md`, "markdown"));
-    const [group] = build({ sources: many, tab: "source" });
+    const [group] = build({ sources: many, tab: "resource" });
     expect(group!.options).toHaveLength(GROUP_LIMIT);
     expect(group!.hidden).toBe(5);
   });
@@ -223,7 +223,7 @@ describe("marking what is already granted", () => {
 
   it("marks everything when the grant is `all`", () => {
     const rows = flatten(build({ isAllGranted: true }));
-    expect(rows.filter((row) => row.kind !== "source").every((row) => row.granted)).toBe(true);
+    expect(rows.filter((row) => row.kind !== "resource").every((row) => row.granted)).toBe(true);
   });
 });
 
@@ -232,7 +232,7 @@ describe("flatten and stepActive", () => {
     const rows = flatten(build());
     expect(rows[0]!.kind).toBe("all-workspaces");
     expect(rows[1]!.kind).toBe("workspace");
-    expect(rows.some((row) => row.kind === "source")).toBe(true);
+    expect(rows.some((row) => row.kind === "resource")).toBe(true);
   });
 
   it("wraps in both directions", () => {

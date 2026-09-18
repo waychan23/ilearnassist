@@ -4232,7 +4232,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // Where an unqualified write goes, resolved down the chain: the session's own setting
     // (which already carries whatever Copilot started it) over the workspace's default. The
     // per-turn instruction tier exists in `resolveWriteLocation` and is unused here until a
-    // turn can express one — see `docs/sources.md`.
+    // turn can express one — see `docs/resources.md`.
     const writeLocation = resolveWriteLocation({
       session: session.settings,
       workspace: workspace.settings,

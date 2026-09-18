@@ -14,7 +14,7 @@ import { resourceCategory, resourceName } from "./resourceView";
  */
 
 /** The three tabs. `all` is what the picker opens on: a bare `@` narrows by nothing. */
-export const REFERENCE_TABS = ["all", "workspace", "source"] as const;
+export const REFERENCE_TABS = ["all", "workspace", "resource"] as const;
 export type ReferenceTab = (typeof REFERENCE_TABS)[number];
 
 /**
@@ -64,7 +64,7 @@ export function pillCategories(pill: ResourcePill | null): readonly FileCategory
 export interface ReferenceOption {
   /** Stable across refetches — a reference id, or `ws:<id>` / `all-workspaces`. */
   key: string;
-  kind: "all-workspaces" | "workspace" | "source";
+  kind: "all-workspaces" | "workspace" | "resource";
   name: string;
   /** A reference's workspace name, shown on the right. Empty for a workspace row. */
   where: string;
@@ -73,7 +73,7 @@ export interface ReferenceOption {
 }
 
 export interface ReferenceGroup {
-  kind: "workspace" | "source";
+  kind: "workspace" | "resource";
   options: ReferenceOption[];
   /** How many matched but did not fit the cap, so the component can say "还有 N 项". */
   hidden: number;
@@ -121,7 +121,7 @@ export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[
   const groups: ReferenceGroup[] = [];
 
   // The workspace group needs both the tab and the absence of a pill to be worth drawing.
-  const wantsWorkspaces = input.tab !== "source" && input.pill === null;
+  const wantsWorkspaces = input.tab !== "resource" && input.pill === null;
   if (wantsWorkspaces) {
     const rows: ReferenceOption[] = [];
     if (matches(input.allLabel, needle) || matches("all", needle)) {
@@ -160,18 +160,18 @@ export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[
       .filter((source) => matches(resourceName(source), needle))
       .map((source) => ({
         key: `src:${source.id}`,
-        kind: "source" as const,
+        kind: "resource" as const,
         name: resourceName(source),
         where: source.workspaceName ?? "",
         granted: false,
       }));
-    push(groups, "source", rows);
+    push(groups, "resource", rows);
   }
 
   return cap(groups);
 }
 
-function push(groups: ReferenceGroup[], kind: "workspace" | "source", rows: ReferenceOption[]): void {
+function push(groups: ReferenceGroup[], kind: "workspace" | "resource", rows: ReferenceOption[]): void {
   if (rows.length === 0) return;
   groups.push({ kind, options: rows.slice(0, GROUP_LIMIT), hidden: Math.max(0, rows.length - GROUP_LIMIT) });
 }
