@@ -23,6 +23,7 @@ import type {
   GetQuizQuestionsResponse,
   GetSessionDiagramsResponse,
   GetSessionTablesResponse,
+  HealthResponse,
   GetSessionInsightsResponse,
   GetSessionNotesResponse,
   GetSessionThreadsResponse,
@@ -485,6 +486,14 @@ export const api = {
 
   /** Who the caller is. A 401 here is the answer, not an expiry — see `ANSWERS_WITH_401`. */
   me: () => request<User>("/auth/me"),
+  /**
+   * Which installation is behind this origin — and the one call made before the token is used.
+   *
+   * Public, so it answers with no session at all, which is the point: the caller has to be able to
+   * ask before it knows whether the token it holds means anything here. See
+   * `composables/instance.ts`, its only caller.
+   */
+  health: () => request<HealthResponse>("/health"),
 
   /**
    * Change your own password.

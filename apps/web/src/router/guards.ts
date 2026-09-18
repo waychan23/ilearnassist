@@ -9,6 +9,7 @@ import {
   closeWorkspaceSettings,
 } from "../composables/ui";
 import { reportLeave } from "../composables/sessionLeave";
+import { consumeStaleAddress } from "../composables/instance";
 import { isUnauthenticatedError } from "../utils/apiError";
 import { ADMIN_SECTIONS } from "./index";
 
@@ -95,11 +96,17 @@ export function installGuards(
    * Where a refusal to enter a page sends the reader: the screen they owe, remembering where
    * they were going. The front door carries no `redirect` — "you were on the way to home" is
    * not a place to come back to.
+   *
+   * **And neither does an address from another installation.** A data-root switch leaves a tab
+   * holding a `/w/<id>/s/<id>` that named a workspace in a database that is gone; handing it back
+   * after the sign-in would land the reader on a page that never existed, which is the
+   * 会话不存在 report. This is the one place that knows both halves — the destination and the fact
+   * that it cannot mean anything here. See `composables/instance.ts`.
    */
-  const landing = (fullPath: string, name: "login" | "password"): RouteLocationRaw => ({
-    name,
-    query: fullPath === "/" ? {} : { redirect: fullPath },
-  });
+  const landing = (fullPath: string, name: "login" | "password"): RouteLocationRaw => {
+    const home = fullPath === "/" || consumeStaleAddress();
+    return { name, query: home ? {} : { redirect: fullPath } };
+  };
 
   const stopBefore = router.beforeEach(async (to) => {
     await ensureProbed();

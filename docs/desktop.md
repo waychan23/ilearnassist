@@ -196,6 +196,36 @@ restart that follows. Precedence is `ILA_DATA_DIR` from the environment first, t
 e2e harness can run without a human at a dialog. Changing the folder restarts the server, and the
 conversations you had on screen stay where they were.
 
+#### Changing the folder leaves stale state behind, and both ends drop it
+
+Stopping the server is not enough, and the failure it leaves is confusing rather than obvious. An
+open **app window** is a browser window on the server's own address: after a switch it holds a
+bearer token the new database has never issued, and a `/w/<id>/s/<id>` naming a workspace that
+does not exist there. The server usually comes back on the **same port**, so nothing about the
+origin changes and the tab has no way to tell it is talking to somebody else. Reported from use as
+a 会话不存在 toast on a page the reader did nothing to reach.
+
+So the two ends each drop what they can, and neither is a second implementation of the other:
+
+- **The panel closes the app window** (`resetAppWindow`), and clears that origin's storage on the
+  way. The window cannot fix itself here: the server it was pointed at has just been stopped and
+  may come back on another port, and `openAppWindow` now compares the window's URL against the
+  current one rather than showing a page from a server that is gone.
+- **The web app settles it for itself, on every load.** `GET /api/health` carries an
+  **installation id** — a value in `app_settings`, not a hash of the path, so a *moved* folder is
+  the same installation while a different folder is a different one. The client compares it before
+  it uses the token and, on a difference, drops the pair and replaces the address with the front
+  door. See `apps/web/src/composables/instance.ts`.
+
+The second is what covers a plain browser, and it is why the check runs **before the router is
+installed**: afterwards the answer would arrive as a 401, indistinguishable from an expired
+session. It is two things rather than one because the address outlives the token — the guard that
+sends a signed-out reader to the sign-in screen remembers where they were going and hands it back,
+so the stale path is suppressed on that one navigation rather than merely erased from the bar
+(the router captured the location at import time, which is before the reset can have finished its
+request). A request that cannot be made concludes nothing: a dropped connection is not an
+installation change, and signing somebody out of one that is fine would be the worse mistake.
+
 The app also writes a `config.local.yaml` overlay (via the existing `ILA_CONFIG_PATH`
 mechanism, not a fork of the config format) setting `port: 0`, so the OS assigns a free port
 on every launch. A fixed port is the wrong default for a desktop app: it turns "another copy

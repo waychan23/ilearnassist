@@ -24,6 +24,7 @@ import type {
   Copilot,
   DirectoryListing,
   FileContent,
+  HealthResponse,
   ProviderConfig,
   PublicConfig,
   WorkResource,
@@ -72,10 +73,24 @@ const inject = (options: {
 }) => env.inject(options);
 
 describe("GET /api/health and /api/config", () => {
-  it("reports health", async () => {
+  it("reports health, and which installation is answering", async () => {
+    /*
+     * The instance id rides the one route a client can call before it has a session, because that
+     * is the question it settles: a token and a `/w/<id>/s/<id>` belong to one database, and an
+     * origin can outlive it — the desktop panel's data-root picker restarts the server on the
+     * same port. Without it the difference arrives as a 401 indistinguishable from an expired
+     * session. See `apps/web/src/composables/instance.ts`.
+     */
     const res = await inject({ method: "GET", url: "/api/health" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true });
+    const body = res.json<HealthResponse>();
+    expect(body.ok).toBe(true);
+    expect(body.instance).toBeTruthy();
+
+    // Stable for the installation — a value that changed per request would sign every client out
+    // on its next reload.
+    const again = (await inject({ method: "GET", url: "/api/health" })).json<HealthResponse>();
+    expect(again.instance).toBe(body.instance);
   });
 
   it("publishes the bootstrap config", async () => {

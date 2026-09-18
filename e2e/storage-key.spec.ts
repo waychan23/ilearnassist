@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AUTH_STORAGE_KEY } from "./auth.js";
+import { AUTH_STORAGE_KEY, INSTANCE_STORAGE_KEY } from "./auth.js";
 
 /**
  * The session's storage key, in the two places it is written down.
@@ -28,4 +28,6 @@ test("the suite's storage key matches the app's", () => {
   );
 
   expect(shared).toContain(`export const AUTH_STORAGE_KEY = "${AUTH_STORAGE_KEY}"`);
+  // The second copy, for `e2e/instance.spec.ts`'s reason — see `auth.ts`.
+  expect(shared).toContain(`export const INSTANCE_STORAGE_KEY = "${INSTANCE_STORAGE_KEY}"`);
 });

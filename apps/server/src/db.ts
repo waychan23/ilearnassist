@@ -751,6 +751,39 @@ export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
  * as it did before the setting existed.
  */
 export const SETTING_MAX_UPLOAD_BYTES = "upload.maxFileBytes";
+
+/**
+ * Which installation this database is.
+ *
+ * A value in the database rather than a hash of the data root's path, and the difference is the
+ * whole of what it is for: **a folder that was moved is the same installation** — its accounts,
+ * its sessions and its `auth_tokens` all travelled with it — while a different folder is a
+ * different one. A path-derived id would call a copy of the same data a new installation and sign
+ * everybody out of a browser that had never left.
+ *
+ * What it answers: a client holding a bearer token has no way to tell "my token expired" from
+ * "this origin is now serving somebody else's database", and the second is what a data-root switch
+ * looks like from a tab that was already open. The comparison is the client's — see
+ * `apps/web/src/composables/instance.ts` — and this is only the fact it compares against.
+ */
+export const SETTING_INSTANCE_ID = "instance.id";
+
+/**
+ * The installation's id, minted on first ask.
+ *
+ * Written on read rather than at creation because `createDb` is called by tests, by the CLI and by
+ * the server, and a value none of them reads does not need to exist. The race it could lose is
+ * against a second *process*, which this codebase already assumes away for DDL (see
+ * `resetAdmin`); two concurrent readers of one file would mint two ids and one would win, which is
+ * the same outcome as minting one.
+ */
+export function instanceId(db: AppDb): string {
+  const known = db.getSetting(SETTING_INSTANCE_ID);
+  if (known) return known;
+  const minted = newId();
+  db.setSetting(SETTING_INSTANCE_ID, minted);
+  return minted;
+}
 /*
  * `SETTING_AUTH_SECRET` ("auth.secret") is gone, and the *row* it wrote is deliberately left
  * alone rather than cleaned up. It signed the session cookie, which a bearer token replaced —

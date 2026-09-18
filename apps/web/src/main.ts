@@ -6,6 +6,7 @@ import { i18n } from "./i18n";
 import { router } from "./router";
 import { installGuards } from "./router/guards";
 import { useLocale } from "./composables/locale";
+import { syncInstallation } from "./composables/instance";
 // The highlight.js theme is not imported here: syntax colours have to follow the resolved
 // theme, so `composables/theme.ts` swaps the matching stylesheet in (and importing one
 // here as well would leave a second, unscoped copy fighting it).
@@ -24,17 +25,29 @@ import "./style.css";
 useLocale();
 
 const pinia = createPinia();
+const app = createApp(App).use(pinia).use(i18n);
 
 /*
- * The guards go on **before** the router is installed, and that order is the whole of "a
+ * The installation is checked **first**, and the whole boot waits on it.
+ *
+ * A token and a `/w/<id>/s/<id>` address belong to one database, and an origin can outlive it —
+ * the desktop panel's data-root picker restarts the server on the same port. Settling that before
+ * anything reads the token is what keeps the answer from arriving disguised as an expired
+ * session; see `composables/instance.ts`, which also states why a request that *fails* changes
+ * nothing. It is one request, and `App.vue` withholds every branch until the account is known
+ * anyway, so nothing is painted later than it already was.
+ *
+ * The guards then go on **before the router is installed**, and that order is the whole of "a
  * reload lands where you were": installing a router is what starts the first navigation, so a
  * guard registered afterwards would miss it — and the first navigation is the one that decides
- * which page this tab opens on.
+ * which page this tab opens on. It is also why the reset can replace the address: nothing has
+ * read it yet.
  *
  * The store is built here rather than reached for inside the guards because Pinia's store has
  * to be active to be looked up, and the app is not mounted yet. Same store either way: this is
  * the instance every component will resolve to.
  */
-installGuards(router, useAppStore(pinia));
-
-createApp(App).use(pinia).use(i18n).use(router).mount("#app");
+void syncInstallation().then(() => {
+  installGuards(router, useAppStore(pinia));
+  app.use(router).mount("#app");
+});

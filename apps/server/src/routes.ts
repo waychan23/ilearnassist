@@ -21,6 +21,7 @@ import type {
   DocumentParsePolicy,
   DocumentParserConfig,
   FileLocation,
+  HealthResponse,
   ParseErrorCode,
   ParseStatus,
   PreviewReference,
@@ -91,6 +92,7 @@ import {
 } from "./config.js";
 import {
   DEFAULT_SESSION_TITLE,
+  instanceId,
   newId,
   readDocumentParsing,
   readMaxUploadBytes,
@@ -1346,7 +1348,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   // Public: a liveness probe that needs a session cannot do its job, and it reports nothing
   // about the data.
-  app.get("/api/health", { config: { public: true } }, async () => ({ ok: true }));
+  app.get(
+    "/api/health",
+    { config: { public: true } },
+    async (): Promise<HealthResponse> => ({ ok: true, instance: instanceId(db) })
+  );
 
   app.get("/api/config", async (request) => publicConfig(actor(request)));
 

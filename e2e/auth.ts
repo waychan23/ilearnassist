@@ -33,6 +33,15 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const AUTH_STORAGE_KEY = "ila-auth";
 
 /**
+ * Where the browser keeps the id of the installation it last talked to.
+ *
+ * The second key this suite has to be able to *write*, for the same reason and with the same
+ * duplication: `e2e/instance.spec.ts` stages a data-root switch by leaving the browser holding an
+ * id that is not the server's. `e2e/storage-key.spec.ts` holds both copies in step.
+ */
+export const INSTANCE_STORAGE_KEY = "ila-instance";
+
+/**
  * Where the signed-in state is written, and read back.
  *
  * Under `.e2e/`, which `global-teardown.ts` removes — so a stale session cannot survive into

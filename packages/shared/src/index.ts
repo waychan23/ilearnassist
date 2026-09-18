@@ -2354,6 +2354,30 @@ export interface AdminUser {
  */
 export const AUTH_STORAGE_KEY = "ila-auth";
 
+/**
+ * Where the client keeps the installation id it last talked to.
+ *
+ * Beside `AUTH_STORAGE_KEY` rather than in the web app, and for that key's reason: both name a
+ * piece of `localStorage` that the *e2e suite* also has to be able to clear, and a key spelled
+ * twice is a key that drifts. See `HealthResponse`.
+ */
+export const INSTANCE_STORAGE_KEY = "ila-instance";
+
+/**
+ * `GET /api/health` — the one route that answers without a session.
+ *
+ * `instance` is the installation's own id, and it is here rather than on `/api/config` because
+ * this is the **first** thing a client can ask: the question it answers — "is the database behind
+ * this origin still the one my stored token belongs to?" — has to be settled *before* the token is
+ * used, or the answer arrives as a 401 that looks exactly like an expired session. See
+ * `SETTING_INSTANCE_ID` on the server and `apps/web/src/composables/instance.ts` on the client.
+ */
+export interface HealthResponse {
+  ok: boolean;
+  /** Absent only in a reply from a build older than this field. */
+  instance?: string;
+}
+
 /** The shortest password the server will accept from a person choosing one. */
 export const PASSWORD_MIN_LENGTH = 8;
 /** Long enough for a passphrase, short enough that hashing stays a rounding error. */
