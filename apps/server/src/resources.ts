@@ -8,6 +8,7 @@ import type {
   StoredFile,
   WebPage,
   WorkResource,
+  WorkResourceType,
 } from "@ilearnassist/shared";
 import { newId } from "./db.js";
 import type { AppDb, FileRecord, WorkResourceFilter, WorkResourceRecord } from "./db.js";
@@ -199,6 +200,54 @@ export function ensureWorkResource(
     summary: input.summary,
     now: input.now,
   });
+}
+
+/**
+ * Give a page reference the text a sibling already extracted, and say whether it worked.
+ *
+ * **A page arrives already extracted**, which is why this is not a parse: `captureWebPage` says
+ * the same thing when it reuses a prior text file, and the honest answer for a second owner is to
+ * point at the text that is already on disk. What makes an adoption necessary at all is that a
+ * page's text is reachable **only through a reference** — `web_pages` names neither the stored
+ * body nor the extracted text — so a second reference to the same page, which is exactly what
+ * pointing at it with `@` creates, is born `none` with no pointer, and `documents.schedule`
+ * skips it (`text/html` is not a document MIME, and `service.ts` early-returns on that before it
+ * writes anything). Left alone it answers "no readable text" for the rest of the conversation —
+ * the failure `docs/resources.md` says the schedule exists to prevent, arriving by the one route
+ * the schedule cannot cover.
+ *
+ * **False means there was no sibling text to adopt**, and the reference is left `none` rather
+ * than marked `ready` with nothing behind it. `read_document` then says there is no text, which
+ * is true and is the reader's own problem to solve by re-keeping the page.
+ */
+export function adoptPageParse(
+  db: AppDb,
+  userId: string,
+  resource: WorkResourceRecord,
+  now?: string
+): boolean {
+  // Not a page, or already readable: nothing to adopt. False either way, because the caller's
+  // next move is the same — hand it to the parse pipeline, which skips a page and parses a file.
+  if (resource.resourceType !== "web_page") return false;
+  if (resource.parseStatus === "ready" && resource.parsedFileId) return false;
+
+  const sibling = db
+    .listWorkResourcesForResource(userId, "web_page", resource.resourceId)
+    .find((other) => other.id !== resource.id && other.parsedFileId !== undefined);
+  if (!sibling?.parsedFileId) return false;
+
+  db.updateWorkResourceParse({
+    id: resource.id,
+    userId,
+    // `ready`, not `none`: the text is there and every reader treats `ready` as "there is text
+    // here". The *length* comes off the sibling rather than being re-measured, because it is the
+    // same file and re-reading it would be a second answer to a question already answered.
+    status: "ready",
+    parsedChars: sibling.parsedChars,
+    parsedFileId: sibling.parsedFileId,
+    now,
+  });
+  return true;
 }
 
 /**
@@ -489,7 +538,44 @@ export async function listResourceViewsForUser(
   filter: WorkResourceFilter = {}
 ): Promise<WorkResourceRecord[]> {
   const rows = await withMissing(user, db.listWorkResourcesFiltered(userId, filter));
-  return withOwnerLabels(db, userId, rows);
+  return withOwnerLabels(db, userId, withReferenceCounts(db, userId, rows));
+}
+
+/**
+ * Attach how many live references point at each row's entity, this one included.
+ *
+ * The library's delete asks with it: destroying a file destroys every reference to it, so a
+ * delete that would take another conversation's material with it has to say so *before* it
+ * happens. One grouped statement per entity type on the page — at most two, since `file` and
+ * `web_page` are the whole vocabulary — and never a query per row.
+ *
+ * Absent rather than `1` when the count cannot be had: a listing is the only caller, and a row
+ * from anywhere else leaves the field off, which the reader must treat as "unknown" rather than
+ * as "nobody else holds this".
+ */
+function withReferenceCounts(
+  db: AppDb,
+  userId: string,
+  rows: readonly WorkResourceRecord[]
+): WorkResourceRecord[] {
+  const idsByType = new Map<WorkResourceType, Set<string>>();
+  for (const row of rows) {
+    const ids = idsByType.get(row.resourceType) ?? new Set<string>();
+    ids.add(row.resourceId);
+    idsByType.set(row.resourceType, ids);
+  }
+
+  const counts = new Map<string, number>();
+  for (const [resourceType, ids] of idsByType) {
+    for (const [resourceId, count] of db.countReferencesForEntities(userId, resourceType, [...ids])) {
+      counts.set(`${resourceType}:${resourceId}`, count);
+    }
+  }
+
+  return rows.map((row) => {
+    const count = counts.get(`${row.resourceType}:${row.resourceId}`);
+    return count === undefined ? row : { ...row, referenceCount: count };
+  });
 }
 
 /**

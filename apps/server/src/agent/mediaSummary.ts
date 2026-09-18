@@ -29,8 +29,17 @@ import { renderPrompt } from "../prompts.js";
  *   a second model would be a second key, a second bill and a second answer.
  *
  * The output is used in two places on purpose: the `summary` column, which the browser and the
- * `@` picker show; and `parsed/<id>.txt`, which is what `read_document` and the prompt builder
- * read. A summary that lived only in the column would be a file the model still could not read.
+ * `@` picker show; and the extracted text a **reference** points at (`parsed_file_id`), which is
+ * what `read_document` reads. A summary that lived only in the column would be a file the model
+ * still could not read.
+ *
+ * **The second half is a registered `files` row, and it has to be.** This module once wrote the
+ * text to `parsed/<imageId>.txt` and stopped there, on the reasoning that the path was derivable
+ * — but no reader derives one: `read_document` follows a reference's `parsed_file_id` to a file
+ * row and resolves *that* row's stored path. So the file was written where nothing looks, and the
+ * description was unreachable by exactly the two readers this docblock names. The id is a **new**
+ * one too, not the image's: `files.id` is a primary key, so a parse result cannot share the row
+ * its own bytes live on. The writer is `summarizeTurnImages` in `routes.ts`.
  */
 
 /** Long enough for a paragraph, short enough to be a label. */

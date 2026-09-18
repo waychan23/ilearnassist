@@ -1721,17 +1721,32 @@ export default {
       document: "文档",
       other: "其他",
     },
+    /*
+     * Two deletes, and the dialog has to say which one a press is. `delete.*` is the
+     * **reference-only** case — an upload or a page, where this account's hold goes and the bytes
+     * and every other owner's reference stay. `deleteFile.*` is a file inside a workspace, which
+     * is deleted through the file manager: the bytes move to that workspace's trash and the
+     * shared file row goes, taking *every* conversation's reference with it.
+     *
+     * They used to share one sentence, and it described the first while the file branch did the
+     * second — promising that other conversations were unaffected, in front of an irreversible
+     * action. The `.shared` pair is the third case: somebody else holds this too, so the reader
+     * is told how many and asked rather than warned.
+     */
     delete: {
-      /*
-       * The copy had to change with the model, and not for style: a v4 delete takes *this owner's
-       * reference* away and leaves the file and every other conversation's reference to it alone.
-       * The old sentence promised the opposite — that the file, its text and its references
-       * everywhere were going — which is a claim a reader acts on.
-       */
       title: "删除这条资料",
       message: "确定要删除「{name}」吗？",
-      detail: "这条引用会被移除，无法恢复。若它是工作区里的文件，文件本身也会一并删除；其他对话对同一份资料的引用不受影响。已发出的消息仍会显示附件，但打不开了。",
+      detail: "这条引用会被移除，无法恢复。其他对话对同一份资料的引用不受影响。已发出的消息仍会显示附件，但打不开了。",
       action: "删除",
+    },
+    deleteFile: {
+      title: "删除这个文件",
+      message: "确定要删除文件「{name}」吗？",
+      detail: "文件会从工作区移到回收站，无法恢复。已发出的消息仍会显示附件，但打不开了。",
+      action: "删除文件",
+      /** `count` others hold it too — named, because they are about to lose it as well. */
+      shared: "文件会从工作区移到回收站，无法恢复。另外还有 {count} 处引用着同一个文件，它们会一起失效。已发出的消息仍会显示附件，但打不开了。",
+      sharedAction: "一并删除文件与所有引用",
     },
     /**
      * Leaving the app for the page a web source was fetched from. Its own verb rather than a

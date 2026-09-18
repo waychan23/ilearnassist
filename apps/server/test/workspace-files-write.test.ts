@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ApiErrorBody, DirectoryListing, WorkResource, Workspace } from "@ilearnassist/shared";
 import { workspaceTrashDir } from "../src/paths.js";
-import { newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
+import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
+import { ensureWorkResource } from "../src/resources.js";
 
 /**
  * The file manager's writes: what a person does to a workspace's files from the browser.
@@ -327,6 +328,71 @@ describe("delete", () => {
 
   it("refuses when nothing is there", async () => {
     expect((await remove("never-existed.txt")).statusCode).toBe(404);
+  });
+
+  it("retires every reference to the file, not just the row it deleted", async () => {
+    /*
+     * A file a second conversation also holds. The bytes moving is not enough on its own: the
+     * shared `files` row goes with them, and a reference left behind is a row pointing at nothing
+     * — hidden by the entity join, and so *indistinguishable* from one that is still live except
+     * by reading the row. Retiring them explicitly is what makes "delete the file and every
+     * reference to it" a fact rather than a conclusion drawn from somebody else's column, and it
+     * is what the library's dialog tells the reader is about to happen.
+     */
+    seed("shared.txt", "held twice");
+    const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "shared.txt")!
+      .fileId;
+    const db = env.server.db;
+
+    // The workspace's own reference, then a conversation's — the shape two holders make.
+    const other = await newSession(env, workspace.id);
+    for (const owner of [
+      { kind: "workspace" as const, id: workspace.id },
+      { kind: "session" as const, id: other.id },
+    ]) {
+      ensureWorkResource(db, {
+        userId: env.user.id,
+        owner,
+        resourceType: "file",
+        resourceId: id!,
+        title: "shared.txt",
+      });
+    }
+    expect(db.listWorkResourcesForResource(env.user.id, "file", id!)).toHaveLength(2);
+
+    await remove("shared.txt");
+
+    // Live references, so nothing left pointing at bytes that are gone.
+    expect(db.listWorkResourcesForResource(env.user.id, "file", id!)).toHaveLength(0);
+  });
+});
+
+describe("what a listing says about a file's holders", () => {
+  it("carries the count, so the delete dialog can ask before it destroys", async () => {
+    /*
+     * The client's only source for "somebody else holds this too", and it is a *listing* fact —
+     * one grouped statement on the page rather than a query per row. `1` is the ordinary answer;
+     * the case that matters is `2`, because that is the one the dialog has to speak about.
+     */
+    seed("counted.txt", "one");
+    const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "counted.txt")!
+      .fileId;
+    const db = env.server.db;
+
+    const before = (await resources()).find((r) => r.resourceId === id)!;
+    expect(before.referenceCount).toBe(1);
+
+    const other = await newSession(env, workspace.id);
+    ensureWorkResource(db, {
+      userId: env.user.id,
+      owner: { kind: "session", id: other.id },
+      resourceType: "file",
+      resourceId: id!,
+      title: "counted.txt",
+    });
+
+    const after = (await resources()).find((r) => r.resourceId === id)!;
+    expect(after.referenceCount).toBe(2);
   });
 });
 

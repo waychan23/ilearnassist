@@ -186,11 +186,80 @@ export async function buildUserContent(
       continue;
     }
 
+    /*
+     * Text-like, and its bytes are not where the row says they are — a **web page**, whose
+     * `web_pages` id is not a `files` id, so `filePathsFor` has no entry for it. It is still the
+     * one thing the model should be told it can *read*: the reference carries the extracted text
+     * (`parsed_file_id`), and `read_document` is the way in. Named as a pointer rather than as a
+     * copy, which is the design — a page reaches the prompt as something to follow, the way a
+     * document past its cap does.
+     *
+     * What stood here was the binary fallback below, which called a parsed page "未解析内容" —
+     * a sentence that was false, and false in the one direction that matters: a model told a
+     * document is unparsed does not try to read it.
+     */
+    if (isTextLike(att.mimeType)) {
+      blocks.push({ type: "text", text: pointerBlock(att, opts) });
+      continue;
+    }
+
     // A binary we have no extractor for: name it so the model knows it exists.
     blocks.push({ type: "text", text: `[附件：${att.name}（${att.mimeType}，未解析内容）]` });
   }
 
   return blocks;
+}
+
+/**
+ * One attachment's **parse state**, as the sentence a model reads.
+ *
+ * Shared by `documentBlock` and `pointerBlock` so the two cannot drift: a reference that is
+ * still being parsed, one that failed and one nothing ever extracted are three different facts,
+ * and each asks the model for something different — wait, report, or give up. `undefined` is the
+ * fourth case: there *is* text, and the caller decides how to hand it over.
+ *
+ * **The status decides, not the pointer**, and that ordering is the whole helper. A failed parse
+ * keeps its `parsed_file_id` — the row records what it was attempting — so keying on the pointer
+ * first would answer "there is text" for a parse that produced none, which is the one thing a
+ * model must not be told.
+ */
+function parseStateBlock(att: Attachment): string | undefined {
+  if (att.parseStatus === "failed") {
+    return `[附件：${att.name}（解析失败：${att.parseError ?? "未知原因"}）]`;
+  }
+  if (att.parseStatus === "pending" || att.parseStatus === "parsing") {
+    return `[附件：${att.name}（正在解析，内容暂不可用）]`;
+  }
+  /*
+   * `ready` **with** a pointer is the one state that means "there is text" — and it is the whole
+   * reason this returns `undefined` rather than a sentence. Everything else has nothing to hand
+   * over, including a `none` that somehow kept a pointer: the two are written together, so a row
+   * that disagrees with itself is one to describe by its status rather than to trust.
+   */
+  if (att.parseStatus === "ready" && att.parsedFileId) return undefined;
+  return `[附件：${att.name}（${att.mimeType}，未解析内容）]`;
+}
+
+/**
+ * An attachment the model can **read but not see**: its text exists, and the only way to it is
+ * `read_document`.
+ *
+ * A web page is the case, and it is the one attachment whose bytes are genuinely unaddressable —
+ * its id is a `web_pages` id, so the path map that inlines a `.md` has nothing for it. The
+ * pointer names the resource id, which is what the tool takes; `documentBlock` prints the same
+ * sentence when a document is too long to inline.
+ *
+ * `toolUse` gates it for the reason it gates that one: without the tool assembled, telling the
+ * model to call `read_document` is telling it about a capability it does not have.
+ */
+function pointerBlock(att: Attachment, opts: BuildContentOptions): string {
+  const state = parseStateBlock(att);
+  if (state !== undefined) return state;
+  if (!opts.toolUse) return `[附件：${att.name}（内容过长，已省略）]`;
+  return (
+    `[附件：${att.name}（网页）—— 用 read_document 工具读取，` +
+    `resourceId 为 "${att.resourceId}"。]`
+  );
 }
 
 /**
@@ -218,13 +287,12 @@ async function documentBlock(att: Attachment, opts: BuildContentOptions): Promis
     ? await readParsedTextHead(opts.user, att.parsedFileId, MAX_INLINE_CHARS + 1)
     : undefined;
   if (head === undefined) {
-    if (att.parseStatus === "failed") {
-      return `[附件：${att.name}（解析失败：${att.parseError ?? "未知原因"}）]`;
-    }
-    if (att.parseStatus === "pending" || att.parseStatus === "parsing") {
-      return `[附件：${att.name}（正在解析，内容暂不可用）]`;
-    }
-    return `[附件：${att.name}（${att.mimeType}，未解析内容）]`;
+    return (
+      parseStateBlock(att) ??
+      // A `parsed_file_id` whose file cannot be read: the row says there is text and the tree
+      // disagrees, which is the one case neither sentence covers.
+      `[附件：${att.name}（解析结果不可读）]`
+    );
   }
 
   if (head.length <= MAX_INLINE_CHARS) {

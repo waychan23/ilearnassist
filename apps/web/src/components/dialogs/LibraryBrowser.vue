@@ -361,22 +361,66 @@ function openInBrowser(row: WorkResource): void {
   void openExternal(url);
 }
 
+/**
+ * Delete a row, **saying first what the delete will actually destroy**.
+ *
+ * Two different things happen behind one button, and the dialog has to say which one this press
+ * is. A **session-owned reference** — an upload, a page — goes through the reference-only route:
+ * this account's hold goes and the bytes and every other owner's reference stay, which is what
+ * the copy has always said. A **file inside a workspace** is deleted through the file manager's
+ * route: the bytes move to the workspace's trash and the shared `files` row goes, which takes
+ * *every* conversation's reference to that file with it.
+ *
+ * The second case used to be described by the first case's sentence, which promised that other
+ * conversations were unaffected — a promise the route does not keep, in front of an irreversible
+ * action. So the file branch asks the server how many references the entity has (the listing
+ * carries it), names the number when there is somebody else, and offers the choice the user is
+ * actually making: destroy the file and every reference to it, or nothing at all.
+ *
+ * Nothing changes for the reference branch, and nothing *can*: those rows have no second owner by
+ * construction — an upload belongs to the account, and the two ids a reference carries (the
+ * entity's and its own) are what make that visible.
+ */
 async function remove(row: WorkResource): Promise<void> {
-  const ok = await confirm({
-    // The same four strings the uploads dialog has always used, and the wording is right for
-    // every kind of reference: this account's hold on it goes, for good.
-    title: t("sources.delete.title"),
-    message: t("sources.delete.message", { name: resourceName(row) }),
-    detail: t("sources.delete.detail"),
-    confirmText: t("sources.delete.action"),
-    danger: true,
-  });
+  const path = fileManagerPath(row);
+  const isWorkspaceFile = Boolean(row.workspaceId) && path !== undefined;
+  /*
+   * `referenceCount` is absent when the server did not answer it, and absent must not read as
+   * "nobody else holds this" — the count is the whole of what makes the warning possible. So an
+   * unknown count is treated as *somebody might*, which asks the question rather than skipping it.
+   */
+  const others = (row.referenceCount ?? 2) - 1;
+
+  const ok = await confirm(
+    isWorkspaceFile
+      ? {
+          title: t("sources.deleteFile.title"),
+          message: t("sources.deleteFile.message", { name: resourceName(row) }),
+          detail:
+            others > 0
+              ? t("sources.deleteFile.shared", { count: others })
+              : t("sources.deleteFile.detail"),
+          confirmText:
+            others > 0
+              ? t("sources.deleteFile.sharedAction")
+              : t("sources.deleteFile.action"),
+          danger: true,
+        }
+      : {
+          // The same four strings the uploads dialog has always used, and the wording is right
+          // here: this account's hold on it goes, for good, and nothing else does.
+          title: t("sources.delete.title"),
+          message: t("sources.delete.message", { name: resourceName(row) }),
+          detail: t("sources.delete.detail"),
+          confirmText: t("sources.delete.action"),
+          danger: true,
+        }
+  );
   if (!ok) return;
 
   try {
-    const path = fileManagerPath(row);
-    if (row.workspaceId && path !== undefined) {
-      await api.deleteWorkspaceEntry(row.workspaceId, path);
+    if (isWorkspaceFile) {
+      await api.deleteWorkspaceEntry(row.workspaceId!, path!);
       // The tree is showing this workspace's files, and one of them has just gone.
       if (store.activeWorkspaceId === row.workspaceId) await store.refreshFileTree({ silent: true });
     } else {

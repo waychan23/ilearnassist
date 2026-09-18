@@ -183,6 +183,7 @@ import {
   webFilePath,
 } from "./resourcePaths.js";
 import {
+  adoptPageParse,
   ensureWorkResource,
   filePathsFor,
   fileOwner,
@@ -1858,6 +1859,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           path: trashFilePath(target.workspace.slug, file.id, path),
         });
         db.softDeleteFileForUser(file.id, target.userId);
+        /*
+         * And every reference to it, explicitly.
+         *
+         * The entity join already *hides* them — a reference whose file is soft-deleted resolves
+         * to no entity and drops out of every listing — so this changes nothing a reader sees.
+         * What it changes is what the rows mean: "the thing this points at is gone" is now a fact
+         * on them rather than a conclusion drawn from somebody else's column, and
+         * `countReferencesForEntities` answers about live rows. A reference left behind would be
+         * a second copy of nothing, which is what the library's delete dialog tells the reader it
+         * is about to do.
+         *
+         * A directory has no single file row, so there is nothing to sweep for one — its contents
+         * are separate rows, deleted one at a time by the same route on the way down.
+         */
+        for (const held of db.listWorkResourcesForResource(target.userId, "file", file.id)) {
+          db.softDeleteWorkResourceForUser(held.id, target.userId);
+        }
       }
       return { ok: true, path: removed.rel };
     } catch (err) {
@@ -4035,13 +4053,45 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         if (!summary) continue;
 
         /*
-         * Both halves, in one place: the file's `summary` column, which the browser reads, and a
-         * text file the *model* reads on every later turn. A summary in the column alone would
-         * leave the image unreadable in the prompt, which is the whole thing this pass is for.
+         * Both halves, in one place: the file's `summary` column, which the browser reads, and the
+         * text the *model* reads on every later turn — as a `files` row of its own, pointed at by
+         * every reference to the image.
+         *
+         * The shape is `documents/service.ts`'s exactly, and it has to be: a reader resolves text
+         * through a reference's `parsed_file_id` and then through *that* row's stored path, so a
+         * file written to `parsed/<id>.txt` with no row behind it is a file nothing can find —
+         * which is what this pass used to do, while its own docblock promised the opposite.
+         *
+         * The id is **new**, not the image's: `files.id` is the primary key, so the bytes and
+         * their description cannot be the same row.
          */
         db.updateFilePath(file.id, input.userId, { summary });
-        const textFileId = file.id;
+        const textFileId = newId();
         await writeParsedText(input.user, textFileId, summary);
+        registerFile(db, {
+          id: textFileId,
+          userId: input.userId,
+          path: storePath(input.user, parsedFilePath(input.user, textFileId)),
+          sourceType: "agent_create",
+          size: Buffer.byteLength(summary, "utf8"),
+          title: `${file.title} (summary)`,
+          mimeType: "text/plain",
+        });
+        /*
+         * **Every** reference to the picture, not just this turn's. A description is about the
+         * image, and the image is one file: a conversation that holds it should be able to read
+         * it whether it attached it or was pointed at it by `@`, and whether that happened
+         * before or after the description was written.
+         */
+        for (const held of db.listWorkResourcesForResource(input.userId, "file", file.id)) {
+          db.updateWorkResourceParse({
+            id: held.id,
+            userId: input.userId,
+            status: "ready",
+            parsedChars: summary.length,
+            parsedFileId: textFileId,
+          });
+        }
       } catch (err) {
         app.log.warn(
           { err: err instanceof Error ? err.message : String(err), fileId: file.id },
@@ -4615,11 +4665,39 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * disagreeing about which model ran a turn.
      */
     const model = describeModel(ctx.provider, ctx.modelId);
+    /*
+     * An image this model cannot see, said out loud **in the message the turn produces**.
+     *
+     * `⚠️` and `OUT_OF_STEPS` are the same shape and the same reasoning: it is content rather than
+     * chrome, it is replayed to the model next turn, and it is untranslated because the server has
+     * no reader to ask. What it answers is a silent failure — an image attachment on a model with
+     * no vision reaches the prompt as a placeholder, so the reply reads as though the picture was
+     * considered and had nothing to say.
+     *
+     * It is appended here rather than posted as a second message because this is the only place
+     * that **arrives**: `runAgentStream` has already emitted `message_done` by the time
+     * `finishTurn` runs, so a row created afterwards would appear only on a reload.
+     *
+     * One line per turn, not per image, and only when there is nothing to be said for the picture
+     * — the summary pass below describes what it *can*, and that description is what a later
+     * model reads.
+     */
+    const unseen = ctx.vision
+      ? []
+      : (opts.attachments ?? []).filter((attachment) => attachment.kind === "image");
+    const content =
+      unseen.length === 0
+        ? result.content
+        : result.content +
+          (result.content.trim() ? "\n\n" : "") +
+          `⚠️ 本次附带的 ${unseen.length === 1 ? `图片「${unseen[0]!.name}」` : `${unseen.length} 张图片`}` +
+          `未参与理解：当前模型不支持图片输入。`;
+
     const assistantMessage = db.createMessage({
       id: newId(),
       sessionId: id,
       role: "assistant",
-      content: result.content,
+      content,
       reasoning: result.reasoning || undefined,
       toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
       usage: Object.keys(result.usage).length > 0 ? result.usage : undefined,
@@ -4963,7 +5041,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       if (!mine) continue;
       referencedAttachments.push(toAttachment(mine, mine.title));
       if (mine.parseStatus === "none") {
-        void documents.schedule(treeFor(actor(request)), userId, mine).catch(() => undefined);
+        /*
+         * A page is **adopted** rather than scheduled. It arrives already extracted, and its text
+         * is reachable only through a reference — so a second reference to the same page is born
+         * with no pointer, and `schedule` skips it (`text/html` is not a document MIME). See
+         * `adoptPageParse`, which answers false for everything else and for a page with no
+         * sibling text, leaving the schedule to run as it always did.
+         */
+        const adopted = adoptPageParse(db, userId, mine);
+        if (!adopted) {
+          void documents.schedule(treeFor(actor(request)), userId, mine).catch(() => undefined);
+        }
       }
     }
 

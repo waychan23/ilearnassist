@@ -1177,9 +1177,14 @@ Fuller map in `docs/reference.md`.
   read last week's file.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace, provider and material
   deletes go through `confirm()` from `composables/confirm.ts`. The agent's own `delete_file`
-  tool is deliberately *not* gated. What a library delete *says* matters more than it used to:
-  it removes this owner's reference and leaves the file and every other owner's reference alone,
-  so the dialog's copy must not promise to destroy the file.
+  tool is deliberately *not* gated. **A library delete is two deletes and the copy must say which
+  one a press is.** A *session-owned reference* — an upload, a page — removes this owner's hold
+  and leaves the file and every other owner's reference alone, so its dialog must not promise to
+  destroy the file. A **file inside a workspace** has no reference separable from the bytes: it
+  goes through the file manager's route, which trashes them and takes the shared `files` row —
+  and so every conversation's reference — with it, which is why the listing carries
+  `referenceCount` and the dialog names how many other holders are about to lose it. One sentence
+  used to describe the first case while the second case ran.
 - **A canned reply is the sentence, and the button sends what it shows.** The composer's chips
   (继续 / 是的 / 可以, `composer.quick.*`) send their own rendered label rather than a second
   string beside it, so the words on the button and the words in the conversation cannot drift —

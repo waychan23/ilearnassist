@@ -76,6 +76,19 @@ CREATE UNIQUE INDEX idx_wr_place
   check-then-insert. It is also what the library's delete acts on: removing a reference takes it
   out of *one* owner's list and leaves the file, and every other owner's reference, alone.
 
+**The library's delete is two deletes, and the dialog says which one a press is.** A
+**session-owned reference** — an upload, a page — goes through `DELETE /api/resources/:id`, which
+is the rule above: this account's hold goes, the bytes and every other owner's reference stay. A
+**file inside a workspace** cannot work that way, because its reference *is* the workspace's own
+tree file: taking only the reference would leave the bytes where the next listing reconciles them
+straight back, which is a delete that visibly does nothing. So it goes through the file manager's
+route instead — the bytes move to that workspace's trash and the shared `files` row goes, taking
+**every** conversation's reference with it. The route therefore retires those references
+explicitly rather than leaving them to be hidden by the entity join, and the listing carries each
+row's `referenceCount` so the dialog can name how many other holders are about to lose it. The
+copy used to describe the first case while the second case ran, promising that other
+conversations were unaffected.
+
 **The `source_type` clause on the blob index is not decoration.** Parse results are files too, and
 two different documents whose extracted text comes out byte-identical — two empty scans, the same
 page rendered twice — would otherwise collide there: a parse dying on a `UNIQUE` violation, with
@@ -303,10 +316,16 @@ Sending a turn with references:
   This is a *write* in a request that reads a lot, and it is deliberate — `resolveReferences`
   stays read-only because replay resolves references on every later turn, and a replay that wrote
   would resurrect rows a user had deleted.
-- **A reference that has never been parsed is scheduled there.** Without it the model would read
-  "still parsing" for ever, and the failure lands in the worst place: the feature looks right in
-  the UI and only `read_document` fails. Referencing a document therefore *makes* it readable
-  rather than handing the model a name.
+- **A reference that has never been parsed is made readable there — and a page is *adopted*
+  rather than scheduled.** Without this the model would read "still parsing" for ever, and the
+  failure lands in the worst place: the feature looks right in the UI and only `read_document`
+  fails. For a file that is the parse pipeline. For a **page** it cannot be: a page arrives
+  already extracted, and `documents.schedule` skips it (`text/html` is not a document MIME, and
+  the service early-returns before writing anything). So `adoptPageParse` copies the
+  `parsed_file_id` a **sibling reference** already points at. This matters more than it looks:
+  a page's text is reachable only through a reference — `web_pages` names neither the stored body
+  nor the extracted text — so a second reference to the same page, which is exactly what pointing
+  at it with `@` creates, is born with no pointer and nothing that would ever write one.
 - The snapshots are stored in **`messages.refs`**, a column of its own, so a chip keeps the label
   and the quote it was shown with even after the file is renamed or unlinked. What the *model*
   reads is re-derived from those on every run, by `referencesForHistory`.
@@ -389,8 +408,17 @@ because they are **ranked**:
 | | what it covers |
 | --- | --- |
 | arm 1 | this conversation's own references |
-| arm 2 | the current workspace's own references, plus any granted workspace's |
+| arm 2 | the current workspace's own references, plus any granted workspace's — **both live** |
 | arm 3 | what those workspaces' *conversations* hold — the current one as well as the granted ones |
+
+**Both arms check that the owning workspace is live, and arm 2 only needs to under `all`.** A
+named grant is live by construction — `resolveWorkspaceScope` re-derives the ids from the account's
+workspaces every turn — but `all` is a *flag*, and arm 2's disjunction short-circuits on it, so
+"every workspace" admitted one that had been deleted. Deletion is soft and dismantles nothing, so
+the material stayed readable by `read_document`, `ila_query kind "resource"` and the chips route,
+with nothing on screen naming the workspace it came from. v3's own arm 2 joined `workspaces` and
+checked `deleted_at`; the v4 rewrite reads `work_resources` directly and the predicate went with
+the join.
 
 **Arm 3 is the v4 replacement for a mechanism v3 had in the *writer*.** An upload used to write a
 `session_sources` row *and* a `workspace_sources` row, and the second is what made a document

@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type AppDb } from "../src/db.js";
 import { NO_SCOPE } from "../src/workspaceScope.js";
 import { captureWebPage, type PageCache } from "../src/webCapture.js";
-import { listResourceViewsForUser } from "../src/resources.js";
+import {
+  adoptPageParse,
+  ensureWorkResource,
+  listResourceViewsForUser,
+  registerFile,
+} from "../src/resources.js";
 import { resolveFilePath } from "../src/resourcePaths.js";
 import { dataLayout, userLayout, workspaceWorkdir, type UserLayout } from "../src/paths.js";
 import type { StoredFile } from "@ilearnassist/shared";
@@ -162,6 +167,102 @@ describe("a workspace page — the user pasted a link", () => {
         .listReadableWorkResources("u1", "s2-other", "w1", NO_SCOPE)
         .some((r) => r.resourceId === row.resourceId)
     ).toBe(true);
+  });
+});
+
+/**
+ * A **second** owner pointing at the same page — which is what `@`-picking it into a conversation
+ * does, and the one path the document pipeline cannot cover.
+ *
+ * A page's text is reachable only through a reference: `web_pages` names neither the stored body
+ * nor the extracted text. So the reference `/chat` links is born `none` with no pointer, and
+ * `documents.schedule` skips it — `text/html` is not a document MIME, and the service
+ * early-returns before writing anything. Left alone, `read_document` answers "no readable text"
+ * for the rest of the conversation, which is the failure the schedule exists to prevent.
+ */
+describe("adopting a page's text for a second owner", () => {
+  /** A page kept by the workspace, which is the shape the library's "add a link" makes. */
+  async function keptPage(url = "https://example.com/kept") {
+    return captureWebPage(db, {
+      user,
+      userId: "u1",
+      owner: { kind: "workspace", id: "w1" },
+      url,
+      cache: cacheWith(url),
+    });
+  }
+
+  /** The reference `/chat` links: same entity, owned by the conversation. */
+  function linked(page: { resourceId: string; title: string }) {
+    return ensureWorkResource(db, {
+      userId: "u1",
+      owner: { kind: "session", id: "s1" },
+      resourceType: "web_page",
+      resourceId: page.resourceId,
+      title: page.title,
+    })!;
+  }
+
+  it("takes the text file the first owner's reference already points at", async () => {
+    const page = await keptPage();
+    expect(page.parseStatus).toBe("ready");
+
+    const mine = linked(page);
+    // The state the bug left it in: no pointer, and nothing that would ever write one.
+    expect(mine.parseStatus).toBe("none");
+    expect(mine.parsedFileId).toBeUndefined();
+
+    expect(adoptPageParse(db, "u1", mine)).toBe(true);
+
+    const after = db.getWorkResourceForUser("u1", mine.id)!;
+    expect(after.parseStatus).toBe("ready");
+    // The *same* text file, not a second copy: a page arrives already extracted, so there is
+    // nothing to redo — the rule `webCapture` states when it reuses a prior text file.
+    expect(after.parsedFileId).toBe(page.parsedFileId);
+  });
+
+  it("says no when there is no text to adopt, rather than claiming ready", async () => {
+    /*
+     * A page no reference has ever extracted — reachable from a build older than this function,
+     * or from a capture whose text write failed. `ready` with no file behind it would make
+     * `read_document` promise text it cannot produce; `none` is the honest answer, and it is the
+     * same one the reader got before.
+     */
+    const page = db.createWebPage({
+      id: "p-orphan",
+      userId: "u1",
+      sourceType: "agent_fetch",
+      url: "https://example.com/orphan",
+      title: "孤儿页",
+      sha256: "0".repeat(64),
+    });
+    const mine = linked({ resourceId: page.id, title: page.title });
+
+    expect(adoptPageParse(db, "u1", mine)).toBe(false);
+    expect(db.getWorkResourceForUser("u1", mine.id)!.parseStatus).toBe("none");
+  });
+
+  it("says no for a file, which is what the parse pipeline is for", async () => {
+    // The caller's rule in one case: a false answer hands the reference to `documents.schedule`,
+    // so a file must reach it — an adoption that claimed files too would leave every uploaded
+    // document unparsed while looking handled.
+    const file = registerFile(db, {
+      userId: "u1",
+      path: "sources/raw/f-1.txt",
+      sourceType: "upload",
+      size: 1,
+      mimeType: "text/plain",
+      title: "notes.txt",
+    });
+    const mine = ensureWorkResource(db, {
+      userId: "u1",
+      owner: { kind: "session", id: "s1" },
+      resourceType: "file",
+      resourceId: file.id,
+      title: file.title,
+    })!;
+
+    expect(adoptPageParse(db, "u1", mine)).toBe(false);
   });
 });
 

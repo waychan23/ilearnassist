@@ -181,6 +181,74 @@ describe("ensureWorkResource", () => {
   });
 });
 
+describe("counting who holds a file", () => {
+  it("counts every live reference to one entity, whatever owns it", () => {
+    /*
+     * The library's delete asks this before it destroys anything: deleting a workspace file takes
+     * the shared `files` row with it, so every conversation pointing at that file loses it. The
+     * count is what lets the dialog say how many, and it has to be about the **entity** rather
+     * than the owner — "does this owner hold it" is true of every row it would be asked about.
+     */
+    const row = file("workspaces/a/workdir/notes.md");
+    for (const owner of [
+      { kind: "workspace" as const, id: WS },
+      { kind: "session" as const, id: SESSION },
+    ]) {
+      ensureWorkResource(db, {
+        userId: USER,
+        owner,
+        resourceType: "file",
+        resourceId: row.id,
+        title: "notes.md",
+      });
+    }
+
+    const counts = db.countReferencesForEntities(USER, "file", [row.id]);
+    expect(counts.get(row.id)).toBe(2);
+    // A file nobody holds is absent from the map rather than zero — the caller's `?? 2` treats
+    // unknown as "somebody might", and a zero would read as an answer.
+    expect(counts.get("no-such-file")).toBeUndefined();
+  });
+
+  it("does not count a reference somebody deleted", () => {
+    // A deleted reference is not a second copy of anything, and counting one would make the
+    // dialog warn about a holder that is not there.
+    const row = file("workspaces/a/workdir/notes.md");
+    const held = [
+      ensureWorkResource(db, {
+        userId: USER,
+        owner: { kind: "workspace", id: WS },
+        resourceType: "file",
+        resourceId: row.id,
+        title: "notes.md",
+      })!,
+      ensureWorkResource(db, {
+        userId: USER,
+        owner: { kind: "session", id: SESSION },
+        resourceType: "file",
+        resourceId: row.id,
+        title: "notes.md",
+      })!,
+    ];
+    db.softDeleteWorkResourceForUser(held[1]!.id, USER);
+
+    expect(db.countReferencesForEntities(USER, "file", [row.id]).get(row.id)).toBe(1);
+  });
+
+  it("never counts another account's references", () => {
+    const row = file("workspaces/a/workdir/notes.md");
+    ensureWorkResource(db, {
+      userId: USER,
+      owner: { kind: "workspace", id: WS },
+      resourceType: "file",
+      resourceId: row.id,
+      title: "notes.md",
+    });
+
+    expect(db.countReferencesForEntities(OTHER, "file", [row.id]).size).toBe(0);
+  });
+});
+
 describe("the three identities", () => {
   it("will not let two live files share a path", () => {
     file(workspaceFilePath("a", "a.md"));

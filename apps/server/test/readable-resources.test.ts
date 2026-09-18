@@ -192,4 +192,39 @@ describe("with a grant", () => {
     // rather than failing the turn — and arm 1 still answers for the conversation itself.
     expect(readableUnder({ workspaceIds: ["not-a-workspace"] })).toEqual(["mine"]);
   });
+
+  it("drops a deleted workspace's material without dismantling anything", () => {
+    /*
+     * Arm 2's liveness check, and **it is only reachable under `all`** — which is why it went
+     * missing. A named grant is live by construction (`resolveWorkspaceScope` re-derives the ids
+     * from the account's workspaces every turn), so a deleted workspace simply never reaches
+     * `@scopeIds`. But `all` is a *flag*, and the arm's own disjunction short-circuits on it, so
+     * "every workspace" admitted one that had been deleted — and deletion is soft and dismantles
+     * nothing, so the material stayed readable by `read_document`, `ila_query` and the chips route.
+     *
+     * Ported from `readable-sources.test.ts`, which was deleted with the v3 file and whose case
+     * was never re-added here.
+     */
+    resource("in-b", { owner: { kind: "workspace", id: WS_B } });
+    resource("in-c", { owner: { kind: "workspace", id: WS_C } });
+
+    expect(readableUnder({ all: true })).toEqual(["in-b", "in-c"]);
+
+    db.softDeleteWorkspaceForUser(WS_B, OWNER);
+
+    // B's is gone from the answer, C's is untouched — and the row itself is still there, which is
+    // what "soft" means. The grant is a *request*, resolved against live workspaces.
+    expect(readableUnder({ all: true })).toEqual(["in-c"]);
+    expect(db.listWorkspaces(OWNER).map((w) => w.id)).not.toContain(WS_B);
+  });
+
+  it("keeps a deleted workspace's conversations' material out too", () => {
+    // The same leak one arm over: arm 3 already checked `w.deleted_at`, so this passes before and
+    // after — pinned so the two arms cannot disagree about what "deleted" means.
+    resource("from-b", { owner: { kind: "session", id: SESSION_B } });
+    resource("from-c", { owner: { kind: "session", id: SESSION_C } });
+    db.softDeleteWorkspaceForUser(WS_B, OWNER);
+
+    expect(readableUnder({ all: true })).toEqual(["from-c"]);
+  });
 });

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "./fixtures";
+import { scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
 
 /**
@@ -83,6 +84,77 @@ test("lists files from every workspace, not only uploads", async ({ page, reques
    */
   await expect(row.getByTestId("resource-origin")).toContainText(`Browse-${suffix}`);
   await expect(row.getByTestId("resource-origin")).toContainText("已有文件");
+});
+
+test("deleting a file inside a workspace says what it will destroy", async ({ page, request }) => {
+  /*
+   * The false promise this closes. A file inside a workspace is deleted through the **file
+   * manager's** route — the bytes move to that workspace's trash and the shared `files` row goes
+   * — so every conversation referencing it loses it. The dialog used to describe the other delete
+   * (this account's reference, and nothing else), which promised other conversations were
+   * unaffected, in front of an irreversible action.
+   *
+   * Two branches, and a browser is the only place either is visible: the *wording* is rendered,
+   * and the second branch needs a real second holder. The count that decides is the server's —
+   * one grouped statement on the listing, not a query per row.
+   */
+  const suffix = Date.now();
+  const workspace = `Shared-${suffix}`;
+  const workspaceId = await seedWorkspace(request, workspace, "shared.md");
+
+  /*
+   * The **workspace's** row, not the conversation's. Both are on the list — they are two
+   * references to one file — and only the workspace's offers a delete from here, because a
+   * conversation's own file belongs to that conversation. Filtering on the control rather than on
+   * position is what keeps this test about the count rather than about ordering.
+   */
+  const listed = () =>
+    page
+      .getByTestId("resource-row")
+      .filter({ hasText: "shared.md" })
+      .filter({ has: page.getByTestId("source-delete") });
+
+  await openBrowser(page);
+  await expect(listed()).toHaveCount(1);
+  await listed().getByTestId("source-delete").click();
+
+  // Nobody else holds it: the file wording, and no number to speak about.
+  const dialog = page.locator(".confirm-overlay");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("删除这个文件");
+  await expect(dialog).not.toContainText("另外还有");
+  await dialog.getByTestId("confirm-cancel").click();
+
+  /*
+   * A second holder, made the way a reader makes one: a conversation referencing the file, which
+   * is the reference `@`-pointing writes. The link happens before the turn runs, so a scripted
+   * reply is enough for the request to finish cleanly.
+   */
+  const sessionId = await request
+    .post(`/api/workspaces/${workspaceId}/sessions`, { data: {} })
+    .then((r) => r.json<{ id: string }>())
+    .then((session) => session.id);
+  const file = await (
+    await request.get("/api/resources")
+  )
+    .json<{ id: string; resource: { path: string } }[]>()
+    .then((rows) => rows.find((r) => r.resource.path.endsWith("/shared.md"))!);
+
+  await scriptLlm(request, { turns: [{ content: "看过了。" }] });
+  await request.post(`/api/sessions/${sessionId}/chat`, {
+    data: {
+      message: "看一下这个文件",
+      refs: [{ kind: "resource", ref: file.id, label: "shared.md" }],
+    },
+  });
+
+  // Re-read the listing, and the number is there — which is what the dialog branches on.
+  await page.getByTestId("sources-close").click();
+  await openBrowser(page);
+  await expect(listed()).toHaveCount(1);
+  await listed().getByTestId("source-delete").click();
+  await expect(dialog).toContainText("另外还有");
+  await expect(dialog).toContainText("一并删除文件与所有引用");
 });
 
 test("filters by workspace", async ({ page, request }) => {

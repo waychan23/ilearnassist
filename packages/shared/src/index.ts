@@ -1760,6 +1760,18 @@ export interface WorkResource {
   ownerName?: string;
   workspaceId?: string;
   workspaceName?: string;
+  /**
+   * How many live references point at this same entity — **this one included**.
+   *
+   * The library asks one question with it: destroying the file behind this row destroys every
+   * other reference to it too, so a delete that would take somebody else's material with it has
+   * to say so before it happens. `1` is "nobody else holds this", which is the common case.
+   *
+   * Optional rather than required, because it is a *listing* fact and not a property of a
+   * reference: a route that answers with one row (or a build that predates the field) leaves it
+   * absent, and absent reads as "unknown" — which a reader must not render as "nobody else".
+   */
+  referenceCount?: number;
 }
 
 /** `GET /api/resources`. The filters the library draws. */

@@ -1718,6 +1718,24 @@ export interface AppDb {
   /** Marks the reference deleted. The entity and its bytes are untouched. */
   softDeleteWorkResourceForUser(id: string, userId: string): boolean;
   /** Records what a parse did. `parsedFileId` is only ever set, never cleared. */
+  /**
+   * How many live references point at each of these entities, keyed by entity id.
+   *
+   * One statement per entity *type* rather than one per row, because the question is asked by a
+   * listing — the library answers it for every row it draws, so a lookup per row would be a
+   * query per row. `resourceIds` travels as JSON for `listReadableWorkResources`' reason:
+   * `json_each('')` raises, and a raise on a listing is a 500.
+   *
+   * **Live references only**, which is what makes the answer mean something: a reference the user
+   * deleted, or one whose owner is gone, is not a second copy of anything. `idx_wr_resource`
+   * carries the pair.
+   */
+  countReferencesForEntities(
+    userId: string,
+    resourceType: WorkResourceType,
+    resourceIds: readonly string[]
+  ): Map<string, number>;
+
   updateWorkResourceParse(input: {
     id: string;
     userId: string;
@@ -3000,6 +3018,22 @@ export function createDb(dbPath: string): AppDb {
   const stmtGetWorkResourceForUser = db.prepare(
     `${WR_SELECT} WHERE wr.id = ? AND wr.user_id = ? AND wr.deleted_at IS NULL`
   );
+  /*
+   * The listing's "how many owners hold this", for every row at once.
+   *
+   * Grouped by entity rather than by owner, because the question the library asks is about the
+   * *file*: one reference per row would answer "does this owner hold it" — which is true of every
+   * row it was asked about — and the fact that matters is whether anybody else does.
+   */
+  const stmtCountReferences = db.prepare(
+    `SELECT resource_id, COUNT(*) AS n
+       FROM work_resources
+      WHERE user_id = @userId AND deleted_at IS NULL
+        AND resource_type = @resourceType
+        AND resource_id IN (SELECT value FROM json_each(@resourceIds))
+      GROUP BY resource_id`
+  );
+
   /** Every live reference to one entity — what answers "is this file still referenced". */
   const stmtListWorkResourcesForResource = db.prepare(
     `${WR_SELECT} WHERE wr.user_id = @userId AND wr.resource_type = @resourceType
@@ -3090,6 +3124,17 @@ export function createDb(dbPath: string): AppDb {
    * Without arm 3's conversations-of-a-granted-workspace clause, `ila_explore`'s `messages` would
    * name ids that resolve to nothing, which reads as a broken tool.
    *
+   * **Both arms check that the workspace is live, and arm 2 only needs to under `all`.** A named
+   * grant is live by construction — `resolveWorkspaceScope` re-derives the ids from the account's
+   * workspaces every turn, so a deleted one never reaches `@scopeIds`. But `all` is a *flag*, and
+   * arm 2's disjunction short-circuits on it, so "every workspace" admitted one that had been
+   * deleted: deletion is soft and dismantles nothing, so the material stayed readable by
+   * `read_document`, `ila_query kind "resource"` and the chips route — with nothing on screen
+   * naming the workspace it came from. v3's own arm 2 joined `workspaces` and checked
+   * `deleted_at`; the v4 rewrite reads `work_resources` directly and the predicate was dropped
+   * with the join. The `EXISTS` carries `user_id` for arm 3's reason: the owner is an id from a
+   * settings blob, and this is what says it names *this* account's workspace.
+   *
    * `linked_at` is `wr.created_at`, and there is no `MIN(...)`/`GROUP BY` any more. That
    * machinery existed because an upload wrote a row in *two* link tables with two `now()` calls,
    * so the same file could come back twice. The four-part unique index makes one row per
@@ -3104,7 +3149,11 @@ export function createDb(dbPath: string): AppDb {
         AND (f.id IS NOT NULL OR p.id IS NOT NULL)
         AND (
           (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
-          OR (wr.owner_type = 'workspace' AND (
+          OR (wr.owner_type = 'workspace'
+              AND EXISTS (
+                SELECT 1 FROM workspaces w
+                 WHERE w.id = wr.owner_id AND w.user_id = @userId AND w.deleted_at IS NULL)
+              AND (
                 @scopeAll = 1 OR wr.owner_id = @workspaceId
                 OR wr.owner_id IN (SELECT value FROM json_each(@scopeIds)))
               AND NOT EXISTS (
@@ -4353,6 +4402,18 @@ export function createDb(dbPath: string): AppDb {
         const entity = entityOf(r);
         return entity ? [mapWorkResource(r, entity)] : [];
       });
+    },
+    countReferencesForEntities(userId, resourceType, resourceIds) {
+      // An empty page of ids returns an empty map rather than asking the statement to parse
+      // `json_each('[]')` — which would work, but a query that provably cannot match is worth
+      // not making.
+      if (resourceIds.length === 0) return new Map();
+      const rows = stmtCountReferences.all({
+        userId,
+        resourceType,
+        resourceIds: JSON.stringify([...new Set(resourceIds)]),
+      }) as { resource_id: string; n: number }[];
+      return new Map(rows.map((r) => [r.resource_id, r.n]));
     },
     listWorkResourcesFiltered(userId, filter) {
       const rows = stmtListWorkResourcesFiltered.all({

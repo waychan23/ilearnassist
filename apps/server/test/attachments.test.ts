@@ -182,6 +182,73 @@ describe("buildUserContent", () => {
     expect(blocks[0]!.text).toContain("读取失败");
   });
 
+  /**
+   * A text-like attachment whose bytes are **not where a path can reach them** — a web page.
+   *
+   * Its id is a `web_pages` id, so `filePathsFor` has no entry for it and the inlining branch
+   * cannot run. What stood there was the binary fallback, which called a parsed page "未解析内容":
+   * true of nothing, and false in the one direction that matters — a model told a document is
+   * unparsed does not try to read it. The text is behind the reference, so the block is a
+   * **pointer**, which is what `documentBlock` prints for a document past its cap.
+   */
+  describe("a resource whose bytes are not addressable", () => {
+    // The `toolUse`-shaped options the documents block below uses, and for its reason: the
+    // question here is what the *model* is told when it may or may not call `read_document`.
+    const opts = (toolUse: boolean) => ({ user, vision: false, toolUse, sourcePaths: stored });
+
+    /** A page reference: `ready`, with the extracted text behind `parsedFileId`. */
+    const page = (overrides: Partial<Attachment> = {}) =>
+      att({
+        id: "page-1",
+        resourceId: "wr-1",
+        name: "递归入门",
+        mimeType: "text/html",
+        resourceType: "web_page",
+        parseStatus: "ready",
+        parsedFileId: "text-9",
+        ...overrides,
+      } as Partial<Attachment>);
+
+    it("points at read_document rather than claiming the page is unparsed", async () => {
+      const blocks = (await buildUserContent("", [page()], opts(true))) as { text: string }[];
+      expect(blocks[0]!.text).toContain("read_document");
+      // The id the tool takes is the **reference's**, not the entity's — the two are different
+      // ids answering different questions, and only one of them `read_document` accepts.
+      expect(blocks[0]!.text).toContain("wr-1");
+      expect(blocks[0]!.text).not.toContain("未解析");
+    });
+
+    it("does not name a tool the turn was not given", async () => {
+      // `toolUse` is false when `read_document` did not survive assembly — a Copilot's allow-list,
+      // or a conversation with nothing readable. Pointing at a call the model cannot make is
+      // worse than saying nothing.
+      const blocks = (await buildUserContent("", [page()], opts(false))) as { text: string }[];
+      expect(blocks[0]!.text).not.toContain("read_document");
+      expect(blocks[0]!.text).toContain("递归入门");
+    });
+
+    it("reports the parse state when there is no text to point at", async () => {
+      for (const [status, expected] of [
+        ["pending", "正在解析"],
+        ["parsing", "正在解析"],
+        ["failed", "解析失败"],
+      ] as const) {
+        const blocks = (await buildUserContent("", [page({ parseStatus: status })], opts(true))) as {
+          text: string;
+        }[];
+        expect(blocks[0]!.text).toContain(expected);
+        expect(blocks[0]!.text).not.toContain("read_document");
+      }
+
+      // And a page nothing ever extracted says so, rather than promising text behind a pointer.
+      const none = (await buildUserContent("", [page({ parseStatus: "none" })], opts(true))) as {
+        text: string;
+      }[];
+      expect(none[0]!.text).toContain("未解析内容");
+      expect(none[0]!.text).not.toContain("read_document");
+    });
+  });
+
   it("omits the leading text block when the message has no text", async () => {
     const attachment = att({ mimeType: "text/plain", name: "a.txt" });
     store(attachment, "body");

@@ -1422,14 +1422,24 @@ const en: typeof MessageSchema = {
       document: "Document",
       other: "Other",
     },
+    /* Two deletes, and the dialog says which one a press is — see the Chinese catalog. */
     delete: {
-      /* The copy changed with the model: a v4 delete takes *this owner's reference* away and
-       * leaves the file and every other conversation's reference to it alone. See `zh-CN`. */
       title: "Delete this reference",
       message: "Delete \u201c{name}\u201d?",
       detail:
-        "This reference is removed, and this cannot be undone. A file inside a workspace goes with it; other conversations referencing the same material are unaffected. Messages already sent keep showing the attachment, but it will not open.",
+        "This reference is removed, and this cannot be undone. Other conversations referencing the same material are unaffected. Messages already sent keep showing the attachment, but it will not open.",
       action: "Delete",
+    },
+    deleteFile: {
+      title: "Delete this file",
+      message: "Delete the file \u201c{name}\u201d?",
+      detail:
+        "The file moves to the workspace trash, and this cannot be undone. Messages already sent keep showing the attachment, but it will not open.",
+      action: "Delete the file",
+      /** `count` others hold it too — named, because they are about to lose it as well. */
+      shared:
+        "The file moves to the workspace trash, and this cannot be undone. {count} other references point at the same file, and they will stop working too. Messages already sent keep showing the attachment, but it will not open.",
+      sharedAction: "Delete the file and every reference",
     },
     /** Leaving the app for the page a web source came from. See `zh-CN` for why it is its own
      *  verb rather than a second reading of `preview`. */

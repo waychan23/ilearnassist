@@ -2,10 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Attachment, ChatStreamEvent, Message, Session, Workspace } from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
 import { serverTimeZone } from "../src/agent/clock.js";
+import { ensureWorkResource, registerFile } from "../src/resources.js";
+import { resolveFilePath } from "../src/resourcePaths.js";
 import { eventTypes, parseSse } from "./helpers/sse.js";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
@@ -15,6 +17,12 @@ import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpe
  * messages. Only the model is fake. `inject()` captures the hijacked SSE response in full,
  * so no port is bound and the assertions run on the exact bytes the browser would receive.
  */
+
+/** A real 1x1 PNG, so an image attachment is an image rather than bytes pretending to be one. */
+const ONE_PX_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64"
+);
 
 /** The source fields these cases read, so the assertions do not rest on the whole wire type. */
 /**
@@ -58,6 +66,24 @@ afterAll(async () => {
 beforeEach(() => {
   llm.reset();
   llm.setTitle("Fake Conversation Title");
+});
+
+/**
+ * Whether the suite's model can see, as the *provider record* says.
+ *
+ * The one piece of state a case has to set and put back: a session resolves its capabilities from
+ * the provider's model row, and that row is seeded once for the whole file — so a case that
+ * declares vision and does not restore it turns every later case's image handling around. The
+ * seeded value is `["tool_use"]`, which is what `seedConfig` writes for a model whose config
+ * declares nothing.
+ */
+function setVision(on: boolean): void {
+  const model = env.server.db.getProvider("fake")!.models[0]!;
+  env.server.db.updateModel(model.id, { capabilities: on ? ["vision", "tool_use"] : ["tool_use"] });
+}
+
+afterEach(() => {
+  setVision(false);
 });
 
 async function chat(sessionId: string, payload: Record<string, unknown>) {
@@ -346,6 +372,152 @@ describe("POST /api/sessions/:id/chat", () => {
       await env.inject({ method: "GET", url: `/api/sessions/${session.id}/resources` })
     ).json<{ resourceId: string }[]>();
     expect(readable.map((r) => r.resourceId)).toContain(uploaded.id);
+  });
+
+  it("gives a page reference the text its sibling already extracted", async () => {
+    /*
+     * The one kind `documents.schedule` cannot cover, and the reason the link loop asks
+     * `adoptPageParse` before it schedules.
+     *
+     * A page's extracted text is reachable **only through a reference**: `web_pages` names
+     * neither the stored body nor the text. So the reference a pointer creates is born `none`
+     * with no pointer, and the pipeline skips it — `text/html` is not a document MIME, and the
+     * service early-returns before writing anything. Left alone, `read_document` answers "no
+     * readable text" for the rest of the conversation, which is precisely what the schedule
+     * exists to prevent.
+     *
+     * The page is seeded as the capture path leaves it — a `web_pages` row, a text file, and a
+     * reference whose `parsed_file_id` points at it — because the real capture route fetches a
+     * URL through the SSRF guard, which refuses loopback and cannot run offline.
+     */
+    const { session } = await freshSession();
+    const db = env.server.db;
+
+    const page = db.createWebPage({
+      id: `p-${Math.random().toString(36).slice(2)}`,
+      userId: env.user.id,
+      sourceType: "agent_fetch",
+      url: "https://example.com/kept",
+      title: "递归入门",
+      sha256: "a".repeat(64),
+    });
+    const text = registerFile(db, {
+      userId: env.user.id,
+      path: `users/${env.user.slug}/sources/parsed/${page.id}.txt`,
+      sourceType: "agent_create",
+      size: 12,
+      title: "递归入门 (text)",
+      mimeType: "text/plain",
+    });
+    const kept = ensureWorkResource(db, {
+      userId: env.user.id,
+      owner: { kind: "workspace", id: currentWorkspaceId },
+      resourceType: "web_page",
+      resourceId: page.id,
+      title: page.title,
+    })!;
+    db.updateWorkResourceParse({
+      id: kept.id,
+      userId: env.user.id,
+      status: "ready",
+      parsedChars: 12,
+      parsedFileId: text.id,
+    });
+
+    llm.setTurns([{ content: "read it" }]);
+    await chat(session.id, {
+      message: "看一下这个网页",
+      refs: [{ kind: "resource", ref: kept.id, label: page.title }],
+    });
+
+    // The conversation's own reference, and the whole point: it can be read.
+    const mine = db
+      .listWorkResourcesForResource(env.user.id, "web_page", page.id)
+      .find((r) => r.ownerType === "session");
+    expect(mine).toBeDefined();
+    expect(mine!.parseStatus).toBe("ready");
+    expect(mine!.parsedFileId).toBe(text.id);
+  });
+
+  it("says an image was not understood, rather than letting the reply imply it was", async () => {
+    /*
+     * The silent failure this closes: with no vision the image reaches the prompt as a
+     * placeholder, so the reply reads as though the picture was considered and had nothing to
+     * say. Nothing on screen distinguished that from a model that looked and answered about it.
+     *
+     * The line rides the turn's own message rather than being posted afterwards, and that is
+     * forced rather than chosen: `runAgentStream` has already emitted `message_done` by the time
+     * `finishTurn` runs, so a row created there would appear only on a reload.
+     */
+    const { session } = await freshSession();
+    const image = await env
+      .inject({
+        method: "POST",
+        url: `/api/sessions/${session.id}/resources`,
+        payload: { name: "cat.png", mimeType: "image/png", data: ONE_PX_PNG.toString("base64") },
+      })
+      .then((r) => r.json<Attachment>());
+    expect(image.kind).toBe("image");
+
+    llm.setTurns([{ content: "看过了。" }]);
+    await chat(session.id, { message: "看看这张图", attachments: [image] });
+
+    const persisted = await messagesOf(session.id);
+    const reply = persisted.find((m) => m.role === "assistant")!;
+    // The model's own sentence is kept, and the note follows it — the reply is not replaced.
+    expect(reply.content).toContain("看过了。");
+    expect(reply.content).toContain("⚠️");
+    expect(reply.content).toContain("cat.png");
+    expect(reply.content).toContain("不支持图片输入");
+  });
+
+  it("describes the image for later turns, when the model can see it", async () => {
+    /*
+     * The other half of `summarizeTurnImages`, and the half that was **broken**: the description
+     * was written to `parsed/<imageId>.txt` with no `files` row and no `parsed_file_id`, so no
+     * reader could reach it — `read_document` follows a reference's pointer to a *row* and
+     * resolves that row's path. The id was the image's own, too, which cannot work: `files.id` is
+     * a primary key, so a parse result cannot share the row its bytes live on.
+     */
+    const { session } = await freshSession();
+    const db = env.server.db;
+    // A model that can see has to be declared — through the same accessor the console's settings
+    // route writes, and restored by the `afterEach` above.
+    setVision(true);
+    llm.setTitle("一张纯色小图。");
+
+    const image = await env
+      .inject({
+        method: "POST",
+        url: `/api/sessions/${session.id}/resources`,
+        payload: { name: "cat.png", mimeType: "image/png", data: ONE_PX_PNG.toString("base64") },
+      })
+      .then((r) => r.json<Attachment>());
+
+    llm.setTurns([{ content: "看过了。" }]);
+    await chat(session.id, { message: "看看这张图", attachments: [image] });
+
+    // The pass is fire-and-forget from `finishTurn`, so the row arrives a moment after `done`.
+    const reference = await vi.waitFor(() => {
+      const held = db.listWorkResourcesForResource(env.user.id, "file", image.id)[0];
+      expect(held?.parsedFileId).toBeTruthy();
+      return held!;
+    });
+
+    expect(reference.parseStatus).toBe("ready");
+    // A pointer to a **row**, and the row's stored path is where the text actually is — which is
+    // the whole difference between this and a file nothing can find.
+    const text = db.getFileForUser(env.user.id, reference.parsedFileId!)!;
+    expect(text.mimeType).toBe("text/plain");
+    expect(text.path).toContain("/parsed/");
+    expect(readFileSync(resolveFilePath(env.userLayout, text)!, "utf8")).toContain("一张纯色小图");
+
+    // And the model can read it back, which is the promise the docblock makes.
+    const readable = await env.inject({
+      method: "GET",
+      url: `/api/sessions/${session.id}/resources`,
+    });
+    expect(readable.statusCode).toBe(200);
   });
 
   it("refuses a reference to somebody else's material", async () => {
