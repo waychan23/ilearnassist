@@ -1119,14 +1119,27 @@ export interface NoteAnchor {
  * rather than NULL because NULL would say "we do not know", which is false of those rows: they
  * are text notes, all of them.
  */
-export const NOTE_TARGET_KINDS = ["text", "diagram", "table"] as const;
+export const NOTE_TARGET_KINDS = ["text", "diagram", "table", "resource"] as const;
 
 export type NoteTargetKind = (typeof NOTE_TARGET_KINDS)[number];
 
-/** The kinds a create may *choose*: `text` is what omitting the pair means, not a thing to send. */
-export type NoteFigureKind = Exclude<NoteTargetKind, "text">;
+/**
+ * The kinds a create may *choose*: `text` is what omitting the pair means, not a thing to send.
+ *
+ * Three, and they are not all figures — a note about the material a conversation is working from
+ * anchors to the whole thing by its **reference id**, exactly as it would to a diagram by its
+ * name. What they share is that the object is the target and the reader never annotated part of
+ * it, which is the rule this type exists to state.
+ */
+export type NoteTargetKindChoice = Exclude<NoteTargetKind, "text">;
 
-/** Cap on a figure's name, matching what the figure tables themselves hold. */
+/** Kept for the sites that genuinely mean "a figure", which is a drawing or a table. */
+export type NoteFigureKind = Exclude<NoteTargetKind, "text" | "resource">;
+
+/**
+ * Cap on a target's handle. A figure's is its canonical name; a resource's is a uuid, which is
+ * shorter — the same cap covers both because it is a bound, not a format.
+ */
 export const NOTE_TARGET_REF_MAX = 200;
 
 /**
@@ -3248,8 +3261,11 @@ export interface CreateNoteInput {
    * both halves is a `text` note, which is why `text` is not among the values here — it is what
    * saying nothing means, not a thing to send.
    */
-  targetKind?: NoteFigureKind;
-  /** The figure's name. Normalised server-side, so any spelling of it resolves. */
+  targetKind?: NoteTargetKindChoice;
+  /**
+   * The target's handle: a figure's **name**, normalised server-side so any spelling resolves,
+   * or a resource's **reference id**, which is an id and resolves as one.
+   */
   targetRef?: string;
 }
 

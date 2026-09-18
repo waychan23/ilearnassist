@@ -84,12 +84,27 @@ function openRow(note: Note, event: MouseEvent): void {
   openNoteEditor(note, rect ? { x: rect.left, y: rect.top + rect.height / 2 } : null);
 }
 
-/** The two kinds a note can be *about*: `text` is the absence of a figure, not a figure. */
-type FigureKind = Exclude<NoteTargetKind, "text">;
+/**
+ * The kinds a note can be *about*: `text` is the absence of a target, not a target.
+ *
+ * Three since v4 added `resource` — a note may anchor to the material a conversation is working
+ * from, by reference id, exactly as it anchors to a figure by name.
+ */
+type TargetKind = Exclude<NoteTargetKind, "text">;
+
+/**
+ * The kinds this panel can **open**.
+ *
+ * Narrower than `TargetKind`, and the narrowing is the point: a diagram and a table have a viewer
+ * here, while a resource is opened through the file preview and has no entry point staged yet.
+ * `isOpenable` is what the chip is gated on, so a resource note draws as a plain note rather than
+ * as a control that renders and does nothing.
+ */
+type FigureKind = Exclude<TargetKind, "resource">;
 
 /** Whether this note is about a figure rather than a passage. Narrows, so the callers can. */
 function isFigure(kind: NoteTargetKind): kind is FigureKind {
-  return kind !== "text";
+  return kind === "diagram" || kind === "table";
 }
 
 /**
@@ -103,12 +118,18 @@ function isFigure(kind: NoteTargetKind): kind is FigureKind {
  * that guard's allowlist of dynamic prefixes, which is where a typo hides. A third kind is then a
  * missing-return compile error rather than a blank chip.
  */
-function figureKindLabel(kind: FigureKind): string {
+function figureKindLabel(kind: TargetKind): string {
   switch (kind) {
     case "diagram":
       return t("notes.target.kinds.diagram");
     case "table":
       return t("notes.target.kinds.table");
+    case "resource":
+      return t("notes.target.kinds.resource");
+    default: {
+      const unhandled: never = kind;
+      return unhandled;
+    }
   }
 }
 

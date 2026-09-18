@@ -1327,6 +1327,7 @@ export default {
       kinds: {
         diagram: "图",
         table: "表",
+        resource: "资料",
       },
       missing: "它写的{kind}已不存在",
     },

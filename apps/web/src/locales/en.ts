@@ -1109,6 +1109,7 @@ const en: typeof MessageSchema = {
       kinds: {
         diagram: "diagram",
         table: "table",
+        resource: "material",
       },
       missing: "The {kind} it is about is gone",
     },

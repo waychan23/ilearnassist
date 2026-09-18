@@ -3648,12 +3648,32 @@ export function createDb(dbPath: string): AppDb {
    * removed — so absence is absence. The `target_kind` guard on each half is what keeps a table
    * note from being reported missing because no *diagram* has that name.
    */
+  /*
+   * `target_missing`, and the **third arm is scoped differently from the first two** — which is
+   * the thing to read before changing any of it.
+   *
+   * A diagram and a table are found inside this conversation, so `n.session_id` is the right
+   * scope for both. A **resource** may legitimately be held by another workspace: the `@` picker
+   * offers exactly that, and the read whitelist admits it through a grant. Scoping the arm by
+   * conversation would make a cross-workspace reference read `targetMissing: true` and lose its
+   * 定位 control while the note is perfectly intact — a silent failure, since a missing target
+   * renders as an ordinary state.
+   *
+   * The owner is reached through the note's own conversation (`notes → sessions → workspaces`),
+   * because that is the only path from a note to an account. Dropping the `user_id` comparison
+   * would make another account's live reference un-missing for a dead id.
+   */
   const NOTE_VIEW_SELECT = `SELECT n.*,
       (n.message_id IS NOT NULL AND m.id IS NULL) AS message_missing,
       ((n.target_kind = 'diagram' AND NOT EXISTS (
          SELECT 1 FROM session_diagrams d WHERE d.session_id = n.session_id AND d.name = n.target_ref
        )) OR (n.target_kind = 'table' AND NOT EXISTS (
          SELECT 1 FROM session_tables t WHERE t.session_id = n.session_id AND t.name = n.target_ref
+       )) OR (n.target_kind = 'resource' AND NOT EXISTS (
+         SELECT 1 FROM work_resources wr
+           JOIN sessions ns ON ns.id = n.session_id
+           JOIN workspaces nw ON nw.id = ns.workspace_id
+          WHERE wr.id = n.target_ref AND wr.user_id = nw.user_id AND wr.deleted_at IS NULL
        ))) AS target_missing
      FROM notes n
      LEFT JOIN messages m ON m.id = n.message_id AND m.deleted_at IS NULL`;

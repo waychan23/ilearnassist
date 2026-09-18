@@ -6,8 +6,8 @@ import {
   isNoteType,
   type ApiErrorCode,
   type Note,
-  type NoteFigureKind,
   type NoteTargetKind,
+  type NoteTargetKindChoice,
   type NoteType,
 } from "@ilearnassist/shared";
 import { newId, type AppDb } from "./db.js";
@@ -74,7 +74,7 @@ const createNoteSchema = z
     quote: z.string().max(NOTE_QUOTE_MAX).optional(),
     occurrence: z.number().int().min(0).optional(),
     content: z.string().max(NOTE_CONTENT_MAX).optional(),
-    targetKind: z.enum(["diagram", "table"]).optional(),
+    targetKind: z.enum(["diagram", "table", "resource"]).optional(),
     targetRef: z.string().min(1).max(NOTE_TARGET_REF_MAX).optional(),
   })
   .superRefine((value, ctx) => {
@@ -119,34 +119,55 @@ function readType(body: unknown, fallback: NoteType): NoteType {
 }
 
 /**
- * The canonical name of a figure this conversation holds, or null.
+ * The handle to store for a target, or null when this conversation cannot anchor to it.
  *
- * The client's spelling is normalised through the *same* function the writer used —
- * `diagramFileName` for a diagram, `tableName` for a table — rather than compared as it arrived.
- * The name is a server-side rule in both cases, so a caller that opened a dialog with
- * `"Auth Flow.mmd"` and a caller that read the canonical `auth-flow.mmd` off the panel are asking
- * about one figure. It is the same normalisation `ila_query` does on its `name` field, which is
- * what keeps the chip a note shows and the string a follow-up hands the model the same string.
+ * Three arms, and **the switch is exhaustive on purpose**. The function used to fall through to
+ * `tableName` for anything that was not a diagram, which was correct while there were two kinds
+ * and became a silent 404 for every note about a resource the moment there were three: a
+ * `target_ref` that is a uuid would be run through the table slug rule, match nothing, and read
+ * as `FIGURE_NOT_FOUND` with no type error anywhere. The `never` arm is what makes the next kind
+ * a compile error rather than that.
  *
- * There is no `getDiagramForUser`/`getTableForUser` to reach for: the row is looked up inside the
- * conversation's own list, and that list is already scoped to the owner — so an id from another
- * account's conversation is not refused here, it simply is not in the list.
+ * A figure's handle is its **canonical name**, normalised through the *same* function the writer
+ * used — so a caller that opened a dialog with `"Auth Flow.mmd"` and one that read
+ * `auth-flow.mmd` off the panel are asking about one figure, and the chip a note shows and the
+ * string a follow-up hands the model are the same string. A resource's is its **id**, which is
+ * already canonical and is not a name at all.
+ *
+ * The scope differs by arm, and that difference is deliberate. A figure is looked up in this
+ * conversation's own list, so a name from elsewhere simply is not in it. A resource is looked up
+ * **owner-scoped**, because a note about the material a conversation is working from is a note
+ * about *the account's* material: the same reference may be held by another workspace, and the
+ * `@` picker offers exactly that. Session-scoping it would refuse the references the feature
+ * exists for.
  */
-function canonicalFigure(
+function canonicalTarget(
   db: AppDb,
   userId: string,
   sessionId: string,
-  kind: NoteFigureKind,
+  kind: NoteTargetKindChoice,
   ref: string
 ): string | null {
-  if (kind === "diagram") {
-    const wanted = diagramFileName(ref);
-    return db.listDiagramsForUser(userId, sessionId).some((d) => d.name === wanted)
-      ? wanted
-      : null;
+  switch (kind) {
+    case "diagram": {
+      const wanted = diagramFileName(ref);
+      return db.listDiagramsForUser(userId, sessionId).some((d) => d.name === wanted)
+        ? wanted
+        : null;
+    }
+    case "table": {
+      const wanted = tableName(ref);
+      return db.listTablesForUser(userId, sessionId).some((t) => t.name === wanted)
+        ? wanted
+        : null;
+    }
+    case "resource":
+      return db.getWorkResourceForUser(userId, ref) ? ref : null;
+    default: {
+      const unhandled: never = kind;
+      return unhandled;
+    }
   }
-  const wanted = tableName(ref);
-  return db.listTablesForUser(userId, sessionId).some((t) => t.name === wanted) ? wanted : null;
 }
 
 /**
@@ -180,13 +201,13 @@ export function createNote(
     }
   }
 
-  const figureKind = parsed.data.targetKind;
+  const chosen = parsed.data.targetKind;
   let targetKind: NoteTargetKind = "text";
   let targetRef: string | null = null;
-  if (figureKind !== undefined) {
-    const canonical = canonicalFigure(db, userId, sessionId, figureKind, parsed.data.targetRef!);
+  if (chosen !== undefined) {
+    const canonical = canonicalTarget(db, userId, sessionId, chosen, parsed.data.targetRef!);
     if (canonical === null) return { ok: false, status: 404, code: "FIGURE_NOT_FOUND" };
-    targetKind = figureKind;
+    targetKind = chosen;
     targetRef = canonical;
   }
 
