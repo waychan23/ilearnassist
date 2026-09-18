@@ -1,11 +1,12 @@
-import type { Source } from "../api/types";
+import type { WorkResource } from "../api/types";
+import { resourceName, resourceSandboxPath } from "./resourceView";
 
 /**
  * The source browser's tree view, as arithmetic rather than as a component.
  *
- * A tree of sources is not a tree of files, and the difference is the whole reason this is
+ * A tree of references is not a tree of files, and the difference is the whole reason this is
  * worth its own module. A file tree has one root per listing and paths that are unique within
- * it; a source list spans **every** workspace and conversation the account has, and two
+ * it; a reference list spans **every** workspace and conversation the account has, and two
  * conversations may each hold a file called `notes/a.md`. So a path is only meaningful *under
  * its owner* — grouping by path alone would merge two different files into one line — and the
  * group a row hangs under is the answer to "where did this come from", which is the question
@@ -17,7 +18,7 @@ import type { Source } from "../api/types";
  * 工作区 Study
  *   会话 递归练习          ← only for rows a conversation owns
  *     notes/a.md
- *   lecture.pdf          ← an upload has no path, so it sits under the workspace itself
+ *   lecture.pdf          ← an upload has no sandbox path, so it sits under the workspace itself
  * ```
  *
  * The functions are pure and take `expanded`, exactly like `utils/fileTree.ts`: which rows are
@@ -31,22 +32,22 @@ export interface SourceGroup {
   key: string;
   label: string;
   /** Rows that belong directly to this group, in list order. */
-  sources: Source[];
+  sources: WorkResource[];
   children: SourceGroup[];
 }
 
 export interface SourceTreeLine {
   kind: "group" | "source";
-  /** Unique across the tree: a group's key, or a source's id prefixed by its group. */
+  /** Unique across the tree: a group's key, or a reference's id prefixed by its group. */
   key: string;
   label: string;
   depth: number;
   /** The group this line toggles, or the row it opens. */
   group?: SourceGroup;
-  source?: Source;
+  source?: WorkResource;
 }
 
-/** A row that is not in any workspace — an upload whose owner is gone, say. */
+/** A row that is not in any workspace — a reference whose owner is gone, say. */
 const LOOSE = "—";
 
 /**
@@ -61,10 +62,10 @@ const LOOSE = "—";
  *   created on demand, which is what lets one workspace hold paths from several owners without
  *   the clients agreeing on a shape first.
  */
-export function groupSources(sources: readonly Source[]): SourceGroup[] {
+export function groupSources(sources: readonly WorkResource[]): SourceGroup[] {
   const roots = new Map<string, SourceGroup>();
 
-  const workspaceGroup = (source: Source): SourceGroup => {
+  const workspaceGroup = (source: WorkResource): SourceGroup => {
     const key = source.workspaceId ? `ws:${source.workspaceId}` : "ws:?";
     const label = source.workspaceName ?? LOOSE;
     let group = roots.get(key);
@@ -75,10 +76,10 @@ export function groupSources(sources: readonly Source[]): SourceGroup[] {
     return group;
   };
 
-  const ownerGroup = (parent: SourceGroup, source: Source): SourceGroup => {
+  const ownerGroup = (parent: SourceGroup, source: WorkResource): SourceGroup => {
     // A workspace-owned row hangs directly under the workspace: the workspace *is* its owner,
     // and repeating its name one level down would be a group with nothing to distinguish it.
-    if (source.ownerKind === "workspace") return parent;
+    if (source.ownerType === "workspace") return parent;
     const key = `${parent.key}/owner:${source.ownerId}`;
     let group = parent.children.find((c) => c.key === key);
     if (!group) {
@@ -107,8 +108,11 @@ export function groupSources(sources: readonly Source[]): SourceGroup[] {
   for (const source of sources) {
     const workspace = workspaceGroup(source);
     const owner = ownerGroup(workspace, source);
-    // A blob has no path: an upload or a page is named, not located, so it sits at its owner.
-    const target = source.relPath ? pathGroup(owner, source.relPath) : owner;
+    // A row with no *sandbox* path sits at its owner: an upload is named rather than located, a
+    // page has no path at all, and a path outside a sandbox says nothing about where the material
+    // came from. See `resourceSandboxPath`.
+    const path = resourceSandboxPath(source);
+    const target = path ? pathGroup(owner, path) : owner;
     target.sources.push(source);
   }
 
@@ -119,7 +123,7 @@ export function groupSources(sources: readonly Source[]): SourceGroup[] {
 function sortGroups(groups: SourceGroup[]): SourceGroup[] {
   groups.sort((a, b) => a.label.localeCompare(b.label));
   for (const group of groups) {
-    group.sources.sort((a, b) => a.name.localeCompare(b.name));
+    group.sources.sort((a, b) => resourceName(a).localeCompare(resourceName(b)));
     sortGroups(group.children);
   }
   return groups;
@@ -150,7 +154,7 @@ export function flattenSourceTree(
       lines.push({
         kind: "source",
         key: `${group.key}/${source.id}`,
-        label: source.name,
+        label: resourceName(source),
         depth: depth + 1,
         source,
       });

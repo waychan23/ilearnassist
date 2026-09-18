@@ -360,7 +360,7 @@ describe("syncThreads", () => {
   });
 
   function seedDiagram(toolCallId: string, name = "flow.mmd", summary = "登录流程图"): void {
-    db.upsertDiagram({ id: newId(), sessionId: SESSION, name, summary, toolCallId });
+    db.upsertDiagram({ id: newId(), sessionId: SESSION, name, fileId: `f-${name}`, summary, toolCallId });
   }
 
   /** A pending user/assistant exchange whose assistant drew one diagram. */

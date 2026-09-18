@@ -55,7 +55,7 @@ const MUST_BE_GATED = [
   "POST /api/sessions/:id/insights/generate",
   "PATCH /api/sessions/:id/insights/:insightId",
   "DELETE /api/sessions/:id/insights/:insightId",
-  "POST /api/sessions/:id/sources",
+  "POST /api/sessions/:id/resources",
   "POST /api/sessions/:id/chat",
   "POST /api/sessions/:id/answers",
   "POST /api/sessions/:id/regenerate",
@@ -94,7 +94,7 @@ const EXEMPT = [
   "GET /api/sessions/:id/files",
   "GET /api/sessions/:id/files/content",
   "GET /api/sessions/:id/files/raw",
-  "GET /api/sessions/:id/sources",
+  "GET /api/sessions/:id/resources",
 ];
 
 const declared = DECLARATIONS.map((d) => `${d.method} ${d.path}`);
@@ -133,7 +133,7 @@ describe("the session write-lock coverage", () => {
 
   it("gates nothing outside the session routes", () => {
     // The flag reads the session id from `params.id`, so a route elsewhere wearing it would gate
-    // itself on whatever `:id` it happens to have — which is how `/api/sources/:id/reparse` would
+    // itself on whatever `:id` it happens to have — which is how `/api/resources/:id/reparse` would
     // end up requiring a lock from a conversation that has nothing to do with it.
     const elsewhere = [
       ...SOURCE.matchAll(/app\.(get|post|patch|put|delete)\(\s*"(\/api\/(?!sessions\/)[^"]+)"([\s\S]*?)async \(/g),

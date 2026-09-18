@@ -1,4 +1,5 @@
-import type { Source, SourceCategory, Workspace } from "../api/types";
+import type { FileCategory, WorkResource, Workspace } from "../api/types";
+import { resourceCategory, resourceName } from "./resourceView";
 
 /**
  * The `@` picker's arithmetic: what the list holds, in what order, and which row the arrow keys
@@ -17,29 +18,34 @@ export const REFERENCE_TABS = ["all", "workspace", "source"] as const;
 export type ReferenceTab = (typeof REFERENCE_TABS)[number];
 
 /**
- * The five type filters, and the categories each stands for.
+ * The four type filters, and the categories each stands for.
  *
- * A **coarse grouping over the closed `SourceCategory` union**, not a category list: the five
- * pills the requirement asks for do not line up with the eight categories the registry stores
- * (`文本` is text *and* markdown, `代码` is code *and* a diagram), and inventing a category per pill
- * would mean the browser's own filter and this one describing the same files differently.
+ * A **coarse grouping over the closed `FileCategory` union**, not a category list: the pills do
+ * not line up with the seven categories a file can have (`文本` is text *and* markdown, `代码` is
+ * code *and* a diagram), and inventing a category per pill would mean the library's own filter
+ * and this one describing the same files differently.
  *
- * Typed as a `Record` over the union, so a category added to `SOURCE_CATEGORIES` with no pill to
+ * Typed as a `Record` over the union, so a category added to `FILE_CATEGORIES` with no pill to
  * hold it is a compile error here rather than a file that can never be filtered to.
+ *
+ * There used to be a fifth pill, `page`. It went with the v4 split rather than by taste: a page
+ * is a `resourceType`, not a `FileCategory` — v3 had to hand-set `category: "page"` because a
+ * page's name cannot say what it is — so "web pages" is no longer a *content type* this list can
+ * filter by. Re-adding it means a pill that filters on `resourceType`, which is a control the
+ * picker does not have.
  */
-export const SOURCE_PILLS = ["image", "text", "code", "page", "other"] as const;
+export const SOURCE_PILLS = ["image", "text", "code", "other"] as const;
 export type SourcePill = (typeof SOURCE_PILLS)[number];
 
-export const PILL_CATEGORIES: Record<SourcePill, readonly SourceCategory[]> = {
+export const PILL_CATEGORIES: Record<SourcePill, readonly FileCategory[]> = {
   image: ["image"],
   text: ["text", "markdown"],
   code: ["code", "diagram"],
-  page: ["page"],
   other: ["document", "other"],
 };
 
 /** Every category the given pills admit, or `null` when no pill is on (meaning "any"). */
-export function pillCategories(pill: SourcePill | null): readonly SourceCategory[] | null {
+export function pillCategories(pill: SourcePill | null): readonly FileCategory[] | null {
   return pill === null ? null : PILL_CATEGORIES[pill];
 }
 
@@ -54,13 +60,13 @@ export function pillCategories(pill: SourcePill | null): readonly SourceCategory
  * a pill is added and nothing names it.
  */
 
-/** One row of the list: a workspace, the all-workspaces row, or a source. */
+/** One row of the list: a workspace, the all-workspaces row, or a reference. */
 export interface ReferenceOption {
-  /** Stable across refetches — a source id, or `ws:<id>` / `all-workspaces`. */
+  /** Stable across refetches — a reference id, or `ws:<id>` / `all-workspaces`. */
   key: string;
   kind: "all-workspaces" | "workspace" | "source";
   name: string;
-  /** A source's workspace name, shown on the right. Empty for a workspace row. */
+  /** A reference's workspace name, shown on the right. Empty for a workspace row. */
   where: string;
   /** Already readable under the current grant, so the row can say so rather than look unpicked. */
   granted: boolean;
@@ -84,8 +90,8 @@ export interface BuildOptionsInput {
   pill: SourcePill | null;
   /** The account's workspaces, current one already excluded by the caller. */
   workspaces: readonly Workspace[];
-  /** The sources the server returned for this query. */
-  sources: readonly Source[];
+  /** The references the server returned for this query. */
+  sources: readonly WorkResource[];
   /** The workspaces already in the grant, so a row can show it is. */
   grantedIds: readonly string[];
   isAllGranted: boolean;
@@ -143,12 +149,19 @@ export function buildOptions(input: BuildOptionsInput): ReferenceGroup[] {
   if (input.tab !== "workspace") {
     const categories = pillCategories(input.pill);
     const rows: ReferenceOption[] = input.sources
-      .filter((source) => categories === null || categories.includes(source.category))
-      .filter((source) => matches(source.name, needle))
+      // A page has no category at all, so a pill that names categories excludes it — which is the
+      // honest answer for "show me the images": a page is not one, and there is no pill that names
+      // it (see `SOURCE_PILLS`).
+      .filter((source) => {
+        if (categories === null) return true;
+        const category = resourceCategory(source);
+        return category !== null && categories.includes(category);
+      })
+      .filter((source) => matches(resourceName(source), needle))
       .map((source) => ({
         key: `src:${source.id}`,
         kind: "source" as const,
-        name: source.name,
+        name: resourceName(source),
         where: source.workspaceName ?? "",
         granted: false,
       }));
@@ -204,6 +217,6 @@ export function stepActive(index: number, delta: -1 | 1, length: number): number
  * do with it, rather than a row that inserts a name and does nothing else.
  */
 export type ReferenceChoice =
-  | { kind: "source"; source: Source }
+  | { kind: "resource"; resource: WorkResource }
   | { kind: "scope"; all: true; name: string }
   | { kind: "scope"; all: false; workspaceId: string; name: string };

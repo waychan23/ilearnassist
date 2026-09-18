@@ -585,7 +585,9 @@ describe("messages", () => {
       content: "answer",
       reasoning: "  thought  ",
       toolCalls: [{ id: "call_1", name: "read_file", input: "{}", output: "ok" }],
-      attachments: [{ id: "a1", name: "x.png", mimeType: "image/png", size: 3, kind: "image" }],
+      attachments: [
+        { id: "a1", resourceId: "r1", name: "x.png", mimeType: "image/png", size: 3, kind: "image" },
+      ],
       usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
     });
 

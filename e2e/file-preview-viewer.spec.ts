@@ -68,7 +68,7 @@ async function seedSource(
     .post(`/api/workspaces/${workspace.id}/sessions`, { data: {} })
     .then((r) => r.json());
 
-  const res = await request.post(`/api/sessions/${session.id}/sources`, {
+  const res = await request.post(`/api/sessions/${session.id}/resources`, {
     data: { name, mimeType, data: bytes.toString("base64") },
   });
   expect(res.status()).toBe(201);
@@ -89,10 +89,13 @@ async function openLibrary(page: Page): Promise<void> {
  * browser over every source the account holds now, and this file seeds the same names as
  * workspace files (that is how the tree cases above work) — so a lookup by name alone is
  * ambiguous, and the filter that tells them apart is the one the dialog was given for it.
+ *
+ * v4 has no `origin` filter, so the scope is what separates them: an upload is owned by the
+ * conversation it arrived in, and a workspace file by the workspace.
  */
 async function openUploads(page: Page, name: string): Promise<void> {
   await openLibrary(page);
-  await page.getByTestId("sources-filter-origin").selectOption("session_attachment");
+  await page.getByTestId("sources-filter-owner-type").selectOption("session");
   /*
    * Wait for the filtered list to *arrive* before anything is clicked.
    *

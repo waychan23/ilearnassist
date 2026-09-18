@@ -17,14 +17,21 @@ import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpe
  */
 
 /** The source fields these cases read, so the assertions do not rest on the whole wire type. */
-interface SourceRowish {
-  relPath?: string;
-  storage: string;
-  ownerKind: string;
-  origin: string;
-  category: string;
-  mimeType: string;
+/**
+ * The shape these cases read off a library row.
+ *
+ * A v4 row is a **reference** with its entity attached, so what used to be flat is now two
+ * levels: the sandbox and the file's kind live on `resource`, the ownership and the parse state
+ * on the reference itself.
+ */
+interface ResourceRowish {
+  id: string;
+  resourceId: string;
+  ownerType: string;
+  title: string;
+  parseStatus: string;
   missing?: boolean;
+  resource: { path: string; category: string; mimeType: string; sourceType: string };
 }
 
 let llm: FakeLlm;
@@ -216,14 +223,13 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(persisted[1]!.toolCalls![0]!.output).toContain("Wrote 4 characters");
   });
 
-  it("leaves a source row for every file the turn writes", async () => {
+  it("leaves a row for every file the turn writes", async () => {
     /*
      * The registry's end-to-end claim, through the real route rather than the registry's own
-     * test: a tool writes bytes, and the row that comes out has the same shape the file
-     * manager and the browser will read. What it pins beyond "a row exists" is the pair that a
-     * second implementation would get wrong — the file lands in the conversation's own folder,
-     * and the row says so (`storage`, `ownerKind`, `origin`), rather than claiming the
-     * workspace owns it or that somebody uploaded it.
+     * test: a tool writes bytes, and the rows that come out have the same shape the file manager
+     * and the library will read. What it pins beyond "a row exists" is the pair a second
+     * implementation would get wrong — the file lands in the conversation's own folder, and the
+     * reference says the conversation owns it rather than the workspace.
      */
     const { session, sessionDirPath } = await freshSession();
     llm.setTurns([
@@ -238,16 +244,15 @@ describe("POST /api/sessions/:id/chat", () => {
 
     await chat(session.id, { message: "write a file" });
 
-    const sources = (await env.inject({ method: "GET", url: "/api/sources" })).json<
-      SourceRowish[]
+    const rows = (await env.inject({ method: "GET", url: "/api/resources" })).json<
+      ResourceRowish[]
     >();
-    const row = sources.find((s) => s.relPath === "notes/a.md")!;
+    const row = rows.find((r) => r.resource.path.endsWith("/notes/a.md"))!;
     expect(row).toBeTruthy();
-    expect(row.storage).toBe("session");
-    expect(row.ownerKind).toBe("session");
-    expect(row.origin).toBe("agent_session");
-    expect(row.category).toBe("markdown");
-    expect(row.mimeType).toBe("text/markdown");
+    expect(row.ownerType).toBe("session");
+    expect(row.resource.sourceType).toBe("agent_create");
+    expect(row.resource.category).toBe("markdown");
+    expect(row.resource.mimeType).toBe("text/markdown");
     expect(row.missing).toBe(false);
     expect(existsSync(join(sessionDirPath, "notes/a.md"))).toBe(true);
   });
@@ -273,52 +278,56 @@ describe("POST /api/sessions/:id/chat", () => {
 
     await chat(session.id, { message: "write a shared file" });
 
-    const sources = (await env.inject({ method: "GET", url: "/api/sources" })).json<
-      SourceRowish[]
+    const rows = (await env.inject({ method: "GET", url: "/api/resources" })).json<
+      ResourceRowish[]
     >();
-    const row = sources.find((s) => s.relPath === "shared/a.md")!;
+    const row = rows.find((r) => r.resource.path.endsWith("/shared/a.md"))!;
     expect(row).toBeTruthy();
-    expect(row.storage).toBe("workspace");
-    expect(row.ownerKind).toBe("workspace");
-    expect(row.origin).toBe("agent_workspace");
+    expect(row.ownerType).toBe("workspace");
+    expect(row.resource.sourceType).toBe("agent_create");
     expect(existsSync(join(workdirPath, "shared/a.md"))).toBe(true);
   });
 
-  it("links and records a source the turn referenced with @", async () => {
+  it("links and records a resource the turn pointed at with @", async () => {
     /*
-     * The three halves of a reference, and each is a different claim. The source is **linked**
-     * — which is what lets a later turn `read_document` it without the user pointing at it
-     * again, and what puts it in the whitelist the tool is built from. The **snapshot** is
-     * recorded on the message, under its own column, so the chips can say which material was
-     * pointed at rather than uploaded. And the **content** reaches the model, because a
-     * reference that only appeared in a chip would be a turn the user thinks is about a file
-     * and the model has never seen.
+     * A `@`-reference and a 追问 are the same mechanism now — a `TurnReference` of kind
+     * `resource` — so what this pins is the three halves of one gesture, each a different claim.
+     *
+     * The reference is **linked**: the chat route gives this conversation a reference of its own
+     * to the same entity, which is what lets a later turn `read_document` it without the user
+     * pointing at it again and what puts it in the whitelist the tool is built from. The
+     * **snapshot** is recorded on the message as a ref, so the chip can say what the question was
+     * about. And the **content** reaches the model, because a reference that only appeared in a
+     * chip would be a turn the user thinks is about a file and the model has never seen.
+     *
+     * v3 wrote the second half into `messages.sources`, its own column beside `attachments`.
+     * That column is gone: the reference *is* the message's record of what it pointed at, and a
+     * second copy would be a second thing to keep in agreement.
      */
     const { session } = await freshSession();
     const uploaded = await env
       .inject({
         method: "POST",
-        url: `/api/sessions/${session.id}/sources`,
+        url: `/api/sessions/${session.id}/resources`,
         payload: {
           name: "referenced.txt",
           mimeType: "text/plain",
           data: Buffer.from("the referenced body").toString("base64"),
         },
       })
-      .then((r) => r.json<{ id: string }>());
+      .then((r) => r.json<{ id: string; resourceId: string }>());
 
     llm.setTurns([{ content: "read it" }]);
     await chat(session.id, {
       message: "look at this",
-      sources: [{ id: uploaded.id, name: "referenced.txt" }],
+      refs: [{ kind: "resource", ref: uploaded.resourceId, label: "referenced.txt" }],
     });
 
     const persisted = await messagesOf(session.id);
     const user = persisted[0]!;
-    expect(user.sources).toHaveLength(1);
-    expect(user.sources![0]!.id).toBe(uploaded.id);
-    expect(user.sources![0]!.name).toBe("referenced.txt");
-    // Not in `attachments`: the two columns are what tell the chips apart.
+    expect(user.refs).toHaveLength(1);
+    expect(user.refs![0]).toMatchObject({ kind: "resource", label: "referenced.txt" });
+    // Not in `attachments`: an upload and a pointer are different things and say so.
     expect(user.attachments).toBeUndefined();
 
     // Every request of the turn, because the *last* one is the auto-titler's — a side call
@@ -327,29 +336,35 @@ describe("POST /api/sessions/:id/chat", () => {
       .requests()
       .map((r) => JSON.stringify((r as { messages: unknown }).messages))
       .join("\n");
-    expect(bodies).toContain("the referenced body");
+    // The block names the reference and says how to read it, which is what makes the pointer
+    // usable rather than merely present.
+    expect(bodies).toContain("read_document");
+    expect(bodies).toContain("referenced.txt");
 
     // The link, which is what a later turn reads the whitelist from.
     const readable = (
-      await env.inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })
-    ).json<{ id: string }[]>();
-    expect(readable.map((s) => s.id)).toContain(uploaded.id);
+      await env.inject({ method: "GET", url: `/api/sessions/${session.id}/resources` })
+    ).json<{ resourceId: string }[]>();
+    expect(readable.map((r) => r.resourceId)).toContain(uploaded.id);
   });
 
-  it("ignores a reference to somebody else's source", async () => {
-    // `getSourceForUser` is the whole check, and a reference that fails it simply does not
-    // arrive — the turn still runs, because the message the user typed is the turn.
+  it("refuses a reference to somebody else's material", async () => {
+    /*
+     * Unlike a source in v3, which was silently dropped, a reference that cannot be resolved
+     * **refuses the turn**: a reference is the object of the question, so losing it changes what
+     * was asked — and no message is written, because a row recording a question the server
+     * declined to run would be a turn in the conversation that never happened.
+     */
     const { session } = await freshSession();
 
     llm.setTurns([{ content: "ok" }]);
     const { res } = await chat(session.id, {
       message: "look at this",
-      sources: [{ id: "not-mine", name: "someone-elses.pdf" }],
+      refs: [{ kind: "resource", ref: "not-mine", label: "someone-elses.pdf" }],
     });
 
-    expect(res.statusCode).toBe(200);
-    const persisted = await messagesOf(session.id);
-    expect(persisted[0]!.sources).toBeUndefined();
+    expect(res.statusCode).toBe(404);
+    expect(await messagesOf(session.id)).toHaveLength(0);
   });
 
   it("records what the turn pointed at, and hands the model a way to read it", async () => {
@@ -364,6 +379,7 @@ describe("POST /api/sessions/:id/chat", () => {
       id: "d-ref",
       sessionId: session.id,
       name: "auth-flow.mmd",
+      fileId: "f-1",
       summary: "登录流程",
       toolCallId: null,
     });
@@ -630,7 +646,7 @@ describe("POST /api/sessions/:id/chat", () => {
     const attachment = (
       await env.inject({
         method: "POST",
-        url: `/api/sessions/${session.id}/sources`,
+        url: `/api/sessions/${session.id}/resources`,
         payload: { name: "shot.png", mimeType: "image/png", data: Buffer.from("fake-png").toString("base64") },
       })
     ).json<Attachment>();
@@ -652,7 +668,7 @@ describe("POST /api/sessions/:id/chat", () => {
     const attachment = (
       await env.inject({
         method: "POST",
-        url: `/api/sessions/${session.id}/sources`,
+        url: `/api/sessions/${session.id}/resources`,
         payload: { name: "shot.png", mimeType: "image/png", data: Buffer.from("fake-png").toString("base64") },
       })
     ).json<Attachment>();

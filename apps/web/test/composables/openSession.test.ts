@@ -29,7 +29,7 @@ vi.mock("../../src/api/client", () => ({
   streamAnswers: vi.fn(),
   streamRegenerate: vi.fn(),
   fileToBase64: vi.fn(),
-  sourceImageUrl: (id: string) => Promise.resolve(`blob:sources/${id}`),
+  fileImageUrl: (id: string) => Promise.resolve(`blob:files/${id}`),
 }));
 
 const { useAppStore } = await import("../../src/stores/app.js");

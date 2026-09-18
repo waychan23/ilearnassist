@@ -58,7 +58,7 @@ vi.mock("../../src/api/client", () => ({
   streamRegenerate: mocks.streamRegenerate,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
-  sourceImageUrl: (id: string) => Promise.resolve(`blob:sources/${id}`),
+  fileImageUrl: (id: string) => Promise.resolve(`blob:files/${id}`),
 }));
 
 // The six pages, stubbed. See the file comment: the guards read `meta`, so a component that

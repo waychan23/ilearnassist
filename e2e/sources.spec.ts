@@ -24,7 +24,7 @@ async function seedSource(request: APIRequestContext, name: string): Promise<str
     .post(`/api/workspaces/${workspace.id}/sessions`, { data: {} })
     .then((r) => r.json());
 
-  const res = await request.post(`/api/sessions/${session.id}/sources`, {
+  const res = await request.post(`/api/sessions/${session.id}/resources`, {
     data: {
       name,
       mimeType: "text/plain",

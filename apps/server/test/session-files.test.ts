@@ -245,21 +245,21 @@ describe("the listing registers what it finds", () => {
 
     const listing = (await list(sessionId)).json<DirectoryListing>();
     const file = listing.entries.find((e) => e.name === "dropped-in.txt")!;
-    expect(file.sourceId).toBeTruthy();
+    expect(file.fileId).toBeTruthy();
 
     const nested = listing.entries.find((e) => e.name === "nested")!;
-    // A directory is not a source — it has an id of its own in the tree, not in the registry.
-    expect(nested.sourceId).toBeUndefined();
+    // A directory is not a file — it has an id of its own in the tree, not in the registry.
+    expect(nested.fileId).toBeUndefined();
   });
 
   it("keeps the same id across listings", async () => {
-    // Required, not tidy: a message's attachment snapshot names a source id, and an id that
-    // changed on every read would make the file a different source each time it was looked at.
+    // Required, not tidy: a reference points at one file id, and an id that changed on every
+    // read would make the file a different file each time it was looked at.
     seed(sessionId, "stable.txt", "x");
     const first = (await list(sessionId)).json<DirectoryListing>();
     const second = (await list(sessionId)).json<DirectoryListing>();
 
-    const idOf = (l: DirectoryListing) => l.entries.find((e) => e.name === "stable.txt")!.sourceId;
+    const idOf = (l: DirectoryListing) => l.entries.find((e) => e.name === "stable.txt")!.fileId;
     expect(idOf(first)).toBe(idOf(second));
   });
 
@@ -269,20 +269,27 @@ describe("the listing registers what it finds", () => {
      * tool is a plain filesystem operation, deliberately: making it unregister would make a
      * tool that deletes a *file* into one that writes the database. So the row survives, the
      * listing stops showing the entry (it is reading the directory, and the directory is
-     * right), and the source is reported as missing wherever sources are listed.
+     * right), and the file is reported as missing wherever references are listed.
      */
     seed(sessionId, "transient.txt", "x");
     const id = (await list(sessionId))
       .json<DirectoryListing>()
-      .entries.find((e) => e.name === "transient.txt")!.sourceId;
+      .entries.find((e) => e.name === "transient.txt")!.fileId;
     rmSync(join(sessionDir(workspaceDir, sessionId), "transient.txt"));
 
     const after = (await list(sessionId)).json<DirectoryListing>();
     expect(after.entries.some((e) => e.name === "transient.txt")).toBe(false);
 
-    const sources = (
-      await env.inject({ method: "GET", url: "/api/sources" })
-    ).json<{ id: string }[]>();
-    expect(sources.some((s) => s.id === id)).toBe(true);
+    /*
+     * The library still lists it, and says the bytes are gone rather than dropping the row — a
+     * listing that omitted it would be a file manager that loses entries when something goes
+     * wrong, which is the same choice the file tree makes for an entry it cannot read.
+     */
+    const listed = (
+      await env.inject({ method: "GET", url: "/api/resources" })
+    ).json<{ resourceId: string; missing?: boolean }[]>();
+    const row = listed.find((r) => r.resourceId === id);
+    expect(row).toBeTruthy();
+    expect(row!.missing).toBe(true);
   });
 });

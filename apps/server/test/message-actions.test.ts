@@ -267,7 +267,7 @@ describe("POST /api/sessions/:id/regenerate", () => {
     const uploaded = (
       await env.inject({
         method: "POST",
-        url: `/api/sessions/${session.id}/sources`,
+        url: `/api/sessions/${session.id}/resources`,
         payload: { name: "dot.png", mimeType: "image/png", data: png },
       })
     ).json<{ id: string; name: string }>();

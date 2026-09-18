@@ -29,11 +29,11 @@ import type {
   QuizAnswers,
   Session,
   SessionSettings,
+  Message,
+  ResourceOwner,
   SetSessionPinnedInput,
-  Source,
-  SourceOrigin,
-  SourceOwner,
-  SourceStorage,
+  WorkResource,
+  StoredFile,
   TitleRetryResult,
   TitleState,
   ToolCall,
@@ -101,7 +101,8 @@ import {
   SETTING_MAX_UPLOAD_BYTES,
   type AppDb,
   type ProviderRecord,
-  type SourceRecord,
+  type WorkResourceFilter,
+  type WorkResourceRecord,
 } from "./db.js";
 import {
   describeParseError,
@@ -167,18 +168,28 @@ import {
 } from "./attachments.js";
 import { apiError } from "./apiError.js";
 import { classifyFile } from "./fileCategory.js";
-import { isSupportedMime, normalizeMime, resolveSourceBytes, sourceRawPath } from "./sourcePaths.js";
 import {
+  parsedFilePath,
+  isSupportedMime,
+  normalizeMime,
+  rawFilePath,
+  resolveFilePath,
+  storePath,
+  webFilePath,
+} from "./resourcePaths.js";
+import {
+  ensureWorkResource,
+  filePathsFor,
   fileOwner,
-  listSourceViewsForUser,
-  ownerWorkspaceRoot as ownerWorkspaceRootIn,
+  listResourceViewsForUser,
+  sessionFilePath,
+  workspaceFilePath,
   reconcileFilesystem,
   reconcileListing,
-  registerFileSource,
-  renameSourceSubtree,
-  sourcePathsFor,
-  sourceBytesOf,
-} from "./sources.js";
+  registerFile,
+  renameFileSubtree,
+  trashFilePath,
+} from "./resources.js";
 import { createDirectory, deletePath, movePath, writeFileAt } from "./fileOps.js";
 import { resolveWriteLocation } from "./writeLocation.js";
 import {
@@ -188,7 +199,7 @@ import {
   scopeQuery,
 } from "./workspaceScope.js";
 import { captureWebPage } from "./webCapture.js";
-import { isSourceCategory, isSourceOrigin, isSourceStorage } from "@ilearnassist/shared";
+import { isFileCategory, isFileSourceType, isWorkResourceType } from "@ilearnassist/shared";
 import {
   bearerToken,
   createAccount,
@@ -1457,21 +1468,21 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * meant to stay that way; the read it rides on already writes, since the session listing
    * creates the directory it is about to list.
    *
-   * Directories are left alone: a directory is not a source, so a listing full of them — a
+   * Directories are left alone: a directory is not a file, so a listing full of them — a
    * `node_modules` — costs the query and nothing else.
    */
-  function withSourceIds(
+  function withFileIds(
     listing: DirectoryListing,
     userId: string,
-    owner: SourceOwner,
-    storage: "workspace" | "session"
+    owner: ResourceOwner,
+    pathFor: (rel: string) => string
   ): DirectoryListing {
-    const ids = reconcileListing(db, { userId, owner, storage, entries: listing.entries });
+    const ids = reconcileListing(db, { userId, owner, pathFor, entries: listing.entries });
     return {
       ...listing,
       entries: listing.entries.map((entry) => {
         const id = entry.type === "file" ? ids.get(entry.path) : undefined;
-        return id ? { ...entry, sourceId: id } : entry;
+        return id ? { ...entry, fileId: id } : entry;
       }),
     };
   }
@@ -1502,7 +1513,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     try {
       const listing = await listDirectory(workspace.workdirPath, path);
-      return withSourceIds(listing, userId, { kind: "workspace", id: workspaceId }, "workspace");
+      return withFileIds(listing, userId, { kind: "workspace", id: workspaceId }, (rel) =>
+        workspaceFilePath(workspace.slug, rel)
+      );
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -1535,7 +1548,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * in the first, and a 40 MB one cannot ride in the second.
    *
    * The type is deliberately `application/octet-stream` with `Content-Disposition: attachment`
-   * rather than the file's own, which is a divergence from `/api/sources/:id/raw` — and that
+   * rather than the file's own, which is a divergence from `/api/resources/:id/raw` — and that
    * route should keep serving the real `mimeType`. It serves the account's own uploads to an
    * `<img>`, where an SVG is inert. This one serves bytes the *agent* may have written into a
    * sandbox, and the client hands them to a viewer that re-materialises some of them (a
@@ -1598,31 +1611,44 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return workspace ? { userId, workspace } : undefined;
   }
 
-  /** The row for a file at a path, created if nobody has one — the same rule the listing uses. */
-  function sourceAt(
+  /**
+   * The file row for a path, created if nobody has one, and made referenceable.
+   *
+   * The file-manager routes are ordinary *writers*: a file the user uploads here is one they
+   * chose deliberately, so it gets both rows — the entity and the reference — exactly as an
+   * upload into a conversation does. That is what separates this from a reconciliation, which
+   * only adds a reference for a file it itself discovered.
+   */
+  function fileAt(
     workspace: Workspace,
     userId: string,
     relPath: string,
     size: number,
-    origin: SourceOrigin
-  ): SourceRecord {
-    return (
-      db.getSourceByPlace(userId, { kind: "workspace", id: workspace.id }, relPath) ??
-      registerFileSource(db, {
+    sourceType: "upload" | "discovered"
+  ): WorkResourceRecord | undefined {
+    const path = workspaceFilePath(workspace.slug, relPath);
+    const existing = db.getFileByPath(userId, path);
+    const file =
+      existing ??
+      registerFile(db, {
         userId,
-        owner: { kind: "workspace", id: workspace.id },
-        storage: "workspace",
-        relPath,
-        origin,
+        path,
+        sourceType,
         size,
-      })
-    );
+      });
+    return ensureWorkResource(db, {
+      userId,
+      owner: { kind: "workspace", id: workspace.id },
+      resourceType: "file",
+      resourceId: file.id,
+      title: file.title,
+    });
   }
 
   /**
    * Create a directory.
    *
-   * Registers nothing, because a directory is not a source — and that is stated here as well as
+   * Registers nothing, because a directory is not a file — and that is stated here as well as
    * in the file tools so the symmetry argument ("every write leaves a row") cannot grow one
    * quietly in either place.
    */
@@ -1686,14 +1712,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
       try {
         const written = await writeFileAt(target.workspace.workdirPath, relPath, bytes);
-        const row = sourceAt(
+        const row = fileAt(
           target.workspace,
           target.userId,
           written.rel,
           bytes.byteLength,
-          "workspace_upload"
+          "upload"
         );
-        return reply.code(201).send({ ...toSource(row), missing: false });
+        return reply.code(201).send(row ? { ...toResource(row), missing: false } : { missing: true });
       } catch (err) {
         const { status, body: failure } = fileErrorReply(err);
         return reply.code(status).send(failure);
@@ -1720,12 +1746,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         body?.from ?? "",
         body?.to ?? ""
       );
-      const owner = { kind: "workspace" as const, id: target.workspace.id };
-      const rows = renameSourceSubtree(db, {
+      const rows = renameFileSubtree(db, {
         userId: target.userId,
-        owner,
-        from: moved.from.rel,
-        to: moved.to.rel,
+        from: workspaceFilePath(target.workspace.slug, moved.from.rel),
+        to: workspaceFilePath(target.workspace.slug, moved.to.rel),
       });
       // Nothing to move means nothing had a row — a file that arrived with no writer. The next
       // listing reconciles it at its new place, so this is not an error.
@@ -1757,21 +1781,20 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
 
     try {
-      // The row is resolved (or made) before the bytes move, because its id is what namespaces
-      // the trash directory — two deletions from different directories must not collide.
-      const owner = { kind: "workspace" as const, id: target.workspace.id };
+      // The file row is resolved (or made) before the bytes move, because its id is what
+      // namespaces the trash directory — two deletions from different directories must not
+      // collide.
       const size = await stat(join(target.workspace.workdirPath, path)).then(
         (info) => info.size,
         () => 0
       );
-      const row =
-        db.getSourceByPlace(target.userId, owner, path) ??
-        registerFileSource(db, {
+      const stored = workspaceFilePath(target.workspace.slug, path);
+      const file =
+        db.getFileByPath(target.userId, stored) ??
+        registerFile(db, {
           userId: target.userId,
-          owner,
-          storage: "workspace",
-          relPath: path,
-          origin: "discovered",
+          path: stored,
+          sourceType: "discovered",
           size,
         });
 
@@ -1779,11 +1802,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         target.workspace.workdirPath,
         workspaceTrashDir(target.workspace.dirPath),
         path,
-        row.id
+        file.id
       );
       if (!removed.wasDirectory) {
-        db.updateSourcePlace(row.id, target.userId, { storage: "trash" });
-        db.softDeleteSourceForUser(row.id, target.userId);
+        // The bytes have moved, so the stored locator moves with them — and the row is marked
+        // deleted rather than removed, which is what lets a restore find it again.
+        db.updateFilePath(file.id, target.userId, {
+          path: trashFilePath(target.workspace.slug, file.id, path),
+        });
+        db.softDeleteFileForUser(file.id, target.userId);
       }
       return { ok: true, path: removed.rel };
     } catch (err) {
@@ -2973,7 +3000,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     try {
       const listing = await listDirectory(root, path);
-      return withSourceIds(listing, userId, { kind: "session", id: found.session.id }, "session");
+      return withFileIds(
+        listing,
+        userId,
+        { kind: "session", id: found.session.id },
+        (rel) => sessionFilePath(found.workspace.slug, found.session.id, rel)
+      );
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -3051,41 +3083,94 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * module instead of of whoever remembered: a route that forgets has to deliberately reach
    * past this function to leak, which is a much harder mistake to make.
    *
-   * Where the bytes are **does** travel now, as `storage` + `relPath`, and that is not a leak:
-   * it is the path inside a sandbox the client can already browse, it is what a tree view of
-   * the browser is drawn from, and it is not enough to reach a file with — the request still
-   * has to pass a route, which resolves it through the guard again.
+   * Where the bytes are **does** travel now, as the reference's own entity: `path` sits on the
+   * file and `url` on the page, and neither is a leak — a file's path is inside a sandbox the
+   * client can already browse, and it is not enough to reach the file with, since every read
+   * still passes a route that resolves it through the guard again.
    */
-  function toSource(record: SourceRecord): Source {
-    const { userId, ...source } = record;
-    return source;
+  function toResource(record: WorkResourceRecord): WorkResource {
+    const { userId, ...resource } = record;
+    return resource;
   }
 
   /**
-   * A source as one message's attachment: the same facts, under the name that upload used.
+   * A reference as one message's attachment: the same facts, under the name that upload used.
    *
-   * The name is the only difference, and it is deliberate rather than redundant. A source
-   * keeps the first name it was uploaded under — that is what dedupe means — so without this
-   * a second upload of the same bytes would show someone else's filename on its chip.
+   * The name is the only difference, and it is deliberate rather than redundant. A file keeps
+   * the first title it was registered under — that is what dedupe means — so without this a
+   * second upload of the same bytes would show someone else's filename on its chip.
    *
-   * Spread-with-omit rather than a field list, so a field added to `Attachment` later travels
-   * here without anyone having to remember this function. `createdAt` is left out because it
-   * is a fact about the source, not about the message that referenced it.
+   * `id` is the **file**, `resourceId` is the reference: two ids for one row, and the split is
+   * the v4 model in miniature. The bytes are fetched by the first and read by the model through
+   * the second.
    */
-  function toAttachment(record: SourceRecord, name: string): Attachment {
-    const { createdAt, ...rest } = toSource(record);
-    return { ...rest, name };
+  function toAttachment(record: WorkResourceRecord, name: string): Attachment {
+    const entity = record.resource;
+    return {
+      id: entity.id,
+      resourceId: record.id,
+      name,
+      mimeType: entityMimeOf(record),
+      size: entitySizeOf(record),
+      kind: entityMimeOf(record) === "image/png" || entityMimeOf(record).startsWith("image/")
+        ? "image"
+        : "file",
+      parseStatus: record.parseStatus,
+      parseError: record.parseError,
+      parseErrorCode: record.parseErrorCode,
+      parserId: record.parserId,
+      parsedChars: record.parsedChars,
+      pageCount: record.pageCount,
+      parsedFileId: record.parsedFileId,
+    };
+  }
+
+  /** A reference's entity MIME. A page is always HTML; a file says so itself. */
+  function entityMimeOf(record: WorkResourceRecord): string {
+    return record.resourceType === "file"
+      ? (record.resource as StoredFile).mimeType
+      : "text/html";
+  }
+
+  /** The same for size, which a page has none of. */
+  function entitySizeOf(record: WorkResourceRecord): number {
+    return record.resourceType === "file" ? (record.resource as StoredFile).size : 0;
   }
 
   /**
-   * A source's bytes, validated, or undefined.
+   * Every file id a run might read: the history's attachments, and this turn's.
    *
-   * Every read of a source's contents goes through here — the preview and the raw download —
-   * so "where is this file" is asked once. The answer itself is `sources.ts`'s: it resolves the
-   * row's owner, picks the root the row's storage names, and checks the path against it.
+   * The history's, not just this turn's, and that is the whole point: `buildHistoryMessages`
+   * re-runs the content builder for every earlier user turn, so a file attached three turns ago
+   * is replayed on every turn after it. Collecting from both is what makes the cost one pass over
+   * a small set instead of one query per attachment per message.
    */
-  function sourcePath(user: User, source: SourceRecord): string | undefined {
-    return sourceBytesOf(db, treeFor(user), user.id, source);
+  function fileIdsOf(history: readonly Message[], extra: readonly Attachment[]): string[] {
+    return [
+      ...history.flatMap((m) => (m.attachments ?? []).map((a) => a.id)),
+      ...extra.map((a) => a.id),
+    ];
+  }
+
+  /**
+   * A reference's bytes, validated, or undefined.
+   *
+   * Every read of a file's contents goes through here — the preview and the raw download — so
+   * "where is this file" is asked once. A page has no bytes of its own: its text is a file the
+   * reference points at, and its raw body is not reachable from here at all.
+   */
+  function resourcePath(user: User, record: WorkResourceRecord): string | undefined {
+    // The parsed text is an *entity's* file too, and is what a preview of a document should
+    // show when there is one — the alternative is handing a viewer a PDF it cannot render.
+    if (record.parsedFileId) {
+      const text = db.getFileForUser(user.id, record.parsedFileId);
+      if (text) {
+        const resolved = resolveFilePath(treeFor(user), text);
+        if (resolved) return resolved;
+      }
+    }
+    if (record.resourceType !== "file") return undefined;
+    return resolveFilePath(treeFor(user), record.resource as StoredFile);
   }
 
   /**
@@ -3106,7 +3191,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * failed.
    */
   app.post(
-    "/api/sessions/:id/sources",
+    "/api/sessions/:id/resources",
     { bodyLimit: ATTACHMENT_BODY_LIMIT, config: { requiresSessionLock: true } },
     async (request, reply) => {
       const user = actor(request);
@@ -3151,100 +3236,92 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       }
 
       /*
-       * Three cases, and the middle one is the soft delete's.
+       * One file, and one reference per owner that should be able to reach it.
        *
-       * `UNIQUE (user_id, sha256)` makes identical bytes one row for the account, so a file the
-       * user deleted cannot be re-uploaded as a second row — the insert would be refused. It is
-       * *revived* instead: the row never lost its bytes, its parse state or its links, so
-       * bringing it back restores the file everywhere it was used, and the re-upload costs
-       * nothing but a marker.
+       * `UNIQUE (user_id, sha256)` makes identical user-supplied bytes one file for the account,
+       * so a file the user deleted cannot be re-uploaded as a second row — the insert would be
+       * refused. It is *revived* instead: the row never lost its bytes and every reference to it
+       * survived, so bringing it back restores the file wherever it was being worked from.
+       *
+       * The reference, by contrast, is per conversation — which is the whole reason the two are
+       * separate tables. Uploading the same bytes into a second conversation reuses the file and
+       * creates a second reference, so neither conversation is holding the other's row.
        */
       const hash = sha256Of(bytes);
-      const existing = db.findSourceByHash(userId, hash);
-      let source = existing;
+      const live = db.findFileByHash(userId, hash);
+      const deleted = live ? undefined : db.findDeletedFileByHash(userId, hash);
+      let file = live ?? (deleted ? db.reviveFileForUser(deleted.id, userId) : undefined);
       let started = false;
 
-      if (!source) {
-        const deleted = db.findDeletedSourceByHash(userId, hash);
-        if (deleted) {
-          // A parse cancelled mid-flight left the row saying `pending` forever, because the run
-          // that would have written an outcome is the one that was stopped. Re-queue it; a row
-          // that already finished keeps its verdict.
-          const stuck = deleted.parseStatus === "pending" || deleted.parseStatus === "parsing";
-          source = db.reviveSourceForUser(deleted.id, userId) ?? deleted;
-          if (stuck && documents.handles(source)) {
-            started = true;
-            void documents.schedule(tree, userId, source, session.workspace.dirPath).catch((err: unknown) => {
-              request.log.error(err, "failed to schedule document parsing");
-            });
-          }
-        }
-      }
-
-      if (!source) {
-        const sourceId = newId();
-        // Both inputs to the path are server-side — an id we just made and a MIME type from
-        // the table — so nothing the client sent can steer the write out of this user's
+      if (!file) {
+        const fileId = newId();
+        // Both inputs to the path are server-side — an id we just made and a MIME type from the
+        // table — so nothing the client sent can steer the write out of this user's
         // `sources/raw/`. Same reasoning as `resolveInWorkspace`, applied at the write.
-        const rawPath = sourceRawPath(tree, sourceId, mimeType);
+        const rawPath = rawFilePath(tree, fileId, mimeType);
         try {
           await writeFile(rawPath, bytes);
         } catch (err) {
-          request.log.error(err, "failed to store source bytes");
-          return reply.code(500).send(apiError("SOURCE_STORE_FAILED", "failed to store the file"));
+          request.log.error(err, "failed to store file bytes");
+          return reply.code(500).send(apiError("FILE_STORE_FAILED", "failed to store the file"));
         }
 
-        source = db.createSource({
-          id: sourceId,
+        file = db.createFile({
+          id: fileId,
           userId,
-          // An upload is held by the conversation it arrived in, and *shared with the
-          // workspace* by the link written below — two different facts, which is why the link
-          // tables still exist beside this column.
-          ownerKind: "session",
-          ownerId: id,
-          origin: "session_attachment",
-          storage: "upload",
-          // No stored path: the filename is `<id>.<ext>`, derived from the id and the MIME
-          // type, so the row would be a second copy of an answer it already has.
-          relPath: null,
-          name,
+          sourceType: "attachment",
+          title: name,
+          path: storePath(tree, rawPath),
           mimeType,
           category: classifyFile(name, mimeType).category,
           size: bytes.byteLength,
-          url: null,
-          summary: null,
           sha256: hash,
         });
-        started = true;
-
-        // Extraction runs *after* the response: a cloud parse can take minutes and the
-        // composer must not hold the upload open for it. `schedule` writes `pending`
-        // synchronously, so the status a poll reads next is never a gap.
-        if (documents.handles(source)) {
-          void documents.schedule(tree, userId, source, session.workspace.dirPath).catch((err: unknown) => {
-            request.log.error(err, "failed to schedule document parsing");
-          });
-        }
       }
 
-      db.linkSourceToSession(userId, id, source.id);
-      db.linkSourceToWorkspace(userId, session.workspace.id, source.id);
+      const resource = ensureWorkResource(db, {
+        userId,
+        owner: { kind: "session", id },
+        resourceType: "file",
+        resourceId: file.id,
+        title: name,
+      });
+      if (!resource) {
+        return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      }
 
       /*
-       * A source this request started parsing reports `pending` rather than being re-read.
+       * A parse is scheduled when *this reference* has never been parsed — a fresh file, a
+       * revived one whose run was cancelled mid-flight, or a file another conversation already
+       * parsed (whose reference is its own, and whose text is its own).
+       *
+       * Extraction runs after the response: a cloud parse can take minutes and the composer must
+       * not hold the upload open for it. `schedule` writes `pending` synchronously, so the status
+       * a poll reads next is never a gap.
+       */
+      if (
+        documents.handles(entityMimeOf(resource)) &&
+        (resource.parseStatus === "none" ||
+          resource.parseStatus === "pending" ||
+          resource.parseStatus === "parsing")
+      ) {
+        started = true;
+        void documents.schedule(tree, userId, resource).catch((err: unknown) => {
+          request.log.error(err, "failed to schedule document parsing");
+        });
+      }
+
+      /*
+       * A reference this request started parsing reports `pending` rather than being re-read.
        * Re-reading would race the work it just queued — a small local PDF can be `ready` before
        * this line runs, and a status that races the parse is not a status. The client polls
-       * `/sessions/:id/sources` for the outcome, so what it needs from the upload is a stable
+       * `/sessions/:id/resources` for the outcome, so what it needs from the upload is a stable
        * "we started", which is what it gets.
        *
-       * A source nothing was started for reports what it already has: its parse may be
-       * finished, or gone stale, or never have been needed. That is the reused case and the
-       * revived-and-already-parsed one alike.
+       * A reference nothing was started for reports what it already has: its parse may be
+       * finished, or gone stale, or never have been needed.
        */
-      const reported =
-        started && documents.handles(source)
-          ? { ...source, parseStatus: "pending" as ParseStatus }
-          : source;
+      const reported = started ? { ...resource, parseStatus: "pending" as ParseStatus } : resource;
       return reply.code(201).send(toAttachment(reported, name));
     }
   );
@@ -3262,7 +3339,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * snapshot folded into each message, so a reparse is reflected here, and in every
    * conversation that shares the file, at once.
    */
-  app.get("/api/sessions/:id/sources", async (request, reply) => {
+  app.get("/api/sessions/:id/resources", async (request, reply) => {
     const userId = actor(request).id;
     const { id } = request.params as { id: string };
     const found = db.getSessionForUser(id, userId);
@@ -3272,7 +3349,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // `@所有工作区` grant makes it an account-wide read. It is paid only while a parse is in
     // flight, and the alternative is the model and the chips disagreeing.
     const scope = scopeQuery(resolveWorkspaceScope(db, userId, found.session));
-    return db.listReadableSources(userId, id, found.workspace.id, scope).map(toSource);
+    return db.listReadableWorkResources(userId, id, found.workspace.id, scope).map(toResource);
   });
 
   /**
@@ -3309,14 +3386,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * somebody else matches nothing rather than being refused: the request is a legitimate
    * question with an empty answer, not an attempt.
    */
-  app.get("/api/sources", async (request, reply) => {
+  app.get("/api/resources", async (request, reply) => {
     const user = actor(request);
     const query = request.query as Record<string, string | string[] | undefined>;
 
     const one = (key: string): string | undefined => {
       const value = query[key];
       if (value === undefined) return undefined;
-      // `?storage=a&storage=b` arrives as an array, and a filter holding two values is a
+      // `?category=a&category=b` arrives as an array, and a filter holding two values is a
       // request this route does not answer — refusing beats picking the first silently.
       if (typeof value !== "string" || value === "") {
         return reply.send(apiError("INVALID_FIELD", `${key} must be a single value`)) as never;
@@ -3324,23 +3401,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return value;
     };
 
-    const storage = one("storage");
-    if (storage !== undefined && !isSourceStorage(storage)) {
-      return reply.code(400).send(apiError("INVALID_FIELD", "unknown storage"));
+    const resourceType = one("resourceType");
+    if (resourceType !== undefined && !isWorkResourceType(resourceType)) {
+      return reply.code(400).send(apiError("INVALID_FIELD", "unknown resource type"));
     }
     const category = one("category");
-    if (category !== undefined && !isSourceCategory(category)) {
+    if (category !== undefined && !isFileCategory(category)) {
       return reply.code(400).send(apiError("INVALID_FIELD", "unknown category"));
     }
-    const origin = one("origin");
-    if (origin !== undefined && !isSourceOrigin(origin)) {
-      return reply.code(400).send(apiError("INVALID_FIELD", "unknown origin"));
+    const ownerType = one("ownerType");
+    if (ownerType !== undefined && ownerType !== "workspace" && ownerType !== "session") {
+      return reply.code(400).send(apiError("INVALID_FIELD", "unknown owner type"));
+    }
+    const owner: WorkResourceFilter["ownerType"] =
+      ownerType === "workspace" || ownerType === "session" ? ownerType : undefined;
+    const sourceType = one("sourceType");
+    if (sourceType !== undefined && !isFileSourceType(sourceType)) {
+      return reply.code(400).send(apiError("INVALID_FIELD", "unknown source type"));
     }
 
     const filter = {
-      storage,
+      resourceType,
+      ownerType: owner,
       category,
-      origin,
       mime: one("mime"),
       name: one("name"),
       workspaceId: one("workspaceId"),
@@ -3354,32 +3437,32 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // `reconcileFilesystem` for why this is affordable here rather than at boot.
     await reconcileFilesystem(db, { workspaceId: filter.workspaceId, sessionId: filter.sessionId });
 
-    const sources = await listSourceViewsForUser(db, treeFor(user), user.id, filter);
-    return sources.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(toSource);
+    const resources = await listResourceViewsForUser(db, treeFor(user), user.id, filter);
+    return resources.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(toResource);
   });
 
   /**
    * One source, by id.
    *
    * The read a caller makes when it has an id and needs the row *now*: the composer polls it
-   * while a source the user just referenced is being parsed, and something that is not in the
-   * conversation's list yet — a reference before the turn that links it — has no other way to
-   * be asked about. `missing` is computed here as it is in the list, so the two agree.
+   * while a reference the user just pointed at is being parsed, and something that is not in the
+   * conversation's list yet — a reference before the turn that links it — has no other way to be
+   * asked about. `missing` is computed here as it is in the list, so the two agree.
    */
-  app.get("/api/sources/:id", async (request, reply) => {
+  app.get("/api/resources/:id", async (request, reply) => {
     const user = actor(request);
-    const { id: sourceId } = request.params as { id: string };
-    const source = db.getSourceForUser(sourceId, user.id);
-    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    const { id } = request.params as { id: string };
+    const resource = db.getWorkResourceForUser(user.id, id);
+    if (!resource) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
-    const path = sourceBytesOf(db, treeFor(user), user.id, source);
+    const path = resourcePath(user, resource);
     const present = path
       ? await stat(path).then(
           (info) => info.isFile(),
           () => false
         )
       : false;
-    return toSource({ ...source, missing: !present });
+    return toResource({ ...resource, missing: !present } as WorkResourceRecord);
   });
 
   /**
@@ -3399,62 +3482,73 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * The bytes are not here, deliberately — `truncated` and `text` are for the text path, and a
    * binary's bytes come from `/raw` beside this, under the cap the client checks first.
    */
-  app.get("/api/sources/:id/preview", async (request, reply) => {
+  app.get("/api/resources/:id/preview", async (request, reply) => {
     const user = actor(request);
-    const { id: sourceId } = request.params as { id: string };
-    const source = db.getSourceForUser(sourceId, user.id);
-    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    const { id } = request.params as { id: string };
+    const resource = db.getWorkResourceForUser(user.id, id);
+    if (!resource) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
-    const path = sourcePath(user, source);
-    if (!path) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    const path = resourcePath(user, resource);
+    if (!path) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
     try {
-      // The *stored* name, not the path's: the name is the only part of the two that the user
-      // ever chose, and a source deduped onto an earlier upload would otherwise show a uuid.
-      const content = await readPreviewFile(path, source.name);
+      // The *stored* title, not the path's: the title is the only part of the two that the user
+      // ever chose, and a file deduped onto an earlier upload would otherwise show a uuid.
+      const content = await readPreviewFile(path, resource.title);
       /*
        * …and the page it came from, when it is one. Carried here rather than fetched by the
        * client, because this route is the only one that knows *both* the bytes and the row: a
        * client holding the preview would otherwise need a second request to learn whether there is
        * somewhere to go, and the dialog's "open in browser" control is gated on exactly that.
        */
-      return { ...content, url: source.url ?? undefined };
+      const entity = resource.resource;
+      return {
+        ...content,
+        url: resource.resourceType === "web_page" ? (entity as { url: string }).url : undefined,
+      };
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
     }
   });
 
-  /** Serve a source's bytes back, for a thumbnail or a download. */
-  app.get("/api/sources/:id/raw", async (request, reply) => {
+  /**
+   * Serve a **file's** bytes back, for a thumbnail or a download.
+   *
+   * By file id rather than by reference, and the two are not interchangeable: a file may be held
+   * by several owners, so "which reference" has no answer here — what is being asked for is the
+   * bytes. The image thumbnail is the caller that matters, and it is addressed from the
+   * attachment, which carries both ids.
+   */
+  app.get("/api/files/:id/raw", async (request, reply) => {
     const user = actor(request);
-    const { id: sourceId } = request.params as { id: string };
-    const source = db.getSourceForUser(sourceId, user.id);
-    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    const { id } = request.params as { id: string };
+    const file = db.getFileForUser(user.id, id);
+    if (!file) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
     // From the row, and validated again before the read: the resolver is what keeps a path
     // that travelled through a backup — or through a future bug — from being a read of
     // whatever it happens to name.
-    const path = sourcePath(user, source);
-    if (!path) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    const path = resolveFilePath(treeFor(user), file);
+    if (!path) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
     try {
       const bytes = await readFile(path);
       return reply
         .header("Cache-Control", "private, max-age=31536000, immutable")
-        .type(source.mimeType)
+        .type(file.mimeType)
         .send(bytes);
     } catch {
-      return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+      return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
     }
   });
 
   /**
-   * Add a web page as a source, by pasting its URL.
+   * Add a web page, by pasting its URL.
    *
    * The user's half of `ila_collect_page`, and the reason it exists is the requirement's own
-   * list of what a source can be: "a web link, or an uploaded file, added to a workspace from
-   * outside a conversation". The browser offered only the file.
+   * list of what material can be: a web link or an uploaded file, added to a workspace from
+   * outside a conversation. The browser offered only the file.
    *
    * A **workspace**, never a conversation, for the same reason the upload picker offers only
    * workspaces: a conversation's material is what happened inside it. The page is linked to
@@ -3466,7 +3560,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * sentence, because that sentence names the reason ("it resolves to a private address") and
    * any wording invented here would say less.
    */
-  app.post("/api/sources/pages", async (request, reply) => {
+  app.post("/api/resources/pages", async (request, reply) => {
     const user = actor(request);
     const body = request.body as { url?: string; workspaceId?: string; summary?: string };
 
@@ -3480,7 +3574,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
 
     try {
-      const source = await captureWebPage(db, {
+      const resource = await captureWebPage(db, {
         user: treeFor(user),
         userId: user.id,
         owner: { kind: "workspace", id: workspace.id },
@@ -3490,7 +3584,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         // that understood it, and nothing has read this one yet.
         summary: body?.summary?.trim() || undefined,
       });
-      return reply.code(201).send(toSource(source));
+      return reply.code(201).send(toResource(resource));
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       return reply.code(400).send(apiError("PAGE_FETCH_FAILED", detail, { detail }));
@@ -3498,21 +3592,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /** Re-run extraction, e.g. after a failure or a change of parser settings. */
-  app.post("/api/sources/:id/reparse", async (request, reply) => {
+  app.post("/api/resources/:id/reparse", async (request, reply) => {
     const user = actor(request);
-    const { id: sourceId } = request.params as { id: string };
-    const source = db.getSourceForUser(sourceId, user.id);
-    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    const { id } = request.params as { id: string };
+    const resource = db.getWorkResourceForUser(user.id, id);
+    if (!resource) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
     try {
-      // The parse reads the bytes through the same resolver every read does, so it needs the
-      // workspace the row's owner lives in. A blob needs none — see `sourcePath`.
-      await documents.reparse(
-        treeFor(user),
-        user.id,
-        source,
-        ownerWorkspaceRootIn(db, user.id, source) ?? ""
-      );
+      // The parse reads the bytes through the same resolver every read does, which needs nothing
+      // but the row — the locator is on the file.
+      await documents.reparse(treeFor(user), user.id, resource);
     } catch (err) {
       return reply.code(400).send(parseApiError(err));
     }
@@ -3520,12 +3609,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Soft delete a file everywhere it is used.
+   * Remove this conversation's *reference* to a file.
    *
-   * The row keeps its bytes, its extracted text and every link; it stops being listed, stops
-   * being offered to the model, and starts 404ing on `/raw`. Because the links survive,
-   * re-uploading the same content brings the file back *with* its history — see the upload
-   * route, which revives this row rather than inserting beside it.
+   * The **reference**, not the file, and the difference is the whole of the v4 model. A file is
+   * the account's; a work resource is one owner's use of it. Deleting here takes the row out of
+   * this owner's list and leaves the bytes, the file's row and every *other* owner's reference
+   * exactly where they were — deleting a file from a conversation must not take it out of
+   * another conversation that is working from it.
+   *
+   * Removing the bytes is the file manager's job, and it says so by moving them to the trash —
+   * a different action with a different consequence, which is why the two are not one route.
    *
    * The `messages.attachments` snapshots were always kept: a message sent with a PDF keeps
    * showing what was sent, rather than the chip vanishing from history it was part of.
@@ -3533,14 +3626,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * An in-flight parse is still cancelled — not to protect the bytes, which are staying, but so
    * a parse that can never be read does not keep running against a file the user has put away.
    */
-  app.delete("/api/sources/:id", async (request, reply) => {
+  app.delete("/api/resources/:id", async (request, reply) => {
     const user = actor(request);
-    const { id: sourceId } = request.params as { id: string };
-    const source = db.getSourceForUser(sourceId, user.id);
-    if (!source) return reply.code(404).send(apiError("SOURCE_NOT_FOUND", "file not found"));
+    const { id } = request.params as { id: string };
+    const resource = db.getWorkResourceForUser(user.id, id);
+    if (!resource) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
-    documents.cancelSource(source.id);
-    db.softDeleteSourceForUser(source.id, user.id);
+    documents.cancelResource(resource.id);
+    db.softDeleteWorkResourceForUser(resource.id, user.id);
     return { ok: true };
   });
 
@@ -3866,14 +3959,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     for (const attachment of input.attachments) {
       if (attachment.kind !== "image") continue;
-      const source = db.getSourceForUser(attachment.id, input.userId);
-      if (!source || !needsSummary(source)) continue;
+      const file = db.getFileForUser(input.userId, attachment.id);
+      if (!file || !needsSummary(file)) continue;
 
-      const path = sourceBytesOf(db, input.user, input.userId, source);
+      const path = resolveFilePath(input.user, file);
       if (!path) continue;
 
       try {
-        const dataUrl = await readAsDataUrl(path, source.mimeType);
+        const dataUrl = await readAsDataUrl(path, file.mimeType);
         const summary = await summarizeImage({
           provider: input.provider,
           modelId: input.modelId,
@@ -3885,14 +3978,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         });
         if (!summary) continue;
 
-        // Both halves, in one place: the column the browser reads, and the text file the
-        // *model* reads on every later turn. A summary in the column alone would leave the
-        // image unreadable in the prompt, which is the whole thing this pass is for.
-        db.updateSourcePlace(source.id, input.userId, { summary });
-        await writeParsedText(input.user, source.id, summary);
+        /*
+         * Both halves, in one place: the file's `summary` column, which the browser reads, and a
+         * text file the *model* reads on every later turn. A summary in the column alone would
+         * leave the image unreadable in the prompt, which is the whole thing this pass is for.
+         */
+        db.updateFilePath(file.id, input.userId, { summary });
+        const textFileId = file.id;
+        await writeParsedText(input.user, textFileId, summary);
       } catch (err) {
         app.log.warn(
-          { err: err instanceof Error ? err.message : String(err), sourceId: source.id },
+          { err: err instanceof Error ? err.message : String(err), fileId: file.id },
           "image summary failed"
         );
       }
@@ -4162,7 +4258,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * the turn's own attachments on purpose — see `read_document`'s note — and the grant is
      * what makes it wider still.
      */
-    const sources = db.listReadableSources(
+    const readable = db.listReadableWorkResources(
       input.userId,
       session.id,
       workspace.id,
@@ -4174,17 +4270,30 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         workdir: workspace.workdirPath,
         sessionDir: ownDir,
         defaultLocation: writeLocation,
-        // The row is written after the bytes, and it is the *same* function the file manager
+        // Both rows are written after the bytes, through the *same* functions the file manager
         // and the reconciler call — so a file the agent wrote and a file the user moved end up
         // as rows nothing can tell apart, which is the point of the registry.
         register: ({ location, relPath, size }) => {
-          registerFileSource(db, {
+          const owner = fileOwner(location, {
+            workspaceId: workspace.id,
+            sessionId: session.id,
+          });
+          const stored =
+            location === "workspace"
+              ? workspaceFilePath(workspace.slug, relPath)
+              : sessionFilePath(workspace.slug, session.id, relPath);
+          const file = registerFile(db, {
             userId: input.userId,
-            owner: fileOwner(location, { workspaceId: workspace.id, sessionId: session.id }),
-            storage: location,
-            relPath,
-            origin: location === "workspace" ? "agent_workspace" : "agent_session",
+            path: stored,
+            sourceType: "agent_create",
             size,
+          });
+          ensureWorkResource(db, {
+            userId: input.userId,
+            owner,
+            resourceType: "file",
+            resourceId: file.id,
+            title: file.title,
           });
         },
       },
@@ -4198,7 +4307,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         db,
         userId: input.userId,
         user: input.user,
-        sources: sources.map((s) => ({ id: s.id, name: s.name, mimeType: s.mimeType })),
+        resources: readable.map((r) => ({
+          id: r.id,
+          name: r.title,
+          mimeType:
+            r.resourceType === "file" ? (r.resource as StoredFile).mimeType : "text/html",
+        })),
         maxChars: Math.min(config.tools.documents.maxTextChars, 40_000),
       },
       // `ila_quiz` and its grading companion are `required` mode: both contexts exist only when
@@ -4235,18 +4349,24 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       diagram: {
         sessionDir: ownDir,
         save: (saved) => {
+          /*
+           * A file, a diagram row and a **pointer** — and the transaction is for the pointer.
+           *
+           * It used to be two rows landing together; what it protects now is a diagram row whose
+           * `file_id` is null, which is a row the 图表 panel can list and cannot open. The file
+           * gets **no work resource**, deliberately: a diagram's `.mmd` is not externally
+           * referenceable, so it is in the panel and not in the library.
+           */
           db.transaction(() => {
-            registerDiagram(db, session.id, saved);
-            registerFileSource(db, {
+            const file = registerFile(db, {
               userId: input.userId,
-              owner: { kind: "session", id: session.id },
-              storage: "session",
-              relPath: saved.name,
-              origin: "agent_session",
+              path: sessionFilePath(workspace.slug, session.id, saved.name),
+              sourceType: "agent_create",
               size: saved.size,
-              name: saved.name,
+              title: saved.name,
               summary: saved.summary,
             });
+            registerDiagram(db, session.id, { ...saved, fileId: file.id });
           });
         },
       },
@@ -4658,42 +4778,25 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // assembled inside `turnContext` so that no call site can hand it a narrower one.
     const readable = new Map(
       db
-        .listReadableSources(
+        .listReadableWorkResources(
           userId,
           id,
           workspace.id,
           scopeQuery(resolveWorkspaceScope(db, userId, session))
         )
-        .map((s) => [s.id, s])
+        .map((r) => [r.id, r])
     );
-    const storedAttachments = attachments
-      .map((a) => (readable.has(a.id) ? toAttachment(readable.get(a.id)!, a.name) : undefined))
-      .filter((a): a is Attachment => a !== undefined);
-
     /*
-     * The sources this turn *referenced*, which is a different rule from the attachments above.
-     *
-     * An attachment must already be readable — it was uploaded into this conversation or its
-     * workspace, and a stale client naming anything else is a client to refuse. A reference is
-     * the user pointing at their own material, wherever it is: a file in another workspace, a
-     * page the agent kept last week. That widens what the model may read, so it is done by
-     * **linking** the source to this conversation rather than by handing the turn a private
-     * copy: the link is what makes `read_document` able to page through it on the next turn
-     * too, and it is the same `session_sources` row an upload writes.
-     *
-     * `getSourceForUser` is the owner check, so an id belonging to somebody else resolves to
-     * nothing rather than being refused — the same "not yours and does not exist answer alike"
-     * rule the rest of the routes follow, and here it means a reference simply does not arrive.
+     * The client names the **reference** it staged, and the snapshot is rebuilt from the server's
+     * row rather than trusted: `resourceId`, not the file id. An attachment must already be
+     * readable — it was uploaded into this conversation or its workspace — and a stale client
+     * naming anything else is a client to refuse, which the `Map` membership test does before any
+     * path is touched.
      */
-    const referenced = (body?.sources ?? [])
-      .map((ref) => db.getSourceForUser(ref.id, userId))
-      .filter((source): source is SourceRecord => source !== undefined);
-
-    const storedSources = referenced
-      .map((source) => {
-        db.linkSourceToSession(userId, id, source.id);
-        const name = (body?.sources ?? []).find((ref) => ref.id === source.id)?.name ?? source.name;
-        return toAttachment(source, name);
+    const storedAttachments = attachments
+      .map((a) => {
+        const row = readable.get(a.resourceId ?? "");
+        return row ? toAttachment(row, a.name) : undefined;
       })
       .filter((a): a is Attachment => a !== undefined);
 
@@ -4763,6 +4866,40 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       return reply.code(resolution.status).send(apiError(resolution.code, "reference not found"));
     }
 
+    /*
+     * A reference is the user pointing at their own material, wherever it is — and what makes it
+     * readable on the *next* turn too is a **link**, not a copy for this one. So each resolved
+     * reference gains a reference of this conversation's own, pointing at the same entity; that
+     * row is what puts it in the read whitelist from here on.
+     *
+     * A side effect of the request rather than of `resolveReferences`, which stays read-only on
+     * purpose: replay resolves references on every later turn, and a replay that wrote would
+     * resurrect rows a user had deleted.
+     *
+     * A reference that has never been parsed is queued here. Without this the model reads "still
+     * parsing" for ever — the feature looks right in the UI and fails only when the model tries
+     * to read the document, which is the worst place for it to fail.
+     */
+    const referencedAttachments: Attachment[] = [];
+    for (const resolved of resolution.resolved) {
+      if (resolved.kind !== "resource") continue;
+      const held = db.getWorkResourceForUser(userId, resolved.resourceId);
+      if (!held) continue;
+      const mine = ensureWorkResource(db, {
+        userId,
+        owner: { kind: "session", id },
+        resourceType: held.resourceType,
+        resourceId: held.resourceId,
+        title: held.title,
+        summary: held.summary,
+      });
+      if (!mine) continue;
+      referencedAttachments.push(toAttachment(mine, mine.title));
+      if (mine.parseStatus === "none") {
+        void documents.schedule(treeFor(actor(request)), userId, mine).catch(() => undefined);
+      }
+    }
+
     // Read history *before* persisting the new user turn, so it isn't replayed twice.
     const history = db.listMessagesForUser(id, userId);
 
@@ -4772,7 +4909,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       role: "user",
       content: message,
       attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
-      sources: storedSources.length > 0 ? storedSources : undefined,
       // The *client's* references rather than the resolved ones: a message describes the turn
       // that was had, so the chip keeps the label and the quote it was shown with. What the model
       // reads is re-derived on every run from these — see `referencesForHistory`.
@@ -4809,14 +4945,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         toolUse: ctx.toolUse,
         history,
         userMessage: message,
-        // To the model, a referenced source and an attachment are the same thing: material
-        // this turn is about. They are two columns on the message so the chips can say which
-        // is which, and one array here because the prompt has no use for the difference.
-        attachments: [...storedAttachments, ...storedSources],
-        sourcePaths: sourcePathsFor(db, treeFor(actor(request)), userId, history, [
-          ...storedAttachments,
-          ...storedSources,
-        ]),
+        // To the model, an attachment and a referenced resource are the same thing: material
+        // this turn is about. A reference reaches the prompt twice on purpose — as a pointer it
+        // can follow with `read_document`, and as bytes here when it is an image — because the
+        // two answer different questions and neither replaces the other.
+        attachments: [...storedAttachments, ...referencedAttachments],
+        sourcePaths: filePathsFor(
+          db,
+          treeFor(actor(request)),
+          userId,
+          fileIdsOf(history, [...storedAttachments, ...referencedAttachments])
+        ),
         // This turn's, and every earlier message's — the same split `userMessage` and `history`
         // make, and for the same reason: history was read before this turn was written.
         references: resolution.resolved,
@@ -4844,7 +4983,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         user: treeFor(actor(request)),
         // The attachments *and* the references: both were sent as material, and an image the
         // user pointed at with `@` deserves a description as much as one they dragged in.
-        attachments: [...storedAttachments, ...storedSources],
+        attachments: [...storedAttachments, ...referencedAttachments],
       });
     } catch (err) {
       failTurn(id, ctx, err, sse);
@@ -4977,8 +5116,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         history,
         userMessage: null,
         // No turn of its own, but the history it replays may reference files whose paths are
-        // not derivable from their ids — see `sourcePathsFor`.
-        sourcePaths: sourcePathsFor(db, treeFor(actor(request)), userId, history, []),
+        // not derivable from their ids — see `filePathsFor`.
+        sourcePaths: filePathsFor(db, treeFor(actor(request)), userId, fileIdsOf(history, [])),
         // And what those replayed turns pointed at. This is the route where it matters most:
         // a regenerated answer is rebuilt entirely from history, so a reference that lived only
         // in the original turn's prompt would leave the model asked about nothing.
@@ -5120,8 +5259,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         history,
         userMessage: null,
         // No turn of its own, but the history it replays may reference files whose paths are
-        // not derivable from their ids — see `sourcePathsFor`.
-        sourcePaths: sourcePathsFor(db, treeFor(actor(request)), userId, history, []),
+        // not derivable from their ids — see `filePathsFor`.
+        sourcePaths: filePathsFor(db, treeFor(actor(request)), userId, fileIdsOf(history, [])),
         // And what those replayed turns pointed at. This is the route where it matters most:
         // a regenerated answer is rebuilt entirely from history, so a reference that lived only
         // in the original turn's prompt would leave the model asked about nothing.

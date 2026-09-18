@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Source, Workspace } from "../../src/api/types";
+import type { FileCategory, StoredFile, WebPage, WorkResource, Workspace } from "../../src/api/types";
 import {
   GROUP_LIMIT,
+  SOURCE_PILLS,
   TOTAL_LIMIT,
   buildOptions,
   flatten,
@@ -34,20 +35,49 @@ function workspace(id: string, name: string): Workspace {
   };
 }
 
-function source(id: string, name: string, category: Source["category"]): Source {
+function source(id: string, name: string, category: FileCategory): WorkResource {
+  return reference(id, name, {
+    id: `f-${id}`,
+    sourceType: "attachment",
+    title: name,
+    path: `sources/raw/f-${id}`,
+    mimeType: "text/plain",
+    category,
+    size: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+}
+
+/**
+ * A kept web page. A page is a `resourceType` rather than a `FileCategory`, so it has no
+ * category to filter by at all — which is what the pill cases below have to say out loud.
+ */
+function page(id: string, name: string): WorkResource {
+  return reference(id, name, {
+    id: `p-${id}`,
+    sourceType: "agent_fetch",
+    url: `https://example.com/${id}`,
+    title: name,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+}
+
+function reference(
+  id: string,
+  title: string,
+  resource: StoredFile | WebPage
+): WorkResource {
   return {
     id,
-    name,
-    mimeType: "text/plain",
-    size: 1,
-    kind: category === "image" ? "image" : "file",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    ownerKind: "session",
+    resourceType: "url" in resource ? "web_page" : "file",
+    resourceId: resource.id,
+    ownerType: "session",
     ownerId: "s1",
-    origin: "session_attachment",
-    storage: "upload",
-    category,
+    title,
+    parseStatus: "none",
+    createdAt: "2026-01-01T00:00:00.000Z",
     workspaceName: "W",
+    resource,
   };
 }
 
@@ -57,7 +87,7 @@ const sources = [
   source("s2", "photo.png", "image"),
   source("s3", "main.ts", "code"),
   source("s4", "lecture.pdf", "document"),
-  source("s5", "kept.html", "page"),
+  page("s5", "kept.html"),
   source("s6", "flow.mmd", "diagram"),
 ];
 
@@ -105,6 +135,18 @@ describe("the type pills", () => {
     expect(pillCategories("text")).toEqual(["text", "markdown"]);
     expect(pillCategories("code")).toEqual(["code", "diagram"]);
     expect(pillCategories("other")).toEqual(["document", "other"]);
+  });
+
+  it("has no pill for a page, because a page has no category", () => {
+    // The v3 pill set had five. `page` was a category there — hand-set on a source whose name
+    // could not say what it was — and in v4 that distinction is the `resourceType`, so a
+    // category pill has nothing to name. Pinned here so re-adding one is a decision.
+    expect(SOURCE_PILLS).not.toContain("page");
+  });
+
+  it("keeps a page out of a pill's matches rather than guessing a category for it", () => {
+    // A page is not an image, and a filter that admitted it would be saying it is.
+    expect(namesOf({ pill: "image" })).toEqual(["photo.png"]);
   });
 
   it("narrows the source rows to the pill's categories", () => {

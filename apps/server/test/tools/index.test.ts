@@ -131,7 +131,7 @@ const documents = {
   db: {} as never,
   userId: "u1",
   user,
-  sources: [{ id: "att-1", name: "lecture.pdf", mimeType: "application/pdf" }],
+  resources: [{ id: "att-1", name: "lecture.pdf", mimeType: "application/pdf" }],
 };
 
 /**
@@ -177,7 +177,7 @@ describe("buildTools", () => {
   });
 
   it("omits read_document when the whitelist is empty", () => {
-    expect(names({ documents: { ...documents, sources: [] } })).not.toContain("read_document");
+    expect(names({ documents: { ...documents, resources: [] } })).not.toContain("read_document");
   });
 
   it("omits ila_query when there is no conversation to query", () => {

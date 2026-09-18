@@ -4,7 +4,6 @@ import { join, extname } from "node:path";
 import type { Attachment } from "@ilearnassist/shared";
 import { isDocumentMime } from "./documents/formats.js";
 import { readParsedTextHead } from "./documents/store.js";
-import { sourceRawPath } from "./sourcePaths.js";
 import { renderReferenceBlock, type ResolvedReference } from "./turnReferences.js";
 import type { UserLayout } from "./paths.js";
 
@@ -85,7 +84,16 @@ export interface BuildContentOptions {
    * may reference sources held by several: the caller is the side that knows, per row, and this
    * module stays the side that knows what to *do* with a file once it has a path.
    */
-  sourcePaths?: ReadonlyMap<string, string>;
+  /**
+   * Every file this run might read, by **file id** — `sourcePathsFor`'s answer, resolved once per
+   * run rather than looked up per message.
+   *
+   * Required rather than optional, which is the change v4 forces: a blob used to be derivable
+   * from its id and MIME type as a fallback, and that fallback was a second source of truth for
+   * where a file is. The path is now *stored* on the row, so an id missing from the map means
+   * the file is missing — not that this module should invent a path for it.
+   */
+  sourcePaths: ReadonlyMap<string, string>;
   /** When false, images are replaced by a text placeholder instead of being sent. */
   vision: boolean;
   /**
@@ -141,23 +149,15 @@ export async function buildUserContent(
 
   for (const att of attachments) {
     /*
-     * Where the bytes are, asked of the row when the caller has one and derived from the id
-     * and the MIME type when it does not.
+     * Where the bytes are, asked of the map and nowhere else.
      *
-     * The derivation is the upload case and stays first only in the sense of being the
-     * fallback: a source whose row is in the map may live in either sandbox, and asking the
-     * row is the only way to know. Both answers are re-checked against a root before use —
-     * `resolveSourceBytes` for a row, and `sourceRawPath`'s own table for a derivation — so
-     * neither is a path this module trusts from the wire.
+     * There used to be a fallback that derived a blob's path from its id and MIME type. That is
+     * gone, and its absence is the point: the path is stored on the row, so an id the caller did
+     * not resolve means the file is not there. A second derivation could only disagree with the
+     * stored one, and the disagreement would be a file that reads in one place and 404s in
+     * another.
      */
-    let path = opts.sourcePaths?.get(att.id);
-    if (path === undefined) {
-      try {
-        path = sourceRawPath(opts.user, att.id, att.mimeType);
-      } catch {
-        path = undefined;
-      }
-    }
+    const path = opts.sourcePaths.get(att.id);
 
     if (att.kind === "image") {
       if (!opts.vision || !path) {
@@ -223,7 +223,12 @@ async function documentBlock(att: Attachment, opts: BuildContentOptions): Promis
 
   // Read one character past the threshold: the extra character is what distinguishes "this
   // is the whole document" from "there is more", which a cap-sized read could never tell.
-  const head = await readParsedTextHead(opts.user, att.id, MAX_INLINE_CHARS + 1);
+  //
+  // By the **parsed file's** id, not the attachment's: the extracted text is a file of its own,
+  // and an attachment is a file of bytes that may have no relationship to it at all.
+  const head = att.parsedFileId
+    ? await readParsedTextHead(opts.user, att.parsedFileId, MAX_INLINE_CHARS + 1)
+    : undefined;
   if (head === undefined) {
     if (att.parseStatus === "failed") {
       return `[附件：${att.name}（解析失败：${att.parseError ?? "未知原因"}）]`;
@@ -241,7 +246,7 @@ async function documentBlock(att: Attachment, opts: BuildContentOptions): Promis
   const preview = head.slice(0, PREVIEW_CHARS);
   const pointer = opts.toolUse
     ? `[... 内容过长，此处仅为前 ${PREVIEW_CHARS} 字符。` +
-      `请调用 read_document 工具读取剩余内容 —— sourceId 为 "${att.id}"，` +
+      `请调用 read_document 工具读取剩余内容 —— resourceId 为 "${att.resourceId}"，` +
       `用 offset 参数分段读取。]`
     : `[... 内容过长，剩余部分已省略。]`;
 

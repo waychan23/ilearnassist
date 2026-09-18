@@ -5,8 +5,8 @@ import {
   api,
   fileToBase64,
   setUnauthenticatedHandler,
+  fileImageUrl,
   setStoredTokens,
-  sourceImageUrl,
   streamAnswers,
   streamChat,
 } from "../../src/api/client.js";
@@ -284,13 +284,14 @@ describe("widgets and statistics", () => {
   });
 });
 
-describe("sourceImageUrl", () => {
+describe("fileImageUrl", () => {
   it("fetches the bytes with the token and hands back an object URL", async () => {
     // Fetched rather than linked, because an `<img src>` cannot carry an `Authorization`
-    // header — see the note on the function. The address is the source alone: the file belongs
-    // to the account, so two conversations referencing it fetch the same bytes.
+    // header — see the note on the function. The address is the **file**, never the reference:
+    // two conversations referencing the same bytes hold two references and one file, and it is
+    // the bytes a thumbnail wants.
     setStoredTokens({ accessToken: "at", refreshToken: "rt" });
-    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:sources/a1" }));
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:files/f1" }));
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -298,11 +299,11 @@ describe("sourceImageUrl", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const url = await sourceImageUrl("a1");
+    const url = await fileImageUrl("f1");
 
-    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sources/a1/raw");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/files/f1/raw");
     expect(headerOf(fetchMock as never, 0).get("Authorization")).toBe("Bearer at");
-    expect(url).toBe("blob:sources/a1");
+    expect(url).toBe("blob:files/f1");
   });
 });
 
@@ -372,8 +373,8 @@ describe("readRawFile", () => {
   });
 });
 
-describe("uploaded files", () => {
-  it("describes a source through its own route, under /api", async () => {
+describe("referenced files", () => {
+  it("describes a reference through its own route, under /api", async () => {
     const fetchMock = stubFetch(() =>
       jsonResponse({
         path: "doc.pdf",
@@ -386,14 +387,15 @@ describe("uploaded files", () => {
       })
     );
 
-    await api.readSourcePreview("s1");
+    await api.readResourcePreview("s1");
 
-    // Addressed by the source rather than by a path: a source is outside every workspace, so
-    // there is no path for the file browser's routes to take.
-    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sources/s1/preview");
+    // Addressed by the *reference* rather than by a path: the material may live outside every
+    // workspace (an upload's bytes are under `sources/raw/`), so there is no path for the file
+    // browser's routes to take.
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/resources/s1/preview");
   });
 
-  it("fetches a source's bytes as the same File a workspace file comes back as", async () => {
+  it("fetches a file's bytes by file id, not by reference id", async () => {
     setStoredTokens({ accessToken: "at", refreshToken: "rt" });
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => ({
       ok: true,
@@ -402,9 +404,11 @@ describe("uploaded files", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const file = await api.readSourceRawFile("s1", "shot.png");
+    const file = await api.readFileRaw("f1", "shot.png");
 
-    expect(String(fetchMock.mock.calls[0]![0])).toBe("/api/sources/s1/raw");
+    // The entity, not the reference: the two are not interchangeable, and `/resources/:id/raw`
+    // is not a route at all.
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("/api/files/f1/raw");
     expect(headerOf(fetchMock as never, 0).get("Authorization")).toBe("Bearer at");
     // Indistinguishable from a workspace file's, which is what lets one viewer serve both.
     expect(file.name).toBe("shot.png");
@@ -693,7 +697,7 @@ describe("the bearer token", () => {
       setStoredTokens({ accessToken: "stale", refreshToken: "spent" });
       vi.stubGlobal("fetch", revokedFetcher());
 
-      await expect(sourceImageUrl("a1")).rejects.toBeInstanceOf(ApiError);
+      await expect(fileImageUrl("f1")).rejects.toBeInstanceOf(ApiError);
       expect(onUnauthenticated).toHaveBeenCalledTimes(1);
     });
   });

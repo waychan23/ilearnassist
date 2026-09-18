@@ -73,7 +73,7 @@ function message(id: string, sessionId = SESSION, role: "user" | "assistant" = "
 }
 
 function seedDiagram(name: string, summary = "登录流程"): void {
-  db.upsertDiagram({ id: newId(), sessionId: SESSION, name, summary, toolCallId: null });
+  db.upsertDiagram({ id: newId(), sessionId: SESSION, name, fileId: `f-${name}`, summary, toolCallId: null });
 }
 
 function seedTable(name: string, summary = "两季度对比"): void {

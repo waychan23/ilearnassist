@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
     listSessionWidgets: vi.fn(() => Promise.resolve({ workspace: [], session: [] })),
     listWorkspaceWidgets: vi.fn(() => Promise.resolve([])),
     listCopilots: vi.fn(() => Promise.resolve([])),
-    listSources: vi.fn(() => Promise.resolve([])),
+    listResources: vi.fn(() => Promise.resolve([])),
     // The lock list, because the session's writability — which is one of the inputs this effect
     // gathers into a widget's context — comes from what the server reports here.
     listWorkspaceLocks: vi.fn(
@@ -46,7 +46,7 @@ vi.mock("../../src/api/client", () => ({
   streamAnswers: vi.fn(),
   streamRegenerate: vi.fn(),
   fileToBase64: vi.fn(),
-  sourceImageUrl: (id: string) => Promise.resolve(`blob:${id}`),
+  fileImageUrl: (id: string) => Promise.resolve(`blob:${id}`),
 }));
 
 const { useAppStore } = await import("../../src/stores/app.js");

@@ -1,8 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { api, fileToBase64, type SourceFilterQuery } from "../../api/client";
-import type { Session, Source, SourceCategory, SourceOrigin } from "../../api/types";
+import { api, fileToBase64, type ResourceFilterQuery } from "../../api/client";
+import type { Session, StoredFile, WorkResource, WorkResourceType } from "../../api/types";
+import {
+  resourceCategory,
+  resourceIsImage,
+  resourceMime,
+  resourceName,
+  resourceSandboxPath,
+  resourceSize,
+  resourceUrl,
+} from "../../utils/resourceView";
 import { useAppStore } from "../../stores/app";
 import { uiState } from "../../composables/ui";
 import { confirm } from "../../composables/confirm";
@@ -14,10 +23,10 @@ import AddSourceDialog from "./AddSourceDialog.vue";
 import Icon from "../Icon.vue";
 
 /**
- * The source browser: everything this account holds, filterable.
+ * The library: everything this account holds a reference to, filterable.
  *
- * It replaces a dialog that listed uploaded files, and the difference is the point — a source
- * is now an upload, a fetched page, a file the agent wrote into a workspace and a file it wrote
+ * It replaces a dialog that listed uploaded files, and the difference is the point — a reference
+ * is now an upload, a kept page, a file the agent wrote into a workspace and a file it wrote
  * into a conversation. "What material do I have, and where did each piece come from" is the
  * question this answers, and neither half of it was answerable before: the old dialog could
  * not see a workspace file at all, and the file tree could not see an upload.
@@ -54,7 +63,7 @@ const props = defineProps<{
    * The filter to open with. `workspaceId` is what opens the conversation's front door on its
    * workspace — a default, not a lock: the picker below is drawn either way.
    */
-  initial?: SourceFilterQuery;
+  initial?: ResourceFilterQuery;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
@@ -71,27 +80,27 @@ const store = useAppStore();
  * and every select would render as an empty box, which is exactly how this shipped once.
  *
  * The keys are spelled out rather than spread-and-defaulted because this is the one place that
- * lists what the browser can filter by, and `Record<keyof SourceFilterQuery, string>` makes a
+ * lists what the browser can filter by, and `Record<keyof ResourceFilterQuery, string>` makes a
  * new filter a compile error here rather than a control that stays blank.
  */
-function asFilters(input: SourceFilterQuery = {}): Record<keyof SourceFilterQuery, string> {
+function asFilters(input: ResourceFilterQuery = {}): Record<keyof ResourceFilterQuery, string> {
   return {
     name: input.name ?? "",
     workspaceId: input.workspaceId ?? "",
     sessionId: input.sessionId ?? "",
     category: input.category ?? "",
-    origin: input.origin ?? "",
+    resourceType: input.resourceType ?? "",
+    ownerType: input.ownerType ?? "",
     mime: input.mime ?? "",
-    storage: input.storage ?? "",
   };
 }
 
 /** What the controls currently say. Every key is a server filter; an empty one is absent. */
-const filters = ref<SourceFilterQuery>(asFilters(props.initial));
+const filters = ref<ResourceFilterQuery>(asFilters(props.initial));
 
-/** Sources for the open scope, ignoring the filters — where the option lists come from. */
-const scopeRows = ref<Source[]>([]);
-const rows = ref<Source[]>([]);
+/** References for the open scope, ignoring the filters — where the option lists come from. */
+const scopeRows = ref<WorkResource[]>([]);
+const rows = ref<WorkResource[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
@@ -105,7 +114,7 @@ const sessions = ref<Session[]>([]);
 /* --------------------------------- loading --------------------------------- */
 
 /** The scope-only filter: what the option lists are drawn from. */
-function scopeFilter(): SourceFilterQuery {
+function scopeFilter(): ResourceFilterQuery {
   return { workspaceId: filters.value.workspaceId, sessionId: filters.value.sessionId };
 }
 
@@ -115,7 +124,7 @@ function scopeFilter(): SourceFilterQuery {
  * Opening the dialog starts one; changing a filter starts another a moment later. Responses do
  * not arrive in the order they were sent, and the loser used to *overwrite* the winner — so the
  * list could settle on the unfiltered answer while the controls said otherwise. Found by a
- * browser spec that opened the dialog, filtered by origin, and then saw every row again.
+ * browser spec that opened the dialog, filtered by kind, and then saw every row again.
  *
  * The same shape `runPreview`'s `filePreviewSeq` uses: the reply that is not the latest is
  * dropped rather than rendered.
@@ -126,7 +135,7 @@ let scopeSeq = 0;
 async function loadScope(): Promise<void> {
   const seq = ++scopeSeq;
   try {
-    const next = await api.listSources(scopeFilter());
+    const next = await api.listResources(scopeFilter());
     if (seq !== scopeSeq) return;
     scopeRows.value = next;
   } catch (e) {
@@ -138,7 +147,7 @@ async function loadRows(): Promise<void> {
   const seq = ++rowsSeq;
   loading.value = true;
   try {
-    const next = await api.listSources(filters.value);
+    const next = await api.listResources(filters.value);
     if (seq !== rowsSeq) return;
     rows.value = next;
     error.value = null;
@@ -178,11 +187,18 @@ async function loadSessions(): Promise<void> {
   }
 }
 
-/** The option values present in the open scope, so a filter offers only what exists. */
-function present(key: "category" | "origin" | "mimeType"): string[] {
+/**
+ * The option values present in the open scope, so a filter offers only what exists.
+ *
+ * The three readers each ask the row a different question — a category is the file's, a MIME type
+ * is the file's, a resource type is the reference's — which is why this is three derivations
+ * behind one shape rather than a property lookup: on a *page* two of the three have no answer.
+ */
+function present(key: "category" | "resourceType" | "mimeType"): string[] {
   const values = new Set<string>();
   for (const row of scopeRows.value) {
-    const value = key === "mimeType" ? row.mimeType : row[key];
+    const value =
+      key === "mimeType" ? resourceMime(row) : key === "category" ? resourceCategory(row) : row.resourceType;
     if (value) values.add(value);
   }
   // The current selection is always offered, even if the scope has moved out from under it —
@@ -193,7 +209,7 @@ function present(key: "category" | "origin" | "mimeType"): string[] {
 }
 
 const categoryOptions = computed(() => present("category"));
-const originOptions = computed(() => present("origin"));
+const kindOptions = computed(() => present("resourceType"));
 const mimeOptions = computed(() => present("mimeType"));
 
 /* --------------------------------- the tree -------------------------------- */
@@ -210,24 +226,75 @@ function toggleGroup(key: string): void {
 
 /* --------------------------------- actions --------------------------------- */
 
-const parseLabel = (source: Source): string => {
-  if (source.parseStatus === "ready") {
-    return source.parsedChars
-      ? t("sources.parsedChars", { count: source.parsedChars })
-      : t("sources.parsed");
+const parseLabel = (row: WorkResource): string => {
+  if (row.parseStatus === "ready") {
+    return row.parsedChars ? t("sources.parsedChars", { count: row.parsedChars }) : t("sources.parsed");
   }
-  if (source.parseStatus === "pending" || source.parseStatus === "parsing") return t("sources.parsing");
-  if (source.parseStatus === "failed") {
-    return translateParseError(source.parseErrorCode, undefined, source.parseError) ?? t("sources.parseFailed");
+  if (row.parseStatus === "pending" || row.parseStatus === "parsing") return t("sources.parsing");
+  if (row.parseStatus === "failed") {
+    return translateParseError(row.parseErrorCode, undefined, row.parseError) ?? t("sources.parseFailed");
   }
   return "";
 };
 
-/** Where a row came from, in words: the sentence the flat view has instead of a tree. */
-function originLabel(source: Source): string {
-  const key = `sources.origin.${source.origin}` as const;
-  const owner = source.ownerName ? ` · ${source.ownerName}` : "";
-  return `${t(key)}${owner}`;
+/**
+ * What a reference *is*, in words: the sentence the flat view has instead of a tree.
+ *
+ * A `switch` over the closed union with a literal `t()` per case, not `` t(`sources.resourceType.${…}`) ``:
+ * `catalog.test.ts` finds a key by scanning for `t("…")` literals, so a built key is invisible to
+ * it and its dead-key scan then reports the message as unused. The same shape the console's nav
+ * and `widgets/registry.ts` use.
+ */
+function kindLabel(kind: WorkResourceType): string {
+  switch (kind) {
+    case "file":
+      return t("sources.resourceType.file");
+    case "web_page":
+      return t("sources.resourceType.web_page");
+  }
+}
+
+/** Where a row came from, in words: what it is, and whose it is. */
+function originLabel(row: WorkResource): string {
+  const owner = row.ownerName ? ` · ${row.ownerName}` : "";
+  /*
+   * **Where it came from**, which is the question this column has always answered — a person
+   * checking whether a file is theirs or the assistant's reads it here, and a label that only
+   * said 文件/网页 would answer a question the row's own icon already answers.
+   *
+   * v4 answers it with the entity's `sourceType` for a file and with the resource type for a
+   * page, which has no source type of its own beyond the URL it came from.
+   */
+  const what =
+    row.resourceType === "web_page"
+      ? t("sources.resourceType.web_page")
+      : fileSourceLabel((row.resource as StoredFile).sourceType);
+  return `${what}${owner}`;
+}
+
+/**
+ * A file's source type, spelled per case.
+ *
+ * A `switch` with a literal key per arm rather than `t(\`sources.fileSource.${type}\`)`, for the
+ * reason `widgetLabel` gives: a key reached through a template literal is invisible to
+ * `catalog.test.ts`, so it would have to go on the dynamic-prefix allowlist — and a prefix that
+ * broad is where a typo hides. The `never` arm makes a fifth source type a compile error.
+ */
+function fileSourceLabel(sourceType: StoredFile["sourceType"]): string {
+  switch (sourceType) {
+    case "attachment":
+      return t("sources.fileSource.attachment");
+    case "upload":
+      return t("sources.fileSource.upload");
+    case "agent_create":
+      return t("sources.fileSource.agent_create");
+    case "discovered":
+      return t("sources.fileSource.discovered");
+    default: {
+      const unhandled: never = sourceType;
+      return unhandled;
+    }
+  }
 }
 
 /**
@@ -238,23 +305,34 @@ function originLabel(source: Source): string {
  * about parsing, which would read as "still working on it" for a text file that never needed
  * extracting.
  */
-function detailOf(source: Source): string {
-  return [formatBytes(source.size), parseLabel(source)].filter(Boolean).join(" · ");
+function detailOf(row: WorkResource): string {
+  return [formatBytes(resourceSize(row)), parseLabel(row)].filter(Boolean).join(" · ");
 }
 
 /**
  * Whether this row can be deleted from here, and how.
  *
- * A workspace file is deleted through the **file manager's** route, which moves its bytes to
- * the trash and soft-deletes the row together. Deleting it through the source route instead
- * would hide the row while the file stayed in the tree — and the next listing would reconcile
- * it straight back, which is a delete that visibly does nothing.
+ * A file **inside a workspace's own tree** is deleted through the **file manager's** route, which
+ * moves its bytes to the trash and takes the row with them. Deleting it through the reference
+ * route instead would drop this account's reference while the bytes stayed in the tree — and the
+ * next listing reconciles the file straight back, which is a delete that visibly does nothing.
  *
  * A conversation's own file offers no delete at all: it belongs to that conversation, and the
- * place to remove it is the conversation (whose dialog is the one that shows it in context).
+ * place to remove it is the conversation (whose dialog is the one that shows it in context). It
+ * is told apart from a *session-owned upload* by having a sandbox path: an upload's bytes are
+ * under `sources/raw/`, so it is nobody's file and the reference route is exactly right for it.
  */
-function canDelete(source: Source): boolean {
-  return source.storage !== "session";
+function canDelete(row: WorkResource): boolean {
+  return row.ownerType !== "session" || resourceSandboxPath(row) === undefined;
+}
+
+/**
+ * The workspace-relative path this row is a *file* at, when the file manager is what should
+ * delete it: a file in a workspace's `workdir/`, and nothing else.
+ */
+function fileManagerPath(row: WorkResource): string | undefined {
+  if (row.ownerType !== "workspace") return undefined;
+  return resourceSandboxPath(row);
 }
 
 /**
@@ -265,8 +343,8 @@ function canDelete(source: Source): boolean {
  * the column. Gating on presence alone is what the row renders on, so the only other way to offer
  * this control would be to offer it on a row with nowhere to go.
  */
-function canOpenInBrowser(source: Source): boolean {
-  return isOpenableUrl(source.url);
+function canOpenInBrowser(row: WorkResource): boolean {
+  return isOpenableUrl(resourceUrl(row));
 }
 
 /**
@@ -277,17 +355,18 @@ function canOpenInBrowser(source: Source): boolean {
  * deliberate silence the function documents: a popup the browser blocked is the user's own setting
  * answering, and nothing the app can add to that is worth a sentence.
  */
-function openInBrowser(source: Source): void {
-  if (!source.url) return;
-  void openExternal(source.url);
+function openInBrowser(row: WorkResource): void {
+  const url = resourceUrl(row);
+  if (!url) return;
+  void openExternal(url);
 }
 
-async function remove(source: Source): Promise<void> {
+async function remove(row: WorkResource): Promise<void> {
   const ok = await confirm({
     // The same four strings the uploads dialog has always used, and the wording is right for
-    // every kind of source: the file, its text and every reference go, for good.
+    // every kind of reference: this account's hold on it goes, for good.
     title: t("sources.delete.title"),
-    message: t("sources.delete.message", { name: source.name }),
+    message: t("sources.delete.message", { name: resourceName(row) }),
     detail: t("sources.delete.detail"),
     confirmText: t("sources.delete.action"),
     danger: true,
@@ -295,15 +374,16 @@ async function remove(source: Source): Promise<void> {
   if (!ok) return;
 
   try {
-    if (source.storage === "workspace" && source.workspaceId && source.relPath) {
-      await api.deleteWorkspaceEntry(source.workspaceId, source.relPath);
+    const path = fileManagerPath(row);
+    if (row.workspaceId && path !== undefined) {
+      await api.deleteWorkspaceEntry(row.workspaceId, path);
       // The tree is showing this workspace's files, and one of them has just gone.
-      if (store.activeWorkspaceId === source.workspaceId) await store.refreshFileTree({ silent: true });
+      if (store.activeWorkspaceId === row.workspaceId) await store.refreshFileTree({ silent: true });
     } else {
-      await store.deleteSource(source.id);
+      await store.deleteResource(row.id);
     }
-    rows.value = rows.value.filter((r) => r.id !== source.id);
-    scopeRows.value = scopeRows.value.filter((r) => r.id !== source.id);
+    rows.value = rows.value.filter((r) => r.id !== row.id);
+    scopeRows.value = scopeRows.value.filter((r) => r.id !== row.id);
   } catch (e) {
     error.value = message(e);
   }
@@ -320,7 +400,10 @@ async function remove(source: Source): Promise<void> {
 const knownDirectories = computed(() => {
   const dirs = new Set<string>();
   for (const row of scopeRows.value) {
-    const rel = row.relPath;
+    // Only the workspace's own files: an upload has no directory to suggest and a
+    // conversation's files are not somewhere the add dialog can put anything.
+    if (row.ownerType !== "workspace") continue;
+    const rel = resourceSandboxPath(row);
     if (!rel) continue;
     const cut = rel.lastIndexOf("/");
     if (cut > 0) dirs.add(rel.slice(0, cut));
@@ -359,7 +442,15 @@ let loadedScope: string | null = null;
  */
 function filterKey(): string {
   const f = filters.value;
-  return JSON.stringify([f.name, f.workspaceId, f.sessionId, f.category, f.origin, f.mime, f.storage]);
+  return JSON.stringify([
+    f.name,
+    f.workspaceId,
+    f.sessionId,
+    f.category,
+    f.resourceType,
+    f.ownerType,
+    f.mime,
+  ]);
 }
 
 /** The scope half of it — the part whose change invalidates the option lists and the sessions. */
@@ -567,6 +658,26 @@ function expandAll(): void {
               </option>
             </select>
 
+            <!--
+              Who is working from it, which is the narrowing v3's `origin` filter was reaching
+              for: "the files I uploaded" and "the files this workspace holds" are the two lists
+              a person actually wants, and neither is reachable by name alone.
+
+              A fixed pair rather than the values present in the scope, unlike the category and
+              MIME pickers: there are exactly two levels, and a picker that listed one of them
+              when a scope held only that one would be a control that cannot narrow anything.
+            -->
+            <select
+              v-model="filters.ownerType"
+              class="input"
+              :aria-label="t('sources.filterOwnerType')"
+              data-testid="sources-filter-owner-type"
+            >
+              <option value="">{{ t("sources.allOwnerTypes") }}</option>
+              <option value="session">{{ t("sources.ownerType.session") }}</option>
+              <option value="workspace">{{ t("sources.ownerType.workspace") }}</option>
+            </select>
+
             <select
               v-model="filters.category"
               class="input"
@@ -575,19 +686,25 @@ function expandAll(): void {
             >
               <option value="">{{ t("sources.allCategories") }}</option>
               <option v-for="c in categoryOptions" :key="c" :value="c">
-                {{ t(`sources.category.${c as SourceCategory}`) }}
+                {{ t(`sources.category.${c}`) }}
               </option>
             </select>
 
+            <!--
+              What the material *is*, which in v4 is a `resourceType` rather than a category: a
+              page is a page because of the entity it came from, not because somebody hand-set a
+              category on it. The label is spelled per case in `kindLabel` so the catalog guard
+              can see it.
+            -->
             <select
-              v-model="filters.origin"
+              v-model="filters.resourceType"
               class="input"
-              :aria-label="t('sources.filterOrigin')"
-              data-testid="sources-filter-origin"
+              :aria-label="t('sources.filterResourceType')"
+              data-testid="sources-filter-resource-type"
             >
-              <option value="">{{ t("sources.allOrigins") }}</option>
-              <option v-for="o in originOptions" :key="o" :value="o">
-                {{ t(`sources.origin.${o as SourceOrigin}`) }}
+              <option value="">{{ t("sources.allResourceTypes") }}</option>
+              <option v-for="k in kindOptions" :key="k" :value="k">
+                {{ kindLabel(k as WorkResourceType) }}
               </option>
             </select>
 
@@ -631,12 +748,20 @@ function expandAll(): void {
               <li v-for="source in rows" :key="source.id" class="source" data-testid="source-row">
                 <button
                   class="source-open"
-                  :title="t('sources.preview', { name: source.name })"
+                  :title="t('sources.preview', { name: resourceName(source) })"
                   data-testid="source-open"
-                  @click="store.openSourceFile(source)"
+                  @click="store.openResourceFile(source)"
                 >
-                  <Icon :name="source.kind === 'image' ? 'image' : source.category === 'diagram' ? 'diagram' : 'file'" />
-                  <span class="label truncate">{{ source.name }}</span>
+                  <Icon
+                    :name="
+                      resourceIsImage(source)
+                        ? 'image'
+                        : resourceCategory(source) === 'diagram'
+                          ? 'diagram'
+                          : 'file'
+                    "
+                  />
+                  <span class="label truncate">{{ resourceName(source) }}</span>
                 </button>
                 <span class="source-detail truncate" data-testid="source-detail">{{ detailOf(source) }}</span>
                 <span class="source-origin truncate" data-testid="source-origin">
@@ -691,11 +816,11 @@ function expandAll(): void {
                   <button
                     class="source-open"
                     :style="{ '--depth': line.depth }"
-                    :title="t('sources.preview', { name: line.source!.name })"
+                    :title="t('sources.preview', { name: resourceName(line.source!) })"
                     data-testid="source-open"
-                    @click="store.openSourceFile(line.source!)"
+                    @click="store.openResourceFile(line.source!)"
                   >
-                    <Icon :name="line.source!.kind === 'image' ? 'image' : 'file'" />
+                    <Icon :name="resourceIsImage(line.source!) ? 'image' : 'file'" />
                     <span class="label truncate">{{ line.label }}</span>
                   </button>
                   <span class="source-detail truncate" data-testid="source-detail">

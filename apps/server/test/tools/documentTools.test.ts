@@ -6,7 +6,7 @@ import { writeParsedText } from "../../src/documents/store.js";
 import { createDb, type AppDb } from "../../src/db.js";
 import { classifyFile } from "../../src/fileCategory.js";
 import { dataLayout, userLayout, type UserLayout } from "../../src/paths.js";
-import { sourceRawPath } from "../../src/sourcePaths.js";
+import { parsedFilePath, rawFilePath, storePath } from "../../src/resourcePaths.js";
 import { buildDocumentTool, type DocumentToolContext } from "../../src/tools/documentTools.js";
 
 /**
@@ -35,7 +35,12 @@ let db: AppDb;
  */
 const OWNER = "u1";
 
-const sources = [
+/*
+ * Two parsed references, as `read_document` is addressed: by the **reference** id, with the
+ * parse state that says its text is ready. The text itself is keyed by the file the reference
+ * points at, which is why the two ids differ.
+ */
+const resources = [
   { id: "att-1", name: "lecture-01.pdf", mimeType: "application/pdf" },
   {
     id: "att-2",
@@ -44,13 +49,16 @@ const sources = [
   },
 ];
 
+/** The file each fixture reference points at. */
+const FILE_OF: Record<string, string> = { "att-1": "file-1", "att-2": "file-2" };
+
 function toolFor(overrides: Partial<DocumentToolContext> = {}) {
-  return buildDocumentTool({ db, userId: OWNER, user, sources, ...overrides });
+  return buildDocumentTool({ db, userId: OWNER, user, resources, ...overrides });
 }
 
 /** The tool returns a string; this keeps the assertions readable. */
 async function read(
-  args: { sourceId: string; offset?: number; limit?: number },
+  args: { resourceId: string; offset?: number; limit?: number },
   overrides: Partial<DocumentToolContext> = {}
 ): Promise<string> {
   return (await toolFor(overrides).invoke(args)) as string;
@@ -69,55 +77,94 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await writeParsedText(user, "att-1", "0123456789".repeat(10));
-  await writeParsedText(user, "att-2", "word document text");
+  /*
+   * The rows the tool resolves through, rebuilt per case because the suite shares one database.
+   * A parsed reference is a *file* holding the text, a reference pointing at it, and `ready` —
+   * three things, and the tool reads the first through the second by way of the third.
+   */
+  db.raw.prepare("DELETE FROM work_resources").run();
+  db.raw.prepare("DELETE FROM files").run();
+
+  for (const [resourceId, body] of [
+    ["att-1", "0123456789".repeat(10)],
+    ["att-2", "word document text"],
+  ] as const) {
+    const fileId = FILE_OF[resourceId]!;
+    await writeParsedText(user, fileId, body);
+    db.createFile({
+      id: fileId,
+      userId: OWNER,
+      sourceType: "agent_create",
+      title: `${resourceId}.txt`,
+      path: storePath(user, parsedFilePath(user, fileId)),
+      mimeType: "text/plain",
+      category: "text",
+      size: body.length,
+    });
+    db.upsertWorkResource({
+      id: resourceId,
+      userId: OWNER,
+      resourceType: "file",
+      resourceId: fileId,
+      ownerType: "session",
+      ownerId: "s1",
+      title: resourceId,
+    });
+    db.updateWorkResourceParse({
+      id: resourceId,
+      userId: OWNER,
+      status: "ready",
+      parsedFileId: fileId,
+      parsedChars: body.length,
+    });
+  }
 });
 
 describe("read_document", () => {
   it("reads from the start by default", async () => {
-    const out = await read({ sourceId: "att-1" });
+    const out = await read({ resourceId: "att-1" });
     expect(out).toContain("0123456789");
     expect(out).toContain("lecture-01.pdf");
     expect(out).toContain("共 100 字符");
   });
 
   it("pages with offset and limit, and reports where to continue", async () => {
-    const first = await read({ sourceId: "att-1", offset: 0, limit: 30 });
+    const first = await read({ resourceId: "att-1", offset: 0, limit: 30 });
     expect(first).toContain("0–30 / 共 100 字符");
     expect(first).toContain("offset=30");
 
-    const second = await read({ sourceId: "att-1", offset: 30, limit: 30 });
+    const second = await read({ resourceId: "att-1", offset: 30, limit: 30 });
     expect(second).toContain("30–60 / 共 100 字符");
   });
 
   it("says when the end has been reached instead of inviting another call", async () => {
-    const out = await read({ sourceId: "att-1", offset: 90, limit: 50 });
+    const out = await read({ resourceId: "att-1", offset: 90, limit: 50 });
     expect(out).toContain("已到末尾");
     expect(out).not.toContain("继续读取");
   });
 
   it("refuses an offset past the end, naming the real length", async () => {
-    const out = await read({ sourceId: "att-1", offset: 5_000 });
+    const out = await read({ resourceId: "att-1", offset: 5_000 });
     expect(out).toContain("超出范围");
     expect(out).toContain("100");
   });
 
   it("caps a single read at the configured ceiling", async () => {
     // A model asking for everything at once must not be able to blow the context window.
-    const out = await read({ sourceId: "att-1", offset: 0, limit: 999_999 }, { maxChars: 25 });
+    const out = await read({ resourceId: "att-1", offset: 0, limit: 999_999 }, { maxChars: 25 });
     expect(out).toContain("0–25 / 共 100 字符");
   });
 
   it("refuses a source that is not in its whitelist", async () => {
     // The whitelist is the security boundary: ids are guessable, so a document the caller
     // was not handed must fail the lookup before any path is touched.
-    const out = await read({ sourceId: "att-from-elsewhere" });
+    const out = await read({ resourceId: "att-from-elsewhere" });
     expect(out).toContain("No such document");
     expect(out).toContain("lecture-01.pdf"); // and lists what it *can* read
   });
 
   it("lists nothing available when the whitelist is empty", async () => {
-    const out = await read({ sourceId: "anything" }, { sources: [] });
+    const out = await read({ resourceId: "anything" }, { resources: [] });
     expect(out).toContain("(none)");
   });
 
@@ -126,8 +173,8 @@ describe("read_document", () => {
     // failed. Either way the model must be told it read nothing, not handed an empty string
     // it will answer about anyway.
     const out = await read(
-      { sourceId: "att-9" },
-      { sources: [{ id: "att-9", name: "empty.pdf", mimeType: "application/pdf" }] }
+      { resourceId: "att-9" },
+      { resources: [{ id: "att-9", name: "empty.pdf", mimeType: "application/pdf" }] }
     );
     expect(out).toContain("没有可读文本");
   });
@@ -152,35 +199,42 @@ describe("read_document", () => {
    */
   describe("a source that was never going to be parsed", () => {
     function seedUpload(id: string, name: string, mimeType: string, body: string): void {
-      const row = db.createSource({
+      /*
+       * The file *and* the reference, because `read_document` is keyed on the reference — and
+       * the reference is what carries the parse state the second case below sets.
+       */
+      const bytes = rawFilePath(user, id, mimeType);
+      mkdirSync(dirname(bytes), { recursive: true });
+      writeFileSync(bytes, body);
+      const file = db.createFile({
         id,
         userId: OWNER,
-        ownerKind: "session",
-        ownerId: "s1",
-        origin: "session_attachment",
-        storage: "upload",
-        relPath: null,
-        name,
+        sourceType: "attachment",
+        title: name,
+        path: storePath(user, bytes),
         mimeType,
         // Derived, never written by hand: the whole point of these two cases is the *category*
         // deciding whether bytes are a fallback — `needsParse` — and a hardcoded one here would
         // let the test assert the opposite of what the app does.
         category: classifyFile(name, mimeType).category,
         size: Buffer.byteLength(body, "utf8"),
-        url: null,
-        summary: null,
-        sha256: null,
       });
-      const bytes = sourceRawPath(user, row.id, row.mimeType);
-      mkdirSync(dirname(bytes), { recursive: true });
-      writeFileSync(bytes, body);
+      db.upsertWorkResource({
+        id: `wr-${id}`,
+        userId: OWNER,
+        resourceType: "file",
+        resourceId: file.id,
+        ownerType: "session",
+        ownerId: "s1",
+        title: name,
+      });
     }
 
     it("reads a Markdown source's bytes, because there is no extracted text to read", async () => {
       seedUpload("att-md", "notes.md", "text/markdown", "# 递归\n\n自己调用自己。");
       const out = await read(
-        { sourceId: "att-md" },
-        { sources: [{ id: "att-md", name: "notes.md", mimeType: "text/markdown" }] }
+        { resourceId: "wr-att-md" },
+        { resources: [{ id: "wr-att-md", name: "notes.md", mimeType: "text/markdown" }] }
       );
       expect(out).toContain("自己调用自己");
       expect(out).not.toContain("没有可读文本");
@@ -191,10 +245,10 @@ describe("read_document", () => {
       // A PDF that failed to extract must not have its raw bytes decoded and handed over as
       // though they were its text.
       seedUpload("att-pdf", "scan.pdf", "application/pdf", "%PDF-1.4 binary");
-      db.updateSourceParse("att-pdf", OWNER, { status: "failed" });
+      db.updateWorkResourceParse({ id: "wr-att-pdf", userId: OWNER, status: "failed" });
       const out = await read(
-        { sourceId: "att-pdf" },
-        { sources: [{ id: "att-pdf", name: "scan.pdf", mimeType: "application/pdf" }] }
+        { resourceId: "wr-att-pdf" },
+        { resources: [{ id: "wr-att-pdf", name: "scan.pdf", mimeType: "application/pdf" }] }
       );
       expect(out).toContain("没有可读文本");
     });
@@ -208,7 +262,7 @@ describe("read_document", () => {
         name: `file-${i}.md`,
         mimeType: "text/markdown",
       }));
-      const out = await read({ sourceId: "nope" }, { sources: many });
+      const out = await read({ resourceId: "nope" }, { resources: many });
       expect(out).toContain("… 950 more");
       expect(out).not.toContain("file-999.md");
     });

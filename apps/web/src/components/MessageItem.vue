@@ -133,10 +133,11 @@ const refs = computed(() => props.message?.refs ?? []);
 
 const attachments = computed(() =>
   (props.message?.attachments ?? []).map((a) => {
-    // The message's own snapshot is a *source* — the server reassembled it when the turn was
-    // sent — so the live overlay is the same object, later. `status` used to be the field
-    // name; there is no trimming step any more, which is why this reads `parseStatus`.
-    const live = store.parseStatus[a.id];
+    // The message's own snapshot is an `Attachment` the server reassembled when the turn was
+    // sent, and the live overlay is the *reference* it was reassembled from, later. Looked up by
+    // `resourceId` and never by `id`: the parse is recorded on the reference, and the file id
+    // would find nothing — see `Attachment` in the shared package.
+    const live = store.resourceParseStatus[a.resourceId];
     if (!live) return a;
     return {
       ...a,

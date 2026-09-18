@@ -434,12 +434,12 @@ export default {
     tabAll: "全部",
     tabWorkspace: "工作区",
     tabSource: "资料",
-    /* The type filter's five pills. Coarser than the eight categories a source really has:
-     * 文本 is text and markdown, 代码 is code and a diagram. */
+    /* The type filter's four pills. Coarser than the seven categories a file really has:
+     * 文本 is text and markdown, 代码 is code and a diagram. A page is no longer a pill — it is a
+     * kind of reference rather than a content type, so there is nothing for one to name. */
     pillImage: "图片",
     pillText: "文本",
     pillCode: "代码",
-    pillPage: "网页链接",
     pillOther: "其他文件",
     /*
      * The row that opens every workspace at once, `{'@'}`-escaped for the reason above. What it
@@ -837,6 +837,7 @@ export default {
       table: "表",
       note: "笔记",
       quiz: "题目",
+      resource: "资料",
     },
     /** The composer's chip row, and the control that takes one back off. */
     remove: "取消引用",
@@ -1490,8 +1491,8 @@ export default {
     SESSION_NOT_FOUND: "会话不存在，可能已被删除。",
     TITLE_EMPTY: "标题不能为空。",
     UNSUPPORTED_FILE_TYPE: "不支持该文件类型：{mimeType}",
-    SOURCE_NOT_FOUND: "文件不存在，可能已被删除。",
-    SOURCE_STORE_FAILED: "文件保存失败，请重试。",
+    RESOURCE_NOT_FOUND: "文件不存在，可能已被删除。",
+    FILE_STORE_FAILED: "文件保存失败，请重试。",
     DATA_REQUIRED: "缺少文件内容。",
     INVALID_BASE64: "文件内容不是合法的 base64 编码。",
     EMPTY_FILE: "文件是空的。",
@@ -1586,12 +1587,19 @@ export default {
     filterWorkspace: "工作区",
     filterSession: "会话",
     filterCategory: "内容类型",
-    filterOrigin: "来源",
+    filterOwnerType: "归属",
+    allOwnerTypes: "全部归属",
+    /** The two levels a reference can belong to — the filter's values. */
+    ownerType: {
+      session: "本会话",
+      workspace: "工作区",
+    },
+    filterResourceType: "资料种类",
     filterMime: "MIME 类型",
     allWorkspaces: "全部工作区",
     allSessions: "全部会话",
     allCategories: "全部类型",
-    allOrigins: "全部来源",
+    allResourceTypes: "全部种类",
     allMimes: "全部 MIME",
     viewFlat: "列表",
     viewTree: "树状",
@@ -1609,13 +1617,22 @@ export default {
     pickFiles: "选择文件",
     addLinkHint: "服务端会抓取这个页面并保存下来，稍后可以在会话里引用。",
     viewLabel: "视图",
-    /** The four origin values, as the filter and every row's byline spell them. */
-    origin: {
-      session_attachment: "会话附件",
-      workspace_upload: "工作区上传",
-      agent_workspace: "助理写入工作区",
-      agent_session: "助理写入会话",
-      web: "网页",
+    /**
+     * What a reference *is*, which is the entity it points at — the filter's values and every
+     * row's byline. A closed set, so a key per value rather than a pattern.
+     */
+    resourceType: {
+      file: "文件",
+      web_page: "网页",
+    },
+    /**
+     * How a file came to exist — the row's byline, and the question a reader checking
+     * "is this mine or the assistant's" is asking. `discovered` is the one nobody claimed.
+     */
+    fileSource: {
+      attachment: "会话附件",
+      upload: "主动上传",
+      agent_create: "助理生成",
       discovered: "已有文件",
     },
     /** The coarse content types. A closed set, so a key per value rather than a pattern. */
@@ -1630,10 +1647,16 @@ export default {
       other: "其他",
     },
     delete: {
-      title: "删除文件",
+      /*
+       * The copy had to change with the model, and not for style: a v4 delete takes *this owner's
+       * reference* away and leaves the file and every other conversation's reference to it alone.
+       * The old sentence promised the opposite — that the file, its text and its references
+       * everywhere were going — which is a claim a reader acts on.
+       */
+      title: "删除这条资料",
       message: "确定要删除「{name}」吗？",
-      detail: "文件本身、已解析的文本，以及在所有对话里的引用都会被删除，无法恢复。这些对话里已发出的消息仍会显示附件，但打不开了。",
-      action: "删除文件",
+      detail: "这条引用会被移除，无法恢复。若它是工作区里的文件，文件本身也会一并删除；其他对话对同一份资料的引用不受影响。已发出的消息仍会显示附件，但打不开了。",
+      action: "删除",
     },
     /**
      * Leaving the app for the page a web source was fetched from. Its own verb rather than a

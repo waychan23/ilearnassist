@@ -42,7 +42,6 @@ import type {
   SessionStats,
   SessionWidgets,
   SetSessionPinnedInput,
-  Source,
   TitleRetryResult,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
@@ -62,6 +61,7 @@ import type {
   UserCredentials,
   WidgetId,
   WidgetState,
+  WorkResource,
   Workspace,
   WorkspaceSettings,
   WorkspaceStats,
@@ -301,7 +301,7 @@ const ANSWERS_WITH_401 = new Set([
 /**
  * What a 401 comes to after the one permitted refresh attempt.
  *
- * Shared by `send`, `streamPost` and `sourceImageUrl`, because the image fetch used to carry
+ * Shared by `send`, `streamPost` and `fileImageUrl`, because the image fetch used to carry
  * its own 401 handling — which was none: a kicked account opening an attached image got a
  * silent failure and stayed on a page whose session was already over. `signalsEnd` is the
  * `!ANSWERS_WITH_401.has(path)` question, asked by the caller because only it knows the path:
@@ -643,18 +643,18 @@ export const api = {
     workspaceId: string,
     input: { dir: string; name: string; mimeType?: string; data: string }
   ) =>
-    request<Source>(`/workspaces/${workspaceId}/files/upload`, {
+    request<WorkResource>(`/workspaces/${workspaceId}/files/upload`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
   /**
-   * Add a web page as a source, by pasting its URL.
+   * Add a web page as a reference, by pasting its URL.
    *
    * A workspace, never a conversation — the same rule the upload picker follows, and the same
    * reason: material added from outside a conversation belongs to the workspace it was added to.
    */
-  addWebSource: (input: { url: string; workspaceId: string }) =>
-    request<Source>("/sources/pages", { method: "POST", body: JSON.stringify(input) }),
+  addResourcePage: (input: { url: string; workspaceId: string }) =>
+    request<WorkResource>("/resources/pages", { method: "POST", body: JSON.stringify(input) }),
   moveWorkspaceEntry: (workspaceId: string, input: { from: string; to: string }) =>
     request<{ from: string; to: string }>(`/workspaces/${workspaceId}/files/move`, {
       method: "POST",
@@ -695,23 +695,26 @@ export const api = {
   readSessionRawFile: (sessionId: string, path: string, name: string) =>
     fetchRawFile(`/api/sessions/${sessionId}/files/raw?path=${encodeURIComponent(path)}`, name),
   /**
-   * An uploaded file, described the same way a workspace file is.
+   * A referenced file, described the same way a workspace file is.
    *
-   * Addressed by the *source* rather than by a path, because a source lives outside every
-   * workspace — `sources/raw/<id>.<ext>` — and belongs to the account. `kind` comes back in the
-   * same vocabulary, so the same dialog renders both.
+   * Addressed by the **reference** rather than by a path, because the material may live outside
+   * every workspace — an upload's bytes are under `sources/raw/` — and because the reference is
+   * what carries the title the user sees. `kind` comes back in the same vocabulary, so the same
+   * dialog renders both.
    */
-  readSourcePreview: (sourceId: string) =>
-    request<FileContent>(`/sources/${sourceId}/preview`),
+  readResourcePreview: (resourceId: string) =>
+    request<FileContent>(`/resources/${resourceId}/preview`),
   /**
-   * An uploaded file's bytes. The same `File` the browser's own files come back as, so the
-   * viewer cannot tell the two apart — which is the point.
+   * A file's bytes, by **file** id — the entity, not the reference.
+   *
+   * The two are not interchangeable: the same bytes referenced from two conversations are one
+   * file and two references, and it is the bytes this fetches. The same `File` the browser's own
+   * files come back as, so the viewer cannot tell the two apart — which is the point.
    *
    * No size cap on this one and none needed: uploads are already capped at
-   * `MAX_ATTACHMENT_BYTES` when they arrive, so a source is at most 10 MB.
+   * `MAX_ATTACHMENT_BYTES` when they arrive, so a file is at most 10 MB.
    */
-  readSourceRawFile: (sourceId: string, name: string) =>
-    fetchRawFile(`/api/sources/${sourceId}/raw`, name),
+  readFileRaw: (fileId: string, name: string) => fetchRawFile(`/api/files/${fileId}/raw`, name),
   /**
    * The diagrams a conversation drew, as rows carrying the model's summary and their
    * thread. Distinct from `listSessionFiles`, which lists the whole folder, so a
@@ -910,7 +913,7 @@ export const api = {
     request<{ ok: boolean }>(`/sessions/${sessionId}/stop`, { method: "POST" }),
 
   uploadAttachment: (sessionId: string, input: UploadAttachmentInput) =>
-    request<Attachment>(`/sessions/${sessionId}/sources`, {
+    request<Attachment>(`/sessions/${sessionId}/resources`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
@@ -961,66 +964,76 @@ export const api = {
     }),
 
   /**
-   * The files a conversation can read, with the parse state as it is now.
+   * The references a conversation can read, with the parse state as it is now.
    *
-   * Not "this conversation's attachments": a source can be shared with the workspace, and this
+   * Not "this conversation's attachments": a reference can be shared with the workspace, and this
    * is what the composer overlays onto its chips so a reparse shows up without a reload.
    */
-  listSessionSources: (sessionId: string) => request<Source[]>(`/sessions/${sessionId}/sources`),
-  /** Every file the account has uploaded — the list the sources dialog manages. */
+  listSessionResources: (sessionId: string) =>
+    request<WorkResource[]>(`/sessions/${sessionId}/resources`),
   /**
-   * The account's sources, filtered.
+   * The account's references, filtered.
    *
-   * One call for every caller, because the filters are the API rather than a mode: the uploads
-   * dialog asks for `storage=upload`, the source browser asks for whatever its controls say,
-   * and neither needs a route of its own. Only the keys that are set travel — an empty filter
-   * is a request with no query string at all.
+   * One call for every caller, because the filters are the API rather than a mode: the sources
+   * panel asks for `?sessionId=…`, the library asks for whatever its controls say, and neither
+   * needs a route of its own. Only the keys that are set travel — an empty filter is a request
+   * with no query string at all.
    */
-  listSources: (filter: SourceFilterQuery = {}) => request<Source[]>(`/sources${queryOf(filter)}`),
+  listResources: (filter: ResourceFilterQuery = {}) =>
+    request<WorkResource[]>(`/resources${queryOf(filter)}`),
   /**
-   * One source, by id.
+   * One reference, by id.
    *
    * For a caller that has the id and needs the row *now*: the composer polls this while a
-   * source the user just referenced is being parsed, and a reference has no other way to be
-   * asked about — it is not in the conversation's list until the turn that links it is sent.
+   * reference the user just pointed at is being parsed, and it has no other way to be asked
+   * about — it is not in the conversation's list until the turn that links it is sent.
    */
-  getSource: (id: string) => request<Source>(`/sources/${id}`),
+  getResource: (id: string) => request<WorkResource>(`/resources/${id}`),
   /**
-   * Delete a file. The server hides it — from every list, from the model's whitelist, from
-   * `/raw` — and keeps the bytes, the extracted text and its links, so re-uploading the same
-   * content brings it back with its history rather than as a new file.
+   * Delete a reference. The server marks *this owner's* reference gone — the file itself, its
+   * bytes and its other owners' references are untouched — and the row leaves every list it was
+   * in.
    *
-   * Distinct from deleting a conversation, which leaves files alone. The messages that were
-   * sent with it keep their snapshots, so history still shows what was sent.
+   * Distinct from deleting a conversation, which leaves the material alone. The messages that
+   * were sent with it keep their snapshots, so history still shows what was sent.
    */
-  deleteSource: (sourceId: string) =>
-    request<{ ok: boolean }>(`/sources/${sourceId}`, { method: "DELETE" }),
-  /** Addressed by the source, not by a conversation: the file is the account's. */
-  reparseSource: (sourceId: string, name?: string) =>
-    request<{ status: string }>(`/sources/${sourceId}/reparse`, {
+  deleteResource: (resourceId: string) =>
+    request<{ ok: boolean }>(`/resources/${resourceId}`, { method: "DELETE" }),
+  /**
+   * Re-run extraction on a reference.
+   *
+   * Addressed by the reference rather than by the file, and that is the v4 model: the parse is
+   * recorded on `parsedFileId` and the parse columns of *this* reference, so two references to
+   * one file are parsed twice and neither can be answered for by the other.
+   */
+  reparseResource: (resourceId: string, name?: string) =>
+    request<{ status: string }>(`/resources/${resourceId}/reparse`, {
       method: "POST",
       body: JSON.stringify(name ? { name } : {}),
     }),
 };
 
 /**
- * A source's bytes, as an object URL the page can point an `<img>` at.
+ * A file's bytes, as an object URL the page can point an `<img>` at.
  *
  * **Fetched rather than linked, and that is what a bearer token costs.** An `<img src>` cannot
- * carry an `Authorization` header, so `/api/sources/:id/raw` is not something a browser will
+ * carry an `Authorization` header, so `/api/files/:id/raw` is not something a browser will
  * load on the page's behalf any more. The alternatives were worse: a token in the query string
  * lands in server logs, browser history and every `Referer` the page emits, and a separate
  * signed-URL endpoint is a second kind of credential to get right.
  *
- * The caller owns the returned URL and must `revokeObjectURL` it. Addressed by the source
- * alone, so two conversations referencing the same file fetch the same bytes.
+ * Addressed by the **file** — the entity — and never by the reference: two conversations
+ * referencing the same bytes hold two references and one file, and it is the bytes a thumbnail
+ * wants. That is also why the same picture in two conversations costs one fetch.
+ *
+ * The caller owns the returned URL and must `revokeObjectURL` it.
  */
-export async function sourceImageUrl(sourceId: string): Promise<string> {
+export async function fileImageUrl(fileId: string): Promise<string> {
   // Same session-ended short-circuit and one refresh as `send`: an image attached in a
   // conversation a kick has ended must take the reader to the login screen like any other
   // request, rather than failing quietly behind it.
   if (sessionEnded) throw sessionEndedError();
-  const fetchBytes = () => fetch(`/api/sources/${sourceId}/raw`, { headers: authHeaders() });
+  const fetchBytes = () => fetch(`/api/files/${fileId}/raw`, { headers: authHeaders() });
   let res = await fetchBytes();
   if (res.status === 401) {
     const outcome = await recoverFrom401(true, true);
@@ -1086,10 +1099,10 @@ export function mimeForName(name: string): string {
 /**
  * A file's bytes as a `File`, fetched with the bearer token.
  *
- * Fetched rather than pointed at, for `sourceImageUrl`'s reason: a bearer token cannot ride on
+ * Fetched rather than pointed at, for `fileImageUrl`'s reason: a bearer token cannot ride on
  * a `<video src>`, so the raw route is not something a browser will load on the page's behalf.
  *
- * A `File` rather than an object URL, and that is the difference from `sourceImageUrl`: that
+ * A `File` rather than an object URL, and that is the difference from `fileImageUrl`: that
  * one hands back a URL for an `<img src>` and makes the caller responsible for revoking it,
  * while the viewer takes a `File` — which carries the name, the type and the bytes together
  * and has no lifetime to manage. Nothing to revoke means nothing to leak.
@@ -1117,15 +1130,16 @@ async function fetchRawFile(url: string, name: string): Promise<File> {
 
 /** Read a File as bare base64 (no `data:` prefix), matching `UploadAttachmentInput`. */
 /**
- * What the source list may be narrowed by, as the wire spells it.
+ * What the library may be narrowed by, as the wire spells it.
  *
  * Every field optional and independent; an empty string is treated as absent, which is what a
- * cleared `<select>` produces and what "no filter" means.
+ * cleared `<select>` produces and what "no filter" means. The set is `WorkResourceFilterQuery`'s,
+ * so a filter the server learned is one a control can offer.
  */
-export interface SourceFilterQuery {
-  storage?: string;
+export interface ResourceFilterQuery {
+  resourceType?: string;
+  ownerType?: string;
   category?: string;
-  origin?: string;
   mime?: string;
   name?: string;
   workspaceId?: string;
@@ -1133,7 +1147,7 @@ export interface SourceFilterQuery {
 }
 
 /** The query string for a filter, with the empty keys left out. */
-function queryOf(filter: SourceFilterQuery): string {
+function queryOf(filter: ResourceFilterQuery): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filter)) {
     if (value) params.set(key, value);

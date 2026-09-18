@@ -20,7 +20,7 @@ import {
   scopeChipIds,
 } from "../utils/workspaceScope";
 import type { ReferenceChoice } from "../utils/referencePicker";
-import type { SourceFilterQuery } from "../api/client";
+import type { ResourceFilterQuery } from "../api/client";
 import { fileViewerSupported } from "../utils/fileViewer";
 import { closeCopilots, closeSources, uiState } from "../composables/ui";
 // The store causes exactly two navigations of its own — a conversation it just created, and
@@ -55,7 +55,6 @@ import type {
   Session,
   SessionLockView,
   SessionSettings,
-  Source,
   ToolCall,
   TurnReference,
   UpdateProviderInput,
@@ -63,6 +62,7 @@ import type {
   WidgetId,
   WidgetScope,
   WidgetState,
+  WorkResource,
   Workspace,
   WorkspaceScope,
 } from "../api/types";
@@ -84,6 +84,7 @@ import {
   type QuizQuestionView,
 } from "../api/types";
 import { ApiError } from "../utils/apiError";
+import { resourceAttachment, resourceCategory, resourceName } from "../utils/resourceView";
 
 /**
  * How often the workspace-wide lock check runs on its own.
@@ -181,16 +182,17 @@ export interface DocumentParserDraft {
  * Where a file preview is reading from.
  *
  * Three, and the third is not a tree: the workspace's `workdir/`, which the file tree browses; a
- * conversation's own `sessions/<id>/`, where the diagrams it draws are written; and an uploaded
- * `source`, which lives outside every workspace and is addressed by id rather than by path.
+ * conversation's own `sessions/<id>/`, where the diagrams it draws are written; and a referenced
+ * `resource`, whose material may live outside every workspace and is addressed by id rather than
+ * by path.
  * `"workspace"` is the default so every existing caller of `openFile` reads the same way it
  * always did.
  *
  * It is kept only to answer one question — whether a *session switch* should close the preview —
- * and `"source"` gives the right answer by not matching `"session"`. An upload belongs to the
+ * and `"resource"` gives the right answer by not matching `"session"`. An upload belongs to the
  * account, so the conversation in front of it is neither here nor there.
  */
-export type FileRoot = "workspace" | "session" | "source";
+export type FileRoot = "workspace" | "session" | "resource";
 
 /** Whether an attachment is still queued or being read. */
 function isSettling(attachment: Attachment): boolean {
@@ -232,15 +234,15 @@ export const useAppStore = defineStore("app", () => {
 
   const config = ref<PublicConfig | null>(null);
   /**
-   * Every file this account has uploaded, as the sources dialog lists them.
+   * Every reference this account holds, as the library lists them.
    *
    * Loaded on demand rather than with `init`: it is a page most sessions never open, and the
    * account's whole library is not something to fetch on every cold start.
    */
-  const sources = ref<Source[]>([]);
-  const sourcesLoading = ref(false);
+  const resources = ref<WorkResource[]>([]);
+  const resourcesLoading = ref(false);
   /** A load or delete failure, shown inside the dialog — not the global toast. */
-  const sourcesError = ref<string | null>(null);
+  const resourcesError = ref<string | null>(null);
 
   const workspaces = ref<Workspace[]>([]);
   const copilots = ref<Copilot[]>([]);
@@ -293,21 +295,23 @@ export const useAppStore = defineStore("app", () => {
   const pendingAttachments = ref<Attachment[]>([]);
 
   /**
-   * Sources the user referenced with `@`, staged for the next turn.
+   * References the user pointed at with `@`, staged for the next turn, as chips.
    *
    * Beside the attachments rather than merged into them, because the two say different things
    * on screen: a chip the user uploaded for this turn, and one they pointed at. Both reach the
    * model as material; only the provenance differs, and only the client shows it.
    *
-   * Held as whole rows rather than ids, so a chip can carry the parse state it already had —
-   * a reference to a document that is still being extracted is a chip that should say so.
+   * Held as `Attachment`s rather than as `WorkResource` rows, because the chip is a chip: it
+   * carries a name, a size, an image kind and the parse state, and every one of those is what
+   * `AttachmentChips` draws. `resourceAttachment` is the one conversion, and the `resourceId`
+   * on it is what the turn actually sends — see `sendMessage`.
    */
-  const pendingSources = ref<Source[]>([]);
+  const pendingResources = ref<Attachment[]>([]);
 
   /**
    * What the next turn will point at — the 追问 chips, staged and not yet sent.
    *
-   * Beside `pendingSources` rather than merged with it, because the two are not the same kind of
+   * Beside `pendingResources` rather than merged with it, because the two are not the same kind of
    * thing however similar the chips look: a source is material the model may read on any later
    * turn, and it has to be parsed before it can be. A reference is the object of *this* question —
    * a diagram, a table, a note, or a passage — and attaching one costs no request at all, because
@@ -319,13 +323,17 @@ export const useAppStore = defineStore("app", () => {
   const pendingRefs = ref<TurnReference[]>([]);
 
   /**
-   * Live parse state per source id, as the server last reported it.
+   * Live parse state per **reference** id, as the server last reported it.
+   *
+   * Keyed by the reference, not by the file: a parse is recorded on the reference's own columns
+   * in v4, so two references to one file may legitimately disagree about whether it has been
+   * read. `Attachment.resourceId` is the key a chip looks itself up by.
    *
    * Overlaid on a message's stored snapshots so a reparse is visible in history without a
-   * reload. Holds whole `Source` rows rather than a trimmed shape, because the live state and
-   * the stored state are the same object read at different moments.
+   * reload. Holds whole `WorkResource` rows rather than a trimmed shape, because the live state
+   * and the stored state are the same object read at different moments.
    */
-  const parseStatus = ref<Record<string, Source>>({});
+  const resourceParseStatus = ref<Record<string, WorkResource>>({});
 
   /** The protocol kinds the server implements, for the parser settings form. */
   const parserKinds = ref<DriverInfo[]>([]);
@@ -339,7 +347,7 @@ export const useAppStore = defineStore("app", () => {
    */
   let parsePoll: ReturnType<typeof setInterval> | null = null;
 
-  /** Attachment ids whose re-parse was asked for but has not yet settled. */
+  /** Reference ids whose re-parse was asked for but has not yet settled. */
   const markingParsing = ref(new Set<string>());
 
   /**
@@ -655,9 +663,9 @@ export const useAppStore = defineStore("app", () => {
     forgetSession();
     account.value = null;
     config.value = null;
-    sources.value = [];
-    sourcesLoading.value = false;
-    sourcesError.value = null;
+    resources.value = [];
+    resourcesLoading.value = false;
+    resourcesError.value = null;
     workspaces.value = [];
     copilots.value = [];
     sessions.value = [];
@@ -674,7 +682,12 @@ export const useAppStore = defineStore("app", () => {
     activeCopilotId.value = null;
     draftSettings.value = {};
     pendingAttachments.value = [];
-    parseStatus.value = {};
+    pendingResources.value = [];
+    // The 追问 chips go with them. They were not cleared here before, which was an oversight
+    // rather than a decision: a chip staged by one account would sit in the next one's composer.
+    pendingRefs.value = [];
+    resourceParseStatus.value = {};
+    markingParsing.value = new Set();
     /*
      * The locks go with the account, like everything else here — and for a sharper reason than
      * most: a lease held by a signed-out account would keep beating, and a *stale* list would
@@ -1181,18 +1194,24 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * An uploaded file, open in the same dialog as a workspace one.
+   * A referenced file, open in the same dialog as a workspace one.
    *
-   * Its own entry point rather than a `root` argument to `openFile`, because a source is not
+   * Its own entry point rather than a `root` argument to `openFile`, because a reference is not
    * reached by a path: the file tree hands over a path it just listed, while this is handed the
    * row itself and addresses it by id. Everything after that is the same call.
+   *
+   * **The two halves are addressed by different ids, and that is not an oversight.** The
+   * *description* comes from the reference (`/resources/:id/preview`), because the reference is
+   * what carries the title the user sees; the *bytes* come from the file
+   * (`/api/files/:id/raw`), because the same bytes referenced twice are one file and it is the
+   * bytes a viewer wants.
    */
-  async function openSourceFile(source: Source): Promise<void> {
+  async function openResourceFile(resource: WorkResource): Promise<void> {
     await runPreview(
-      "source",
-      source.name,
-      () => api.readSourcePreview(source.id),
-      (name) => api.readSourceRawFile(source.id, name)
+      "resource",
+      resourceName(resource),
+      () => api.readResourcePreview(resource.id),
+      (name) => api.readFileRaw(resource.resource.id, name)
     );
   }
 
@@ -2065,29 +2084,33 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * Fold freshly polled parse state onto the staged attachments and the live map.
+   * Fold freshly polled parse state onto the staged chips and the live map.
    *
-   * The polled object is a **source** — the server's own row for the file — which is why the
-   * map holds sources rather than a smaller ad-hoc shape: the live state and the stored state
-   * are the same thing, read at different moments.
+   * The polled object is a **`WorkResource`** — the server's own row for a reference — which is
+   * why the map holds references rather than a smaller ad-hoc shape: the live state and the
+   * stored state are the same thing, read at different moments.
+   *
+   * The join is on `Attachment.resourceId` and never on `Attachment.id`, because the parse
+   * belongs to the *reference*: the file id would look up a row that does not exist, and the
+   * chip would sit at whatever state it was staged with for the rest of the turn.
    */
-  function mergeParseStatus(sources: Source[]): void {
-    const byId = new Map(sources.map((s) => [s.id, s]));
-    parseStatus.value = { ...parseStatus.value, ...Object.fromEntries(byId) };
+  function mergeParseStatus(rows: WorkResource[]): void {
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    resourceParseStatus.value = { ...resourceParseStatus.value, ...Object.fromEntries(byId) };
     const fold = <T extends Attachment>(attachment: T): T => {
-      const source = byId.get(attachment.id);
-      if (!source) return attachment;
+      const row = byId.get(attachment.resourceId);
+      if (!row) return attachment;
       return {
         ...attachment,
-        parseStatus: source.parseStatus,
-        parseError: source.parseError,
-        parserId: source.parserId,
-        parsedChars: source.parsedChars,
-        pageCount: source.pageCount,
+        parseStatus: row.parseStatus,
+        parseError: row.parseError,
+        parserId: row.parserId,
+        parsedChars: row.parsedChars,
+        pageCount: row.pageCount,
       };
     };
     pendingAttachments.value = pendingAttachments.value.map(fold);
-    pendingSources.value = pendingSources.value.map(fold);
+    pendingResources.value = pendingResources.value.map(fold);
   }
 
   /**
@@ -2102,23 +2125,23 @@ export const useAppStore = defineStore("app", () => {
 
     const tick = async (): Promise<void> => {
       try {
-        const sources = await api.listSessionSources(sessionId);
+        const rows = await api.listSessionResources(sessionId);
         /*
-         * A referenced source is not in that list yet — the link is written when the turn is
-         * sent — so it is asked for by id. Read individually rather than by widening the list
-         * route: there are a handful of them, and the alternative is a route that answers a
-         * question about a conversation with material that is not the conversation's.
+         * A reference the user just pointed at is not in that list yet — the link is written when
+         * the turn is sent — so it is asked for by id. Read individually rather than by widening
+         * the list route: there are a handful of them, and the alternative is a route that answers
+         * a question about a conversation with material that is not the conversation's.
          */
-        const referenced = pendingSources.value.filter(isSettling);
+        const referenced = pendingResources.value.filter(isSettling);
         if (referenced.length > 0) {
-          const rows = await Promise.all(
-            referenced.map((source) => api.getSource(source.id).catch(() => null))
+          const asked = await Promise.all(
+            referenced.map((chip) => api.getResource(chip.resourceId).catch(() => null))
           );
-          mergeParseStatus(rows.filter((row): row is Source => row !== null));
+          mergeParseStatus(asked.filter((row): row is WorkResource => row !== null));
         }
-        mergeParseStatus(sources);
+        mergeParseStatus(rows);
         for (const id of [...markingParsing.value]) {
-          const status = sources.find((s) => s.id === id)?.parseStatus;
+          const status = rows.find((r) => r.id === id)?.parseStatus;
           if (status && status !== "pending" && status !== "parsing") markingParsing.value.delete(id);
         }
       } catch {
@@ -2127,7 +2150,7 @@ export const useAppStore = defineStore("app", () => {
       }
       if (
         !pendingAttachments.value.some(isSettling) &&
-        !pendingSources.value.some(isSettling) &&
+        !pendingResources.value.some(isSettling) &&
         !also()
       ) {
         stopParsePolling();
@@ -2180,15 +2203,15 @@ export const useAppStore = defineStore("app", () => {
    * Re-run extraction on an attachment that failed, or that predates a settings change.
    *
    * Works for both a pending composer attachment and one already sent in the conversation
-   * — the latter is why the live `parseStatus` map exists, since nothing about a historical
+   * — the latter is why the live parse-state map exists, since nothing about a historical
    * message changes when the server re-parses it.
    */
   /* ------------------------------ uploaded files ---------------------------- */
 
   /**
-   * Read the account's sources, filtered.
+   * Read the account's references, filtered.
    *
-   * Errors go to `sourcesError` rather than the toast: the dialog is open and the user asked
+   * Errors go to `resourcesError` rather than the toast: the dialog is open and the user asked
    * for this, so the place to say it failed is where they are looking — which is also why the
    * previous list is *kept* on a failure rather than cleared. A filter that fails to apply
    * should leave the reader looking at what they had, not at an empty panel.
@@ -2196,15 +2219,18 @@ export const useAppStore = defineStore("app", () => {
    * `silent` is for a re-read nobody asked for: the post-delete refresh, where a failure has
    * the delete's own report to ride on. Two errors for one action is one too many.
    */
-  async function loadSources(filter: SourceFilterQuery = {}, options: { silent?: boolean } = {}): Promise<void> {
-    if (!options.silent) sourcesLoading.value = true;
-    if (!options.silent) sourcesError.value = null;
+  async function loadResources(
+    filter: ResourceFilterQuery = {},
+    options: { silent?: boolean } = {}
+  ): Promise<void> {
+    if (!options.silent) resourcesLoading.value = true;
+    if (!options.silent) resourcesError.value = null;
     try {
-      sources.value = await api.listSources(filter);
+      resources.value = await api.listResources(filter);
     } catch (e) {
-      if (!options.silent) sourcesError.value = messageOf(e);
+      if (!options.silent) resourcesError.value = messageOf(e);
     } finally {
-      if (!options.silent) sourcesLoading.value = false;
+      if (!options.silent) resourcesLoading.value = false;
     }
   }
 
@@ -2264,16 +2290,24 @@ export const useAppStore = defineStore("app", () => {
     await consume(streamRegenerate(sessionId), sessionId);
   }
 
-  async function deleteSource(sourceId: string): Promise<void> {
+  /**
+   * Take this owner's reference away.
+   *
+   * **The file is not deleted.** In v4 a delete is of a *reference*: the entity, its bytes and
+   * every other owner's reference to it are untouched, which is what lets one conversation stop
+   * working from a file another one still reads. The docblock above describes what the v3 delete
+   * did, and it is the v4 model's whole point that the two are different operations.
+   */
+  async function deleteResource(resourceId: string): Promise<void> {
     try {
-      await api.deleteSource(sourceId);
-      sources.value = sources.value.filter((s) => s.id !== sourceId);
+      await api.deleteResource(resourceId);
+      resources.value = resources.value.filter((r) => r.id !== resourceId);
       // The live overlay must forget it too, or a chip would keep showing parse state for a
-      // file that is gone.
-      const { [sourceId]: _removed, ...rest } = parseStatus.value;
-      parseStatus.value = rest;
+      // reference that is gone.
+      const { [resourceId]: _removed, ...rest } = resourceParseStatus.value;
+      resourceParseStatus.value = rest;
     } catch (e) {
-      sourcesError.value = messageOf(e);
+      resourcesError.value = messageOf(e);
     }
   }
 
@@ -2288,15 +2322,15 @@ export const useAppStore = defineStore("app", () => {
    * Already-referenced is a no-op rather than a second chip: the reference is the pair, and
    * two chips for one file would be two references in one turn.
    */
-  async function referenceSource(source: Source): Promise<void> {
-    if (pendingSources.value.some((s) => s.id === source.id)) return;
-    pendingSources.value = [...pendingSources.value, source];
+  async function referenceResource(resource: WorkResource): Promise<void> {
+    if (pendingResources.value.some((chip) => chip.resourceId === resource.id)) return;
+    pendingResources.value = [...pendingResources.value, resourceAttachment(resource)];
 
-    if (!isSettling(source) || !needsExtraction(source)) return;
+    if (!isSettlingResource(resource) || !needsExtraction(resource)) return;
     try {
-      await api.reparseSource(source.id, source.name);
-      markingParsing.value.add(source.id);
-      markSourceParsing(source.id);
+      await api.reparseResource(resource.id, resourceName(resource));
+      markingParsing.value.add(resource.id);
+      markResourceParsing(resource);
       startParsePolling(activeSessionId.value ?? "");
     } catch (e) {
       // A parse that could not be *started* is reported, unlike one that failed: the chip
@@ -2305,18 +2339,26 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  function removePendingSource(id: string): void {
-    pendingSources.value = pendingSources.value.filter((s) => s.id !== id);
+  /** Take one staged chip back off, keyed the way the chip is. */
+  /**
+   * Drop a staged reference.
+   *
+   * Keyed on the **file id**, which is what `AttachmentChips` emits for every row it draws —
+   * the same key the attachments row above it removes by. Matching on `resourceId` instead was
+   * a chip whose remove button removed nothing, which is the failure this repo names most often.
+   */
+  function removePendingResource(id: string): void {
+    pendingResources.value = pendingResources.value.filter((chip) => chip.id !== id);
   }
 
-  function clearPendingSources(): void {
-    pendingSources.value = [];
+  function clearPendingResources(): void {
+    pendingResources.value = [];
   }
 
   /**
    * Stage a reference for the next turn.
    *
-   * Nothing is fetched and nothing is awaited, which is the difference from `referenceSource`
+   * Nothing is fetched and nothing is awaited, which is the difference from `referenceResource`
    * and the whole reason 追问 is cheap: everything a reference names is already in this
    * conversation. Already-staged is a no-op rather than a second chip — two chips for one
    * diagram would be two references in one turn, and the model would be told the same thing
@@ -2389,7 +2431,7 @@ export const useAppStore = defineStore("app", () => {
    * The one place in this store where a swallowed failure is worse than a noisy one: a grant the
    * user believes they made and did not is a conversation that will not read a workspace, and
    * nothing on screen afterwards would explain it. Reported through the toast, which is where
-   * `referenceSource` reports a parse it could not start — the composer's own failures have no
+   * `referenceResource` reports a parse it could not start — the composer's own failures have no
    * pane of their own to land in.
    */
   async function writeScope(next: WorkspaceScope | null): Promise<void> {
@@ -2400,28 +2442,34 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  /** Whether this source is one a model can only read after extraction. */
-  function needsExtraction(source: Source): boolean {
-    return source.category === "document" || source.category === "image";
+  /** Whether this reference is one a model can only read after extraction. */
+  function needsExtraction(resource: WorkResource): boolean {
+    const category = resourceCategory(resource);
+    return category === "document" || category === "image";
   }
 
-  /** Show a source as parsing in both the staged list and the live overlay. */
-  function markSourceParsing(id: string): void {
-    pendingSources.value = pendingSources.value.map((s) =>
-      s.id === id ? { ...s, parseStatus: "pending" } : s
+  /** Whether a reference is still queued or being read, as the server last said. */
+  function isSettlingResource(resource: WorkResource): boolean {
+    return resource.parseStatus === "pending" || resource.parseStatus === "parsing";
+  }
+
+  /** Show a reference as parsing in both the staged chips and the live overlay. */
+  function markResourceParsing(resource: WorkResource): void {
+    const next: WorkResource = { ...resource, parseStatus: "pending" };
+    pendingResources.value = pendingResources.value.map((chip) =>
+      chip.resourceId === resource.id ? { ...chip, parseStatus: "pending" } : chip
     );
-    parseStatus.value = {
-      ...parseStatus.value,
-      [id]: { ...parseStatus.value[id], ...pendingSources.value.find((s) => s.id === id) } as Source,
-    };
+    resourceParseStatus.value = { ...resourceParseStatus.value, [resource.id]: next };
   }
 
   async function reparseAttachment(attachment: Attachment): Promise<void> {
     const sessionId = activeSessionId.value;
     if (!sessionId) return;
     try {
-      await api.reparseSource(attachment.id, attachment.name);
-      markingParsing.value.add(attachment.id);
+      // By the *reference*: the parse is recorded on `WorkResource`'s own columns, and the file
+      // id would name a row that no route reparses.
+      await api.reparseResource(attachment.resourceId, attachment.name);
+      markingParsing.value.add(attachment.resourceId);
       pendingAttachments.value = pendingAttachments.value.map((a) =>
         a.id === attachment.id ? { ...a, parseStatus: "pending", parseError: undefined } : a
       );
@@ -2430,7 +2478,7 @@ export const useAppStore = defineStore("app", () => {
       // truthful than anything assembled here.
       startParsePolling(sessionId, () => markingParsing.value.size > 0);
     } catch (e) {
-      markingParsing.value.delete(attachment.id);
+      markingParsing.value.delete(attachment.resourceId);
       setError(messageOf(e));
     }
   }
@@ -2797,17 +2845,27 @@ export const useAppStore = defineStore("app", () => {
     chatExtras: Partial<ChatInput> = {}
   ): Promise<void> {
     const content = text.trim();
+    /*
+     * A referenced file becomes a **`TurnReference`** on the way out, and that is the only form
+     * the wire has for it: `ChatInput.sources` and `Message.sources` are gone, and v4 gave the
+     * 追问 mechanism a `resource` kind so that "material I may read" and "the object of this
+     * question" travel together. The handle is the *reference* id — what `read_document` takes
+     * and what carries the parse state — and the label is what the chip showed.
+     *
+     * The staged chips stay a list of their own on screen, because a chip with a parse badge and
+     * a retry control is a different thing to look at than a bare 追问 chip; the two are joined
+     * here, at the one moment the difference stops mattering.
+     */
+    const references = pendingResources.value.map(
+      (chip): TurnReference => ({ kind: "resource", ref: chip.resourceId, label: chip.name })
+    );
     // A reference counts as something to send, on the same footing as an attachment: pointing
-    // at a file is a turn, even when the sentence around it is empty.
-    const references = [...pendingSources.value];
-    // And so does a 追问 chip: "what about this?" is a complete question, and the server's own
-    // `MESSAGE_REQUIRED` guard knows about them for the same reason — the two sides have to
-    // agree about what a sendable message is or a question asked by pointing is refused.
-    const refs = [...pendingRefs.value];
-    if (
-      (!content && attachments.length === 0 && references.length === 0 && refs.length === 0) ||
-      streaming.value.active
-    )
+    // at a file is a turn, even when the sentence around it is empty. And so does a 追问 chip —
+    // "what about this?" is a complete question, and the server's own `MESSAGE_REQUIRED` guard
+    // knows about refs for the same reason: the two sides have to agree about what a sendable
+    // message is, or a question asked by pointing is refused by a server that never looked.
+    const refs = [...pendingRefs.value, ...references];
+    if ((!content && attachments.length === 0 && refs.length === 0) || streaming.value.active)
       return;
 
     // Auto-create a session if the user is on a fresh workspace.
@@ -2833,15 +2891,14 @@ export const useAppStore = defineStore("app", () => {
       role: "user",
       content,
       attachments: attachments.length > 0 ? attachments : undefined,
-      sources: references.length > 0 ? references : undefined,
       // The bubble shows what was pointed at, so this is the client's own array — the same
-      // snapshot rule `sources` follows one line up.
+      // snapshot rule `attachments` follows one line up.
       refs: refs.length > 0 ? refs : undefined,
       createdAt: new Date().toISOString(),
     });
 
     clearPendingAttachments();
-    clearPendingSources();
+    clearPendingResources();
     clearPendingReferences();
     streaming.value = { ...EMPTY_STREAMING(), active: true };
     emitWidgetEvent({ type: "turn.started", sessionId });
@@ -2850,11 +2907,8 @@ export const useAppStore = defineStore("app", () => {
       streamChat(sessionId, {
         message: content,
         attachments,
-        // Ids and the names the composer showed: everything else about a source is re-read
-        // server-side, the same split an attachment makes.
-        sources: references.length > 0
-          ? references.map((source) => ({ id: source.id, name: source.name }))
-          : undefined,
+        // Handles and the labels the composer showed: everything else about a reference is
+        // re-read server-side, the same split an attachment makes.
         refs: refs.length > 0 ? refs : undefined,
         ...chatExtras,
       }),
@@ -2966,9 +3020,9 @@ export const useAppStore = defineStore("app", () => {
     // state
     account,
     config,
-    sources,
-    sourcesLoading,
-    sourcesError,
+    resources,
+    resourcesLoading,
+    resourcesError,
     workspaces,
     copilots,
     sessions,
@@ -2980,9 +3034,9 @@ export const useAppStore = defineStore("app", () => {
     activeCopilotId,
     draftSettings,
     pendingAttachments,
-    pendingSources,
+    pendingResources,
     pendingRefs,
-    parseStatus,
+    resourceParseStatus,
     parserKinds,
     streaming,
     error,
@@ -3034,8 +3088,8 @@ export const useAppStore = defineStore("app", () => {
     changePassword,
     saveProfile,
     signOut,
-    loadSources,
-    deleteSource,
+    loadResources,
+    deleteResource,
     deleteMessage,
     regenerateLastMessage,
     refreshConfig,
@@ -3072,9 +3126,9 @@ export const useAppStore = defineStore("app", () => {
     testDocumentParser,
     setDocumentParsing,
     uploadAttachment,
-    referenceSource,
-    removePendingSource,
-    clearPendingSources,
+    referenceResource,
+    removePendingResource,
+    clearPendingResources,
     stageReference,
     removePendingReference,
     clearPendingReferences,
@@ -3102,7 +3156,7 @@ export const useAppStore = defineStore("app", () => {
     moveEntry,
     deleteEntry,
     openFile,
-    openSourceFile,
+    openResourceFile,
     closeFile,
     resetFileTree,
   };

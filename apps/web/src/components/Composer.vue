@@ -7,7 +7,7 @@ import AttachmentChips from "./AttachmentChips.vue";
 import SourceMentionPicker from "./SourceMentionPicker.vue";
 import { activeMention, insertMention, type ActiveMention } from "../utils/mention";
 import type { ReferenceChoice } from "../utils/referencePicker";
-import type { Source } from "../api/types";
+import { resourceName } from "../utils/resourceView";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
 import { closeWidgetDrawer, openSessionSettings } from "../composables/ui";
@@ -40,7 +40,7 @@ const canSend = computed(
     !store.documentsParsing &&
     (!!text.value.trim() ||
       store.pendingAttachments.length > 0 ||
-      store.pendingSources.length > 0 ||
+      store.pendingResources.length > 0 ||
       // A staged 追问 chip is a complete question on its own: "what about this?" needs no words
       // around it, and the server's own guard agrees — see `MESSAGE_REQUIRED` in routes.ts.
       store.pendingRefs.length > 0)
@@ -125,14 +125,14 @@ function onPickReference(choice: ReferenceChoice): void {
   const current = mention.value;
   if (!el || !current) return;
 
-  const name = choice.kind === "source" ? choice.source.name : choice.name;
+  const name = choice.kind === "resource" ? resourceName(choice.resource) : choice.name;
   const result = insertMention(text.value, current, name);
   text.value = result.text;
   mention.value = null;
 
   switch (choice.kind) {
-    case "source":
-      void store.referenceSource(choice.source);
+    case "resource":
+      void store.referenceResource(choice.resource);
       break;
     case "scope":
       void store.referenceScope(choice);
@@ -427,16 +427,18 @@ function onInput() {
         </div>
 
         <!--
-          The referenced sources, as chips of their own. A `Source` is an `Attachment` in every
-          field the chip reads, so the same component draws both — and drawing them as two rows
-          rather than one is what says which was uploaded for this turn and which was pointed at.
+          The referenced files, as chips of their own. A `WorkResource` becomes an `Attachment` in
+          every field the chip reads — see `resourceAttachment` — so the same component draws both,
+          and drawing them as two rows rather than one is what says which was uploaded for this
+          turn and which was pointed at. They join the refs row below at send time, which is where
+          the two stop being different things.
         -->
-        <div v-if="store.pendingSources.length" data-testid="composer-sources">
+        <div v-if="store.pendingResources.length" data-testid="composer-sources">
           <AttachmentChips
-            :attachments="store.pendingSources"
+            :attachments="store.pendingResources"
             removable
-            @remove="store.removePendingSource"
-            @reparse="(source) => store.referenceSource(source as Source)"
+            @remove="store.removePendingResource"
+            @reparse="store.reparseAttachment"
           />
         </div>
 

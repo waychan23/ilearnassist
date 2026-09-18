@@ -456,12 +456,12 @@ async function buildHistoryMessages(
        */
       const content = await buildUserContent(
         m.content,
-        [...(m.attachments ?? []), ...(m.sources ?? [])],
+        m.attachments ?? [],
         {
           user: input.user,
           vision: input.vision,
           toolUse: input.toolUse,
-          sourcePaths: input.sourcePaths,
+          sourcePaths: input.sourcePaths ?? new Map(),
           // Resolved by the caller from the message's stored refs — see the field's note. A turn
           // that pointed at a diagram is rebuilt with that pointer in it, which is the whole
           // reason `/regenerate` can ask the same question twice.
@@ -628,7 +628,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       user: input.user,
       vision: input.vision,
       toolUse: input.toolUse,
-      sourcePaths: input.sourcePaths,
+      sourcePaths: input.sourcePaths ?? new Map(),
       references: input.references,
     });
     messages.push(new HumanMessage(userContent as string | UserContentBlock[]));

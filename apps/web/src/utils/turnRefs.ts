@@ -37,6 +37,8 @@ export function kindLabel(kind: TurnReferenceKind): string {
       return i18n.global.t("turnRef.kind.note");
     case "quiz":
       return i18n.global.t("turnRef.kind.quiz");
+    case "resource":
+      return i18n.global.t("turnRef.kind.resource");
   }
 }
 

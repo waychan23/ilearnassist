@@ -87,6 +87,14 @@ export function fileOwner(
 
 export interface RegisterFileInput {
   userId: string;
+  /**
+   * The row's id, for a caller that has to name the file **before it exists**.
+   *
+   * A blob's path is derived from its id (`sources/parsed/<id>.txt`), so the writer has to know
+   * the id to decide where to put the bytes — and letting this default would mean the row and the
+   * path disagreed, which is a file that resolves to nothing.
+   */
+  id?: string;
   /** The stored locator: relative to the user root, `/`-separated. See `resourcePaths.ts`. */
   path: string;
   /**
@@ -143,7 +151,7 @@ export function registerFile(db: AppDb, input: RegisterFileInput): FileRecord {
   }
 
   return db.createFile({
-    id: newId(),
+    id: input.id ?? newId(),
     userId: input.userId,
     sourceType: input.sourceType,
     title,
@@ -283,7 +291,7 @@ export function reconcileListing(
     owner: ResourceOwner;
     /** Builds the stored path from a path relative to the sandbox root. */
     pathFor: (rel: string) => string;
-    entries: readonly { type: string; path: string; size?: number }[];
+    entries: readonly { type: string; path: string; size?: number | null }[];
     now?: string;
   }
 ): Map<string, string> {
@@ -544,6 +552,34 @@ async function withMissing(
       return { ...row, missing: !present };
     })
   );
+}
+
+/**
+ * The resolved path of every file a run might read, by **file id**.
+ *
+ * One map for the whole run rather than a lookup per message: `buildUserContent` is re-run for
+ * every replayed user turn, and a file attached three turns ago is replayed on every turn after
+ * it. Collecting the ids first — from history *and* from the turn being sent — makes the cost one
+ * pass over a small set instead of one query per attachment per message.
+ *
+ * An id that resolves to nothing is simply absent, which is what `buildUserContent` reads as
+ * "this attachment is missing". There is deliberately no derivation to fall back to: the path is
+ * stored on the row, so a second way to compute one could only disagree with it.
+ */
+export function filePathsFor(
+  db: AppDb,
+  user: UserLayout,
+  userId: string,
+  fileIds: Iterable<string>
+): Map<string, string> {
+  const paths = new Map<string, string>();
+  for (const id of new Set(fileIds)) {
+    const file = db.getFileForUser(userId, id);
+    if (!file) continue;
+    const path = resolveFilePath(user, file);
+    if (path) paths.set(id, path);
+  }
+  return paths;
 }
 
 /** Re-exported so a caller reasoning about a resource's bytes has one import. */

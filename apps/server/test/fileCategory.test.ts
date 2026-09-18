@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { DIAGRAM_FILE_EXTENSIONS } from "@ilearnassist/shared";
 import { categoryFor, classifyFile, extensionOf, mimeForName } from "../src/fileCategory.js";
 import { isDocumentMime } from "../src/documents/formats.js";
-import { normalizeMime } from "../src/sourcePaths.js";
+import { normalizeMime } from "../src/resourcePaths.js";
 
 /**
  * What a file is, and the guard that keeps this answer in agreement with the two other places
@@ -127,7 +127,7 @@ describe("classifyFile", () => {
  * The drift guard, and the reason this test file exists rather than a handful of cases above.
  *
  * Three modules classify files and they must agree, because they answer three questions about
- * the same bytes: *what kind of thing is this* (here), *may it be uploaded* (`sourcePaths`'s
+ * the same bytes: *what kind of thing is this* (here), *may it be uploaded* (`resourcePaths`'s
  * MIME table), *is it text or binary for a reader* (`files.ts`'s read-avoidance list). A new
  * member of either of the other two sets that this classifier calls `text` or `code` is a file
  * the browser offers as text and cannot open — a `.mmd` drawn in one panel and shown as source

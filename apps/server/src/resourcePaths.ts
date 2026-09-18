@@ -128,15 +128,15 @@ export function webFilePath(user: UserLayout, fileId: string, mimeType: string):
 }
 
 /**
- * Where a parse result is written. **Write-time only**, like the two above; the row's
- * `parsed_file_id` is what a reader follows.
+ * Where a parse result is written. **Write-time only**, like the two above; a reader follows the
+ * reference's `parsed_file_id` to the file row and then resolves *that* row's path.
  *
- * Keyed by the **work resource** rather than by the entity, which is the consequence the schema
- * states: two references to one file each parse it and each get their own text.
+ * Keyed by the parsed **file's own id**, like every other blob here, so a file's path derives
+ * from its id in one uniform rule and the row stores what this returned.
  */
-export function parsedFilePath(user: UserLayout, workResourceId: string): string {
-  if (!isSafeId(workResourceId)) throw new Error("Invalid resource id.");
-  return join(user.parsedDir, `${workResourceId}.txt`);
+export function parsedFilePath(user: UserLayout, fileId: string): string {
+  if (!isSafeId(fileId)) throw new Error("Invalid file id.");
+  return join(user.parsedDir, `${fileId}.txt`);
 }
 
 /**

@@ -52,6 +52,8 @@ export function diagramFileName(name: string): string {
 export interface DiagramSaveInput {
   /** Canonical file name inside the conversation's folder — `auth-flow.mmd`. */
   name: string;
+  /** The `.mmd` this row drew, as a file id. See `Diagram.fileId`. */
+  fileId: string;
   /** The model's one-line description; required on the tool and `NOT NULL` in the row. */
   summary: string;
   /** The call that wrote it, or null when the invoke config carried no id. */
@@ -75,6 +77,7 @@ export function registerDiagram(
     id: newId(),
     sessionId,
     name: input.name,
+    fileId: input.fileId,
     summary: input.summary,
     toolCallId: input.toolCallId,
   });

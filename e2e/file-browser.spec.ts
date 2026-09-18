@@ -299,15 +299,24 @@ test("an unqualified write goes to the conversation, not the workspace tree", as
   await openFilesTab(page);
   await expect(page.getByTestId("file-row").filter({ hasText: "mine.txt" })).toHaveCount(0);
 
-  // …but there, in the conversation's own folder — which the source browser is now the way to
-  // see: it lists the row, and the row's byline says which folder wrote it.
+  // …but there, in the conversation's own folder — which the library is now the way to see: it
+  // lists the row, and the row's byline says the assistant wrote it.
   await page.getByTestId("open-sources").click();
   const browser = page.getByTestId("sources-dialog");
   await expect(browser).toBeVisible();
 
   const row = browser.getByTestId("source-row").filter({ hasText: "mine.txt" });
   await expect(row).toBeVisible();
-  await expect(row.getByTestId("source-origin")).toContainText("助理写入会话");
+  /*
+   * `助理生成`, not v3's `助理写入会话`.
+   *
+   * v4 folded the two sandbox origins into one because *which folder* is a fact about the
+   * reference's owner (`ownerType`), not about the file — so the byline answers "who wrote it",
+   * and the "which folder" half lands in the same line's owner label beside it. The distinction
+   * the v3 label carried is not lost; it moved to the column that can hold it.
+   */
+  await expect(row.getByTestId("source-origin")).toContainText("助理生成");
+  await expect(row.getByTestId("source-origin")).toContainText("·");
 });
 
 /*

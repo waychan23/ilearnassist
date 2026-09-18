@@ -86,9 +86,9 @@ export function buildCollectPageTool(ctx: CollectPageContext & { cache: PageCach
       });
 
       return (
-        `Kept "${row.name}" as a source (id ${row.id}). ` +
+        `Kept "${row.title}" (id ${row.id}). ` +
         `It is now part of this conversation: it can be read with read_document, listed in the ` +
-        `source browser, and referenced again without fetching it a second time.`
+        `library, and referenced again without fetching it a second time.`
       );
     },
     {

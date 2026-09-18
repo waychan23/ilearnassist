@@ -239,7 +239,7 @@ export const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = 
   note: ["id", "query", "limit", "offset"],
   diagram: ["name", "limit"],
   table: ["name", "limit"],
-  source: ["query", "limit", "offset"],
+  resource: ["query", "limit", "offset"],
 };
 
 /**
@@ -554,43 +554,44 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
    * them, and folding a `node_modules` into this list would make the answer useless.
    *
    * The read whitelist already carries the conversation's workspace — that is what
-   * `listReadableSources` unions — so this passes the same workspace the turn's tools were built
-   * for. The context does not carry it, and deriving it here would be a second definition.
+   * `listReadableWorkResources` unions — so this passes the same workspace the turn's tools were
+   * built for. The context does not carry it, and deriving it here would be a second definition.
    *
    * Summaries and parse state only — never contents. Reading a file is `read_document`'s job,
    * and a list that inlined one would spend the context of every turn that asked.
    */
-  const source = async (input: QueryInput): Promise<string> => {
+  const resource = async (input: QueryInput): Promise<string> => {
     const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
     const offset = input.offset ?? 0;
     const needle = input.query?.trim().toLowerCase();
 
     const all = ctx.db
-      .listReadableSources(ctx.userId, ctx.sessionId, ctx.workspaceId, ctx.scope)
-      .filter((s) => !needle || s.name.toLowerCase().includes(needle));
+      .listReadableWorkResources(ctx.userId, ctx.sessionId, ctx.workspaceId, ctx.scope)
+      .filter((r) => !needle || r.title.toLowerCase().includes(needle));
 
-    const items = all.slice(offset, offset + limit).map((s) => ({
-      id: s.id,
-      name: s.name,
-      mimeType: s.mimeType,
-      category: s.category,
-      size: s.size,
-      origin: s.origin,
-      summary: s.summary ? clip(s.summary) : null,
-      parseStatus: s.parseStatus,
-      /** How to read it: the id `read_document` takes. */
-      readable: s.parseStatus === "ready" || s.parseStatus === "none",
+    const items = all.slice(offset, offset + limit).map((r) => ({
+      /** The id `read_document` takes: a reference, not the file behind it. */
+      id: r.id,
+      name: r.title,
+      resourceType: r.resourceType,
+      mimeType: r.resourceType === "file" ? (r.resource as { mimeType: string }).mimeType : null,
+      category: r.resourceType === "file" ? (r.resource as { category: string }).category : null,
+      url: r.resourceType === "web_page" ? (r.resource as { url: string }).url : null,
+      summary: r.summary ? clip(r.summary) : null,
+      parseStatus: r.parseStatus,
+      /** How to read it: `read_document` takes the id above. */
+      readable: r.parseStatus === "ready" || r.parseStatus === "none",
     }));
 
     return page({
-      kind: "source",
+      kind: "resource",
       items,
       total: all.length,
       offset,
       note:
         "These are the documents this conversation can read, by id. Call read_document with " +
-        "one `sourceId` to read its text a page at a time. `readable: false` means its text is " +
-        "not available yet or could not be extracted.",
+        "one `resourceId` to read its text a page at a time. `readable: false` means its text " +
+        "is not available yet or could not be extracted.",
     });
   };
 
@@ -678,7 +679,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     note: async (input) => note(input),
     diagram: (input) => diagram(input),
     table: (input) => table(input),
-    source,
+    resource,
   };
 
   return tool(

@@ -4,7 +4,7 @@ import type {
   Attachment,
   DocumentParserConfig,
   PublicConfig,
-  Source,
+  WorkResource,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_INLINE_CHARS } from "../src/attachments.js";
@@ -62,19 +62,24 @@ async function statusOf(sessionId: string): Promise<
 > {
   const res = await env.inject({
     method: "GET",
-    url: `/api/sessions/${sessionId}/sources`,
+    url: `/api/sessions/${sessionId}/resources`,
   });
-  const sources = res.json<Source[]>();
+  const resources = res.json<WorkResource[]>();
+  /*
+   * Keyed by `resourceId` — the **file** — because that is what an upload response's `id` is, and
+   * the parse state the cases below assert lives on the reference. `WorkResource.id` is the
+   * reference; the two are the same file seen from two sides.
+   */
   return Object.fromEntries(
-    sources.map((s) => [
-      s.id,
+    resources.map((r) => [
+      r.resourceId,
       {
-        status: s.parseStatus,
-        error: s.parseError,
-        parserId: s.parserId,
-        parseErrorCode: s.parseErrorCode,
-        parsedChars: s.parsedChars,
-        pageCount: s.pageCount,
+        status: r.parseStatus,
+        error: r.parseError,
+        parserId: r.parserId,
+        parseErrorCode: r.parseErrorCode,
+        parsedChars: r.parsedChars,
+        pageCount: r.pageCount,
       },
     ])
   );
@@ -226,7 +231,7 @@ describe("parsing an uploaded document", () => {
     await waitForParsing(env, session.id);
     const record = (await statusOf(session.id))[attachment.id]!;
 
-    expect(record.status).toBe("ready");
+    expect(record.status, JSON.stringify(record)).toBe("ready");
     expect(record.parsedChars).toBeGreaterThan(0);
     expect((record as { pageCount?: number }).pageCount).toBe(1);
   });
@@ -276,7 +281,7 @@ describe("parsing an uploaded document", () => {
     // Point the failure at something that works, then retry.
     const res = await env.inject({
       method: "POST",
-      url: `/api/sources/${attachment.id}/reparse`,
+      url: `/api/resources/${attachment.resourceId}/reparse`,
       payload: { name: "scanned.pdf" },
     });
     expect(res.statusCode).toBe(202);
@@ -308,7 +313,7 @@ describe("parsing an uploaded document", () => {
     const session = await newSession(env, workspace.id);
     const res = await env.inject({
       method: "POST",
-      url: `/api/sources/ghost/reparse`,
+      url: `/api/resources/ghost/reparse`,
     });
     expect(res.statusCode).toBe(404);
   });
@@ -482,7 +487,9 @@ describe("documents in the prompt", () => {
       // The preview is inlined, the rest is not — the whole point of the truncation.
       expect(sent).toContain("内容过长");
       expect(sent).toContain("read_document");
-      expect(sent).toContain(attachment.id);
+      // The pointer names the **reference**, which is the id `read_document` takes — naming the
+      // file behind it would be an id the tool refuses.
+      expect(sent).toContain(attachment.resourceId);
       expect(sent).not.toContain("z".repeat(MAX_INLINE_CHARS));
     } finally {
       await long.close();

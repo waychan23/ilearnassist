@@ -221,7 +221,7 @@ test("a load that fails is reported in the panel, and the retry is what fixes it
   await page.getByTestId("composer-send").click();
   await expect(page.getByTestId("source-row")).toHaveCount(1);
 
-  await page.route("**/api/sources?**", (route) => route.abort());
+  await page.route("**/api/resources?**", (route) => route.abort());
   await page.reload();
   await enterWorkspace(page, name);
   await page.getByTestId("session-item").first().click();
@@ -231,7 +231,7 @@ test("a load that fails is reported in the panel, and the retry is what fixes it
   // Never the toast: the conversation itself did nothing wrong.
   await expect(page.locator("body > .toast")).toHaveCount(0);
 
-  await page.unroute("**/api/sources?**");
+  await page.unroute("**/api/resources?**");
   await page.getByTestId("widget-retry").click();
   await expect(page.getByTestId("source-row")).toHaveCount(1);
 });

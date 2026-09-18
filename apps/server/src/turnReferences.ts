@@ -51,6 +51,18 @@ export type ResolvedReference =
     }
   | { kind: "note"; noteId: string; noteType: NoteType; content: string; missing: boolean }
   | {
+      kind: "resource";
+      /**
+       * The **reference** id — what `read_document` takes and what `ila_query` lists. Not the
+       * file behind it: a file may be held by several owners, and it is this conversation's
+       * reference that carries the parse state and the title the reader saw.
+       */
+      resourceId: string;
+      title: string;
+      summary: string;
+      missing: boolean;
+    }
+  | {
       kind: "quiz";
       quizId: string;
       /** The session-scoped `Qn`, shown to the reader and used by the model in prose. */
@@ -163,6 +175,27 @@ export function resolveReferences(
       continue;
     }
 
+    if (ref.kind === "resource") {
+      /*
+       * Owner-scoped rather than session-scoped, deliberately unlike every arm above.
+       *
+       * A reference is addressed by a **work resource** id, and one held by another workspace is
+       * a legitimate thing to point at — the same material the `@` picker offers and the read
+       * whitelist admits through a grant. Requiring this session to own it would refuse exactly
+       * the references the feature exists for.
+       */
+      const resource = db.getWorkResourceForUser(userId, ref.ref);
+      if (!resource) return { ok: false, status: 404, code: "REFERENCE_NOT_FOUND" };
+      resolved.push({
+        kind: "resource",
+        resourceId: resource.id,
+        title: resource.title,
+        summary: resource.summary ?? "",
+        missing: false,
+      });
+      continue;
+    }
+
     /*
      * A figure. The name is normalised through the same function the writer used, so the client's
      * spelling is not the question — and what is *stored* on the note and looked up by the tool is
@@ -265,6 +298,17 @@ export function renderReferenceBlock(
       );
       return;
     }
+    if (reference.kind === "resource") {
+      lines.push(
+        `${label} Material this conversation is working from${
+          reference.missing ? ", which is no longer there" : ""
+        }, titled "${reference.title}". Read it with read_document(resourceId: "${
+          reference.resourceId
+        }").${reference.summary ? ` It is about: ${reference.summary}` : ""}`,
+        ""
+      );
+      return;
+    }
     const noun = reference.figureKind === "diagram" ? "diagram" : "table";
     lines.push(
       `${label} A ${noun} from this conversation${
@@ -338,6 +382,18 @@ function resolveForReplay(
       } else {
         out.push({ kind: "note", noteId: ref.ref, noteType: "other", content: "", missing: true });
       }
+      continue;
+    }
+
+    if (ref.kind === "resource") {
+      const resource = db.getWorkResourceForUser(userId, ref.ref);
+      out.push({
+        kind: "resource",
+        resourceId: ref.ref,
+        title: resource?.title ?? ref.label,
+        summary: resource?.summary ?? "",
+        missing: resource === undefined,
+      });
       continue;
     }
 

@@ -103,21 +103,27 @@ test("filters by workspace", async ({ page, request }) => {
   void first;
 });
 
-test("filters by origin", async ({ page, request }) => {
-  // The three origins the requirement names, and the filter is what tells them apart: a file
-  // the agent wrote and a file the user uploaded are the same kind of row otherwise.
+test("filters by category", async ({ page, request }) => {
+  /*
+   * v4's filter axis for this, where v3 filtered by `origin`.
+   *
+   * A reference is *what it points at*, so the library filters by the entity's kind and its
+   * coarse category — and "how did this come to exist" is the row's byline rather than a filter,
+   * because a person reads it to check provenance and rarely wants to narrow by it. What the
+   * case pins is unchanged: one control narrows the list, and the row it excludes is really gone.
+   */
   const suffix = Date.now();
-  const workspaceId = await seedWorkspace(request, `Origin-${suffix}`, "written-by-agent.md");
-  await seedUpload(request, workspaceId, "uploaded-by-hand.md");
+  const workspaceId = await seedWorkspace(request, `Category-${suffix}`, "written-by-agent.md");
+  await seedUpload(request, workspaceId, "uploaded-by-hand.pdf");
 
   await openBrowser(page);
-  await page.getByTestId("sources-filter-workspace").selectOption({ label: `Origin-${suffix}` });
-  await expect(page.getByTestId("source-row").filter({ hasText: "uploaded-by-hand.md" })).toBeVisible();
+  await page.getByTestId("sources-filter-workspace").selectOption({ label: `Category-${suffix}` });
+  await expect(page.getByTestId("source-row").filter({ hasText: "uploaded-by-hand.pdf" })).toBeVisible();
 
-  await page.getByTestId("sources-filter-origin").selectOption("workspace_upload");
+  await page.getByTestId("sources-filter-category").selectOption("markdown");
   await settle(page);
-  await expect(page.getByTestId("source-row").filter({ hasText: "uploaded-by-hand.md" })).toBeVisible();
-  await expect(page.getByTestId("source-row").filter({ hasText: "written-by-agent.md" })).toHaveCount(0);
+  await expect(page.getByTestId("source-row").filter({ hasText: "written-by-agent.md" })).toBeVisible();
+  await expect(page.getByTestId("source-row").filter({ hasText: "uploaded-by-hand.pdf" })).toHaveCount(0);
 });
 
 test("the tree view groups by where a file came from", async ({ page, request }) => {
@@ -264,7 +270,7 @@ test("reads each list once per open, and only the rows when a filter changes", a
   // Attached between the app starting and the dialog opening, so the count is the open's alone.
   const seen: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).pathname === "/api/sources") seen.push(r.url());
+    if (new URL(r.url()).pathname === "/api/resources") seen.push(r.url());
   });
 
   await page.getByTestId("open-sources").click();
@@ -285,7 +291,7 @@ test("reads each list once per open, and only the rows when a filter changes", a
    * the reader narrowed by.
    */
   seen.length = 0;
-  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/sources");
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/resources");
   await page.getByTestId("sources-filter-search").fill("no-such-source-anywhere");
   await answered;
   expect(seen).toHaveLength(1);

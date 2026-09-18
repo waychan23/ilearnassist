@@ -145,6 +145,7 @@ describe("a note about a figure", () => {
       id: `d-${name}`,
       sessionId,
       name,
+      fileId: `f-${name}`,
       summary: "A flow",
       toolCallId: null,
     });

@@ -2,8 +2,9 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
-import type { Source } from "../api/types";
+import type { WorkResource } from "../api/types";
 import { useAppStore } from "../stores/app";
+import { resourceCategory, resourceIsImage } from "../utils/resourceView";
 import Icon from "./Icon.vue";
 import type { IconName } from "../utils/icons";
 import type { ActiveMention } from "../utils/mention";
@@ -29,9 +30,10 @@ import {
  *   for this conversation. Its row raises a chip and writes a session setting rather than
  *   travelling with the turn, because a grant persists: pointing at something once makes it
  *   readable on every later turn.
- * - A **source** is a single file, attached to this turn the way it always was.
+ * - A **reference** names one piece of material — a file or a kept page — and is staged for this
+ *   turn.
  *
- * It asks the **server** for the source rows on every keystroke, debounced, rather than filtering
+ * It asks the **server** for the reference rows on every keystroke, debounced, rather than filtering
  * a list it already has — the composer opens on every page, and the account's whole library is not
  * something to hold in memory for a control most turns never touch. Workspaces are the exception
  * and for a reason: the account has a handful, the store already holds them, and a round-trip to
@@ -56,7 +58,7 @@ const emit = defineEmits<{ pick: [choice: ReferenceChoice] }>();
 const { t } = useI18n();
 const store = useAppStore();
 
-const sources = ref<Source[]>([]);
+const sources = ref<WorkResource[]>([]);
 const active = ref(0);
 const open = ref(false);
 const tab = ref<ReferenceTab>("all");
@@ -78,7 +80,7 @@ const DEBOUNCE_MS = 150;
 async function load(query: string): Promise<void> {
   const mine = ++seq;
   try {
-    const found = await api.listSources({ name: query });
+    const found = await api.listResources({ name: query });
     if (mine !== seq) return;
     // Not capped here. The cap belongs to the list's shape, per group — `buildOptions` — and the
     // pill filter runs over what came back, so truncating first would filter *after* the cut and
@@ -170,8 +172,6 @@ function pillLabel(id: SourcePill): string {
       return t("composer.pillText");
     case "code":
       return t("composer.pillCode");
-    case "page":
-      return t("composer.pillPage");
     case "other":
       return t("composer.pillOther");
   }
@@ -181,9 +181,9 @@ function pillLabel(id: SourcePill): string {
 function iconOf(row: ReferenceOption): IconName {
   if (row.kind === "all-workspaces") return "list-tree";
   if (row.kind === "workspace") return "folder";
-  const source = sources.value.find((s) => `src:${s.id}` === row.key);
-  if (source?.kind === "image") return "image";
-  if (source?.category === "diagram") return "diagram";
+  const resource = sources.value.find((s) => `src:${s.id}` === row.key);
+  if (resource && resourceIsImage(resource)) return "image";
+  if (resource && resourceCategory(resource) === "diagram") return "diagram";
   return "file";
 }
 
@@ -261,8 +261,8 @@ function choose(row: ReferenceOption): void {
     });
     return;
   }
-  const source = sources.value.find((s) => `src:${s.id}` === row.key);
-  if (source) emit("pick", { kind: "source", source });
+  const resource = sources.value.find((s) => `src:${s.id}` === row.key);
+  if (resource) emit("pick", { kind: "resource", resource });
 }
 
 defineExpose({ handleKey });

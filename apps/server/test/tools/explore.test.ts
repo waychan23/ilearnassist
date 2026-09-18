@@ -195,7 +195,7 @@ describe("ila_explore — messages", () => {
         },
       ],
       attachments: [
-        { id: "att-1", name: "lecture.pdf", mimeType: "application/pdf", size: 1, kind: "file" },
+        { id: "att-1", resourceId: "res-1", name: "lecture.pdf", mimeType: "application/pdf", size: 1, kind: "file" },
       ],
     });
   });

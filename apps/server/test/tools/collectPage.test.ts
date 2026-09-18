@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type AppDb } from "../../src/db.js";
 import { buildCollectPageTool, type PageCache } from "../../src/tools/collectPage.js";
-import { listSourceViewsForUser } from "../../src/sources.js";
+import { listResourceViewsForUser } from "../../src/resources.js";
 import { dataLayout, userLayout, type UserLayout } from "../../src/paths.js";
 
 /**
@@ -73,11 +73,19 @@ describe("ila_collect_page", () => {
     // The model is told what it kept and, more usefully, what it can now do with it — the id is
     // in the sentence because `read_document` takes one.
     expect(result).toContain("递归入门");
-    const row = (await listSourceViewsForUser(db, user, "u1"))[0]!;
-    expect(result).toContain(row.id);
-    expect(row.summary).toBe("递归的基础讲解");
-    expect(row.ownerKind).toBe("session");
-    expect(row.ownerId).toBe("s1");
+    /*
+     * What the turn holds is a **reference** to the page, and the sentence names its id —
+     * because `read_document` takes one. Two references exist after a keep in a conversation:
+     * the conversation's and the workspace's, which is what makes the page readable from a
+     * sibling conversation too.
+     */
+    const rows = await listResourceViewsForUser(db, user, "u1");
+    const mine = rows.find((r) => r.ownerType === "session")!;
+    expect(result).toContain(mine.id);
+    expect(mine.summary).toBe("递归的基础讲解");
+    expect(mine.ownerId).toBe("s1");
+    expect(mine.resourceType).toBe("web_page");
+    expect(rows.some((r) => r.ownerType === "workspace" && r.ownerId === "w1")).toBe(true);
   });
 
   it("refuses a page with nothing to store, as a tool error the model can act on", async () => {

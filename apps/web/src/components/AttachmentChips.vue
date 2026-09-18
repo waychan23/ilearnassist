@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
-import { sourceImageUrl } from "../api/client";
+import { fileImageUrl } from "../api/client";
 import { translateParseError } from "../utils/apiError";
 import { formatBytes } from "../utils/format";
 import type { Attachment } from "../api/types";
@@ -11,9 +11,9 @@ import Icon from "./Icon.vue";
  * Chips for the files on a message, or staged in the composer.
  *
  * There is no `sessionId` here, unlike the name this used to carry: a chip's thumbnail is
- * addressed by the **source**, which is what owns the bytes. The same file referenced from two
+ * addressed by the **file**, which is what owns the bytes. The same file referenced from two
  * conversations therefore resolves to the same object URL — which is why the fetch is keyed by
- * source id rather than by chip.
+ * file id rather than by chip.
  */
 const props = defineProps<{
   attachments: Attachment[];
@@ -32,11 +32,11 @@ const props = defineProps<{
 const thumbs = ref<Record<string, string>>({});
 const requested = new Set<string>();
 
-async function loadThumb(sourceId: string): Promise<void> {
-  if (requested.has(sourceId)) return;
-  requested.add(sourceId);
+async function loadThumb(fileId: string): Promise<void> {
+  if (requested.has(fileId)) return;
+  requested.add(fileId);
   try {
-    thumbs.value = { ...thumbs.value, [sourceId]: await sourceImageUrl(sourceId) };
+    thumbs.value = { ...thumbs.value, [fileId]: await fileImageUrl(fileId) };
   } catch {
     // Not reported. The chip still names the file and still reports its parse state, which is
     // what the user actually has to act on; a toast about a thumbnail would be noise, and the

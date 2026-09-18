@@ -344,11 +344,11 @@ const en: typeof MessageSchema = {
     tabAll: "All",
     tabWorkspace: "Workspaces",
     tabSource: "Sources",
-    /* The type filter's five pills. Coarser than the eight categories a source really has. */
+    /* The type filter's four pills. Coarser than the seven categories a file really has. A page
+     * is no longer a pill — it is a kind of reference rather than a content type. */
     pillImage: "Images",
     pillText: "Text",
     pillCode: "Code",
-    pillPage: "Web pages",
     pillOther: "Other files",
     /*
      * The row that opens every workspace at once. Its Chinese label is what it is called in the
@@ -653,6 +653,7 @@ const en: typeof MessageSchema = {
       table: "Table",
       note: "Note",
       quiz: "Quiz question",
+      resource: "Material",
     },
     remove: "Remove this reference",
     ask: "Ask about it",
@@ -1240,8 +1241,8 @@ const en: typeof MessageSchema = {
     SESSION_NOT_FOUND: "That conversation no longer exists.",
     TITLE_EMPTY: "The title cannot be empty.",
     UNSUPPORTED_FILE_TYPE: "Unsupported file type: {mimeType}",
-    SOURCE_NOT_FOUND: "That file no longer exists.",
-    SOURCE_STORE_FAILED: "Could not save the file. Please try again.",
+    RESOURCE_NOT_FOUND: "That file no longer exists.",
+    FILE_STORE_FAILED: "Could not save the file. Please try again.",
     DATA_REQUIRED: "The file contents are missing.",
     INVALID_BASE64: "The file contents are not valid base64.",
     EMPTY_FILE: "That file is empty.",
@@ -1336,12 +1337,19 @@ const en: typeof MessageSchema = {
     filterWorkspace: "Workspace",
     filterSession: "Conversation",
     filterCategory: "Kind",
-    filterOrigin: "Came from",
+    filterOwnerType: "Held by",
+    allOwnerTypes: "Any owner",
+    /** The two levels a reference can belong to — the filter's values. */
+    ownerType: {
+      session: "This conversation",
+      workspace: "The workspace",
+    },
+    filterResourceType: "Kind",
     filterMime: "MIME type",
     allWorkspaces: "All workspaces",
     allSessions: "All conversations",
     allCategories: "All kinds",
-    allOrigins: "Any origin",
+    allResourceTypes: "Any kind",
     allMimes: "All MIME types",
     viewFlat: "List",
     viewTree: "Tree",
@@ -1359,12 +1367,16 @@ const en: typeof MessageSchema = {
     pickFiles: "Choose files",
     addLinkHint: "The server fetches the page and keeps it, so a conversation can reference it later.",
     viewLabel: "View",
-    origin: {
-      session_attachment: "Attachment",
-      workspace_upload: "Uploaded to a workspace",
-      agent_workspace: "Written into a workspace",
-      agent_session: "Written into a conversation",
-      web: "Web page",
+    /* What a reference *is*, which is the entity it points at — see `zh-CN`. */
+    resourceType: {
+      file: "File",
+      web_page: "Web page",
+    },
+    /** How a file came to exist. See `zh-CN` for what the byline is for. */
+    fileSource: {
+      attachment: "Attachment",
+      upload: "Uploaded",
+      agent_create: "Written by the assistant",
       discovered: "Found in a folder",
     },
     category: {
@@ -1378,10 +1390,13 @@ const en: typeof MessageSchema = {
       other: "Other",
     },
     delete: {
-      title: "Delete this file",
+      /* The copy changed with the model: a v4 delete takes *this owner's reference* away and
+       * leaves the file and every other conversation's reference to it alone. See `zh-CN`. */
+      title: "Delete this reference",
       message: "Delete \u201c{name}\u201d?",
-      detail: "The file, its extracted text and every reference to it are removed, and this cannot be undone. Messages already sent keep showing the attachment, but it will not open.",
-      action: "Delete file",
+      detail:
+        "This reference is removed, and this cannot be undone. A file inside a workspace goes with it; other conversations referencing the same material are unaffected. Messages already sent keep showing the attachment, but it will not open.",
+      action: "Delete",
     },
     /** Leaving the app for the page a web source came from. See `zh-CN` for why it is its own
      *  verb rather than a second reading of `preview`. */

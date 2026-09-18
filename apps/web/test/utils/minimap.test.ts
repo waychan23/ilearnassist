@@ -108,8 +108,8 @@ describe("messagePreview", () => {
       message({
         role: "user",
         attachments: [
-          { id: "a1", name: "shot.png", mimeType: "image/png", size: 1, kind: "image" },
-          { id: "a2", name: "notes.md", mimeType: "text/markdown", size: 1, kind: "file" },
+          { id: "f-a1", resourceId: "a1", name: "shot.png", mimeType: "image/png", size: 1, kind: "image" },
+          { id: "f-a2", resourceId: "a2", name: "notes.md", mimeType: "text/markdown", size: 1, kind: "file" },
         ],
       })
     );
@@ -121,7 +121,7 @@ describe("messagePreview", () => {
       message({
         role: "user",
         content: "look at this",
-        attachments: [{ id: "a1", name: "shot.png", mimeType: "image/png", size: 1, kind: "image" }],
+        attachments: [{ id: "f-a1", resourceId: "a1", name: "shot.png", mimeType: "image/png", size: 1, kind: "image" }],
       })
     );
     expect(preview).toBe("look at this");

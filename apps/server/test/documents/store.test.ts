@@ -6,10 +6,10 @@ import {
   readParsedText,
   readParsedTextHead,
   removeParsedText,
-  sourceParsedPath,
+  parsedTextPath,
   writeParsedText,
 } from "../../src/documents/store.js";
-import { sourceRawPath } from "../../src/sourcePaths.js";
+import { rawFilePath } from "../../src/resourcePaths.js";
 import { dataLayout, userLayout, type UserLayout } from "../../src/paths.js";
 
 /**
@@ -87,8 +87,8 @@ describe("where the two kinds of file sit", () => {
     // Not load-bearing any more — nothing globs for a file by id, because the path is a
     // column — but the split is still the contract: a reader should never have to check
     // which of the two it is holding. The hazard that made this mandatory is pinned below.
-    const raw = sourceRawPath(user, "att-1", "application/pdf");
-    const parsed = sourceParsedPath(user, "att-1")!;
+    const raw = rawFilePath(user, "att-1", "application/pdf");
+    const parsed = parsedTextPath(user, "att-1")!;
 
     expect(raw).toBe(join(user.rawDir, "att-1.pdf"));
     expect(parsed).toBe(join(user.parsedDir, "att-1.txt"));
@@ -103,10 +103,10 @@ describe("where the two kinds of file sit", () => {
     // PDF. The path comes from the row now, so the download route reads the bytes it was
     // told to read and the question does not arise.
     mkdirSync(user.rawDir, { recursive: true });
-    writeFileSync(sourceRawPath(user, "att-1", "application/pdf"), Buffer.from("%PDF-1.4"));
+    writeFileSync(rawFilePath(user, "att-1", "application/pdf"), Buffer.from("%PDF-1.4"));
     await writeParsedText(user, "att-1", "extracted text that must not be served");
 
-    const raw = sourceRawPath(user, "att-1", "application/pdf");
+    const raw = rawFilePath(user, "att-1", "application/pdf");
     expect(raw).toBeTruthy();
     expect(raw!.endsWith("att-1.pdf")).toBe(true);
   });

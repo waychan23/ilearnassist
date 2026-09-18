@@ -107,7 +107,7 @@ async function submit(): Promise<void> {
 
   try {
     if (tab.value === "link") {
-      await api.addWebSource({ url: url.value.trim(), workspaceId: workspaceId.value });
+      await api.addResourcePage({ url: url.value.trim(), workspaceId: workspaceId.value });
     } else {
       const pending = [...files.value];
       for (const file of pending) {
