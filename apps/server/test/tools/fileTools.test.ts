@@ -50,10 +50,26 @@ describe("write_file", () => {
     expect(existsSync(join(h.sessionDir, "deep/nested/a.txt"))).toBe(true);
   });
 
-  it("says which folder it wrote into", async () => {
+  it("says which folder it wrote into, and which reference it became", async () => {
+    /*
+     * The id in the sentence is the `ila_collect_page` shape, and both of its readers are why:
+     * the model gets a handle it can hand to `read_document` without listing a directory first,
+     * and the message list's file card reads it to offer 标注/笔记 — a note is anchored to a
+     * *reference*, and a card has only a path. `FileCard.vue` parses this sentence, so the
+     * wording is a contract rather than a message.
+     */
     await expect(
       tools().writeFile.invoke({ path: "a.txt", content: "hello" })
-    ).resolves.toBe("Wrote 5 characters to a.txt in the session folder.");
+    ).resolves.toBe("Wrote 5 characters to a.txt in the session folder (id wr-1).");
+  });
+
+  it("omits the id when the registry made no row", async () => {
+    // A caller whose `register` returns nothing still gets a sentence that reads as a sentence.
+    // `ctx` is the harness's own object, so this reaches the one callback the tools use.
+    h.ctx.register = () => undefined;
+    await expect(
+      h.tools.writeFile.invoke({ path: "b.txt", content: "hi" })
+    ).resolves.toBe("Wrote 2 characters to b.txt in the session folder.");
   });
 
   /*

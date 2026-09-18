@@ -2,9 +2,10 @@ import { promises as fs } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { FILE_LOCATIONS } from "@ilearnassist/shared";
+import { FILE_LOCATIONS, WRITE_FILE_TOOL_NAME } from "@ilearnassist/shared";
 import type { FileLocation } from "@ilearnassist/shared";
 import { resolveInWorkspace } from "../workspace.js";
+import { renderPrompt } from "../prompts.js";
 
 const MAX_READ_CHARS = 40_000;
 const MAX_LIST_ENTRIES = 200;
@@ -26,6 +27,12 @@ interface DirEntry {
  * database, exactly as it knows nothing about a turn: it writes files, and somebody else
  * decides what a written file means. It runs *after* the bytes are on disk, so a registration
  * that throws cannot leave a row pointing at a file that was never written.
+ *
+ * It **returns the reference's id**, which goes into the tool's result — the `ila_collect_page`
+ * shape, and for the same two reasons. The model gets a handle it can hand to `read_document`
+ * without a listing first; and the message list's file card gets the id it needs to offer
+ * 标注/笔记, which is anchored to a reference rather than to a path. `undefined` is the honest
+ * answer for a caller whose registry made no row, and the sentence simply omits the id then.
  */
 export interface FileToolContext {
   /** The workspace's shared sandbox: every conversation in the workspace sees this tree. */
@@ -34,7 +41,26 @@ export interface FileToolContext {
   sessionDir: string;
   /** Where an unqualified write goes. Resolved per turn — see `writeLocation.ts`. */
   defaultLocation: FileLocation;
-  register: (input: { location: FileLocation; relPath: string; size: number }) => void;
+  register: (input: {
+    location: FileLocation;
+    relPath: string;
+    size: number;
+  }) => string | undefined;
+}
+
+/**
+ * The guidance the system prompt carries on a turn where `write_file` survived assembly.
+ *
+ * It lives here rather than in `loop.ts` for `collectPageGuidance`'s reason: the tool and its
+ * teaching are one thing, and the route asks the assembled array rather than the config.
+ *
+ * It is the other half of the **file card**, and without it the card is a third copy rather than
+ * the only one: the renderer draws the artifact over the call, so what is left for the prompt to
+ * ask is that the reply not restate it. Nothing on the server can write into a model's reply, so
+ * "do not paste what you just wrote" is this sentence or it is nothing.
+ */
+export function fileWriteGuidance(): string {
+  return renderPrompt("chat.guidance.fileWrite");
 }
 
 async function listDir(absPath: string, relBase: string): Promise<DirEntry[]> {
@@ -193,11 +219,22 @@ export function buildFileTools(ctx: FileToolContext) {
       const abs = resolveAt(where, path);
       await fs.mkdir(dirname(abs), { recursive: true });
       await fs.writeFile(abs, content, "utf8");
-      ctx.register({ location: where, relPath: relOf(where, abs), size: Buffer.byteLength(content, "utf8") });
-      return `Wrote ${content.length} characters to ${path} in the ${where} folder.`;
+      const id = ctx.register({
+        location: where,
+        relPath: relOf(where, abs),
+        size: Buffer.byteLength(content, "utf8"),
+      });
+      /*
+       * The id rides the sentence in the `Kept "X" (id …)` shape, so the model has a handle it can
+       * pass straight to `read_document` rather than listing a directory to find one. The message
+       * list reads the same two facts out of it — which folder, and which reference — for the file
+       * card, which is why the wording is worth keeping stable: `FileCard.vue` parses it.
+       */
+      const written = `Wrote ${content.length} characters to ${path} in the ${where} folder`;
+      return id ? `${written} (id ${id}).` : `${written}.`;
     },
     {
-      name: "write_file",
+      name: WRITE_FILE_TOOL_NAME,
       description:
         "Write a text file into one of the two writable folders, creating parent directories as " +
         "needed. Overwrites the file if it already exists. Write into the same folder as a file " +

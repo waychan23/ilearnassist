@@ -2,11 +2,12 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
-import { isInteractiveTool, type Message, type ToolCall } from "../api/types";
-import { codeCopyClick } from "../composables/codeCopy";
+import { isInteractiveTool, TABLE_TOOL_NAME, type Message, type ToolCall } from "../api/types";
+import { codeCopyClick, tableCopyClick } from "../composables/codeCopy";
 import { confirm } from "../composables/confirm";
-import { openNoteFromHighlight } from "../composables/messageNotes";
-import { renderMarkdown } from "../utils/markdown";
+import { openNoteFromHighlight, requestNoteEditor } from "../composables/messageNotes";
+import { objectNoteRequest } from "../composables/notes";
+import { renderMarkdown, type TableHeading } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
 import { applyNoteHighlights, noteIdAt, type NoteHighlightMark } from "../utils/noteAnchor";
 import { groupToolCalls } from "../utils/toolCallGroups";
@@ -167,9 +168,51 @@ const markdownLabels = computed(() => ({
   copied: t("common.copied"),
 }));
 
+/**
+ * The tables this reply recorded, in the order the model wrote them.
+ *
+ * Read off the `ila_table` **calls**, which is the only place in this message that knows a table's
+ * canonical name — the row it was saved to lives in `session_tables` and nothing joins the two.
+ * `renderMarkdown` pairs them positionally and gives up when the counts disagree, so a malformed
+ * argument here costs a title rather than a wrong one; a call whose JSON will not parse is one
+ * that never reached the save path either, and is skipped for the same reason.
+ */
+const tableHeadings = computed(() => {
+  const headings: TableHeading[] = [];
+  for (const call of props.message?.toolCalls ?? []) {
+    if (call.name !== TABLE_TOOL_NAME) continue;
+    try {
+      const args = JSON.parse(call.input) as { name?: unknown; summary?: unknown };
+      if (typeof args.name === "string" && args.name) {
+        headings.push({
+          name: args.name,
+          ...(typeof args.summary === "string" ? { summary: args.summary } : {}),
+        });
+      }
+    } catch {
+      /* a call with unparseable arguments recorded nothing to title */
+    }
+  }
+  return headings;
+});
+
+/**
+ * The words a table's bar needs, or `null` where a table should be left alone.
+ *
+ * Null in a **streaming** message: the calls arrive as the turn runs, so a table drawn before its
+ * `ila_table` call has landed would be titling against a moving set — and the count guard would
+ * flip a bar on and off as the turn went. The bar appears with the message, which is when its
+ * headings are settled.
+ */
+const tableWords = computed(() =>
+  props.streaming
+    ? null
+    : { headings: tableHeadings.value, labels: { untitled: t("table.untitled"), annotate: t("notes.annotate") } }
+);
+
 const rendered = computed(() => {
   if (!content.value) return "";
-  const html = renderMarkdown(content.value, markdownLabels.value);
+  const html = renderMarkdown(content.value, markdownLabels.value, tableWords.value ?? undefined);
   return props.streaming ? html + '<span class="streaming-cursor"></span>' : html;
 });
 
@@ -221,11 +264,40 @@ onMounted(() => void nextTick(drawNoteMarks));
  * message — including on a link — is left alone.
  */
 function onContentClick(event: MouseEvent): void {
-  // A code block's copy control first, and it reports whether it took the event: the two
-  // behaviours are distinguished by what was pressed, not by which ran first.
+  // The rendered controls first, and each reports whether it took the event: the behaviours are
+  // distinguished by what was pressed, not by which ran first.
   if (codeCopyClick(event)) return;
+  if (tableCopyClick(event)) return;
+  if (noteTable(event)) return;
   const noteId = noteIdAt(event.target as Element | null);
   if (noteId) openNoteFromHighlight(noteId);
+}
+
+/**
+ * A table's 标注/笔记 button, which is chrome rather than anything worth copying.
+ *
+ * The name and summary ride on the button's own attributes, put there by `renderMarkdown` from the
+ * `ila_table` call — so this reads what the bar already says rather than looking anything up. The
+ * handle is the model's spelling of the name, which is deliberate: the server normalises it with
+ * `tableName`, the same function the writer used, so the spelling that reaches the note is
+ * canonical either way and this side never has to know which of the two it is holding.
+ */
+function noteTable(event: MouseEvent): boolean {
+  const button = (event.target as Element | null)?.closest<HTMLElement>("[data-table-note]");
+  if (!button) return false;
+  event.stopPropagation();
+  event.preventDefault();
+
+  const name = button.dataset.tableName ?? "";
+  if (!name) return true;
+  const request = objectNoteRequest({
+    kind: "table",
+    ref: name,
+    label: name,
+    summary: button.dataset.tableSummary || undefined,
+  });
+  if (request) requestNoteEditor(request);
+  return true;
 }
 
 /** Token accounting for a finished assistant turn, when the provider reported it. */

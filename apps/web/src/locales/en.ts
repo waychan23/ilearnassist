@@ -57,6 +57,15 @@ const en: typeof MessageSchema = {
    * about the *drawing* rather than about the call: the same sentences are shown by the file
    * preview, which knows nothing about a tool call.
    */
+  /**
+   * A table's title bar in a reply — the strip above the markdown, not the table itself. See the
+   * Chinese catalog for why it is not a corner of `diagram`.
+   */
+  table: {
+    /** Deliberately vague rather than an invented name — see the Chinese catalog. */
+    untitled: "Table",
+  },
+
   diagram: {
     rendering: "Drawing the diagram…",
     failed: "This diagram cannot be drawn — mermaid could not parse the source below.",
@@ -432,6 +441,12 @@ const en: typeof MessageSchema = {
   },
 
   files: {
+    /** The card a `write_file` call draws in the conversation — see the Chinese catalog. */
+    card: {
+      open: "Open the file",
+      moreLines: "{count} more lines not shown — open it to read the rest",
+      copy: "Copy the file's contents",
+    },
     tab: "Workspace files",
     refresh: "Refresh the file list",
     empty: "This workspace has no files yet",

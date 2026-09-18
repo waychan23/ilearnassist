@@ -105,6 +105,8 @@ export interface RunAgentInput {
   collectPageGuidance?: string;
   /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
+  /** `write_file`'s other half — see `fileWriteGuidance`. */
+  fileWriteGuidance?: string;
   /**
    * What the user opened to this conversation with `@`, on turns where `ila_explore` is
    * assembled. Absent on every ordinary conversation, and it does more than add a paragraph —
@@ -314,6 +316,8 @@ export interface SystemPromptInput {
   collectPageGuidance?: string;
   /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
+  /** `write_file`'s other half — see `fileWriteGuidance`. */
+  fileWriteGuidance?: string;
   /**
    * What the user has opened to this conversation with `@`.
    *
@@ -405,6 +409,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   const quiz = block(input.quizGuidance);
   const collectPage = block(input.collectPageGuidance);
   const table = block(input.tableGuidance);
+  const fileWrite = block(input.fileWriteGuidance);
   // The `@` grant, which qualifies the workspace block above it.
   const explore = block(input.exploreGuidance);
   // One make-up turn's answer key, last: the most specific instruction in the prompt.
@@ -416,6 +421,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     clock,
     workspace,
     codeFence,
+    fileWrite,
     plan,
     quiz,
     collectPage,
@@ -614,6 +620,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         quizGuidance: input.quizGuidance,
         collectPageGuidance: input.collectPageGuidance,
         tableGuidance: input.tableGuidance,
+        fileWriteGuidance: input.fileWriteGuidance,
         exploreGuidance: input.exploreGuidance,
         quizMakeupNote: input.quizMakeupNote,
       })

@@ -242,10 +242,19 @@ const FENCED_CODE =
   /<pre class="hljs"(?: data-lang="([^"]*)")?(?: data-file="([^"]*)")?><code>([\s\S]*?)<\/code><\/pre>/g;
 
 /**
- * The strip above a code block: which file it is, and what language that file is.
+ * The strip above a code block: which file it is, what language that file is, and the copy
+ * control.
  *
- * Both halves are optional and independent — a snippet with a language and no file is the common
- * case, and one with neither produces no strip at all.
+ * Both name halves are optional and independent — a snippet with a language and no file is the
+ * ordinary case, and one with neither leaves the strip holding the control alone. Which is why the
+ * strip is **always** emitted for a block with content: it is the control's row, not a decoration
+ * that happens to contain it.
+ *
+ * **The copy control lives in here rather than in the corner.** It used to be absolutely
+ * positioned against the `<pre>`, and both it and this strip sat *in the scrolled content* — so
+ * dragging the horizontal scrollbar of a wide block carried the filename, the language and the
+ * button off-screen together. One sticky row holds all three against the scrollport instead, and
+ * the two can no longer disagree about where "the top of the block" is.
  *
  * **The values are inserted as they were captured, already escaped.** They went through
  * `md.utils.escapeHtml` on the way onto the marker, so what comes back is entity text: it renders
@@ -253,43 +262,163 @@ const FENCED_CODE =
  * `escapeHtml` a second time would be the bug — `a & b` would render as `a &amp; b`.
  *
  * `data-note-skip` is what keeps the strip out of `utils/noteAnchor.ts`'s visible-text walk. It is
- * the renderer's own chrome rather than anything the model wrote, exactly like the copy control
- * next to it, and a filename counted as message text would shift the occurrence arithmetic for
- * every note anchored below it — including notes written before this strip existed.
+ * the renderer's own chrome rather than anything the model wrote — the control contributes no text
+ * at all, and a filename counted as message text would shift the occurrence arithmetic for every
+ * note anchored below it, including notes written before this strip existed.
  */
-function codeHead(language: string | undefined, file: string | undefined): string {
-  if (!language && !file) return "";
+function codeHead(
+  language: string | undefined,
+  file: string | undefined,
+  labels: MarkdownLabels
+): string {
   const parts = [
     file ? `<span class="code-file">${file}</span>` : "",
     language ? `<span class="code-lang">${language}</span>` : "",
   ];
-  return `<span class="code-head" data-note-skip>${parts.join("")}</span>`;
+  return `<span class="code-head" data-note-skip>${parts.join("")}${codeCopyControl(labels)}</span>`;
 }
 
-export function renderMarkdown(text: string, labels: MarkdownLabels): string {
-  return md.render(text).replace(
+/* ------------------------------- table titles ------------------------------- */
+
+/**
+ * What a table the conversation recorded is called.
+ *
+ * The `name` and `summary` off the **`ila_table` call**, never off the model's own heading — the
+ * row is the only copy that cannot disagree with the 图表 panel, and the panel is where the same
+ * table is listed under the same name.
+ */
+export interface TableHeading {
+  name: string;
+  summary?: string;
+}
+
+/** The two words a table's bar needs beyond `MarkdownLabels`, as values rather than keys. */
+export interface TableLabels {
+  /** The bar's text for a table called nothing — see the count guard in `renderTables`. */
+  untitled: string;
+  /** The annotate control's name, drawn only on a table that has a heading. */
+  annotate: string;
+}
+
+/** Every table in a rendered string, non-greedy: markdown-it never nests one inside another. */
+const TABLE = /<table\b[\s\S]*?<\/table>/g;
+
+/** How many tables a rendered string holds. */
+const countTables = (html: string): number => (html.match(/<table\b/g) ?? []).length;
+
+/**
+ * Give every table a title bar, and the recorded ones their two actions.
+ *
+ * **The pairing is positional and count-guarded, and the guard is the load-bearing half.** The
+ * reply is markdown and the rows live in `session_tables`; nothing joins them, so the only handle
+ * the renderer has is "the tables appear in the order the model wrote them, and it wrote one per
+ * call". When the two counts **disagree** the pairing is abandoned entirely rather than attempted
+ * — a bar naming the wrong table is worse than a bar naming none, because a wrong name is a fact
+ * the reader has no way to check. Every table still gets a bar; the ones without a heading simply
+ * lose the annotate control, which needs a name to anchor to.
+ *
+ * The bar is **inside** a wrapper div with the table, which is what gives the delegated handler
+ * something to read: `closest("[data-table-block]")` is one table, where searching the whole
+ * message would copy whichever came first.
+ *
+ * `data-note-skip` on the bar, like the code block's, and this is the case its own docblock warns
+ * about: the bar carries *text* (the title), and `utils/noteAnchor.ts` counts a quote's
+ * occurrences over the message's visible text — so a title counted as message text would shift
+ * every note anchored below it.
+ */
+function renderTables(
+  html: string,
+  labels: MarkdownLabels,
+  tables: { headings: readonly TableHeading[]; labels: TableLabels }
+): string {
+  const total = countTables(html);
+  if (total === 0) return html;
+
+  const paired = tables.headings.length === total;
+  let index = 0;
+  return html.replace(TABLE, (table) => {
+    const heading = paired ? tables.headings[index] : undefined;
+    index += 1;
+    return `<div class="table-block" data-table-block>${tableBar(heading, labels, tables.labels)}${table}</div>`;
+  });
+}
+
+function tableBar(
+  heading: TableHeading | undefined,
+  labels: MarkdownLabels,
+  words: TableLabels
+): string {
+  // Escaped because this text is the model's, from the tool call's arguments rather than from the
+  // markdown — markdown-it never saw it, so nothing has escaped it yet.
+  const name = md.utils.escapeHtml(heading?.name ?? words.untitled);
+  const annotate = md.utils.escapeHtml(words.annotate);
+
+  return (
+    `<div class="table-head" data-note-skip>` +
+    `<span class="table-name">${name}</span>` +
+    // Absent, not disabled, when there is no heading: the control needs a canonical name to
+    // anchor the note to, and a button that rendered and did nothing is the failure this
+    // repository names most often.
+    (heading
+      ? `<button type="button" class="table-action" data-table-note ` +
+        `data-table-name="${name}" ` +
+        `data-table-summary="${md.utils.escapeHtml(heading.summary ?? "")}" ` +
+        `title="${annotate}" aria-label="${annotate}">${iconSvg("marker")}</button>`
+      : "") +
+    tableCopyControl(labels) +
+    `</div>`
+  );
+}
+
+/**
+ * The table's copy control, on the code block's pattern and for its reasons.
+ *
+ * `data-copy-table` rather than `data-copy-code`: the two copy different things — the code control
+ * reads the `<pre>` it sits in, this one converts its table to HTML with the inline styles that
+ * survive leaving the app. One attribute with a branch inside would be a control whose behaviour
+ * depends on where it happens to be.
+ */
+function tableCopyControl(labels: MarkdownLabels): string {
+  const name = md.utils.escapeHtml(labels.copy);
+  const copied = md.utils.escapeHtml(labels.copied);
+  return (
+    `<button type="button" class="code-copy" data-copy-table data-copy-state="idle" ` +
+    `data-idle-label="${name}" data-copied-label="${copied}" ` +
+    `title="${name}" aria-label="${name}">` +
+    `${iconSvg("copy")}${iconSvg("check")}</button>`
+  );
+}
+
+export function renderMarkdown(
+  text: string,
+  labels: MarkdownLabels,
+  tables?: { headings: readonly TableHeading[]; labels: TableLabels }
+): string {
+  const html = md.render(text).replace(
     FENCED_CODE,
     (whole, language: string | undefined, file: string | undefined, code: string) => {
       // An empty fence gets no control: there is nothing to copy, and a button that copies nothing
       // is the "renders but does nothing" this repository keeps out of its UI.
       if (!code) return whole;
       /*
-       * The button sits **inside** the `<pre>`, which is valid (`<button>` is phrasing content) and
-       * is why the opening tag is rewritten rather than wrapped: a wrapper div would be a block
-       * inside a `<pre>`, and the CSS positions this absolutely so it cannot disturb the code's own
-       * whitespace. No whitespace between the elements either — `<pre>` keeps it, and
-       * `utils/noteAnchor.ts` counts the text it would become.
-       *
-       * The head goes **first**, before the control, because the control is absolutely positioned
-       * in the top-right corner and the head is a flow element at the top-left: the other order
-       * would put the head's own text under the button.
+       * Everything sits **inside** the `<pre>`, which is valid (`<button>` and `<span>` are
+       * phrasing content) and is why the opening tag is rewritten rather than wrapped: a wrapper
+       * div would be a block inside a `<pre>`. No whitespace between the elements either — `<pre>`
+       * keeps it, and `utils/noteAnchor.ts` counts the text it would become.
        */
       return (
-        `<pre class="hljs code-block">${codeHead(language, file)}` +
-        `${codeCopyControl(labels)}<code>${code}</code></pre>`
+        `<pre class="hljs code-block">${codeHead(language, file, labels)}` +
+        `<code>${code}</code></pre>`
       );
     }
   );
+  /*
+   * Tables last, and optional. The surfaces that render a *stored* blob — the quiz dialog, the file
+   * preview — pass no `tables`, so a table there is left exactly as markdown-it wrote it: they have
+   * no `session_tables` row behind them and no notes panel to annotate into, so a bar would be
+   * chrome around an action that cannot be taken.
+   */
+  return tables ? renderTables(html, labels, tables) : html;
 }
 
 /**

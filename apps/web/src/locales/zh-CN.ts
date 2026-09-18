@@ -74,6 +74,24 @@ export default {
    * about the *drawing* rather than about the call: the same sentences are shown by the file
    * preview, which knows nothing about a tool call.
    */
+  /**
+   * A table's title bar in a reply — the strip above the markdown, not the table itself.
+   *
+   * Its own namespace rather than a corner of `diagram`: the bar is drawn by the *message* renderer
+   * (`utils/markdown.ts`), which knows nothing about the 图表 panel, and the two are only the same
+   * table by coincidence of the reader looking at both.
+   */
+  table: {
+    /**
+     * The bar's text for a table no `ila_table` call recorded.
+     *
+     * Deliberately vague rather than an invented name: the count guard abandons the pairing the
+     * moment the two disagree, and a bar that guessed a title would be stating something the app
+     * cannot know.
+     */
+    untitled: "表格",
+  },
+
   diagram: {
     /** While mermaid is parsing and laying out — measured in tens of milliseconds, not seconds,
      *  but a diagram that appears from nowhere is a jump. */
@@ -542,6 +560,20 @@ export default {
    * the tree is not a part of the sidebar conceptually — the sidebar is just where it lives.
    */
   files: {
+    /**
+     * The card a `write_file` call draws in the conversation — the artifact, not its text.
+     *
+     * Its own sub-namespace rather than three more keys beside the file tree's: the card is the
+     * *message* side of a file, and the tree is the browser's, and the two only meet when a reader
+     * opens one from the other.
+     */
+    card: {
+      /** Opening the whole file in the preview dialog, which is where reading it belongs. */
+      open: "打开文件",
+      /** Said under the preview, so a head of a file is not mistaken for the file. */
+      moreLines: "还有 {count} 行未显示，打开可查看全文",
+      copy: "复制文件内容",
+    },
     tab: "工作区文件",
     refresh: "刷新文件列表",
     empty: "这个工作区还没有文件",

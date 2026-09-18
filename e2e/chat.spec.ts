@@ -53,8 +53,15 @@ test("a conversation round trip survives a reload", async ({ page, request }) =>
   await expect(reasoning).toContainText("用户想要一个文件，我应该用 write_file。");
   await expect(page.getByText("用户想要一个文件，我应该用 write_file。")).toHaveCount(1);
 
-  // The tool call is surfaced as a card.
-  await expect(page.getByTestId("tool-call").first()).toContainText("写入文件");
+  /*
+   * The tool call is surfaced as a **file card**, not the generic args-and-result disclosure: a
+   * write is an artifact the conversation now holds, so the card shows the file rather than the
+   * JSON that produced it. `e2e/file-card.spec.ts` is where that card is examined; what this test
+   * needs from it is that the call is shown at all, and that the file's own text is not pasted
+   * into the reply beside it.
+   */
+  await expect(page.getByTestId("file-card").first()).toContainText("notes.txt");
+  await expect(page.getByTestId("message-assistant").first().locator("pre.code-block")).toHaveCount(0);
 
   // The final answer is the persisted assistant message.
   await expect(page.getByTestId("message-assistant").last()).toContainText("文件已保存。");
@@ -78,7 +85,7 @@ test("a conversation round trip survives a reload", async ({ page, request }) =>
   await page.getByTestId("session-item").first().click();
   await expect(page.getByTestId("message-user")).toContainText("帮我写一个文件");
   await expect(page.getByTestId("message-assistant").last()).toContainText("文件已保存。");
-  await expect(page.getByTestId("tool-call").first()).toContainText("写入文件");
+  await expect(page.getByTestId("file-card").first()).toContainText("notes.txt");
   await expect(page.getByTestId("session-title")).toHaveText("写一个文件");
 
   // The sidebar lists the conversation too.

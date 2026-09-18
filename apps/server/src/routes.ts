@@ -82,6 +82,7 @@ import {
   SUPERADMIN_ROLE,
   TABLE_TOOL_NAME,
   USERNAME_MAX_LENGTH,
+  WRITE_FILE_TOOL_NAME,
 } from "@ilearnassist/shared";
 import {
   insightReasoningSetting,
@@ -159,6 +160,7 @@ import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { collectPageGuidance } from "./tools/collectPage.js";
 import { tableGuidance } from "./tools/table.js";
+import { fileWriteGuidance } from "./tools/fileTools.js";
 import { exploreGuidance } from "./tools/explore.js";
 import { planGuidance } from "./tools/planTools.js";
 import { quizGuidance } from "./tools/quizReview.js";
@@ -4189,6 +4191,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     collectPageGuidance?: string;
     /** See the assembly site: the positive half of `ila_table`'s contract. */
     tableGuidance?: string;
+    /** Present when `write_file` survived assembly — the other half of the file card. */
+    fileWriteGuidance?: string;
     /**
      * Present when the conversation holds an `@` grant **and** `ila_explore` survived assembly.
      * Its presence is what flips the workspace note's read prohibition — see `buildSystemPrompt`.
@@ -4336,13 +4340,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
             sourceType: "agent_create",
             size,
           });
-          ensureWorkResource(db, {
+          return ensureWorkResource(db, {
             userId: input.userId,
             owner,
             resourceType: "file",
             resourceId: file.id,
             title: file.title,
-          });
+          })?.id;
         },
       },
       webSearch: config.tools.webSearch,
@@ -4519,6 +4523,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * the tool is never taught a call it cannot make.
        */
       tableGuidance: tools.some((t) => t.name === TABLE_TOOL_NAME) ? tableGuidance() : undefined,
+      /*
+       * The file card's other half, in the same form: the renderer draws the written file over
+       * the call, and this is what asks the reply not to restate it. Asked of the assembled
+       * array, so a Copilot whose allow-list excludes `write_file` is never told what not to do
+       * with a file it cannot write.
+       */
+      fileWriteGuidance: tools.some((t) => t.name === WRITE_FILE_TOOL_NAME)
+        ? fileWriteGuidance()
+        : undefined,
       /*
        * The `auto-install` side effect, and the only reason the loop takes a callback for it: the
        * loop knows which tool ran, and this closure knows whose conversation it ran in. It
@@ -5016,6 +5029,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
+        fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
@@ -5178,6 +5192,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
+        fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
@@ -5321,6 +5336,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         quizGuidance: ctx.quizGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
+        fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,

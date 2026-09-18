@@ -48,11 +48,17 @@ async function send(page: Page, text: string): Promise<void> {
 const group = (page: Page) => page.getByTestId("tool-call-group");
 const toggle = (page: Page) => page.getByTestId("tool-call-group-toggle");
 
-/** Three ordinary actions in one step — the shape this feature exists for. */
+/**
+ * Three ordinary actions in one step — the shape this feature exists for.
+ *
+ * All three are **groupable**, which is what makes them "ordinary": `write_file` is deliberately
+ * not one of them any more (its card renders the file, so it breaks a run like a diagram), and
+ * the case below it pins that.
+ */
 const THREE_CALLS = [
   { id: "call_ls", name: "list_files", args: { path: "." } },
-  { id: "call_write", name: "write_file", args: { path: "a.txt", content: "hi" } },
   { id: "call_read", name: "read_file", args: { path: "a.txt" } },
+  { id: "call_fetch", name: "web_fetch", args: { url: "https://example.com" } },
 ];
 
 test("a run of consecutive tool calls is one card, and opens into all of them", async ({
@@ -85,7 +91,7 @@ test("a run of consecutive tool calls is one card, and opens into all of them", 
   await expect(head).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("tool-call")).toHaveCount(3);
   await expect(page.getByTestId("tool-call").first()).toContainText("列出文件");
-  await expect(page.getByTestId("tool-call").last()).toContainText("读取文件");
+  await expect(page.getByTestId("tool-call").last()).toContainText("读取网页");
 
   // The same control folds it back.
   await head.click();
@@ -157,6 +163,44 @@ test("a diagram breaks a run rather than being folded into it", async ({ page, r
   await expect(group(page)).toHaveCount(1);
   await expect(toggle(page)).toContainText("2 个工具调用");
   await expect(page.getByTestId("diagram-card")).toHaveCount(1);
+
+  await toggle(page).click();
+  await expect(page.getByTestId("tool-call")).toHaveCount(2);
+});
+
+test("a written file breaks a run rather than being folded into it", async ({ page, request }) => {
+  /*
+   * The diagram's reason, one tool over: the file card renders the **file**, so folding it into a
+   * count would hide the artifact behind a number. A turn that reads two files and writes one
+   * therefore shows the write as a card and folds only the two reads.
+   *
+   * `apps/web/test/utils/toolCallGroups.test.ts` pins the rule; what is here is that the message
+   * list draws it — and that the file is not simply swallowed by the run it sits inside.
+   */
+  await scriptLlm(request, {
+    turns: [
+      {
+        content: "我先看看再写。",
+        toolCalls: [
+          { id: "call_ls", name: "list_files", args: { path: "." } },
+          { id: "call_read", name: "read_file", args: { path: "a.txt" } },
+          { id: "call_write", name: "write_file", args: { path: "b.txt", content: "hi" } },
+        ],
+      },
+      { content: "写好了。" },
+    ],
+  });
+
+  await page.goto("/");
+  await createAndEnter(page, `写文件 ${Date.now()}`);
+  await openSession(page);
+  await send(page, "写个文件");
+  await expect(page.getByTestId("message-assistant").last()).toContainText("写好了。");
+
+  // The two reads folded into one line; the written file is still a file.
+  await expect(group(page)).toHaveCount(1);
+  await expect(toggle(page)).toContainText("2 个工具调用");
+  await expect(page.getByTestId("file-card")).toHaveCount(1);
 
   await toggle(page).click();
   await expect(page.getByTestId("tool-call")).toHaveCount(2);

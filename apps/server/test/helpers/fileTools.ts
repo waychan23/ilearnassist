@@ -37,7 +37,17 @@ export function fileToolsFor(
     workdir,
     sessionDir,
     defaultLocation: options.defaultLocation ?? "session",
-    register: (input) => written.push(input),
+    /*
+     * A reference id per write, in the shape the real registry makes them. Returned rather than
+     * ignored because the tools put it *in their result* — the model gets a handle for
+     * `read_document` and the file card gets one for 标注/笔记 — so a harness that returned
+     * nothing would hide the whole of that half from every test that writes a file.
+     */
+    register: (input) => {
+      const id = `wr-${written.length + 1}`;
+      written.push(input);
+      return id;
+    },
   };
 
   return { tools: buildFileTools(ctx), ctx, written, workdir, sessionDir };

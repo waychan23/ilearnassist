@@ -150,6 +150,17 @@ export const DIAGRAM_TOOL_NAME = "ila_diagram";
 export const TABLE_TOOL_NAME = "ila_table";
 
 /**
+ * The tool the file card is drawn for.
+ *
+ * Shared for the `TABLE_TOOL_NAME` reason — the client switches on it to pick a call out of an
+ * assistant message — and it is the only one of the file tools that has a constant, because it is
+ * the only one whose *call* the client renders. `list_files` and `read_file` are things a model
+ * did on the way to an answer; a write is an artifact the conversation now holds, and the card is
+ * where it is shown.
+ */
+export const WRITE_FILE_TOOL_NAME = "write_file";
+
+/**
  * The plan tools' names. Declared here rather than in the plan section below because the
  * widget registry names the plan widget's tools at module-eval time, and a `const` used in
  * an initializer has to exist first.

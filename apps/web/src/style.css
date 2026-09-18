@@ -1669,23 +1669,22 @@ body {
 /*
  * A fenced code block's copy control, written into the HTML by `renderMarkdown`.
  *
- * Absolutely positioned rather than in the flow, because it lives *inside* the `<pre>` — a
- * `<button>` is phrasing content and valid there, but as a normal child it would be laid out on
- * its own line of the code's own whitespace, which `<pre>` preserves and `noteAnchor` would then
- * count. Out of the flow, it sits in the corner and the code is untouched.
+ * **A flex item in the strip above the code, not an overlay.** It used to be absolutely
+ * positioned in the corner, which read well until a wide block was scrolled: an absolutely
+ * positioned child of a scroll container scrolls *with* the content, so the button and the
+ * filename beside it left the screen together the moment a long line was dragged. The strip is
+ * sticky against the scrollport now, and everything it holds comes with it.
  *
  * Always visible rather than hover-only: a control that appears on hover is invisible on a touch
  * screen, and this one has no other affordance. `--text-3` keeps it quiet next to the code, at
  * full contrast when pointed at or focused.
  */
 .code-copy {
-  position: absolute;
-  top: var(--space-4);
-  right: var(--space-4);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-3);
+  flex: none;
+  padding: var(--space-2);
   border: none;
   border-radius: var(--radius-xs);
   background: none;
@@ -1724,30 +1723,36 @@ pre.code-block {
 }
 
 /*
- * The strip above a code block: the file it came from, and its language.
+ * The strip above a code block: the file it came from, its language, and the copy control.
  *
- * Two spans in a flex row rather than a table or a grid, because either of them can be the only
- * one present — a snippet with a language and no file is the ordinary case. `justify-content`
- * pushes the language to the right, so the filename sits where a filename belongs and the language
- * lines up with the copy control above it.
+ * **Sticky on the inline axis**, which is what keeps all three visible while the code under them
+ * scrolls sideways. `left: 0` is a horizontal sticky offset, so the strip stays against the left
+ * edge of the scrollport rather than travelling with the content — the failure this replaces. The
+ * background is what the code scrolls *under*; without it the two overlap and the strip reads as
+ * part of the first line.
  *
- * `padding-right` on the head is what keeps a long filename from sliding under that control: it is
- * absolutely positioned in the corner and the head is in the flow, so without the reservation the
- * two overlap for any name longer than a few characters.
+ * A flex row rather than a table or a grid, because either name can be the only one present — a
+ * snippet with a language and no file is the ordinary case. `justify-content` pushes the language
+ * and the control to the right, so the filename sits where a filename belongs.
  *
  * The whole strip is `user-select: none`, matching the control: neither is part of the message a
  * reader would quote, and `data-note-skip` keeps both out of the anchor arithmetic for the same
  * reason.
  */
 .code-head {
+  position: sticky;
+  left: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-4);
   margin-bottom: var(--space-3);
-  padding-right: var(--space-8);
   font-size: var(--fs-2);
-  color: var(--text-3);
+  /* `--code-fg-2`, not `--text-3`: this strip paints the code surface, and the design system
+     requires a foreground from that surface's own family so the pairing is right in both themes.
+     The muted tone is the code block's secondary text, which is what a filename is. */
+  color: var(--code-fg-2);
+  background: var(--code-bg);
   user-select: none;
 }
 .code-file {
@@ -1805,6 +1810,67 @@ pre.code-block {
 .markdown td {
   border: 1px solid var(--border);
   padding: var(--space-3) var(--space-5);
+}
+/*
+ * The wrapper `renderMarkdown` puts around every table, so its title bar and its copy control have
+ * an element to belong to: `closest("[data-table-block]")` is one table, where searching the whole
+ * message would find whichever came first. `overflow-x` here rather than on the table, so a wide
+ * grid scrolls under its own bar instead of widening the bubble — the code block's treatment, one
+ * level out because a table's bar is a *sibling* of the thing that scrolls.
+ */
+.table-block {
+  margin: 0 0 var(--space-5);
+  overflow-x: auto;
+}
+/* The bar is the scrolling box's content, so it must not add a second margin under it. */
+.table-block .markdown table,
+.table-block table {
+  margin-bottom: 0;
+}
+/*
+ * The strip above a table: what it is called, and the two things a reader can do with it.
+ *
+ * `position: sticky; left: 0` for the code block's reason — a wide grid scrolled sideways carries
+ * its own title off-screen otherwise, and the title is what says which table this is.
+ */
+.table-head {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-2);
+  color: var(--text-3);
+  background: var(--panel);
+  user-select: none;
+}
+.table-name {
+  /* Takes the slack, so the name is pushed left and the controls stay right. */
+  margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.table-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  user-select: none;
+}
+.table-action:hover,
+.table-action:focus-visible {
+  background: var(--panel-2);
+  color: var(--text);
 }
 
 /* --------------------------------- tool cards -------------------------------- */

@@ -167,18 +167,27 @@ describe("renderMarkdown", () => {
       /*
        * An info word nothing recognises is not a language, and a pill repeating it would be the
        * app inventing a fact — ` ```app.py ` and ` ```foobar ` are the same thing to highlight.js.
-       * The block renders as it always did: escaped text, no header.
+       * The strip is still there, because it is the copy control's row; what is absent is the
+       * language, not the strip.
        */
       for (const info of ["app.py", "foobar"]) {
         const html = renderMarkdown("```" + info + "\nbody\n```", labels);
-        expect(html, info).not.toContain("code-head");
-        expect(html).not.toContain("code-lang");
+        expect(html, info).not.toContain("code-lang");
+        expect(html, info).not.toContain("code-file");
+        expect(html, info).toContain("code-head");
       }
     });
 
-    it("renders exactly as before when the fence names nothing", () => {
+    it("keeps the strip, and the control in it, when the fence names nothing", () => {
+      /*
+       * The strip is no longer a decoration that happens to hold the control — it **is** the
+       * control's row, and it is there for every block with content. That is what lets one sticky
+       * element hold the filename, the language and the button against the scrollport together,
+       * instead of the button being positioned in a corner the scroller carries away.
+       */
       const html = renderMarkdown("```\nplain\n```", labels);
-      expect(html).not.toContain("code-head");
+      expect(html).toContain('<span class="code-head" data-note-skip>');
+      expect(html).toContain("data-copy-code");
       expect(html).toContain("plain");
     });
 
@@ -286,6 +295,88 @@ describe("renderMarkdown", () => {
 
   it("returns an empty string for empty input", () => {
     expect(render("")).toBe("");
+  });
+
+  /**
+   * The title bar every table gets, and the two actions on it.
+   *
+   * The claims worth pinning are the ones a screenshot cannot show: that the pairing between a
+   * rendered table and the `ila_table` call that recorded it **gives up** rather than guessing
+   * when the counts disagree, and that the bar's title is kept out of the note-anchor arithmetic
+   * — it is text the renderer added, and counting it would shift every note below it.
+   */
+  describe("a table's title bar", () => {
+    const labels = { copy: "复制", copied: "已复制" };
+    const words = { untitled: "表格", annotate: "标注/笔记" };
+    const TABLE_MD = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+
+    const withTables = (markdown: string, headings: { name: string; summary?: string }[] = []) =>
+      renderMarkdown(markdown, labels, { headings, labels: words });
+
+    it("draws a bar per table, wrapping it so the controls know which table they act on", () => {
+      const html = withTables(TABLE_MD, [{ name: "对比表", summary: "两列" }]);
+      expect(html).toContain('data-table-block');
+      expect(html).toContain('<span class="table-name">对比表</span>');
+      expect(html).toContain("data-table-note");
+      expect(html).toContain("data-copy-table");
+      // The wrapper is what `closest("[data-table-block]")` finds, and the table is inside it.
+      expect(html.indexOf('data-table-block')).toBeLessThan(html.indexOf("<table"));
+    });
+
+    it("keeps the bar out of the message's visible text", () => {
+      // `noteAnchor` counts a quote's occurrences over the message's visible text, and the title
+      // is chrome the reader never wrote — see the `data-note-skip` note in `utils/markdown.ts`.
+      const html = withTables(TABLE_MD, [{ name: "对比表" }]);
+      expect(html).toContain('<div class="table-head" data-note-skip>');
+    });
+
+    it("gives up on the pairing when the counts disagree, rather than naming the wrong table", () => {
+      /*
+       * The guard, and the whole reason the bar's text is worth trusting. Two tables and one
+       * recorded name is a reply whose structure the renderer cannot account for; a bar naming the
+       * second table after the first table's row is a fact the reader has no way to check.
+       */
+      const html = withTables(`${TABLE_MD}\n\ntext\n\n${TABLE_MD}`, [{ name: "对比表" }]);
+      expect((html.match(/data-table-block/g) ?? []).length).toBe(2);
+      expect(html).not.toContain("对比表");
+      expect(html).toContain(">表格<");
+      // Both actions survive except the one that needs a name to anchor to.
+      expect(html).not.toContain("data-table-note");
+      expect((html.match(/data-copy-table/g) ?? []).length).toBe(2);
+    });
+
+    it("pairs positionally when the counts agree", () => {
+      const html = withTables(`${TABLE_MD}\n\ntext\n\n${TABLE_MD}`, [
+        { name: "第一张" },
+        { name: "第二张" },
+      ]);
+      expect(html.indexOf("第一张")).toBeLessThan(html.indexOf("第二张"));
+    });
+
+    it("carries the summary onto the control, escaped", () => {
+      const html = withTables(TABLE_MD, [{ name: "对比表", summary: 'a "b" <c>' }]);
+      expect(html).toContain('data-table-summary="a &quot;b&quot; &lt;c&gt;"');
+    });
+
+    it("escapes a name before it becomes markup and text", () => {
+      const html = withTables(TABLE_MD, [{ name: "<img src=x>" }]);
+      expect(html).not.toContain("<img");
+      expect(html).toContain("&lt;img src=x&gt;");
+    });
+
+    it("leaves a table exactly as markdown-it wrote it when no tables are passed", () => {
+      // The quiz dialog and the file preview render a *stored* blob: no `session_tables` row is
+      // behind it and no notes panel is open, so a bar there would be chrome around an action
+      // that cannot be taken.
+      const html = renderMarkdown(TABLE_MD, labels);
+      expect(html).toContain("<table>");
+      expect(html).not.toContain("table-block");
+      expect(html).not.toContain("table-head");
+    });
+
+    it("touches no table when the reply has none", () => {
+      expect(withTables("只是普通文字。", [{ name: "对比表" }])).not.toContain("table-block");
+    });
   });
 });
 

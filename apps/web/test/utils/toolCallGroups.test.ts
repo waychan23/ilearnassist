@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DIAGRAM_TOOL_NAME, type ToolCall } from "@ilearnassist/shared";
+import {
+  DIAGRAM_TOOL_NAME,
+  WRITE_FILE_TOOL_NAME,
+  type ToolCall,
+} from "@ilearnassist/shared";
 import {
   groupHead,
   groupToolCalls,
@@ -84,6 +88,13 @@ describe("isGroupableToolCall", () => {
 
   it("refuses a diagram, whose card renders the artifact", () => {
     expect(isGroupableToolCall(call("a", DIAGRAM_TOOL_NAME))).toBe(false);
+  });
+
+  it("refuses a write, whose card renders the file", () => {
+    // The diagram's reason in a second place: a write is not a step on the way to an answer but a
+    // thing the conversation now holds, so a turn that writes one and reads two others must not
+    // file the file under "3 个工具调用".
+    expect(isGroupableToolCall(call("a", WRITE_FILE_TOOL_NAME))).toBe(false);
   });
 
   it("refuses each interactive tool", () => {

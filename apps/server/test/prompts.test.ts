@@ -74,6 +74,7 @@ describe("the catalog", () => {
       "clock",
       "workspace",
       "codeFence",
+      "fileWrite",
       "plan",
       "quiz",
       "collectPage",
