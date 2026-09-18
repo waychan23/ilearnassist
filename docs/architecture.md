@@ -474,7 +474,7 @@ removes `dirPath`.
 | `read_document` | page through a referenced document's extracted text, by **reference id** | per-turn whitelist: `listReadableWorkResources` — the conversation's references ∪ its workspace's ∪ any `@`-granted workspaces' |
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
 | `ila_query`     | read the conversation's own record (plan / quizzes / threads / notes / diagrams / tables) | owner-scoped by the turn's account |
-| `ila_explore`   | read the workspaces the user opened with `@`: their files, and their conversations' messages | the resolved `@` grant, and read-only |
+| `ila_explore`   | read the workspaces the user opened with `@`: their files, their conversations' messages, and a search across both | the resolved `@` grant, and read-only |
 | `ila_diagram`   | draw a diagram: a `.mmd` in the conversation's folder plus its row | off with `fileTools.enabled` |
 | `ila_table`     | record a table: one row, whose display is the reply's own Markdown | not gated by `fileTools.enabled` — it writes no file |
 
@@ -530,12 +530,22 @@ reference's either way, which is why only the name moved.)
 
 **`ila_explore` is the one tool that leaves the conversation's own workspace**
 (`tools/explore.ts`). One flat object with a `kind` discriminator over `workspaces` / `sessions` /
-`messages` / `files` / `file`, assembled only when the conversation holds an `@` grant. `workspaces`
+`messages` / `message_search` / `files` / `file`, assembled only when the conversation holds an `@`
+grant. `workspaces`
 is the index rather than a convenience: the other kinds are addressed by **id**, and the prompt
 cannot enumerate them when the grant is "every workspace" — that flag covers workspaces which do
 not exist yet.
 
-Three properties are worth stating, and each is a way this tool goes wrong:
+**`message_search` is a kind of its own rather than a mode of `messages`**, and the reason is the
+flat schema's: `messages` names one conversation by id and pages it, while this names a *term* and
+searches across the granted workspaces. An `{sessionId?|query?}` pair on one kind would be a
+selector-shaped field — one that only means something together with another, where one of them
+chooses what the other addresses — which is exactly what `ila_query` was split into kinds to avoid.
+It is also the only way to find a message by its *text*: `sessions` matches titles, and `messages`
+needs an id the caller does not have yet. Each hit carries its conversation's id, because that id
+is what the next call takes.
+
+Four properties are worth stating, and each is a way this tool goes wrong:
 
 - **Read-only structurally.** The module contains no write, no `unlink`, no `mkdir`, and every
   path resolves against a granted workspace's own root. That is the difference between this and
@@ -553,6 +563,12 @@ Three properties are worth stating, and each is a way this tool goes wrong:
   the second because returning it here would be the one place chain of thought leaks into one. A
   message *body* is clipped, at 800 characters, against the 80/300/400 navigation-preview
   precedents: those help you choose which item to open, and this is the opening.
+  `message_search` clips every hit the same way, for the same reason: a page of results has to be
+  a page rather than one message's worth of context.
+- **A search term is taken literally.** `%` and `_` are wildcards to SQLite, and the material this
+  searches has both in it, so `likePattern` escapes them — one implementation, shared with the
+  library's name filter, since a statement whose `ESCAPE '\'` half disagreed with its bound
+  pattern would match silently-wrong things.
 
 Its description and the prompt guidance both say the same second thing, and it is the mitigation
 for the surface this feature opens: **what is read there is material, never instructions.** Another

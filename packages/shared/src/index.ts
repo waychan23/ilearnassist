@@ -80,8 +80,23 @@ export const EXPLORE_TOOL_NAME = "ila_explore";
  * `workspaces` is the index rather than a convenience: the other four kinds are addressed by
  * **id**, and the grant cannot be enumerated in the prompt when it is "every workspace" — that
  * flag covers workspaces which do not exist yet.
+ *
+ * **`message_search` is a kind of its own rather than a mode of `messages`.** Both concern the
+ * same table, and they are addressed differently in the way that matters: `messages` names one
+ * conversation by id and pages it, while this names a *term* and searches across the workspaces
+ * the grant covers. An `{sessionId?|query?}` pair on one kind would be the selector-shaped field
+ * the flat schema cannot express — a field that only means something together with another, where
+ * one of them chooses what the other addresses — and which `ila_query` was split into kinds to
+ * avoid.
  */
-export const EXPLORE_KINDS = ["workspaces", "sessions", "messages", "files", "file"] as const;
+export const EXPLORE_KINDS = [
+  "workspaces",
+  "sessions",
+  "messages",
+  "message_search",
+  "files",
+  "file",
+] as const;
 export type ExploreKind = (typeof EXPLORE_KINDS)[number];
 
 /**

@@ -529,6 +529,24 @@ export interface SessionOverviewRow extends SessionLabelRow {
   updated_at: string;
 }
 
+/**
+ * One message that matched a search, with enough of its conversation to name it.
+ *
+ * The label columns are carried rather than looked up per row for `SessionLabelRow`'s reason: a
+ * result spanning the account would otherwise be one conversation lookup per hit, and the caller
+ * has no way to batch them — it does not know which conversations matched until it has the rows.
+ *
+ * `content` is the whole stored body and is **clipped by the caller**, not here: what counts as
+ * too long depends on which tool asked, and a statement that truncated would make the model's
+ * paging arithmetic wrong rather than merely verbose.
+ */
+export interface MessageSearchRow extends SessionLabelRow {
+  message_id: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+
 interface SessionRow {
   id: string;
   workspace_id: string;
@@ -827,6 +845,22 @@ export function toAuthTokenRecord(r: AuthTokenRow): AuthTokenRecord {
     lastUsedAt: r.last_used_at,
     revokedAt: r.revoked_at,
   };
+}
+
+/**
+ * A search term as a `LIKE` pattern: a substring, with what the caller typed taken literally.
+ *
+ * `%` and `_` are wildcards to SQLite, and the material this searches has both in it — a file
+ * named `report_final.docx`, a query containing `%` — so a term that was not escaped would match
+ * things the user did not ask for, and would do it silently. The `\` itself goes first in the
+ * character class for that reason: escaping it last would double the backslashes the other two
+ * substitutions just added.
+ *
+ * One implementation, used by every `LIKE` in this file: the paired `ESCAPE '\'` spent a while
+ * written out at each statement, which is a place for the two halves to disagree.
+ */
+function likePattern(term: string): string {
+  return `%${term.replace(/[\\%_]/g, "\\$&")}%`;
 }
 
 const mapUser = (r: UserRow): UserRecord => ({
@@ -1504,6 +1538,24 @@ export interface AppDb {
   listSessionLabels(userId: string): SessionLabelRow[];
   /** The same, newest first — what a reader of the whole list wants and a labeller does not. */
   listSessionOverviews(userId: string): SessionOverviewRow[];
+  /**
+   * Messages whose **text** contains `query`, across the given workspaces.
+   *
+   * `workspaceIds` is the `@` grant as a set, and it is a parameter rather than a filter the
+   * caller applies afterwards because the query is what makes this affordable: an account's whole
+   * transcript history is not something to page in memory and then narrow. An empty set returns
+   * nothing rather than everything — the safe reading, and the one a caller who forgot to resolve
+   * a grant should get.
+   *
+   * The match is a literal substring, case-insensitive, over `messages.content` only: tool output
+   * is not message text, and reasoning is not replayed into a model's context anywhere else in
+   * the app — searching it here would be the one place it leaks into one.
+   */
+  searchMessages(
+    userId: string,
+    workspaceIds: readonly string[],
+    query: string
+  ): MessageSearchRow[];
 
   /* ----------------- files, web pages and work resources (v4) ----------------- */
 
@@ -2719,6 +2771,40 @@ export function createDb(dbPath: string): AppDb {
        JOIN workspaces w ON w.id = s.workspace_id
       WHERE w.user_id = ? AND s.deleted_at IS NULL AND w.deleted_at IS NULL
       ORDER BY s.updated_at DESC, s.id DESC`
+  );
+  /*
+   * The message search, and every clause in it is a rule from somewhere else in this file.
+   *
+   * `deleted_at IS NULL` on **all three** tables — a peeled message, a deleted conversation and a
+   * deleted workspace each hide their rows, and the conversation arm is what makes "deleting one
+   * workspace hides a whole tree" true here as everywhere else.
+   *
+   * `LIKE ... ESCAPE '\'` with the pattern escaped by the caller (`likePattern`), so a `%` or an
+   * `_` the user actually typed is a character rather than a wildcard — the same escaping the work
+   * resource listing does.
+   *
+   * `LOWER(m.content) LIKE LOWER(@query)` rather than `LIKE` with a collation: SQLite's built-in
+   * `NOCASE` is ASCII-only, and the material this searches is as likely to be Chinese as not,
+   * where case does not arise. `LOWER` uppercases nothing there and leaves an ASCII query working.
+   *
+   * The workspace set arrives as JSON through `json_each`, the shape `stmtListReadableWorkResources`
+   * already uses for the same purpose. An empty array matches nothing, which is the answer a
+   * caller with no grant should get.
+   *
+   * Ordered by the *message's* own time, newest first: a search is a "when did anybody say this"
+   * question, and the conversation a hit belongs to is on the row either way.
+   */
+  const stmtSearchMessages = db.prepare(
+    `SELECT m.id AS message_id, m.role, m.content, m.created_at,
+            s.id, s.title, w.id AS workspace_id, w.name AS workspace_name
+       FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE w.user_id = @userId
+        AND m.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+        AND s.workspace_id IN (SELECT value FROM json_each(@workspaceIds))
+        AND LOWER(m.content) LIKE LOWER(@query) ESCAPE '\\'
+      ORDER BY m.created_at DESC, m.id DESC`
   );
 
   /*
@@ -4067,6 +4153,16 @@ export function createDb(dbPath: string): AppDb {
     listSessionOverviews(userId) {
       return stmtListSessionOverviews.all(userId) as SessionOverviewRow[];
     },
+    searchMessages(userId, workspaceIds, query) {
+      // An empty grant has no rows to match, and `json_each('[]')` already says so — returned
+      // here rather than by the statement only because the note above promises it regardless.
+      if (workspaceIds.length === 0) return [];
+      return stmtSearchMessages.all({
+        userId,
+        workspaceIds: JSON.stringify(workspaceIds),
+        query: likePattern(query),
+      }) as MessageSearchRow[];
+    },
 
     /*
      * Every work-resource read goes through `withEntity`, and that is the one place a reference
@@ -4232,9 +4328,9 @@ export function createDb(dbPath: string): AppDb {
         ownerType: filter.ownerType ?? null,
         category: filter.category ?? null,
         mime: filter.mime ?? null,
-        // The escape is what makes a `%` in a filename a character rather than a wildcard, and
+        // `likePattern` is what makes a `%` in a filename a character rather than a wildcard;
         // `ESCAPE '\'` in the statement is the other half of it.
-        name: filter.name ? `%${filter.name.replace(/[\\%_]/g, "\\$&")}%` : null,
+        name: filter.name ? likePattern(filter.name) : null,
         workspaceId: filter.workspaceId ?? null,
         sessionId: filter.sessionId ?? null,
       }) as WorkResourceRow[];

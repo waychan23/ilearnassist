@@ -241,6 +241,14 @@ rather than a special one. The uniform part is that a reference points at a pars
 way: a `work_resources` row's `parsed_file_id` names a `files` row whether its entity is a file or
 a page.
 
+**One reference, held by whoever asked.** A page kept by a turn is the conversation's; a link the
+user pasted into the library is the workspace's. It used to write the workspace's as well, so that
+a page kept in one conversation would be readable from another — and that was a second row the
+library showed twice for one page, because readability never depended on it: the third arm of
+`listReadableWorkResources` already admits any reference owned by a *sibling* conversation in the
+same workspace. Sharing a page further is `@`-pointing at it in the next conversation, which is
+what shares every other piece of material.
+
 Three properties are worth knowing:
 
 - **A page's identity is its reading, not its bytes.** The hash is over the URL *and the
@@ -397,6 +405,7 @@ What a grant opens, and each half is needed:
 | the granted workspaces' **references** | arms 2 and 3 of `listReadableWorkResources` | `read_document` is addressed by a reference id, and that row is where the parse state — the readable text — lives |
 | the material their **conversations** hold | arm 3 | a conversation's own reference is owned by the conversation, so a reader scoped to the workspace alone would not see it |
 | their **files** | `ila_explore`'s `files`/`file` kinds | a workspace file no reference was ever made for is a *path*, and a path is not a reference id: `read_document` cannot address one |
+| the **text** of what was said there | `ila_explore`'s `message_search` kind | messages are not material at all — no reference names one, and `messages` needs a conversation id the caller does not have until a search has told it |
 
 `ila_explore` is assembled **only when the grant is non-empty**, the `read_document` rule — a tool
 that could only refuse is a step the model wastes discovering that. Its `messages` kind strips

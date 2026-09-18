@@ -3627,7 +3627,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         user: treeFor(user),
         userId: user.id,
         owner: { kind: "workspace", id: workspace.id },
-        workspaceId: workspace.id,
         url,
         // A link somebody pasted has no summary: a summary is a reading of a page by something
         // that understood it, and nothing has read this one yet.

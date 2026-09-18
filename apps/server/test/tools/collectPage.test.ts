@@ -75,17 +75,22 @@ describe("ila_collect_page", () => {
     expect(result).toContain("递归入门");
     /*
      * What the turn holds is a **reference** to the page, and the sentence names its id —
-     * because `read_document` takes one. Two references exist after a keep in a conversation:
-     * the conversation's and the workspace's, which is what makes the page readable from a
-     * sibling conversation too.
+     * because `read_document` takes one.
+     *
+     * **One reference, and it is the conversation's.** There used to be a second, owned by the
+     * workspace, on the reading that a page should be readable from every conversation in it —
+     * and the second row is what the library showed twice. Readability from a sibling was never
+     * what it bought: `listReadableWorkResources` admits any reference owned by a sibling
+     * conversation, so the workspace's row only duplicated the entry.
      */
     const rows = await listResourceViewsForUser(db, user, "u1");
-    const mine = rows.find((r) => r.ownerType === "session")!;
+    expect(rows).toHaveLength(1);
+    const mine = rows[0]!;
     expect(result).toContain(mine.id);
     expect(mine.summary).toBe("递归的基础讲解");
+    expect(mine.ownerType).toBe("session");
     expect(mine.ownerId).toBe("s1");
     expect(mine.resourceType).toBe("web_page");
-    expect(rows.some((r) => r.ownerType === "workspace" && r.ownerId === "w1")).toBe(true);
   });
 
   it("refuses a page with nothing to store, as a tool error the model can act on", async () => {

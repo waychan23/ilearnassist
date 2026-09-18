@@ -28,12 +28,17 @@ import type { UserLayout } from "./paths.js";
  * - two **`files` rows**: the fetched body, and the extracted text. The body's is registered and
  *   never referenced — the honest case the file/reference split exists for — while the text's id
  *   goes on the reference as `parsed_file_id`, which is how `read_document` finds it;
- * - one or two **`work_resources`**: the owner's, and the workspace's when the owner is a
- *   conversation. That second one is what makes a page kept in one conversation readable from
- *   another in the same workspace — the same widening an uploaded document has.
+ * - exactly one **`work_resources` row**, held by whoever asked for the page: the conversation
+ *   when the model kept it, the workspace when the user added a link.
  *
- * Two references share one text file rather than each extracting their own copy: the *parse* is
- * per reference, but a page arrives already extracted, so there is nothing to redo.
+ * **One reference, and there used to be two — and the second bought nothing.** A page kept by a
+ * turn also wrote the *workspace's* reference, on the reading that a page is like an uploaded
+ * document and should be readable from every conversation in the workspace. That reading was
+ * already served by `listReadableWorkResources`, whose third arm admits any reference owned by a
+ * *sibling* conversation in the same workspace; the extra row changed nothing about what could be
+ * read and only put a second, identical entry in the library under a different owner — the
+ * duplication reported from use. Removing it is a subtraction with no loss, which is worth stating
+ * plainly because the opposite is the natural assumption.
  */
 
 /** What a turn remembers about the pages it fetched, so keeping one does not refetch it. */
@@ -45,10 +50,14 @@ const MAX_PAGE_TEXT_CHARS = 400_000;
 export interface CapturePageInput {
   user: UserLayout;
   userId: string;
-  /** Who holds the page: a conversation when the model kept it, a workspace when a user added it. */
+  /**
+   * Who holds the page: a conversation when the model kept it, a workspace when a user added it.
+   *
+   * The only owner, since the fan-out to the workspace was removed — see the module docblock. What
+   * makes a kept page readable from a sibling conversation is the readable set's own sibling arm,
+   * not a second row here.
+   */
   owner: ResourceOwner;
-  /** The workspace it belongs to, so it is readable from every conversation in it. */
-  workspaceId: string;
   url: string;
   /**
    * The model's one line about the page.
@@ -181,42 +190,38 @@ export async function captureWebPage(
     now,
   });
 
-  const owners: ResourceOwner[] = [{ kind: "workspace", id: input.workspaceId }];
-  if (input.owner.kind === "session") owners.unshift(input.owner);
-
-  let first: WorkResourceRecord | undefined;
-  for (const owner of owners) {
-    const resource = ensureWorkResource(db, {
-      userId: input.userId,
-      owner,
-      resourceType: "web_page",
-      resourceId: page.id,
-      title: page.title,
-      summary: input.summary,
-      now,
-    });
-    if (!resource) continue;
-    /*
-     * `ready`, not `none`: a page arrives already extracted — the text is the point of keeping
-     * it — and `none` would tell every reader nothing had been done. The parsed file is linked
-     * so `read_document` finds the text through the ordinary path.
-     */
-    db.updateWorkResourceParse({
-      id: resource.id,
-      userId: input.userId,
-      status: "ready",
-      parsedChars: text.length,
-      parsedFileId: textFile.id,
-      now,
-    });
-    first ??= resource;
-  }
-
-  if (!first) {
+  const resource = ensureWorkResource(db, {
+    userId: input.userId,
+    owner: input.owner,
+    resourceType: "web_page",
+    resourceId: page.id,
+    title: page.title,
+    summary: input.summary,
+    now,
+  });
+  if (!resource) {
     // Unreachable through either caller — both pass an owner they have already resolved — and
     // a throw rather than a silent return: a page with no reference is a page nobody can read.
     throw new Error("Could not attach the page to anything.");
   }
 
-  return db.getWorkResourceForUser(input.userId, first.id) ?? first;
+  /*
+   * `ready`, not `none`: a page arrives already extracted — the text is the point of keeping it
+   * — and `none` would tell every reader nothing had been done. The parsed file is linked so
+   * `read_document` finds the text through the ordinary path.
+   *
+   * The text file is *shared* by every reference to the same reading: the parse is per reference,
+   * but a page arrives already extracted, so there is nothing to redo when a second conversation
+   * is pointed at it.
+   */
+  db.updateWorkResourceParse({
+    id: resource.id,
+    userId: input.userId,
+    status: "ready",
+    parsedChars: text.length,
+    parsedFileId: textFile.id,
+    now,
+  });
+
+  return db.getWorkResourceForUser(input.userId, resource.id) ?? resource;
 }

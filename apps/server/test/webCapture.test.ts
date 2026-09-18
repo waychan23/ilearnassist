@@ -78,7 +78,6 @@ describe("a workspace page — the user pasted a link", () => {
       user,
       userId: "u1",
       owner: { kind: "workspace", id: "w1" },
-      workspaceId: "w1",
       url,
       cache: cacheWith(url),
     });
@@ -95,7 +94,6 @@ describe("a workspace page — the user pasted a link", () => {
       user,
       userId: "u1",
       owner: { kind: "workspace", id: "w1" },
-      workspaceId: "w1",
       url,
       cache: cacheWith(url),
     });
@@ -131,13 +129,12 @@ describe("a workspace page — the user pasted a link", () => {
     ).toBe(true);
   });
 
-  it("links a page kept in a conversation to the conversation too", async () => {
+  it("links a page kept in a conversation to that conversation alone", async () => {
     const url = "https://example.com/a";
     const row = await captureWebPage(db, {
       user,
       userId: "u1",
       owner: { kind: "session", id: "s1" },
-      workspaceId: "w1",
       url,
       summary: "递归的入门讲解",
       cache: cacheWith(url),
@@ -146,19 +143,23 @@ describe("a workspace page — the user pasted a link", () => {
     expect(row.ownerType).toBe("session");
     expect(row.summary).toBe("递归的入门讲解");
     /*
-     * Two references: the conversation it was kept in, and the workspace it belongs to — which is
-     * how a page kept in one conversation is readable from another, exactly as an upload is. One
-     * text file serves both, because a page arrives already extracted and there is nothing to
-     * redo; the *parse* is per reference, which is why each carries its own `parsed_file_id`.
+     * One reference, and there used to be two. The workspace's row was written on the reading
+     * that a page is like an upload — readable from every conversation in the workspace — and
+     * that reading was already served by the *sibling* arm of the readable set below. So the
+     * second row changed nothing about what could be read and only put a duplicate entry in the
+     * library under a different owner, which is what the report was about.
      */
     const refs = db.listWorkResourcesForResource("u1", "web_page", row.resourceId);
-    expect(refs.map((r) => r.ownerType).sort()).toEqual(["session", "workspace"]);
-    expect(refs.every((r) => r.parsedFileId === row.parsedFileId)).toBe(true);
-    // Compared by the *entity*: a sibling conversation in the same workspace reads the page
-    // through the workspace's reference, not through this conversation's.
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.ownerType).toBe("session");
+    expect(refs[0]!.ownerId).toBe("s1");
+
+    // And a sibling conversation still reads it, which is the half that makes the removal a
+    // subtraction rather than a regression: it is `listReadableWorkResources` that widens this,
+    // not the row that was deleted.
     expect(
       db
-        .listReadableWorkResources("u1", "s2-nonexistent", "w1", NO_SCOPE)
+        .listReadableWorkResources("u1", "s2-other", "w1", NO_SCOPE)
         .some((r) => r.resourceId === row.resourceId)
     ).toBe(true);
   });
@@ -172,7 +173,6 @@ describe("what it refuses", () => {
         user,
         userId: "u1",
         owner: { kind: "workspace", id: "w1" },
-        workspaceId: "w1",
         url,
         cache: cacheWith(url, "<html><body><script>1</script></body></html>"),
       })

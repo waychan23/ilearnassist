@@ -1334,7 +1334,6 @@ describe("sources", () => {
       user: env.userLayout,
       userId: env.user.id,
       owner: { kind: "workspace", id: workspace.id },
-      workspaceId: workspace.id,
       url,
       cache: new Map([
         [

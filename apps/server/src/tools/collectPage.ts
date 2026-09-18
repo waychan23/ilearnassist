@@ -79,7 +79,6 @@ export function buildCollectPageTool(ctx: CollectPageContext & { cache: PageCach
         user: ctx.user,
         userId: ctx.userId,
         owner: { kind: "session", id: ctx.sessionId },
-        workspaceId: ctx.workspaceId,
         url,
         summary,
         cache: ctx.cache,
