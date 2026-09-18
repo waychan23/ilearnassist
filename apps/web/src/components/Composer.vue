@@ -4,9 +4,9 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import AttachmentChips from "./AttachmentChips.vue";
-import SourceMentionPicker from "./SourceMentionPicker.vue";
+import ResourceMentionPicker from "./ResourceMentionPicker.vue";
 import { activeMention, insertMention, type ActiveMention } from "../utils/mention";
-import type { ReferenceChoice } from "../utils/referencePicker";
+import type { ReferenceChoice } from "../utils/resourcePicker";
 import { resourceName } from "../utils/resourceView";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
@@ -317,7 +317,7 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-const picker = ref<InstanceType<typeof SourceMentionPicker> | null>(null);
+const picker = ref<InstanceType<typeof ResourceMentionPicker> | null>(null);
 
 function onInput() {
   refreshMention();
@@ -372,7 +372,7 @@ function onInput() {
       <!-- One surface owns the input, the attachments and the toolbar (chatbox's
            InputBox layout), so the composer reads as a single control. -->
       <div class="surface">
-        <SourceMentionPicker ref="picker" :mention="mention" @pick="onPickReference" />
+        <ResourceMentionPicker ref="picker" :mention="mention" @pick="onPickReference" />
         <div class="input-row">
           <textarea
             ref="textarea"
@@ -433,7 +433,7 @@ function onInput() {
           turn and which was pointed at. They join the refs row below at send time, which is where
           the two stop being different things.
         -->
-        <div v-if="store.pendingResources.length" data-testid="composer-sources">
+        <div v-if="store.pendingResources.length" data-testid="composer-resources">
           <AttachmentChips
             :attachments="store.pendingResources"
             removable

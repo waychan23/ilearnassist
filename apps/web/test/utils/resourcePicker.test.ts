@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { FileCategory, StoredFile, WebPage, WorkResource, Workspace } from "../../src/api/types";
 import {
   GROUP_LIMIT,
-  SOURCE_PILLS,
+  RESOURCE_PILLS,
   TOTAL_LIMIT,
-  buildOptions,
+  buildReferenceOptions,
   flatten,
   pillCategories,
   stepActive,
   type BuildOptionsInput,
-} from "../../src/utils/referencePicker";
+} from "../../src/utils/resourcePicker";
 
 /**
  * The `@` picker's list arithmetic.
@@ -92,7 +92,7 @@ const sources = [
 ];
 
 function build(overrides: Partial<BuildOptionsInput> = {}) {
-  return buildOptions({
+  return buildReferenceOptions({
     query: "",
     tab: "all",
     pill: null,
@@ -141,7 +141,7 @@ describe("the type pills", () => {
     // The v3 pill set had five. `page` was a category there — hand-set on a source whose name
     // could not say what it was — and in v4 that distinction is the `resourceType`, so a
     // category pill has nothing to name. Pinned here so re-adding one is a decision.
-    expect(SOURCE_PILLS).not.toContain("page");
+    expect(RESOURCE_PILLS).not.toContain("page");
   });
 
   it("keeps a page out of a pill's matches rather than guessing a category for it", () => {

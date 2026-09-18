@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { StoredFile, WorkResource } from "../../src/api/types";
 import {
   allGroupKeys,
-  flattenSourceTree,
-  groupSources,
-} from "../../src/utils/sourceTree";
+  flattenResourceTree,
+  groupResources,
+} from "../../src/utils/resourceTree";
 
 /**
  * The source browser's tree.
@@ -66,16 +66,16 @@ function sessionPath(ownerId: string, rel: string): string {
   return `workspaces/w1/sessions/${ownerId}/${rel}`;
 }
 
-describe("groupSources", () => {
+describe("groupResources", () => {
   it("hangs a workspace file under its workspace", () => {
-    const groups = groupSources([fileAt("s1", "a.md", "workspaces/w1/workdir/a.md")]);
+    const groups = groupResources([fileAt("s1", "a.md", "workspaces/w1/workdir/a.md")]);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.label).toBe("Study");
     expect(groups[0]!.sources.map((s) => s.title)).toEqual(["a.md"]);
   });
 
   it("nests a path by segment", () => {
-    const groups = groupSources([
+    const groups = groupResources([
       fileAt("s1", "a.md", "workspaces/w1/workdir/notes/2026/a.md"),
     ]);
     const notes = groups[0]!.children[0]!;
@@ -86,7 +86,7 @@ describe("groupSources", () => {
 
   it("keeps one conversation's files out of another's, even at the same path", () => {
     // The claim the whole grouping exists for. Both rows are `notes/a.md`; they are two files.
-    const groups = groupSources([
+    const groups = groupResources([
       fileAt("s1", "a.md", sessionPath("sess1", "notes/a.md"), {
         ownerType: "session",
         ownerId: "sess1",
@@ -108,7 +108,7 @@ describe("groupSources", () => {
 
   it("puts a row with no path at its owner rather than in a directory", () => {
     // An upload is named, not located: its bytes are under `sources/raw/`, which is not a sandbox.
-    const groups = groupSources([
+    const groups = groupResources([
       fileAt("s1", "lecture.pdf", "sources/raw/f-s1.pdf", {
         ownerType: "session",
         ownerId: "sess1",
@@ -121,7 +121,7 @@ describe("groupSources", () => {
   });
 
   it("groups a workspace's own rows and its conversations' rows together", () => {
-    const groups = groupSources([
+    const groups = groupResources([
       fileAt("s1", "shared.md", "workspaces/w1/workdir/shared.md"),
       fileAt("s2", "mine.md", sessionPath("sess1", "mine.md"), {
         ownerType: "session",
@@ -135,7 +135,7 @@ describe("groupSources", () => {
   });
 
   it("separates two workspaces", () => {
-    const groups = groupSources([
+    const groups = groupResources([
       fileAt("s1", "a.md", "workspaces/w1/workdir/a.md"),
       fileAt("s2", "b.md", "workspaces/w1/workdir/b.md", {
         workspaceId: "w2",
@@ -148,7 +148,7 @@ describe("groupSources", () => {
   it("files an ownerless row under a placeholder rather than dropping it", () => {
     // A row whose owner cannot be resolved is still material the user has; hiding it would be
     // the listing quietly losing something it was asked to show.
-    const groups = groupSources([
+    const groups = groupResources([
       fileAt("s1", "orphan.md", "workspaces/w1/workdir/orphan.md", {
         workspaceId: undefined,
         workspaceName: undefined,
@@ -159,14 +159,14 @@ describe("groupSources", () => {
   });
 });
 
-describe("flattenSourceTree", () => {
+describe("flattenResourceTree", () => {
   const sources = [
     fileAt("s1", "shared.md", "workspaces/w1/workdir/shared.md"),
     fileAt("s2", "x.md", "workspaces/w1/workdir/notes/x.md"),
   ];
 
   it("emits a group as a line whether or not it is open", () => {
-    const lines = flattenSourceTree(groupSources(sources), []);
+    const lines = flattenResourceTree(groupResources(sources), []);
     expect(lines.map((l) => l.kind)).toEqual(["group"]);
     expect(lines[0]!.label).toBe("Study");
   });
@@ -174,20 +174,20 @@ describe("flattenSourceTree", () => {
   it("emits a group's own rows before its subdirectories", () => {
     // Otherwise a directory header pushes the rows that are the group's own content below it,
     // which reads as if they were inside it.
-    const lines = flattenSourceTree(groupSources(sources), ["ws:w1"]);
+    const lines = flattenResourceTree(groupResources(sources), ["ws:w1"]);
     expect(lines.map((l) => l.label)).toEqual(["Study", "shared.md", "notes"]);
   });
 
   it("increases the depth with each level", () => {
-    const lines = flattenSourceTree(groupSources(sources), ["ws:w1", "ws:w1/notes"]);
+    const lines = flattenResourceTree(groupResources(sources), ["ws:w1", "ws:w1/notes"]);
     expect(lines.map((l) => l.depth)).toEqual([0, 1, 1, 2]);
   });
 
   it("gives every line a key that is unique across the tree", () => {
     // Two sources can share a name — that is the case the grouping exists for — so a key of
     // the name alone would collide and Vue would reuse the wrong row.
-    const lines = flattenSourceTree(
-      groupSources([
+    const lines = flattenResourceTree(
+      groupResources([
         fileAt("s1", "a.md", "workspaces/w1/workdir/a.md"),
         fileAt("s2", "a.md", "workspaces/w1/workdir/nested/a.md"),
       ]),
@@ -199,7 +199,7 @@ describe("flattenSourceTree", () => {
 
 describe("allGroupKeys", () => {
   it("lists every group, so a caller can expand the whole tree", () => {
-    const groups = groupSources([
+    const groups = groupResources([
       fileAt("s1", "a.md", "workspaces/w1/workdir/notes/2026/a.md"),
       fileAt("s2", "b.md", "workspaces/w1/workdir/b.md", { workspaceId: "w2", workspaceName: "R" }),
     ]);

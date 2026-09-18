@@ -9,7 +9,7 @@ import ThreadWidget from "./ThreadWidget.vue";
 import NotesWidget from "./NotesWidget.vue";
 import DiagramWidget from "./DiagramWidget.vue";
 import InsightWidget from "./InsightWidget.vue";
-import SourcesWidget from "./SourcesWidget.vue";
+import ResourcesWidget from "./ResourcesWidget.vue";
 import { claimNotes, releaseNotes, setNotesWritable } from "../composables/notes";
 
 /**
@@ -246,5 +246,5 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
    * installed), and no install hook (there is nothing to set up beyond the listing it loads
    * anyway — and loading it is not a decision the install makes for the user).
    */
-  sources: { component: SourcesWidget },
+  sources: { component: ResourcesWidget },
 };

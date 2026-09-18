@@ -383,10 +383,10 @@ test("a diagram's own file stays out of the library, and is opened from the pane
    * what this asserts, and asserting the *absence* is the only way to tell "not listed" from
    * "listed under a name I did not guess".
    */
-  await page.getByTestId("open-sources").click();
-  const dialog = page.getByTestId("sources-dialog");
+  await page.getByTestId("open-library").click();
+  const dialog = page.getByTestId("library-dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByTestId("source-row").filter({ hasText: "browsable.mmd" })).toHaveCount(0);
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "browsable.mmd" })).toHaveCount(0);
 
   // The panel is where it lives, and it opens the same viewer the library row would have.
   await page.keyboard.press("Escape");

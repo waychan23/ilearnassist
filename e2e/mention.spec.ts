@@ -67,7 +67,7 @@ test("picks a workspace file with @ and sends it as a reference", async ({ page,
   // *picked*, the chip is what it *means*.
   await expect(page.getByTestId("composer-input")).toHaveValue("看 @report.md ");
   await expect(
-    page.getByTestId("composer-sources").getByTestId("attachment-chip").filter({ hasText: "report.md" })
+    page.getByTestId("composer-resources").getByTestId("attachment-chip").filter({ hasText: "report.md" })
   ).toBeVisible();
 
   await page.getByTestId("composer-send").click();
@@ -125,7 +125,7 @@ test("a reference can be dropped before sending", async ({ page, request }) => {
   await typeMention(page, "report");
   await page.getByTestId("mention-option").filter({ hasText: name }).click();
 
-  const chips = page.getByTestId("composer-sources");
+  const chips = page.getByTestId("composer-resources");
   await expect(chips.getByTestId("attachment-chip")).toHaveCount(1);
   await chips.getByTestId("attachment-chip").first().getByTestId("attachment-remove").click();
   await expect(chips.getByTestId("attachment-chip")).toHaveCount(0);

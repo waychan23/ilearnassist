@@ -78,8 +78,8 @@ async function seedSource(
 async function openLibrary(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByTestId("workspace-home")).toBeVisible();
-  await page.getByTestId("open-sources").click();
-  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await page.getByTestId("open-library").click();
+  await expect(page.getByTestId("library-dialog")).toBeVisible();
 }
 
 /**
@@ -95,7 +95,7 @@ async function openLibrary(page: Page): Promise<void> {
  */
 async function openUploads(page: Page, name: string): Promise<void> {
   await openLibrary(page);
-  await page.getByTestId("sources-filter-owner-type").selectOption("session");
+  await page.getByTestId("resources-filter-owner-type").selectOption("session");
   /*
    * Wait for the filtered list to *arrive* before anything is clicked.
    *
@@ -105,7 +105,7 @@ async function openUploads(page: Page, name: string): Promise<void> {
    * rather than lucky.
    */
   await expect(
-    page.getByTestId("source-row").filter({ hasText: name })
+    page.getByTestId("resource-row").filter({ hasText: name })
   ).toHaveCount(1);
 }
 
@@ -160,7 +160,7 @@ test("an uploaded image opens in the viewer, over the list it came from", async 
   await seedSource(request, "shot.png", "image/png", ONE_PX_PNG);
   await openUploads(page, "shot.png");
 
-  await page.getByTestId("source-open").filter({ hasText: "shot.png" }).click();
+  await page.getByTestId("resource-open").filter({ hasText: "shot.png" }).click();
 
   const viewer = page.getByTestId("file-viewer");
   await expect(viewer).toHaveAttribute("data-render-state", "ready", { timeout: 15000 });
@@ -175,7 +175,7 @@ test("an uploaded image opens in the viewer, over the list it came from", async 
    */
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("file-viewer")).toHaveCount(0);
-  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await expect(page.getByTestId("library-dialog")).toBeVisible();
 });
 
 test("an uploaded PDF opens in the viewer", async ({ page, request }) => {
@@ -184,7 +184,7 @@ test("an uploaded PDF opens in the viewer", async ({ page, request }) => {
   await seedSource(request, "doc.pdf", "application/pdf", buildPdf(["Viewer fixture"]));
   await openUploads(page, "doc.pdf");
 
-  await page.getByTestId("source-open").filter({ hasText: "doc.pdf" }).click();
+  await page.getByTestId("resource-open").filter({ hasText: "doc.pdf" }).click();
 
   const viewer = page.getByTestId("file-viewer");
   await expect(viewer).toHaveAttribute("data-render-state", "ready", { timeout: 15000 });

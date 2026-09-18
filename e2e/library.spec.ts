@@ -52,14 +52,14 @@ async function seedUpload(request: APIRequestContext, workspaceId: string, name:
  * about the filtered list rather than about the clock.
  */
 async function settle(page: Page): Promise<void> {
-  await expect(page.getByTestId("sources-loading")).toHaveCount(0);
+  await expect(page.getByTestId("library-loading")).toHaveCount(0);
 }
 
 async function openBrowser(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByTestId("workspace-home")).toBeVisible();
-  await page.getByTestId("open-sources").click();
-  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await page.getByTestId("open-library").click();
+  await expect(page.getByTestId("library-dialog")).toBeVisible();
 }
 
 test("lists files from every workspace, not only uploads", async ({ page, request }) => {
@@ -70,7 +70,7 @@ test("lists files from every workspace, not only uploads", async ({ page, reques
 
   await openBrowser(page);
 
-  const row = page.getByTestId("source-row").filter({ hasText: "from-the-agent.md" });
+  const row = page.getByTestId("resource-row").filter({ hasText: "from-the-agent.md" });
   await expect(row).toBeVisible();
   /*
    * And the byline says where it came from — which the flat list answers in words, since it has
@@ -81,8 +81,8 @@ test("lists files from every workspace, not only uploads", async ({ page, reques
    * so no tool of ours claimed it. A browser that labelled it "written by the assistant" would
    * be lying about provenance in the one place the user looks to check it.
    */
-  await expect(row.getByTestId("source-origin")).toContainText(`Browse-${suffix}`);
-  await expect(row.getByTestId("source-origin")).toContainText("已有文件");
+  await expect(row.getByTestId("resource-origin")).toContainText(`Browse-${suffix}`);
+  await expect(row.getByTestId("resource-origin")).toContainText("已有文件");
 });
 
 test("filters by workspace", async ({ page, request }) => {
@@ -92,14 +92,14 @@ test("filters by workspace", async ({ page, request }) => {
   void second;
 
   await openBrowser(page);
-  await expect(page.getByTestId("source-row").filter({ hasText: "alpha.md" })).toBeVisible();
-  await expect(page.getByTestId("source-row").filter({ hasText: "beta.md" })).toBeVisible();
+  await expect(page.getByTestId("resource-row").filter({ hasText: "alpha.md" })).toBeVisible();
+  await expect(page.getByTestId("resource-row").filter({ hasText: "beta.md" })).toBeVisible();
 
-  await page.getByTestId("sources-filter-workspace").selectOption({ label: `Filter-A-${suffix}` });
+  await page.getByTestId("resources-filter-workspace").selectOption({ label: `Filter-A-${suffix}` });
   await settle(page);
 
-  await expect(page.getByTestId("source-row").filter({ hasText: "alpha.md" })).toBeVisible();
-  await expect(page.getByTestId("source-row").filter({ hasText: "beta.md" })).toHaveCount(0);
+  await expect(page.getByTestId("resource-row").filter({ hasText: "alpha.md" })).toBeVisible();
+  await expect(page.getByTestId("resource-row").filter({ hasText: "beta.md" })).toHaveCount(0);
   void first;
 });
 
@@ -117,13 +117,13 @@ test("filters by category", async ({ page, request }) => {
   await seedUpload(request, workspaceId, "uploaded-by-hand.pdf");
 
   await openBrowser(page);
-  await page.getByTestId("sources-filter-workspace").selectOption({ label: `Category-${suffix}` });
-  await expect(page.getByTestId("source-row").filter({ hasText: "uploaded-by-hand.pdf" })).toBeVisible();
+  await page.getByTestId("resources-filter-workspace").selectOption({ label: `Category-${suffix}` });
+  await expect(page.getByTestId("resource-row").filter({ hasText: "uploaded-by-hand.pdf" })).toBeVisible();
 
-  await page.getByTestId("sources-filter-category").selectOption("markdown");
+  await page.getByTestId("resources-filter-category").selectOption("markdown");
   await settle(page);
-  await expect(page.getByTestId("source-row").filter({ hasText: "written-by-agent.md" })).toBeVisible();
-  await expect(page.getByTestId("source-row").filter({ hasText: "uploaded-by-hand.pdf" })).toHaveCount(0);
+  await expect(page.getByTestId("resource-row").filter({ hasText: "written-by-agent.md" })).toBeVisible();
+  await expect(page.getByTestId("resource-row").filter({ hasText: "uploaded-by-hand.pdf" })).toHaveCount(0);
 });
 
 test("the tree view groups by where a file came from", async ({ page, request }) => {
@@ -131,7 +131,7 @@ test("the tree view groups by where a file came from", async ({ page, request })
   const workspaceId = await seedWorkspace(request, `Tree-${suffix}`, "notes/deep.md");
 
   await openBrowser(page);
-  await page.getByTestId("sources-filter-workspace").selectOption({ label: `Tree-${suffix}` });
+  await page.getByTestId("resources-filter-workspace").selectOption({ label: `Tree-${suffix}` });
   await page.getByTestId("sources-view-tree").click();
 
   // Workspace → the directory the path names → the file. The grouping is the point: a flat
@@ -141,7 +141,7 @@ test("the tree view groups by where a file came from", async ({ page, request })
   await tree.getByTestId("source-group").filter({ hasText: `Tree-${suffix}` }).click();
   await expect(tree.getByTestId("source-group").filter({ hasText: "notes" })).toBeVisible();
   await tree.getByTestId("source-group").filter({ hasText: "notes" }).click();
-  await expect(tree.getByTestId("source-row").filter({ hasText: "deep.md" })).toBeVisible();
+  await expect(tree.getByTestId("resource-row").filter({ hasText: "deep.md" })).toBeVisible();
   void workspaceId;
 });
 
@@ -151,7 +151,7 @@ test("adds a file to a workspace from the browser", async ({ page, request }) =>
   const workspaceId = await seedWorkspace(request, name, "seed.md");
 
   await openBrowser(page);
-  await page.getByTestId("sources-add").click();
+  await page.getByTestId("library-add").click();
 
   // One door, a tab per kind: the file tab is the one showing, and everything is collected
   // before anything is sent.
@@ -168,8 +168,8 @@ test("adds a file to a workspace from the browser", async ({ page, request }) =>
   await dialog.getByTestId("add-source-submit").click();
   await expect(dialog).toHaveCount(0);
 
-  await page.getByTestId("sources-filter-workspace").selectOption({ label: name });
-  await expect(page.getByTestId("source-row").filter({ hasText: "added.txt" })).toBeVisible();
+  await page.getByTestId("resources-filter-workspace").selectOption({ label: name });
+  await expect(page.getByTestId("resource-row").filter({ hasText: "added.txt" })).toBeVisible();
 
   // And it is really in the folder that was typed, not only in the list.
   const listed = await request
@@ -196,31 +196,31 @@ test("a conversation opens it on its own workspace, and the picker moves it", as
 
   await page.goto("/");
   await enterWorkspace(page, mine);
-  await page.getByTestId("open-sources").click();
+  await page.getByTestId("open-library").click();
 
-  const dialog = page.getByTestId("sources-dialog");
+  const dialog = page.getByTestId("library-dialog");
   await expect(dialog).toBeVisible();
   await settle(page);
 
   // Opened on this conversation's workspace: its own files are here, the other one's are not.
-  await expect(dialog.getByTestId("source-row").filter({ hasText: "mine.md" })).toBeVisible();
-  await expect(dialog.getByTestId("source-row").filter({ hasText: "theirs.md" })).toHaveCount(0);
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "mine.md" })).toBeVisible();
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "theirs.md" })).toHaveCount(0);
 
-  const picker = dialog.getByTestId("sources-filter-workspace");
+  const picker = dialog.getByTestId("resources-filter-workspace");
   await expect(picker).toBeVisible();
   await expect(picker).toHaveValue(mineId);
 
   // …and it is a default rather than a lock: the other workspace is one selection away.
   await picker.selectOption({ label: other });
   await settle(page);
-  await expect(dialog.getByTestId("source-row").filter({ hasText: "theirs.md" })).toBeVisible();
-  await expect(dialog.getByTestId("source-row").filter({ hasText: "mine.md" })).toHaveCount(0);
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "theirs.md" })).toBeVisible();
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "mine.md" })).toHaveCount(0);
 
   // All the way out — the whole account, which is what the other front door opens on.
   await picker.selectOption("");
   await settle(page);
-  await expect(dialog.getByTestId("source-row").filter({ hasText: "mine.md" })).toBeVisible();
-  await expect(dialog.getByTestId("source-row").filter({ hasText: "theirs.md" })).toBeVisible();
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "mine.md" })).toBeVisible();
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "theirs.md" })).toBeVisible();
 
   /*
    * And what is added goes where the list is *looking*, not where the dialog was opened. With
@@ -228,7 +228,7 @@ test("a conversation opens it on its own workspace, and the picker moves it", as
    * answered from the door's own scope, which here would have silently aimed an upload at the
    * workspace the reader had just navigated away from.
    */
-  await dialog.getByTestId("sources-add").click();
+  await dialog.getByTestId("library-add").click();
   await expect(page.getByTestId("add-source-workspace")).toBeVisible();
 });
 
@@ -244,7 +244,7 @@ test("keeps the controls to a strip and gives the rest to the list", async ({ pa
   await openBrowser(page);
 
   const toolbar = page.getByTestId("sources-toolbar");
-  const list = page.getByTestId("sources-dialog").locator(".browser-scroll");
+  const list = page.getByTestId("library-dialog").locator(".browser-scroll");
   await expect(toolbar).toBeVisible();
 
   const toolbarBox = (await toolbar.boundingBox())!;
@@ -273,8 +273,8 @@ test("reads each list once per open, and only the rows when a filter changes", a
     if (new URL(r.url()).pathname === "/api/resources") seen.push(r.url());
   });
 
-  await page.getByTestId("open-sources").click();
-  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await page.getByTestId("open-library").click();
+  await expect(page.getByTestId("library-dialog")).toBeVisible();
   await settle(page);
 
   /*
@@ -292,7 +292,7 @@ test("reads each list once per open, and only the rows when a filter changes", a
    */
   seen.length = 0;
   const answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/resources");
-  await page.getByTestId("sources-filter-search").fill("no-such-source-anywhere");
+  await page.getByTestId("resources-filter-search").fill("no-such-source-anywhere");
   await answered;
   expect(seen).toHaveLength(1);
 });
@@ -313,7 +313,7 @@ test("adds a web link, and says why one that cannot be reached was not kept", as
   await seedWorkspace(request, name, "seed.md");
 
   await openBrowser(page);
-  await page.getByTestId("sources-add").click();
+  await page.getByTestId("library-add").click();
 
   const dialog = page.getByTestId("add-source-dialog");
   await dialog.getByTestId("add-source-workspace").selectOption({ label: name });

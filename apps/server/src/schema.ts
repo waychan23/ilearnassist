@@ -92,39 +92,48 @@ export const SCHEMA_VERSION = 4;
  * `copilots.model` is gone rather than dormant: it was superseded by `settings.modelId` and
  * only existed to be folded forward by a migration that no longer runs.
  *
- * ### A source is one row for one piece of material
+ * ### A file (or a page), and a reference to it
  *
- * Owned by a **workspace or a conversation** — and so by an account — rather than by the
- * message that happened to use it, because one file can be referenced by several. `origin`
- * says how it came to exist; `storage` says which root its bytes are under, and is the one
- * field that changes; `category` is what the browser filters on. Two partial unique indexes
- * carry the two identity rules: identical uploaded bytes are one row (`idx_sources_blob`),
- * and a file is placed by its owner and its path (`idx_sources_place`).
+ * The material an account holds is **two tables on the entity side and one on the reference
+ * side**. `files` and `web_pages` are what the bytes are, owned by the account; `work_resources`
+ * is the statement that this workspace or this conversation is working from one of them, which
+ * is why it is the table the library browses and `@` picks from.
  *
- * Where the bytes are is answered in two steps rather than one, and neither step is a stored
- * absolute path. `storage` picks the root and `rel_path` says where in it — both re-validated
- * before every read, because a database row is not a trust boundary and a path that travelled
- * through a backup, or through a future bug, is not the same thing as one this code wrote. An
- * `upload` or a `web` source stores no path at all: its filename is `<id>.<ext>`, derived from
- * the id and the MIME type, exactly as `paths.ts` says every path here is.
+ * The split is not tidiness. A v3 `sources` row was both at once, so it had exactly one owner
+ * and resolved its own bytes *through* that owner — and one file used by two conversations was
+ * therefore unrepresentable. Here the locator is a single `files.path` relative to the user
+ * root, and a reference may be one of several. Nothing on disk moved.
  *
- * Parse state lives in **columns** here rather than in a `parsed/<id>.json` sidecar. That is
- * the "index it in the database" half of the design: a reparse is then visible in every
- * conversation at once rather than only in the messages written after it, and a source shared
- * by two conversations is parsed once. Only the extracted *text* stays a file — it is large,
- * and `read_document` streams it by offset.
+ * **The file/reference split has a second use that is not a workaround**: a file may have *no*
+ * reference at all. A diagram's `.mmd` and a document's extracted text are exactly that — real
+ * files, registered, addressable by path, and deliberately not something the library lists.
  *
- * ### The two link tables are not the same thing
+ * ### Three identity rules
  *
- * `session_sources` is the authority on what the model may read: a query, answered fresh
- * every turn, so a source unlinked a moment ago is gone from the next turn's whitelist.
- * `workspace_sources` is the same one level up, and is how a document uploaded in one
- * conversation is readable from another in the same workspace.
+ * - Identical uploaded bytes are one file (`idx_files_blob`), which is why re-uploading a
+ *   deleted file *revives* its row rather than inserting beside it.
+ * - A file is placed by its path (`idx_files_path`), so a rename is an UPDATE that keeps the id
+ *   and every reference to it.
+ * - A reference is placed by owner and entity (`idx_wr_place`), so re-referencing is idempotent
+ *   and one owner cannot hold the same entity twice.
  *
- * Neither is what a *message* shows. `messages.attachments` stays a JSON snapshot of the
- * source as it was sent, so a chip does not vanish from history because the source was
- * unlinked or deleted afterwards — and it carries the name that upload used, which the source
- * itself deliberately does not (it keeps the first name it ever saw).
+ * ### Where the bytes are
+ *
+ * One stored field, `files.path`, relative to the account's own root, re-validated before every
+ * read — because a database row is not a trust boundary, and a path that travelled through a
+ * backup is not the same thing as one this code wrote. A blob's name is still `<id>.<ext>` from
+ * the MIME table; it is written into the row rather than recomputed, because the bytes are where
+ * they are and a MIME type can be corrected later.
+ *
+ * ### The parse lives on the reference
+ *
+ * `work_resources` carries `parse_status` and friends, and `parsed_file_id` points at the row
+ * holding the text. Two consequences, both deliberate: a reference with no entity needs no parse
+ * columns, and **the same file referenced by two owners is parsed twice** — where v3 parsed it
+ * once and showed the reparse to both.
+ *
+ * `messages.attachments` is unchanged in spirit: a JSON snapshot of what was attached as it was
+ * sent, so a chip does not vanish from history because the file was deleted afterwards.
  */
 export const DDL = `
   -- An account carries a password now, which is what changed this table's meaning: a
@@ -211,107 +220,6 @@ export const DDL = `
     UNIQUE (user_id, slug)
   );
   CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id, created_at);
-
-  -- ---------------------------------------------------------------------------------------
-  -- transit: the v3 material registry, dropped in part 6 of the 大改造 once nothing reads it.
-  -- A fresh data root simply never has rows here, so the coexistence is not a compatibility
-  -- layer — it is the ordering a rename of this size has to land in.
-  -- ---------------------------------------------------------------------------------------
-  CREATE TABLE IF NOT EXISTS sources (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-
-    -- Who holds it: 'session' | 'workspace', and that row's id.
-    --
-    -- No foreign key, and the cost is real: SQLite cannot point one column at two tables. It
-    -- is affordable because ownership is only ever *reached through* — every read resolves the
-    -- owner first (getSessionForUser / getWorkspaceForUser) and then reads its sources — so an
-    -- orphan is invisible rather than handed to whoever asked. The cascade a foreign key would
-    -- have provided is not wanted anyway: relations are never dismantled.
-    owner_kind TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-
-    -- How it came to exist. Provenance: fixed for the life of the row.
-    -- 'session_attachment' | 'workspace_upload' | 'agent_workspace' | 'agent_session' | 'web'
-    origin TEXT NOT NULL,
-
-    -- Which root the bytes are under: 'upload' | 'web' | 'workspace' | 'session' | 'trash'.
-    -- The one field here that changes — deleting a file from the manager moves it to 'trash'
-    -- rather than erasing it — and the one the resolver switches on.
-    storage TEXT NOT NULL,
-
-    -- The path within that root. NULL for 'upload' and 'web', whose filename is
-    -- '<id>.<ext>' and therefore derived from the id and the MIME type; non-NULL for
-    -- 'workspace' and 'session', where it is the only record of the file's name.
-    rel_path TEXT,
-
-    -- The display name. For an upload, the name it arrived under; for a file, the last path
-    -- segment. Never used to address the bytes — that is "rel_path".
-    name TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    -- 'page' | 'text' | 'code' | 'markdown' | 'diagram' | 'image' | 'document' | 'other'.
-    -- A label for the browser's filters, not an access-control decision: what decides whether
-    -- anything is *parsed* is still "isDocumentMime", which this does not replace.
-    category TEXT NOT NULL,
-    size INTEGER NOT NULL,
-    -- The page this source is, when it is one.
-    source_url TEXT,
-    -- The model's one-liner, where something has produced one. "session_diagrams.summary" is
-    -- the precedent: the thing the bytes cannot answer, stored beside them rather than in them.
-    summary TEXT,
-
-    -- The content hash, for account blobs only. See idx_sources_blob.
-    sha256 TEXT,
-
-    parse_status TEXT NOT NULL DEFAULT 'none',
-    parse_error TEXT,
-    parse_error_code TEXT,
-    parser_id TEXT,
-    parsed_chars INTEGER,
-    page_count INTEGER,
-    parse_updated_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT,
-
-    -- Soft delete. On the byte side too: the file stays on disk, so a delete costs no disk
-    -- and a future restore has something to restore.
-    deleted_at TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id, created_at);
-  -- The listing query: one owner's sources, in path order.
-  CREATE INDEX IF NOT EXISTS idx_sources_owner ON sources(owner_kind, owner_id, rel_path);
-  -- Identical *uploaded bytes* are one row — and this one is deliberately NOT filtered on
-  -- 'deleted_at', because that is what makes a re-upload of deleted bytes revive the row
-  -- rather than insert beside it. See 'findDeletedSourceByHash' / 'reviveSourceForUser'.
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_blob
-    ON sources(user_id, sha256) WHERE sha256 IS NOT NULL;
-  -- One row per file at one path, per owner. A rename is an UPDATE of 'rel_path' on this row,
-  -- which is the whole reason identity is the id and not a hash of either the path or the
-  -- bytes. Filtered on 'deleted_at' so a deleted file does not block a new one at the same
-  -- path. SQLite treats NULLs as distinct in a unique index, so the predicate and the NULL are
-  -- belt and braces — but the predicate is the *documentation*.
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_place
-    ON sources(user_id, owner_kind, owner_id, rel_path)
-    WHERE deleted_at IS NULL AND rel_path IS NOT NULL;
-  CREATE INDEX IF NOT EXISTS idx_sources_web
-    ON sources(user_id, source_url) WHERE source_url IS NOT NULL;
-
-  -- What a source is referenced by. Two tables, and both are needed — see the note above.
-  CREATE TABLE IF NOT EXISTS session_sources (
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, source_id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_session_sources_source ON session_sources(source_id);
-
-  CREATE TABLE IF NOT EXISTS workspace_sources (
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (workspace_id, source_id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_workspace_sources_source ON workspace_sources(source_id);
 
   -- ---------------------------------------------------------------------------------------
   -- The v4 model: an entity (what the bytes are) and a reference (who is working from it).

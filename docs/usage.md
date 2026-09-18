@@ -13,10 +13,10 @@ apps/web/src/components/stats/        the panel both statistics pages render
 
 ## Why a ledger rather than a sum over `messages`
 
-`messages.usage` records a **turn's** tokens, and only a turn writes a message. Five other calls the
+`messages.usage` records a **turn's** tokens, and only a turn writes a message. Four other calls the
 server makes on its own cost real tokens that no transcript holds: the auto-titler, the turn
-classifier, the insight pass, the image describer and the note-export summariser. The requirement
-asks for spend *by purpose*, and a purpose only the transcript could not express is the whole point.
+classifier, the insight pass and the image describer. The requirement asks for spend *by purpose*,
+and a purpose only the transcript could not express is the whole point.
 
 A sum over `messages` also cannot group: `usage` is a JSON blob whose fields are optional, which is
 exactly why `widgets.ts`'s existing statistics do their arithmetic in JavaScript. `SUM()` over

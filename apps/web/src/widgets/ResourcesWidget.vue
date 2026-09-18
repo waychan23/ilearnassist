@@ -190,7 +190,7 @@ function openBrowser(row: WorkResource): void {
         <span class="badge muted" data-testid="sources-count">{{ visible.length }}</span>
       </div>
 
-      <div v-if="rows.length === 0" class="widget-empty" data-testid="sources-empty">
+      <div v-if="rows.length === 0" class="widget-empty" data-testid="library-empty">
         {{ t("widgets.sources.empty") }}
       </div>
       <!-- A filter that matches nothing is a different sentence from a list that is empty. -->
@@ -203,7 +203,7 @@ function openBrowser(row: WorkResource): void {
           <button
             class="sources-open"
             type="button"
-            data-testid="source-row"
+            data-testid="resource-row"
             :title="t('sources.preview', { name: resourceName(row) })"
             @click="store.openResourceFile(row)"
           >
@@ -222,7 +222,7 @@ function openBrowser(row: WorkResource): void {
             type="button"
             :title="t('sources.openInBrowser')"
             :aria-label="t('sources.openInBrowser')"
-            data-testid="source-open-browser"
+            data-testid="resource-open-browser"
             @click="openBrowser(row)"
           >
             <Icon name="link" />

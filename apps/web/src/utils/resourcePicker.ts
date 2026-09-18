@@ -5,7 +5,7 @@ import { resourceCategory, resourceName } from "./resourceView";
  * The `@` picker's arithmetic: what the list holds, in what order, and which row the arrow keys
  * land on.
  *
- * It lives here rather than in `SourceMentionPicker.vue` for the project's usual reason —
+ * It lives here rather than in `ResourceMentionPicker.vue` for the project's usual reason —
  * components are covered by Playwright and nothing else — and here it matters more than usual,
  * because the list holds two kinds of thing at once. A model that answers "what is in here" from
  * the template would be wrong in the ways nobody screenshots: a filter that keeps the workspace
@@ -34,10 +34,10 @@ export type ReferenceTab = (typeof REFERENCE_TABS)[number];
  * filter by. Re-adding it means a pill that filters on `resourceType`, which is a control the
  * picker does not have.
  */
-export const SOURCE_PILLS = ["image", "text", "code", "other"] as const;
-export type SourcePill = (typeof SOURCE_PILLS)[number];
+export const RESOURCE_PILLS = ["image", "text", "code", "other"] as const;
+export type ResourcePill = (typeof RESOURCE_PILLS)[number];
 
-export const PILL_CATEGORIES: Record<SourcePill, readonly FileCategory[]> = {
+export const PILL_RULES: Record<ResourcePill, readonly FileCategory[]> = {
   image: ["image"],
   text: ["text", "markdown"],
   code: ["code", "diagram"],
@@ -45,8 +45,8 @@ export const PILL_CATEGORIES: Record<SourcePill, readonly FileCategory[]> = {
 };
 
 /** Every category the given pills admit, or `null` when no pill is on (meaning "any"). */
-export function pillCategories(pill: SourcePill | null): readonly FileCategory[] | null {
-  return pill === null ? null : PILL_CATEGORIES[pill];
+export function pillCategories(pill: ResourcePill | null): readonly FileCategory[] | null {
+  return pill === null ? null : PILL_RULES[pill];
 }
 
 /*
@@ -87,7 +87,7 @@ export interface BuildOptionsInput {
   query: string;
   tab: ReferenceTab;
   /** The active type pill, or `null` for no type filter. */
-  pill: SourcePill | null;
+  pill: ResourcePill | null;
   /** The account's workspaces, current one already excluded by the caller. */
   workspaces: readonly Workspace[];
   /** The references the server returned for this query. */
@@ -116,7 +116,7 @@ const matches = (haystack: string, needle: string): boolean =>
  * - **Workspaces come first**, because they are the coarser thing and picking one is the decision
  *   the other rows are refinements of.
  */
-export function buildOptions(input: BuildOptionsInput): ReferenceGroup[] {
+export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[] {
   const needle = input.query.trim().toLowerCase();
   const groups: ReferenceGroup[] = [];
 
@@ -151,7 +151,7 @@ export function buildOptions(input: BuildOptionsInput): ReferenceGroup[] {
     const rows: ReferenceOption[] = input.sources
       // A page has no category at all, so a pill that names categories excludes it — which is the
       // honest answer for "show me the images": a page is not one, and there is no pill that names
-      // it (see `SOURCE_PILLS`).
+      // it (see `RESOURCE_PILLS`).
       .filter((source) => {
         if (categories === null) return true;
         const category = resourceCategory(source);

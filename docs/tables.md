@@ -115,14 +115,16 @@ behaves as if it were not there.
 beside them"; there are no bytes here to store beside. Nothing can disagree with `content` because
 there is nothing else — for the panel. The reply is a second copy, and that is the drift above.
 
-**No `sources` row, and deliberately.** A source's `rel_path` is non-NULL for both sandbox
-storages and every consumer is path-driven, so an honest source row is impossible for a row with no
-file. The asymmetry is the norm rather than the exception: `ila_query`, `ila_explore`, `ila_quiz`,
-`ila_make_plan` and the insight pass all write session-scoped rows with neither a file nor a source.
-`session_diagrams` is the only tool-written row that also has one, and only because it is a file.
-Writing a `.md` into `sessions/<id>/` instead is explicitly *not* the answer: it would put two full
-copies of the same source on disk — the one drift `docs/diagrams.md` says the architecture cannot
-represent — and `write_file` already gives a model that wants a file.
+**No file and no reference, and deliberately.** Since v4 the material an account holds is an entity
+plus a *reference*, and a table has neither: a reference is what makes something appear in the
+library and in the `@` picker, and every consumer of one is path- or entity-driven — there are no
+bytes for a `files.path` to name. The asymmetry is the norm rather than the exception: `ila_query`,
+`ila_explore`, `ila_quiz`, `ila_make_plan` and the insight pass all write session-scoped rows with
+neither a file nor a reference. `session_diagrams` is the only tool-written row that also has one,
+and only because it *is* a file — which is precisely why a drawn diagram has a `files` row and no
+reference of its own. Writing a `.md` into `sessions/<id>/` instead is explicitly *not* the answer:
+it would put two full copies of the same artifact on disk — the one drift `docs/diagrams.md` says
+the architecture cannot represent — and `write_file` already gives a model that wants a file.
 
 **No `fileMissing`.** There is no file to be missing, and the field's absence on the wire is what
 the `Table` type says. Its absence in the tests is an assertion rather than an omission.
@@ -178,7 +180,7 @@ Three consequences worth naming:
   no `stem()`, no `fileMissing` and no missing styling.
 - **The filter is client-side with options derived from the rows.** One conversation's set is small,
   and a server round trip per filter click would pay `reconcileFilesystem`'s bounded walk for
-  nothing — `SourcesWidget`'s rule. An option that can only produce the empty state (表 in a
+  nothing — `ResourcesWidget`'s rule. An option that can only produce the empty state (表 in a
   conversation with no tables) is not offered at all.
 - **`table.changed` is its own widget event.** The emission site is keyed on the tool's name, so
   sharing `diagram.changed` would make each panel refetch on the other's calls.

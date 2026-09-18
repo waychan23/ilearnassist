@@ -511,7 +511,7 @@ export interface QuizQuestionInsert {
 }
 
 /**
- * One row per live conversation, with the workspace it belongs to, for labelling sources.
+ * One row per live conversation, with the workspace it belongs to, for labelling a list.
  *
  * Names and ids only: the source browser groups and labels by owner, and a *session* owner is
  * not something the client can name — it holds the workspaces, but fetching every conversation
@@ -634,7 +634,6 @@ interface MessageRow {
   tool_calls: string | null;
   attachments: string | null;
   /** JSON, nullable: absent on every row written before the `@`-reference existed. */
-  sources: string | null;
   /** JSON, nullable for the same reason: written only by a turn that pointed at something. */
   refs: string | null;
   usage: string | null;
@@ -1198,7 +1197,6 @@ const mapMessage = (r: MessageRow): Message => ({
   reasoning: r.reasoning ?? undefined,
   toolCalls: r.tool_calls ? safeParseArray<ToolCall>(r.tool_calls) : undefined,
   attachments: r.attachments ? safeParseArray<Attachment>(r.attachments) : undefined,
-  sources: r.sources ? safeParseArray<Attachment>(r.sources) : undefined,
   refs: r.refs ? safeParseArray<TurnReference>(r.refs) : undefined,
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
   model: messageModelOf(r),
@@ -1931,8 +1929,6 @@ export interface AppDb {
     reasoning?: string;
     toolCalls?: ToolCall[];
     attachments?: Attachment[];
-    /** The sources this turn *referenced* rather than attached. See `ChatInput.sources`. */
-    sources?: Attachment[];
     /** What the turn pointed at, as the client sent it. See `ChatInput.refs`. */
     refs?: TurnReference[];
     usage?: MessageUsage;
@@ -2466,12 +2462,6 @@ export function createDb(dbPath: string): AppDb {
     // return value is ignored.
     ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
     /*
-     * The sources a turn referenced with `@`, beside its attachments. Additive and nullable:
-     * NULL is "this turn referenced nothing", which is what every message written before the
-     * column existed means, and `[]` would have claimed somebody chose an empty list.
-     */
-    ensureColumn(db, "messages", "sources", "sources TEXT");
-    /*
      * What the turn *pointed at* — a diagram, a table, a note, or a passage selected in an earlier
      * message. Beside `sources` rather than merged with it because the two answer different
      * questions: a source is material the model may read on any later turn, a reference is the
@@ -2638,7 +2628,6 @@ export function createDb(dbPath: string): AppDb {
      */
     for (const table of [
       "workspaces",
-      "sources",
       "copilots",
       "sessions",
       "messages",
@@ -3349,9 +3338,9 @@ export function createDb(dbPath: string): AppDb {
   /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, sources, refs, usage,
+    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, refs, usage,
                               provider_id, provider_name, model_id, model_name, stopped, created_at)
-     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @sources, @refs, @usage,
+     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @refs, @usage,
              @providerId, @providerName, @modelId, @modelName, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
@@ -4518,7 +4507,6 @@ export function createDb(dbPath: string): AppDb {
         attachments: input.attachments?.length ? JSON.stringify(input.attachments) : null,
         // Stored only when there is something to store, like the column beside it: a JSON
         // `[]` would make "referenced nothing" a value rather than an absence.
-        sources: input.sources?.length ? JSON.stringify(input.sources) : null,
         refs: input.refs?.length ? JSON.stringify(input.refs) : null,
         usage: input.usage ? JSON.stringify(input.usage) : null,
         providerId: input.model?.providerId ?? null,

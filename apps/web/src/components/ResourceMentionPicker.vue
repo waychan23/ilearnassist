@@ -10,15 +10,15 @@ import type { IconName } from "../utils/icons";
 import type { ActiveMention } from "../utils/mention";
 import {
   REFERENCE_TABS,
-  SOURCE_PILLS,
-  buildOptions,
+  RESOURCE_PILLS,
+  buildReferenceOptions,
   flatten,
   stepActive,
   type ReferenceChoice,
   type ReferenceOption,
   type ReferenceTab,
-  type SourcePill,
-} from "../utils/referencePicker";
+  type ResourcePill,
+} from "../utils/resourcePicker";
 
 /**
  * The `@` picker: what this conversation can reference, narrowed by what has been typed.
@@ -62,7 +62,7 @@ const sources = ref<WorkResource[]>([]);
 const active = ref(0);
 const open = ref(false);
 const tab = ref<ReferenceTab>("all");
-const pill = ref<SourcePill | null>(null);
+const pill = ref<ResourcePill | null>(null);
 /** The request in flight is ignored if a newer query has been typed since. */
 let seq = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -82,7 +82,7 @@ async function load(query: string): Promise<void> {
   try {
     const found = await api.listResources({ name: query });
     if (mine !== seq) return;
-    // Not capped here. The cap belongs to the list's shape, per group — `buildOptions` — and the
+    // Not capped here. The cap belongs to the list's shape, per group — `buildReferenceOptions` — and the
     // pill filter runs over what came back, so truncating first would filter *after* the cut and
     // show fewer matches than exist.
     sources.value = found;
@@ -104,7 +104,7 @@ const offeredWorkspaces = computed(() =>
 );
 
 const groups = computed(() =>
-  buildOptions({
+  buildReferenceOptions({
     query: props.mention?.query ?? "",
     tab: tab.value,
     pill: pill.value,
@@ -164,7 +164,7 @@ function tabLabel(id: ReferenceTab): string {
   }
 }
 
-function pillLabel(id: SourcePill): string {
+function pillLabel(id: ResourcePill): string {
   switch (id) {
     case "image":
       return t("composer.pillImage");
@@ -195,7 +195,7 @@ function setTab(id: ReferenceTab): void {
   if (id === "workspace") pill.value = null;
 }
 
-function togglePill(id: SourcePill): void {
+function togglePill(id: ResourcePill): void {
   pill.value = pill.value === id ? null : id;
 }
 
@@ -292,7 +292,7 @@ defineExpose({ handleKey });
       -->
       <div v-if="tab !== 'workspace'" class="mention-pills">
         <button
-          v-for="id in SOURCE_PILLS"
+          v-for="id in RESOURCE_PILLS"
           :key="id"
           class="mention-pill"
           type="button"

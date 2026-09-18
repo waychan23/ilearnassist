@@ -341,15 +341,17 @@ skipped, failed, written — are named rather than left to be inferred from an i
 ### Diagrams (`diagrams.ts`, `tools/diagram.ts`, `threads.ts`)
 
 A diagram is a `.mmd` file in `sessions/<id>/` **plus** a `session_diagrams` row; each half holds
-what the other cannot. The file is the source of the bytes and is written first; the row
-(`name`, the model's `summary`, `tool_call_id`, `thread_id`) is upserted on
+what the other cannot. The file is written first, through `registerFile`, and the row
+(`name`, the model's `summary`, `tool_call_id`, `thread_id`, **`file_id`**) is upserted on
 `(session_id, name)` second, so a failed or refused call leaves the previous revision alone.
-The row carries no `source` (a second copy of the bytes is the one drift the split exists to
-prevent), no `source_path` (derivable from the session and the name), no `message_id` (the
-assistant message does not exist when the tool runs), and no `deleted_at` — it is derived data
-like `session_threads`, not the learner's writing. `GET /api/sessions/:id/diagrams` is the
-panel's read model and answers `fileMissing` by statting each file; the session-files content
-route attaches a diagram's `summary` by name on the session root only.
+The row carries no `source` (the bytes are the file the `file_id` points at; a second copy is the
+one drift the split exists to prevent), no `path` (the file row already carries one), no
+`message_id` (the assistant message does not exist when the tool runs), and no `deleted_at` — it is
+derived data like `session_threads`, not the learner's writing. It gets **no work resource**, which
+is the file/reference split's one real use: the drawing is read in the 图表 panel and is
+deliberately absent from the library. `GET /api/sessions/:id/diagrams` is the panel's read model
+and answers `fileMissing` by statting each file; the session-files content route attaches a
+diagram's `summary` by name on the session root only.
 
 `thread_id` is not set at write time. The classifier above is given each turn's diagrams — name
 and summary inside `<diagram>` blocks under the message that drew them — and answers a second,
@@ -368,8 +370,9 @@ is upserted on `(session_id, name)` like a diagram's, so calling the tool again 
 corrects that table rather than adding a second. It holds the markdown because there is no file
 for the bytes to live in and nothing for a second copy to disagree with; `session_diagrams`' row
 holds only what its file cannot answer, which is the opposite arrangement for the opposite reason.
-No `sources` row either — a source's `rel_path` is non-NULL for both sandbox storages, and every
-consumer is path-driven — and no `deleted_at`, like the derived rows above.
+No file and so **no reference** either — a reference is what puts material in the library and the
+`@` picker, and every consumer of one is path- or entity-driven — and no `deleted_at`, like the
+derived rows above.
 
 The **display** is the assistant's reply: `ila_table`'s guidance asks the model to write the same
 table as ordinary Markdown, because nothing on the server can put text into a model's output. The
@@ -468,7 +471,7 @@ removes `dirPath`.
 | `delete_file`   | delete a file/dir inside the workspace    | workspace |
 | `web_search`    | search the web (bing/duckduckgo/tavily/searxng) | —   |
 | `web_fetch`     | fetch a URL and return its readable text  | SSRF guard |
-| `read_document` | page through an uploaded file's extracted text | per-turn whitelist: the conversation's sources ∪ its workspace's ∪ any `@`-granted workspaces' |
+| `read_document` | page through a referenced document's extracted text, by **reference id** | per-turn whitelist: `listReadableWorkResources` — the conversation's references ∪ its workspace's ∪ any `@`-granted workspaces' |
 | `ask_user`      | put a question to the user and end the turn until they answer | — |
 | `ila_query`     | read the conversation's own record (plan / quizzes / threads / notes / diagrams / tables) | owner-scoped by the turn's account |
 | `ila_explore`   | read the workspaces the user opened with `@`: their files, and their conversations' messages | the resolved `@` grant, and read-only |
@@ -488,12 +491,12 @@ installation's agent does not write files", and `ila_explore` reads granted work
 while writing nothing at all. Its context is present only when the conversation holds an `@`
 grant, so the absence of the tool is the ordinary case.
 
-**`turnContext()` resolves the `@` grant and is the only caller of `db.listReadableSources`.**
+**`turnContext()` resolves the `@` grant and is the only caller of `db.listReadableWorkResources`.**
 That is a deliberate consolidation: the three turn routes used to each compute the whitelist, and
 the scope has to be resolved exactly once per turn so that `/answers` and `/regenerate` cannot
 grant less than the turn that asked the question. A future route that built its tools some other
 way now also loses `read_document` entirely — failing loudly rather than quietly under-granting.
-See [sources.md](sources.md#reading-across-workspaces).
+See [resources.md](resources.md#reading-across-workspaces).
 
 **A tool's parameters schema must arrive as a top-level object.** The one shape that does not is a
 zod union: it converts to `{"anyOf": […], "type": null}`, which a strict OpenAI-compatible endpoint
@@ -518,11 +521,12 @@ re-implemented, and a second read would be a second chance to leak it. Only
 `read_file` structurally cannot reach. Answers carry `truncated` and shrink the page rather
 than the text, because a cut JSON string is not a smaller answer.
 
-`kind: "source"` must see the `@` grant too, and that is not a detail: it is the model's only
+`kind: "resource"` must see the `@` grant too, and that is not a detail: it is the model's only
 index of what it may read, so a whitelist widened by a grant this read could not see would leave
 the model with material it cannot enumerate — and the only remaining way to find it is guessing
 ids, which is exactly the wandering the whitelist exists to prevent, reachable by a model that is
-now *allowed* to wander.
+now *allowed* to wander. (`ila_query`'s kind was `source` until v4; the id it takes is a
+reference's either way, which is why only the name moved.)
 
 **`ila_explore` is the one tool that leaves the conversation's own workspace**
 (`tools/explore.ts`). One flat object with a `kind` discriminator over `workspaces` / `sessions` /
@@ -561,15 +565,16 @@ ceiling and the item caps. Two tools with two engines would be two answers to wh
 means, and that flag is what the model pages on. `truncated` says "there is more of this set you
 have not seen", which has two causes — the page was shrunk to fit the ceiling, or the caller's own
 `limit` was smaller than what remained. It used to report only the first, telling a caller who
-asked for 20 of 200 items that nothing was truncated. A model is never offered a tool with nothing to read — and the whitelist is the
-conversation's sources ∪ its workspace's ∪ any `@`-granted workspaces', resolved in
-`turnContext` (see [sources.md](sources.md)). It is a `Map` keyed by source id rather than a
-lookup by a bare id, because ids are guessable enough that a tool taking one would let a model
-wander into another conversation's uploads: a guessed id fails the `Map` before any path is
-touched, which makes that wandering unrepresentable rather than merely forbidden.
+asked for 20 of 200 items that nothing was truncated. A model is never offered a tool with nothing to read — and the whitelist is
+`listReadableWorkResources`, the three ranked arms resolved in `turnContext`
+(see [resources.md](resources.md#the-whitelist-is-three-arms-over-one-table)). It is a `Map` keyed
+by **reference id** rather than a lookup by a bare id, because ids are guessable enough that a tool
+taking one would let a model wander into another conversation's uploads: a guessed id fails the
+`Map` before any path is touched, which makes that wandering unrepresentable rather than merely
+forbidden.
 
 **It also reads the bytes when there is no extracted text, for the categories that never had
-any.** Only `document` and `image` are extracted (`needsParse`), so a Markdown or `.txt` source has
+any.** Only `document` and `image` are extracted (`needsParse`), so a Markdown or `.txt` file has
 never had anything in `parsed/` — and the tool could be handed one by name and not read a byte of
 it. That was survivable while a model was only shown ids it had just been handed; it stops being
 survivable once a grant makes uploads elsewhere addressable, because "here is an id" with nothing
@@ -803,28 +808,35 @@ only when explicitly set, so unset values keep ChatOpenAI's own defaults.
 
 ### Uploaded files (`attachments.ts`)
 
-Bytes live at `<userRoot>/sources/raw/<sourceId>.<ext>` — deliberately outside the
+Bytes live at `<userRoot>/sources/raw/<fileId>.<ext>` — deliberately outside the
 workspace, so chat uploads never pollute the user's project directory or appear in the
-agent's `list_files`. `resolveInSources()` mirrors the `resolveInWorkspace` guard, refusing
-anything that escapes the account's sources tree, and it is applied on **every** read of a
-stored path — including one that came out of the database, because a row is not a trust
-boundary.
+agent's `list_files`. What is stored is a `files.path` relative to the user root, and
+`resolveFilePath` (`resourcePaths.ts`) validates it on **every** read — refusing an escaping,
+absolute or empty path — including one that came out of the database, because a row is not a trust
+boundary. The tree is **passed in** as a `UserLayout`, not a module constant: it belongs to an
+account under a data root the process chose at launch, so there is nothing to compute at import
+time. That is also what keeps `config.ts` importable by the test suite — see "Config" above.
 
-A file is a **source**: owned by the account, indexed by the `sources` table, and
-*referenced* by conversations and workspaces rather than owned by them. Two consequences
-worth knowing before reading the rest of this section:
+The v4 split is at its clearest here. The bytes and the title are a **file**, owned by the
+account; the conversation working from it holds a **work resource** — a reference. Two
+consequences worth knowing before reading the rest of this section:
 
-- **Identical bytes are one source.** `UNIQUE (user_id, sha256)`, with the hash scoped to the
-  account — a lookup by hash alone would hand one account's file to another who uploaded the
-  same content. Re-uploading a PDF reuses the row, the file and whatever parse it already has.
-- **A file can outlive every conversation that referenced it.** Deleting a conversation
-  cascades its links away and touches nothing on disk; `DELETE /api/sources/:id` is the one
-  that deletes bytes.
+- **Identical uploaded bytes are one file.** `UNIQUE (user_id, sha256)`, narrowed to `upload` and
+  `attachment` so two parse results that happen to be byte-identical cannot collide, and with the
+  hash scoped to the account — a lookup by hash alone would hand one account's file to another who
+  uploaded the same content. Re-uploading a PDF reuses the row and the bytes; what it does **not**
+  reuse is the parse, which lives on the reference, so a second conversation uploading the same PDF
+  parses it again.
+- **A file outlives every reference to it.** Deleting a reference removes *this owner's* use and
+  touches nothing on disk — a sibling conversation holding its own reference can still read the
+  file. `DELETE /api/resources/:id` deletes a reference; the file manager's delete is the one that
+  moves bytes to `workspaces/<slug>/trash/<fileId>/`.
 
-The sources tree is **passed in** as a `UserLayout`, not a module constant: it belongs to an
-account under a data root the process chose at launch, so there is nothing to compute at
-import time. That is also what keeps `config.ts` importable by the test suite — see "Config"
-above.
+An `Attachment` carries **three ids**, and each answers its own question: `id` is the **file**
+(where the bytes are, and what an image is fetched by), `resourceId` is the **reference** (what
+`read_document` takes, and whose parse state is current), and `parsedFileId` is the **file holding
+the extracted text**. Using one where another belongs is the mistake the trio exists to make
+visible.
 
 `buildUserContent()` turns a turn into model content:
 
@@ -850,16 +862,22 @@ always available; cloud parsers are optional and configured like LLM providers.
 
 ```
 <userRoot>/sources/
-  raw/<sourceId>.pdf        the original bytes
-  parsed/<sourceId>.txt     extracted text
+  raw/<fileId>.pdf        the original bytes
+  parsed/<fileId>.txt     extracted text — a `files` row of its own, with no reference
 ```
 
-**Parse state is not there.** It lives in columns on the `sources` row — that is the "index
-it in the database" half of the design, and it buys two things a `parsed/<id>.json` sidecar
-could not: a reparse is visible in **every** conversation that references the file at once,
-rather than only in the messages written after it; and a file referenced by two conversations
-is parsed **once**, not once per reference. Only the extracted text stays a file: it is large,
-and `read_document` streams it by offset.
+**Parse state is not there.** It lives in columns on the **`work_resources`** row — the reference
+— which is the "index it in the database" half of the design, and it buys what a
+`parsed/<id>.json` sidecar could not: a reparse is visible immediately, from every surface that
+reads the reference. Only the extracted text stays a file: it is large, and `read_document`
+streams it by offset. That text is a `files` row reached through the reference's `parsed_file_id`
+— registered and deliberately **not** referenceable, so no parse result ever appears in the
+library.
+
+The cost of putting the parse on the reference rather than the entity is stated rather than
+hidden: **the same file referenced by two owners is parsed twice.** v3 parsed it once and showed
+the reparse to both; here each reference owns its run and its text, because that is the row the
+requirement asks the state to describe.
 
 The two directories are siblings, which used to be *load-bearing*: `findStoredAttachment()`
 located an attachment by globbing `<id>.*` in the session directory, and `txt` is a legitimate
@@ -870,11 +888,13 @@ avoided. The split stays because raw bytes and derived text are different kinds 
 
 **Extraction is asynchronous.** A cloud job routinely takes tens of seconds (five
 minutes is the ceiling), so the upload endpoint answers immediately with `parseStatus:
-"pending"` and a background `DocumentService` queue does the work — keyed by **source id**,
-because the work belongs to the file rather than to the conversation that happened to upload
-it. The client polls `GET /api/sessions/:id/sources` and the composer **blocks sending until
-every staged attachment has settled** — the text is injected when the message is built, so
-sending early would produce a turn where the model never saw the document the user attached.
+"pending"` and a background `DocumentService` queue does the work — keyed by **reference id**,
+because the parse belongs to one owner's use of the file rather than to the file. `cancelResource`
+takes that same id, so deleting one reference stops its parse and leaves every other owner's row
+running. The client polls `GET /api/sessions/:id/resources` and the composer **blocks
+sending until every staged attachment has settled** — the text is injected when the message is
+built, so sending early would produce a turn where the model never saw the document the user
+attached.
 
 #### Local extraction
 
@@ -1041,11 +1061,14 @@ attachments, providers and app defaults.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/sessions/:id/sources` | upload a file and reference it from this conversation (and its workspace) |
-| `GET /api/sessions/:id/sources` | every file this conversation can read, with its parse state — **the model's whitelist too** |
-| `GET /api/sources/:id/raw` | a file's bytes, for a thumbnail or a download |
-| `POST /api/sources/:id/reparse` | re-run extraction |
-| `DELETE /api/sources/:id` | delete the file, its text and every reference to it |
+| `POST /api/sessions/:id/resources` | upload a file and reference it from this conversation |
+| `GET /api/sessions/:id/resources` | every reference this conversation may read, with its parse state — **the model's whitelist too** |
+| `GET /api/resources` | the account's references, filtered by resource type, owner, category, mime, name, workspace and conversation |
+| `GET /api/resources/:id/preview` | one reference, described the way a workspace file is |
+| `GET /api/files/:id/raw` | a **file's** bytes, for a thumbnail or a download — by file id, because "which reference" has no answer when a file has several |
+| `POST /api/resources/pages` | add a page by URL, to a workspace — fetched through `web_fetch`'s guard |
+| `POST /api/resources/:id/reparse` | re-run extraction for one reference |
+| `DELETE /api/resources/:id` | remove **this owner's reference**; the bytes and every other owner's reference stay |
 | `POST /api/auth/login` | sign in with a name and a password. Answers 409 `SETUP_REQUIRED` when the installation has no administrator, which the server itself will not serve |
 | `pnpm … server cli create-admin` | create the first administrator, outside the server — the only way, and it works with the server stopped |
 | `pnpm … server cli reset-admin (--password-stdin \| --generate)` | replace a superadmin's forgotten password; also outside the server, and the only place a superadmin's **own** password can be replaced |
@@ -1069,10 +1092,10 @@ attachments, providers and app defaults.
 | `GET /api/workspaces/:id/files?path=` | one directory level of the workspace, for the sidebar's file tree |
 | `GET /api/workspaces/:id/files/content?path=` | a file's metadata, and its text when it is text |
 | `PATCH /api/sessions/:id` | rename (numbered against its siblings), describe, update per-conversation settings, or re-persona it (`systemPrompt`, `tools`); a title also flips `titleSource` to `user` |
-| `POST /api/sessions/:id/sources` | upload (base64 JSON); schedules parsing |
-| `GET /api/sessions/:id/sources` | what this conversation can read, with parse state |
-| `GET /api/sessions/:sessionId/attachments/:attachmentId` | serve the bytes back |
-| `POST /api/sessions/:id/attachments/:attachmentId/reparse` | re-run extraction |
+| `POST /api/sessions/:id/resources` | upload (base64 JSON); schedules parsing for this reference |
+| `GET /api/sessions/:id/resources` | what this conversation can read, with parse state |
+| `GET /api/files/:id/raw` | serve a file's bytes back |
+| `POST /api/resources/:id/reparse` | re-run extraction |
 | `GET/POST /api/document-parsers`, `PUT/DELETE /api/document-parsers/:id` | cloud parser CRUD |
 | `GET /api/document-parsers/kinds` | the protocol kinds the server implements |
 | `POST /api/document-parsers/:id/test` | round-trip a throwaway document |
@@ -1196,10 +1219,10 @@ after that point, and rendering both would show the answer twice for as long as 
   reasoning, per-turn token line, copy action), `ReasoningBlock`, `MessageMinimapRail` (one
   anchor per turn), `ToolCallCard` (collapsible args/result), `Composer` (paperclip/paste
   uploads, session-params button, token popover, model picker), `ModelSelector`,
-  `AttachmentChips`, `TokenCountPopover`, `SourceBrowser` (every source the account holds,
+  `AttachmentChips`, `TokenCountPopover`, `LibraryBrowser` (every reference the account holds,
   filterable, with one add entry), and the dialogs: `ConfirmDialog`, `CopilotsDialog` (the
-  account's own Copilots) with `CopilotDialog` as its editor, `AddSourceDialog` (a tab per
-  kind of source), `ProviderDialog`, `NewSessionDialog`, `SessionSettingsDialog`,
+  account's own Copilots) with `CopilotDialog` as its editor, `AddResourceDialog` (a tab per
+  kind of material), `ProviderDialog`, `NewSessionDialog`, `SessionSettingsDialog`,
   `WorkspaceSettingsDialog`, `CreateWorkspaceDialog`, `FilePreviewDialog`. `AdminConsole`
   and its `admin/ProvidersSection` and `admin/DocumentsSection` hold the installation-wide
   screens — the ones that are nobody's alone.
@@ -1427,16 +1450,17 @@ itself made. Its row carries `adopted`, which is the only thing that survives th
 is also why it is not in the `"study"` group: the group's rule is "live on install" and this one
 waits to be asked (see [widgets.md](widgets.md#an-on-demand-widget-with-no-tools-the-insight-widget)).
 
-**A panel over the source registry shows the conversation's material, not the model's whitelist.**
-The sources panel (`id: "sources"`) reads `GET /api/sources?sessionId=…` — held by this
-conversation *or* linked into it — rather than `GET /api/sessions/:id/sources`, which is the
-session ∪ workspace union and is exactly what `read_document` is bound to. The two are one route
-apart and answer different questions: what a panel should show is what the conversation is
-working from, and the whitelist would put a workspace's whole corpus beside the three files it is
-about. It filters by category **client-side**, from the rows it already has, because one
-conversation's list is small and the option list is the one thing the server cannot answer in the
-same request — see [sources.md](sources.md) and
-[widgets.md](widgets.md#a-viewer-over-the-registry-the-sources-widget).
+**A panel over the registry shows the conversation's material, not the model's whitelist.**
+The resources panel (`id: "sources"` — the id is a key and did not move with the wording) reads
+`GET /api/resources?sessionId=…` — the references this conversation holds — rather than
+`GET /api/sessions/:id/resources`, which is the three-arm whitelist and is exactly what
+`read_document` is bound to. The two are one route apart and answer different questions: what a
+panel should show is what the conversation is working from, and the whitelist would put a granted
+workspace's whole corpus beside the three files it is about. It filters by category
+**client-side**, from the rows it already has, because one conversation's list is small and the
+option list is the one thing the server cannot answer in the same request — see
+[resources.md](resources.md) and
+[widgets.md](widgets.md#a-viewer-over-the-registry-the-resources-widget).
 
 A widget declares which levels it accepts — `workspace`, `session` — and only those two exist. A
 **Copilot is a third place to tick a box, not a third scope**: its selection is copied into the

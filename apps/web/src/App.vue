@@ -7,7 +7,7 @@ import Sidebar from "./components/Sidebar.vue";
 import WidgetPanel from "./components/WidgetPanel.vue";
 import ConfirmDialog from "./components/dialogs/ConfirmDialog.vue";
 import CopilotsDialog from "./components/dialogs/CopilotsDialog.vue";
-import SourceBrowser from "./components/dialogs/SourceBrowser.vue";
+import LibraryBrowser from "./components/dialogs/LibraryBrowser.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
 import SessionSettingsDialog from "./components/dialogs/SessionSettingsDialog.vue";
@@ -269,7 +269,7 @@ watch(
       its workspace — a default the browser's own workspace picker moves in one click, which is
       why the picker is drawn from both doors.
     -->
-    <SourceBrowser
+    <LibraryBrowser
       :initial="{ workspaceId: uiState.sourcesScope?.workspaceId }"
       @close="closeSources"
     />

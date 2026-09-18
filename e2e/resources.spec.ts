@@ -43,8 +43,8 @@ async function seedSource(request: APIRequestContext, name: string): Promise<str
 async function openLibrary(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByTestId("workspace-home")).toBeVisible();
-  await page.getByTestId("open-sources").click();
-  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await page.getByTestId("open-library").click();
+  await expect(page.getByTestId("library-dialog")).toBeVisible();
 }
 
 test.describe("uploaded files", () => {
@@ -53,31 +53,31 @@ test.describe("uploaded files", () => {
 
     await openLibrary(page);
 
-    const row = page.getByTestId("source-row").filter({ hasText: "lecture-notes.txt" });
+    const row = page.getByTestId("resource-row").filter({ hasText: "lecture-notes.txt" });
     await expect(row).toBeVisible();
     // Size, and no parse state: a text file needs no extraction, and `none` must not render
     // as a sentence about parsing — that would read as "still working on it".
-    await expect(row.getByTestId("source-detail")).toHaveText(/B$/);
+    await expect(row.getByTestId("resource-detail")).toHaveText(/B$/);
   });
 
   test("says so when there is nothing to list", async ({ page }) => {
     // Only meaningful on a run where this account has uploaded nothing — the seeded ones
     // above are per-test, and a fresh account is the case a user meets first.
     await page.goto("/");
-    await page.getByTestId("open-sources").click();
+    await page.getByTestId("open-library").click();
 
-    const dialog = page.getByTestId("sources-dialog");
+    const dialog = page.getByTestId("library-dialog");
     await expect(dialog).toBeVisible();
     // Either state is correct depending on what else has run; what must never happen is a
     // dialog that looks empty because it failed to load.
-    await expect(dialog.getByTestId("sources-empty").or(page.getByTestId("source-row").first())).toBeVisible();
+    await expect(dialog.getByTestId("library-empty").or(page.getByTestId("resource-row").first())).toBeVisible();
   });
 
   test("deleting asks first, and cancelling changes nothing", async ({ page, request }) => {
     await seedSource(request, "keep-me.txt");
 
     await openLibrary(page);
-    const row = page.getByTestId("source-row").filter({ hasText: "keep-me.txt" });
+    const row = page.getByTestId("resource-row").filter({ hasText: "keep-me.txt" });
     await row.getByTestId("source-delete").click();
 
     // The confirmation has to say what it costs — that this is not the same thing as
@@ -93,7 +93,7 @@ test.describe("uploaded files", () => {
     await seedSource(request, "doomed.txt");
 
     await openLibrary(page);
-    const row = page.getByTestId("source-row").filter({ hasText: "doomed.txt" });
+    const row = page.getByTestId("resource-row").filter({ hasText: "doomed.txt" });
     await row.getByTestId("source-delete").click();
     await page.getByTestId("confirm-accept").click();
 
@@ -101,12 +101,12 @@ test.describe("uploaded files", () => {
 
     // Gone from the server, not just from the list on screen: a reload re-reads it.
     await openLibrary(page);
-    await expect(page.getByTestId("source-row").filter({ hasText: "doomed.txt" })).toHaveCount(0);
+    await expect(page.getByTestId("resource-row").filter({ hasText: "doomed.txt" })).toHaveCount(0);
   });
 
   test("closes on Escape", async ({ page }) => {
     await openLibrary(page);
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("sources-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("library-dialog")).toHaveCount(0);
   });
 });

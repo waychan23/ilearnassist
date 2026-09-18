@@ -19,7 +19,7 @@ import {
   removeWorkspace,
   scopeChipIds,
 } from "../utils/workspaceScope";
-import type { ReferenceChoice } from "../utils/referencePicker";
+import type { ReferenceChoice } from "../utils/resourcePicker";
 import type { ResourceFilterQuery } from "../api/client";
 import { fileViewerSupported } from "../utils/fileViewer";
 import { closeCopilots, closeSources, uiState } from "../composables/ui";

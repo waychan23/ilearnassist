@@ -192,7 +192,7 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
       <!--
         The strip appears only once there is something to narrow, and it offers only the kinds
         that are there: an option that can only ever produce the empty state is a control that
-        does nothing. The count is the same one `SourcesWidget` carries, for the same reason —
+        does nothing. The count is the same one `ResourcesWidget` carries, for the same reason —
         it is what makes a filter honest about what it is hiding.
       -->
       <div v-if="rows.length > 0 && kinds.length > 1" class="figure-filter">

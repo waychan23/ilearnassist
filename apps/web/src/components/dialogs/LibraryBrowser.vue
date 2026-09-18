@@ -18,8 +18,8 @@ import { confirm } from "../../composables/confirm";
 import { translateParseError } from "../../utils/apiError";
 import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
-import { allGroupKeys, flattenSourceTree, groupSources } from "../../utils/sourceTree";
-import AddSourceDialog from "./AddSourceDialog.vue";
+import { allGroupKeys, flattenResourceTree, groupResources } from "../../utils/resourceTree";
+import AddResourceDialog from "./AddResourceDialog.vue";
 import Icon from "../Icon.vue";
 
 /**
@@ -214,8 +214,8 @@ const mimeOptions = computed(() => present("mimeType"));
 
 /* --------------------------------- the tree -------------------------------- */
 
-const groups = computed(() => groupSources(rows.value));
-const lines = computed(() => flattenSourceTree(groups.value, expanded.value));
+const groups = computed(() => groupResources(rows.value));
+const lines = computed(() => flattenResourceTree(groups.value, expanded.value));
 const allCollapsed = computed(() => expanded.value.length === 0);
 
 function toggleGroup(key: string): void {
@@ -555,7 +555,7 @@ function expandAll(): void {
         class="modal source-browser"
         role="dialog"
         aria-modal="true"
-        data-testid="sources-dialog"
+        data-testid="library-dialog"
       >
         <div class="modal-head">
           <h3>{{ t("sources.title") }}</h3>
@@ -626,14 +626,14 @@ function expandAll(): void {
               class="input search"
               :aria-label="t('sources.search')"
               :placeholder="t('sources.searchHint')"
-              data-testid="sources-filter-search"
+              data-testid="resources-filter-search"
             />
 
             <select
               v-model="filters.workspaceId"
               class="input"
               :aria-label="t('sources.filterWorkspace')"
-              data-testid="sources-filter-workspace"
+              data-testid="resources-filter-workspace"
             >
               <option value="">{{ t("sources.allWorkspaces") }}</option>
               <option v-for="w in store.workspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
@@ -650,7 +650,7 @@ function expandAll(): void {
               v-model="filters.sessionId"
               class="input"
               :aria-label="t('sources.filterSession')"
-              data-testid="sources-filter-session"
+              data-testid="resources-filter-session"
             >
               <option value="">{{ t("sources.allSessions") }}</option>
               <option v-for="s in sessions" :key="s.id" :value="s.id">
@@ -671,7 +671,7 @@ function expandAll(): void {
               v-model="filters.ownerType"
               class="input"
               :aria-label="t('sources.filterOwnerType')"
-              data-testid="sources-filter-owner-type"
+              data-testid="resources-filter-owner-type"
             >
               <option value="">{{ t("sources.allOwnerTypes") }}</option>
               <option value="session">{{ t("sources.ownerType.session") }}</option>
@@ -682,7 +682,7 @@ function expandAll(): void {
               v-model="filters.category"
               class="input"
               :aria-label="t('sources.filterCategory')"
-              data-testid="sources-filter-category"
+              data-testid="resources-filter-category"
             >
               <option value="">{{ t("sources.allCategories") }}</option>
               <option v-for="c in categoryOptions" :key="c" :value="c">
@@ -700,7 +700,7 @@ function expandAll(): void {
               v-model="filters.resourceType"
               class="input"
               :aria-label="t('sources.filterResourceType')"
-              data-testid="sources-filter-resource-type"
+              data-testid="resources-filter-resource-type"
             >
               <option value="">{{ t("sources.allResourceTypes") }}</option>
               <option v-for="k in kindOptions" :key="k" :value="k">
@@ -712,7 +712,7 @@ function expandAll(): void {
               v-model="filters.mime"
               class="input"
               :aria-label="t('sources.filterMime')"
-              data-testid="sources-filter-mime"
+              data-testid="resources-filter-mime"
             >
               <option value="">{{ t("sources.allMimes") }}</option>
               <option v-for="m in mimeOptions" :key="m" :value="m">{{ m }}</option>
@@ -728,28 +728,28 @@ function expandAll(): void {
           </div>
 
           <div class="browser-scroll">
-            <p v-if="error" class="browser-note error" role="alert" data-testid="sources-error">
+            <p v-if="error" class="browser-note error" role="alert" data-testid="library-error">
               {{ error }}
             </p>
 
-            <p v-if="loading" class="browser-note" data-testid="sources-loading">
+            <p v-if="loading" class="browser-note" data-testid="library-loading">
               {{ t("sources.loading") }}
             </p>
             <p
               v-else-if="rows.length === 0"
               class="browser-note"
-              data-testid="sources-empty"
+              data-testid="library-empty"
             >
               {{ t("sources.empty") }}
             </p>
 
             <!-- The flat view: one row per source, newest first, with where it came from. -->
             <ul v-else-if="view === 'flat'" class="sources-list">
-              <li v-for="source in rows" :key="source.id" class="source" data-testid="source-row">
+              <li v-for="source in rows" :key="source.id" class="source" data-testid="resource-row">
                 <button
-                  class="source-open"
+                  class="resource-open"
                   :title="t('sources.preview', { name: resourceName(source) })"
-                  data-testid="source-open"
+                  data-testid="resource-open"
                   @click="store.openResourceFile(source)"
                 >
                   <Icon
@@ -763,8 +763,8 @@ function expandAll(): void {
                   />
                   <span class="label truncate">{{ resourceName(source) }}</span>
                 </button>
-                <span class="source-detail truncate" data-testid="source-detail">{{ detailOf(source) }}</span>
-                <span class="source-origin truncate" data-testid="source-origin">
+                <span class="source-detail truncate" data-testid="resource-detail">{{ detailOf(source) }}</span>
+                <span class="source-origin truncate" data-testid="resource-origin">
                   {{ originLabel(source) }}
                 </span>
                 <!-- A sibling of the row's own control, never a child of it: a button inside a
@@ -774,7 +774,7 @@ function expandAll(): void {
                   class="icon-btn"
                   :title="t('sources.openInBrowser')"
                   :aria-label="t('sources.openInBrowser')"
-                  data-testid="source-open-browser"
+                  data-testid="resource-open-browser"
                   @click="openInBrowser(source)"
                 >
                   <Icon name="link" />
@@ -812,18 +812,18 @@ function expandAll(): void {
                   <Icon :name="expanded.includes(line.key) ? 'folder-open' : 'folder'" />
                   <span class="label truncate">{{ line.label }}</span>
                 </button>
-                <div v-else class="source tree-row" data-testid="source-row">
+                <div v-else class="source tree-row" data-testid="resource-row">
                   <button
-                    class="source-open"
+                    class="resource-open"
                     :style="{ '--depth': line.depth }"
                     :title="t('sources.preview', { name: resourceName(line.source!) })"
-                    data-testid="source-open"
+                    data-testid="resource-open"
                     @click="store.openResourceFile(line.source!)"
                   >
                     <Icon :name="resourceIsImage(line.source!) ? 'image' : 'file'" />
                     <span class="label truncate">{{ line.label }}</span>
                   </button>
-                  <span class="source-detail truncate" data-testid="source-detail">
+                  <span class="source-detail truncate" data-testid="resource-detail">
                     {{ detailOf(line.source!) }}
                   </span>
                   <button
@@ -831,7 +831,7 @@ function expandAll(): void {
                     class="icon-btn"
                     :title="t('sources.openInBrowser')"
                     :aria-label="t('sources.openInBrowser')"
-                    data-testid="source-open-browser"
+                    data-testid="resource-open-browser"
                     @click="openInBrowser(line.source!)"
                   >
                     <Icon name="link" />
@@ -856,13 +856,13 @@ function expandAll(): void {
           <!--
             One door for both kinds. The dialog that opens asks *what* is being added — a file
             or a link — which is the question a knowledge base asks, and then collects
-            everything before anything is sent. See `AddSourceDialog`.
+            everything before anything is sent. See `AddResourceDialog`.
           -->
-          <button class="btn" data-testid="sources-add" @click="addOpen = true">
+          <button class="btn" data-testid="library-add" @click="addOpen = true">
             <Icon name="plus" />
             {{ t("sources.add") }}
           </button>
-          <button class="btn primary" data-testid="sources-done" @click="emit('close')">
+          <button class="btn primary" data-testid="library-done" @click="emit('close')">
             {{ t("common.close") }}
           </button>
         </div>
@@ -878,7 +878,7 @@ function expandAll(): void {
       workspace you had just navigated away from would land where the *dialog* was opened, which
       is the silent kind of wrong.
     -->
-    <AddSourceDialog
+    <AddResourceDialog
       v-if="addOpen"
       :locked-workspace-id="filters.workspaceId"
       :directories="knownDirectories"

@@ -68,7 +68,7 @@ test("an empty conversation says so, and offers no filter to press", async ({ pa
    */
   await sourcesSession(page, unique("Empty Sources"));
 
-  await expect(page.getByTestId("sources-empty")).toBeVisible();
+  await expect(page.getByTestId("library-empty")).toBeVisible();
   await expect(page.getByTestId("sources-filter")).toHaveCount(0);
   await expect(page.getByTestId("sources-list")).toHaveCount(0);
 });
@@ -104,7 +104,7 @@ test("an upload and a file the agent wrote appear in the same list", async ({ pa
 
   // The turn is what links the upload and what wrote the file, so `turn.finished` is what the
   // panel refreshes on. Both rows, without a reload.
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
   await expect(page.getByTestId("sources-list")).toContainText(uploaded);
   await expect(page.getByTestId("sources-list")).toContainText("summary.md");
 
@@ -112,7 +112,7 @@ test("an upload and a file the agent wrote appear in the same list", async ({ pa
   await page.reload();
   await enterWorkspace(page, name);
   await page.getByTestId("session-item").first().click();
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
 });
 
 test("the category filter is built from what is there, and narrows to it", async ({
@@ -137,7 +137,7 @@ test("the category filter is built from what is there, and narrows to it", async
   await upload(page, uploaded);
   await page.getByTestId("composer-input").fill("把这次的小结写下来");
   await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
 
   const filter = page.getByTestId("sources-filter");
   // Only the categories actually present — the one question the server cannot answer in the same
@@ -147,7 +147,7 @@ test("the category filter is built from what is there, and narrows to it", async
   await expect(filter).toContainText("Markdown");
 
   await filter.selectOption("text");
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
   await expect(page.getByTestId("sources-list")).toContainText(uploaded);
   // The count is what makes the filter honest about what it is hiding.
   await expect(page.getByTestId("sources-count")).toHaveText("1");
@@ -157,7 +157,7 @@ test("the category filter is built from what is there, and narrows to it", async
   await expect(page.getByTestId("sources-list")).not.toContainText(uploaded);
 
   await filter.selectOption("");
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
 });
 
 test("opening a row goes through the ordinary file preview", async ({ page, request }) => {
@@ -178,9 +178,9 @@ test("opening a row goes through the ordinary file preview", async ({ page, requ
   await sourcesSession(page, unique("Openable"));
   await page.getByTestId("composer-input").fill("把这次的小结写下来");
   await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
 
-  await page.getByTestId("source-row").first().click();
+  await page.getByTestId("resource-row").first().click();
   const preview = page.locator("body > .modal-overlay");
   await expect(preview).toBeVisible();
   await expect(preview).toContainText("summary.md");
@@ -219,7 +219,7 @@ test("a load that fails is reported in the panel, and the retry is what fixes it
   await sourcesSession(page, name);
   await page.getByTestId("composer-input").fill("把这次的小结写下来");
   await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
 
   await page.route("**/api/resources?**", (route) => route.abort());
   await page.reload();
@@ -227,11 +227,11 @@ test("a load that fails is reported in the panel, and the retry is what fixes it
   await page.getByTestId("session-item").first().click();
 
   await expect(page.getByTestId("widget-sources")).toContainText("读取参考资料失败");
-  await expect(page.getByTestId("source-row")).toHaveCount(0);
+  await expect(page.getByTestId("resource-row")).toHaveCount(0);
   // Never the toast: the conversation itself did nothing wrong.
   await expect(page.locator("body > .toast")).toHaveCount(0);
 
   await page.unroute("**/api/resources?**");
   await page.getByTestId("widget-retry").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
 });

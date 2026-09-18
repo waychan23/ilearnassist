@@ -27,23 +27,23 @@ import { resourceName, resourceSandboxPath } from "./resourceView";
  */
 
 /** A node in the tree, before flattening. */
-export interface SourceGroup {
+export interface ResourceGroup {
   /** Stable identity, and the key `expanded` holds. */
   key: string;
   label: string;
   /** Rows that belong directly to this group, in list order. */
   sources: WorkResource[];
-  children: SourceGroup[];
+  children: ResourceGroup[];
 }
 
-export interface SourceTreeLine {
+export interface ResourceTreeLine {
   kind: "group" | "source";
   /** Unique across the tree: a group's key, or a reference's id prefixed by its group. */
   key: string;
   label: string;
   depth: number;
   /** The group this line toggles, or the row it opens. */
-  group?: SourceGroup;
+  group?: ResourceGroup;
   source?: WorkResource;
 }
 
@@ -62,10 +62,10 @@ const LOOSE = "—";
  *   created on demand, which is what lets one workspace hold paths from several owners without
  *   the clients agreeing on a shape first.
  */
-export function groupSources(sources: readonly WorkResource[]): SourceGroup[] {
-  const roots = new Map<string, SourceGroup>();
+export function groupResources(sources: readonly WorkResource[]): ResourceGroup[] {
+  const roots = new Map<string, ResourceGroup>();
 
-  const workspaceGroup = (source: WorkResource): SourceGroup => {
+  const workspaceGroup = (source: WorkResource): ResourceGroup => {
     const key = source.workspaceId ? `ws:${source.workspaceId}` : "ws:?";
     const label = source.workspaceName ?? LOOSE;
     let group = roots.get(key);
@@ -76,7 +76,7 @@ export function groupSources(sources: readonly WorkResource[]): SourceGroup[] {
     return group;
   };
 
-  const ownerGroup = (parent: SourceGroup, source: WorkResource): SourceGroup => {
+  const ownerGroup = (parent: ResourceGroup, source: WorkResource): ResourceGroup => {
     // A workspace-owned row hangs directly under the workspace: the workspace *is* its owner,
     // and repeating its name one level down would be a group with nothing to distinguish it.
     if (source.ownerType === "workspace") return parent;
@@ -90,7 +90,7 @@ export function groupSources(sources: readonly WorkResource[]): SourceGroup[] {
   };
 
   /** Walk or create the chain of directories a path names. */
-  const pathGroup = (parent: SourceGroup, relPath: string): SourceGroup => {
+  const pathGroup = (parent: ResourceGroup, relPath: string): ResourceGroup => {
     const segments = relPath.split("/").slice(0, -1);
     let group = parent;
     for (const segment of segments) {
@@ -120,7 +120,7 @@ export function groupSources(sources: readonly WorkResource[]): SourceGroup[] {
 }
 
 /** Groups by label, rows by name — the order a reader expects, and stable across reloads. */
-function sortGroups(groups: SourceGroup[]): SourceGroup[] {
+function sortGroups(groups: ResourceGroup[]): ResourceGroup[] {
   groups.sort((a, b) => a.label.localeCompare(b.label));
   for (const group of groups) {
     group.sources.sort((a, b) => resourceName(a).localeCompare(resourceName(b)));
@@ -136,13 +136,13 @@ function sortGroups(groups: SourceGroup[]): SourceGroup[] {
  * when it is — the same shape `flattenTree` gives the file tree, and for the same reason: the
  * renderer draws a flat list and indentation is the depth it carries.
  */
-export function flattenSourceTree(
-  groups: readonly SourceGroup[],
+export function flattenResourceTree(
+  groups: readonly ResourceGroup[],
   expanded: readonly string[],
   depth = 0
-): SourceTreeLine[] {
+): ResourceTreeLine[] {
   const open = new Set(expanded);
-  const lines: SourceTreeLine[] = [];
+  const lines: ResourceTreeLine[] = [];
 
   for (const group of groups) {
     lines.push({ kind: "group", key: group.key, label: group.label, depth, group });
@@ -159,14 +159,14 @@ export function flattenSourceTree(
         source,
       });
     }
-    lines.push(...flattenSourceTree(group.children, expanded, depth + 1));
+    lines.push(...flattenResourceTree(group.children, expanded, depth + 1));
   }
 
   return lines;
 }
 
 /** Every group key, so "expand all" and a first render have somewhere to start. */
-export function allGroupKeys(groups: readonly SourceGroup[]): string[] {
+export function allGroupKeys(groups: readonly ResourceGroup[]): string[] {
   const keys: string[] = [];
   for (const group of groups) {
     keys.push(group.key);

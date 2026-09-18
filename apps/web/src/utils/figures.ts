@@ -105,7 +105,7 @@ export function filterFigures(rows: readonly FigureRow[], filter: FigureFilter):
 /**
  * The kinds actually present, in the panel's own order.
  *
- * Derived rather than fixed, which is `SourcesWidget`'s rule for its category filter: an option
+ * Derived rather than fixed, which is `ResourcesWidget`'s rule for its category filter: an option
  * that can only ever produce the empty state is a control that does nothing, and a conversation
  * with no tables should not offer 表 in a menu.
  */
