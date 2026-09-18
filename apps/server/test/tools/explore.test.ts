@@ -279,6 +279,43 @@ describe("ila_explore — message_search", () => {
     expect(ids).not.toContain("m3");
   });
 
+  it("searches everything under `all`, including the conversation's own workspace", async () => {
+    /*
+     * The reported bug, and its shape is why it went unnoticed: `scope.workspaces` excludes the
+     * conversation's **own** workspace on purpose — every other reader already has it — so an
+     * account with one workspace resolves `@所有工作区` to `{ all: true, workspaces: [] }`. A
+     * default set read off that list searched nothing, and said so in the result: *"Messages in 0
+     * opened workspaces"*, beside a search the user had aimed at everything.
+     *
+     * What `all` means to the person who chose it is "my conversations", and the one they are
+     * reading is one of them. So the set is the account's own.
+     */
+    const tool = buildExploreTool({ db, userId: OWNER, scope: { all: true, workspaces: [] } });
+
+    const out = JSON.parse(
+      (await tool.invoke({ kind: "message_search", query: "递归" })) as string
+    ) as { total: number; items: { sessionId: string }[]; note: string };
+    // Both workspaces, and every message: the search is not narrowed by the grant's own list.
+    expect(out.total).toBe(3);
+    expect(new Set(out.items.map((i) => i.sessionId))).toEqual(
+      new Set(["sGranted", SESSION_HERE])
+    );
+    // And the sentence says what it searched, rather than reporting the empty grant.
+    expect(out.note).toContain("every workspace in this account");
+    expect(out.note).not.toContain("0 opened");
+  });
+
+  it("reads a hit's conversation under `all`, which is the next call the result asks for", async () => {
+    /*
+     * The half that makes the search usable: the result tells the model to call `messages` with
+     * the id it returned. A hit in a workspace the grant's own list omits — the conversation's
+     * own, under `all` — has to be readable, or the search answers with an address that cannot be
+     * opened.
+     */
+    const tool = buildExploreTool({ db, userId: OWNER, scope: { all: true, workspaces: [] } });
+    await expect(tool.invoke({ kind: "messages", sessionId: SESSION_HERE })).resolves.toBeTruthy();
+  });
+
   it("names each hit's conversation, because that id is the next call", async () => {
     // A search that answered with text and no address would leave the model unable to read the
     // exchange around the hit — which is the only reason to search in the first place.

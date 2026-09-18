@@ -87,6 +87,45 @@ test("picks a workspace file with @ and sends it as a reference", async ({ page,
     .toContain("the referenced contents");
 });
 
+test("a long list is paged, and the pager keeps loading until nothing is left", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The list window, from the outside. `apps/web/test/utils/resourcePicker.test.ts` pins the
+   * arithmetic; what only a browser can show is that the pager is *wired* — that the control is
+   * drawn when rows are past the window, that pressing it grows the window, and that it retires
+   * itself once the list is complete rather than offering more of nothing.
+   *
+   * The rows are written straight to the workspace's folder rather than uploaded: the picker's
+   * list comes from `/api/resources`, whose route reconciles the filesystem first, so on-disk
+   * files are exactly the input it reads.
+   */
+  const name = `MentionPage-${Date.now()}`;
+  const res = await request.post("/api/workspaces", { data: { name } });
+  const { workdirPath } = (await res.json()) as { workdirPath: string };
+  const total = 115;
+  for (let i = 0; i < total; i++) {
+    writeFileSync(join(workdirPath, `paged-${String(i).padStart(3, "0")}.md`), `# ${i}`);
+  }
+
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  await page.getByTestId("composer-input").click();
+  await page.getByTestId("composer-input").type("@paged");
+
+  // One page, and the rest counted.
+  const pager = page.getByTestId("mention-more");
+  await expect(pager).toBeVisible();
+  await expect(page.getByTestId("mention-option")).toHaveCount(100);
+  await expect(pager).toContainText("15");
+
+  // Pressing it shows the rest, and retires the control: there is no more to ask for.
+  await pager.click();
+  await expect(page.getByTestId("mention-option")).toHaveCount(total);
+  await expect(page.getByTestId("mention-more")).toHaveCount(0);
+});
+
 test("the conversation's own objects load once per opening, not per keystroke", async ({
   page,
   request,

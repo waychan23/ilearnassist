@@ -28,6 +28,7 @@ import { notesWritable } from "../composables/notes";
 import { useMessageSelection } from "../composables/messageSelection";
 import { useWidgetActivation } from "../composables/widgetActivation";
 import { useSessionLock } from "../composables/sessionLock";
+import { useFigureViewer } from "../composables/figureViewer";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 import { messageReference } from "../utils/turnRefs";
 import MessageItem from "./MessageItem.vue";
@@ -36,6 +37,7 @@ import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
 import NoteEditor from "./NoteEditor.vue";
 import Composer from "./Composer.vue";
 import TopbarControls from "./TopbarControls.vue";
+import DiagramDialog from "./dialogs/DiagramDialog.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 import Icon from "./Icon.vue";
 
@@ -333,6 +335,9 @@ const noteMarks = ref<readonly NoteHighlightMark[]>([]);
 const editorRequest = ref<NoteEditorRequest | null>(null);
 const editorAnchor = ref<{ x: number; y: number } | null>(null);
 const editorBusy = ref(false);
+
+/** The note window's 标注对象 opens through here — see `onEditorOpenTarget`. */
+const { viewing, open: openFigure, close: closeFigure } = useFigureViewer();
 /**
  * Where the window should open, set by the toolbar just before the capture is routed.
  *
@@ -480,6 +485,25 @@ function onEditorAsk(): void {
     ref: noteId,
     label: request.draft.content.trim() || request.draft.quote,
   });
+}
+
+/**
+ * Show the object the note being edited is about.
+ *
+ * The **window floats and this view owns the viewer**, which is the split the note window's own
+ * docblock describes: it knows a draft and nothing about what a figure, a table or a reference
+ * *is*, so it emits and this decides. The viewer is the notes panel's own — `useFigureViewer`
+ * answers "how do I show one of these" once, and a second answer here would be a second place
+ * for the next kind to be forgotten.
+ *
+ * The window is **not** closed, unlike the one a dialog opens: this is a card over the
+ * conversation, so a preview or a table dialog opening behind it is a dialog the reader asked
+ * for and can dismiss, with the note still on screen beside it.
+ */
+function onEditorOpenTarget(): void {
+  const target = editorRequest.value?.draft.target;
+  if (!target) return;
+  void openFigure(target.kind, target.ref, target.label, target.summary);
 }
 
 /**
@@ -723,7 +747,19 @@ onBeforeUnmount(() => {
       @remove="onEditorRemove"
       @locate="onEditorLocate"
       @ask="onEditorAsk"
+      @open-target="onEditorOpenTarget"
       @close="closeEditor"
+    />
+
+    <!-- What still needs a dialog: a table. A diagram and a reference open in the file preview,
+         which is a dialog of its own — see `useFigureViewer`. -->
+    <DiagramDialog
+      v-if="viewing"
+      :content="viewing.content"
+      :name="viewing.name"
+      :summary="viewing.summary"
+      :figure="viewing.figure"
+      @close="closeFigure"
     />
 
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />

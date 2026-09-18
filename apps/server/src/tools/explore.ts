@@ -179,6 +179,25 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
   const granted = new Map(scope.workspaces.map((w) => [w.id, w]));
   const grantedIds = new Set(granted.keys());
 
+  /**
+   * The workspaces a **listing** reaches: the ones the grant names, or — under `all` — every
+   * workspace the account holds.
+   *
+   * Deliberately wider than `grantedIds`, and the difference is a bug that shipped: the grant
+   * excludes the conversation's *own* workspace, because every other reader already has it
+   * (`read_document`'s whitelist unions it in and the file tools are sandboxed inside it). So an
+   * account with one workspace resolves `@所有工作区` to `{ all: true, workspaces: [] }` — an
+   * empty list — and `message_search` answered "0 opened workspaces" for a search the user had
+   * aimed at everything. What `all` means to the person who chose it is "my conversations", and
+   * the one they are reading is one of them.
+   *
+   * `scope.workspaces` stays what it is: it is also the prompt's list of names and the answer to
+   * "what did the user open", and `all` is the fact that covers the rest. See
+   * `ResolvedScope.all`.
+   */
+  const across = (): Set<string> =>
+    scope.all ? new Set(db.listWorkspaces(userId).map((w) => w.id)) : grantedIds;
+
   /** A workspace in scope, or a refusal naming the ones that are. */
   const requireWorkspace = (id: string | undefined): ScopedWorkspace => {
     const available = scope.workspaces.map((w) => `${w.id} (${w.name})`).join(", ");
@@ -245,9 +264,12 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
     const offset = 0;
     const needle = input.query?.trim().toLowerCase();
 
-    // One workspace named, or every granted one. With `all`, the ids in `scope.workspaces` are
-    // the account's workspaces as of now, which is what "all" meant at the moment of the call.
-    const wanted = input.workspaceId ? new Set([requireWorkspace(input.workspaceId).id]) : grantedIds;
+    // One workspace named, or every one the grant reaches — which under `all` is the account's
+    // own list rather than the grant's, since the conversation's workspace is part of "all". See
+    // `across`.
+    const wanted = input.workspaceId
+      ? new Set([requireWorkspace(input.workspaceId).id])
+      : across();
 
     const all = db
       .listSessionOverviews(userId)
@@ -298,7 +320,10 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
     // what the user opened. A conversation in a workspace nobody opened is not readable even
     // though it is the caller's own.
     if (!found) throw new Error(`No conversation with id "${sessionId}".`);
-    if (!grantedIds.has(found.session.workspaceId)) {
+    // The same set a listing uses, and it has to be: `message_search` answers with conversation
+    // ids and tells the model to read one here, so a hit it can find and not open would be worse
+    // than not finding it.
+    if (!across().has(found.session.workspaceId)) {
       throw new Error(
         `That conversation is in "${found.workspace.name}", which is not opened to this conversation.`
       );
@@ -379,9 +404,13 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
    *   thinking of, and which conversation to call `messages` on next.
    * - **Each hit names its conversation**, because that id is the point — a search that answers
    *   with text and no address makes the next call impossible.
-   * - **A `workspaceId` narrows rather than selects.** Absent means every opened workspace, which
-   *   is the ordinary case; named, it is one workspace from kind `"workspaces"`. The refusal for
-   *   an id outside the grant is `requireWorkspace`'s, like every other kind.
+   * - **A `workspaceId` narrows rather than selects.** Absent means everything the grant reaches,
+   *   which is the ordinary case; named, it is one workspace from kind `"workspaces"`. The refusal
+   *   for an id outside the grant is `requireWorkspace`'s, like every other kind.
+   *
+   * The set the un-narrowed call searches is `across()`, not the grant's own list, and that is the
+   * difference between a search that works and one that answers "0 opened workspaces": see the
+   * note on `across`.
    */
   const messageSearch = (input: ExploreInput): string => {
     const offset = input.offset ?? 0;
@@ -393,7 +422,7 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
 
     const wanted = input.workspaceId
       ? [requireWorkspace(input.workspaceId).id]
-      : [...grantedIds];
+      : [...across()];
 
     const all = db.searchMessages(userId, wanted, query);
     const items = all.slice(offset, offset + limit).map((row) => ({
@@ -407,9 +436,16 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
       content: clip(row.content, EXPLORE_MESSAGE_MAX),
     }));
 
+    /*
+     * What was actually searched, said as the reader would say it. The count is `wanted`, not
+     * `grantedIds` — reporting the grant's own list was how "0 opened workspaces" appeared beside
+     * a search the user had aimed at everything, which is a sentence that reads as a bug report.
+     */
     const where = input.workspaceId
       ? `"${clip(requireWorkspace(input.workspaceId).name, EXPLORE_META_MAX)}"`
-      : `${grantedIds.size} opened workspace${grantedIds.size === 1 ? "" : "s"}`;
+      : scope.all
+        ? `every workspace in this account`
+        : `${wanted.length} opened workspace${wanted.length === 1 ? "" : "s"}`;
 
     return renderPage({
       tool: EXPLORE_TOOL_NAME,

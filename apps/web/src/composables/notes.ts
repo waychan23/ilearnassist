@@ -383,6 +383,9 @@ export function openNoteEditor(note: Note, anchor?: { x: number; y: number } | n
               // worst — which is what the window used to show. Falling back to the ref keeps the
               // row non-empty for a note written before the title was recorded.
               label: note.quote || note.targetRef,
+              // ...and whether there is still anything to open. A target the server has reported
+              // as gone makes the window draw a sentence instead of a control.
+              ...(note.targetMissing ? { missing: true } : {}),
             },
           }
         : {}),

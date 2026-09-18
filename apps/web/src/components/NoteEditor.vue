@@ -63,6 +63,8 @@ const emit = defineEmits<{
   locate: [];
   /** Ask the agent about this note. The host knows what a note *is*; this window does not. */
   ask: [];
+  /** Show the object the note is about. The host owns the viewer; this window does not. */
+  openTarget: [];
   close: [];
 }>();
 
@@ -77,6 +79,15 @@ const existing = computed(() => !!props.draft.noteId);
 
 /** The object this note is about, if it is about one. */
 const target = computed(() => props.draft.target ?? null);
+
+/**
+ * Whether there is something to open.
+ *
+ * A target the server has reported as gone (`targetMissing`) has no viewer to offer — the note
+ * still reads, and the object it named is not there to show. Everything else does, subject to
+ * what the host can actually open.
+ */
+const openable = computed(() => !!target.value && !target.value.missing);
 
 /**
  * What kind this note may be — which is not always the whole list.
@@ -398,9 +409,32 @@ function typeLabel(candidate: NoteType): string {
       -->
       <div v-if="target" class="field">
         <label>{{ t("notes.editor.targetLabel") }}</label>
-        <p class="note-target" data-testid="note-editor-target">
+        <!--
+          A control, not a sentence: the object a note is about is one click away from the window
+          that names it, which is where a reader editing that note has just been. It opens the
+          same viewer the panel's chip does — a diagram or a file through the preview, a table
+          through the dialog — and the *host* owns that decision, not this window, which is why
+          the click is an emit rather than a call.
+
+          Drawn as a button only where there is something to open. A note whose target is gone has
+          no viewer to offer, and a control that renders and does nothing is the failure this
+          repository names most often.
+        -->
+        <button
+          v-if="openable"
+          type="button"
+          class="note-target"
+          data-testid="note-editor-target"
+          :title="t('notes.editor.openTarget')"
+          @click="emit('openTarget')"
+        >
           <!-- `targetKindIcon`, not a comparison: a two-arm ternary here fell through to a table
                icon for every kind that was not a diagram, which is what a resource note got. -->
+          <Icon :name="targetKindIcon(target.kind)" />
+          <span class="truncate">{{ target.label }}</span>
+          <Icon name="expand" />
+        </button>
+        <p v-else class="note-target" data-testid="note-editor-target">
           <Icon :name="targetKindIcon(target.kind)" />
           <span class="truncate">{{ target.label }}</span>
         </p>

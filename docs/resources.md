@@ -330,10 +330,21 @@ page's name cannot say what it is — so "web pages" is no longer a *content typ
 filter by, and re-adding it means a pill that filters on `resourceType`, a control the picker does
 not have. A page has no category at all, so turning on any pill excludes it. The pills filter
 **client-side**, over the rows the server already returned, and that is a correctness point rather
-than a shortcut: the picker fetches the account's whole match set and caps *per group* in
+than a shortcut: the picker fetches the account's whole match set and windows it in
 `buildOptions`, so filtering server-side would mean asking `/api/resources` for a list of categories
 it does not take (its `category` is a single value) and capping before the filter, which shows fewer
 matches than exist.
+
+**The list is one window, and a pager grows it.** `LIST_PAGE` (100) rows are drawn at a time, and
+the control under the list adds another 100 until nothing is left — after which it is not drawn.
+It replaced an 8-per-group / 12-total pair that kept a menu from being a wall, which it is not
+(the list scrolls) and which capped what a reader could reach at a dozen rows with no way to ask
+for the rest. One window over the whole list rather than a cap per group, because "还有 N 项" is
+only a useful sentence if N is how many more a press will produce: under a shared window a
+per-group count would promise a group's rows that the next page spends on an earlier group.
+Nothing is fetched to page — the match set is already in hand — so the window is display
+arithmetic, and it resets with the query and the filters, because a different list is a different
+set of rows.
 
 Selecting any pill **drops the workspace group**. A workspace is not a file and has no category, so
 a list still showing workspaces after you asked for images reads as a filter that did not work. The
@@ -397,6 +408,16 @@ and a `GROUP BY`; this is the same ranking as an exclusion, needing no aggregate
 
 Without arm 3's conversations-of-a-granted-workspace clause, `ila_explore`'s `messages` would name
 ids that resolve to nothing, which reads as a broken tool.
+
+**`ResolvedScope.workspaces` excludes the conversation's own workspace, and `ila_explore`'s listing
+kinds must not read it as "everything".** It is excluded here on purpose: every other reader already
+has it — `read_document`'s whitelist unions it in and the file tools are sandboxed inside it — so
+the grant is only ever about the *other* ones. But an account with one workspace therefore resolves
+`@所有工作区` to `{ all: true, workspaces: [] }`, and a search that took its default set off that
+list searched nothing while reporting *"Messages in 0 opened workspaces"*. The listing kinds
+(`sessions`, `message_search`, and `messages`' grant check) use a set of their own — `across()`,
+which under `all` is the account's own workspaces — because what the person who chose `all` means is
+"my conversations", and the one they are reading is one of them.
 
 What a grant opens, and each half is needed:
 

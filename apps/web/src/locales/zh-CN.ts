@@ -483,8 +483,11 @@ export default {
     sourceWorkspace: "所属工作区",
     /** The select's empty option — no narrowing, which is the state the picker opens in. */
     anyWorkspace: "所有工作区",
-    /** Said when more rows matched than the list shows. */
-    moreHidden: "还有 {count} 项未显示",
+    /**
+     * The pager, under the list. One control for the whole list rather than one per group,
+     * because the window is one — see `LIST_PAGE` in `utils/resourcePicker.ts`.
+     */
+    loadMore: "还有 {count} 项未显示，点击加载更多",
     noWorkspaceMatch: "没有匹配的工作区。",
     /** Removing one workspace from what this conversation may read. */
     scopeRemove: "不再引用「{name}」",
@@ -1389,6 +1392,14 @@ export default {
         resource: "资料",
       },
       missing: "它写的{kind}已不存在",
+      /**
+       * A reference that resolves to something with no viewer — a web page.
+       *
+       * Said out loud rather than swallowed: the reader pressed a control the app drew, so a
+       * click that did nothing would be the one outcome they cannot act on. The page is still
+       * openable from its own URL, which is where the library's row sends them.
+       */
+      notViewable: "这条资料没有可预览的文件（例如网页链接），请在资料库中打开。",
     },
     /** The conversation is marked up by a different widget. Deliberately nameless. */
     claimedByOther: "另一个控件正在使用本会话的标注能力，暂时无法在此标注。",
@@ -1408,8 +1419,12 @@ export default {
       newTitle: "新建笔记",
       editTitle: "编辑笔记",
       quoteLabel: "标注原文",
-      /** The counterpart of 标注原文, for a note about a 图 or a 表. */
+      /**
+       * The counterpart of 标注原文, for a note about an object — a 图, a 表 or a piece of 资料.
+       */
       targetLabel: "标注对象",
+      /** What pressing the object opens. It is a control only while the object is still there. */
+      openTarget: "打开这个对象",
       contentLabel: "笔记内容",
       contentPlaceholder: "写下你的想法…",
       typeLabel: "笔记类型",

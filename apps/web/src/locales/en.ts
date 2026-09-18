@@ -376,8 +376,8 @@ const en: typeof MessageSchema = {
     sourceWorkspace: "Workspace",
     /** The select's empty option — no narrowing, which is the state the picker opens in. */
     anyWorkspace: "All workspaces",
-    /** Said when more rows matched than the list shows. */
-    moreHidden: "{count} more not shown",
+    /** The pager, under the list — see the Chinese catalog for why there is only one. */
+    loadMore: "{count} more not shown — click to load them",
     noWorkspaceMatch: "No workspace matches that.",
     /** Removing one workspace from what this conversation may read. */
     scopeRemove: "Stop referencing “{name}”",
@@ -1140,6 +1140,8 @@ const en: typeof MessageSchema = {
         resource: "material",
       },
       missing: "The {kind} it is about is gone",
+      /** A reference with no viewer — a web page. See the Chinese catalog. */
+      notViewable: "This material has no file to preview (a web link, for instance). Open it from the library.",
     },
     claimedByOther: "Another widget is using this conversation's annotations, so marking is unavailable here.",
     /** The bar's own label, not a widget's — see `zh-CN` for why it is the neutral one. */
@@ -1155,6 +1157,8 @@ const en: typeof MessageSchema = {
       quoteLabel: "Marked text",
       /** The counterpart of `quoteLabel`, for a note about a 图 or a 表. */
       targetLabel: "About",
+      /** What pressing the object opens. It is a control only while the object is still there. */
+      openTarget: "Open the object",
       contentLabel: "Your note",
       contentPlaceholder: "What are you thinking?",
       typeLabel: "Kind of note",

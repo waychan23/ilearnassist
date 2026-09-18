@@ -371,3 +371,44 @@ test("the preview header is a title, the file's controls, and the window's", asy
   // The title is nowhere near any of it, which is what keeps the row reading as two things.
   expect(fileGroup.left - title.right).toBeGreaterThan(betweenGroups);
 });
+
+test("writing a note about the file puts the note window on top of the preview", async ({
+  page,
+  request,
+}) => {
+  /*
+   * A layering bug, and only a browser can see it. The preview is deliberately at `--z-preview`
+   * — above every dialog, because it is the layer opened *from* things — while the note window
+   * is a floating card at `--z-window`, below it. So the window appeared **underneath** the
+   * dialog that had just asked for it, with its own controls unreachable: the same failure
+   * `--z-confirm` was added for, one layer down.
+   *
+   * The fix is `DiagramDialog`'s: the opener closes, and the file is one press away again
+   * because the note window draws its 标注对象 as a control. The second half is asserted below.
+   */
+  const name = `Viewer-note-${Date.now()}`;
+  await seedWorkspace(request, name);
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  // A conversation, and one with the notes panel installed — the button is drawn only where a
+  // window would render *and* the conversation accepts writes.
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await openFilesTab(page);
+  await openFile(page, "notes.md");
+
+  // The preview has to have found a reference for the control to be drawn at all — the file tree
+  // registers one as it lists, and the route resolves the path back to it.
+  await page.getByTestId("file-preview-note").click();
+
+  const editor = page.getByTestId("note-editor");
+  await expect(editor).toBeVisible();
+  // The preview is gone rather than merely behind it: a `toBeVisible` on the editor would pass
+  // for an element the dialog is covering, which is exactly the bug.
+  await expect(page.getByTestId("file-preview-body")).toHaveCount(0);
+
+  // ...and the object it names is one press away, which is what makes closing cost nothing.
+  await expect(editor.getByTestId("note-editor-target")).toBeVisible();
+  await editor.getByTestId("note-editor-target").click();
+  await expect(page.getByTestId("file-preview-body")).toContainText("标题");
+});

@@ -10,9 +10,8 @@ import type {
 import type { FigureRow } from "../../src/utils/figures";
 import { figureReference } from "../../src/utils/turnRefs";
 import {
-  GROUP_LIMIT,
+  LIST_PAGE,
   RESOURCE_PILLS,
-  TOTAL_LIMIT,
   buildReferenceOptions,
   flatten,
   pillCategories,
@@ -112,15 +111,16 @@ function build(overrides: Partial<BuildOptionsInput> = {}) {
     grantedIds: [],
     isAllGranted: false,
     allLabel: ALL_LABEL,
+    limit: LIST_PAGE,
     ...overrides,
   });
 }
 
 const namesOf = (input: Partial<BuildOptionsInput> = {}): string[] =>
-  flatten(build(input)).map((row) => row.name);
+  flatten(build(input).groups).map((row) => row.name);
 
 const groupKinds = (input: Partial<BuildOptionsInput> = {}): string[] =>
-  build(input).map((group) => group.kind);
+  build(input).groups.map((group) => group.kind);
 
 describe("the tabs", () => {
   it("shows both kinds on 全部, workspaces first", () => {
@@ -181,9 +181,9 @@ describe("the type pills", () => {
 
 describe("matching", () => {
   it("matches everything on a bare `@`", () => {
-    expect(namesOf()).toHaveLength(
-      Math.min(TOTAL_LIMIT, 1 + workspaces.length + sources.length)
-    );
+    // Workspaces, the all-workspaces row, and every source — the picker is opened to browse as
+    // much as to search.
+    expect(namesOf()).toHaveLength(1 + workspaces.length + sources.length);
   });
 
   it("matches a name case-insensitively and as a substring", () => {
@@ -204,36 +204,60 @@ describe("matching", () => {
   });
 });
 
-describe("caps", () => {
-  it("caps a group and reports what did not fit", () => {
-    const many = Array.from({ length: GROUP_LIMIT + 5 }, (_, i) => source(`x${i}`, `file-${i}.md`, "markdown"));
-    const [group] = build({ sources: many, tab: "resource" });
-    expect(group!.options).toHaveLength(GROUP_LIMIT);
-    expect(group!.hidden).toBe(5);
+/**
+ * The window, and the pager that grows it.
+ *
+ * One window over the whole list rather than a cap per group, because "还有 N 项" is only a
+ * useful sentence if N is how many more a press will produce. The rows are all already in hand —
+ * the account's match set is one request — so the window is display arithmetic and nothing else.
+ */
+describe("the window", () => {
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => source(`x${i}`, `file-${i}.md`, "markdown"));
+
+  it("shows a page, and says how much is past it", () => {
+    const options = build({ sources: many(LIST_PAGE + 5), tab: "resource" });
+    expect(flatten(options.groups)).toHaveLength(LIST_PAGE);
+    expect(options.hidden).toBe(5);
   });
 
-  it("caps the whole list, so the menu is never taller than the composer", () => {
-    const many = Array.from({ length: 40 }, (_, i) => source(`x${i}`, `file-${i}.md`, "markdown"));
-    expect(flatten(build({ sources: many })).length).toBeLessThanOrEqual(TOTAL_LIMIT);
+  it("says nothing is hidden when the list fits", () => {
+    // The pager's own off state: a control that renders on a complete list would be one that
+    // does nothing.
+    expect(build({ tab: "resource" }).hidden).toBe(0);
+  });
+
+  it("shows everything once the window is opened past it", () => {
+    const sources = many(LIST_PAGE + 5);
+    const opened = build({ sources, tab: "resource", limit: LIST_PAGE * 2 });
+    expect(flatten(opened.groups)).toHaveLength(LIST_PAGE + 5);
+    expect(opened.hidden).toBe(0);
+  });
+
+  it("fills the window in draw order, so the coarser rows come first", () => {
+    // Workspaces are the first group, and a window that ran out inside it must not skip ahead to
+    // the material — the list would show a later group's rows above an earlier group's absence.
+    const withSources = build({ sources: many(LIST_PAGE + 5), limit: 3 });
+    expect(groupKinds({ sources: many(LIST_PAGE + 5), limit: 3 })).toEqual(["workspace"]);
+    expect(withSources.hidden).toBe(workspaces.length + 1 + LIST_PAGE + 5 - 3);
   });
 
   it("never leaves a heading with nothing under it", () => {
-    // What the total cap produces when it runs out during the second group.
-    const many = Array.from({ length: 20 }, (_, i) => source(`x${i}`, `file-${i}.md`, "markdown"));
-    const groups = build({ sources: many });
+    // What a window that runs out during the second group produces.
+    const groups = build({ sources: many(20), limit: 4 }).groups;
     expect(groups.every((group) => group.options.length > 0)).toBe(true);
   });
 });
 
 describe("marking what is already granted", () => {
   it("marks a named workspace, so a picked row does not look unpicked", () => {
-    const rows = flatten(build({ grantedIds: ["w1"] }));
+    const rows = flatten(build({ grantedIds: ["w1"] }).groups);
     expect(rows.find((row) => row.name === "笔记")?.granted).toBe(true);
     expect(rows.find((row) => row.name === "代码库")?.granted).toBe(false);
   });
 
   it("marks everything when the grant is `all`", () => {
-    const rows = flatten(build({ isAllGranted: true }));
+    const rows = flatten(build({ isAllGranted: true }).groups);
     expect(rows.filter((row) => row.kind !== "resource").every((row) => row.granted)).toBe(true);
   });
 });
@@ -296,7 +320,7 @@ describe("the conversation's own objects", () => {
     const same = {
       figures: [figure("diagram", "scores", "图上的"), figure("table", "scores", "表里的")],
     };
-    const rows = flatten(build(same));
+    const rows = flatten(build(same).groups);
     const named = rows.filter((row) => row.name === "scores");
     expect(named.map((row) => row.kind)).toEqual(["diagram", "table"]);
     // And the two stage different references, which is the point of separating them.
@@ -307,7 +331,7 @@ describe("the conversation's own objects", () => {
   it("stages the same reference 追问 does", () => {
     // `@` and 追问 are one mechanism, so the object a row carries is the one the figure panel's
     // ask button builds — not a second shape that agrees until a name is awkward.
-    const rows = flatten(build(objects));
+    const rows = flatten(build(objects).groups);
     const diagram = rows.find((row) => row.kind === "diagram")!;
     expect(diagram.ref).toEqual(figureReference(figure("diagram", "flow", "登录时序")));
     const noteRow = rows.find((row) => row.kind === "note")!;
@@ -317,17 +341,21 @@ describe("the conversation's own objects", () => {
   it("shows a bare 标注 by its quote, the way the panel's own rows do", () => {
     // Narrowed to the notes alone, because the whole-list cap would cut the second one — which is
     // the cap doing its job, and is the case below.
-    const rows = flatten(build({ ...objects, query: "没懂" }));
+    const rows = flatten(build({ ...objects, query: "没懂" }).groups);
     expect(rows.find((row) => row.key === "note:n2")?.name).toBe("这一段没懂");
   });
 
-  it("counts the objects against the whole-list cap like every other row", () => {
-    // Three workspaces' worth of rows above them leave the note group one slot, and the overflow
-    // is reported rather than silently dropped.
-    const groups = build(objects);
-    const notes = groups.find((group) => group.kind === "note")!;
-    expect(notes.options).toHaveLength(1);
-    expect(notes.hidden).toBe(1);
+  it("counts the objects against the window like every other row", () => {
+    /*
+     * The note group is the last one drawn, so a window that runs out before it says so rather
+     * than dropping the rows quietly — and the rows that did not fit are what the pager's count
+     * is made of.
+     */
+    const options = build({ ...objects, limit: 9 });
+    expect(options.groups.some((group) => group.kind === "note")).toBe(false);
+    // Nine shown: the all-workspaces row, both named workspaces, and the six sources.
+    expect(flatten(options.groups)).toHaveLength(9);
+    expect(options.hidden).toBe(2 + 2);
   });
 
   it("matches a figure by its summary as well as its name", () => {
@@ -353,7 +381,7 @@ describe("the conversation's own objects", () => {
 
 describe("flatten and stepActive", () => {
   it("flattens across a group boundary in draw order", () => {
-    const rows = flatten(build());
+    const rows = flatten(build().groups);
     expect(rows[0]!.kind).toBe("all-workspaces");
     expect(rows[1]!.kind).toBe("workspace");
     expect(rows.some((row) => row.kind === "resource")).toBe(true);

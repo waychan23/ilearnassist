@@ -149,9 +149,15 @@ function openPage(): void {
  * resolves the path to that reference and puts its title and summary on the reply, which is what
  * the note's 标注原文 is built from; without it a note about `main.rs` would quote a uuid.
  *
- * The window is **not** closed, unlike the one `DiagramDialog` opens: this dialog is the thing
- * being annotated and the note card floats over the conversation behind it, so there is nothing
- * here for it to be hidden behind.
+ * **It closes the preview first**, which this used to argue against and was wrong about. The note
+ * window is a floating card rendered by `ChatView`, so it lives at `--z-window` — *below*
+ * `--z-preview`, the layer this dialog deliberately sits at because it is the one opened *from*
+ * things. The card was therefore painted underneath the dialog that had just opened it, with its
+ * own controls unreachable — the same failure `--z-confirm` was added for, one layer down.
+ *
+ * Closing loses nothing that matters: the file is one press away, because the note window now
+ * draws its 标注对象 as a control that opens exactly this. That is `DiagramDialog`'s answer to the
+ * same problem, and the two arrived at it from the same place.
  */
 function noteAboutFile(): void {
   const reference = content.value?.reference;
@@ -162,7 +168,9 @@ function noteAboutFile(): void {
     label: reference.title,
     summary: reference.summary ?? reference.title,
   });
-  if (request) requestNoteEditor(request);
+  if (!request) return;
+  store.closeFile();
+  requestNoteEditor(request);
 }
 
 /**

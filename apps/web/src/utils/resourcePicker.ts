@@ -112,13 +112,21 @@ export interface ReferenceOption {
 export interface ReferenceGroup {
   kind: ReferenceGroupKind;
   options: ReferenceOption[];
-  /** How many matched but did not fit the cap, so the component can say "还有 N 项". */
-  hidden: number;
 }
 
-/** How many rows one group shows, and how many the whole list shows. */
-export const GROUP_LIMIT = 8;
-export const TOTAL_LIMIT = 12;
+/**
+ * The rows the list draws at once, and how many more each press of the pager adds.
+ *
+ * One window over the whole list rather than a cap per group, and the difference is what the
+ * pager needs to say: "还有 N 项" is only a useful sentence if N is how many more you will get.
+ * It replaced an 8-per-group / 12-total pair that existed to keep a menu from being a wall —
+ * which it is not, because the list scrolls — and that capped the material a reader could reach
+ * at a dozen rows with no way to ask for the rest.
+ *
+ * The window is applied **client-side over rows already fetched**, so loading more costs nothing:
+ * the account's match set is one request, and this only decides how much of it is on screen.
+ */
+export const LIST_PAGE = 100;
 
 export interface BuildOptionsInput {
   query: string;
@@ -138,6 +146,15 @@ export interface BuildOptionsInput {
   isAllGranted: boolean;
   /** The label for the all-workspaces row, which is translated and therefore passed in. */
   allLabel: string;
+  /** How many rows the window currently holds. Grows by `LIST_PAGE` per press of the pager. */
+  limit: number;
+}
+
+/** The window, and what is past it. */
+export interface ReferenceOptions {
+  groups: ReferenceGroup[];
+  /** How many rows matched but are outside the window — what the pager says. */
+  hidden: number;
 }
 
 const matches = (haystack: string, needle: string): boolean =>
@@ -159,7 +176,7 @@ const matches = (haystack: string, needle: string): boolean =>
  *   the other rows are refinements of. The conversation's own objects follow the material, because
  *   that is the order of the question: what this is working from, then what it has made.
  */
-export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[] {
+export function buildReferenceOptions(input: BuildOptionsInput): ReferenceOptions {
   const needle = input.query.trim().toLowerCase();
   const groups: ReferenceGroup[] = [];
 
@@ -248,7 +265,7 @@ export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[
     );
   }
 
-  return cap(groups);
+  return cap(groups, input.limit);
 }
 
 /**
@@ -288,24 +305,32 @@ function push(
   rows: ReferenceOption[]
 ): void {
   if (rows.length === 0) return;
-  groups.push({ kind, options: rows.slice(0, GROUP_LIMIT), hidden: Math.max(0, rows.length - GROUP_LIMIT) });
+  groups.push({ kind, options: rows });
 }
 
-/** Cut the whole list to `TOTAL_LIMIT` rows, counting what fell off into each group's `hidden`. */
-function cap(groups: ReferenceGroup[]): ReferenceGroup[] {
-  let left = TOTAL_LIMIT;
+/**
+ * Cut the whole list to the window, and say how much fell past it.
+ *
+ * Groups are filled in draw order, so the window is spent on the coarser rows first — the
+ * workspaces, then the material, then what the conversation made. That order is the same one the
+ * reader sees, so "load more" reveals the list from the top down rather than in patches.
+ *
+ * A group the window emptied entirely is dropped: a heading with nothing under it is not a
+ * group, and it would say the list holds something it does not.
+ */
+function cap(groups: ReferenceGroup[], limit: number): ReferenceOptions {
+  let left = Math.max(0, limit);
+  let hidden = 0;
   const out: ReferenceGroup[] = [];
+
   for (const group of groups) {
-    if (left <= 0) {
-      out.push({ ...group, options: [], hidden: group.hidden + group.options.length });
-      continue;
-    }
     const kept = group.options.slice(0, left);
+    hidden += group.options.length - kept.length;
     left -= kept.length;
-    out.push({ ...group, options: kept, hidden: group.hidden + (group.options.length - kept.length) });
+    if (kept.length > 0) out.push({ kind: group.kind, options: kept });
   }
-  // A group the cap emptied entirely is a heading with nothing under it.
-  return out.filter((group) => group.options.length > 0);
+
+  return { groups: out, hidden };
 }
 
 /** The rows in draw order — what the arrow keys walk and what a click indexes into. */

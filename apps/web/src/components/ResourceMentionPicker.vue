@@ -10,6 +10,7 @@ import Icon from "./Icon.vue";
 import type { IconName } from "../utils/icons";
 import type { ActiveMention } from "../utils/mention";
 import {
+  LIST_PAGE,
   REFERENCE_TABS,
   RESOURCE_PILLS,
   buildReferenceOptions,
@@ -160,7 +161,17 @@ const offeredWorkspaces = computed(() =>
  */
 const filterWorkspaces = computed(() => store.workspaces);
 
-const groups = computed(() =>
+/**
+ * How many rows the list is currently showing.
+ *
+ * Grows by `LIST_PAGE` per press of the pager until nothing is left. It is **display state and
+ * nothing else** — the rows are all already in hand, because the account's match set arrives in
+ * one reply and the picker has always filtered it client-side. So "load more" costs no request,
+ * which is what makes a 100-row page a reasonable default rather than a heavy one.
+ */
+const shown = ref(LIST_PAGE);
+
+const options = computed(() =>
   buildReferenceOptions({
     query: props.mention?.query ?? "",
     tab: tab.value,
@@ -172,11 +183,17 @@ const groups = computed(() =>
     grantedIds: store.scopedWorkspaceIds,
     isAllGranted: store.scopeIsAll,
     allLabel: t("composer.allWorkspaces"),
+    limit: shown.value,
   })
 );
 
 /** One flat list for the keyboard, so an arrow key crosses a divider without knowing it exists. */
-const rows = computed(() => flatten(groups.value));
+const rows = computed(() => flatten(options.value.groups));
+
+/** Ask for the next page. Nothing is fetched — see `shown`. */
+function loadMore(): void {
+  shown.value += LIST_PAGE;
+}
 
 watch(
   () => props.mention?.query ?? null,
@@ -211,10 +228,18 @@ watch(
   { immediate: true }
 );
 
-// The list is rebuilt from four inputs, and the highlight belongs to the list rather than to the
-// query — a filter that leaves it where it was points at whatever now happens to be there.
-watch([tab, pill, sourceWorkspaceId], () => {
+/*
+ * The list is rebuilt from four inputs, and the highlight belongs to the list rather than to the
+ * query — a filter that leaves it where it was points at whatever now happens to be there.
+ *
+ * The window goes back to one page with them, and it has to: a different list is a different set
+ * of rows, so a window opened to 300 for a search that returned 400 would silently be 300 deep on
+ * a list of four. `loadMore` sits outside this watcher on purpose — it grows the window *without*
+ * changing the list, which is the whole distinction between paging and filtering.
+ */
+watch([tab, pill, sourceWorkspaceId, () => props.mention?.query ?? ""], () => {
   active.value = 0;
+  shown.value = LIST_PAGE;
 });
 
 // Only the filter the *server* answers has to be asked again; the other three inputs are answered
@@ -453,7 +478,7 @@ defineExpose({ handleKey });
       </select>
     </div>
 
-    <div v-for="group in groups" :key="group.kind" class="mention-group">
+    <div v-for="group in options.groups" :key="group.kind" class="mention-group">
       <div class="mention-heading" data-testid="mention-heading">
         {{ groupLabel(group.kind) }}
       </div>
@@ -471,10 +496,26 @@ defineExpose({ handleKey });
         <span class="label truncate">{{ row.name }}</span>
         <span class="where truncate">{{ row.where }}</span>
       </button>
-      <div v-if="group.hidden > 0" class="mention-more">
-        {{ t("composer.moreHidden", { count: group.hidden }) }}
-      </div>
     </div>
+
+    <!--
+      What the window cut, and the way to see it. One control rather than one per group, because
+      the window is one: the count is only useful if it is how many more a press will actually
+      produce, and a per-group count under a shared window would promise a group's rows that the
+      next page spends on an earlier group.
+
+      `mousedown.prevent`, like the rows: this is inside the picker, and a press that blurred the
+      textarea would close the very menu it is paging.
+    -->
+    <button
+      v-if="options.hidden > 0"
+      type="button"
+      class="mention-more"
+      data-testid="mention-more"
+      @mousedown.prevent="loadMore"
+    >
+      {{ t("composer.loadMore", { count: options.hidden }) }}
+    </button>
 
     <!--
       Nothing found, said out loud. Silence would read as "still looking" for a query the server
@@ -615,10 +656,25 @@ defineExpose({ handleKey });
   font-size: var(--fs-2);
   max-width: 12ch;
 }
+/*
+ * The pager. A full-width button rather than a line of small print, because it is the only way to
+ * reach the rest of the list — and it sits outside `.mention-group` so it reads as belonging to
+ * the list rather than to whichever group happens to be last.
+ */
 .mention-more {
-  padding: 0 var(--space-4) var(--space-2);
-  color: var(--text-3);
-  font-size: var(--fs-1);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  text-align: center;
+  cursor: pointer;
+}
+.mention-more:hover {
+  background: var(--panel-2);
 }
 .mention-empty {
   padding: var(--space-4);

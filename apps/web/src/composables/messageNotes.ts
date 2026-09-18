@@ -111,6 +111,14 @@ export interface NoteObjectNote {
    * falls back to this once it is gone.
    */
   summary?: string;
+  /**
+   * The server says this object is gone — the note survives, the thing it names does not.
+   *
+   * Carried so the window can draw its 标注对象 as a **sentence** rather than a control: the two
+   * read the same and mean opposite things, and only the note knows which. Absent means "there is
+   * something to open", which is the honest default for a note being written.
+   */
+  missing?: boolean;
 }
 
 /** Where the window's 定位 goes. */
