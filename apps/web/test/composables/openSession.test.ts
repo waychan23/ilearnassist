@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   api: {
     listMessages: vi.fn(),
     listSessionWidgets: vi.fn(),
-    getNoteSync: vi.fn(),
     acquireSessionLock: vi.fn(),
     releaseSessionLock: vi.fn(),
   },
@@ -59,7 +58,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.api.listMessages.mockResolvedValue([]);
   mocks.api.listSessionWidgets.mockResolvedValue({ workspace: [], session: [] });
-  mocks.api.getNoteSync.mockResolvedValue({ sync: null });
   mocks.api.acquireSessionLock.mockResolvedValue({ lock: null });
   mocks.api.releaseSessionLock.mockResolvedValue({ released: true });
 });

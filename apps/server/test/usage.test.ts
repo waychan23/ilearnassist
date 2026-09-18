@@ -166,13 +166,13 @@ describe("buildStats", () => {
     const rows = [
       row({ purpose: "title" }),
       row({ purpose: "chat" }),
-      row({ purpose: "summary.notes" }),
+      row({ purpose: "summary.media" }),
     ];
     const filter = usageFilter({ timezone: "UTC" }, "UTC");
     expect(buildStats(rows, filter, null).byPurpose.map((b) => b.key)).toEqual([
       "chat",
       "title",
-      "summary.notes",
+      "summary.media",
     ]);
   });
 

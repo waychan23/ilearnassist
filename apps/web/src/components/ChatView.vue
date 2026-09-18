@@ -31,7 +31,6 @@ import { useSessionLock } from "../composables/sessionLock";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 import { messageReference } from "../utils/turnRefs";
 import MessageItem from "./MessageItem.vue";
-import NoteSyncControl from "./NoteSyncControl.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
 import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
 import NoteEditor from "./NoteEditor.vue";
@@ -600,14 +599,6 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </div>
-
-      <!--
-        The conversation's own action, between the title it acts on and the browser's properties —
-        locale and theme belong to the browser, so they keep the outer edge. Its own group rather
-        than a control inside the title block: that block is the bar's most crowded spot, and this
-        one carries a label that grows and shrinks with the export.
-      -->
-      <NoteSyncControl v-if="store.activeSession" />
 
       <!-- The title block takes the free space, so the actions land on the right. -->
       <TopbarControls />

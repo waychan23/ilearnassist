@@ -70,8 +70,6 @@ const mocks = vi.hoisted(() => ({
     stopSession: vi.fn(),
     // `selectSession` reads the export state on the way in, so these need a resting value rather
     // than `undefined` — the store tolerates a failure, but every test would pay for it.
-    startNoteSync: vi.fn(),
-    getNoteSync: vi.fn().mockResolvedValue({ sync: null }),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
     listSessionFiles: vi.fn(),
@@ -3591,117 +3589,6 @@ describe("deleting and regenerating the last message", () => {
     await store.regenerateLastMessage();
 
     expect(mocks.streamRegenerate).not.toHaveBeenCalled();
-  });
-});
-
-describe("the note export", () => {
-  /*
-   * The run is asynchronous on the server, so the store's half is a poll — and the poll is what
-   * these pin: that it starts, that it stops the moment the run settles, and that a reply
-   * arriving after the reader has switched conversations is dropped rather than shown as this
-   * conversation's state.
-   */
-  const settled = {
-    status: "ok" as const,
-    startedAt: "2026-09-16T06:00:00.000Z",
-    finishedAt: "2026-09-16T06:00:01.000Z",
-    added: 2,
-    updated: 0,
-    removed: 0,
-    error: null,
-    stuck: false,
-  };
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("follows a run to its end, then stops asking", async () => {
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-    mocks.api.getNoteSync
-      .mockResolvedValueOnce({ sync: { ...settled, status: "running" } })
-      .mockResolvedValue({ sync: settled });
-
-    await store.syncNotesToLibrary();
-    expect(store.noteSyncing).toBe(true);
-    expect(store.noteSync?.status).toBe("running");
-
-    // The first poll fires immediately rather than after a full interval, and reports that the
-    // run is still going — so the poll keeps going rather than settling on its first answer.
-    await vi.advanceTimersByTimeAsync(0);
-    expect(store.noteSync?.status).toBe("running");
-    expect(store.noteSyncing).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(store.noteSync?.status).toBe("ok");
-    expect(store.noteSyncing).toBe(false);
-
-    // Settled: no further polling, so an idle conversation does not keep asking the server.
-    const calls = mocks.api.getNoteSync.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(mocks.api.getNoteSync).toHaveBeenCalledTimes(calls);
-  });
-
-  it("forces only when the caller says the last run is stuck", async () => {
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-
-    await store.syncNotesToLibrary();
-    expect(mocks.api.startNoteSync).toHaveBeenLastCalledWith("s1", {});
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    // The recovery carries the flag; an ordinary press never does, because forcing a live run is
-    // a second export over the same files.
-    await store.syncNotesToLibrary(true);
-    expect(mocks.api.startNoteSync).toHaveBeenLastCalledWith("s1", { force: true });
-    await vi.advanceTimersByTimeAsync(10_000);
-  });
-
-  it("reports a refused start, and re-reads the state that refused it", async () => {
-    // A 409 means another run is live. The press has to say so — a button that does nothing is
-    // what this app keeps out of the UI — and the panel should then show the run that refused it.
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockRejectedValue(new ApiError("SYNC_IN_PROGRESS", "already", 409));
-    mocks.api.getNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-
-    await store.syncNotesToLibrary();
-    expect(store.error).toBeTruthy();
-    expect(store.noteSyncing).toBe(false);
-    expect(store.noteSync?.status).toBe("running");
-  });
-
-  it("does not carry one conversation's export state into the next", async () => {
-    /*
-     * The export state is per conversation, and both halves of that are asserted here: the switch
-     * clears what was on screen, and it stops the poll with it. A poll left running would settle
-     * the *previous* conversation's run into the one now open — a status line about somebody
-     * else's notes, which is exactly the "reply for a session that is no longer active" the other
-     * lists guard against with a sequence number.
-     */
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-    // Each conversation answers for itself, which is what makes the clearing observable.
-    mocks.api.getNoteSync.mockImplementation((id: string) =>
-      Promise.resolve({ sync: id === "s1" ? settled : null })
-    );
-
-    await store.syncNotesToLibrary();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(store.noteSync?.status).toBe("ok");
-
-    mocks.api.listMessages.mockResolvedValue([]);
-    await store.selectSession("s2");
-    expect(store.noteSync).toBeNull();
-
-    // The poll went with it: only the switch's own read has been made since.
-    const calls = mocks.api.getNoteSync.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(mocks.api.getNoteSync).toHaveBeenCalledTimes(calls);
   });
 });
 

@@ -1,7 +1,7 @@
 import { assertHasAdministrator, NoAdministratorError } from "./adminCli.js";
 import { loadConfig, PROJECT_PATHS, readConfigPatch, resolveDataRoot } from "./config.js";
 import { buildServer } from "./server.js";
-import { configPatchPath, insightLogPath, noteSyncLogPath, threadLogPath } from "./paths.js";
+import { configPatchPath, insightLogPath, threadLogPath } from "./paths.js";
 import { configureModelLog } from "./modelLog.js";
 import { setPromptOverrides } from "./prompts.js";
 
@@ -16,13 +16,12 @@ async function main(): Promise<void> {
   // and a non-zero exit rather than a stack trace from a module that every test imports.
   const dataRoot = resolveDataRoot();
 
-  // The out-of-band calls' observation logs (<dataRoot>/logs/{threads,insights,notes}.log),
-  // created lazily on the first block. Configured in the process entry only, so the test server
-  // (which calls buildServer directly) stays silent.
+  // The out-of-band calls' observation logs (<dataRoot>/logs/{threads,insights}.log), created
+  // lazily on the first block. Configured in the process entry only, so the test server (which
+  // calls buildServer directly) stays silent.
   configureModelLog({
     threads: threadLogPath(dataRoot),
     insights: insightLogPath(dataRoot),
-    notes: noteSyncLogPath(dataRoot),
   });
 
   /*

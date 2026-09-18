@@ -806,39 +806,9 @@ export const DDL = `
     ON insight_items(session_id, adopted, created_at);
 
   /*
-   * One conversation's note export: the state of its last — or current — run.
-   *
-   * Derived data, like session_threads and session_diagrams, so no deleted_at: nothing in the
-   * product deletes a run, and a column no read filters on would make the soft-delete invariant
-   * false the moment it was written.
-   *
-   * The primary key IS the session. The row answers one question — "what is this conversation's
-   * export doing" — in a single statement, and it is also the lock: 'running' is written before
-   * any work starts, with no await between the read and the write, so of two concurrent starts
-   * exactly one wins. A log of runs would be a different table with a different question, and it
-   * could not be the lock.
-   *
-   * No summary column: that belongs to the conversation, not to the run, and it is regenerated
-   * on every sync — see sessions.summary.
-   */
-  CREATE TABLE IF NOT EXISTS session_note_syncs (
-    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-    -- 'running' | 'ok' | 'empty' | 'failed'.
-    status TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    -- What the run did: rows created, rows rewritten, rows soft-deleted.
-    added INTEGER NOT NULL DEFAULT 0,
-    updated INTEGER NOT NULL DEFAULT 0,
-    removed INTEGER NOT NULL DEFAULT 0,
-    -- The provider's or the parser's own sentence. Untranslated, like every raw failure string.
-    error TEXT
-  );
-
-  /*
    * Who may write to a conversation: one lease per session, held by one client.
    *
-   * Ephemeral, like session_threads and session_note_syncs, so no deleted_at — and the reason is
+   * Ephemeral, like session_threads, so no deleted_at — and the reason is
    * sharper here than for those. A row's whole meaning is "this client holds the pen *now*", so a
    * soft-deleted row would be a claim about the present that outlived its truth. Release and
    * expiry are the only two exits, and both are real DELETEs.
@@ -905,7 +875,7 @@ export const DDL = `
     session_id TEXT,
     -- The assistant message a chat turn produced, when there is one to point at.
     message_id TEXT,
-    -- chat | title | thread | insight | summary.media | summary.notes — see USAGE_PURPOSES.
+    -- chat | title | thread | insight | summary.media — see USAGE_PURPOSES.
     -- A string rather than a CHECK constraint: the list grows, and a constraint would make a new
     -- purpose a migration instead of an entry in one array.
     purpose TEXT NOT NULL,

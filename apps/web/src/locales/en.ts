@@ -217,7 +217,6 @@ const en: typeof MessageSchema = {
       thread: "Topic classification",
       insight: "Insight pass",
       "summary.media": "Image summary",
-      "summary.notes": "Note summary",
     },
   },
 
@@ -1147,18 +1146,6 @@ const en: typeof MessageSchema = {
     },
   },
 
-  /** Exporting a conversation's notes into the source library. See `zh-CN` for the shapes. */
-  noteSync: {
-    action: "Export notes to the library",
-    hint: "Export this conversation's notes as sources. They join the library, and any conversation in this account can reference them.",
-    running: "Exporting…",
-    done: "{count} note exported | {count} notes exported",
-    empty: "This conversation has no notes yet",
-    failed: "Export failed",
-    stuck: "The last export never finished",
-    force: "Force a re-export",
-  },
-
   plan: {
     empty:
       "This conversation has no plan yet. Ask the assistant to make a study plan and it appears here.",
@@ -1295,7 +1282,6 @@ const en: typeof MessageSchema = {
     FIGURE_NOT_FOUND: "That diagram or table cannot be found — it may have changed or been deleted.",
     REFERENCE_NOT_FOUND:
       "Something this message refers to is gone — it may have been deleted or changed. Please send it again.",
-    SYNC_IN_PROGRESS: "This conversation is already being exported to the library.",
     INSIGHT_NOT_FOUND:
       "That observation cannot be found — a later pass may have replaced it.",
     MESSAGE_NOT_FOUND: "That message cannot be found — it may already have been deleted.",
@@ -1379,7 +1365,6 @@ const en: typeof MessageSchema = {
       agent_workspace: "Written into a workspace",
       agent_session: "Written into a conversation",
       web: "Web page",
-      note_export: "Notes you exported",
       discovered: "Found in a folder",
     },
     category: {

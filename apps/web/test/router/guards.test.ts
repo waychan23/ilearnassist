@@ -42,7 +42,6 @@ const mocks = vi.hoisted(() => ({
     listWorkspaceLocks: vi.fn(),
     acquireSessionLock: vi.fn(),
     releaseSessionLock: vi.fn(),
-    getNoteSync: vi.fn(),
     reportSessionLeave: vi.fn(),
   },
   streamChat: vi.fn(),
@@ -163,7 +162,6 @@ beforeEach(async () => {
   mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [] });
   mocks.api.acquireSessionLock.mockResolvedValue({ lock: null });
   mocks.api.releaseSessionLock.mockResolvedValue({ released: true });
-  mocks.api.getNoteSync.mockResolvedValue({ sync: null });
   mocks.api.reportSessionLeave.mockResolvedValue({ status: "skipped" });
 
   uiState.drawerOpen = false;

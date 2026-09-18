@@ -16,7 +16,6 @@ import type {
   MessageUsage,
   ModelCapability,
   Note,
-  NoteSyncStatus,
   NoteTargetKind,
   NoteType,
   ParseErrorCode,
@@ -385,57 +384,6 @@ export interface InsightInsert {
  * on the way out, unlike `Diagram`, whose route adds `fileMissing` from a `stat`.
  */
 export type InsightRecord = Insight;
-
-interface NoteSyncRow {
-  session_id: string;
-  status: string;
-  started_at: string;
-  finished_at: string | null;
-  added: number;
-  updated: number;
-  removed: number;
-  error: string | null;
-}
-
-/**
- * One conversation's note-export state, as the server holds it.
- *
- * Not the shared `SessionNoteSync`: that one carries `stuck`, which is derived from
- * `startedAt` against a clock and is therefore not a column. `readNoteSync` adds it.
- */
-export interface NoteSyncRecord {
-  sessionId: string;
-  status: NoteSyncStatus;
-  startedAt: string;
-  finishedAt: string | null;
-  added: number;
-  updated: number;
-  removed: number;
-  error: string | null;
-}
-
-/** What a run writes about itself. Every field but the first two is what the run did. */
-export interface NoteSyncStateInput {
-  sessionId: string;
-  status: NoteSyncStatus;
-  startedAt: string;
-  finishedAt?: string | null;
-  added?: number;
-  updated?: number;
-  removed?: number;
-  error?: string | null;
-}
-
-const mapNoteSync = (r: NoteSyncRow): NoteSyncRecord => ({
-  sessionId: r.session_id,
-  status: r.status as NoteSyncStatus,
-  startedAt: r.started_at,
-  finishedAt: r.finished_at,
-  added: r.added,
-  updated: r.updated,
-  removed: r.removed,
-  error: r.error,
-});
 
 /** A diagram as the rest of the server reads it. The route adds `fileMissing`. */
 export interface DiagramRecord {
@@ -2165,33 +2113,6 @@ export interface AppDb {
   softDeleteNote(sessionId: string, noteId: string): boolean;
 
   /**
-   * This conversation's note-export state, or `undefined` when it has never been exported.
-   *
-   * Bare session id, like `listDiagramsBySession`: the two routes that read it resolve the
-   * session through a `ForUser` read first, and the run itself is already inside the server.
-   * There is deliberately no `getSessionSummary` — nothing reads the summary except the export
-   * that just wrote it, and a getter nobody calls is a second thing to keep in agreement.
-   */
-  getNoteSyncState(sessionId: string): NoteSyncRecord | undefined;
-  /**
-   * Write the state of a run. An upsert on `session_id`, and **that write is the lock**.
-   *
-   * A start reads the state and writes `running` with no `await` between them — better-sqlite3
-   * is synchronous and the handler is one turn of the event loop — so of two concurrent starts
-   * exactly one sees anything but `running` and the other is refused. That is also why there is
-   * no in-flight map beside this: a `Map` cannot survive the process restart this guard has to
-   * survive, and two mechanisms for one fact drift apart.
-   */
-  saveNoteSyncState(input: NoteSyncStateInput): NoteSyncRecord;
-  /**
-   * The conversation's own summary, written by the export's model call.
-   *
-   * A column rather than a row of its own, because it is one value per conversation and every
-   * export replaces it — `NULL` before the first, which is why the column is nullable.
-   */
-  setSessionSummary(sessionId: string, summary: string): void;
-
-  /**
    * A conversation's insight observations, in the order the panel renders them: adopted first,
    * then the current pass in the model's own order. Owner-scoped, the route's read.
    */
@@ -2564,19 +2485,6 @@ export function createDb(dbPath: string): AppDb {
      */
     ensureColumn(db, "workspaces", "description", "description TEXT NOT NULL DEFAULT ''");
     ensureColumn(db, "sessions", "description", "description TEXT NOT NULL DEFAULT ''");
-
-    /*
-     * The conversation's own summary, written by the note export's model call.
-     *
-     * Nullable, unlike the two descriptions directly above, and the difference is the same one
-     * `settings` makes: `NULL` is "this conversation has never been exported", which is a
-     * different claim from "exported, and the summary came back empty". The export refuses to
-     * write an empty one at all, so a non-null value here is always usable text.
-     *
-     * `description` is *not* the home for it: that field is the user's own words about their
-     * conversation, and a model's summary landing there would overwrite what they wrote.
-     */
-    ensureColumn(db, "sessions", "summary", "summary TEXT");
 
     /*
      * How the auto-titler last left the row: `'model'`, `'fallback'`, or `NULL` for never
@@ -3624,31 +3532,6 @@ export function createDb(dbPath: string): AppDb {
   const stmtSoftDeleteNote = db.prepare(
     "UPDATE notes SET deleted_at = ? WHERE id = ? AND session_id = ? AND deleted_at IS NULL"
   );
-
-  /* ---------------------------- notes → the library --------------------------- */
-  const stmtGetNoteSyncState = db.prepare(
-    "SELECT * FROM session_note_syncs WHERE session_id = ?"
-  );
-  /*
-   * Every column is overwritten on every write, and that is right here where it would be wrong
-   * for a source: a run's state is not patched, it is *replaced* — "running" carries no counts
-   * and no error, and a settled run carries all of them. A COALESCE fallback would let a failed
-   * run inherit the previous run's `added`, which is a number about work that never happened.
-   */
-  const stmtUpsertNoteSyncState = db.prepare(
-    `INSERT INTO session_note_syncs
-       (session_id, status, started_at, finished_at, added, updated, removed, error)
-     VALUES (@sessionId, @status, @startedAt, @finishedAt, @added, @updated, @removed, @error)
-     ON CONFLICT(session_id) DO UPDATE SET
-       status = @status,
-       started_at = @startedAt,
-       finished_at = @finishedAt,
-       added = @added,
-       updated = @updated,
-       removed = @removed,
-       error = @error`
-  );
-  const stmtSetSessionSummary = db.prepare("UPDATE sessions SET summary = ? WHERE id = ?");
 
   /* ------------------------------ session diagrams --------------------------- */
   /*
@@ -4808,29 +4691,6 @@ export function createDb(dbPath: string): AppDb {
 
     softDeleteNote(sessionId, noteId) {
       return stmtSoftDeleteNote.run(now(), noteId, sessionId).changes > 0;
-    },
-
-    getNoteSyncState(sessionId) {
-      const row = stmtGetNoteSyncState.get(sessionId) as NoteSyncRow | undefined;
-      return row ? mapNoteSync(row) : undefined;
-    },
-
-    saveNoteSyncState(input) {
-      stmtUpsertNoteSyncState.run({
-        sessionId: input.sessionId,
-        status: input.status,
-        startedAt: input.startedAt,
-        finishedAt: input.finishedAt ?? null,
-        added: input.added ?? 0,
-        updated: input.updated ?? 0,
-        removed: input.removed ?? 0,
-        error: input.error ?? null,
-      });
-      return mapNoteSync(stmtGetNoteSyncState.get(input.sessionId) as NoteSyncRow);
-    },
-
-    setSessionSummary(sessionId, summary) {
-      stmtSetSessionSummary.run(summary, sessionId);
     },
 
     listDiagramsBySession(sessionId) {

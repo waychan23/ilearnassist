@@ -24,7 +24,6 @@ import type {
   GetSessionDiagramsResponse,
   GetSessionTablesResponse,
   GetSessionInsightsResponse,
-  GetNoteSyncResponse,
   GetSessionNotesResponse,
   GetSessionThreadsResponse,
   Insight,
@@ -44,7 +43,6 @@ import type {
   SessionWidgets,
   SetSessionPinnedInput,
   Source,
-  StartNoteSyncInput,
   TitleRetryResult,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
@@ -874,26 +872,6 @@ export const api = {
     }),
   deleteNote: (sessionId: string, noteId: string) =>
     request<{ ok: boolean }>(`/sessions/${sessionId}/notes/${noteId}`, { method: "DELETE" }),
-
-  /*
-   * Exporting this conversation's notes into the source library.
-   *
-   * The pair is asynchronous where `generateInsights` above is one long POST, and that is the
-   * difference between the two features rather than an inconsistency: a pass answers with the
-   * list it produced, while this run writes files and a status the reader can watch. So the POST
-   * returns as soon as the job is recorded and `getNoteSync` is how the panel learns how it went.
-   *
-   * A `409 SYNC_IN_PROGRESS` is the ordinary "already running" answer, which the store reports as
-   * a sentence rather than retrying. `sync: null` is "never exported" — the normal state of a
-   * conversation, and not an error.
-   */
-  startNoteSync: (sessionId: string, input: StartNoteSyncInput = {}) =>
-    request<GetNoteSyncResponse>(`/sessions/${sessionId}/notes/sync`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  getNoteSync: (sessionId: string) =>
-    request<GetNoteSyncResponse>(`/sessions/${sessionId}/notes/sync`),
 
   /*
    * Insights (the insight widget), about the conversation for the same reason.

@@ -18,7 +18,7 @@ answered by *where the file was*:
 | question | column | values |
 | --- | --- | --- |
 | Who holds it? | `owner_kind` + `owner_id` | a `workspace` or a `session` |
-| How did it come to exist? | `origin` | `session_attachment`, `workspace_upload`, `agent_workspace`, `agent_session`, `web`, `note_export`, `discovered` |
+| How did it come to exist? | `origin` | `session_attachment`, `workspace_upload`, `agent_workspace`, `agent_session`, `web`, `discovered` |
 | Where are the bytes? | `storage` (+ `rel_path`) | `upload`, `web`, `workspace`, `session`, `trash` |
 | What is it? | `category` | `page`, `text`, `markdown`, `code`, `diagram`, `image`, `document`, `other` |
 
@@ -30,18 +30,6 @@ questions — a file the agent wrote into a workspace, moved to the trash by the
 `discovered` is the origin nothing claims: a file found in a sandbox with no row to account for
 it. Its own value rather than a guess between the two `agent_*` ones, because those mean "the
 assistant wrote this" and the browser prints them as such.
-
-`note_export` is the learner's own writing, written into their library by the conversation's
-同步到资料库 action. Every other value names *who wrote* the material, and the browser prints that
-beside the row — so filing a person's notes under the assistant's name would be the same lie
-`discovered` exists to avoid. Each note becomes its own `source` at
-`sessions/<sessionId>/notes/<noteId>.md`, with the conversation's summary in an email-shaped
-header so the note is legible to a reader who was not in the conversation. The note id is the
-join key, so a re-export updates rather than replaces and an `@`-reference keeps pointing at
-something. A note whose source is removed takes its file with it, which is the one place the
-"a soft delete keeps the bytes" rule does not hold: the bytes are a pure function of the note, and
-a file left behind would be re-registered by the next reconcile as a `discovered` source — the
-deleted note, back under a different id.
 
 ## Identity: two rules, not one
 

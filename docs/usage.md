@@ -49,7 +49,6 @@ follows. Four things about its shape are load-bearing:
 | `thread` | `agent/threads.ts`, both the post-turn hook and the panel's backfill | the factory |
 | `insight` | `agent/insights.ts` | the factory |
 | `summary.media` | `agent/mediaSummary.ts`, once per image | the factory |
-| `summary.notes` | `agent/notesSummary.ts` | the factory |
 
 Every pass reports through `agent/callUsage.ts`, which is **the one place a provider's field names
 become this app's** — the main loop uses it too, so the transcript and the ledger cannot disagree

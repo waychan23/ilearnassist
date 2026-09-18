@@ -28,7 +28,6 @@ const mocks = vi.hoisted(() => ({
     getConfig: vi.fn(),
     listWorkspaces: vi.fn(),
     listCopilots: vi.fn(),
-    getNoteSync: vi.fn().mockResolvedValue({ sync: null }),
   },
 }));
 

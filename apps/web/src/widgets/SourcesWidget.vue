@@ -86,15 +86,8 @@ onMounted(() => {
      * through — and there is no narrower event to ride: nothing announces "a source was added",
      * because the client is what asked for every addition and the store already knows. A library
      * upload lands in a *workspace*, which this list does not show.
-     *
-     * `library.changed` is the exception, and the note export is why it is one: that run is the
-     * *server* writing sources, with no turn anywhere near it, so nothing local knows the list
-     * moved. Emitted only when the run actually changed something.
      */
-    if (
-      (event.type === "turn.finished" || event.type === "library.changed") &&
-      event.sessionId === store.activeSessionId
-    ) {
+    if (event.type === "turn.finished" && event.sessionId === store.activeSessionId) {
       void load();
     }
   });
