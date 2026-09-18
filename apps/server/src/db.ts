@@ -780,7 +780,7 @@ export interface AuthTokenRecord {
  *
  * The same split as `ProviderRecord` and its `apiKey`, and for a stronger reason: a password
  * hash is a credential. `mapUser` is the only place one is read, and a route returns `User`
- * by stripping these with a destructuring rest — the pattern `toSource` uses for `userId`.
+ * by stripping these with a destructuring rest — the pattern `toResource` uses for `userId`.
  * That is what makes "the hash is never serialised" a property of the shapes rather than of
  * every route remembering to leave a field out.
  */
@@ -2463,7 +2463,7 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
     /*
      * What the turn *pointed at* — a diagram, a table, a note, or a passage selected in an earlier
-     * message. Beside `sources` rather than merged with it because the two answer different
+     * message. Beside `attachments` rather than merged with it because the two answer different
      * questions: a source is material the model may read on any later turn, a reference is the
      * object of the one question that was asked. Nullable for the same reason: NULL is "this turn
      * pointed at nothing", which is what every message written before the column means.

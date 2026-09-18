@@ -6,7 +6,7 @@ import { isDocumentMime } from "./documents/formats.js";
 /**
  * What a file *is*: one MIME type and one coarse category, from a name.
  *
- * A registry needs this and a browser needs it twice — once to filter a list of sources, once
+ * A registry needs this and a browser needs it twice — once to filter a list of files, once
  * to decide whether anything has to be *parsed* before a model can read it. Doing it here,
  * once, is the whole reason the module exists: this codebase has already paid for a second
  * extension table once, when a `.mmd` compiled cleanly and rendered as highlighted source in

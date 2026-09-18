@@ -2398,7 +2398,7 @@ export const useAppStore = defineStore("app", () => {
    * Open a workspace — or all of them — to this conversation.
    *
    * A **session setting** rather than something sent with the turn, and that is the whole design:
-   * the grant persists (`session_sources` is the precedent — pointing at something once makes it
+   * the grant persists (a work resource is the precedent — pointing at something once makes it
    * readable on every later turn), it survives a reload, and it is in force for turns nobody
    * typed an `@` in. The `@` is how it is *made*; the setting is what it means.
    */

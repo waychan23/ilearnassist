@@ -17,9 +17,9 @@ import { join } from "node:path";
  *       workdir/                 the agent's file-tool sandbox and the file browser's root
  *       sessions/<sessionId>/    a conversation's own files — the diagrams it draws
  *     sources/
- *       raw/<sourceId>.<ext>     an uploaded file
- *       web/<sourceId>.<ext>     a page the agent fetched and kept
- *       parsed/<sourceId>.txt    its extracted text, for every kind of source
+ *       raw/<fileId>.<ext>       an uploaded file
+ *       web/<fileId>.<ext>       a page's fetched body
+ *       parsed/<fileId>.txt      extracted text, a file of its own
  *   db/sqlite/ilearnassist.sqlite
  * ```
  *

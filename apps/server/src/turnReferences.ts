@@ -97,7 +97,7 @@ const KINDS = new Set<TurnReferenceKind>(TURN_REFERENCE_KINDS);
 /**
  * Turn what the client sent into what this conversation holds.
  *
- * **Refused, never dropped**, and the contrast with `body.sources` is the whole reason. A source
+ * **Refused, never dropped**, and the contrast with attachments is the whole reason. Material
  * is *material the model may read*, so one that has gone missing narrows the turn and the model
  * still answers. A reference is **the object of the question**: losing it does not narrow the
  * question, it changes it — the model answers about nothing while the user reads an answer about

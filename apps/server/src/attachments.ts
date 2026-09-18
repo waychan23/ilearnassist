@@ -8,15 +8,14 @@ import { renderReferenceBlock, type ResolvedReference } from "./turnReferences.j
 import type { UserLayout } from "./paths.js";
 
 /**
- * Uploaded files. Bytes live at `<userRoot>/sources/raw/<sourceId>.<ext>`, extracted text
+ * Uploaded files. Bytes live at `<userRoot>/sources/raw/<fileId>.<ext>`, extracted text
  * beside them in `parsed/` — under the account that uploaded them rather than under the
  * conversation they arrived in, because a file can be referenced by several conversations and
  * is stored once.
  *
- * The extension is derived deterministically from the MIME type, so the `sources` row's
- * `raw_path` and this module compute the same location from the same two facts. The row is
- * the authority for *which* file a message referred to; this module is the authority for
- * where that file is.
+ * Where a file's bytes are is the **row's** answer now, not this module's: `files.path` is
+ * stored, relative to this tree, and `resourcePaths.ts` resolves it. An attachment carries the
+ * id, and the caller hands over the resolution — see `BuildContentOptions.sourcePaths`.
  *
  * There is no root constant here, and that is the point: the tree belongs to a user under a
  * data directory the process chose at launch, so every function takes the layout. A
@@ -69,29 +68,18 @@ export type UserContentBlock =
 export const PREVIEW_CHARS = 4_000;
 
 export interface BuildContentOptions {
-  /** Whose sources tree to read from. Derived per request, never held. */
+  /** Whose tree to read from. Derived per request, never held. */
   user: UserLayout;
   /**
-   * Where each attachment's bytes actually are, by id — for the ones that are not uploads.
-   *
-   * An attachment is a snapshot, and the snapshot was enough while a source was always an
-   * upload: its bytes are at `<id>.<ext>`, an expression this module can compute from the id
-   * and the MIME type alone. A file the agent wrote into a sandbox has no such path — its
-   * location is `storage` + `relPath` on a row — so the caller resolves those and hands them
-   * over. Absent, the derivation below is exactly what this module has always done.
-   *
-   * Paths rather than rows, because resolving one needs the workspace it lives in, and a turn
-   * may reference sources held by several: the caller is the side that knows, per row, and this
-   * module stays the side that knows what to *do* with a file once it has a path.
-   */
-  /**
-   * Every file this run might read, by **file id** — `sourcePathsFor`'s answer, resolved once per
+   * Every file this run might read, by **file id** — `filePathsFor`'s answer, resolved once per
    * run rather than looked up per message.
    *
-   * Required rather than optional, which is the change v4 forces: a blob used to be derivable
-   * from its id and MIME type as a fallback, and that fallback was a second source of truth for
-   * where a file is. The path is now *stored* on the row, so an id missing from the map means
-   * the file is missing — not that this module should invent a path for it.
+   * Required rather than optional, which is the change v4 forces: a blob's path used to be
+   * *derivable* from its id and MIME type, so an id missing from the map had a fallback. It is
+   * now a stored fact on the file row, so an id the caller did not resolve means the file is not
+   * there — not that this module should invent a path for it. A second derivation could only
+   * disagree with the stored one, and the disagreement would be a file that reads in one place
+   * and 404s in another.
    */
   sourcePaths: ReadonlyMap<string, string>;
   /** When false, images are replaced by a text placeholder instead of being sent. */
