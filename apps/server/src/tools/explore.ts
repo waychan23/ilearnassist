@@ -323,8 +323,23 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
             })),
           }
         : {}),
-      ...(m.sources?.length
-        ? { sources: m.sources.map((s) => ({ id: s.id, name: clip(s.name, EXPLORE_META_MAX) })) }
+      /*
+       * What this turn was pointed at. The `ref` of a resource is the id `read_document` takes,
+       * which is what makes this the useful half; a diagram's is its name and a table's is its
+       * slug, which `ila_query` takes. `label` is what the reader saw on the chip.
+       *
+       * What stood here read `m.sources`, which no writer produces — the v3 column retired when
+       * the ref replaced it — so this arm could never fire while the note below told the model
+       * it could. See `Message.refs`.
+       */
+      ...(m.refs?.length
+        ? {
+            refs: m.refs.map((r) => ({
+              kind: r.kind,
+              ref: clip(r.ref, EXPLORE_META_MAX),
+              label: clip(r.label ?? "", EXPLORE_META_MAX),
+            })),
+          }
         : {}),
       ...(m.attachments?.length
         ? {
@@ -345,7 +360,8 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
       note:
         `Conversation "${clip(found.session.title, EXPLORE_META_MAX)}" in ${found.workspace.name}, ` +
         "oldest first. Tool calls are reduced to their name and status, and reasoning is not " +
-        "included. `sources` and `attachments` name files by id, which read_document can take.",
+        "included. `attachments` name files by id, and `refs` name what the turn was pointed at " +
+        "— a resource's is the id read_document takes, a figure's is the name ila_query takes.",
     });
   };
 

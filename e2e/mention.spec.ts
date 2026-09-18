@@ -87,6 +87,39 @@ test("picks a workspace file with @ and sends it as a reference", async ({ page,
     .toContain("the referenced contents");
 });
 
+test("the conversation's own objects load once per opening, not per keystroke", async ({
+  page,
+  request,
+}) => {
+  /*
+   * A request-count claim, which is the only way to see this one. The picker's 图/表/笔记 rows are
+   * **query-independent** — the same diagrams at every letter — so a load per keystroke would pay
+   * three requests a character for an answer that cannot have changed. Worse, each reply replaces
+   * the rows, so a click aimed at one lands on a detached node: the exact hazard the picker's own
+   * debounce exists for, reintroduced one group over.
+   */
+  const name = `MentionObjects-${Date.now()}`;
+  await seedWorkspace(request, name, "report.md");
+
+  let diagramCalls = 0;
+  page.on("request", (req) => {
+    if (/\/api\/sessions\/[^/]+\/diagrams/.test(req.url())) diagramCalls += 1;
+  });
+
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+
+  // Six keystrokes into one mention: one opening.
+  await page.getByTestId("composer-input").click();
+  await page.getByTestId("composer-input").type("@report");
+  await expect(page.getByTestId("mention-picker")).toBeVisible();
+  await expect(page.getByTestId("mention-option").first()).toBeVisible();
+
+  expect(diagramCalls).toBe(1);
+});
+
 test("a mention inside an address or a word does not open the picker", async ({ page, request }) => {
   // The refusal that keeps the feature from feeling broken: typing an email address must not
   // put a list of files over the composer.

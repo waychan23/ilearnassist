@@ -13,6 +13,7 @@ import {
   openNewNoteEditor,
   openNoteEditor,
 } from "../composables/notes";
+import { targetKindIcon } from "../composables/messageNotes";
 import { useFigureViewer } from "../composables/figureViewer";
 import { useNoteTargets, type NoteTargetDetail } from "../composables/noteTarget";
 import DiagramDialog from "../components/dialogs/DiagramDialog.vue";
@@ -122,11 +123,6 @@ function targetKindLabel(kind: TargetKind): string {
       return unhandled;
     }
   }
-}
-
-/** The mark beside a kind: only a drawing and a table have an icon of their own. */
-function targetKindIcon(kind: TargetKind): "diagram" | "table" | "file" {
-  return kind === "diagram" ? "diagram" : kind === "table" ? "table" : "file";
 }
 
 /**

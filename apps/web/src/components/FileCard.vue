@@ -6,6 +6,7 @@ import { canAnnotate, objectNoteRequest } from "../composables/notes";
 import { requestNoteEditor } from "../composables/messageNotes";
 import { useAppStore, type FileRoot } from "../stores/app";
 import { highlightFile } from "../utils/markdown";
+import { resolvedRoot, writtenFile } from "../utils/writeResult";
 import { formatBytes } from "../utils/format";
 import CopyButton from "./CopyButton.vue";
 import Icon from "./Icon.vue";
@@ -74,19 +75,9 @@ const failed = computed(() => (props.toolCall.output ?? "").startsWith("Tool err
  * a contract with `fileTools.ts` — see the note there — so it is parsed once here rather than
  * guessed at from the arguments.
  */
-const written = computed(() => props.toolCall.output ?? "");
-const root = computed<FileRoot>(() =>
-  /in the workspace folder/.test(written.value)
-    ? "workspace"
-    : /in the session folder/.test(written.value)
-      ? "session"
-      : // No result yet, or one that does not name a folder: the argument is the next best
-        // answer, and `session` is the product default — the same chain the write itself took.
-        args.value.location === "workspace"
-        ? "workspace"
-        : "session"
-);
-const referenceId = computed(() => /\(id ([^)]+)\)/.exec(written.value)?.[1] ?? "");
+const written = computed(() => writtenFile(props.toolCall.output ?? ""));
+const root = computed<FileRoot>(() => resolvedRoot(written.value, args.value.location));
+const referenceId = computed(() => written.value.referenceId);
 
 /** The head of the file, and whether anything was dropped to get it. */
 const lines = computed(() => content.value.split("\n"));

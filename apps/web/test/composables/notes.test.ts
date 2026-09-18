@@ -40,15 +40,18 @@ vi.mock("../../src/api/client", () => ({
 
 import { useAppStore } from "../../src/stores/app";
 import {
+  canAnnotate,
   claimNotes,
   noteList,
   notesClaimRefused,
   notesError,
+  notesWritable,
   objectNoteRequest,
   openNewNoteEditor,
   openNoteEditor,
   releaseNotes,
   resetNotes,
+  setNotesWritable,
 } from "../../src/composables/notes";
 import {
   registerMessageNotesHost,
@@ -158,6 +161,36 @@ describe("claiming", () => {
     releaseNotes();
     expect(noteList.value).toEqual([]);
     expect(list.marks.at(-1)).toEqual([]);
+  });
+
+  it("says annotating is possible only where a window would render and a write would land", async () => {
+    /*
+     * The gate every 标注/笔记 control outside the panel is drawn on, and both halves are a way
+     * the control could render and then do nothing: with no widget claimed there is no host for
+     * the window, and with another client holding the conversation every write on the notes route
+     * is refused — so a button offered then would open a window whose Save fails.
+     */
+    expect(canAnnotate.value).toBe(false);
+
+    // The conversation has to be the one on screen as well as the one claimed: a control is drawn
+    // for the message list the reader is looking at, and that is the store's active session.
+    useAppStore().activeSessionId = SESSION;
+    await claimed([note()]);
+    expect(canAnnotate.value).toBe(true);
+
+    // Another client takes the lease: the flag is what the widget context *told* this module,
+    // which is the same value the panel's own add button obeys.
+    setNotesWritable(false);
+    expect(canAnnotate.value).toBe(false);
+
+    setNotesWritable(true);
+    expect(canAnnotate.value).toBe(true);
+
+    releaseNotes();
+    expect(canAnnotate.value).toBe(false);
+    // And the flag goes back to its default with the capability: nothing is installed to be
+    // forbidden, so a control left disabled afterwards would be disabled for no reason.
+    expect(notesWritable.value).toBe(true);
   });
 
   it("reports a load failure in the panel, and not as a toast", async () => {

@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import type { NoteType } from "@ilearnassist/shared";
 import { NOTE_TYPES } from "@ilearnassist/shared";
 import { confirm } from "../composables/confirm";
-import type { NoteEditorDraft } from "../composables/messageNotes";
+import { targetKindIcon, type NoteEditorDraft } from "../composables/messageNotes";
 import Icon from "./Icon.vue";
 
 /**
@@ -399,7 +399,9 @@ function typeLabel(candidate: NoteType): string {
       <div v-if="target" class="field">
         <label>{{ t("notes.editor.targetLabel") }}</label>
         <p class="note-target" data-testid="note-editor-target">
-          <Icon :name="target.kind === 'diagram' ? 'diagram' : 'table'" />
+          <!-- `targetKindIcon`, not a comparison: a two-arm ternary here fell through to a table
+               icon for every kind that was not a diagram, which is what a resource note got. -->
+          <Icon :name="targetKindIcon(target.kind)" />
           <span class="truncate">{{ target.label }}</span>
         </p>
       </div>

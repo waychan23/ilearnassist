@@ -136,7 +136,7 @@ const DESCRIPTION = [
   "",
   "Use it whenever the answer depends on what has already happened here rather than on general knowledge — what the learner has already covered, what they got wrong, what they wrote down, what they pushed back on, or what they asked for a picture of. The learner's questions often refer back to material you cannot see from the last few messages, and this is how you look it up instead of guessing or asking them to repeat it.",
   "",
-  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table` or `source`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
+  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table` or `resource`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
   "",
   "If an answer comes back with \"truncated\": true, you are seeing part of the set: call again with a larger offset or a narrower filter rather than assuming you have seen it all.",
 ].join("\n");
@@ -195,8 +195,8 @@ const inputSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'kind: "note" or "source". For notes, only those whose text or quoted passage ' +
-        "contains this, case-insensitively; for sources, only those whose name does."
+      'kind: "note" or "resource". For notes, only those whose text or quoted passage ' +
+        "contains this, case-insensitively; for material, only those whose name does."
     ),
   name: z
     .string()

@@ -76,16 +76,28 @@ export function setNotesWritable(next: boolean): void {
 /**
  * Whether a note can be filed at all from where the reader is standing.
  *
- * The capability has two owners: `notes.ts` holds the records, but the **window** that writes them
- * is rendered by `ChatView` — so with the notes widget not installed there is no host, and
- * `requestNoteEditor` is a no-op. Every control outside the panel that offers 标注/笔记 therefore
- * has to ask this first, or it is a button that renders and does nothing, which is the failure this
- * repository names most often.
+ * Two conditions, and each is a different way a control could render and then do nothing — which
+ * is the failure this repository names most often:
  *
- * A `computed` reading a module singleton rather than a store value, so a control gated on it
- * appears and disappears with the install without anything having to be re-rendered by hand.
+ * - **The window has to have a host.** `notes.ts` holds the records, but the window that writes
+ *   them is rendered by `ChatView`, so with the notes widget not installed `requestNoteEditor` is
+ *   a no-op.
+ * - **The conversation has to accept writes.** Another client holding the lease refuses every
+ *   write on the notes route, so a button offered in a read-only conversation would open a window
+ *   whose Save fails — the same "renders but does nothing" one step later.
+ *
+ * `writable` rather than the session's lock state, and that is the rule rather than a shortcut:
+ * the flag is the value the widget context *told* this module (see `setNotesWritable`), so asking
+ * it is not a control looking up somebody else's state. It is also accurate exactly when it is
+ * read — `isMessageNotesActive` being true means the widget was activated, which is what sets it.
+ *
+ * A `computed` reading module singletons rather than store values, so a control gated on it
+ * appears and disappears with the install and with the lease without anything being re-rendered
+ * by hand.
  */
-export const canAnnotate = computed(() => isMessageNotesActive(useAppStore().activeSessionId));
+export const canAnnotate = computed(
+  () => isMessageNotesActive(useAppStore().activeSessionId) && writable.value
+);
 
 /**
  * A failed user action goes to the toast, not to the panel.
@@ -366,7 +378,11 @@ export function openNoteEditor(note: Note, anchor?: { x: number; y: number } | n
             target: {
               kind: note.targetKind as NoteObjectNote["kind"],
               ref: note.targetRef,
-              label: note.targetRef,
+              // The note's 标注原文 and **not** the ref: for an object note that field holds the
+              // object's own title, and a ref is a canonical file name at best and a uuid at
+              // worst — which is what the window used to show. Falling back to the ref keeps the
+              // row non-empty for a note written before the title was recorded.
+              label: note.quote || note.targetRef,
             },
           }
         : {}),

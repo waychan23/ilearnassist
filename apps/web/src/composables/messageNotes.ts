@@ -77,6 +77,25 @@ export interface NoteEditorDraft {
  * the two are one value travelling together — a ref without a kind cannot be resolved, since
  * `diagramFileName`, `tableName` and a resource lookup would each claim it.
  */
+/**
+ * The mark beside an object kind, wherever one is named.
+ *
+ * A `switch` with a `never` arm rather than a ternary, which is the lesson this union already
+ * taught once: the template in `NoteEditor` compared against `"diagram"` and fell through to a
+ * table icon for everything else, so widening the union to three kinds silently gave every
+ * resource note a table's icon. A fourth kind is now a compile error at each site that names one.
+ */
+export function targetKindIcon(kind: NoteTargetKindChoice): IconName {
+  switch (kind) {
+    case "diagram":
+      return "diagram";
+    case "table":
+      return "table";
+    case "resource":
+      return "file";
+  }
+}
+
 export interface NoteObjectNote {
   kind: NoteTargetKindChoice;
   /** The handle: a figure's canonical name, or a resource's reference id. */

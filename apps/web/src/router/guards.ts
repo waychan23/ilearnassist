@@ -104,7 +104,13 @@ export function installGuards(
    * that it cannot mean anything here. See `composables/instance.ts`.
    */
   const landing = (fullPath: string, name: "login" | "password"): RouteLocationRaw => {
-    const home = fullPath === "/" || consumeStaleAddress();
+    // Read **before** the test, and unconditionally. Written as `fullPath === "/" ||
+    // consumeStaleAddress()`, the left operand short-circuits and the flag is left armed — to be
+    // spent by whatever *later* navigation happens to be refused first, suppressing a redirect
+    // the reader did want. The one-shot is about the navigation in flight, so it is spent on the
+    // refusal it belongs to whether or not that refusal needed it.
+    const stale = consumeStaleAddress();
+    const home = fullPath === "/" || stale;
     return { name, query: home ? {} : { redirect: fullPath } };
   };
 

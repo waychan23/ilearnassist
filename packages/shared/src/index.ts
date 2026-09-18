@@ -2126,19 +2126,11 @@ export interface Message {
   toolCalls?: ToolCall[];
   attachments?: Attachment[];
   /**
-   * The sources this turn *referenced*, as snapshots taken when it was sent.
-   *
-   * The same rule as `attachments`, and the same reason for a snapshot rather than a live
-   * lookup: a message describes the turn that was had. A source referenced here and deleted
-   * afterwards still reads as referenced, and the chip keeps the name the composer showed.
-   */
-  sources?: Attachment[];
-  /**
    * What the user pointed at when they sent this turn — the 追问 chips, as they were shown.
    *
-   * A snapshot on the same rule `sources` follows, and for the same reason: a message describes
-   * the turn that was had, so a diagram referenced here and revised afterwards still reads as
-   * referenced, and the chip keeps the label the composer showed.
+   * A snapshot rather than a live lookup, and the reason is the one `attachments` gives: a message
+   * describes the turn that was *had*, so a diagram referenced here and revised afterwards still
+   * reads as referenced, and the chip keeps the label the composer showed.
    *
    * **It is replayed to the model, and that is load-bearing rather than tidy.** `/regenerate`
    * sends `userMessage: null` and rebuilds the turn from history; if a reference lived only in
@@ -2146,6 +2138,13 @@ export interface Message {
    * question with no idea what it was about. Replaying costs a re-resolution per stored reference
    * per turn — the same trade `sourcePaths` already makes for attachments — and what comes back
    * is current: a figure revised since is read as it is now, not as it was.
+   *
+   * **This is the whole of what a message records about being pointed at.** There used to be a
+   * `sources?: Attachment[]` beside it, from the v3 `messages.sources` column; the v4 split
+   * retired the column and the ref replaced it, and the field outlived both — declared here,
+   * written by nothing, and read only by a dead branch of `ila_explore` that told the model
+   * `sources` named files by id. A field nothing can produce is worse than an absent one: it
+   * type-checks every reader that asks for it.
    */
   refs?: TurnReference[];
   usage?: MessageUsage;

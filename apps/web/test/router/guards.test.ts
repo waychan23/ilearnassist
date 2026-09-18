@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PublicConfig, Session, User, Workspace } from "@ilearnassist/shared";
+import { INSTANCE_STORAGE_KEY } from "@ilearnassist/shared";
 import { i18n } from "../../src/i18n.js";
 import { uiState, toggleSidebar } from "../../src/composables/ui.js";
 
@@ -28,6 +29,9 @@ import { uiState, toggleSidebar } from "../../src/composables/ui.js";
 const mocks = vi.hoisted(() => ({
   api: {
     me: vi.fn(),
+    // `syncInstallation`'s only call. Mocked here because the address it drops is a *guard*
+    // behaviour as much as a storage one — see "an address from another installation".
+    health: vi.fn(),
     login: vi.fn(),
     logout: vi.fn(),
     changePassword: vi.fn(),
@@ -59,6 +63,9 @@ vi.mock("../../src/api/client", () => ({
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
   fileImageUrl: (id: string) => Promise.resolve(`blob:files/${id}`),
+  // `composables/instance.ts` destructures this at module scope, so the mock has to carry it or
+  // importing that module throws before any test runs.
+  setStoredTokens: vi.fn(),
 }));
 
 // The six pages, stubbed. See the file comment: the guards read `meta`, so a component that
@@ -82,6 +89,7 @@ const { closeWidgetDrawer, openWidgetDrawer, openSessionSettings, openDrawer } =
   "../../src/composables/ui.js"
 );
 const { sidebarRail } = await import("../../src/composables/ui.js");
+const { syncInstallation } = await import("../../src/composables/instance.js");
 
 /* --------------------------------- fixtures -------------------------------- */
 
@@ -234,6 +242,51 @@ describe("who may see which page", () => {
 
     expect(landed()).toBe("login");
     expect(router.currentRoute.value.query.redirect).toBeUndefined();
+  });
+
+  /**
+   * A URL from an installation this browser is no longer talking to.
+   *
+   * The reported failure: the desktop panel's data-root picker restarts the server on the same
+   * port, so a tab comes back to a different database holding an address naming a workspace that
+   * never existed in it — and the guard hands that address back after the sign-in, landing the
+   * reader on a 会话不存在 toast they did nothing to reach. `syncInstallation` is what notices; the
+   * guard is what has to not carry it forward.
+   */
+  describe("an address from another installation", () => {
+    beforeEach(() => {
+      mocks.api.me.mockRejectedValue(new ApiError("UNAUTHENTICATED", "no session", 401));
+      mocks.api.health.mockResolvedValue({ ok: true, instance: "inst-2" });
+      localStorage.setItem(INSTANCE_STORAGE_KEY, "inst-1");
+    });
+
+    it("is not carried forward as a redirect", async () => {
+      await syncInstallation();
+      await open("/w/old-workspace/s/old-session");
+
+      expect(landed()).toBe("login");
+      expect(router.currentRoute.value.query.redirect).toBeUndefined();
+    });
+
+    it("does not spend itself on a refusal that did not need it", async () => {
+      /*
+       * The bug this case exists for, and it is a short-circuit rather than a typo: written as
+       * `fullPath === "/" || consumeStaleAddress()`, the left operand wins when the reset's own
+       * address rewrite means the first refusal *is* the front door — leaving the flag armed to
+       * be spent on whatever later navigation happened to be refused. The reader's next bookmark
+       * then lands on the front door instead of the conversation it named, which is the
+       * behaviour `routing.spec.ts` covers for everybody who did not switch installations.
+       */
+      await syncInstallation();
+      // The reset rewrote the address, so the first refusal is for the front door — and it
+      // consumes the flag without using it.
+      await open("/");
+      expect(router.currentRoute.value.query.redirect).toBeUndefined();
+
+      // A later refusal is an ordinary one, and keeps its bookmark.
+      await open("/w/old-workspace/s/old-session");
+      expect(router.currentRoute.value.query.redirect).toBe("/w/old-workspace/s/old-session");
+    });
   });
 
   it("sends a signed-in account to the front door rather than the sign-in screen", async () => {

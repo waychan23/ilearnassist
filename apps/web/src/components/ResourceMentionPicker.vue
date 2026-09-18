@@ -195,9 +195,17 @@ watch(
 
     // Opening is immediate too, so `@` alone shows the picker straight away and the fetch
     // fills it in. Only the fetch waits.
+    const opening = !open.value;
     open.value = true;
     active.value = 0;
-    void loadObjects();
+    /*
+     * The objects load on **opening**, not on every keystroke — and that is not an optimisation,
+     * it is the rule the debounce above exists for. This watcher fires per character, so a load
+     * per keystroke would replace the rows under the pointer three times a letter and a click
+     * aimed at one would land on a detached node. They are query-independent anyway: the same
+     * diagrams at every letter.
+     */
+    if (opening) void loadObjects();
     timer = setTimeout(() => void load(query), DEBOUNCE_MS);
   },
   { immediate: true }
