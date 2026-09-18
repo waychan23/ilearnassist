@@ -356,6 +356,17 @@ const en: typeof MessageSchema = {
      * difference between the two spellings never strands somebody mid-word.
      */
     allWorkspaces: "{'@'}All workspaces",
+    /**
+     * The dividers over the conversation's own objects, and the reason Sources is not just files.
+     * See the Chinese catalog.
+     */
+    pickGroupDiagram: "Diagrams",
+    pickGroupTable: "Tables",
+    pickGroupNote: "Notes",
+    /** The workspace filter over the source list — one group, not the whole list. */
+    sourceWorkspace: "Workspace",
+    /** The select's empty option — no narrowing, which is the state the picker opens in. */
+    anyWorkspace: "All workspaces",
     /** Said when more rows matched than the list shows. */
     moreHidden: "{count} more not shown",
     noWorkspaceMatch: "No workspace matches that.",

@@ -103,6 +103,8 @@ const scopeChips = computed(() =>
  * this only asks it and hands the caret back afterwards.
  */
 const mention = ref<ActiveMention | null>(null);
+/** The box the picker lives in — what decides whether a blur left the composer. See `onBlur`. */
+const surface = ref<HTMLElement | null>(null);
 
 function refreshMention(): void {
   const el = textarea.value;
@@ -110,14 +112,37 @@ function refreshMention(): void {
 }
 
 /**
+ * The textarea lost focus.
+ *
+ * A bare `mention = null` was right for as long as the picker held only buttons, because those
+ * keep the textarea focused with `mousedown.prevent`. A `<select>` cannot work that way: it needs
+ * real focus to open at all, and clearing the mention on the way in would close the picker the
+ * control sits inside — a filter that dismisses the thing it filters.
+ *
+ * So the mention is kept while focus stays inside the composer's surface, which is the element the
+ * picker lives in, and dropped the moment it leaves. A blur with nowhere to go (`relatedTarget`
+ * null — focus moved to the window) is treated as leaving, which is what it is.
+ */
+function onBlur(event: FocusEvent): void {
+  const next = event.relatedTarget as Node | null;
+  if (next && surface.value?.contains(next)) return;
+  mention.value = null;
+}
+
+/**
  * Put the chosen thing's name where the mention was, and put the caret after it.
  *
- * `insertMention` runs for all three kinds, because the `@` is how something is *picked* and not
+ * `insertMention` runs for all four kinds, because the `@` is how something is *picked* and not
  * what it means: the name goes into the sentence so it reads naturally, and what the reference
  * *means* is the chip beside the composer. A workspace's name is inserted the same way a file's
  * is, and what follows differs.
  *
- * The `switch` is exhaustive over `ReferenceChoice`, so a fourth kind of reference is a
+ * **`turnRef` stages through the same call 追问 uses**, which is the whole point of the arm: an
+ * `@` on a diagram and a click on "ask about this" produce the same `TurnReference` and go through
+ * the same `stageReference`, so there is one answer to "what is this figure called" rather than
+ * two that agree until a name is awkward.
+ *
+ * The `switch` is exhaustive over `ReferenceChoice`, so a fifth kind of reference is a
  * `vue-tsc` error here rather than a row that inserts a name and does nothing else.
  */
 function onPickReference(choice: ReferenceChoice): void {
@@ -133,6 +158,9 @@ function onPickReference(choice: ReferenceChoice): void {
   switch (choice.kind) {
     case "resource":
       void store.referenceResource(choice.resource);
+      break;
+    case "turnRef":
+      store.stageReference(choice.ref);
       break;
     case "scope":
       void store.referenceScope(choice);
@@ -371,7 +399,7 @@ function onInput() {
 
       <!-- One surface owns the input, the attachments and the toolbar (chatbox's
            InputBox layout), so the composer reads as a single control. -->
-      <div class="surface">
+      <div ref="surface" class="surface">
         <ResourceMentionPicker ref="picker" :mention="mention" @pick="onPickReference" />
         <div class="input-row">
           <textarea
@@ -385,7 +413,7 @@ function onInput() {
             @keyup="refreshMention"
             @click="refreshMention"
             @paste="onPaste"
-            @blur="mention = null"
+            @blur="onBlur"
           ></textarea>
 
           <!--

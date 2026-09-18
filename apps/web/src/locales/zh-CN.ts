@@ -447,6 +447,24 @@ export default {
      * can tell the size of.
      */
     allWorkspaces: "{'@'}所有工作区",
+    /*
+     * The dividers over the conversation's own objects, and the reason 资料 is not just files: a
+     * 图, a 表 and a 笔记 are things a conversation works from exactly as a PDF is. Three separate
+     * headings rather than one, because a 图 and a 表 can share a name and a flat list would then
+     * be two identical rows.
+     */
+    pickGroupDiagram: "图",
+    pickGroupTable: "表",
+    pickGroupNote: "笔记",
+    /**
+     * The workspace filter over the 资料 list.
+     *
+     * Its own label rather than a second tab strip, because it narrows *one group* of an already
+     * filtered list — a fourth tab would say it narrowed everything.
+     */
+    sourceWorkspace: "所属工作区",
+    /** The select's empty option — no narrowing, which is the state the picker opens in. */
+    anyWorkspace: "所有工作区",
     /** Said when more rows matched than the list shows. */
     moreHidden: "还有 {count} 项未显示",
     noWorkspaceMatch: "没有匹配的工作区。",

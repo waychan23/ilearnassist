@@ -2,9 +2,10 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
-import type { WorkResource } from "../api/types";
+import type { Note, WorkResource } from "../api/types";
 import { useAppStore } from "../stores/app";
 import { resourceCategory, resourceIsImage } from "../utils/resourceView";
+import { figureRows, type FigureRow } from "../utils/figures";
 import Icon from "./Icon.vue";
 import type { IconName } from "../utils/icons";
 import type { ActiveMention } from "../utils/mention";
@@ -15,6 +16,7 @@ import {
   flatten,
   stepActive,
   type ReferenceChoice,
+  type ReferenceGroupKind,
   type ReferenceOption,
   type ReferenceTab,
   type ResourcePill,
@@ -23,8 +25,8 @@ import {
 /**
  * The `@` picker: what this conversation can reference, narrowed by what has been typed.
  *
- * Two kinds of thing live in one list, and the tabs and pills are how a list that holds both
- * stays readable:
+ * Three kinds of thing live in one list, and the tabs, the pills and the workspace filter are how
+ * a list that holds all of them stays readable:
  *
  * - A **workspace** opens it — every file and conversation inside it becomes reference material
  *   for this conversation. Its row raises a chip and writes a session setting rather than
@@ -32,16 +34,21 @@ import {
  *   readable on every later turn.
  * - A **reference** names one piece of material — a file or a kept page — and is staged for this
  *   turn.
+ * - A **图, a 表 or a 笔记** is one of the objects this conversation itself made, staged as the same
+ *   `TurnReference` 追问 sends. 资料 therefore means "material" rather than "files", which is why
+ *   the three are drawn under their own headings: a 图 and a 表 can share a name, and a flat list
+ *   would show two identical rows.
  *
  * It asks the **server** for the reference rows on every keystroke, debounced, rather than filtering
  * a list it already has — the composer opens on every page, and the account's whole library is not
- * something to hold in memory for a control most turns never touch. Workspaces are the exception
- * and for a reason: the account has a handful, the store already holds them, and a round-trip to
- * filter three names would be a request per letter to answer a question already answered.
+ * something to hold in memory for a control most turns never touch. The other two lists are the
+ * exception, each for its own reason: the account's workspaces are a handful the store already
+ * holds, and the conversation's own objects are **query-independent** — the same diagrams at every
+ * letter — so fetching them per keystroke would pay repeatedly for one answer.
  *
- * The tabs and the pills are **component-local**. They describe what the user is looking at right
- * now, not anything the conversation owns, and putting them in the store would make two composers
- * share a filter.
+ * The tabs, the pills and the workspace filter are **component-local**. They describe what the user
+ * is looking at right now, not anything the conversation owns, and putting them in the store would
+ * make two composers share a filter.
  *
  * The parent owns the query and the caret; this owns the keyboard, because the keys it needs —
  * ArrowUp/Down/Enter/Escape — are the ones the composer would otherwise act on. `handleKey` is
@@ -59,10 +66,20 @@ const { t } = useI18n();
 const store = useAppStore();
 
 const sources = ref<WorkResource[]>([]);
+const figures = ref<FigureRow[]>([]);
+const notes = ref<Note[]>([]);
 const active = ref(0);
 const open = ref(false);
 const tab = ref<ReferenceTab>("all");
 const pill = ref<ResourcePill | null>(null);
+/**
+ * Which workspace the 资料 list is narrowed to, or `""` for all of them.
+ *
+ * The empty string rather than `undefined` or `null`, and the reason is the `<select>` it is bound
+ * to: a select bound to an absent value paints blank instead of its placeholder option, so the
+ * value in the template has to be the value in the arithmetic. One conversion at the request.
+ */
+const sourceWorkspaceId = ref("");
 /** The request in flight is ignored if a newer query has been typed since. */
 let seq = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -80,7 +97,12 @@ const DEBOUNCE_MS = 150;
 async function load(query: string): Promise<void> {
   const mine = ++seq;
   try {
-    const found = await api.listResources({ name: query });
+    const found = await api.listResources({
+      name: query,
+      // The endpoint's `workspaceId` already means "this workspace's own material *and* its
+      // conversations'", which is the right reading of "filed under this workspace".
+      ...(sourceWorkspaceId.value ? { workspaceId: sourceWorkspaceId.value } : {}),
+    });
     if (mine !== seq) return;
     // Not capped here. The cap belongs to the list's shape, per group — `buildReferenceOptions` — and the
     // pill filter runs over what came back, so truncating first would filter *after* the cut and
@@ -94,7 +116,33 @@ async function load(query: string): Promise<void> {
 }
 
 /**
- * The workspaces worth offering: the account's, minus the one this conversation is in.
+ * The conversation's own objects, read once per open.
+ *
+ * All three calls at once, and none of them waited on by the picker's own frame: the menu is up
+ * the moment `@` is typed and these rows appear under it when they arrive. A failure leaves its
+ * group empty rather than reporting — the same answer `load` gives, and for the same reason.
+ */
+async function loadObjects(): Promise<void> {
+  const sessionId = store.activeSessionId;
+  if (!sessionId) {
+    figures.value = [];
+    notes.value = [];
+    return;
+  }
+  const [diagrams, tables, found] = await Promise.all([
+    api.listSessionDiagrams(sessionId).catch(() => null),
+    api.listSessionTables(sessionId).catch(() => null),
+    api.listNotes(sessionId).catch(() => null),
+  ]);
+  // A reply for a conversation the reader has since left is dropped, the rule the notes panel
+  // makes: two conversations' objects are two lists.
+  if (store.activeSessionId !== sessionId) return;
+  figures.value = figureRows(diagrams?.diagrams ?? [], tables?.tables ?? []);
+  notes.value = found?.notes ?? [];
+}
+
+/**
+ * The workspaces worth offering as a *grant*: the account's, minus the one this conversation is in.
  *
  * `@`-ing the workspace you are already in grants nothing — it is readable regardless — so a row
  * for it would be a reference that changes no behaviour.
@@ -103,6 +151,15 @@ const offeredWorkspaces = computed(() =>
   store.workspaces.filter((w) => w.id !== store.activeWorkspaceId)
 );
 
+/**
+ * The workspaces the 资料 list can be narrowed to, and this one **includes the current one**.
+ *
+ * Deliberately not `offeredWorkspaces`: that answers "which workspace could I open", while this
+ * answers "where is this material filed". A reader looking for a file they uploaded into this very
+ * workspace would find it missing from the filter that exists to find it.
+ */
+const filterWorkspaces = computed(() => store.workspaces);
+
 const groups = computed(() =>
   buildReferenceOptions({
     query: props.mention?.query ?? "",
@@ -110,6 +167,8 @@ const groups = computed(() =>
     pill: pill.value,
     workspaces: offeredWorkspaces.value,
     sources: sources.value,
+    figures: figures.value,
+    notes: notes.value,
     grantedIds: store.scopedWorkspaceIds,
     isAllGranted: store.scopeIsAll,
     allLabel: t("composer.allWorkspaces"),
@@ -129,6 +188,8 @@ watch(
     if (query === null || props.mention === null) {
       open.value = false;
       sources.value = [];
+      figures.value = [];
+      notes.value = [];
       return;
     }
 
@@ -136,22 +197,27 @@ watch(
     // fills it in. Only the fetch waits.
     open.value = true;
     active.value = 0;
+    void loadObjects();
     timer = setTimeout(() => void load(query), DEBOUNCE_MS);
   },
   { immediate: true }
 );
 
-// The list is rebuilt from three inputs, and the highlight belongs to the list rather than to the
-// query — a tab or a pill that leaves it where it was points at whatever now happens to be there.
-watch([tab, pill], () => {
+// The list is rebuilt from four inputs, and the highlight belongs to the list rather than to the
+// query — a filter that leaves it where it was points at whatever now happens to be there.
+watch([tab, pill, sourceWorkspaceId], () => {
   active.value = 0;
 });
 
+// Only the filter the *server* answers has to be asked again; the other three inputs are answered
+// from what is already in hand.
+watch(sourceWorkspaceId, () => void load(props.mention?.query ?? ""));
+
 /**
- * The label of a tab or a group heading. A `switch` with a literal `t()` per case, not a table
- * keyed by id: `catalog.test.ts` finds keys by scanning for `t("…")` literals, so a key reached
- * through an object property is invisible to it and its dead-key scan then fails the build. The
- * same shape `widgets/registry.ts` uses, and for the same reason.
+ * The label of a tab. A `switch` with a literal `t()` per case, not a table keyed by id:
+ * `catalog.test.ts` finds keys by scanning for `t("…")` literals, so a key reached through an
+ * object property is invisible to it and its dead-key scan then fails the build. The same shape
+ * `widgets/registry.ts` uses, and for the same reason.
  */
 function tabLabel(id: ReferenceTab): string {
   switch (id) {
@@ -161,6 +227,28 @@ function tabLabel(id: ReferenceTab): string {
       return t("composer.tabWorkspace");
     case "resource":
       return t("composer.tabSource");
+  }
+}
+
+/**
+ * The heading over a group, which **is** the divider between kinds.
+ *
+ * Five cases rather than three, because the two groups that are not objects are named by the tabs
+ * they belong to: a workspace row is a workspace and a material row is 资料, and giving them
+ * headings of their own would be two more words for the same two things.
+ */
+function groupLabel(kind: ReferenceGroupKind): string {
+  switch (kind) {
+    case "workspace":
+      return t("composer.tabWorkspace");
+    case "resource":
+      return t("composer.tabSource");
+    case "diagram":
+      return t("composer.pickGroupDiagram");
+    case "table":
+      return t("composer.pickGroupTable");
+    case "note":
+      return t("composer.pickGroupNote");
   }
 }
 
@@ -177,10 +265,29 @@ function pillLabel(id: ResourcePill): string {
   }
 }
 
-/** `image` and `diagram` are the two shapes worth telling apart at a glance; the rest are files. */
+/**
+ * The mark beside a row.
+ *
+ * `image` and `diagram` are the two shapes worth telling apart at a glance; the rest are files.
+ * The three object kinds are read from the row's own `kind` rather than looked up in `sources`,
+ * which is what makes a 图 and a 表 distinguishable at all in a list that can hold both under one
+ * name.
+ */
 function iconOf(row: ReferenceOption): IconName {
-  if (row.kind === "all-workspaces") return "list-tree";
-  if (row.kind === "workspace") return "folder";
+  switch (row.kind) {
+    case "all-workspaces":
+      return "list-tree";
+    case "workspace":
+      return "folder";
+    case "diagram":
+      return "diagram";
+    case "table":
+      return "table";
+    case "note":
+      return "note";
+    case "resource":
+      break;
+  }
   const resource = sources.value.find((s) => `src:${s.id}` === row.key);
   if (resource && resourceIsImage(resource)) return "image";
   if (resource && resourceCategory(resource) === "diagram") return "diagram";
@@ -246,6 +353,14 @@ function handleKey(event: KeyboardEvent): boolean {
   return true;
 }
 
+/**
+ * A row was picked.
+ *
+ * `ref` is tested before the source lookup, and that is the whole of how a 图, a 表 or a 笔记
+ * reaches the composer: they are the only rows carrying one, and the key spaces are disjoint
+ * (`diagram:`/`table:`/`note:` against `src:`), so the order is a convenience rather than a rule.
+ * What makes it safe is that a `src:` row never carries a `ref` at all.
+ */
 function choose(row: ReferenceOption): void {
   open.value = false;
   if (row.kind === "all-workspaces") {
@@ -259,6 +374,10 @@ function choose(row: ReferenceOption): void {
       workspaceId: row.key.slice("ws:".length),
       name: row.name,
     });
+    return;
+  }
+  if (row.ref) {
+    emit("pick", { kind: "turnRef", ref: row.ref, name: row.name });
     return;
   }
   const resource = sources.value.find((s) => `src:${s.id}` === row.key);
@@ -303,11 +422,32 @@ defineExpose({ handleKey });
           {{ pillLabel(id) }}
         </button>
       </div>
+
+      <!--
+        Where the material is filed. Only on the sources tab, which is the tab whose list it
+        narrows — on the everything tab the pills are already the control for that list, and two
+        filters over one group is a question nobody can answer about which of them won.
+
+        `mousedown` is stopped but not prevented, which is the opposite of what the pills do: a
+        pill is a button that keeps the textarea focused, while a select needs the focus to open
+        at all. What keeps the picker from closing under it is the composer's own blur handler.
+      -->
+      <select
+        v-if="tab === 'resource'"
+        v-model="sourceWorkspaceId"
+        class="mention-select"
+        data-testid="mention-workspace"
+        :aria-label="t('composer.sourceWorkspace')"
+        @mousedown.stop
+      >
+        <option value="">{{ t("composer.anyWorkspace") }}</option>
+        <option v-for="w in filterWorkspaces" :key="w.id" :value="w.id">{{ w.name }}</option>
+      </select>
     </div>
 
     <div v-for="group in groups" :key="group.kind" class="mention-group">
       <div class="mention-heading" data-testid="mention-heading">
-        {{ tabLabel(group.kind === "workspace" ? "workspace" : "resource") }}
+        {{ groupLabel(group.kind) }}
       </div>
       <button
         v-for="row in group.options"
@@ -383,6 +523,22 @@ defineExpose({ handleKey });
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+/*
+ * The workspace filter sits at the right end of the filter row, and takes a compact width: it is a
+ * narrowing of one group rather than the control the picker opens on, so it should not read as
+ * loudly as the tabs beside it.
+ */
+.mention-select {
+  margin-left: auto;
+  max-width: 14ch;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--fs-1);
 }
 .mention-pill {
   padding: var(--space-1) var(--space-4);

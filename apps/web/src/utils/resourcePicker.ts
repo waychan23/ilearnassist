@@ -1,5 +1,7 @@
-import type { FileCategory, WorkResource, Workspace } from "../api/types";
+import type { FileCategory, Note, TurnReference, WorkResource, Workspace } from "../api/types";
+import type { FigureRow } from "./figures";
 import { resourceCategory, resourceName } from "./resourceView";
+import { figureReference, noteReference } from "./turnRefs";
 
 /**
  * The `@` picker's arithmetic: what the list holds, in what order, and which row the arrow keys
@@ -60,20 +62,55 @@ export function pillCategories(pill: ResourcePill | null): readonly FileCategory
  * a pill is added and nothing names it.
  */
 
-/** One row of the list: a workspace, the all-workspaces row, or a reference. */
+/** Everything a row can be. Five of the six are things to *point at*; the sixth is a workspace. */
+export type ReferenceOptionKind =
+  | "all-workspaces"
+  | "workspace"
+  | "resource"
+  | "diagram"
+  | "table"
+  | "note";
+
+/** Every group a heading can name — the option kinds minus the all-workspaces row, which has none. */
+export type ReferenceGroupKind = Exclude<ReferenceOptionKind, "all-workspaces">;
+
+/**
+ * One row of the list: a workspace, the all-workspaces row, a reference — or one of the objects
+ * this conversation made.
+ *
+ * The last three are rows the `@` list did not always have, and they are what makes 资料 mean
+ * "material" rather than "files": a 图, a 表 and a 笔记 are things a conversation works from
+ * exactly as a PDF is.
+ *
+ * **`ref` carries the object, and it is a `TurnReference` rather than a name.** That is the whole
+ * reason 追问 and `@` are one mechanism: pointing at a diagram from the panel and typing `@` for it
+ * produce the same object, which the composer stages through the same call and the server resolves
+ * through the same code. A second shape here would be a second answer to "what is this thing
+ * called", and the two would disagree on exactly the awkward names.
+ */
 export interface ReferenceOption {
-  /** Stable across refetches — a reference id, or `ws:<id>` / `all-workspaces`. */
+  /** Stable across refetches — a reference id, `ws:<id>`, `all-workspaces`, or `kind:ref`. */
   key: string;
-  kind: "all-workspaces" | "workspace" | "resource";
+  kind: ReferenceOptionKind;
   name: string;
-  /** A reference's workspace name, shown on the right. Empty for a workspace row. */
+  /** A reference's workspace name, shown on the right. Empty for every other row. */
   where: string;
   /** Already readable under the current grant, so the row can say so rather than look unpicked. */
   granted: boolean;
+  /**
+   * What the row stages, for the three object kinds.
+   *
+   * Optional rather than a fourth arm of a discriminated union, and the shape is the honest one
+   * here: a workspace stages a scope setting and a material row stages a `WorkResource`, so *no*
+   * row stages a reference except these three — and the component reads this only inside the
+   * branches that already narrowed on `kind`. What makes it safe is `objectRefs` below, which is
+   * the single place a `ref` is ever attached.
+   */
+  ref?: TurnReference;
 }
 
 export interface ReferenceGroup {
-  kind: "workspace" | "resource";
+  kind: ReferenceGroupKind;
   options: ReferenceOption[];
   /** How many matched but did not fit the cap, so the component can say "还有 N 项". */
   hidden: number;
@@ -92,6 +129,10 @@ export interface BuildOptionsInput {
   workspaces: readonly Workspace[];
   /** The references the server returned for this query. */
   sources: readonly WorkResource[];
+  /** The conversation's own 图 and 表, in one list — `figureRows`'s shape, already merged. */
+  figures: readonly FigureRow[];
+  /** The conversation's own notes. */
+  notes: readonly Note[];
   /** The workspaces already in the grant, so a row can show it is. */
   grantedIds: readonly string[];
   isAllGranted: boolean;
@@ -111,10 +152,12 @@ const matches = (haystack: string, needle: string): boolean =>
  * - **The all-workspaces row also answers to the literal `all`.** Its label is translated, so a
  *   user who read `@所有工作区` once and is now typing on an English screen has no stable word to
  *   type; the English word is the one that is stable across both.
- * - **A pill drops the workspace group.** A workspace has no source type, so a list still showing
- *   workspaces after you asked for images reads as a filter that did not work.
+ * - **A pill drops every group it cannot filter.** A workspace has no source type and neither does
+ *   a 图, so a list still showing them after you asked for images reads as a filter that did not
+ *   work.
  * - **Workspaces come first**, because they are the coarser thing and picking one is the decision
- *   the other rows are refinements of.
+ *   the other rows are refinements of. The conversation's own objects follow the material, because
+ *   that is the order of the question: what this is working from, then what it has made.
  */
 export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[] {
   const needle = input.query.trim().toLowerCase();
@@ -146,8 +189,13 @@ export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[
     push(groups, "workspace", rows);
   }
 
+  const categories = pillCategories(input.pill);
+  // A pill is a claim about a *file's* type, so it silences the three object groups rather than
+  // filtering them: neither a drawing nor a note has a category to be matched against, and
+  // leaving them in would be the filter appearing not to have taken.
+  const objects = input.tab !== "workspace" && input.pill === null;
+
   if (input.tab !== "workspace") {
-    const categories = pillCategories(input.pill);
     const rows: ReferenceOption[] = input.sources
       // A page has no category at all, so a pill that names categories excludes it — which is the
       // honest answer for "show me the images": a page is not one, and there is no pill that names
@@ -168,10 +216,77 @@ export function buildReferenceOptions(input: BuildOptionsInput): ReferenceGroup[
     push(groups, "resource", rows);
   }
 
+  if (objects) {
+    /*
+     * One group per kind rather than one grouped list, and the group headings *are* the dividers
+     * the reader sees: a 图 and a 表 can share a name, so a flat list would show two identical
+     * rows with nothing to tell them apart but the icon.
+     */
+    push(
+      groups,
+      "diagram",
+      objectRows(input.figures.filter((row) => row.kind === "diagram"), needle)
+    );
+    push(
+      groups,
+      "table",
+      objectRows(input.figures.filter((row) => row.kind === "table"), needle)
+    );
+    push(
+      groups,
+      "note",
+      input.notes
+        .filter((note) => matches(noteTargetText(note), needle))
+        .map((note) => ({
+          key: `note:${note.id}`,
+          kind: "note" as const,
+          name: noteTargetText(note),
+          where: "",
+          granted: false,
+          ref: noteReference(note),
+        }))
+    );
+  }
+
   return cap(groups);
 }
 
-function push(groups: ReferenceGroup[], kind: "workspace" | "resource", rows: ReferenceOption[]): void {
+/**
+ * The figures of one kind, as rows ready to stage.
+ *
+ * `where` is left empty on purpose: a figure belongs to *this* conversation, which the reader is
+ * already looking at, so naming the workspace it happens to live in would be answering a question
+ * nobody asked — the one place the material rows' second column would be noise.
+ */
+function objectRows(figures: readonly FigureRow[], needle: string): ReferenceOption[] {
+  return figures
+    .filter((row) => matches(row.name, needle) || matches(row.summary, needle))
+    .map((row) => ({
+      key: `${row.kind}:${row.fileName ?? row.name}`,
+      kind: row.kind,
+      name: row.name,
+      where: "",
+      granted: false,
+      ref: figureReference(row),
+    }));
+}
+
+/**
+ * What a note row says.
+ *
+ * The same fallback `NotesWidget.rowText` and `noteReference` make, and it is not tidiness that
+ * it is made the same way three times: a bare 标注 has no words of its own, so a row showing the
+ * note's empty body would be a blank line in a list of them.
+ */
+function noteTargetText(note: Note): string {
+  return note.content.trim() || note.quote;
+}
+
+function push(
+  groups: ReferenceGroup[],
+  kind: ReferenceGroupKind,
+  rows: ReferenceOption[]
+): void {
   if (rows.length === 0) return;
   groups.push({ kind, options: rows.slice(0, GROUP_LIMIT), hidden: Math.max(0, rows.length - GROUP_LIMIT) });
 }
@@ -215,8 +330,13 @@ export function stepActive(index: number, delta: -1 | 1, length: number): number
  * A discriminated union rather than an id plus a kind, so the handler is an exhaustive `switch`:
  * a fourth kind of reference is then a `vue-tsc` error at the one place that has to know what to
  * do with it, rather than a row that inserts a name and does nothing else.
+ *
+ * `turnRef` is the arm 追问 already sends, and the reason the three object rows need nothing new
+ * on the far side: the composer stages it through the same `store.stageReference` a figure panel's
+ * ask button calls.
  */
 export type ReferenceChoice =
   | { kind: "resource"; resource: WorkResource }
+  | { kind: "turnRef"; ref: TurnReference; name: string }
   | { kind: "scope"; all: true; name: string }
   | { kind: "scope"; all: false; workspaceId: string; name: string };

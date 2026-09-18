@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { FileCategory, StoredFile, WebPage, WorkResource, Workspace } from "../../src/api/types";
+import type {
+  FileCategory,
+  Note,
+  StoredFile,
+  WebPage,
+  WorkResource,
+  Workspace,
+} from "../../src/api/types";
+import type { FigureRow } from "../../src/utils/figures";
+import { figureReference } from "../../src/utils/turnRefs";
 import {
   GROUP_LIMIT,
   RESOURCE_PILLS,
@@ -98,6 +107,8 @@ function build(overrides: Partial<BuildOptionsInput> = {}) {
     pill: null,
     workspaces,
     sources,
+    figures: [],
+    notes: [],
     grantedIds: [],
     isAllGranted: false,
     allLabel: ALL_LABEL,
@@ -224,6 +235,119 @@ describe("marking what is already granted", () => {
   it("marks everything when the grant is `all`", () => {
     const rows = flatten(build({ isAllGranted: true }));
     expect(rows.filter((row) => row.kind !== "resource").every((row) => row.granted)).toBe(true);
+  });
+});
+
+/**
+ * The conversation's own objects — a 图, a 表 and a 笔记 — which is what makes 资料 mean
+ * "material" rather than "files".
+ *
+ * The two rules worth pinning are the ones a screenshot cannot show: that the three are drawn
+ * under their own headings (a 图 and a 表 can share a name, so a flat list would show two
+ * identical rows), and that a filter which cannot apply to them silences them rather than leaving
+ * them in place looking unfiltered.
+ */
+describe("the conversation's own objects", () => {
+  function figure(kind: "diagram" | "table", name: string, summary = ""): FigureRow {
+    return {
+      key: `${kind}:${name}`,
+      kind,
+      name,
+      summary,
+      threadTitle: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      toolCallId: null,
+      fileName: kind === "diagram" ? `${name}.mmd` : null,
+      content: kind === "table" ? "| a |" : null,
+      fileMissing: false,
+    };
+  }
+
+  function note(id: string, content: string, quote = ""): Note {
+    return {
+      id,
+      sessionId: "s1",
+      messageId: null,
+      type: "annotation",
+      quote,
+      occurrence: 0,
+      content,
+      targetKind: "text",
+      targetRef: null,
+      messageMissing: false,
+      targetMissing: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+  }
+
+  const objects = {
+    figures: [figure("diagram", "flow", "登录时序"), figure("table", "scores", "成绩对比")],
+    notes: [note("n1", "再看一遍第二章"), note("n2", "", "这一段没懂")],
+  };
+
+  it("draws one group per kind, after the material", () => {
+    // Group headings are the dividers the reader sees, so one group per kind is the feature rather
+    // than a layout choice.
+    expect(groupKinds(objects)).toEqual(["workspace", "resource", "diagram", "table", "note"]);
+  });
+
+  it("keeps a 图 and a 表 of the same name apart", () => {
+    const same = {
+      figures: [figure("diagram", "scores", "图上的"), figure("table", "scores", "表里的")],
+    };
+    const rows = flatten(build(same));
+    const named = rows.filter((row) => row.name === "scores");
+    expect(named.map((row) => row.kind)).toEqual(["diagram", "table"]);
+    // And the two stage different references, which is the point of separating them.
+    expect(named[0]!.ref).toMatchObject({ kind: "diagram", ref: "scores.mmd" });
+    expect(named[1]!.ref).toMatchObject({ kind: "table", ref: "scores" });
+  });
+
+  it("stages the same reference 追问 does", () => {
+    // `@` and 追问 are one mechanism, so the object a row carries is the one the figure panel's
+    // ask button builds — not a second shape that agrees until a name is awkward.
+    const rows = flatten(build(objects));
+    const diagram = rows.find((row) => row.kind === "diagram")!;
+    expect(diagram.ref).toEqual(figureReference(figure("diagram", "flow", "登录时序")));
+    const noteRow = rows.find((row) => row.kind === "note")!;
+    expect(noteRow.ref).toMatchObject({ kind: "note", ref: "n1" });
+  });
+
+  it("shows a bare 标注 by its quote, the way the panel's own rows do", () => {
+    // Narrowed to the notes alone, because the whole-list cap would cut the second one — which is
+    // the cap doing its job, and is the case below.
+    const rows = flatten(build({ ...objects, query: "没懂" }));
+    expect(rows.find((row) => row.key === "note:n2")?.name).toBe("这一段没懂");
+  });
+
+  it("counts the objects against the whole-list cap like every other row", () => {
+    // Three workspaces' worth of rows above them leave the note group one slot, and the overflow
+    // is reported rather than silently dropped.
+    const groups = build(objects);
+    const notes = groups.find((group) => group.kind === "note")!;
+    expect(notes.options).toHaveLength(1);
+    expect(notes.hidden).toBe(1);
+  });
+
+  it("matches a figure by its summary as well as its name", () => {
+    expect(namesOf({ ...objects, query: "登录" })).toContain("flow");
+    expect(namesOf({ ...objects, query: "成绩" })).toContain("scores");
+  });
+
+  it("drops all three when a pill is on, since a figure has no file category", () => {
+    // A pill is a claim about a *file's* type. Leaving the objects in would be the filter
+    // appearing not to have taken — and the workspaces go with them, which is the rule that was
+    // already here for the same reason.
+    expect(groupKinds({ ...objects, pill: "image" })).toEqual(["resource"]);
+  });
+
+  it("drops all three on the 工作区 tab", () => {
+    expect(groupKinds({ ...objects, tab: "workspace" })).toEqual(["workspace"]);
+  });
+
+  it("draws none of them with no conversation's objects to offer", () => {
+    expect(groupKinds()).toEqual(["workspace", "resource"]);
   });
 });
 
