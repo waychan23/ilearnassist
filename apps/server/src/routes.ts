@@ -166,7 +166,7 @@ import {
   sha256Of,
 } from "./attachments.js";
 import { apiError } from "./apiError.js";
-import { classifySource } from "./sourceCategory.js";
+import { classifyFile } from "./fileCategory.js";
 import { isSupportedMime, normalizeMime, resolveSourceBytes, sourceRawPath } from "./sourcePaths.js";
 import {
   fileOwner,
@@ -3209,7 +3209,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           relPath: null,
           name,
           mimeType,
-          category: classifySource(name, mimeType).category,
+          category: classifyFile(name, mimeType).category,
           size: bytes.byteLength,
           url: null,
           summary: null,

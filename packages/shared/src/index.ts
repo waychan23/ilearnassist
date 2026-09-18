@@ -1628,6 +1628,179 @@ export function isFileLocation(value: unknown): value is FileLocation {
   return value === "workspace" || value === "session";
 }
 
+/* ------------------------------- the v4 model -------------------------------- */
+
+/*
+ * An **entity** and a **reference** to it.
+ *
+ * A `StoredFile` or a `WebPage` is the material itself — bytes on disk or a page at a URL, owned
+ * by the account. A `WorkResource` is one workspace's or one conversation's *reference* to such
+ * an entity, and it is the only thing the rest of the app addresses: the library browses
+ * references, `@` picks a reference, `read_document` takes a reference's id.
+ *
+ * The split exists because a single row could not be both. The v3 source had exactly one owner
+ * and resolved its own path *through* that owner, so one file used by two conversations was
+ * unrepresentable. The cost is stated rather than hidden: a file with **no** reference at all is
+ * an ordinary state (a diagram's `.mmd`, a document's extracted text), and the same file
+ * referenced twice is parsed twice.
+ *
+ * Every list here is declared at runtime rather than as a bare type, for the reason
+ * `PARSE_ERROR_CODES` gives: the web catalogs and the filters iterate them, and a type alone is
+ * erased by the time a test runs.
+ */
+
+/** How a file came to exist. `discovered` is the one nobody's tool wrote — see schema.ts. */
+export const FILE_SOURCE_TYPES = ["attachment", "upload", "agent_create", "discovered"] as const;
+export type FileSourceType = (typeof FILE_SOURCE_TYPES)[number];
+
+export function isFileSourceType(value: unknown): value is FileSourceType {
+  return typeof value === "string" && (FILE_SOURCE_TYPES as readonly string[]).includes(value);
+}
+
+/** How a page came to exist: the user supplied the URL, or a tool kept it. */
+export const WEB_PAGE_SOURCE_TYPES = ["upload", "agent_fetch"] as const;
+export type WebPageSourceType = (typeof WEB_PAGE_SOURCE_TYPES)[number];
+
+export function isWebPageSourceType(value: unknown): value is WebPageSourceType {
+  return typeof value === "string" && (WEB_PAGE_SOURCE_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Coarse content type: what the browser filters on, and what decides whether a parse is needed.
+ *
+ * There is no `page` value, unlike `SOURCE_CATEGORIES`. A page is a `WebPage`, which is a
+ * `resourceType` — and that is where the distinction belonged all along: v3 had to set
+ * `category: "page"` by hand, because a category is derived from a file's *name* and a page's
+ * name cannot say what it is.
+ */
+export const FILE_CATEGORIES = [
+  "text",
+  "code",
+  "markdown",
+  "diagram",
+  "image",
+  "document",
+  "other",
+] as const;
+export type FileCategory = (typeof FILE_CATEGORIES)[number];
+
+export function isFileCategory(value: unknown): value is FileCategory {
+  return typeof value === "string" && (FILE_CATEGORIES as readonly string[]).includes(value);
+}
+
+/** What a reference points at. The polymorphic half of `WorkResource.resourceId`. */
+export const WORK_RESOURCE_TYPES = ["file", "web_page"] as const;
+export type WorkResourceType = (typeof WORK_RESOURCE_TYPES)[number];
+
+export function isWorkResourceType(value: unknown): value is WorkResourceType {
+  return typeof value === "string" && (WORK_RESOURCE_TYPES as readonly string[]).includes(value);
+}
+
+/** Which level a reference belongs to. The same two levels a source's owner had. */
+export const WORK_RESOURCE_OWNER_TYPES = ["workspace", "session"] as const;
+export type WorkResourceOwnerType = (typeof WORK_RESOURCE_OWNER_TYPES)[number];
+
+export function isWorkResourceOwnerType(value: unknown): value is WorkResourceOwnerType {
+  return (
+    typeof value === "string" && (WORK_RESOURCE_OWNER_TYPES as readonly string[]).includes(value)
+  );
+}
+
+/** The workspace or conversation a reference belongs to. */
+export interface ResourceOwner {
+  kind: WorkResourceOwnerType;
+  id: string;
+}
+
+/**
+ * A file the account stores: the bytes, and where they are.
+ *
+ * `path` is relative to the **account's own root** (`<dataRoot>/users/<slug>/`), never absolute —
+ * a copied data root must still resolve, which was the point of v3's `storage`/`relPath` split
+ * too. What changed is that one field replaces the pair: v3 had to ask the owner where the bytes
+ * were, and a file with two owners has no single owner to ask.
+ *
+ * Named `StoredFile` rather than `File` because the web app uses the DOM `File` — the composer
+ * hands `fileToBase64(new File(...))` a real one — and a type import that shadowed it would break
+ * the constructor in whichever module imported this.
+ */
+export interface StoredFile {
+  id: string;
+  sourceType: FileSourceType;
+  title: string;
+  path: string;
+  mimeType: string;
+  category: FileCategory;
+  size: number;
+  /** The model's one-liner, where something has produced one. */
+  summary?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** A page the account holds. Its bytes (raw HTML, extracted text) are `StoredFile` rows. */
+export interface WebPage {
+  id: string;
+  sourceType: WebPageSourceType;
+  url: string;
+  title: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/**
+ * A workspace's or a conversation's reference to one piece of material.
+ *
+ * The parse is recorded **here** rather than on the entity, so `parsedFileId` is the extracted
+ * text when there is one and the parse columns describe *this reference's* run. That is what the
+ * requirement asks for, and the consequence is stated in `schema.ts`: two references to one file
+ * are parsed twice.
+ */
+export interface WorkResource {
+  id: string;
+  resourceType: WorkResourceType;
+  resourceId: string;
+  ownerType: WorkResourceOwnerType;
+  ownerId: string;
+  /** What this owner calls it. Defaulted from the entity, and per-owner thereafter. */
+  title: string;
+  summary?: string;
+  parsedFileId?: string;
+  parseStatus: ParseStatus;
+  parseError?: string;
+  parseErrorCode?: ParseErrorCode;
+  parserId?: string;
+  parsedChars?: number;
+  pageCount?: number;
+  parseUpdatedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+  /** The entity itself, carried inline so a list needs one request rather than one per row. */
+  resource: StoredFile | WebPage;
+  /**
+   * The bytes are gone, or the entity row is. Computed on read by a `stat`, never stored — a
+   * stored flag would freeze at whatever the answer was the first time somebody looked, the same
+   * argument `SessionNoteSync.stuck` makes.
+   */
+  missing?: boolean;
+  /** The owner's display name, for the library's tree. Absent when the owner is gone. */
+  ownerName?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+}
+
+/** `GET /api/resources`. The filters the library draws. */
+export interface WorkResourceFilterQuery {
+  name?: string;
+  resourceType?: WorkResourceType;
+  category?: FileCategory;
+  ownerType?: WorkResourceOwnerType;
+  workspaceId?: string;
+  sessionId?: string;
+  mime?: string;
+}
+
 /**
  * Machine codes for the server's curated error replies.
  *

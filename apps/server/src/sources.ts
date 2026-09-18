@@ -9,7 +9,7 @@ import type {
   SourceStorage,
 } from "@ilearnassist/shared";
 import { newId, type AppDb, type SourceFilter, type SourceRecord } from "./db.js";
-import { classifySource } from "./sourceCategory.js";
+import { classifyFile } from "./fileCategory.js";
 import { resolveSourceBytes } from "./sourcePaths.js";
 import { sessionDir, workspaceWorkdir, type UserLayout } from "./paths.js";
 
@@ -80,7 +80,7 @@ export interface RegisterFileInput {
  */
 export function registerFileSource(db: AppDb, input: RegisterFileInput): SourceRecord {
   const name = input.name ?? basename(input.relPath);
-  const { category, mimeType } = classifySource(name, input.mimeType);
+  const { category, mimeType } = classifyFile(name, input.mimeType);
 
   const existing = db.getSourceByPlace(input.userId, input.owner, input.relPath);
 
@@ -388,7 +388,7 @@ async function withMissing(
  * The category and MIME a fetched page is stored under.
  *
  * A page's category is decided by its *origin*, never by a name, which is why it is not a case
- * in `classifySource`: an `.html` file in a workspace is code, and the same bytes fetched from
+ * in `classifyFile`: an `.html` file in a workspace is code, and the same bytes fetched from
  * a URL are a page. `storage: "web"` and this category travel together for that reason.
  */
 export const PAGE_CATEGORY: SourceCategory = "page";
@@ -577,7 +577,7 @@ export function sourcePathsFor(
  * its place; a page's is what it contains.
  *
  * `category: "page"` is set here rather than derived by the classifier, and that is the one
- * place the name does not decide: `classifySource` reads an `.html` file as code, because a
+ * place the name does not decide: `classifyFile` reads an `.html` file as code, because a
  * file on disk *is* code — while a page's category comes from its origin, which only this
  * caller knows.
  */

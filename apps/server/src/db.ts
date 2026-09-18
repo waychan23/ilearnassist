@@ -9,6 +9,8 @@ import type {
   CopilotVisibility,
   DocumentParsePolicy,
   DocumentParserKind,
+  FileCategory,
+  FileSourceType,
   Insight,
   InsightType,
   Message,
@@ -36,15 +38,21 @@ import type {
   SourceOrigin,
   SourceOwner,
   SourceStorage,
+  StoredFile,
   ThreadBranch,
   TitleState,
   ToolCall,
   TurnReference,
   User,
   UserRole,
+  WebPage,
+  WebPageSourceType,
   WidgetId,
   WidgetScope,
   WidgetState,
+  WorkResource,
+  WorkResourceOwnerType,
+  WorkResourceType,
   Workspace,
   WorkspaceSettings,
   WorkspaceStats,
@@ -60,7 +68,6 @@ import {
   MIN_UPLOAD_LIMIT_BYTES,
 } from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
-import { migrateIfNeeded } from "./migrations.js";
 import type { ScopeQuery } from "./workspaceScope.js";
 import { applySchema } from "./schema.js";
 import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
@@ -78,6 +85,25 @@ export interface SourceFilter {
   origin?: SourceOrigin;
   mime?: string;
   /** A substring of the name, matched literally — see the escape in the query. */
+  name?: string;
+  workspaceId?: string;
+  sessionId?: string;
+}
+
+/**
+ * The library's filters, as the statement takes them.
+ *
+ * `category` and `mime` read the **entity's** columns, not the reference's — they describe what
+ * the bytes are, which is a fact about a file rather than about somebody's use of it. So both
+ * are silently inapplicable to a page, and the statement's `@category IS NULL OR f.category = …`
+ * arm is false for one: filtering by `document` correctly returns no pages.
+ */
+export interface WorkResourceFilter {
+  resourceType?: WorkResourceType;
+  ownerType?: WorkResourceOwnerType;
+  category?: FileCategory;
+  mime?: string;
+  /** A substring of the title, matched literally — see the escape in the query. */
   name?: string;
   workspaceId?: string;
   sessionId?: string;
@@ -901,6 +927,189 @@ const mapSource = (r: SourceRow): SourceRecord => ({
   updatedAt: r.updated_at ?? undefined,
 });
 
+/* ------------------- files, web pages and work resources (v4) ------------------- */
+
+/*
+ * The three new row shapes, and the one place a snake_case row becomes the wire type.
+ *
+ * `WorkResourceRecord` carries the entity **inline** rather than as a second lookup, because
+ * every reader of a list needs it: the library draws a size column and a URL control from it,
+ * and one request per row is the N+1 the v3 listing already refused. That is why its statements
+ * join both entity tables rather than selecting from `work_resources` alone.
+ */
+interface FileRow {
+  id: string;
+  user_id: string;
+  source_type: string;
+  title: string;
+  path: string;
+  mime_type: string;
+  category: string;
+  size: number;
+  summary: string | null;
+  sha256: string | null;
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
+}
+
+interface WebPageRow {
+  id: string;
+  user_id: string;
+  source_type: string;
+  url: string;
+  title: string;
+  summary: string | null;
+  sha256: string | null;
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
+}
+
+/**
+ * A work resource joined to its entity, with the entity's columns prefixed.
+ *
+ * Both entity joins are `LEFT` and both are conditional on `resource_type`, so exactly one of
+ * the two column sets is populated and the other is NULL — which is also how a reference to a
+ * soft-deleted entity reads. `mapWorkResource` turns that into "no entity", and the listing
+ * treats it as gone.
+ */
+interface WorkResourceRow {
+  id: string;
+  user_id: string;
+  resource_type: string;
+  resource_id: string;
+  owner_type: string;
+  owner_id: string;
+  title: string;
+  summary: string | null;
+  parsed_file_id: string | null;
+  parse_status: string;
+  parse_error: string | null;
+  parse_error_code: string | null;
+  parser_id: string | null;
+  parsed_chars: number | null;
+  page_count: number | null;
+  parse_updated_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
+  /** Present only when `resource_type = 'file'` and the file is live. */
+  file_entity_id: string | null;
+  file_source_type: string | null;
+  file_title: string | null;
+  file_path: string | null;
+  file_mime_type: string | null;
+  file_category: string | null;
+  file_size: number | null;
+  file_summary: string | null;
+  file_created_at: string | null;
+  file_updated_at: string | null;
+  /** Present only when `resource_type = 'web_page'` and the page is live. */
+  page_entity_id: string | null;
+  page_source_type: string | null;
+  page_url: string | null;
+  page_title: string | null;
+  page_summary: string | null;
+  page_created_at: string | null;
+  page_updated_at: string | null;
+}
+
+/** A file as the rest of the server reads it. */
+export interface FileRecord extends StoredFile {
+  userId: string;
+  sha256?: string;
+}
+
+/** A work resource with its entity resolved. The route adds `missing` and the owner labels. */
+export interface WorkResourceRecord extends Omit<WorkResource, "resource" | "missing"> {
+  userId: string;
+  resource: StoredFile | WebPage;
+}
+
+const mapFile = (r: FileRow): FileRecord => ({
+  id: r.id,
+  userId: r.user_id,
+  sourceType: r.source_type as FileSourceType,
+  title: r.title,
+  path: r.path,
+  mimeType: r.mime_type,
+  category: r.category as FileCategory,
+  size: r.size,
+  summary: r.summary ?? undefined,
+  sha256: r.sha256 ?? undefined,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at ?? undefined,
+});
+
+const mapWebPage = (r: WebPageRow): WebPage => ({
+  id: r.id,
+  sourceType: r.source_type as WebPageSourceType,
+  url: r.url,
+  title: r.title,
+  summary: r.summary ?? undefined,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at ?? undefined,
+});
+
+/**
+ * The entity a joined row carries, or `undefined` when there is none.
+ *
+ * `undefined` means the entity was soft-deleted between the reference being written and this
+ * read — the reference is not dismantled when its entity goes, so this is a reachable state
+ * rather than a defensive branch. Callers treat it as gone; the listing drops the row.
+ */
+function entityOf(r: WorkResourceRow): StoredFile | WebPage | undefined {
+  if (r.file_entity_id) {
+    return {
+      id: r.file_entity_id,
+      sourceType: r.file_source_type as FileSourceType,
+      title: r.file_title ?? "",
+      path: r.file_path ?? "",
+      mimeType: r.file_mime_type ?? "application/octet-stream",
+      category: r.file_category as FileCategory,
+      size: r.file_size ?? 0,
+      summary: r.file_summary ?? undefined,
+      createdAt: r.file_created_at ?? r.created_at,
+      updatedAt: r.file_updated_at ?? undefined,
+    };
+  }
+  if (r.page_entity_id) {
+    return {
+      id: r.page_entity_id,
+      sourceType: r.page_source_type as WebPageSourceType,
+      url: r.page_url ?? "",
+      title: r.page_title ?? "",
+      summary: r.page_summary ?? undefined,
+      createdAt: r.page_created_at ?? r.created_at,
+      updatedAt: r.page_updated_at ?? undefined,
+    };
+  }
+  return undefined;
+}
+
+const mapWorkResource = (r: WorkResourceRow, entity: StoredFile | WebPage): WorkResourceRecord => ({
+  id: r.id,
+  userId: r.user_id,
+  resourceType: r.resource_type as WorkResourceType,
+  resourceId: r.resource_id,
+  ownerType: r.owner_type as WorkResourceOwnerType,
+  ownerId: r.owner_id,
+  title: r.title,
+  summary: r.summary ?? undefined,
+  parsedFileId: r.parsed_file_id ?? undefined,
+  parseStatus: r.parse_status as ParseStatus,
+  parseError: r.parse_error ?? undefined,
+  parseErrorCode: (r.parse_error_code ?? undefined) as ParseErrorCode | undefined,
+  parserId: r.parser_id ?? undefined,
+  parsedChars: r.parsed_chars ?? undefined,
+  pageCount: r.page_count ?? undefined,
+  parseUpdatedAt: r.parse_updated_at ?? undefined,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at ?? undefined,
+  resource: entity,
+});
+
 const mapWorkspace = (r: WorkspaceRow): Workspace => ({
   id: r.id,
   name: r.name,
@@ -1543,6 +1752,147 @@ export interface AppDb {
     workspaceId: string,
     scope: ScopeQuery
   ): SourceRecord[];
+
+  /* ----------------- files, web pages and work resources (v4) ----------------- */
+
+  /** One file by id, owner-scoped. "Not yours" and "does not exist" answer alike. */
+  getFileForUser(userId: string, id: string): FileRecord | undefined;
+  /**
+   * The live file at one path, or undefined.
+   *
+   * **By path, not by id**, and that is the whole of the rename story: a file the user moves is
+   * the same file, and the caller that wants it back asks by the new path. `deleted_at IS NULL`
+   * is what lets a file be deleted and a new one written at the same path.
+   */
+  getFileByPath(userId: string, path: string): FileRecord | undefined;
+  /** Every live file the account holds, in path order — the reconciler's read. */
+  listFilesForUser(userId: string): FileRecord[];
+  findFileByHash(userId: string, sha256: string): FileRecord | undefined;
+  /** The soft-deleted twin of the above, which is what a re-upload revives. */
+  findDeletedFileByHash(userId: string, sha256: string): FileRecord | undefined;
+  createFile(input: {
+    id: string;
+    userId: string;
+    sourceType: FileSourceType;
+    title: string;
+    path: string;
+    mimeType: string;
+    category: FileCategory;
+    size: number;
+    summary?: string;
+    sha256?: string;
+    now?: string;
+  }): FileRecord;
+  /**
+   * Update a file's place or its description of itself, in place.
+   *
+   * One statement for a rename, a rewrite and a size change because they are one operation: the
+   * row keeps its id and every reference to it, and only these columns move. Returns whether
+   * anything matched, so a caller can tell "not yours" from "done".
+   */
+  updateFilePath(
+    id: string,
+    userId: string,
+    patch: {
+      path?: string;
+      title?: string;
+      mimeType?: string;
+      category?: FileCategory;
+      size?: number;
+      summary?: string | null;
+      now?: string;
+    }
+  ): boolean;
+  /** Marks the file deleted. Returns false when no live file existed, or it was not theirs. */
+  softDeleteFileForUser(id: string, userId: string): boolean;
+  /**
+   * Clears the marker on a soft-deleted file and returns it, or undefined if there was nothing
+   * to revive. The bytes and every reference to it are untouched — the row was never dismantled,
+   * only hidden.
+   */
+  reviveFileForUser(id: string, userId: string): FileRecord | undefined;
+
+  getWebPageForUser(userId: string, id: string): WebPage | undefined;
+  /** The live page whose reading hashes to this, which is what makes keeping it again a no-op. */
+  findWebPageByHash(userId: string, sha256: string): WebPage | undefined;
+  createWebPage(input: {
+    id: string;
+    userId: string;
+    sourceType: WebPageSourceType;
+    url: string;
+    title: string;
+    summary?: string;
+    sha256: string;
+    now?: string;
+  }): WebPage;
+  updateWebPage(
+    id: string,
+    userId: string,
+    patch: { url?: string; title?: string; summary?: string | null; now?: string }
+  ): boolean;
+
+  /**
+   * Make an entity referenceable by one owner, and return the reference.
+   *
+   * **The only write that may create a `work_resources` row**, and it is idempotent on
+   * (owner, entity): calling it twice is one row whose title is refreshed. `undefined` means the
+   * entity is not this account's or is not there at all — the ownership check and the insert are
+   * one statement, so an id from another account cannot become a row.
+   */
+  upsertWorkResource(input: {
+    id: string;
+    userId: string;
+    resourceType: WorkResourceType;
+    resourceId: string;
+    ownerType: WorkResourceOwnerType;
+    ownerId: string;
+    title: string;
+    summary?: string;
+    now?: string;
+  }): WorkResourceRecord | undefined;
+  getWorkResourceForUser(userId: string, id: string): WorkResourceRecord | undefined;
+  /**
+   * Every live reference to one entity, with the entity attached.
+   *
+   * The reverse lookup the delete paths need: it is what answers "does anything still reference
+   * this file", which no foreign key can answer here because `resource_id` is polymorphic.
+   */
+  listWorkResourcesForResource(
+    userId: string,
+    resourceType: WorkResourceType,
+    resourceId: string
+  ): WorkResourceRecord[];
+  listWorkResourcesFiltered(
+    userId: string,
+    filter: WorkResourceFilter
+  ): WorkResourceRecord[];
+  /**
+   * The read whitelist: what the model may read this turn.
+   *
+   * The same three arms the v3 statement had, over one table — see its docblock for what each
+   * covers and why arm 3 must not gain an `@workspaceId` clause.
+   */
+  listReadableWorkResources(
+    userId: string,
+    sessionId: string,
+    workspaceId: string,
+    scope: ScopeQuery
+  ): WorkResourceRecord[];
+  /** Marks the reference deleted. The entity and its bytes are untouched. */
+  softDeleteWorkResourceForUser(id: string, userId: string): boolean;
+  /** Records what a parse did. `parsedFileId` is only ever set, never cleared. */
+  updateWorkResourceParse(input: {
+    id: string;
+    userId: string;
+    status: ParseStatus;
+    error?: string | null;
+    code?: ParseErrorCode | null;
+    parserId?: string | null;
+    parsedChars?: number | null;
+    pageCount?: number | null;
+    parsedFileId?: string | null;
+    now?: string;
+  }): boolean;
 
   /**
    * Workspaces — and the pattern every user-owned accessor below follows.
@@ -2338,17 +2688,6 @@ export function createDb(dbPath: string): AppDb {
   db.pragma("foreign_keys = ON");
 
   /*
-   * Walk the file forward to this build's schema, if it has a path there.
-   *
-   * **Outside the transaction below, and that is a requirement rather than tidiness.** A
-   * migration that rebuilds a table has to run with `foreign_keys` off —
-   * `migrations.ts` explains at length what goes wrong otherwise — and SQLite will not change
-   * that pragma from inside a transaction. So the two are sequential: the walk first, then the
-   * shape. A database already at this version does nothing here.
-   */
-  migrateIfNeeded(db);
-
-  /*
    * Everything that changes the file's *shape* is one write, with the lock taken up front.
    *
    * Two processes can now do this at once — the administrator CLI is designed to be run
@@ -2865,6 +3204,259 @@ export function createDb(dbPath: string): AppDb {
      JOIN sources src ON src.id = arm.source_id
      WHERE src.deleted_at IS NULL
      ORDER BY arm.linked_at ASC, src.id ASC`
+  );
+
+  /* ----------------- files, web pages and work resources (v4) ----------------- */
+
+  /*
+   * The join every work-resource read shares.
+   *
+   * Both entity joins are conditional on `resource_type` **inside the ON clause**, which is what
+   * makes one statement serve a polymorphic foreign key: SQLite evaluates the constant against
+   * the outer row, so exactly one side can match and the other's columns are all NULL. The
+   * alternative — a `UNION ALL` of two nearly identical selects — is what the v3 listing did for
+   * its three arms, and the duplication it costs is a second place for a filter to be added to
+   * only one of them.
+   *
+   * `*_deleted_at IS NULL` is in the ON clause rather than the WHERE, deliberately: putting it
+   * in the WHERE would turn the LEFT JOIN into an INNER one and *hide* a reference whose entity
+   * was deleted, which would make `entityOf`'s undefined branch unreachable and the caller's
+   * reasoning a lie. Here the entity's columns come back NULL and the caller decides.
+   */
+  const WR_SELECT = `
+    SELECT wr.*,
+           f.id          AS file_entity_id,
+           f.source_type AS file_source_type,
+           f.title       AS file_title,
+           f.path        AS file_path,
+           f.mime_type   AS file_mime_type,
+           f.category    AS file_category,
+           f.size        AS file_size,
+           f.summary     AS file_summary,
+           f.created_at  AS file_created_at,
+           f.updated_at  AS file_updated_at,
+           p.id          AS page_entity_id,
+           p.source_type AS page_source_type,
+           p.url         AS page_url,
+           p.title       AS page_title,
+           p.summary     AS page_summary,
+           p.created_at  AS page_created_at,
+           p.updated_at  AS page_updated_at
+      FROM work_resources wr
+      LEFT JOIN files f
+        ON wr.resource_type = 'file' AND f.id = wr.resource_id AND f.deleted_at IS NULL
+      LEFT JOIN web_pages p
+        ON wr.resource_type = 'web_page' AND p.id = wr.resource_id AND p.deleted_at IS NULL`;
+
+  const stmtGetFileForUser = db.prepare(
+    "SELECT * FROM files WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtGetFileByPath = db.prepare(
+    "SELECT * FROM files WHERE user_id = ? AND path = ? AND deleted_at IS NULL"
+  );
+  const stmtListFilesForUser = db.prepare(
+    "SELECT * FROM files WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
+  );
+  /*
+   * The live hash lookup and the deleted one, the pair the soft delete's revive policy needs.
+   * `source_type IN ('upload','attachment')` restates what `idx_files_blob` already encodes —
+   * the dedupe rule is about bytes a person supplied, and a parse result is not one.
+   */
+  const stmtFindFileByHash = db.prepare(
+    `SELECT * FROM files
+      WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL
+        AND source_type IN ('upload', 'attachment') AND deleted_at IS NULL`
+  );
+  const stmtFindDeletedFileByHash = db.prepare(
+    `SELECT * FROM files
+      WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL
+        AND source_type IN ('upload', 'attachment') AND deleted_at IS NOT NULL`
+  );
+  const stmtCreateFile = db.prepare(
+    `INSERT INTO files
+       (id, user_id, source_type, title, path, mime_type, category, size, summary, sha256, created_at)
+     VALUES (@id, @userId, @sourceType, @title, @path, @mimeType, @category, @size, @summary,
+             @sha256, @createdAt)`
+  );
+  /*
+   * Every column written on every update, with the row's own value as the fallback — the
+   * `stmtUpdateSourcePlace` shape, and the same reason: the patch is partial and the row is the
+   * default, so one statement says "whatever the caller did not mention stays". `summary` keeps
+   * its separate `@summarySet` flag, because a caller may legitimately want to *clear* it.
+   */
+  const stmtUpdateFilePath = db.prepare(
+    `UPDATE files
+        SET path = COALESCE(@path, path),
+            title = COALESCE(@title, title),
+            mime_type = COALESCE(@mimeType, mime_type),
+            category = COALESCE(@category, category),
+            size = COALESCE(@size, size),
+            summary = CASE WHEN @summarySet = 1 THEN @summary ELSE summary END,
+            updated_at = @updatedAt
+      WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
+  );
+  const stmtSoftDeleteFileForUser = db.prepare(
+    "UPDATE files SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtReviveFileForUser = db.prepare(
+    `UPDATE files SET deleted_at = NULL WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL
+       RETURNING *`
+  );
+
+  const stmtGetWebPageForUser = db.prepare(
+    "SELECT * FROM web_pages WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtFindWebPageByHash = db.prepare(
+    "SELECT * FROM web_pages WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL"
+  );
+  const stmtCreateWebPage = db.prepare(
+    `INSERT INTO web_pages (id, user_id, source_type, url, title, summary, sha256, created_at)
+     VALUES (@id, @userId, @sourceType, @url, @title, @summary, @sha256, @createdAt)`
+  );
+  const stmtUpdateWebPage = db.prepare(
+    `UPDATE web_pages
+        SET url = COALESCE(@url, url),
+            title = COALESCE(@title, title),
+            summary = CASE WHEN @summarySet = 1 THEN @summary ELSE summary END,
+            updated_at = @updatedAt
+      WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
+  );
+
+  /*
+   * The write that makes a file referenceable, and **the only one that may**.
+   *
+   * One statement, with the ownership check and the insert together, which is the shape
+   * `stmtLinkSourceToWorkspace` had and for the reason its docblock gives: an id from another
+   * account must not be able to become a row. `ON CONFLICT DO UPDATE` rather than
+   * `INSERT OR IGNORE`, because re-referencing is the ordinary case (an `@`-reference to
+   * something already held) and the caller wants the row back either way — but only the title
+   * moves, so a re-reference does not reset a parse or a summary somebody already has.
+   *
+   * The partial index means the conflict target has to repeat its predicate.
+   */
+  const stmtUpsertWorkResource = db.prepare(
+    `INSERT INTO work_resources
+       (id, user_id, resource_type, resource_id, owner_type, owner_id, title, summary,
+        parse_status, created_at)
+     SELECT @id, @userId, @resourceType, @resourceId, @ownerType, @ownerId, @title, @summary,
+            'none', @createdAt
+       FROM (SELECT 1) WHERE (
+         @resourceType = 'file' AND EXISTS (
+           SELECT 1 FROM files f WHERE f.id = @resourceId AND f.user_id = @userId AND f.deleted_at IS NULL)
+       ) OR (
+         @resourceType = 'web_page' AND EXISTS (
+           SELECT 1 FROM web_pages p WHERE p.id = @resourceId AND p.user_id = @userId AND p.deleted_at IS NULL)
+       )
+     ON CONFLICT(user_id, owner_type, owner_id, resource_type, resource_id)
+       WHERE deleted_at IS NULL
+       DO UPDATE SET title = excluded.title, updated_at = @createdAt
+     RETURNING *`
+  );
+  const stmtGetWorkResourceForUser = db.prepare(
+    `${WR_SELECT} WHERE wr.id = ? AND wr.user_id = ? AND wr.deleted_at IS NULL`
+  );
+  /** Every live reference to one entity — what answers "is this file still referenced". */
+  const stmtListWorkResourcesForResource = db.prepare(
+    `${WR_SELECT} WHERE wr.user_id = @userId AND wr.resource_type = @resourceType
+        AND wr.resource_id = @resourceId AND wr.deleted_at IS NULL`
+  );
+  /*
+   * The library's list, filtered.
+   *
+   * Filtered **in the query**, not over the result, because the reader `stat`s every row it is
+   * given — the v3 argument, unchanged: a workspace with a thousand files would otherwise make
+   * "show me my documents" cost a thousand metadata calls to then discard them all.
+   *
+   * One statement with `@x IS NULL OR …` guards rather than a statement per combination: each
+   * filter is independent, and eight of them is a combinatorial number of statements. The
+   * `resource_type`/`owner_type` pair rides `idx_wr_resource` and `idx_wr_owner`; the `user_id`
+   * index carries the query.
+   *
+   * **A reference whose entity is gone is hidden**, not returned with a null entity: the entity
+   * is what the row is *about*, and a row about nothing is not a row the library can draw. That
+   * is the `f.id IS NOT NULL OR p.id IS NOT NULL` arm, and it is why the joins are LEFT in the
+   * shared prefix — an INNER JOIN would silently do the same thing for a different reason and
+   * make `entityOf`'s undefined branch look dead.
+   *
+   * The two scope filters read wider than ownership, and both directions are the v3 ones:
+   *
+   * - **A workspace** holds what it owns *and* what its conversations own, because a file
+   *   uploaded into a conversation is readable from the whole workspace.
+   * - **A conversation** holds what it owns. There is no second arm any more — the link table
+   *   that used to supply it has no successor — because a reference owned by the session *is*
+   *   the link.
+   *
+   * Neither looks at whether the owning conversation is soft-deleted: deleting a conversation
+   * hides the conversation, not the files it produced.
+   */
+  const stmtListWorkResourcesFiltered = db.prepare(
+    `${WR_SELECT}
+      WHERE wr.user_id = @userId AND wr.deleted_at IS NULL
+        AND (f.id IS NOT NULL OR p.id IS NOT NULL)
+        AND (@resourceType IS NULL OR wr.resource_type = @resourceType)
+        AND (@category IS NULL OR f.category = @category)
+        AND (@ownerType IS NULL OR wr.owner_type = @ownerType)
+        AND (@mime IS NULL OR f.mime_type = @mime)
+        AND (@name IS NULL OR wr.title LIKE @name ESCAPE '\\\\')
+        AND (@workspaceId IS NULL OR (
+              (wr.owner_type = 'workspace' AND wr.owner_id = @workspaceId)
+              OR (wr.owner_type = 'session' AND wr.owner_id IN (
+                    SELECT s.id FROM sessions s WHERE s.workspace_id = @workspaceId))
+            ))
+        AND (@sessionId IS NULL OR (wr.owner_type = 'session' AND wr.owner_id = @sessionId))
+      ORDER BY wr.created_at ASC, wr.id ASC`
+  );
+  const stmtSoftDeleteWorkResourceForUser = db.prepare(
+    "UPDATE work_resources SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtUpdateWorkResourceParse = db.prepare(
+    `UPDATE work_resources
+        SET parse_status = @status, parse_error = @error, parse_error_code = @code,
+            parser_id = @parserId, parsed_chars = @parsedChars, page_count = @pageCount,
+            parsed_file_id = COALESCE(@parsedFileId, parsed_file_id),
+            parse_updated_at = @updatedAt
+      WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
+  );
+  /*
+   * The read whitelist, and the three arms are the v3 ones over a single table.
+   *
+   * - **Arm 1** is the conversation's own material.
+   * - **Arm 2** is the current workspace's, plus any granted one — a granted workspace needs its
+   *   own clause because arm 1 covers the current conversation only.
+   * - **Arm 3** is what the *conversations* of a granted workspace hold. Without it, material a
+   *   conversation in a granted workspace holds would be invisible, and `ila_explore`'s
+   *   `messages` would name ids that resolve to nothing, which reads as a broken tool.
+   *
+   * Arm 3 deliberately has **no `@workspaceId` clause**, exactly as before: adding one would
+   * quietly widen the *ungranted* case to a conversation's siblings. With `@scopeAll = 0` and an
+   * empty id list this returns what it returned before the grant existed.
+   *
+   * `linked_at` is `wr.created_at`, and there is no `MIN(...)`/`GROUP BY` any more. That
+   * machinery existed because an upload wrote a row in *two* link tables with two `now()` calls,
+   * so the same file could come back twice. The four-part unique index makes one row per
+   * owner+entity, and the three arms address three disjoint owner sets, so a duplicate is not
+   * merely unlikely — it is unrepresentable.
+   *
+   * The ids reach `json_each` as a JSON array built by `scopeIdsJson`, the only place that value
+   * is built: `json_each('')` raises, and a raise here is a 500 on every turn.
+   */
+  const stmtListReadableWorkResources = db.prepare(
+    `${WR_SELECT}
+      WHERE wr.user_id = @userId AND wr.deleted_at IS NULL
+        AND (f.id IS NOT NULL OR p.id IS NOT NULL)
+        AND (
+          (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
+          OR (wr.owner_type = 'workspace' AND (
+                @scopeAll = 1 OR wr.owner_id = @workspaceId
+                OR wr.owner_id IN (SELECT value FROM json_each(@scopeIds))))
+          OR (wr.owner_type = 'session' AND wr.owner_id IN (
+                SELECT s.id FROM sessions s
+                 JOIN workspaces w ON w.id = s.workspace_id
+                WHERE w.user_id = @userId AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+                  AND (@scopeAll = 1
+                       OR s.workspace_id IN (SELECT value FROM json_each(@scopeIds)))))
+        )
+      ORDER BY wr.created_at ASC, wr.id ASC`
   );
 
   /* ------------------------------ workspaces ------------------------------ */
@@ -4031,6 +4623,206 @@ export function createDb(dbPath: string): AppDb {
           scopeIds: scope.idsJson,
         }) as SourceRow[]
       ).map(mapSource);
+    },
+
+    /* ----------------- files, web pages and work resources (v4) ----------------- */
+
+    /*
+     * Every work-resource read goes through `withEntity`, and that is the one place a reference
+     * with no entity is handled: the shared join leaves the entity's columns NULL when the row
+     * it points at has been soft-deleted, and this drops the row rather than handing back a
+     * reference to nothing. A row about nothing is not a row the library can draw, and a caller
+     * that had to check for it at every site would eventually forget once.
+     */
+    getFileForUser(userId, id) {
+      const r = stmtGetFileForUser.get(id, userId) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+    getFileByPath(userId, path) {
+      const r = stmtGetFileByPath.get(userId, path) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+    listFilesForUser(userId) {
+      return (stmtListFilesForUser.all(userId) as FileRow[]).map(mapFile);
+    },
+    findFileByHash(userId, sha256) {
+      const r = stmtFindFileByHash.get(userId, sha256) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+    findDeletedFileByHash(userId, sha256) {
+      const r = stmtFindDeletedFileByHash.get(userId, sha256) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+    createFile(input) {
+      stmtCreateFile.run({
+        id: input.id,
+        userId: input.userId,
+        sourceType: input.sourceType,
+        title: input.title,
+        path: input.path,
+        mimeType: input.mimeType,
+        category: input.category,
+        size: input.size,
+        summary: input.summary ?? null,
+        sha256: input.sha256 ?? null,
+        createdAt: input.now ?? now(),
+      });
+      const r = stmtGetFileForUser.get(input.id, input.userId) as FileRow;
+      return mapFile(r);
+    },
+    updateFilePath(id, userId, patch) {
+      return (
+        stmtUpdateFilePath.run({
+          id,
+          userId,
+          path: patch.path ?? null,
+          title: patch.title ?? null,
+          mimeType: patch.mimeType ?? null,
+          category: patch.category ?? null,
+          size: patch.size ?? null,
+          // Two parameters for one column, because "clear the summary" and "do not touch the
+          // summary" are different intentions and a lone null cannot express both.
+          summarySet: patch.summary === undefined ? 0 : 1,
+          summary: patch.summary ?? null,
+          updatedAt: patch.now ?? now(),
+        }).changes > 0
+      );
+    },
+    softDeleteFileForUser(id, userId) {
+      return stmtSoftDeleteFileForUser.run(now(), id, userId).changes > 0;
+    },
+    reviveFileForUser(id, userId) {
+      const r = stmtReviveFileForUser.get(id, userId) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+
+    getWebPageForUser(userId, id) {
+      const r = stmtGetWebPageForUser.get(id, userId) as WebPageRow | undefined;
+      return r ? mapWebPage(r) : undefined;
+    },
+    findWebPageByHash(userId, sha256) {
+      const r = stmtFindWebPageByHash.get(userId, sha256) as WebPageRow | undefined;
+      return r ? mapWebPage(r) : undefined;
+    },
+    createWebPage(input) {
+      stmtCreateWebPage.run({
+        id: input.id,
+        userId: input.userId,
+        sourceType: input.sourceType,
+        url: input.url,
+        title: input.title,
+        summary: input.summary ?? null,
+        sha256: input.sha256,
+        createdAt: input.now ?? now(),
+      });
+      const r = stmtGetWebPageForUser.get(input.id, input.userId) as WebPageRow;
+      return mapWebPage(r);
+    },
+    updateWebPage(id, userId, patch) {
+      return (
+        stmtUpdateWebPage.run({
+          id,
+          userId,
+          url: patch.url ?? null,
+          title: patch.title ?? null,
+          summarySet: patch.summary === undefined ? 0 : 1,
+          summary: patch.summary ?? null,
+          updatedAt: patch.now ?? now(),
+        }).changes > 0
+      );
+    },
+
+    upsertWorkResource(input) {
+      /*
+       * The statement's `RETURNING *` gives the reference row without its entity, so the entity
+       * is read back through the same owner-scoped accessor the callers use. Two statements
+       * rather than a second join, because the value being returned is the *reference* — the
+       * entity is fetched by whoever needs it, and doing it here would mean this method had to
+       * know which of the two tables to read.
+       */
+      const inserted = stmtUpsertWorkResource.get({
+        id: input.id,
+        userId: input.userId,
+        resourceType: input.resourceType,
+        resourceId: input.resourceId,
+        ownerType: input.ownerType,
+        ownerId: input.ownerId,
+        title: input.title,
+        summary: input.summary ?? null,
+        createdAt: input.now ?? now(),
+      }) as { id: string } | undefined;
+      if (!inserted) return undefined;
+      return this.getWorkResourceForUser(input.userId, inserted.id);
+    },
+    getWorkResourceForUser(userId, id) {
+      const r = stmtGetWorkResourceForUser.get(id, userId) as WorkResourceRow | undefined;
+      if (!r) return undefined;
+      const entity = entityOf(r);
+      return entity ? mapWorkResource(r, entity) : undefined;
+    },
+    listWorkResourcesForResource(userId, resourceType, resourceId) {
+      const rows = stmtListWorkResourcesForResource.all({
+        userId,
+        resourceType,
+        resourceId,
+      }) as WorkResourceRow[];
+      return rows.flatMap((r) => {
+        const entity = entityOf(r);
+        return entity ? [mapWorkResource(r, entity)] : [];
+      });
+    },
+    listWorkResourcesFiltered(userId, filter) {
+      const rows = stmtListWorkResourcesFiltered.all({
+        userId,
+        resourceType: filter.resourceType ?? null,
+        ownerType: filter.ownerType ?? null,
+        category: filter.category ?? null,
+        mime: filter.mime ?? null,
+        // The escape is what makes a `%` in a filename a character rather than a wildcard, and
+        // `ESCAPE '\'` in the statement is the other half of it.
+        name: filter.name ? `%${filter.name.replace(/[\\%_]/g, "\\$&")}%` : null,
+        workspaceId: filter.workspaceId ?? null,
+        sessionId: filter.sessionId ?? null,
+      }) as WorkResourceRow[];
+      return rows.flatMap((r) => {
+        const entity = entityOf(r);
+        return entity ? [mapWorkResource(r, entity)] : [];
+      });
+    },
+    listReadableWorkResources(userId, sessionId, workspaceId, scope) {
+      const rows = stmtListReadableWorkResources.all({
+        userId,
+        sessionId,
+        workspaceId,
+        // `1`/`0` and never a boolean: SQLite has no boolean type, and the statement tests it
+        // with `= 1`. `idsJson` is the JSON array `scopeIdsJson` builds — see that function
+        // for why nothing else may be bound here.
+        scopeAll: scope.all ? 1 : 0,
+        scopeIds: scope.idsJson,
+      }) as WorkResourceRow[];
+      return rows.flatMap((r) => {
+        const entity = entityOf(r);
+        return entity ? [mapWorkResource(r, entity)] : [];
+      });
+    },
+    softDeleteWorkResourceForUser(id, userId) {
+      return stmtSoftDeleteWorkResourceForUser.run(now(), id, userId).changes > 0;
+    },
+    updateWorkResourceParse(input) {
+      return (
+        stmtUpdateWorkResourceParse.run({
+          id: input.id,
+          userId: input.userId,
+          status: input.status,
+          error: input.error ?? null,
+          code: input.code ?? null,
+          parserId: input.parserId ?? null,
+          parsedChars: input.parsedChars ?? null,
+          pageCount: input.pageCount ?? null,
+          parsedFileId: input.parsedFileId ?? null,
+          updatedAt: input.now ?? now(),
+        }).changes > 0
+      );
     },
 
     listWorkspaces(userId) {

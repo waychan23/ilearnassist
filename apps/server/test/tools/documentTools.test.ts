@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { writeParsedText } from "../../src/documents/store.js";
 import { createDb, type AppDb } from "../../src/db.js";
-import { classifySource } from "../../src/sourceCategory.js";
+import { classifyFile } from "../../src/fileCategory.js";
 import { dataLayout, userLayout, type UserLayout } from "../../src/paths.js";
 import { sourceRawPath } from "../../src/sourcePaths.js";
 import { buildDocumentTool, type DocumentToolContext } from "../../src/tools/documentTools.js";
@@ -165,7 +165,7 @@ describe("read_document", () => {
         // Derived, never written by hand: the whole point of these two cases is the *category*
         // deciding whether bytes are a fallback — `needsParse` — and a hardcoded one here would
         // let the test assert the opposite of what the app does.
-        category: classifySource(name, mimeType).category,
+        category: classifyFile(name, mimeType).category,
         size: Buffer.byteLength(body, "utf8"),
         url: null,
         summary: null,
