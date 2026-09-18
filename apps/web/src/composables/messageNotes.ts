@@ -1,5 +1,5 @@
 import { computed, ref } from "vue";
-import type { NoteType, WidgetId } from "@ilearnassist/shared";
+import type { NoteTargetKindChoice, NoteType, WidgetId } from "@ilearnassist/shared";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 import type { IconName } from "../utils/icons";
 
@@ -59,29 +59,39 @@ export interface NoteEditorDraft {
   type: NoteType;
   content: string;
   /**
-   * What the note is about, when it is a 图 or a 表 rather than a passage.
+   * What the note is about, when it is an object rather than a passage.
    *
    * It sits beside `quote` rather than replacing it because the two are alternatives, not a
    * pair: a note names one thing, and which kind of thing that is decides which of these is
-   * filled in. `label` is what the window shows — the figure's name, already canonical, since
+   * filled in. `label` is what the window shows — the object's name, already canonical, since
    * the server is what resolves a note's target and hands it back.
    */
-  target?: NoteFigureNote;
+  target?: NoteObjectNote;
 }
 
 /**
- * A figure a note can be written about.
+ * An object a note can be written about.
  *
- * `kind` names the table to look in and `ref` is the handle the server stores, so the two are
- * one value travelling together — a ref without a kind cannot be resolved, since both
- * `diagramFileName` and `tableName` would claim it.
+ * Three kinds and one shape, because the three differ in how they are *resolved* and not in how
+ * they are held: `kind` names the table to look in and `ref` is the handle the server stores, so
+ * the two are one value travelling together — a ref without a kind cannot be resolved, since
+ * `diagramFileName`, `tableName` and a resource lookup would each claim it.
  */
-export interface NoteFigureNote {
-  kind: "diagram" | "table";
-  /** The canonical name: `auth-flow.mmd` for a diagram, a bare slug for a table. */
+export interface NoteObjectNote {
+  kind: NoteTargetKindChoice;
+  /** The handle: a figure's canonical name, or a resource's reference id. */
   ref: string;
   /** What the window and the panel row show. Display only. */
   label: string;
+  /**
+   * The object's own title or summary, when the caller has one to hand.
+   *
+   * Written into the note's 标注原文, which an object note otherwise has nothing to put there —
+   * and a 标注 with nothing in that field is the shape `NoteEditor`'s type strip refuses to
+   * offer. A snapshot: the panel prefers a live lookup while the target is still there, and
+   * falls back to this once it is gone.
+   */
+  summary?: string;
 }
 
 /** Where the window's 定位 goes. */

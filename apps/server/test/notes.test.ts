@@ -198,17 +198,25 @@ describe("a note about a figure", () => {
     expect(noKind.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
   });
 
-  it("refuses a note that carries both a figure and a passage", async () => {
-    // One note names one thing. Either reading of a request carrying both would throw away half
-    // of what was sent, so it is refused rather than resolved.
-    const withQuote = await createNote({
+  it("records a figure's own title as its 标注原文, and still refuses a passage", async () => {
+    /*
+     * One note names one thing, and the test of "a passage" is the `messageId` and the
+     * `occurrence` — not the quote. An object note has a 标注原文 with nothing quoted in it,
+     * holding the object's title, so a bare `quote` is a title rather than a second anchor.
+     * Refusing it was refusing the only thing an object note can put in the field the reader
+     * sees, which is why this half flipped from 400 to 201.
+     */
+    const withTitle = await createNote({
       targetKind: "diagram",
       targetRef: "auth-flow.mmd",
-      quote: "some words",
+      quote: "登录与刷新的时序",
     });
-    expect(withQuote.statusCode).toBe(400);
-    expect(withQuote.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+    expect(withTitle.statusCode).toBe(201);
+    expect(withTitle.json<Note>().quote).toBe("登录与刷新的时序");
+    expect(withTitle.json<Note>().messageId).toBeNull();
 
+    // A message is an anchor, and two anchors in one request is still a client that assembled
+    // two different notes — either reading would throw away half of what was sent.
     const withMessage = await createNote({
       targetKind: "diagram",
       targetRef: "auth-flow.mmd",
@@ -217,6 +225,17 @@ describe("a note about a figure", () => {
     });
     expect(withMessage.statusCode).toBe(400);
     expect(withMessage.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+
+    // And an occurrence without a message is an offset into nothing, so it is refused on the
+    // same grounds rather than silently counted over the object's title.
+    const withOccurrence = await createNote({
+      targetKind: "diagram",
+      targetRef: "auth-flow.mmd",
+      quote: "登录与刷新的时序",
+      occurrence: 1,
+    });
+    expect(withOccurrence.statusCode).toBe(400);
+    expect(withOccurrence.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
   });
 
   it("refuses a figure this conversation does not hold, under its own code", async () => {

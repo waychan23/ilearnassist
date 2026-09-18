@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { isNarrow } from "../../composables/breakpoints";
+import { canAnnotate, objectNoteRequest } from "../../composables/notes";
+import { requestNoteEditor } from "../../composables/messageNotes";
 import { useAppStore } from "../../stores/app";
 import type { FigureTurnReference } from "../../utils/turnRefs";
 import { renderMarkdown } from "../../utils/markdown";
@@ -119,6 +121,32 @@ function askAbout(): void {
   if (!props.figure) return;
   store.stageReference(props.figure);
   emit("close");
+}
+
+/**
+ * Write a note about the figure on screen.
+ *
+ * The same reasoning as `askAbout`, and the same ending: it **closes**. The note window is drawn
+ * by the chat view, which is behind this overlay — the composer's problem exactly — so leaving the
+ * dialog up would open a card the reader cannot see. Dismissing is the only way a full-screen
+ * overlay can stop being in the way, and the note's 标注原文 carries the figure's own summary, so
+ * the subject is in the card that replaces it rather than lost with the drawing.
+ *
+ * Gated on `canAnnotate` where the button is drawn, not here: with no notes widget installed
+ * nothing renders the window, so offering the control would be offering one that does nothing.
+ */
+function noteAbout(): void {
+  const figure = props.figure;
+  if (!figure) return;
+  const request = objectNoteRequest({
+    kind: figure.kind,
+    ref: figure.ref,
+    label: figure.label ?? figure.ref,
+    summary: props.summary,
+  });
+  if (!request) return;
+  emit("close");
+  requestNoteEditor(request);
 }
 
 const MIN_ZOOM = 0.25;
@@ -444,6 +472,19 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
               @click="askAbout"
             >
               <Icon name="link" />
+            </button>
+            <!-- Beside the ask control and for its reason: a reader looking at the drawing is
+                 the one who has something to say about it. Absent, not disabled, where nothing
+                 would render the window — see `noteAbout`. -->
+            <button
+              v-if="figure && canAnnotate"
+              class="icon-btn"
+              data-testid="diagram-viewer-note"
+              :title="t('notes.annotate')"
+              :aria-label="t('notes.annotate')"
+              @click="noteAbout"
+            >
+              <Icon name="marker" />
             </button>
             <button
               class="icon-btn"

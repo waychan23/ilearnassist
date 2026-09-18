@@ -1105,15 +1105,17 @@ export interface NoteAnchor {
  * What a note is *about*, when it is not a passage in a message.
  *
  * A note has always been able to point at a message, and the pair it points with — `quote` and
- * `occurrence` — only works for text. A 图 and a 表 have no passage to quote, so they are named
- * instead: the whole object is the target, addressed by the canonical `name` the figure already
- * carries (`session_diagrams.name`, `session_tables.name`), which is the same handle `ila_query`
- * looks them up by and the same one a follow-up reference carries.
+ * `occurrence` — only works for text. A 图, a 表 and a reference have no passage to quote, so
+ * they are named instead: the whole object is the target, addressed by the canonical handle the
+ * object already carries (`session_diagrams.name`, `session_tables.name`, or a
+ * `work_resources.id`), which is the same handle `ila_query` looks them up by and the same one a
+ * follow-up reference carries.
  *
- * A figure is never *partly* annotated. A mermaid diagram is rendered SVG with no addressable
+ * An object is never *partly* annotated. A mermaid diagram is rendered SVG with no addressable
  * text nodes, and a table's cells are markdown the reader can see but the anchor arithmetic
- * counts over rendered geometry — so "the whole figure" is the only unit that means the same
- * thing on both sides of a reload.
+ * counts over rendered geometry — so "the whole object" is the only unit that means the same
+ * thing on both sides of a reload. What a target note carries in `quote` is therefore not an
+ * anchor but the object's own title, recorded so the note reads as something on its own.
  *
  * `text` is the default and what every row written before this existed means. It is a value
  * rather than NULL because NULL would say "we do not know", which is false of those rows: they
@@ -1168,7 +1170,13 @@ export interface Note {
   /** The annotated message; null for a note added from the list with no annotation. */
   messageId: string | null;
   type: NoteType;
-  /** The annotated text, verbatim. Empty when there is no annotation. */
+  /**
+   * The annotated text, verbatim — or the target's own title, for a note about an object.
+   *
+   * One column for two things, which is honest rather than tidy: a note's 标注原文 is
+   * whatever it is *about*, and the only difference between a passage and a diagram is
+   * whether the reader wrote it or the app looked it up. Empty when there is neither.
+   */
   quote: string;
   /** Which occurrence of `quote` this was, counted over the message's visible text. */
   occurrence: number;
@@ -1176,12 +1184,14 @@ export interface Note {
   /** What this note is about. `text` for every note with a quote or nothing at all. */
   targetKind: NoteTargetKind;
   /**
-   * The figure's canonical name — `auth-flow.mmd` for a diagram, a bare slug for a table.
+   * The target's handle — a figure's canonical name, or a resource's reference id.
    *
-   * Null for a text note, and that NULL is honest rather than a sentinel: there is no figure, so
-   * there is no name. The client shows it as the chip's label and the follow-up passes it on, so
-   * it is the *server's* name that travels — the one `diagramFileName`/`tableName` produced —
-   * rather than the spelling the client happened to open the dialog with.
+   * `auth-flow.mmd` for a diagram, a bare slug for a table, and a uuid for the material a
+   * conversation works from. Null for a text note, and that NULL is honest rather than a
+   * sentinel: there is no target, so there is no handle. The client shows a figure's as the
+   * chip's label and the follow-up passes it on, so it is the *server's* name that travels —
+   * the one `diagramFileName`/`tableName` produced — rather than the spelling the client
+   * happened to open the dialog with. A resource's is already canonical, being an id.
    */
   targetRef: string | null;
   /**
@@ -2671,6 +2681,20 @@ export type FileContentKind = (typeof FILE_CONTENT_KINDS)[number];
  * the UI states outright rather than letting a file look like it ends there. It is always
  * false for `binary`, where nothing was truncated because nothing was read.
  */
+/**
+ * The reference a previewed file is held by, as much of it as a preview needs.
+ *
+ * A whole `WorkResource` would be a second copy of the entity and the parse state in a reply that
+ * is about the *bytes*; these three fields are the ones a note's 标注原文 and its chip are built
+ * from, and nothing else on that record has a reader here.
+ */
+export interface PreviewReference {
+  id: string;
+  /** The reference's own title, which is what a chip shows. */
+  title: string;
+  summary?: string;
+}
+
 export interface FileContent {
   path: string;
   name: string;
@@ -2685,6 +2709,24 @@ export interface FileContent {
    * and a `.mmd` nobody drew here — so the client treats "not present" as "no summary".
    */
   summary?: string;
+  /**
+   * The **reference** these bytes are held by, when this file has one.
+   *
+   * A note about an object is anchored to a reference id, and a file reached by *path* — from the
+   * file tree, or from the card a `write_file` call draws — has no id to anchor to; the file's own
+   * id is a different thing and the notes API refuses it. So the route that already resolves the
+   * path to a file row resolves the reference in the same breath and puts it here, which is what
+   * lets 标注/笔记 be offered on a preview at all.
+   *
+   * The title and summary travel with it because the *note* needs them: an object note's 标注原文
+   * holds the object's own words, and a chip reading a raw uuid would say nothing about what the
+   * note is about.
+   *
+   * Absent when the file has no live reference — a path the reconciler has not walked yet, or one
+   * whose references were all deleted. The control is then simply not drawn, the same answer
+   * `targetMissing` gives from the other side.
+   */
+  reference?: PreviewReference;
   /**
    * The page these bytes came from, set only on a `page` source's preview.
    *
@@ -3250,16 +3292,26 @@ export interface CreateNoteInput {
   messageId?: string | null;
   /** Defaults to `annotation` — the quick action sends nothing but the selection. */
   type?: NoteType;
+  /**
+   * The annotated text — or, for a target note, the object's own title or summary as recorded.
+   *
+   * The second reading is the reason a target may carry a quote at all: an object has something
+   * to put in 标注原文 and no passage to put there, so what travels is its title. It is a
+   * *snapshot*, kept so a note still reads as something after its target is gone, while the
+   * panel prefers a live lookup whenever the target is still there.
+   */
   quote?: string;
   occurrence?: number;
   content?: string;
   /**
-   * What the note is about, when it is a figure rather than a passage.
+   * What the note is about, when it is an object rather than a passage.
    *
    * The pair travels together, the rule `quote`/`occurrence` already follows, and they are
-   * mutually exclusive with the message anchor: a note about a 图 has no passage in it. Omitting
-   * both halves is a `text` note, which is why `text` is not among the values here — it is what
-   * saying nothing means, not a thing to send.
+   * mutually exclusive with the *message* anchor: a note about a 图 has no passage in it. A
+   * bare `quote` beside them is not an anchor — see `quote` above — which is why only
+   * `messageId` and `occurrence` are refused alongside a target. Omitting both halves is a
+   * `text` note, which is why `text` is not among the values here — it is what saying nothing
+   * means, not a thing to send.
    */
   targetKind?: NoteTargetKindChoice;
   /**

@@ -75,29 +75,30 @@ const card = ref<HTMLElement | null>(null);
 /** Whether the note exists yet. A create has nothing to delete until it is saved. */
 const existing = computed(() => !!props.draft.noteId);
 
+/** The object this note is about, if it is about one. */
+const target = computed(() => props.draft.target ?? null);
+
 /**
  * What kind this note may be — which is not always the whole list.
  *
- * 标注 means "this marks a passage", so offering it for a note with nothing marked is offering a
- * kind that cannot be true of the note being written. The window is opened with no passage in two
- * cases — the panel's own 新建笔记, and a note about a 图 or a 表 — and it is those this excludes
- * it from. The four that remain are stances on the material, and none of them needs a passage to
- * be about.
+ * 标注 means "this marks something", and there are two somethings: a passage, and an object. So a
+ * note with **either** anchor may be one — a note about a 图 or a 表 is as much a 标注 as one made
+ * by dragging over a sentence, which is what the second clause is for. With neither, 标注 would be
+ * a kind that cannot be true of the note being written, and only the panel's own 新建笔记 has
+ * neither. What the guard is really excluding is "a note that marks nothing"; it used to read as
+ * "a note with no quote", which quietly made 标注 unselectable for every object note.
  *
- * The second clause is for a row this window did not create: a note that *is* a 标注 keeps its own
+ * The third clause is for a row this window did not create: a note that *is* a 标注 keeps its own
  * kind in the strip even with an empty quote. Only the API can produce that (the server defaults
  * a missing type to `annotation`), and without the clause the strip would show nothing pressed —
  * which reads as a note of no kind rather than as one this window cannot name. A note's own kind
  * being hidden from it would be the worse of the two.
  */
 const offeredTypes = computed(() =>
-  props.draft.quote || props.draft.type === "annotation"
+  props.draft.quote || target.value || props.draft.type === "annotation"
     ? NOTE_TYPES
     : NOTE_TYPES.filter((candidate) => candidate !== "annotation")
 );
-
-/** The figure this note is about, if it is about one. */
-const target = computed(() => props.draft.target ?? null);
 
 /**
  * Whether there is anything to lose by closing.

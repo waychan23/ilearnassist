@@ -23,6 +23,7 @@ import type {
   FileLocation,
   ParseErrorCode,
   ParseStatus,
+  PreviewReference,
   ProviderConfig,
   ProviderModelInput,
   PublicConfig,
@@ -1488,6 +1489,34 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   /**
+   * The reference a previewed file is held by, so the dialog can offer to annotate it.
+   *
+   * A preview is reached by **path**, while a note about a file is anchored to a **reference id** —
+   * and the file's own id is a third thing that the notes API refuses. The two lookups are the
+   * bridge, and they belong here rather than on the client because the client has only the path:
+   * turning that into a `files` row means knowing how the sandbox maps onto the account's root,
+   * which is this side's business in every other route as well.
+   *
+   * **The owner's own row wins when a file has several.** A file written in a conversation and
+   * also walked into its workspace has two references, and a note filed against the one belonging
+   * to the *other* owner would be a note this conversation may not be able to read back. The
+   * fallback is the first live row, which is the right answer for a workspace file whose only
+   * reference is the workspace's own.
+   */
+  function referenceFor(
+    userId: string,
+    storedPath: string,
+    owner: ResourceOwner
+  ): PreviewReference | undefined {
+    const file = db.getFileByPath(userId, storedPath);
+    if (!file) return undefined;
+    const held = db.listWorkResourcesForResource(userId, "file", file.id);
+    const mine = held.find((row) => row.ownerType === owner.kind && row.ownerId === owner.id);
+    const row = mine ?? held[0];
+    return row ? { id: row.id, title: row.title, ...(row.summary ? { summary: row.summary } : {}) } : undefined;
+  }
+
+  /**
    * The browser's two reads. Both are keyed on the workspace id and a path *relative to the
    * workspace root*, and both answer from disk — there is no index and nothing cached, so a
    * file the agent wrote a moment ago is there on the next request.
@@ -1532,7 +1561,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
 
     try {
-      return await readFileContent(workspace.workdirPath, path);
+      const content = await readFileContent(workspace.workdirPath, path);
+      // The reference, when there is one, so the dialog can offer 标注/笔记 — see
+      // `referenceFor`. Only for a path that resolved: a `string[]` never reaches here.
+      if (typeof path === "string") {
+        const reference = referenceFor(userId, workspaceFilePath(workspace.slug, path), {
+          kind: "workspace",
+          id: workspaceId,
+        });
+        if (reference) content.reference = reference;
+      }
+      return content;
     } catch (err) {
       const { status, body } = fileErrorReply(err);
       return reply.code(status).send(body);
@@ -3031,6 +3070,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       if (content.kind === "diagram" && typeof path === "string") {
         const row = db.getDiagramBySessionName(id, path);
         if (row) content.summary = row.summary;
+      }
+      // The reference, for the same shape of reason as the summary above: this route has the
+      // session and the path, and the client has only the path. See `referenceFor`.
+      if (typeof path === "string") {
+        const reference = referenceFor(
+          userId,
+          sessionFilePath(found.workspace.slug, found.session.id, path),
+          { kind: "session", id }
+        );
+        if (reference) content.reference = reference;
       }
       return content;
     } catch (err) {

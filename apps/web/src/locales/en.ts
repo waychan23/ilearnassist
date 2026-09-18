@@ -1103,6 +1103,8 @@ const en: typeof MessageSchema = {
     empty: "No notes yet. Select something in a message to mark it or write about it.",
     untitled: "(empty)",
     open: "Open this note",
+    /** One button, two nouns — see `zh-CN` for why the name is deliberately both of them. */
+    annotate: "Mark / Note",
     /** The row's control for a note written about a 图 or a 表 instead of a passage. */
     target: {
       label: "Open the {kind} it is about",

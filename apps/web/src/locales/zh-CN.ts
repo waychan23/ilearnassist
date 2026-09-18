@@ -1321,6 +1321,15 @@ export default {
     /** A note with neither a body nor an annotation — the row still has to say something. */
     untitled: "（无内容）",
     open: "打开这条笔记",
+    /**
+     * One button, two nouns — and the name is deliberately both of them.
+     *
+     * It marks the object *and* it opens a window to write in, because which of the two the reader
+     * wants is not knowable when the button is drawn: a 标注 is filed on one click from the bar
+     * over a selection, but an object can only be annotated through the window, so a button named
+     * 标注 alone would promise the quick action it cannot perform.
+     */
+    annotate: "标注/笔记",
     /** The row's chip for a note written about a 图 or a 表 instead of a passage. */
     target: {
       label: "打开它写的那{kind}",

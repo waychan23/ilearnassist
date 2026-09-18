@@ -100,10 +100,15 @@ const createNoteSchema = z
     }
     /*
      * And a note has exactly one anchor. A 图 has no passage in it, so a request carrying both a
-     * figure and a quote is a client that assembled two different notes — refused rather than
-     * resolved, because either reading would throw away half of what was sent.
+     * figure and a *passage* is a client that assembled two different notes — refused rather
+     * than resolved, because either reading would throw away half of what was sent.
+     *
+     * The test is the `messageId` and the `occurrence`, not the quote, and the difference is the
+     * whole of what an object note is: it has a 标注原文 with no passage in it, holding the
+     * object's own title, so `quote` alone is a title rather than an anchor. Refusing that was
+     * refusing the only thing an object note can put in the field the reader sees.
      */
-    if (value.targetKind !== undefined && (anchored || value.messageId)) {
+    if (value.targetKind !== undefined && (value.messageId || (value.occurrence ?? 0) > 0)) {
       ctx.addIssue({ code: "custom", message: "a figure target cannot also be a passage" });
     }
   });

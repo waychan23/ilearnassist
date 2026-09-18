@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Note, NoteTargetKind, NoteType } from "@ilearnassist/shared";
 import { useAppStore } from "../stores/app";
@@ -14,6 +14,7 @@ import {
   openNoteEditor,
 } from "../composables/notes";
 import { useFigureViewer } from "../composables/figureViewer";
+import { useNoteTargets, type NoteTargetDetail } from "../composables/noteTarget";
 import DiagramDialog from "../components/dialogs/DiagramDialog.vue";
 import Icon from "../components/Icon.vue";
 
@@ -52,9 +53,14 @@ const claimed = computed(() => notesClaimRefused.value !== null);
  * The order is the feature. A bare 标注 has no words of its own, so showing the quote is the
  * only way the row says anything at all; once there *is* a body, that is what the reader is
  * looking for and the quote is context they can get by opening it.
+ *
+ * A note about an object takes the object's own title or summary for the second slot, looked up
+ * fresh, and only then falls back to the snapshot in the note — which is the same 标注原文 read
+ * three ways, most current first. `rowText` is what the row shows, so leaving a renamed or
+ * resummarised object saying its old name would be the one place the panel contradicted itself.
  */
-function rowText(note: Note): string {
-  return note.content.trim() || note.quote || t("notes.untitled");
+function rowText(row: NoteRow): string {
+  return row.note.content.trim() || targetText(row) || t("notes.untitled");
 }
 
 function typeLabel(type: NoteType): string {
@@ -93,32 +99,17 @@ function openRow(note: Note, event: MouseEvent): void {
 type TargetKind = Exclude<NoteTargetKind, "text">;
 
 /**
- * The kinds this panel can **open**.
- *
- * Narrower than `TargetKind`, and the narrowing is the point: a diagram and a table have a viewer
- * here, while a resource is opened through the file preview and has no entry point staged yet.
- * `isOpenable` is what the chip is gated on, so a resource note draws as a plain note rather than
- * as a control that renders and does nothing.
- */
-type FigureKind = Exclude<TargetKind, "resource">;
-
-/** Whether this note is about a figure rather than a passage. Narrows, so the callers can. */
-function isFigure(kind: NoteTargetKind): kind is FigureKind {
-  return kind === "diagram" || kind === "table";
-}
-
-/**
- * What a figure kind is called.
+ * What an object kind is called.
  *
  * A `switch` over the closed union with a literal `t("…")` per case, the shape `registry.ts` uses
  * for widget labels, and it has to be written this way rather than as a key looked up later:
  * `catalog.test.ts` finds the keys a component uses by scanning the source for `t("…")`, so a key
  * that only ever appears as a *string literal* is reported as dead — and reaching for
  * `t(\`notes.target.kinds.${kind}\`)` instead would put a bare `notes.target.kinds.` entry into
- * that guard's allowlist of dynamic prefixes, which is where a typo hides. A third kind is then a
+ * that guard's allowlist of dynamic prefixes, which is where a typo hides. A fourth kind is then a
  * missing-return compile error rather than a blank chip.
  */
-function figureKindLabel(kind: TargetKind): string {
+function targetKindLabel(kind: TargetKind): string {
   switch (kind) {
     case "diagram":
       return t("notes.target.kinds.diagram");
@@ -133,8 +124,13 @@ function figureKindLabel(kind: TargetKind): string {
   }
 }
 
+/** The mark beside a kind: only a drawing and a table have an icon of their own. */
+function targetKindIcon(kind: TargetKind): "diagram" | "table" | "file" {
+  return kind === "diagram" ? "diagram" : kind === "table" ? "table" : "file";
+}
+
 /**
- * One row, with its figure link already resolved.
+ * One row, with its target already resolved.
  *
  * The narrowing is here rather than in the template because a template cannot do it: `v-if` on an
  * element and that element's other bindings are separate expressions, so `note.targetRef` would
@@ -142,33 +138,52 @@ function figureKindLabel(kind: TargetKind): string {
  * what stops the chip, its label and its title from each testing the same three conditions and
  * eventually disagreeing about them.
  *
- * What it holds is the *kind*, not a translated label: this is a `computed`, and a label baked in
- * here would be a snapshot of the locale it was built under. The template calls
- * `figureKindLabel` itself, which is what re-runs on a language change.
+ * The detail comes from `useNoteTargets` — a live lookup, so the chip names the object as it is
+ * called *now* rather than as it was when the note was written — and falls back to the note's own
+ * snapshot when the lookup missed. What it holds is the *kind* rather than a translated label: a
+ * label baked in here would be a snapshot of the locale it was built under, and the template
+ * calls `targetKindLabel` itself so a language change re-runs it.
  */
 interface NoteRow {
   note: Note;
-  /** The figure to offer, when there is one to open. */
-  figure: { kind: FigureKind; ref: string } | null;
-  /** The figure is gone: the chip is replaced by a sentence rather than drawn dead. */
-  goneKind: FigureKind | null;
+  /** The object to offer, when there is one this conversation can reach. */
+  target: NoteTargetDetail | null;
+  /** The object is gone: the chip is replaced by a sentence rather than drawn dead. */
+  goneKind: TargetKind | null;
 }
 
 const rows = computed<NoteRow[]>(() =>
   notes.value.map((note) => {
-    if (!isFigure(note.targetKind) || note.targetRef === null) {
-      return { note, figure: null, goneKind: null };
+    if (note.targetKind === "text" || note.targetRef === null) {
+      return { note, target: null, goneKind: null };
     }
-    return note.targetMissing
-      ? { note, figure: null, goneKind: note.targetKind }
-      : { note, figure: { kind: note.targetKind, ref: note.targetRef }, goneKind: null };
+    if (note.targetMissing) return { note, target: null, goneKind: note.targetKind };
+    return { note, target: detailFor(note), goneKind: null };
   })
 );
 
 const { viewing, open: openFigure, close: closeFigure } = useFigureViewer();
+const { detailFor, load: loadTargets } = useNoteTargets(openFigure);
 
-function openTarget(figure: { kind: FigureKind; ref: string }): void {
-  void openFigure(figure.kind, figure.ref, figure.ref);
+/**
+ * Keep the targets current with the list, and with the conversation.
+ *
+ * Two inputs rather than one: the list changes when a note is written or deleted, and the
+ * conversation changes without the list having moved yet on a switch. Both are "what this panel
+ * is showing has changed", which is the only question the lookup answers.
+ */
+watch(
+  [notes, () => store.activeSessionId],
+  () => {
+    const sessionId = store.activeSessionId;
+    if (sessionId) void loadTargets(sessionId, notes.value);
+  },
+  { immediate: true }
+);
+
+/** What a note's 标注原文 says, preferring the live object over the snapshot. */
+function targetText(row: NoteRow): string {
+  return row.target?.summary.trim() || row.target?.title || row.note.quote;
 }
 
 function retry(): void {
@@ -260,31 +275,39 @@ function retryClaim(): void {
                 <Icon name="target" />
               </span>
             </span>
-            <span class="note-row-text clamp-2">{{ rowText(row.note) }}</span>
+            <span class="note-row-text clamp-2">{{ rowText(row) }}</span>
           </button>
 
           <!--
-            What a figure note is about, as a **sibling** of the row button rather than a chip
+            What an object note is about, as a **sibling** of the row button rather than a chip
             inside it. A control inside a button is invalid HTML and unreachable by keyboard, and
             the figure panel already settled the shape: its locate button sits beside the row
             button for exactly this reason.
 
-            Not drawn at all when the figure is gone — `targetMissing` is the server's answer, and
+            The chip **is** the "show me the detail" control — where a figure note used to draw a
+            chip that opened the figure, every object kind now draws one, and the ones that cannot
+            be shown here draw it without the control rather than as a button that opens nothing.
+            Its label is the object's own title rather than the stored handle: a reference's
+            handle is a uuid, and a chip reading `wr-7` would say nothing about what the note is
+            about.
+
+            Not drawn at all when the object is gone — `targetMissing` is the server's answer, and
             a control that opens nothing is worse than an absent one.
           -->
           <button
-            v-if="row.figure"
+            v-if="row.target"
             type="button"
             class="note-target"
             :data-testid="`note-target-${row.note.id}`"
-            :title="t('notes.target.label', { kind: figureKindLabel(row.figure.kind) })"
-            @click="openTarget(row.figure)"
+            :disabled="!row.target.open"
+            :title="t('notes.target.label', { kind: targetKindLabel(row.target.kind) })"
+            @click="row.target.open?.()"
           >
-            <Icon :name="row.figure.kind === 'diagram' ? 'diagram' : 'table'" />
-            <span class="truncate">{{ row.figure.ref }}</span>
+            <Icon :name="targetKindIcon(row.target.kind)" />
+            <span class="truncate">{{ row.target.title }}</span>
           </button>
           <span v-else-if="row.goneKind" class="note-target-gone">
-            {{ t("notes.target.missing", { kind: figureKindLabel(row.goneKind) }) }}
+            {{ t("notes.target.missing", { kind: targetKindLabel(row.goneKind) }) }}
           </span>
         </li>
       </ul>

@@ -1,5 +1,6 @@
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import type { CreateNoteInput, Note, NoteType } from "@ilearnassist/shared";
+import { NOTE_QUOTE_MAX } from "@ilearnassist/shared";
 import { api } from "../api/client";
 import { i18n } from "../i18n";
 import { useAppStore } from "../stores/app";
@@ -12,7 +13,7 @@ import {
   type ClaimResult,
   type NoteCapture,
   type NoteEditorRequest,
-  type NoteFigureNote,
+  type NoteObjectNote,
 } from "./messageNotes";
 import type { NoteHighlightMark } from "../utils/noteAnchor";
 
@@ -71,6 +72,20 @@ export const notesWritable = writable;
 export function setNotesWritable(next: boolean): void {
   writable.value = next;
 }
+
+/**
+ * Whether a note can be filed at all from where the reader is standing.
+ *
+ * The capability has two owners: `notes.ts` holds the records, but the **window** that writes them
+ * is rendered by `ChatView` — so with the notes widget not installed there is no host, and
+ * `requestNoteEditor` is a no-op. Every control outside the panel that offers 标注/笔记 therefore
+ * has to ask this first, or it is a button that renders and does nothing, which is the failure this
+ * repository names most often.
+ *
+ * A `computed` reading a module singleton rather than a store value, so a control gated on it
+ * appears and disappears with the install without anything having to be re-rendered by hand.
+ */
+export const canAnnotate = computed(() => isMessageNotesActive(useAppStore().activeSessionId));
 
 /**
  * A failed user action goes to the toast, not to the panel.
@@ -349,7 +364,7 @@ export function openNoteEditor(note: Note, anchor?: { x: number; y: number } | n
       ...(note.targetKind !== "text" && note.targetRef !== null
         ? {
             target: {
-              kind: note.targetKind as NoteFigureNote["kind"],
+              kind: note.targetKind as NoteObjectNote["kind"],
               ref: note.targetRef,
               label: note.targetRef,
             },
@@ -384,40 +399,56 @@ export function openNewNoteEditor(): void {
 }
 
 /**
- * The window over a 图 or a 表, opened from wherever that figure is shown.
+ * The window over an object — a 图, a 表, or the material the conversation works from.
  *
- * Built here rather than by the caller because a figure note is a *note* — it goes through the
- * same `create`, the same claim and the same writability as any other — and the panel that
- * draws the figure should not have to know how one is stored. What the caller supplies is the
- * only thing it knows and this module does not: which figure the reader pointed at, and where
- * on screen they pointed at it.
+ * Built here rather than by the caller because an object note is a *note* — it goes through the
+ * same `create`, the same claim and the same writability as any other — and the panel that draws
+ * the object should not have to know how one is stored. What the caller supplies is the only
+ * thing it knows and this module does not: which object the reader pointed at, what it is called,
+ * and where on screen they pointed at it.
  *
- * `type` starts at `idea` rather than `annotation`, the same choice `openNewNoteEditor` makes
- * for the same reason: 标注 means "this marks a passage", and there is no passage here. The
- * window's own strip drops that kind for the same reason, so the two agree by construction
- * rather than by both remembering.
+ * `type` starts at `annotation`, which is what the button that opens this window is called: a
+ * note made by pressing 标注/笔记 on an object *is* a mark on that object, the same act as
+ * dragging over a sentence. (It started at `idea` while 图 and 表 were the only targets and the
+ * window's strip dropped 标注 for them; both halves of that moved together.)
  *
- * `locate` is null and `quote` is empty on purpose: a figure note has no message to scroll to
- * and no text to highlight, so 定位 is not offered at all rather than offered and refused.
+ * `quote` carries the object's title or summary, which is what the 标注原文 holds. It is a
+ * snapshot — the panel prefers a live lookup while the object is still there — and it is what
+ * makes the note readable on its own. `locate` is null on purpose and for the opposite reason: an
+ * object note has no message to scroll to, so 定位 is not offered rather than offered and refused.
  */
-export function figureNoteRequest(
-  target: NoteFigureNote,
+export function objectNoteRequest(
+  target: NoteObjectNote,
   anchor?: { x: number; y: number } | null
 ): NoteEditorRequest | null {
   const sessionId = loadedSessionId.value;
   if (!sessionId) return null;
   return {
-    draft: { quote: "", type: "idea", content: "", target },
+    draft: { quote: quoteFor(target), type: "annotation", content: "", target },
     locate: null,
     anchor: anchor ?? null,
     save: (input) =>
       create(sessionId, {
         targetKind: target.kind,
         targetRef: target.ref,
+        quote: quoteFor(target),
         type: input.type,
         content: input.content,
       }),
   };
+}
+
+/**
+ * What goes in an object note's 标注原文.
+ *
+ * The summary first, the title second, because a summary says more about the object than its
+ * name does and the field is the one the reader sees beside the note. Clipped to the server's own
+ * cap rather than trusted: a summary is model-written prose of no particular length, and a note
+ * refused at the create for being too long is a button that does nothing.
+ */
+function quoteFor(target: NoteObjectNote): string {
+  const text = target.summary?.trim() || target.label;
+  return text.slice(0, NOTE_QUOTE_MAX);
 }
 
 // A claim that moves to another conversation must stop marking the old one's messages, and

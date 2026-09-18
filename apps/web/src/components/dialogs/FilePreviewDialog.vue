@@ -4,6 +4,8 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import { isNarrow } from "../../composables/breakpoints";
 import { codeCopyClick } from "../../composables/codeCopy";
+import { canAnnotate, objectNoteRequest } from "../../composables/notes";
+import { requestNoteEditor } from "../../composables/messageNotes";
 import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
 import { highlightFile, renderMarkdown } from "../../utils/markdown";
@@ -137,6 +139,30 @@ const pageUrl = computed(() => (isOpenableUrl(content.value?.url) ? content.valu
 
 function openPage(): void {
   if (pageUrl.value) void openExternal(pageUrl.value);
+}
+
+/**
+ * Write a note about the file on screen.
+ *
+ * Anchored to the file's **reference**, which is the one handle the notes API accepts for a
+ * piece of material — the file's own id is a different thing and the create refuses it. The route
+ * resolves the path to that reference and puts its title and summary on the reply, which is what
+ * the note's 标注原文 is built from; without it a note about `main.rs` would quote a uuid.
+ *
+ * The window is **not** closed, unlike the one `DiagramDialog` opens: this dialog is the thing
+ * being annotated and the note card floats over the conversation behind it, so there is nothing
+ * here for it to be hidden behind.
+ */
+function noteAboutFile(): void {
+  const reference = content.value?.reference;
+  if (!reference) return;
+  const request = objectNoteRequest({
+    kind: "resource",
+    ref: reference.id,
+    label: reference.title,
+    summary: reference.summary ?? reference.title,
+  });
+  if (request) requestNoteEditor(request);
 }
 
 /**
@@ -312,6 +338,21 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
               @click="openPage"
             >
               <Icon name="link" />
+            </button>
+
+            <!-- Beside the other conversation-scoped actions, and absent rather than disabled
+                 when either half of the capability is missing: no notes widget is installed, or
+                 this file is held by no reference for the note to anchor to. A control that
+                 renders and does nothing is the failure this repository names most often. -->
+            <button
+              v-if="canAnnotate && content?.reference"
+              class="icon-btn"
+              data-testid="file-preview-note"
+              :title="t('notes.annotate')"
+              :aria-label="t('notes.annotate')"
+              @click="noteAboutFile"
+            >
+              <Icon name="marker" />
             </button>
           </div>
 

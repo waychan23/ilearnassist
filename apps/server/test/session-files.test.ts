@@ -263,6 +263,43 @@ describe("the listing registers what it finds", () => {
     expect(idOf(first)).toBe(idOf(second));
   });
 
+  it("carries the file's reference on a preview, which is what a note anchors to", async () => {
+    /*
+     * A preview is reached by **path** and a note about a file is anchored to a **reference id**,
+     * so without this a 文件详情窗 could offer nothing to annotate with — and the file's own id is
+     * a third thing the notes API refuses. The reference is created by the listing, which is why
+     * this reads the directory first.
+     */
+    seed(sessionId, "annotatable.txt", "hello");
+    void (await list(sessionId));
+
+    const preview = (await content(sessionId, "annotatable.txt")).json<FileContent>();
+    expect(preview.reference?.id).toBeTruthy();
+    expect(preview.reference?.title).toBe("annotatable.txt");
+
+    // And it is the id the notes API actually takes, which is the whole point of the field.
+    const created = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/notes`,
+      payload: {
+        targetKind: "resource",
+        targetRef: preview.reference!.id,
+        quote: preview.reference!.title,
+        type: "annotation",
+        content: "记一下",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+  });
+
+  it("carries no reference for a file nothing has registered", async () => {
+    // The honest absence: a path the reconciler has not walked has no reference to anchor to, and
+    // the control is simply not drawn — the same answer `targetMissing` gives from the other side.
+    seed(sessionId, "never-listed.txt", "x");
+    const preview = (await content(sessionId, "never-listed.txt")).json<FileContent>();
+    expect(preview.reference).toBeUndefined();
+  });
+
   it("keeps the row when the file is deleted behind the app's back", async () => {
     /*
      * The drift the agent's own `delete_file` creates — and the reason the row stays. That
