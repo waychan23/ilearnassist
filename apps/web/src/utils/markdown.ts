@@ -202,45 +202,94 @@ const md: MarkdownIt = new MarkdownIt({
    * `highlight.js` would and hands off to the one highlighter — which keeps the message
    * bubbles and the file preview from colouring the same code two different ways, and leaves
    * a single escaper (`md.utils.escapeHtml`) doing the escaping for both.
+   *
+   * **`attrs` is markdown-it's own parsing of the rest of the info string**, and it is the
+   * filename: ` ```python app.py ` arrives here as `("…", "python", "app.py")`. That is the
+   * whole reason this feature needs no parser of its own — the app used to drop the third
+   * argument on the floor, so a filename the model wrote was already being computed and thrown
+   * away. Both halves ride out on the marker as **escaped attributes** so the post-pass can
+   * render them; `escapeHtml` is what keeps that honest, since the values come from the model.
+   *
+   * The language is carried only when `highlight.js` knows it. An info word nothing recognises
+   * is not a language, and a pill claiming `app.py` is one would be the app inventing a fact.
    */
-  highlight(str, lang) {
+  highlight(str, lang, attrs) {
     const named = lang && hljs.getLanguage(lang) ? lang : null;
-    return `<pre class="hljs"><code>${highlightCode(str, named)}</code></pre>`;
+    const language = named ? ` data-lang="${md.utils.escapeHtml(named)}"` : "";
+    const file = attrs ? ` data-file="${md.utils.escapeHtml(attrs)}"` : "";
+    return `<pre class="hljs"${language}${file}><code>${highlightCode(str, named)}</code></pre>`;
   },
 });
 
 /**
- * Every fenced code block in a rendered string, with its contents.
+ * Every fenced code block in a rendered string, with its contents and its two labels.
  *
  * The marker is **unforgeable**, which is what makes a post-pass safe rather than a rewrite of
  * generated HTML: it is emitted by the hook directly above, and a model cannot reproduce it
  * because `highlightCode` escapes its input — a fence whose text is literally `<pre
  * class="hljs"><code>` arrives as `&lt;pre …`. So a match can only be a code block this module
- * made.
+ * made. The two attributes are escaped on the way in for the same reason: a model that wrote
+ * `data-lang="` inside a fence's info string gets `&quot;`, and the marker still cannot be
+ * forged from the code's own text.
  *
  * A post-pass at all because markdown-it's `highlight` hook is registered once on the instance
- * and is called with `(str, lang)` — there is no per-call channel to carry the labels through,
- * and the alternatives are a mutable module-level value or a second renderer rule that would
- * re-implement the hook's own `<pre>` decision. This keeps the hook a pure function of its input.
+ * and is called with `(str, lang, attrs)` — there is no per-call channel to carry the labels
+ * through, and the alternatives are a mutable module-level value or a second renderer rule that
+ * would re-implement the hook's own `<pre>` decision. This keeps the hook a pure function of its
+ * input.
  */
-const FENCED_CODE = /<pre class="hljs"><code>([\s\S]*?)<\/code><\/pre>/g;
+const FENCED_CODE =
+  /<pre class="hljs"(?: data-lang="([^"]*)")?(?: data-file="([^"]*)")?><code>([\s\S]*?)<\/code><\/pre>/g;
+
+/**
+ * The strip above a code block: which file it is, and what language that file is.
+ *
+ * Both halves are optional and independent — a snippet with a language and no file is the common
+ * case, and one with neither produces no strip at all.
+ *
+ * **The values are inserted as they were captured, already escaped.** They went through
+ * `md.utils.escapeHtml` on the way onto the marker, so what comes back is entity text: it renders
+ * as the original characters and cannot open a tag, in element content or in an attribute. Running
+ * `escapeHtml` a second time would be the bug — `a & b` would render as `a &amp; b`.
+ *
+ * `data-note-skip` is what keeps the strip out of `utils/noteAnchor.ts`'s visible-text walk. It is
+ * the renderer's own chrome rather than anything the model wrote, exactly like the copy control
+ * next to it, and a filename counted as message text would shift the occurrence arithmetic for
+ * every note anchored below it — including notes written before this strip existed.
+ */
+function codeHead(language: string | undefined, file: string | undefined): string {
+  if (!language && !file) return "";
+  const parts = [
+    file ? `<span class="code-file">${file}</span>` : "",
+    language ? `<span class="code-lang">${language}</span>` : "",
+  ];
+  return `<span class="code-head" data-note-skip>${parts.join("")}</span>`;
+}
 
 export function renderMarkdown(text: string, labels: MarkdownLabels): string {
-  return md.render(text).replace(FENCED_CODE, (whole, code: string) => {
-    // An empty fence gets no control: there is nothing to copy, and a button that copies nothing
-    // is the "renders but does nothing" this repository keeps out of its UI.
-    if (!code) return whole;
-    /*
-     * The button sits **inside** the `<pre>`, which is valid (`<button>` is phrasing content) and
-     * is why the opening tag is rewritten rather than wrapped: a wrapper div would be a block
-     * inside a `<pre>`, and the CSS positions this absolutely so it cannot disturb the code's own
-     * whitespace. No whitespace between the elements either — `<pre>` keeps it, and
-     * `utils/noteAnchor.ts` counts the text it would become.
-     */
-    return (
-      `<pre class="hljs code-block">${codeCopyControl(labels)}<code>${code}</code></pre>`
-    );
-  });
+  return md.render(text).replace(
+    FENCED_CODE,
+    (whole, language: string | undefined, file: string | undefined, code: string) => {
+      // An empty fence gets no control: there is nothing to copy, and a button that copies nothing
+      // is the "renders but does nothing" this repository keeps out of its UI.
+      if (!code) return whole;
+      /*
+       * The button sits **inside** the `<pre>`, which is valid (`<button>` is phrasing content) and
+       * is why the opening tag is rewritten rather than wrapped: a wrapper div would be a block
+       * inside a `<pre>`, and the CSS positions this absolutely so it cannot disturb the code's own
+       * whitespace. No whitespace between the elements either — `<pre>` keeps it, and
+       * `utils/noteAnchor.ts` counts the text it would become.
+       *
+       * The head goes **first**, before the control, because the control is absolutely positioned
+       * in the top-right corner and the head is a flow element at the top-left: the other order
+       * would put the head's own text under the button.
+       */
+      return (
+        `<pre class="hljs code-block">${codeHead(language, file)}` +
+        `${codeCopyControl(labels)}<code>${code}</code></pre>`
+      );
+    }
+  );
 }
 
 /**

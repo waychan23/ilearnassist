@@ -1724,6 +1724,45 @@ pre.code-block {
 }
 
 /*
+ * The strip above a code block: the file it came from, and its language.
+ *
+ * Two spans in a flex row rather than a table or a grid, because either of them can be the only
+ * one present — a snippet with a language and no file is the ordinary case. `justify-content`
+ * pushes the language to the right, so the filename sits where a filename belongs and the language
+ * lines up with the copy control above it.
+ *
+ * `padding-right` on the head is what keeps a long filename from sliding under that control: it is
+ * absolutely positioned in the corner and the head is in the flow, so without the reservation the
+ * two overlap for any name longer than a few characters.
+ *
+ * The whole strip is `user-select: none`, matching the control: neither is part of the message a
+ * reader would quote, and `data-note-skip` keeps both out of the anchor arithmetic for the same
+ * reason.
+ */
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+  padding-right: var(--space-8);
+  font-size: var(--fs-2);
+  color: var(--text-3);
+  user-select: none;
+}
+.code-file {
+  /* Takes the slack, so a long name is pushed left and the language stays right. */
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.code-lang {
+  flex: none;
+  text-transform: lowercase;
+}
+
+/*
  * Display math. KaTeX lays a `$$…$$` out as a centred, `nowrap` block, so a formula wider
  * than the bubble would widen the message column instead of scrolling — `overflow-x` here
  * is the same treatment `.markdown pre` gets, one rule up.

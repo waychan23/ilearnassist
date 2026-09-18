@@ -374,6 +374,7 @@ export function toWireUser(record: UserRecord): User {
     slug: record.slug,
     roles: record.roles,
     mustChangePassword: record.mustChangePassword,
+    about: record.about,
     createdAt: record.createdAt,
   };
 }

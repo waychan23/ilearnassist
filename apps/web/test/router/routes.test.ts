@@ -22,6 +22,7 @@ describe("the route table", () => {
       "/login",
       "/password",
       "/account",
+      "/usage",
       "/admin/:section?",
       "/w/:workspaceId",
       "/w/:workspaceId/s/:sessionId",

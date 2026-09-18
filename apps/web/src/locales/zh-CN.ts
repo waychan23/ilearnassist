@@ -36,6 +36,8 @@ export default {
      */
     listSeparator: "、",
     save: "保存",
+    /** The same verb while the request is in flight — the button's pending label. */
+    saving: "保存中…",
     close: "关闭",
     edit: "编辑",
     /*
@@ -178,6 +180,99 @@ export default {
     identity: "账号",
     passwordLead: "修改密码后，这个账号在其他设备上的登录会全部失效。",
     passwordChanged: "密码已修改。",
+    /**
+     * The introduction, which is prompt input rather than a profile page's decoration.
+     *
+     * The lead sentence is the one place a user is told where this text goes. It is not a detail
+     * to leave implicit: the account is writing something that reaches a model on every turn, and
+     * finding that out afterwards is how a field meant to help becomes a surprise.
+     */
+    about: {
+      title: "个人介绍",
+      lead: "可选。写下你的背景、领域、擅长和兴趣，助手会在每一次对话中参考它，从而把讲解的深浅调到合适的位置。",
+      label: "关于我",
+      placeholder: "例如：我是做后端开发的，熟悉 Java 和分布式系统；正在自学机器学习，线性代数是薄弱环节，喜欢从具体例子入手。",
+      /** `{used}` and `{max}` are character counts. */
+      count: "{used} / {max} 字",
+      save: "保存介绍",
+      saved: "介绍已保存。",
+      /** The save button's tooltip while there is nothing to save. */
+      noChanges: "还没有修改",
+    },
+  },
+
+  /**
+   * Token usage: what the model calls cost, and what they were for.
+   *
+   * A namespace of its own rather than keys under `account.` or `admin.`, because the same words
+   * are needed on two pages that belong to different people — an account's own usage and the
+   * console's installation-wide view — and neither is the other's sub-screen.
+   */
+  usage: {
+    title: "用量统计",
+    /** The account's own page. */
+    selfLead: "这是你名下所有会话与后台任务的模型用量。",
+    /** The console's, where the numbers are everybody's. */
+    platformLead: "整个实例的模型用量，按账号、工作区、会话、用途、服务商与模型拆分。",
+    loading: "加载中…",
+    /** Nothing has *ever* been recorded — a different claim from an empty range. */
+    empty: "还没有记录到任何模型调用。",
+    /** A range that happens to contain no calls. */
+    emptyRange: "这个时间范围内没有用量记录。",
+    untitled: "（未命名会话）",
+    /**
+     * When counting began. Deliberately stated: the ledger is forward-only, so a page showing
+     * nothing for last month is telling the truth about its own window rather than about last month.
+     */
+    since: "统计自 {when} 起。",
+    range: {
+      today: "今天",
+      week: "近 7 天",
+      month: "近 30 天",
+      all: "全部",
+      from: "开始日期",
+      to: "结束日期",
+    },
+    /** The headline tiles. */
+    tile: {
+      total: "总 Token",
+      input: "输入",
+      cached: "缓存命中",
+      output: "输出",
+      calls: "调用次数",
+    },
+    /** Table column headers, and the chart series that name the same figures. */
+    field: {
+      calls: "次数",
+      input: "输入",
+      cached: "缓存命中",
+      cacheMiss: "输入（未命中）",
+      output: "输出",
+      reasoning: "思考",
+      total: "合计",
+      averageMs: "平均耗时",
+    },
+    chart: {
+      overTime: "每日用量",
+      byPurpose: "按用途",
+    },
+    table: {
+      purpose: "按用途",
+      provider: "按服务商",
+      model: "按模型",
+      workspace: "按工作区",
+      session: "按会话",
+      user: "按账号",
+    },
+    /** One per `USAGE_PURPOSES` id, so a new purpose is an entry in that array and a key here. */
+    purpose: {
+      chat: "会话",
+      title: "自动生成标题",
+      thread: "脉络整理",
+      insight: "洞察生成",
+      "summary.media": "图片摘要",
+      "summary.notes": "笔记摘要",
+    },
   },
 
   /**
@@ -205,6 +300,7 @@ export default {
       providers: "配置所有账号共用的模型服务；普通用户只能在已配置的模型中选择使用。",
       documents: "配置所有账号共用的文档解析方式。",
       uploads: "所有账号共用的上传限制。",
+      stats: "整个实例的模型用量。",
     },
     /** The left menu. One entry per section; the key is the section id. */
     nav: {
@@ -212,6 +308,7 @@ export default {
       providers: "模型服务",
       documents: "文档解析",
       uploads: "上传设置",
+      stats: "用量统计",
     },
     /**
      * The upload limit. The unit is MB here and bytes on the wire, and the conversion lives in
@@ -671,6 +768,8 @@ export default {
     step: "第 {current} / {total} 题",
     previous: "上一题",
     next: "下一题",
+    /** The pager's third move: the next question with no answer at all. Absent when there is none. */
+    nextUnanswered: "下一未答题",
     submit: "提交",
     cancel: "取消小测",
     unanswered: "未回答",

@@ -13,6 +13,7 @@
     "@ilearnassist/shared": "workspace:*",
     "@open-file-viewer/core": "^0.1.45",
     "@vscode/markdown-it-katex": "^1.1.2",
+    "chart.js": "^4.5.1",
     "highlight.js": "^11.12.0",
     "katex": "^0.16.47",
     "markdown-it": "^14.3.1",

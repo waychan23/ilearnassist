@@ -242,8 +242,10 @@ apps/server/src/
   cli.ts                  # the administrator CLI entry (argv/stdin/exit codes; rules in adminCli.ts)
   adminCli.ts             # status/create-admin/reset-admin rules, no process access; the boot gate too
   webApp.ts               # serves the built frontend beside the API, when there is one
-  config.ts               # YAML + ${ENV} resolution + .env loader + resolveDataRoot
+  config.ts               # YAML + ${ENV} + .env + resolveDataRoot + the config.patch.json overlay
   paths.ts                # the on-disk layout: data root → users/<slug> → workspaces, sources, db
+  prompts.json            # every system prompt and guidance block, keyed — see docs/prompts.md
+  prompts.ts              # the catalog: rendering, {{placeholders}}, and config.patch.json overrides
   schema.ts               # the DDL, schemaProblem, and the user_version guard (one transaction)
   apiError.ts             # the { error: { code, message, params } } envelope, shared with the CLI
   auth.ts                 # accounts: scrypt passwords, credential policy, bearer tokens, the gate
@@ -261,6 +263,7 @@ apps/server/src/
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
   agent/clock.ts          # what time it is where the user is, for the turn's prompt
+  agent/callUsage.ts      # the one place usage_metadata becomes a MessageUsage
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
   agent/mediaSummary.ts   # one line about an image, from the model that saw it
@@ -286,6 +289,7 @@ apps/server/src/
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   widgets.ts              # sumUsage + the widget-selection validator (pure)
+  usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
   notes.ts                # the notes widget's records: what a body may become a note (pure)
   insights.ts             # the insight pass: prompt, defensive parse, the wipe-then-insert write
 apps/web/src/
@@ -313,7 +317,9 @@ apps/web/src/
   utils/locale.ts         # browser-language detection + the alias table
   utils/mermaid.ts        # the lazy mermaid chunk: theme variables, parse, render
   utils/noteAnchor.ts     # selection → quote + occurrence, and back (pure, DOM-only)
+  utils/charts.ts         # the lazy Chart.js chunk + the palette read from the live stylesheet
   utils/widgetTabs.ts     # the tab strip's fit arithmetic (pure)
+  components/stats/       # StatsPanel (both statistics pages) + UsageChart (the canvas)
   widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
@@ -324,14 +330,14 @@ apps/web/src/
   utils/referencePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
   utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
   utils/sourceTree.ts     # the source browser's tree: group by origin, flatten by open set
-  components/…            # App, LoginView, WorkspaceHome, Sidebar, ChatView, MessageItem,
+  components/…            # App, LoginView, WorkspaceHome, UsageView, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
                           #   AskUserCard, Composer, SourceMentionPicker, WriteLocationField,
                           #   FileTree, WidgetPanel, AppMenu,
                           #   WidgetTabStrip, GenerationParams, NoteEditor,
                           #   MessageSelectionToolbar,
-                          #   dialogs (Settings, WorkspaceSettings, SourceBrowser, AddSource,
-                          #   FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
+                          #   ProfileForm, dialogs (Settings, WorkspaceSettings, SourceBrowser,
+                          #   AddSource, FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -544,6 +550,29 @@ Fuller map in `docs/reference.md`.
   colouring. Past `MAX_HIGHLIGHT_CHARS` the text is escaped rather than tokenised — the cap
   exists because a minified bundle at the 256 KB preview cap costs a third of a second in
   `hljs` alone.
+- **A code block's file name and language ride the fence's info string, and the header is
+  chrome rather than content.** markdown-it already splits ` ```python app.py ` and hands the
+  filename to the `highlight` hook as its **third argument**; the hook used to declare
+  `(str, lang)` and drop it, so a name the model wrote was parsed and thrown away on every
+  render. Both halves therefore reach the post-pass as **escaped attributes on the unforgeable
+  marker** — escaped with the same `md.utils.escapeHtml`, which is what keeps a model-supplied
+  info string from forging one. Three things are load-bearing:
+  - **The header is `data-note-skip`.** It is the only renderer-added element that carries
+    *text*, and `utils/noteAnchor.ts` counts a quote's occurrences over the message's visible
+    text — so counting it would shift the arithmetic for every note anchored below it, including
+    notes written before the header existed. (The copy control beside it takes the other route:
+    no text nodes at all.)
+  - **The copy control reads `querySelector("code")`**, so a copy yields the code alone, with no
+    filename line. That is the whole reason the info string was chosen over a leading comment —
+    and it is why the header is built from `<span>`s. `codeCopy.test.ts` asserts it against
+    `renderMarkdown`'s real output, because wrapping a name in a `<code>` would silently start
+    copying it.
+  - **A language is claimed only when `hljs.getLanguage` knows it**, and an unrecognised info
+    word produces no header at all. ` ```app.py ` is not a language, and a pill repeating a
+    filename back as one would be the app inventing a fact.
+  The other half is the prompt: `chat.guidance.codeFence` tells the model to name the file, and
+  it is the one **unconditional** guidance block, because it is about the *format* of a reply
+  rather than about a capability. Without it the renderer would be drawing data nothing produces.
 - **The file tree's freshness is the refresh button plus the end of a turn.** The post-turn
   re-read hangs off `consume()`'s `finally` in `stores/app.ts`, which is the one point every
   turn ends at, and it is gated on a tree having been loaded at all — a panel nobody opened
@@ -959,6 +988,34 @@ Fuller map in `docs/reference.md`.
   accessors that *do* take a bare session id (`touchSession`, `createMessage`,
   `skipAwaitingToolCalls`, …) are documented as such in `AppDb`: every caller reaches them
   after a scoped read has already resolved the session.
+- **Every model call writes one row to a ledger, and a message records the model that wrote it.**
+  `usage_events` is what answers "what did this cost, and for what"; `messages.provider_*`/`model_*`
+  is what answers "which model wrote this". Four things are load-bearing:
+  - **The ledger is not a sum over `messages`.** Only a *turn* writes a message, and five other calls
+    the server makes on its own — the auto-titler, the turn classifier, the insight pass, the image
+    describer, the note-export summariser — cost real tokens no transcript holds. A purpose breakdown
+    is only expressible because all six meet in one table. It is a pure DDL addition, so no
+    `SCHEMA_VERSION` bump.
+  - **`agent/callUsage.ts` is the one place `usage_metadata` becomes a `MessageUsage`**, used by the
+    main loop and all five passes. Two mappings would be two chances for a transcript and a ledger
+    row to disagree about what a provider reported. Each pass reports through an optional `onUsage`,
+    and `passRecorder` in `routes.ts` resolves the attribution once — a new pass wired by hand is one
+    wired with a different idea of whose call it was.
+  - **`recordUsage` cannot fail the call it describes and writes nothing for an unreported one.** An
+    all-zero row would claim a free call and drag every average toward it.
+  - **Cache-miss input is derived, never stored**: `cached_input_tokens` is a *subset* of
+    `input_tokens`, so a third column could contradict the other two with nothing to arbitrate.
+    `duration_ms` is nullable and zero is *not* the same as NULL — "nobody timed this" versus "it came
+    back instantly" — which is why the panel shows an em dash for a bucket whose `durationMs` is 0.
+  The date range is cut in **the reader's zone**, per day via `Intl` rather than a fixed offset (a
+  DST boundary makes the latter wrong), and days inside a named range are filled with zeroes so a
+  quiet week does not draw as a busy line. The ledger is **forward-only** — no backfill from
+  `messages` — so the pages state when counting began rather than implying a history they lack.
+  `byUser` is present **only** on the console's route; its absence on the other two *is* the
+  permission. Charts are a **lazy chunk** (`utils/charts.ts`) whose palette is read from the live
+  stylesheet as **concrete colours, never `var()`** — a canvas has no cascading context, so a `var()`
+  is a string it silently ignores, which is mermaid's `themeVariables` problem verbatim. See
+  `docs/usage.md`.
 - **A Copilot is owned, and "platform" is not a tier — it is a published one.** `copilots` carries
   `user_id` and a `visibility` of `private` or `public`, not an admin role, so a Copilot the
   operator wants every account to have is simply one they published, and "ordinary users cannot
@@ -1527,6 +1584,29 @@ Fuller map in `docs/reference.md`.
     the right one for the desktop app where the two are the same machine.
   `clock.ts` is pure and takes `now` and the zone as arguments, which is what lets the format be
   tested at a pinned instant rather than at whatever day the suite runs.
+- **Every system prompt lives in one catalog, and is read at call time — never captured in a
+  constant.** `apps/server/src/prompts.json` is a **keyed object** (not an array), so a deployment's
+  `<dataRoot>/config.patch.json` overriding `prompts["title.system"]` replaces exactly that entry
+  through the already-exported `deepMerge`. Three things are load-bearing:
+  - **`renderPrompt(key, vars)`, never `export const`.** The catalog is patched by the *process entry
+    point*, which runs after every module has been evaluated, so a module-level constant would be the
+    bundled text for the process's whole life and a tuned prompt would silently do nothing — the
+    failure this repo names most often. That is why `THREAD_SYSTEM_PROMPT` became
+    `threadSystemPrompt()` and friends. `buildSystemPrompt` keeps only the **conditions** (which
+    blocks apply, which of two sandbox sentences); every **word** comes from the catalog.
+  - **A missing placeholder throws; an empty one renders as nothing.** The split is what lets a block
+    be dropped (an uninstalled widget supplies `""`) while a missing value is loud. The placeholder
+    name is restricted to an identifier so the classifier's `{"decisions":[…]}` schema cannot be
+    mistaken for one, and a test scans every entry for a `{{` the pattern does not match.
+  - **`test/helpers/fakeLlm.ts` identifies out-of-band calls by a substring of their prompt prose**
+    (`"topic-classification function"`, `"reflective study coach"`, `"short summary of a study
+    conversation"`, `"titling function"`). Reflowing one of those four sentences breaks the *test
+    harness* rather than the app, and the failure lands somewhere unrelated — so a test asserts each
+    marker is still in its catalog entry, and changing such a sentence means updating the marker too.
+  `config.patch.json` is **not a prompt feature**: it is deep-merged over the whole config tree, an
+  unreadable file throws naming the path, and a typo'd prompt key warns at boot rather than doing
+  nothing quietly. Tool descriptions and the out-of-band *user*-prompt templates stay in code — they
+  are bound to schemas and to data assembly, not free-standing prompt text. See `docs/prompts.md`.
 - **A referenced source is *linked*, not copied.** `ChatInput.sources` names ids; the server
   links each to the conversation (`session_sources`) and records the snapshot in
   **`messages.sources`**, a column of its own beside `attachments`. The link is what lets a later
@@ -1867,7 +1947,9 @@ Fuller map in `docs/reference.md`.
   staged in `dist/resources/web` and leaves it alone. Run `pnpm desktop:build` (or
   `pnpm build`) once if the panel's server has nothing to serve.
 
-For the full architecture and configuration reference, see `docs/`. Three of those files are working
-references rather than background: `docs/design-system.md` for anything visual,
-`docs/widgets.md` before adding a widget to the right sidebar, and `docs/session-locks.md` before
-touching anything that writes to a conversation from more than one client.
+For the full architecture and configuration reference, see `docs/`. Those files that are working
+references rather than background: `docs/design-system.md` for anything visual, `docs/prompts.md`
+before changing any system prompt or adding one, `docs/usage.md` before touching the token ledger or
+the statistics pages, `docs/widgets.md` before adding a widget to the right sidebar, and
+`docs/session-locks.md` before touching anything that writes to a conversation from more than one
+client.

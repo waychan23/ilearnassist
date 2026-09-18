@@ -145,6 +145,11 @@ export const DDL = `
     roles TEXT NOT NULL DEFAULT '["user"]',
     must_change_password INTEGER NOT NULL DEFAULT 0,
     disabled INTEGER NOT NULL DEFAULT 0,
+    -- The account's own description of itself, in its own words, sent to the model as context on
+    -- every turn. '' rather than NULL: every account written before this column existed genuinely
+    -- *has* no introduction, so the default preserves what those rows already meant where NULL
+    -- would say "we do not know". See chat.system.about in the prompt catalog.
+    about TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username COLLATE NOCASE);
@@ -860,6 +865,70 @@ export const DDL = `
     acquired_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
   );
+
+  /*
+   * One row per **model call**, which is the thing messages.usage cannot be.
+   *
+   * The requirement is spend by purpose, provider, model and day. A sum over messages answers
+   * none of it: only a chat turn writes a message, the rest of the calls are the server's own, and
+   * messages.usage is a JSON blob whose fields are optional — which is exactly why the existing
+   * statistics deliberately do their arithmetic in JavaScript (widgets.ts). SUM() over columns
+   * is what a date range and four groupings need.
+   *
+   * **Attributed to a user, a workspace and usually a session**, so one table answers all three
+   * levels the requirement names. Every call the server makes is inside some account's turn or
+   * some account's session, including the out-of-band ones — which is what makes one uniform
+   * table possible rather than a per-purpose shape.
+   *
+   * user_id is NOT NULL unlike the nullable ids beside it: a call with no account is not a row
+   * whose owner is unknown, it is a bug, and every route that reaches this has already resolved
+   * one. workspace_id and session_id are nullable because a call *can* legitimately be outside
+   * one — nothing writes such a row today, and permitting it is cheaper than a migration the day
+   * something does.
+   *
+   * No deleted_at: this is derived observability data, like session_threads, and a soft-delete
+   * column no read filters on would make the app-wide invariant false the moment it was written.
+   * Nothing deletes a row. No foreign keys either, deliberately: a row here describes what a call
+   * *cost*, and deleting a conversation must not be able to erase what was spent on it — the same
+   * reason the entity tables soft-delete rather than cascade.
+   *
+   * **Cache miss is not a column.** cached_input_tokens is a subset of input_tokens as
+   * providers report it, so a third stored figure could disagree with the other two and nothing
+   * could say which was right; it is derived where it is read.
+   *
+   * New table, so no SCHEMA_VERSION bump (see the note on counters).
+   */
+  CREATE TABLE IF NOT EXISTS usage_events (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    workspace_id TEXT,
+    session_id TEXT,
+    -- The assistant message a chat turn produced, when there is one to point at.
+    message_id TEXT,
+    -- chat | title | thread | insight | summary.media | summary.notes — see USAGE_PURPOSES.
+    -- A string rather than a CHECK constraint: the list grows, and a constraint would make a new
+    -- purpose a migration instead of an entry in one array.
+    purpose TEXT NOT NULL,
+    provider_id TEXT,
+    provider_name TEXT,
+    model_id TEXT,
+    model_name TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    -- Wall-clock time for the call, when the caller measured it. NULL is "not measured", which is
+    -- different from zero and has to stay so for an average to mean anything.
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL
+  );
+  -- Four indexes for the four ways this is read: an account's own range, a workspace's, one
+  -- conversation's, and the purpose breakdown every page shows.
+  CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_events(user_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_workspace ON usage_events(workspace_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_purpose ON usage_events(purpose, created_at);
 `;
 
 /**

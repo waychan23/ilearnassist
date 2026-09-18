@@ -183,6 +183,35 @@ function readYaml(path: string): Record<string, unknown> {
   return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
 }
 
+/**
+ * Read `<dataRoot>/config.patch.json`, the deployment's configuration overlay.
+ *
+ * Absent is the normal case and returns `{}`. **Malformed throws**, naming the file: a patch that
+ * silently does nothing is exactly the failure this file exists to prevent, and a person who has
+ * just edited it by hand is the one reader who most needs to be told. (An empty file is malformed
+ * too, by the same argument — `JSON.parse("")` throws, and the error names the path.)
+ *
+ * `undefined` for the path means there is no data root to read from — the unit test suite's case —
+ * which is deliberately *not* an error. See `loadConfig` for why the caller passes it rather than
+ * this function resolving it.
+ */
+export function readConfigPatch(path: string | undefined): Record<string, unknown> {
+  if (!path || !existsSync(path)) return {};
+  const raw = readFileSync(path, "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `config.patch.json is not valid JSON: ${path}\n${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`config.patch.json must hold a JSON object at its top level: ${path}`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
 /** Coerce an unknown config node into a plain object (or empty object). */
 function asObj(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
@@ -317,8 +346,29 @@ function isParserKind(value: unknown): value is DocumentParserKind {
 
 let cached: AppConfig | undefined;
 
-/** Load the config (base + optional local override), resolving env placeholders. */
-export function loadConfig(): AppConfig {
+/**
+ * Load the config (base + optional local override + the deployment's patch), resolving env
+ * placeholders.
+ *
+ * `patch` is the deployment overlay, read from `<dataRoot>/config.patch.json` and handed in by the
+ * caller rather than resolved here. That is the same rule `configureModelLog` follows, and for the
+ * same reason: `ILA_DATA_DIR` reaches `process.env` through a checked-in `.env`, so a path resolved
+ * inside this module would make the unit suite's results depend on whatever the machine running it
+ * happens to have in its data folder. Every existing caller passes nothing and gets exactly what it
+ * got before.
+ *
+ * It merges *before* env resolution and `withDefaults`, so `${ENV}` works inside a patch and the
+ * result flows through the ordinary validation — a patch is not a second configuration system, it
+ * is an earlier layer of the same one. Arrays replace rather than concatenate (`deepMerge`'s rule),
+ * which is what makes "this list, not that one" expressible.
+ *
+ * A `prompts` section passes through this merge untouched and unread: the catalog is not part of
+ * `AppConfig`, it is its own registry (`prompts.ts`), and the process entry point hands the same
+ * section to `setPromptOverrides` as well. One file, two readers, each taking its own key — which
+ * is what makes the patch a general mechanism rather than a prompt feature with a config-shaped
+ * wrapper.
+ */
+export function loadConfig(patch: Record<string, unknown> = {}): AppConfig {
   if (cached) return cached;
 
   const basePath = resolve(CONFIG_DIR, "config.yaml");
@@ -329,7 +379,7 @@ export function loadConfig(): AppConfig {
   const base = readYaml(basePath);
   const local = readYaml(localPath);
 
-  const merged = resolveEnvDeep(deepMerge(base, local)) as Record<string, unknown>;
+  const merged = resolveEnvDeep(deepMerge(deepMerge(base, local), patch)) as Record<string, unknown>;
   const config = withDefaults(merged);
 
   // `ILA_HOST` overrides the bind address, for the same reason `ILA_DATA_DIR` overrides the

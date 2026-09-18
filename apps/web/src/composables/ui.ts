@@ -38,7 +38,7 @@ import { router } from "../router";
  * the drawer says where the sidebar *is*, this says how wide it is, and the sidebar's own
  * toggle is a different control on each viewport because of it. The field carries the rest.
  */
-export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
+export type View = "login" | "password" | "home" | "chat" | "account" | "admin" | "usage";
 
 /**
  * Which screen the platform console is showing.
@@ -48,7 +48,7 @@ export type View = "login" | "password" | "home" | "chat" | "account" | "admin";
  * cannot disagree about what exists. It used to be a field on `uiState`, which is the shape
  * the URL replaced: a section is a place in the console, so it belongs in the address of one.
  */
-export type AdminSection = "users" | "providers" | "documents" | "uploads";
+export type AdminSection = "users" | "providers" | "documents" | "uploads" | "stats";
 
 export const uiState = reactive({
   /** The account's own Copilots, opened from the menu either rail draws. */

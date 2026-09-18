@@ -338,6 +338,20 @@ export const ICON_PATHS = {
   ],
   /* The platform console: other people's accounts rather than one's own. */
   shield: ["M8 2.25L13.25 4.1V8.5C13.25 11.25 11.1 13.1 8 13.9C4.9 13.1 2.75 11.25 2.75 8.5V4.1Z"],
+
+  /*
+   * The statistics section's mark: three columns of different heights. Bars rather than a line,
+   * because what the section shows is mostly *comparison* — by purpose, by provider, by model —
+   * and a trend is one of its five tables rather than the whole of it. Axis and baseline included
+   * so it reads as a chart at 16px rather than as three loose marks.
+   */
+  chart: [
+    "M2.75 2.75V13.25",
+    "M2.75 13.25H13.25",
+    "M5.75 13.25V8.5",
+    "M8.75 13.25V5.5",
+    "M11.75 13.25V10.5",
+  ],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICON_PATHS;

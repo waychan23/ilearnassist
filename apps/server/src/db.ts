@@ -12,6 +12,7 @@ import type {
   Insight,
   InsightType,
   Message,
+  MessageModel,
   MessageUsage,
   ModelCapability,
   Note,
@@ -119,6 +120,7 @@ interface UserRow {
   roles: string;
   must_change_password: number;
   disabled: number;
+  about: string;
   created_at: string;
 }
 
@@ -615,6 +617,75 @@ interface SessionLockRow {
   expires_at: string;
 }
 
+/**
+ * A usage ledger row, as stored.
+ *
+ * The names come from a **join**, not from the row: `provider_name`/`model_name` are denormalized
+ * on the row and travel with it, while a workspace's title and a session's title are properties of
+ * entities that may since have been renamed — and a statistics table showing today's name against
+ * last month's spend is the right way round, because the reader is looking at the workspace they
+ * have, not the one they had.
+ */
+export interface UsageRow {
+  id: string;
+  userId: string;
+  workspaceId: string | null;
+  sessionId: string | null;
+  messageId: string | null;
+  purpose: string;
+  providerId: string | null;
+  providerName: string | null;
+  modelId: string | null;
+  modelName: string | null;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  durationMs: number | null;
+  createdAt: string;
+  /** From the join; absent when the row names no workspace, or names one that is gone. */
+  workspaceName?: string;
+  /** From the join, for the per-session table. */
+  sessionTitle?: string;
+  /** From the join, for the console's per-account breakdown. */
+  userName?: string;
+}
+
+/** What `insertUsageEvent` writes. Every token column defaults to zero at the call site. */
+export interface UsageEventInput {
+  id: string;
+  userId: string;
+  workspaceId: string | null;
+  sessionId: string | null;
+  messageId: string | null;
+  purpose: string;
+  providerId: string | null;
+  providerName: string | null;
+  modelId: string | null;
+  modelName: string | null;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  durationMs: number | null;
+}
+
+/**
+ * The window a ledger read is cut to.
+ *
+ * Deliberately *narrower* than the `/api/stats` query it is built from: the instants are already
+ * resolved (see `usage.ts`) and the zone is not this layer's business. `userId` absent means
+ * every account, which only an administrator's route may ask for.
+ */
+export interface UsageQuery {
+  userId?: string;
+  workspaceId?: string;
+  fromIso: string | null;
+  toIso: string | null;
+}
+
 interface MessageRow {
   id: string;
   session_id: string;
@@ -628,6 +699,18 @@ interface MessageRow {
   /** JSON, nullable for the same reason: written only by a turn that pointed at something. */
   refs: string | null;
   usage: string | null;
+  /**
+   * Which model wrote this message, stored as four columns rather than one JSON blob.
+   *
+   * Columns because the statistics group by them, and because the *names* are the point: a
+   * provider renamed or removed later must not rewrite what the transcript says about a turn it
+   * already had. Null on every row written before the columns existed, which reads as "not
+   * recorded" rather than as a default the app invented.
+   */
+  provider_id: string | null;
+  provider_name: string | null;
+  model_id: string | null;
+  model_name: string | null;
   /** SQLite has no boolean: 0/1, and `null` on rows written before the column existed. */
   stopped: number | null;
   created_at: string;
@@ -814,6 +897,7 @@ const mapUser = (r: UserRow): UserRecord => ({
   slug: r.slug,
   roles: parseStoredRoles(r.roles),
   mustChangePassword: r.must_change_password !== 0,
+  about: r.about,
   createdAt: r.created_at,
   passwordHash: r.password_hash,
   disabled: r.disabled !== 0,
@@ -977,6 +1061,62 @@ const mapSessionLock = (r: SessionLockRow, clientId: string): SessionLockView =>
   expiresAt: r.expires_at,
 });
 
+/**
+ * A ledger row, snake_case columns into the shape `usage.ts` reads.
+ *
+ * The three joined labels keep their `undefined` rather than becoming `""`: a bucket with no
+ * label falls back to its key, and an empty string would render as a blank table cell instead.
+ */
+const mapUsageRow = (r: UsageDbRow): UsageRow => {
+  const row: UsageRow = {
+    id: r.id,
+    userId: r.user_id,
+    workspaceId: r.workspace_id,
+    sessionId: r.session_id,
+    messageId: r.message_id,
+    purpose: r.purpose,
+    providerId: r.provider_id,
+    providerName: r.provider_name,
+    modelId: r.model_id,
+    modelName: r.model_name,
+    inputTokens: r.input_tokens,
+    cachedInputTokens: r.cached_input_tokens,
+    outputTokens: r.output_tokens,
+    reasoningTokens: r.reasoning_tokens,
+    totalTokens: r.total_tokens,
+    durationMs: r.duration_ms,
+    createdAt: r.created_at,
+  };
+  if (r.workspace_name) row.workspaceName = r.workspace_name;
+  if (r.session_title) row.sessionTitle = r.session_title;
+  if (r.user_name) row.userName = r.user_name;
+  return row;
+};
+
+/** The stored row, as better-sqlite3 hands it back. */
+interface UsageDbRow {
+  id: string;
+  user_id: string;
+  workspace_id: string | null;
+  session_id: string | null;
+  message_id: string | null;
+  purpose: string;
+  provider_id: string | null;
+  provider_name: string | null;
+  model_id: string | null;
+  model_name: string | null;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  duration_ms: number | null;
+  created_at: string;
+  workspace_name: string | null;
+  session_title: string | null;
+  user_name: string | null;
+}
+
 const mapMessage = (r: MessageRow): Message => ({
   id: r.id,
   sessionId: r.session_id,
@@ -988,9 +1128,28 @@ const mapMessage = (r: MessageRow): Message => ({
   sources: r.sources ? safeParseArray<Attachment>(r.sources) : undefined,
   refs: r.refs ? safeParseArray<TurnReference>(r.refs) : undefined,
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
+  model: messageModelOf(r),
   stopped: r.stopped ? true : undefined,
   createdAt: r.created_at,
 });
+
+/**
+ * The model that wrote a message, or `undefined` when it was not recorded.
+ *
+ * All four columns or nothing: a row with an id and no name is a row from a half-finished write,
+ * and handing back a partial object would put a message on screen claiming a model with no name
+ * to show. `undefined` is the honest answer for every message written before these columns
+ * existed — see `Message.model`.
+ */
+function messageModelOf(r: MessageRow): MessageModel | undefined {
+  if (!r.provider_id || !r.provider_name || !r.model_id || !r.model_name) return undefined;
+  return {
+    providerId: r.provider_id,
+    providerName: r.provider_name,
+    modelId: r.model_id,
+    modelName: r.model_name,
+  };
+}
 
 const mapPlan = (r: PlanRow): PlanRecord => ({
   id: r.id,
@@ -1208,6 +1367,13 @@ export interface AppDb {
   setUserRoles(id: string, roles: UserRole[]): UserRecord | undefined;
   /** Disable or re-enable an account. Never a delete: the row owns workspaces and history. */
   setUserDisabled(id: string, disabled: boolean): UserRecord | undefined;
+  /**
+   * The account's own description of itself — the one field of its own record it may write.
+   *
+   * Not scoped to an actor and not an admin operation: this is the account writing about itself,
+   * which is why it is the only mutator here with no console route behind it.
+   */
+  setUserAbout(id: string, about: string): UserRecord | undefined;
   /**
    * Whether anybody on this installation can sign in at all.
    *
@@ -1718,6 +1884,12 @@ export interface AppDb {
     /** What the turn pointed at, as the client sent it. See `ChatInput.refs`. */
     refs?: TurnReference[];
     usage?: MessageUsage;
+    /**
+     * Which model produced this message. Absent writes four NULLs, which is what every caller
+     * that is not a turn does — a `⚠️` failure row is attributed by its caller, and a message
+     * written by a test does not claim a model at all.
+     */
+    model?: MessageModel;
     /** The user cut this turn short; `content` is whatever had streamed by then. */
     stopped?: boolean;
   }): Message;
@@ -2116,6 +2288,26 @@ export interface AppDb {
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
   statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
+
+  /*
+   * The usage ledger. Four methods, and the split between them is the permission model rather
+   * than a preference: `listUsageRows` with a `userId` is an account reading its own, and the
+   * same method without one is an administrator reading everybody's. Nothing here decides which
+   * caller may do that — the routes do, exactly as they do for every other owner-scoped read.
+   */
+
+  /** Append one call's cost. The one write to the ledger, and it never updates. */
+  insertUsageEvent(input: UsageEventInput): void;
+  /**
+   * The rows in a window, oldest first.
+   *
+   * Every aggregate on the statistics pages is built from this one read, which is deliberate: a
+   * query per breakdown would be four more chances for the totals and the tables beside them to
+   * disagree about what the window contains.
+   */
+  listUsageRows(query: UsageQuery): UsageRow[];
+  /** The instant of the first row ever written, or null. How a page says when counting began. */
+  usageSince(userId?: string): string | null;
   /** The same numbers for one conversation. `undefined` when it is not the caller's. */
   statsForSessionForUser(userId: string, sessionId: string): SessionStats | undefined;
 
@@ -2273,6 +2465,15 @@ export function createDb(dbPath: string): AppDb {
      * pointed at nothing", which is what every message written before the column means.
      */
     ensureColumn(db, "messages", "refs", "refs TEXT");
+    /*
+     * Which model wrote each message. Additive and nullable: NULL is "this message predates the
+     * columns", which is what every row already written means, and a default would have been this
+     * app inventing a model for a turn it never recorded.
+     */
+    ensureColumn(db, "messages", "provider_id", "provider_id TEXT");
+    ensureColumn(db, "messages", "provider_name", "provider_name TEXT");
+    ensureColumn(db, "messages", "model_id", "model_id TEXT");
+    ensureColumn(db, "messages", "model_name", "model_name TEXT");
 
     /*
      * What a note is *about*, for a note about a 图 or a 表 rather than a passage.
@@ -2308,6 +2509,10 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "users", "roles", `roles TEXT NOT NULL DEFAULT '["user"]'`);
     ensureColumn(db, "users", "must_change_password", "must_change_password INTEGER NOT NULL DEFAULT 0");
     ensureColumn(db, "users", "disabled", "disabled INTEGER NOT NULL DEFAULT 0");
+    // The account's self-description, which reaches the model as `chat.system.about`. A column
+    // rather than a row in `app_settings` because it is per account, and `CREATE TABLE IF NOT
+    // EXISTS` skips a table that already exists — so the DDL above only ever reaches a new install.
+    ensureColumn(db, "users", "about", "about TEXT NOT NULL DEFAULT ''");
 
     /*
      * Copilots became owned and publishable, and a conversation now snapshots the Copilot it was
@@ -2473,6 +2678,7 @@ export function createDb(dbPath: string): AppDb {
   );
   const stmtSetUserRoles = db.prepare("UPDATE users SET roles = @roles WHERE id = @id");
   const stmtSetUserDisabled = db.prepare("UPDATE users SET disabled = @disabled WHERE id = @id");
+  const stmtSetUserAbout = db.prepare("UPDATE users SET about = @about WHERE id = @id");
   // `EXISTS` rather than a count: the question is yes or no, and the plan stops at the first
   // row instead of walking an index over every account.
   const stmtHasPasswordAccounts = db.prepare(
@@ -3020,6 +3226,43 @@ export function createDb(dbPath: string): AppDb {
    * from `findAwaitingToolCall`, and from the history `buildHistoryMessages` turns into the
    * model's context. There is no second place to forget.
    */
+  /*
+   * One row per model call, with the three labels a table needs and cannot derive: a workspace's
+   * title, a conversation's title and an account's name. LEFT JOINs, so a row whose workspace or
+   * session is gone still counts — it is spend that happened, and dropping it would make the
+   * totals disagree with the breakdowns beside them.
+   *
+   * The two bounds are compared as ISO strings, which is lexical and therefore correct here for
+   * the same reason `auth_tokens.expires_at` is: every instant written by this app is UTC with a
+   * fixed width. Either may be NULL, so the same statement serves a bounded and an unbounded query
+   * rather than two statements that could disagree about the join.
+   */
+  const stmtListUsageRows = db.prepare(
+    `SELECT e.*, w.name AS workspace_name, s.title AS session_title, u.username AS user_name
+       FROM usage_events e
+       LEFT JOIN workspaces w ON w.id = e.workspace_id
+       LEFT JOIN sessions s ON s.id = e.session_id
+       LEFT JOIN users u ON u.id = e.user_id
+      WHERE (@userId IS NULL OR e.user_id = @userId)
+        AND (@workspaceId IS NULL OR e.workspace_id = @workspaceId)
+        AND (@fromIso IS NULL OR e.created_at >= @fromIso)
+        AND (@toIso IS NULL OR e.created_at < @toIso)
+      ORDER BY e.created_at ASC`
+  );
+  /** The earliest row there is, which is how a page says when counting began. */
+  const stmtUsageSince = db.prepare(
+    "SELECT MIN(created_at) AS since FROM usage_events WHERE (@userId IS NULL OR user_id = @userId)"
+  );
+  const stmtInsertUsageEvent = db.prepare(
+    `INSERT INTO usage_events (id, user_id, workspace_id, session_id, message_id, purpose,
+                               provider_id, provider_name, model_id, model_name,
+                               input_tokens, cached_input_tokens, output_tokens, reasoning_tokens,
+                               total_tokens, duration_ms, created_at)
+     VALUES (@id, @userId, @workspaceId, @sessionId, @messageId, @purpose,
+             @providerId, @providerName, @modelId, @modelName,
+             @inputTokens, @cachedInputTokens, @outputTokens, @reasoningTokens,
+             @totalTokens, @durationMs, @createdAt)`
+  );
   const stmtListMessages = db.prepare(
     "SELECT * FROM messages WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
   );
@@ -3041,8 +3284,10 @@ export function createDb(dbPath: string): AppDb {
   /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, sources, refs, usage, stopped, created_at)
-     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @sources, @refs, @usage, @stopped, @createdAt)`
+    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, sources, refs, usage,
+                              provider_id, provider_name, model_id, model_name, stopped, created_at)
+     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @sources, @refs, @usage,
+             @providerId, @providerName, @modelId, @modelName, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
   /*
@@ -3723,6 +3968,11 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetUser.get(id) as UserRow | undefined;
       return r ? mapUser(r) : undefined;
     },
+    setUserAbout(id, about) {
+      stmtSetUserAbout.run({ id, about });
+      const r = stmtGetUser.get(id) as UserRow | undefined;
+      return r ? mapUser(r) : undefined;
+    },
     hasPasswordAccounts() {
       return (stmtHasPasswordAccounts.get() as { found: number }).found === 1;
     },
@@ -4131,6 +4381,10 @@ export function createDb(dbPath: string): AppDb {
         sources: input.sources?.length ? JSON.stringify(input.sources) : null,
         refs: input.refs?.length ? JSON.stringify(input.refs) : null,
         usage: input.usage ? JSON.stringify(input.usage) : null,
+        providerId: input.model?.providerId ?? null,
+        providerName: input.model?.providerName ?? null,
+        modelId: input.model?.modelId ?? null,
+        modelName: input.model?.modelName ?? null,
         stopped: input.stopped ? 1 : 0,
         createdAt: now(),
       });
@@ -4690,6 +4944,21 @@ export function createDb(dbPath: string): AppDb {
       return stmtAssignTableToThread.run(threadId, tableId, sessionId).changes;
     },
 
+    insertUsageEvent(input) {
+      stmtInsertUsageEvent.run({ ...input, createdAt: now() });
+    },
+    listUsageRows(query) {
+      return (stmtListUsageRows.all({
+        userId: query.userId ?? null,
+        workspaceId: query.workspaceId ?? null,
+        fromIso: query.fromIso,
+        toIso: query.toIso,
+      }) as UsageDbRow[]).map(mapUsageRow);
+    },
+    usageSince(userId) {
+      const row = stmtUsageSince.get({ userId: userId ?? null }) as { since: string | null };
+      return row.since;
+    },
     statsForWorkspace(userId, workspaceId) {
       const workspace = workspaceForUser(workspaceId, userId);
       if (!workspace) return undefined;

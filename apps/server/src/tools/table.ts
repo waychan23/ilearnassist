@@ -7,6 +7,7 @@ import {
   looksLikeMarkdownTable,
   tableName,
 } from "../tables.js";
+import { renderPrompt } from "../prompts.js";
 
 /**
  * `ila_table` — the model records a table, in a conversation whose reply already shows it.
@@ -20,10 +21,10 @@ import {
  *
  * **The inline copy is the model's job, not this tool's**, and there is no code path that could
  * make it otherwise: nothing on the server writes into a model's reply. So the instruction lives
- * in `TABLE_GUIDANCE` below, which reaches the system prompt on any turn where this tool survived
+ * in `tableGuidance` below, which reaches the system prompt on any turn where this tool survived
  * assembly — and that guidance is not decoration. The tool's own description is necessarily a
  * *restriction* ("not every table"), and a model that was never told to write the table out reads
- * a restriction as "usually do not": the exact failure `COLLECT_PAGE_GUIDANCE` documents one tool
+ * a restriction as "usually do not": the exact failure `collectPageGuidance` documents one tool
  * over.
  */
 
@@ -51,24 +52,25 @@ interface TableInvokeConfig {
 }
 
 /**
- * What the system prompt says on a turn that offers this tool.
+ * What the system prompt says on a turn that offers this tool: `chat.guidance.table` in the
+ * catalog, so it can be tuned without a rebuild.
  *
  * The positive half of a contract whose other half is a restriction, and it has to carry three
  * things the schema cannot: that the table is *also* written in the reply (which is what the user
  * sees — the tool produces no rendering at all), that this is how a table becomes findable later
  * in the 图表 panel, and that the panel's copy is the row rather than the reply, so a revise means
- * calling again with the same name.
+ * calling again with the same name. Deliberately *not* a repetition of the description: the
+ * description is read when the model is deciding whether to call, and this when it is deciding
+ * what to do with the turn.
  *
- * Deliberately *not* a repetition of the description: the description is read when the model is
- * deciding whether to call, and this when it is deciding what to do with the turn.
+ * A function rather than a constant, and that is load-bearing: the catalog is patched by the
+ * process entry point (`<dataRoot>/config.patch.json`), which runs *after* every module has been
+ * evaluated. A module-level constant would be the bundled text forever, so a tuned prompt would
+ * silently do nothing.
  */
-export const TABLE_GUIDANCE =
-  "When a table is worth keeping (a comparison, a summary, anything the learner will want to " +
-  "find again), call ila_table with the same markdown table you are writing in your reply. Write " +
-  "the table out in your reply as ordinary Markdown as well — that inline copy is what the user " +
-  "reads, and the tool's purpose is to keep it: it is saved to this conversation's 图表 panel, " +
-  "where it can be reopened, zoomed and copied out later. To correct a table you already " +
-  "recorded, call ila_table again with the same name and the complete corrected table.";
+export function tableGuidance(): string {
+  return renderPrompt("chat.guidance.table");
+}
 
 export function buildTableTool(ctx: TableToolContext): StructuredToolInterface {
   return tool(

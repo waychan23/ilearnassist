@@ -65,7 +65,7 @@ declare module "vue-router" {
  * to know what a section *is* — `AdminConsole.vue` builds its menu from its own copy of the
  * icons, and a mismatch there would be a menu row the URL cannot express.
  */
-export const ADMIN_SECTIONS = ["users", "providers", "documents", "uploads"] as const;
+export const ADMIN_SECTIONS = ["users", "providers", "documents", "uploads", "stats"] as const;
 
 export const routes: RouteRecordRaw[] = [
   {
@@ -91,6 +91,16 @@ export const routes: RouteRecordRaw[] = [
     name: "account",
     component: () => import("../components/AccountView.vue"),
     meta: { view: "account", auth: true },
+  },
+  {
+    /*
+     * The account's own usage. A page rather than a dialog, and reachable from the menu both rails
+     * draw — so it is somewhere a reader can be sent to and come back to.
+     */
+    path: "/usage",
+    name: "usage",
+    component: () => import("../components/UsageView.vue"),
+    meta: { view: "usage", auth: true },
   },
   {
     /*

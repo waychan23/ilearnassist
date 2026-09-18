@@ -7,6 +7,7 @@ import {
 } from "@ilearnassist/shared";
 import type { AppDb } from "../db.js";
 import { gradeQuizAnswers, renderReviewResult } from "../quizzes.js";
+import { renderPrompt } from "../prompts.js";
 
 /**
  * What the grading tool needs: the database and the server-bound session id, assembled only
@@ -84,16 +85,17 @@ export function buildQuizReviewTool(ctx: QuizReviewToolContext) {
  * Appended to the system prompt while the conversation has the quiz widget installed.
  *
  * Model input, so deliberately English and untranslated — the same discipline
- * `PLAN_GUIDANCE` and the quiz tool-result strings follow. It carries the protocol the tool
+ * `planGuidance` and the quiz tool-result strings follow. It carries the protocol the tool
  * descriptions cannot enforce on their own: judge and record after every quiz, recognise a
  * make-up answer by its quiz_id, and never turn one into a new quiz.
+ *
+ * The guidance lives in the catalog (`chat.guidance.quiz`) so it can be tuned without a rebuild.
+ *
+ * A function rather than a constant, and that is load-bearing: the catalog is patched by the
+ * process entry point (`<dataRoot>/config.patch.json`), which runs *after* every module has been
+ * evaluated. A module-level constant would be the bundled text forever, so a tuned prompt would
+ * silently do nothing.
  */
-export const QUIZ_GUIDANCE = [
-  "This conversation has a quiz panel: quizzes you set with ila_quiz are saved there, per question, with the verdicts you record.",
-  "",
-  "Rhythm:",
-  "- When the user answers an ila_quiz, judge every question against the reference_answer/explanation the quiz result carries (when you supplied them — the user never saw them) and call ila_review_quiz once with each question's exact quiz_id, verdict (correct / incorrect / unsure) and a short explanation in the user's language — EVERY question gets one, correct answers included: briefly reinforce why the picked option is right, never just \"correct\". Make the grading call, and any ila_update_plan_progress the chapter warrants, before writing prose, then walk each question through in your FINAL message after the tool results — its Qn label, verdict and a brief why — so an all-correct quiz is a per-question rundown, not a one-line congratulations.",
-  "- A later user message that quotes a quiz_id and says it is a make-up answer (补答) — for a question the user skipped or cancelled without answering — is that SAME question being answered late; a system note on that turn carries the grading key when one was given. Grade just that question through ila_review_quiz with the quoted id — never call ila_quiz for it, and never present it as a new question.",
-  "- A follow-up message quoting a quiz_id is a question about that question, not a new quiz: answer it directly.",
-  "- Only call ila_quiz to genuinely test understanding on new material; quizzes belong to the plan chapter being studied (the tool binds the current chapter automatically, or name its nodeId).",
-].join("\n");
+export function quizGuidance(): string {
+  return renderPrompt("chat.guidance.quiz");
+}

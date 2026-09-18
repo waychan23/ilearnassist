@@ -1357,6 +1357,124 @@ export interface UpdateInsightInput {
 /* ------------------------------------ stats ------------------------------------ */
 
 /**
+ * What a model call was **for**.
+ *
+ * The distinction the requirement asks for, and the reason a ledger exists rather than a sum over
+ * `messages`: only `chat` produces a message. The other five are calls the server makes on its
+ * own, and they cost real tokens that no transcript records — an auto-title, a post-turn
+ * classification, a button-triggered reflection, an image description, and the summary a note
+ * export writes.
+ *
+ * Ids rather than labels: the client renders them through the catalog, so a new purpose is an
+ * entry here and a key in two catalogs — the same rule `ApiErrorCode` follows.
+ */
+export const USAGE_PURPOSES = [
+  "chat",
+  "title",
+  "thread",
+  "insight",
+  "summary.media",
+  "summary.notes",
+] as const;
+
+export type UsagePurpose = (typeof USAGE_PURPOSES)[number];
+
+/**
+ * One bucket of the ledger, summed.
+ *
+ * Every figure is a **sum over calls**, which is why `durationMs` is here too: an average is
+ * `durationMs / calls`, and both halves travel so the reader can see what the average is over.
+ */
+export interface UsageTotals {
+  /** How many model calls this covers. The denominator for anything per-call. */
+  calls: number;
+  inputTokens: number;
+  /** The share of `inputTokens` the provider served from its cache. */
+  cachedInputTokens: number;
+  /**
+   * `inputTokens - cachedInputTokens`.
+   *
+   * Derived rather than stored, because the two are not independent: a provider reports cached
+   * tokens as a *subset* of the input, so a second column could disagree with the first and there
+   * would be no way to tell which was right. Both are shown, and this is what makes the split the
+   * requirement asks for ("缓存命中/未命中") add up to the input total.
+   */
+  cacheMissInputTokens: number;
+  outputTokens: number;
+  /** The share of `outputTokens` spent thinking, where the provider reports it. */
+  reasoningTokens: number;
+  totalTokens: number;
+  /** Wall-clock time summed over the calls, in milliseconds. */
+  durationMs: number;
+}
+
+/**
+ * A labelled row of a breakdown.
+ *
+ * `label` is present when the server knows a human name for the key — a workspace's title, a
+ * provider's display name — and absent when it is the client's to render, which is the case for a
+ * purpose id (translated) and a day (a date).
+ */
+export interface UsageBucket extends UsageTotals {
+  key: string;
+  label?: string;
+}
+
+/**
+ * The whole answer of one statistics query.
+ *
+ * `since` is the earliest ledger row there is, which is how a page says *when counting began*
+ * without pretending to a history it does not have: the ledger is forward-only, so every figure
+ * here describes the window the deployment has actually been observing.
+ *
+ * `byUser` is present only for a platform administrator — the one field whose absence is a
+ * permission rather than an empty result.
+ */
+export interface UsageStats {
+  /** Inclusive `YYYY-MM-DD` bounds, as asked for. Absent means unbounded. */
+  from?: string;
+  to?: string;
+  /** The date of the first ledger row, or absent when there is none. */
+  since?: string;
+  totals: UsageTotals;
+  byPurpose: UsageBucket[];
+  byProvider: UsageBucket[];
+  byModel: UsageBucket[];
+  /** One row per calendar day, in the caller's timezone. */
+  byDay: UsageBucket[];
+  byWorkspace: UsageBucket[];
+  byUser?: UsageBucket[];
+}
+
+/** One conversation's totals, for the session-level table. */
+export interface UsageSessionRow extends UsageTotals {
+  sessionId: string;
+  title: string;
+  workspaceId: string;
+}
+
+export interface UsageSessionsResponse {
+  sessions: UsageSessionRow[];
+}
+
+/** The query every statistics route takes. Bounds are inclusive dates, not instants. */
+export interface UsageQuery {
+  from?: string;
+  to?: string;
+  /**
+   * The browser's IANA zone, used to cut `byDay` at local midnight.
+   *
+   * The same argument `TurnRequestMeta.timezone` makes: the server may be on a desk while the
+   * reader is somewhere else, and a "day" that ends at the server's midnight is a day nobody
+   * lived through. Untrusted like every body field — an unusable name falls back to the server's
+   * own zone rather than failing the query.
+   */
+  timezone?: string;
+  /** An administrator's filter. Ignored for everybody else, whose scope is themselves. */
+  userId?: string;
+}
+
+/**
  * One conversation's numbers, for the statistics widgets.
  *
  * Sums cover the assistant messages that recorded usage; a turn the user stopped reports none,
@@ -1923,6 +2041,40 @@ export interface MessageUsage {
   totalTokens?: number;
   cachedInputTokens?: number;
   contextTokens?: number;
+  /**
+   * The part of `outputTokens` the model spent thinking, where the provider breaks it out.
+   *
+   * A quantity rather than a mode: chain of thought is billed inside the output tokens, so this
+   * is a *share* of them, not a third bucket to add. Read from
+   * `usage_metadata.output_token_details.reasoning`.
+   *
+   * `0` on a provider that does not report it, exactly as `cachedInputTokens` is — the two are the
+   * same kind of figure from the same place, and giving one of them a third state would make a sum
+   * over turns mean something different for each.
+   */
+  reasoningTokens?: number;
+}
+
+/**
+ * Which model produced a message, as it was at the time — **denormalized on purpose**.
+ *
+ * The names are stored beside the ids rather than joined from `providers`/`models`, and that is
+ * the whole point of the type: a provider renamed, re-pointed or deleted next month must not
+ * rewrite what a conversation says about the turn it already had. The ids stay so a record can
+ * be traced back to the configuration that produced it, if that configuration still exists.
+ *
+ * It exists because a model can be changed mid-conversation, so "the model" is not a property of
+ * the session — it is a property of each turn, and a transcript with two models in it is a
+ * transcript whose numbers mean nothing without this.
+ */
+export interface MessageModel {
+  providerId: string;
+  /** The provider's display name when the turn ran. */
+  providerName: string;
+  /** The configured model's id — `ModelDef.id`, not the wire model name. */
+  modelId: string;
+  /** The model's display name when the turn ran. */
+  modelName: string;
 }
 
 export interface Message {
@@ -1973,6 +2125,16 @@ export interface Message {
    */
   refs?: TurnReference[];
   usage?: MessageUsage;
+  /**
+   * The model that produced this message, or absent on a message written before it was recorded.
+   *
+   * On the *assistant* message rather than on the session, because the model is a generation
+   * parameter a user can change mid-conversation — see `MessageModel` for why the names are
+   * stored beside the ids. Absent is honest rather than defaulted: a message from before this
+   * existed has no model, and filling in the session's current one would be a claim about a turn
+   * nobody recorded.
+   */
+  model?: MessageModel;
   createdAt: string;
 }
 
@@ -2105,8 +2267,41 @@ export interface User {
    * can make a request could skip the screen.
    */
   mustChangePassword: boolean;
+  /**
+   * The account's own description of itself, in its own words — background, field, strengths,
+   * interests. Optional to fill in; `""` means it has not been.
+   *
+   * It reaches the model as system-prompt context on **every** turn of every conversation, the way
+   * a persona does, and is what lets an agent pitch an explanation at the right level without
+   * being told again each time. It is the account's own record of itself and the only field of it
+   * the account may write — see `PATCH /api/auth/me`.
+   */
+  about: string;
   createdAt: string;
 }
+
+/**
+ * The body of `PATCH /api/auth/me` — the account editing its own record.
+ *
+ * One field, because one is all an account owns: the username is the console's (renaming is
+ * display-only and a `slug` never moves), and the roles and the disabled flag are an
+ * administrator's. Sending the whole record back would invite a client to believe otherwise.
+ */
+export interface UpdateProfileInput {
+  /** The new introduction. Trimmed by the store, and `""` clears it. */
+  about: string;
+}
+
+/**
+ * The longest an introduction may be, in characters.
+ *
+ * A real ceiling rather than a formality, and the reason is that this text is sent to the model on
+ * **every turn of every conversation**: an unbounded introduction would be a per-turn token cost
+ * the account never sees, paid in every conversation it has. Two thousand characters is a couple of
+ * paragraphs — comfortably more than a description of one's background and interests needs — and
+ * it is a *shared* constant so the field can say what the limit is before a request is made.
+ */
+export const PROFILE_ABOUT_MAX = 2000;
 
 /**
  * An account as the platform console lists it.

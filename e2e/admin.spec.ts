@@ -184,6 +184,38 @@ test("the account page is everyone's, and changes the password it is signed in w
   await expect(page.getByTestId("password-error")).toBeVisible();
 });
 
+/**
+ * The introduction, which is the one field of an account's own record it may write.
+ *
+ * The claim that needs a browser is the *journey*: what is typed on the page is what the server
+ * stores, and it is still there after a reload. `apps/server/test/profile.test.ts` pins what the
+ * route refuses; `chat-sse.test.ts` pins that the text reaches the model.
+ */
+test("the account page writes the introduction the agent is given", async ({ page, request }) => {
+  await page.goto("/");
+  await page.getByTestId("open-account").click();
+  await expect(page.getByTestId("account-page")).toBeVisible();
+
+  // Nothing to save on arrival, so the button says so rather than offering a write that would
+  // send the same text back.
+  await expect(page.getByTestId("profile-save")).toBeDisabled();
+
+  const about = "我是后端工程师，熟悉分布式系统；正在自学机器学习，线性代数是薄弱环节。";
+  await page.getByTestId("profile-about").fill(about);
+  await expect(page.getByTestId("profile-save")).toBeEnabled();
+  await page.getByTestId("profile-save").click();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+
+  // A reload is the half a form cannot fake: the value came back from `users.about` rather than
+  // from the textarea's own state.
+  await page.reload();
+  await expect(page.getByTestId("profile-about")).toHaveValue(about);
+
+  // Put the shared account back, so a later spec's turn prompt is not carrying this test's prose.
+  const cleared = await request.patch("/api/auth/me", { data: { about: "" } });
+  expect(cleared.ok()).toBe(true);
+});
+
 test("the sidebar reaches the console from inside a conversation", async ({ page }) => {
   await page.goto("/");
   await enterWorkspace(page);

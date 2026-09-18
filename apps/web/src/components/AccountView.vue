@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import PasswordChangeForm from "./PasswordChangeForm.vue";
+import ProfileForm from "./ProfileForm.vue";
 import TopbarControls from "./TopbarControls.vue";
 import Icon from "./Icon.vue";
 
@@ -83,6 +84,15 @@ function onChanged(): void {
           >
             <Icon name="shield" /> {{ t("admin.title") }}
           </button>
+        </section>
+
+        <!--
+          Between the identity card and the password: it is the other half of "who is this", and it
+          is a thing the account writes about itself rather than a credential it changes.
+        -->
+        <section class="account-card">
+          <h2 class="home-title">{{ t("account.about.title") }}</h2>
+          <ProfileForm />
         </section>
 
         <section class="account-card">

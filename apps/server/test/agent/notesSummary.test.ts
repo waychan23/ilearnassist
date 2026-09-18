@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ModelCapability, ProviderModel } from "@ilearnassist/shared";
 import { makeNoteSummarizer } from "../../src/agent/notesSummary.js";
-import { NOTE_SUMMARY_SYSTEM_PROMPT } from "../../src/notesExport.js";
+import { noteSummarySystemPrompt } from "../../src/notesExport.js";
 import type { ProviderRecord } from "../../src/db.js";
 import type { OutOfBandReasoningSetting } from "../../src/config.js";
 import { startFakeLlm, type FakeLlm } from "../helpers/fakeLlm.js";
@@ -59,7 +59,7 @@ describe("makeNoteSummarizer", () => {
     reasoning?: OutOfBandReasoningSetting
   ): Promise<string> {
     return makeNoteSummarizer({ provider, modelId, reasoning })(
-      NOTE_SUMMARY_SYSTEM_PROMPT,
+      noteSummarySystemPrompt(),
       "user: 递归怎么写\nassistant: 先想基准情形"
     );
   }
@@ -115,7 +115,7 @@ describe("makeNoteSummarizer", () => {
     // The export settles this as `failed`, which is a fact about the call — the route does not
     // turn it into an HTTP error, and the message is what the panel shows.
     await expect(
-      makeNoteSummarizer({ provider: undefined, modelId: "x" })(NOTE_SUMMARY_SYSTEM_PROMPT, "…")
+      makeNoteSummarizer({ provider: undefined, modelId: "x" })(noteSummarySystemPrompt(), "…")
     ).rejects.toThrow(/No provider/);
     expect(llm.requests()).toHaveLength(0);
   });
@@ -124,7 +124,7 @@ describe("makeNoteSummarizer", () => {
     const keyless = { ...providerWith(model("fake-model")), apiKey: "" };
     await expect(
       makeNoteSummarizer({ provider: keyless, modelId: "fake-model" })(
-        NOTE_SUMMARY_SYSTEM_PROMPT,
+        noteSummarySystemPrompt(),
         "…"
       )
     ).rejects.toThrow(/API key/);

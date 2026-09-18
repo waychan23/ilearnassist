@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codeCopyClick } from "../../src/composables/codeCopy";
+import { renderMarkdown } from "../../src/utils/markdown";
 
 /**
  * The copy control's click side.
@@ -56,6 +57,25 @@ describe("codeCopyClick", () => {
     // One tick for the promise the handler does not await.
     await vi.advanceTimersByTimeAsync(0);
     expect(writeText).toHaveBeenCalledWith("const a = 1;");
+  });
+
+  it("copies the code alone, not the block's own header", async () => {
+    /*
+     * The header names the file and the language, and it lives inside the same `<pre>` as the code
+     * — so it is excluded from a copy only because the handler reads `querySelector("code")` and
+     * the header is spans. Built from `renderMarkdown`'s real output rather than the hand-written
+     * block above, because the markup is the thing that could change: the day somebody wraps a
+     * filename in a `<code>` element, the copy silently starts carrying it.
+     */
+    document.body.innerHTML =
+      `<div id="host">` +
+      renderMarkdown("```python app.py\nconst a = 1;\n```", { copy: "复制", copied: "已复制" }) +
+      `</div>`;
+
+    expect(codeCopyClick(press())).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(writeText).toHaveBeenCalledWith("const a = 1;\n");
   });
 
   it("says it copied, then says nothing again", async () => {

@@ -1,6 +1,9 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { MessageUsage } from "@ilearnassist/shared";
+import { usageOfMessage } from "./callUsage.js";
 import type { ProviderRecord } from "../db.js";
+import { renderPrompt } from "../prompts.js";
 
 /**
  * One line about an image, written by the model that can see it.
@@ -35,16 +38,6 @@ const MAX_SUMMARY_CHARS = 400;
 /** Output budget, generous for `generateTitle`'s reason: a reasoning model spends it thinking. */
 const MAX_OUTPUT_TOKENS = 512;
 
-const SYSTEM_PROMPT =
-  "You describe images for a study assistant. You receive one image and output a short " +
-  "description of it — nothing else.\n" +
-  "Rules:\n" +
-  "- Write in the same language as the conversation.\n" +
-  "- One to three sentences: what the image shows, and any text in it worth keeping (a " +
-  "diagram's labels, a table's headers, a screenshot's key values).\n" +
-  "- Describe only what is there. Never guess at what is cut off, and never answer a " +
-  "question the image might be asking.\n" +
-  "- Output the description alone: no preamble, no 'This image shows', no quotes.";
 
 export interface SummarizeImageInput {
   provider: ProviderRecord | undefined;
@@ -57,6 +50,21 @@ export interface SummarizeImageInput {
    * in this language" needs no table mapping `zh-CN` to 中文.
    */
   sample: string;
+  /**
+   * Handed this call's token usage, once, when the provider reported any.
+   *
+   * Optional because the ledger is observability rather than behaviour: a caller that does not
+   * record usage still gets its answer. Called at most once, and never with a null — a provider
+   * that reports nothing produces no call at all, so the callback cannot be confused about the
+   * difference between "free" and "unreported".
+   */
+  /**
+   * `durationMs` is the call's own wall-clock time, measured here rather than by the caller: the
+   * caller does not know when the request left, and a figure that included its own bookkeeping
+   * would be a latency nobody experienced. Zero means nobody timed it — the ledger stores NULL for
+   * that, which is a different claim from "it was instant".
+   */
+  onUsage?: (usage: MessageUsage, durationMs: number) => void;
 }
 
 /**
@@ -86,8 +94,13 @@ export async function summarizeImage(input: SummarizeImageInput): Promise<string
     timeout: 30_000,
   });
 
+  // Read here rather than captured in a module constant, so a `<dataRoot>/config.patch.json`
+  // override takes effect: the patch is applied by the process entry point, which runs after this
+  // module has been evaluated.
+  const systemPrompt = renderPrompt("mediaSummary.system");
+  const startedAt = Date.now();
   const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPT),
+    new SystemMessage(systemPrompt),
     new HumanMessage({
       content: [
         {
@@ -101,6 +114,8 @@ export async function summarizeImage(input: SummarizeImageInput): Promise<string
       ],
     }),
   ]);
+  const usage = usageOfMessage(response);
+  if (usage) input.onUsage?.(usage, Date.now() - startedAt);
 
   const text =
     typeof response.content === "string"

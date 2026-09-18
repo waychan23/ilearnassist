@@ -65,9 +65,9 @@ export interface FakeTurn {
  * and a prompt phrase is stable in a way a request shape is not.
  */
 const OUT_OF_BAND_MARKERS = [
-  "topic-classification function", // threads.ts — THREAD_SYSTEM_PROMPT
-  "reflective study coach", // insights.ts — INSIGHT_SYSTEM_PROMPT
-  "short summary of a study conversation", // notesExport.ts — NOTE_SUMMARY_SYSTEM_PROMPT
+  "topic-classification function", // threads.ts — thread.system
+  "reflective study coach", // insights.ts — insight.system
+  "short summary of a study conversation", // notesExport.ts — notesSummary.system
   /*
    * `agent/title.ts` — TITLE_SYSTEM_PROMPT. In the list because a spec needs to make the titler
    * **fail**, and there is no other body-borne way to say so: the sticky `title` cannot be set to

@@ -24,6 +24,8 @@ const en: typeof MessageSchema = {
     copy: "Copy",
     listSeparator: ", ",
     save: "Save",
+    /** The same verb while the request is in flight — the button's pending label. */
+    saving: "Saving…",
     close: "Close",
     edit: "Edit",
     rename: "Rename",
@@ -122,7 +124,103 @@ const en: typeof MessageSchema = {
     identity: "Account",
     passwordLead: "Changing your password signs this account out everywhere else.",
     passwordChanged: "Your password has been changed.",
+    /**
+     * The introduction, which is prompt input rather than a profile page's decoration.
+     *
+     * The lead sentence is the one place a user is told where this text goes — the account is
+     * writing something that reaches a model on every turn, and finding that out afterwards is
+     * how a field meant to help becomes a surprise.
+     */
+    about: {
+      title: "About you",
+      lead: "Optional. Describe your background, field, strengths and interests, and the assistant will take it into account in every conversation — so it can pitch an explanation at the right level.",
+      label: "About me",
+      placeholder:
+        "For example: I work in backend development, mostly Java and distributed systems. I am teaching myself machine learning; linear algebra is my weak spot, and I learn best from concrete examples.",
+      /** `{used}` and `{max}` are character counts. */
+      count: "{used} / {max} characters",
+      save: "Save introduction",
+      saved: "Your introduction has been saved.",
+      /** The save button's tooltip while there is nothing to save. */
+      noChanges: "No changes yet",
+    },
   },
+
+  /**
+   * Token usage: what the model calls cost, and what they were for.
+   *
+   * A namespace of its own rather than keys under \`account.\` or \`admin.\`, because the same words
+   * are needed on two pages that belong to different people — an account's own usage and the
+   * console's installation-wide view — and neither is the other's sub-screen.
+   */
+  usage: {
+    title: "Usage",
+    /** The account's own page. */
+    selfLead: "Model usage across every conversation and background task of yours.",
+    /** The console's, where the numbers are everybody's. */
+    platformLead:
+      "Model usage for the whole installation, broken down by account, workspace, conversation, purpose, provider and model.",
+    loading: "Loading…",
+    /** Nothing has *ever* been recorded — a different claim from an empty range. */
+    empty: "No model calls have been recorded yet.",
+    /** A range that happens to contain no calls. */
+    emptyRange: "No usage in this date range.",
+    untitled: "(Untitled conversation)",
+    /**
+     * When counting began. Deliberately stated: the ledger is forward-only, so a page showing
+     * nothing for last month is telling the truth about its own window rather than about last month.
+     */
+    since: "Counting since {when}.",
+    range: {
+      today: "Today",
+      week: "Last 7 days",
+      month: "Last 30 days",
+      all: "All time",
+      from: "From",
+      to: "To",
+    },
+    /** The headline tiles. */
+    tile: {
+      total: "Total tokens",
+      input: "Input",
+      cached: "Cache hits",
+      output: "Output",
+      calls: "Calls",
+    },
+    /** Table column headers, and the chart series that name the same figures. */
+    field: {
+      calls: "Calls",
+      input: "Input",
+      cached: "Cache hits",
+      cacheMiss: "Input (missed)",
+      output: "Output",
+      reasoning: "Thinking",
+      total: "Total",
+      averageMs: "Avg. ms",
+    },
+    chart: {
+      overTime: "Daily usage",
+      byPurpose: "By purpose",
+    },
+    table: {
+      purpose: "By purpose",
+      provider: "By provider",
+      model: "By model",
+      workspace: "By workspace",
+      session: "By conversation",
+      user: "By account",
+    },
+    /** One per \`USAGE_PURPOSES\` id, so a new purpose is an entry in that array and a key here. */
+    purpose: {
+      chat: "Conversation",
+      title: "Auto-title",
+      thread: "Topic classification",
+      insight: "Insight pass",
+      "summary.media": "Image summary",
+      "summary.notes": "Note summary",
+    },
+  },
+
 
   roles: {
     superadmin: "Superadmin",
@@ -139,12 +237,14 @@ const en: typeof MessageSchema = {
       providers: "Configure the model services every account shares; ordinary users choose from what is configured here.",
       documents: "Configure how documents are parsed for every account.",
       uploads: "The upload limit every account shares.",
+      stats: "Model usage across the installation.",
     },
     nav: {
       users: "Users",
       providers: "Model services",
       documents: "Documents",
       uploads: "Uploads",
+      stats: "Usage",
     },
     uploads: {
       maxSize: "Largest file size (MB)",
@@ -500,6 +600,8 @@ const en: typeof MessageSchema = {
     step: "Question {current} of {total}",
     previous: "Previous",
     next: "Next",
+    /** The pager's third move: the next question with no answer at all. Absent when there is none. */
+    nextUnanswered: "Next unanswered",
     submit: "Submit",
     cancel: "Dismiss",
     unanswered: "No answer",
