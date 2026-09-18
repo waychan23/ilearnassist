@@ -678,17 +678,41 @@ function typeLabel(candidate: NoteType): string {
  * `truncate` on the inner span rather than here, so the icon keeps its size while the name
  * ellipsises — the rule `style.css` gives for a truncated flex row.
  */
+/*
+ * Also a `<button>`, and it has to be told what the `<p>` it replaces got for free. A paragraph
+ * is a block, so it took the field's width and its nowrap label was truncated inside it; a button
+ * **shrink-wraps its content**, so that label made the row wider than the card — which is a
+ * horizontal scrollbar on the whole window. `width: 100%` plus `min-width: 0` is what the block
+ * was doing, and the label's own `.truncate` does the rest.
+ */
 .note-target {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
   margin: 0;
   padding: var(--space-3) var(--space-4);
   background: var(--panel-2);
   border-radius: var(--radius-sm);
   border-left: 2px solid var(--accent);
+  font-family: inherit;
   font-size: var(--fs-3);
   color: var(--text-2);
+  text-align: left;
+}
+/*
+ * The affordance, since a button here is one of two shapes of the same row. No hover *colour*:
+ * the row already sits on `--panel-2` and the palette has nothing above it to move to — the two
+ * tokens are the whole surface scale — so the mark is the accent rule it already carries, the
+ * pointer, and the expand icon beside the label.
+ */
+button.note-target {
+  cursor: pointer;
+}
+button.note-target:hover .truncate,
+button.note-target:focus-visible .truncate {
+  color: var(--text);
 }
 .note-target .icon {
   flex: none;
