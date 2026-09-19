@@ -52,8 +52,13 @@ test("touch: one tap opens the token popover, and it stays open", async ({ page,
   await button.tap();
   await expect(popover).toBeVisible();
 
-  // Tapping elsewhere dismisses it — the touch equivalent of moving the mouse away.
-  await page.locator(".topbar").tap();
+  /*
+   * Tapping elsewhere dismisses it — the touch equivalent of moving the mouse away. The press
+   * is *dispatched on `body`* rather than aimed at the screen, because every large-looking
+   * target on this layout turned out to be a strip of controls rather than empty space; the
+   * overflow case below carries the two failures that established that, and the same fix.
+   */
+  await page.locator("body").dispatchEvent("pointerdown");
   await expect(popover).toBeHidden();
 });
 
@@ -540,7 +545,27 @@ test("layout: nothing overflows the phone, even with the widest controls open", 
   await expect(page.locator(".overlay-popover.menu")).toBeVisible();
   expect(await overflow(), "the model menu overflows").toEqual({ scroll: 412, client: 412 });
 
-  await page.locator(".topbar").tap();
+  /*
+   * Dismissed with a press dispatched on `body`, not by tapping the screen.
+   *
+   * This was `page.locator(".topbar").tap()`, and the way it was wrong took the first CI run
+   * to show. `.topbar` reads as empty space and is a strip of controls; both popovers close on
+   * a **capture-phase** `pointerdown` outside their root, so the tap did dismiss the menu —
+   * and then went on to activate whatever it had landed on. On Linux that was the
+   * session-settings button (`SessionSettingsDialog`'s overlay, `.btn` "重置"), whose modal
+   * covered `.token-btn` for the rest of the test; on macOS the same point is a gap between
+   * controls, which is why it passed here and failed there. It was never a dismissal gesture,
+   * only a tap that happened to be harmless on one platform.
+   *
+   * Aiming at the controls themselves is not open to us either: `.model-btn` sits *under* its
+   * own menu, whose footer item intercepts the tap, and the composer's toolbar covers the
+   * textarea beside the token chip. Dispatching the press sidesteps all of it — and it is what
+   * the assertion is about in the first place: a press outside the popover closes it, with
+   * nothing depending on where that press would have landed.
+   */
+  await page.locator("body").dispatchEvent("pointerdown");
+  await expect(page.locator(".overlay-popover.menu")).toBeHidden();
+
   await page.locator(".token-btn").tap();
   await expect(page.locator(".overlay-popover.popover")).toBeVisible();
   expect(await overflow(), "the token popover overflows").toEqual({ scroll: 412, client: 412 });
