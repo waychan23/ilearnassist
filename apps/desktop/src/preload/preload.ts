@@ -37,6 +37,11 @@ const api: PanelApi = {
   openApp: () => ipcRenderer.invoke(PANEL_CHANNELS.openApp) as Promise<void>,
   openInBrowser: () => ipcRenderer.invoke(PANEL_CHANNELS.openInBrowser) as Promise<void>,
   revealDataDir: () => ipcRenderer.invoke(PANEL_CHANNELS.revealDataDir) as Promise<void>,
+  // No argument, deliberately: the URL is the main process's own, so the page cannot ask the shell
+  // to open an address of its choosing. See the note on the channel.
+  openUpdatePage: () => ipcRenderer.invoke(PANEL_CHANNELS.openUpdatePage) as Promise<void>,
+  checkForUpdates: () =>
+    ipcRenderer.invoke(PANEL_CHANNELS.checkForUpdates) as Promise<PanelState>,
   // Which account is reset is the main process's to decide; the password is the operator's
   // own choice and rides over IPC into the child's stdin, so it never reaches an argv string.
   resetAdminPassword: (input) =>

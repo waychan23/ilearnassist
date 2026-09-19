@@ -49,9 +49,36 @@ export interface DesktopSettings {
    * than a restart later. This file is the only thing both processes already share.
    */
   locale: PanelLocaleChoice;
+  /**
+   * What the last look at GitHub found, so an offline launch does not look like a broken one.
+   *
+   * `null` means no check has ever completed — a first run, or one that has never had a network.
+   * The panel distinguishes the two: "never checked" shows nothing, and "checked, and there is
+   * nothing newer" also shows nothing, but a *cached* answer lets the notice survive a restart
+   * without asking GitHub again on every launch.
+   *
+   * Written by the main process only, and read back through `readSettings`'s narrowing like
+   * everything else here. Note what is *not* cached: a failure. A check that could not answer
+   * leaves the previous result alone rather than replacing it with "nothing", which would make a
+   * flaky network look like a confirmed up-to-date app.
+   */
+  updateCheck: UpdateCheckCache | null;
 }
 
-export const DEFAULT_SETTINGS: DesktopSettings = { sharedOnLan: false, dataDir: "", locale: "" };
+/** A completed version check, as it is remembered between launches. */
+export interface UpdateCheckCache {
+  latestVersion: string;
+  url: string;
+  /** ISO, so the panel could show it later; nothing reads it yet. */
+  checkedAt: string;
+}
+
+export const DEFAULT_SETTINGS: DesktopSettings = {
+  sharedOnLan: false,
+  dataDir: "",
+  locale: "",
+  updateCheck: null,
+};
 
 /**
  * Read the file, falling back to the defaults for anything missing or unreadable.
@@ -90,10 +117,25 @@ export function readSettings(file: string): DesktopSettings {
       // answer, because it is the boundary where a hand-edited JSON value becomes a value the
       // rest of the program is entitled to treat as a locale.
       locale: isPanelLocaleChoice(value["locale"]) ? value["locale"] : DEFAULT_SETTINGS.locale,
+      // Narrowed field by field, and a partial object throws away all of it: a cache with a
+      // missing version is not half-usable, it is unusable, and "no answer" is a state the panel
+      // already handles.
+      updateCheck: readUpdateCheck(value["updateCheck"]),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+}
+
+/** A cached check, or null for anything that is not a complete one. */
+function readUpdateCheck(value: unknown): UpdateCheckCache | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const latestVersion = typeof v["latestVersion"] === "string" ? v["latestVersion"] : null;
+  const url = typeof v["url"] === "string" ? v["url"] : null;
+  const checkedAt = typeof v["checkedAt"] === "string" ? v["checkedAt"] : null;
+  if (!latestVersion || !url || !checkedAt) return null;
+  return { latestVersion, url, checkedAt };
 }
 
 /** Write the file, creating its directory. Throws only if the write itself fails. */

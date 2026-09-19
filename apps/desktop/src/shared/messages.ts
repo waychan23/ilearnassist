@@ -92,6 +92,30 @@ export interface PanelMessages {
   "action.copied": string;
   "action.reveal": string;
   "action.quit": string;
+  "action.checkUpdates": string;
+  /**
+   * The version row, and the notice that appears when a newer release exists.
+   *
+   * The version is always shown rather than only when there is news: it is the number a user is
+   * asked for when they report a problem, and until this row existed the only place to read it was
+   * the operating system's About box. `checking` replaces it for the two seconds a check takes, so
+   * a manual check is visibly doing something.
+   */
+  "update.version": string;
+  /** The label on the version row — "Version", with the number drawn beside it. */
+  "label.version": string;
+  "update.checking": string;
+  "update.available": string;
+  "update.download": string;
+  /**
+   * The line shown after a boot that upgraded the database.
+   *
+   * Both halves matter: that it happened (an upgrade of the user's only copy of their data should
+   * not be silent) and where the copy taken first is, because that is the file they would need if
+   * the upgrade turns out to have been wrong.
+   */
+  "migrated.note": string;
+  "migrated.backup": string;
   "action.showLogs": string;
   "action.hideLogs": string;
   "action.share": string;
@@ -305,6 +329,14 @@ const zhCN: PanelMessages = {
   "cli.fault.INTERNAL": "创建时发生了内部错误。",
   "hint.needAdmin": "这个数据文件夹还没有超级管理员，先创建管理员，服务才能启动。",
   "action.quit": "停止服务器并退出",
+  "action.checkUpdates": "检查更新",
+  "label.version": "版本",
+  "update.version": "v{version}",
+  "update.checking": "正在检查更新…",
+  "update.available": "有新版本 v{version}",
+  "update.download": "下载新版本",
+  "migrated.note": "数据库已从 v{from} 升级到 v{to}。",
+  "migrated.backup": "升级前的副本：{path}",
   "action.showLogs": "查看日志",
   "action.hideLogs": "收起日志",
   "action.share": "在手机/平板打开",
@@ -419,6 +451,14 @@ const en: PanelMessages = {
   "cli.fault.INTERNAL": "An internal error occurred while creating the account.",
   "hint.needAdmin": "This data folder has no superadmin yet — create one before the server can start.",
   "action.quit": "Stop server and quit",
+  "action.checkUpdates": "Check for updates",
+  "label.version": "Version",
+  "update.version": "v{version}",
+  "update.checking": "Checking for updates…",
+  "update.available": "Version v{version} is available",
+  "update.download": "Download it",
+  "migrated.note": "The database was upgraded from v{from} to v{to}.",
+  "migrated.backup": "A copy from before the upgrade: {path}",
   "action.showLogs": "Show logs",
   "action.hideLogs": "Hide logs",
   "action.share": "Open on your phone",

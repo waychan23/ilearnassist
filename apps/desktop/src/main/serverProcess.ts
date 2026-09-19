@@ -1,6 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ServerFault, ServerState, ServerStatus } from "../shared/panelApi.js";
-import { parseListeningLine, type LaunchSpec } from "./launch.js";
+import {
+  parseListeningLine,
+  parseMigratedLine,
+  type LaunchSpec,
+  type MigrationReport,
+} from "./launch.js";
 
 /**
  * Supervises the backend: start it, watch it come up, stop it, and be honest when it dies.
@@ -65,6 +70,7 @@ export class ServerProcess {
   #url: string | null = null;
   #fault: ServerFault | null = null;
   #logs: string[] = [];
+  #migrated: MigrationReport | null = null;
 
   /** Partial line from the last chunk; a chunk boundary is not a line boundary. */
   #pending = "";
@@ -94,6 +100,7 @@ export class ServerProcess {
       // `ServerProcessOptions.dataDir`.
       dataDir: this.#options.dataDir(),
       logs: [...this.#logs],
+      migrated: this.#migrated,
     };
   }
 
@@ -119,6 +126,10 @@ export class ServerProcess {
     this.#url = null;
     this.#fault = null;
     this.#logs = [];
+    // Per-run, like the three above: a note about the migration *this* boot performed. Kept
+    // across restarts it would survive a data-root change and describe the previous root's
+    // database, which is worse than saying nothing.
+    this.#migrated = null;
     this.#pending = "";
     this.#state = "starting";
     this.#emit();
@@ -281,6 +292,18 @@ export class ServerProcess {
       this.#emit();
       return;
     }
+
+    /*
+     * A migration is reported but does **not** touch the state machine: `running` still has
+     * exactly one cause, the listening line. It is recorded because the panel has something to
+     * say about it — an upgrade of the user's only copy of their data should not be silent, and
+     * the path of the copy taken beforehand is worth having on screen.
+     *
+     * First one wins: the line is printed once per boot, but a restart loop would print it
+     * again, and the earlier report is the one that describes what happened to this database.
+     */
+    const migrated = parseMigratedLine(line);
+    if (migrated && !this.#migrated) this.#migrated = migrated;
 
     this.#emitLogsSoon();
   }

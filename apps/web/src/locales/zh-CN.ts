@@ -199,6 +199,14 @@ export default {
     passwordLead: "修改密码后，这个账号在其他设备上的登录会全部失效。",
     passwordChanged: "密码已修改。",
     /**
+     * The build and the schema, on the account page.
+     *
+     * Two numbers rather than one because they move independently — a build can be replaced with
+     * the schema unchanged, and a database can be upgraded by a build that is not newer — and
+     * somebody self-hosting is asked for both when they report a problem.
+     */
+    version: "版本 v{version} · 数据库 v{schema}",
+    /**
      * The introduction, which is prompt input rather than a profile page's decoration.
      *
      * The lead sentence is the one place a user is told where this text goes. It is not a detail

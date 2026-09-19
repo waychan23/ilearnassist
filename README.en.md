@@ -208,6 +208,10 @@ files) and `users/<name>/sources/` (your uploads).
 **How do I back it up?**
 Copy that folder. That is the whole backup; the application itself can be reinstalled freely.
 
+Inside it, `<data folder>/backups/` holds the snapshots taken **automatically before a database
+upgrade** (the most recent five). When the schema has to change, the app copies the database first,
+because an upgrade that succeeds and turns out to be wrong has no other way back.
+
 **I forgot my password.**
 Use **Reset administrator password** in the desktop control panel. It works **with the server
 stopped** — a forgotten password is usually discovered at the same moment as something else
@@ -229,6 +233,19 @@ default.
 **Does uninstalling delete my data?**
 No. The program and your data are in different places, and uninstalling the app leaves the data
 folder untouched. Delete that folder by hand to remove everything.
+
+**How do I upgrade?**
+**The database upgrades itself — there is nothing to do.** A newer build walks the schema forward
+the first time it starts, and takes a snapshot into `<data folder>/backups/` (above) before it
+touches anything. The panel says so: *"the database was upgraded from vX to vY"*, with the path of
+the copy.
+
+**The app itself is a download you install over the old one.** The panel tells you when a newer
+release exists and takes you to the download page; installing over the top leaves your data alone,
+because your data is not in the app. There is deliberately no one-click self-update: on macOS that
+requires a paid code-signing certificate, which this project does not have (hence the install
+warning above). Doing it this way on all three platforms is more honest than a button that works on
+two of them.
 
 **Which systems are supported?**
 macOS (Apple silicon and Intel), Windows and Linux all have installers, and the source runs

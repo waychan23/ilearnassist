@@ -11,6 +11,7 @@ import {
   seedFromConfig,
   type AppDb,
 } from "./db.js";
+import type { MigrationOutcome } from "./migrations.js";
 import { DocumentService } from "./documents/service.js";
 import { dataLayout, type DataLayout } from "./paths.js";
 import { registerWebApp } from "./webApp.js";
@@ -53,13 +54,21 @@ export interface BuiltServer {
   documents: DocumentService;
   /** Whether the built frontend was found and is being served at `/`. */
   servesWebApp: boolean;
+  /**
+   * The migration this boot ran, or null when the database was already current.
+   *
+   * Returned rather than printed: the line the panel reads is written by the process entry point
+   * (`index.ts`), beside the listening line, so the output a launcher parses lives in one file.
+   */
+  migrated: MigrationOutcome | null;
 }
 
 export async function buildServer(input: BuildServerInput): Promise<BuiltServer> {
   const { config, dataRoot } = input;
   const layout = dataLayout(dataRoot);
 
-  const db = createDb(layout.sqliteFile);
+  let migrated: MigrationOutcome | null = null;
+  const db = createDb(layout.sqliteFile, { onMigrated: (outcome) => (migrated = outcome) });
 
   /*
    * No account is created here, and none can be. There used to be one — a well-known
@@ -130,5 +139,5 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
     await documents.shutdown();
   });
 
-  return { app, db, dataRoot, layout, documents, servesWebApp };
+  return { app, db, dataRoot, layout, documents, servesWebApp, migrated };
 }

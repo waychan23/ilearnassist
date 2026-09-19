@@ -133,6 +133,8 @@ const en: typeof MessageSchema = {
     identity: "Account",
     passwordLead: "Changing your password signs this account out everywhere else.",
     passwordChanged: "Your password has been changed.",
+    /** The build and the schema — see the note in the Chinese catalog. */
+    version: "Version v{version} · database v{schema}",
     /**
      * The introduction, which is prompt input rather than a profile page's decoration.
      *
