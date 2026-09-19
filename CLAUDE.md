@@ -2137,4 +2137,6 @@ references rather than background: `docs/design-system.md` for anything visual, 
 before changing any system prompt or adding one, `docs/usage.md` before touching the token ledger or
 the statistics pages, `docs/widgets.md` before adding a widget to the right sidebar, and
 `docs/session-locks.md` before touching anything that writes to a conversation from more than one
-client.
+client. `docs/demo-gifs.md` is the recording brief for the READMEs' animated demos — the slots are
+in both READMEs as commented-out image lines, so the naming and the content are specified in one
+place rather than agreed per take.

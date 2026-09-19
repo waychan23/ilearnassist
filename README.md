@@ -41,6 +41,12 @@
 - **助手（助理）可自定义** —— 人设提示词、可用工具、默认控件，都可以做成一个助理，供
   自己反复使用，也可以公开给所有账号。对话开始时会复制一份，之后改助理不会影响已有对话。
 
+<!--
+  演示 GIF 待录制 —— 把下面这行两端的注释去掉即可显示（录好后把文件放到 docs/assets/quiz-and-notes.zh.gif）。
+  录制内容见 docs/demo-gifs.md 的「用例 4」。
+![答题判分与笔记：选中一段话写笔记，点笔记跳回原文](docs/assets/quiz-and-notes.zh.gif)
+-->
+
 ### 资料
 
 - **资料库** —— 上传 PDF / Word / Excel / PPT / 纯文本等文件，或收藏网页，集中管理。
@@ -53,6 +59,12 @@
 - **网页搜索与抓取** —— 内置 Bing / DuckDuckGo（免 Key），也支持 Tavily / SearXNG；助手
   可以把确认有用的网页收藏成资料。
 - **文件预览** —— 代码高亮、Markdown、Mermaid 图表、表格、图片、PDF 等直接在应用内查看。
+
+<!--
+  演示 GIF 待录制 —— 把下面这行两端的注释去掉即可显示（录好后把文件放到 docs/assets/library-and-mention.zh.gif）。
+  录制内容见 docs/demo-gifs.md 的「用例 5」。
+![资料库与 @ 引用：上传 PDF，然后针对它提问](docs/assets/library-and-mention.zh.gif)
+-->
 
 ### 账号与部署
 
@@ -96,6 +108,12 @@
    填入 API Key 并保存。**填好之前，模型列表是空的**——助手需要一个大模型才能工作。
 6. **开始学习**：回到首页，新建一个工作区，进去后新建对话，助理选 **引导学习 · Guided Learning**，然后告诉
    它你想学什么。
+
+<!--
+  演示 GIF 待录制 —— 把下面这行两端的注释去掉即可显示（录好后把文件放到 docs/assets/first-run.zh.gif）。
+  录制内容见 docs/demo-gifs.md 的「用例 1」。
+![首次启动：选数据目录、创建管理员、打开应用](docs/assets/first-run.zh.gif)
+-->
 
 > 首次遇到防火墙询问时，请允许应用在本机（127.0.0.1）通信。默认不对外开放——只有你在控制
 > 面板里主动打开"局域网共享"，手机才能访问。
@@ -145,6 +163,12 @@ pnpm dev
 点了没反应的服务商，不如不给。任何 OpenAI 兼容的服务（Ollama、LM Studio、vLLM、自建网关…）
 都可以在控制台里手动添加。
 
+<!--
+  演示 GIF 待录制 —— 把下面这行两端的注释去掉即可显示（录好后把文件放到 docs/assets/configure-provider.zh.gif）。
+  录制内容见 docs/demo-gifs.md 的「用例 2」。
+![配置模型服务商：填入 Key 之后，模型出现在选择器里](docs/assets/configure-provider.zh.gif)
+-->
+
 ## 内置助理：引导学习
 
 「引导学习 · Guided Learning」是一个公开助理，所有账号都能在助理列表里看到并使用。它
@@ -167,6 +191,12 @@ pnpm dev
 它属于创建它的那个管理员账号，但对所有账号**可见可用**。想按自己的方式教，在 **助理** 里
 把它**复制一份**再改：改内置那条（只有管理员能改）会影响此后每一个新建的会话，而已经开始的
 对话不受影响——对话在创建时就复制了一份助理设定，之后互不干扰。
+
+<!--
+  演示 GIF 待录制 —— 把下面这行两端的注释去掉即可显示（录好后把文件放到 docs/assets/first-lesson.zh.gif）。
+  录制内容见 docs/demo-gifs.md 的「用例 3」。
+![引导学习：从提出主题到生成计划、开始讲解、出题检验](docs/assets/first-lesson.zh.gif)
+-->
 
 ---
 

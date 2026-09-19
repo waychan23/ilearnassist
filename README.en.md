@@ -49,6 +49,12 @@ data on first launch → create an administrator → paste a key → start study
   reusable assistant, private to you or published to every account. A conversation copies it at
   creation, so editing the assistant later leaves existing conversations alone.
 
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/quiz-and-notes.en.gif).
+  What to record: docs/demo-gifs.md, case 4.
+![Answering a quiz, and a note that jumps back to the passage it quotes](docs/assets/quiz-and-notes.en.gif)
+-->
+
 ### Material
 
 - **Library** — upload PDF / Word / Excel / PowerPoint / plain text, or keep a web page, all in
@@ -63,6 +69,12 @@ data on first launch → create an administrator → paste a key → start study
   assistant can keep a page it found useful as a reference.
 - **File preview** — highlighted code, Markdown, Mermaid diagrams, tables, images and PDFs, all
   in the app.
+
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/library-and-mention.en.gif).
+  What to record: docs/demo-gifs.md, case 5.
+![The library and @: upload a PDF, then ask about it](docs/assets/library-and-mention.en.gif)
+-->
 
 ### Accounts and deployment
 
@@ -112,6 +124,12 @@ Then walk through this once:
    empty** — the assistant needs a model to work at all.
 6. **Start learning**: go back to the home page, create a workspace, open a conversation, choose
    the **引导学习 · Guided Learning** assistant, and tell it what you want to learn.
+
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/first-run.en.gif).
+  What to record: docs/demo-gifs.md, case 1.
+![First run: pick a data folder, create the administrator, open the app](docs/assets/first-run.en.gif)
+-->
 
 > If your firewall asks, allow the app to communicate on this machine (127.0.0.1). Nothing is
 > exposed to the network by default — that only changes if you turn on LAN sharing yourself.
@@ -165,6 +183,12 @@ conversation's model picker — better to offer nothing than to offer something 
 nothing. Any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, your own gateway…) can be added
 by hand in the console.
 
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/configure-provider.en.gif).
+  What to record: docs/demo-gifs.md, case 2.
+![Configuring a provider: once a key is saved, the model appears in the picker](docs/assets/configure-provider.en.gif)
+-->
+
 ## The built-in assistant
 
 **引导学习 · Guided Learning** is a public assistant, visible to and usable by every account. It
@@ -194,6 +218,12 @@ every account**. To teach your own way, open **Assistants** and **copy** it befo
 changing the built-in itself (administrator only) affects every conversation started from then
 on, while conversations already under way are untouched — a conversation copies the assistant's
 definition when it is created, and the two go their separate ways after that.
+
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/first-lesson.en.gif).
+  What to record: docs/demo-gifs.md, case 3.
+![Guided Learning: from a topic to a plan, the first lesson, and a quiz](docs/assets/first-lesson.en.gif)
+-->
 
 ---
 
