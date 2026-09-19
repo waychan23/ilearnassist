@@ -5,6 +5,9 @@
 [![CI](https://github.com/waychan23/ilearnassist/actions/workflows/ci.yml/badge.svg)](https://github.com/waychan23/ilearnassist/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+*The screenshots and demos below show the Chinese interface — the app is fully translated, and
+English recordings are on the way.*
+
 **Interactive Learning Assistant** (交互式学习助理) is an AI study companion that runs on your
 own computer. It is not just another chat box: it draws up a study plan, teaches it one item at
 a time, checks whether you actually understood with multiple-choice questions, keeps track of
@@ -49,11 +52,13 @@ data on first launch → create an administrator → paste a key → start study
   reusable assistant, private to you or published to every account. A conversation copies it at
   creation, so editing the assistant later leaves existing conversations alone.
 
-<!--
-  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/quiz-and-notes.en.gif).
-  What to record: docs/demo-gifs.md, case 4.
-![Answering a quiz, and a note that jumps back to the passage it quotes](docs/assets/quiz-and-notes.en.gif)
--->
+![Answering a quiz, and a note that jumps back to the passage it quotes](docs/assets/quiz-and-notes.zh.gif)
+
+*A wrong answer is marked honestly; a note jumps back to its passage.*
+
+![Ask for a diagram, open it in the figures panel, then switch to threads](docs/assets/diagram-and-threads.zh.gif)
+
+*The figures and threads panels collect what the conversation drew and discussed.*
 
 ### Material
 
@@ -70,11 +75,9 @@ data on first launch → create an administrator → paste a key → start study
 - **File preview** — highlighted code, Markdown, Mermaid diagrams, tables, images and PDFs, all
   in the app.
 
-<!--
-  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/library-and-mention.en.gif).
-  What to record: docs/demo-gifs.md, case 5.
-![The library and @: upload a PDF, then ask about it](docs/assets/library-and-mention.en.gif)
--->
+![The library and @: upload a PDF, then ask about it](docs/assets/library-and-mention.zh.gif)
+
+*Uploaded material is referenced with @, and the assistant reads it.*
 
 ### Accounts and deployment
 
@@ -125,11 +128,9 @@ Then walk through this once:
 6. **Start learning**: go back to the home page, create a workspace, open a conversation, choose
    the **引导学习 · Guided Learning** assistant, and tell it what you want to learn.
 
-<!--
-  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/first-run.en.gif).
-  What to record: docs/demo-gifs.md, case 1.
-![First run: pick a data folder, create the administrator, open the app](docs/assets/first-run.en.gif)
--->
+![First run: pick a data folder, create the administrator, open the app](docs/assets/first-run.zh.gif)
+
+*From download to a usable window: four steps.*
 
 > If your firewall asks, allow the app to communicate on this machine (127.0.0.1). Nothing is
 > exposed to the network by default — that only changes if you turn on LAN sharing yourself.
@@ -183,11 +184,9 @@ conversation's model picker — better to offer nothing than to offer something 
 nothing. Any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, your own gateway…) can be added
 by hand in the console.
 
-<!--
-  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/configure-provider.en.gif).
-  What to record: docs/demo-gifs.md, case 2.
-![Configuring a provider: once a key is saved, the model appears in the picker](docs/assets/configure-provider.en.gif)
--->
+![Configuring a provider: once a key is saved, the model appears in the picker](docs/assets/configure-provider.zh.gif)
+
+*The model appears in the picker once a key is saved.*
 
 ## The built-in assistant
 
@@ -219,11 +218,9 @@ changing the built-in itself (administrator only) affects every conversation sta
 on, while conversations already under way are untouched — a conversation copies the assistant's
 definition when it is created, and the two go their separate ways after that.
 
-<!--
-  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/first-lesson.en.gif).
-  What to record: docs/demo-gifs.md, case 3.
-![Guided Learning: from a topic to a plan, the first lesson, and a quiz](docs/assets/first-lesson.en.gif)
--->
+![Guided Learning: from a topic to a plan, the first lesson, and a quiz](docs/assets/first-lesson.zh.gif)
+
+*The plan panel grows item by item, and each item is checked with a question.*
 
 ---
 

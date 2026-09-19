@@ -25,17 +25,22 @@ recorded.
 
 ## Status
 
-- **The Chinese set is recorded and wired up**: all six `docs/assets/*.zh.gif` are referenced by
-  `README.md`, each with a one-line caption under it.
-- **The English set is not yet distinct.** `docs/assets/*.en.gif` exist, but every one is
-  **byte-identical to its `.zh` counterpart**, so pointing `README.en.md` at them would show
-  Chinese-interface demos to English readers. The `.en` slots therefore stay commented out until
-  that is decided — see the note in the pull request or the commit that wired the Chinese set.
-- The brief's numbers were **soft**: a tight 1280×800 window and a ≤3 MB budget are preferences
-  for clone size, not platform limits. A committed image is bound by GitHub's 100 MB per-file cap
-  and the ~1 GB repository guideline, and the recordings are well inside both (largest 10.7 MB,
-  74 MB in total across both sets). What matters more is that a GIF is legible in a README
-  column, which is what the 1000px figure is really about.
+**Recorded and wired up: six demos of the Chinese interface, in `docs/assets/*.zh.gif`.**
+
+**Both READMEs use them, and that is a decision rather than an oversight.** There is one set —
+the Chinese one — and `README.en.md` points at the same six files, with English captions. English
+recordings are planned; when they arrive they are named `<name>.en.gif`, and the only edit is
+repointing the six image lines in `README.en.md` at them. Until then the English README carries a
+line under its badges saying the demos show the Chinese interface.
+
+**The numbers in this brief were soft.** A tight 1280×800 window and a ≤3 MB budget are
+preferences for clone size, not platform limits — the recordings are full-screen, longer than the
+suggested durations, and up to 10.7 MB. That is fine: a committed image is bound by GitHub's
+**100 MB per-file** cap and the **~1 GB** repository guideline, and the six files total 37 MB. The
+10 MB figure that circulates applies to *uploaded attachments* and to externally-hosted images
+routed through `camo`, and these are neither. What the width figure was really about is legibility
+in a README column, and compressing a legible demo into an illegible one to satisfy a limit that
+does not apply is the wrong trade.
 
 ## Before you record
 
