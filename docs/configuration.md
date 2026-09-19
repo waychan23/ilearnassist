@@ -8,7 +8,7 @@ vars win).
 | Kind | Keys | Where it is edited | Apply |
 | --- | --- | --- | --- |
 | **Bootstrap** | `server`, `workspaces`, `tools` | `config.yaml` | restart the backend |
-| **Seed** | `providers`, `defaultProvider`, `defaultModel` | Settings → Providers in the UI | immediate |
+| **Seed** | `providers`, `defaultProvider`, `defaultModel` | Console → Model services | immediate |
 
 Providers and models are copied into SQLite on first boot. After that the UI is
 the source of truth: editing the YAML later does **not** overwrite what the UI
