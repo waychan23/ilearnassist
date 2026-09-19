@@ -24,7 +24,10 @@ const store = useAppStore();
  * One group per level, in the order they are drawn, and only the non-empty ones.
  *
  * An empty group is not a group: passing it to the strip would spend a divider's width on a rule
- * with nothing on one side of it.
+ * with nothing on one side of it. **The workspace entry is empty today and that is the expected
+ * state, not a bug** — nothing is installed at that level, so in practice the strip always draws
+ * one group and no divider. It is kept because the level is still a level, and a workspace widget
+ * would appear here without this expression changing.
  */
 const groups = computed(() =>
   [

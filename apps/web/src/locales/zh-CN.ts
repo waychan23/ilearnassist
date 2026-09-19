@@ -1219,25 +1219,13 @@ export default {
     },
     open: "打开控件栏",
     /**
-     * The session parameters dialog with no conversation open. Distinct from
-     * `widgets.sessionStats.noSession`, which is the panel saying it has nothing to show: this
-     * one says a widget has nowhere to be installed *yet*.
+     * The install list with no conversation open: a widget has nowhere to be installed *yet*.
+     * Distinct from the per-widget `noSession` strings below, which are a *panel* saying it has
+     * nothing to show — a different problem, with a different remedy.
      */
     noSession: "还没有会话，控件要装到某个会话里。",
     loadFailed: "读取数据失败",
     retry: "重试",
-    messages: "消息",
-    tokens: "Tokens",
-    workspaceStats: {
-      /**
-       * "（Demo）" is part of the name, not a note about it: these two are shipped as
-       * demonstrations of the framework rather than as features, and a tab that reads as a
-       * finished product would invite someone to rely on it.
-       */
-      name: "工作区统计（Demo）",
-      hint: "当前工作区的会话列表，以及每个会话的消息数与 token 消耗。",
-      empty: "这个工作区还没有会话。",
-    },
     workspaceSettings: {
       title: "工作区设置",
       liveHint: "改动会立刻反映在右侧栏上。",
@@ -1251,12 +1239,6 @@ export default {
       description: "工作区描述",
       descriptionPlaceholder: "这个工作区用来做什么？",
       descriptionHint: "仅供你自己参考，不会发送给模型。",
-    },
-    sessionStats: {
-      name: "会话统计（Demo）",
-      hint: "当前会话的消息数与 token 消耗。",
-      noSession: "打开一个会话后，这里会显示它的统计。",
-      context: "本轮上下文",
     },
     plan: {
       name: "计划",

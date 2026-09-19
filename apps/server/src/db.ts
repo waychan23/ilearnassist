@@ -33,7 +33,6 @@ import type {
   Session,
   SessionLockView,
   SessionSettings,
-  SessionStats,
   StoredFile,
   ThreadBranch,
   TitleState,
@@ -51,7 +50,6 @@ import type {
   WorkResourceType,
   Workspace,
   WorkspaceSettings,
-  WorkspaceStats,
 } from "@ilearnassist/shared";
 import {
   DEFAULT_USER_ROLES,
@@ -66,7 +64,7 @@ import {
 import { workspaceWorkdir } from "./paths.js";
 import type { ScopeQuery } from "./workspaceScope.js";
 import { applySchema } from "./schema.js";
-import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
+import { resolveWidgetStates } from "./widgets.js";
 
 /**
  * What a source listing may be narrowed by. Every field is optional and independent.
@@ -1453,21 +1451,6 @@ function safeParseObject<T extends object>(json: string | null): T {
 }
 
 /**
- * One message's usage, or `null` when the column held nothing.
- *
- * `null` and `{}` are different answers, and the difference is load-bearing for the statistics:
- * those count messages by their entries in an array, so a message with no usage has to arrive as
- * `null` rather than as a zeroed object — otherwise a user message and a turn the user stopped
- * would both look like turns that recorded figures.
- *
- * A column holding *malformed* JSON is the tolerant case and parses to `{}`, which sums to zero
- * and is what a damaged row should contribute.
- */
-function parseUsage(json: string | null): MessageUsage | null {
-  return json ? safeParseObject<MessageUsage>(json) : null;
-}
-
-/**
  * Add a column to an existing table when it is missing. `CREATE TABLE IF NOT EXISTS`
  * silently skips tables that already exist, so databases created before a schema
  * change would otherwise never gain the new columns.
@@ -2486,7 +2469,6 @@ export interface AppDb {
   assignTableToThread(sessionId: string, tableId: string, threadId: string): number;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
-  statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
 
   /*
    * The usage ledger. Four methods, and the split between them is the permission model rather
@@ -2508,7 +2490,6 @@ export interface AppDb {
   /** The instant of the first row ever written, or null. How a page says when counting began. */
   usageSince(userId?: string): string | null;
   /** The same numbers for one conversation. `undefined` when it is not the caller's. */
-  statsForSessionForUser(userId: string, sessionId: string): SessionStats | undefined;
 
   listProviders(): ProviderRecord[];
   getProvider(id: string): ProviderRecord | undefined;
@@ -4165,25 +4146,6 @@ export function createDb(dbPath: string): AppDb {
        updated_at = @now`
   );
 
-  /*
-   * Two narrow projections for the statistics: the role (so a count can tell the two apart if it
-   * ever wants to) and the usage blob. `usage` is read whole and parsed in `widgets.ts` rather
-   * than summed here — see the note on `sumUsage` for why the arithmetic is not in SQL.
-   *
-   * Ordered ascending by `created_at`, because `contextTokens` is the *last* turn's figure and
-   * "last" has to mean the same thing to the query as it does to the reader.
-   */
-  const stmtSessionUsageRows = db.prepare(
-    `SELECT m.role, m.usage FROM messages m
-      WHERE m.session_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at ASC`
-  );
-  const stmtWorkspaceUsageRows = db.prepare(
-    `SELECT m.session_id, m.role, m.usage FROM messages m
-       JOIN sessions s ON s.id = m.session_id
-      WHERE s.workspace_id = ? AND s.deleted_at IS NULL AND m.deleted_at IS NULL
-      ORDER BY m.created_at ASC`
-  );
-
   /* ------------------------------ providers ------------------------------- */
   const stmtListProviders = db.prepare(
     "SELECT * FROM providers WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC"
@@ -5435,43 +5397,6 @@ export function createDb(dbPath: string): AppDb {
     usageSince(userId) {
       const row = stmtUsageSince.get({ userId: userId ?? null }) as { since: string | null };
       return row.since;
-    },
-    statsForWorkspace(userId, workspaceId) {
-      const workspace = workspaceForUser(workspaceId, userId);
-      if (!workspace) return undefined;
-
-      const rows = stmtWorkspaceUsageRows.all(workspaceId) as {
-        session_id: string;
-        usage: string | null;
-      }[];
-      const bySession = new Map<string, (MessageUsage | null)[]>();
-      for (const row of rows) {
-        const list = bySession.get(row.session_id) ?? [];
-        list.push(parseUsage(row.usage));
-        bySession.set(row.session_id, list);
-      }
-
-      // Driven by the session list rather than by the rows, so a conversation with no messages
-      // still appears with zeros — a widget that silently omitted it would read as the
-      // conversation not existing. `listSessionsForUser` already orders newest first.
-      return buildWorkspaceStats({
-        workspaceId,
-        sessions: (stmtListSessionsForUser.all(workspaceId, userId) as SessionRow[]).map((s) => ({
-          sessionId: s.id,
-          title: s.title,
-          usages: bySession.get(s.id) ?? [],
-        })),
-      });
-    },
-    statsForSessionForUser(userId, sessionId) {
-      const row = getSessionRowForUser(sessionId, userId);
-      if (!row) return undefined;
-      const rows = stmtSessionUsageRows.all(sessionId) as { usage: string | null }[];
-      return buildSessionStats({
-        sessionId,
-        title: row.title,
-        usages: rows.map((r) => parseUsage(r.usage)),
-      });
     },
 
     listProviders() {

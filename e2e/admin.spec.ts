@@ -406,9 +406,22 @@ test("an administrator configures a model provider from the console", async ({ p
    * them was being read — so the claim was true and untested, and a change that broke it would
    * have stayed green.
    */
-  await enterWorkspace(page);
-  // A conversation of this spec's own: the composer renders without one, so `enterWorkspace`
-  // does not imply a session, and both controls below are session-scoped.
+  /*
+   * A workspace of this spec's own, for the reason spelled out further down this file:
+   * `enterWorkspace(page)` with no name opens the suite's shared default workspace, and
+   * `chat.spec.ts` asserts that workspace holds **exactly one** conversation. Making a second one
+   * there fails a test in a different file, which points at the wrong thing entirely.
+   *
+   * A conversation, not just a workspace: the composer renders without a session, so
+   * `enterWorkspace` does not imply one, and both controls asserted below are session-scoped.
+   */
+  await page.getByTestId("admin-back").click();
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+  const workspace = `provider-picker ${Date.now()}`;
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(workspace);
+  await page.getByTestId("workspace-create-submit").click();
+  await enterWorkspace(page, workspace);
   await page.getByTestId("new-session").click();
   await page.getByTestId("create-session").click();
   await expect(page.getByTestId("composer-input")).toBeVisible();

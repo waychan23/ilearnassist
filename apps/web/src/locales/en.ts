@@ -979,14 +979,6 @@ const en: typeof MessageSchema = {
     noSession: "No conversation yet — a widget has to be installed into one.",
     loadFailed: "Couldn't load the data",
     retry: "Retry",
-    messages: "Messages",
-    tokens: "Tokens",
-    workspaceStats: {
-      /** "(Demo)" is part of the name, not a note about it — see the remark in `zh-CN.ts`. */
-      name: "Workspace stats (Demo)",
-      hint: "This workspace's conversations, with each one's message count and token use.",
-      empty: "This workspace has no conversations yet.",
-    },
     workspaceSettings: {
       title: "Workspace settings",
       liveHint: "Changes show up in the right sidebar immediately.",
@@ -995,12 +987,6 @@ const en: typeof MessageSchema = {
       description: "Workspace description",
       descriptionPlaceholder: "What is this workspace for?",
       descriptionHint: "For your own reference; never sent to the model.",
-    },
-    sessionStats: {
-      name: "Conversation stats (Demo)",
-      hint: "This conversation's message count and token use.",
-      noSession: "Open a conversation and its numbers appear here.",
-      context: "Context this turn",
     },
     plan: {
       name: "Plan",

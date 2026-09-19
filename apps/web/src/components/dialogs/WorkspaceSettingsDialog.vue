@@ -288,8 +288,14 @@ function isActiveWorkspace(): boolean {
           />
 
 
+          <!--
+            Both of these are conditional on there being something to install, which there is
+            not right now: the workspace level has no widgets. Without the guard the list would
+            draw its own empty wrapper and the hint below would explain what installing here
+            does — to a section with nothing in it.
+          -->
           <WidgetToggleList
-            v-if="uiState.workspaceSettingsId"
+            v-if="uiState.workspaceSettingsId && rows.length > 0"
             scope="workspace"
             :rows="rows"
             testid-prefix="workspace-widget"
@@ -301,7 +307,7 @@ function isActiveWorkspace(): boolean {
             Installing here changes a panel the user may not be able to see. Said out loud only
             when it is true, rather than always: a sentence nobody needs is one they learn to skip.
           -->
-          <div v-if="isActiveWorkspace()" class="hint">
+          <div v-if="isActiveWorkspace() && rows.length > 0" class="hint">
             {{ t("widgets.workspaceSettings.liveHint") }}
           </div>
         </div>
