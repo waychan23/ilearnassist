@@ -3,6 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waychan23/ilearnassist.git",
+    "directory": "apps/server"
+  },
+  "homepage": "https://github.com/waychan23/ilearnassist",
+  "bugs": "https://github.com/waychan23/ilearnassist/issues",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",

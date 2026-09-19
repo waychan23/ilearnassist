@@ -4,6 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Desktop control panel: starts the ilearnassist server and opens the app.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waychan23/ilearnassist.git",
+    "directory": "apps/desktop"
+  },
+  "homepage": "https://github.com/waychan23/ilearnassist",
+  "bugs": "https://github.com/waychan23/ilearnassist/issues",
   "main": "dist/main/main.cjs",
   "scripts": {
     "dev": "node scripts/build.mjs --no-web && electron .",

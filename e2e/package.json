@@ -1,5 +1,13 @@
 {
   "name": "ilearnassist-e2e",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waychan23/ilearnassist.git",
+    "directory": "e2e"
+  },
+  "homepage": "https://github.com/waychan23/ilearnassist",
+  "bugs": "https://github.com/waychan23/ilearnassist/issues"
 }
