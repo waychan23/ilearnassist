@@ -2855,8 +2855,22 @@ export function isDiagramFile(name: string): boolean {
   return (DIAGRAM_FILE_EXTENSIONS as readonly string[]).includes(name.slice(dot + 1).toLowerCase());
 }
 
-/** What a model can do — drives vision handling and UI badges. */
-export type ModelCapability = "vision" | "reasoning" | "tool_use";
+/**
+ * What a model can do.
+ *
+ * Three behaviours read this, not one, which is why it is a real list rather than a UI
+ * label: `vision` decides whether an image attachment is sent as an `image_url` or reaches
+ * the model as a placeholder, `reasoning` decides whether chain-of-thought is replayed back
+ * on outgoing messages that carry tool calls, and `tool_use` decides whether the tools are
+ * offered at all. A model seeded with the wrong capability therefore misbehaves rather than
+ * merely showing the wrong badge.
+ */
+export const MODEL_CAPABILITIES = ["vision", "reasoning", "tool_use"] as const;
+
+export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
+
+export const isModelCapability = (value: unknown): value is ModelCapability =>
+  typeof value === "string" && (MODEL_CAPABILITIES as readonly string[]).includes(value);
 
 export interface ProviderModel {
   /** Stable record id, used when editing/deleting this model. */

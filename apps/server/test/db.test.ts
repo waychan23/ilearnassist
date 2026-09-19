@@ -809,6 +809,25 @@ describe("seedFromConfig", () => {
     expect(db.getProvider("p")!.models[0]!.capabilities).toContain("tool_use");
   });
 
+  it("prefers a declared capability over the guess", () => {
+    // `glm-5.3` is the case that makes the field worth having: the id says nothing about
+    // reasoning, so a guess reads it as a plain chat model — and a reasoning model that never
+    // gets its chain-of-thought replayed is a 400 from DeepSeek-shaped providers. Note the id
+    // is deliberately one the guess gets wrong, so this cannot pass by accident.
+    const declared = {
+      ...seed,
+      providers: [
+        {
+          ...seed.providers[0]!,
+          models: [{ id: "glm-5.3", name: "GLM", capabilities: ["tool_use", "reasoning"] as const }],
+        },
+      ],
+    };
+    expect(guessCapabilities("glm-5.3")).toEqual(["tool_use"]);
+    seedFromConfig(db, declared as unknown as typeof seed);
+    expect(db.getProvider("p")!.models[0]!.capabilities).toEqual(["tool_use", "reasoning"]);
+  });
+
   it("is a no-op once providers exist, so UI edits survive a config change", () => {
     seedFromConfig(db, seed);
     db.updateProvider("p", { name: "Renamed In UI" });

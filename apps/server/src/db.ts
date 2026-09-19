@@ -5617,13 +5617,24 @@ export interface SeedProviderDef {
   name: string;
   baseURL: string;
   apiKey?: string;
-  models: { id: string; name: string }[];
+  models: { id: string; name: string; capabilities?: ModelCapability[] }[];
 }
 
 /**
- * Best-effort capability guess for a model seeded from config. It only pre-fills the
- * checkboxes in Settings → Providers; the user can correct it there, and it drives
- * nothing but the vision placeholder and the UI badges.
+ * Best-effort capability guess, for a model entry that does not declare them.
+ *
+ * It is a **fallback, not the mechanism**: `config.yaml` can declare `capabilities` per
+ * model and does so for every built-in, because a model id does not reliably say what the
+ * model can do — see `ModelDef` for the two examples that settle it. This stays for models
+ * added by hand and for entries written before the field existed.
+ *
+ * What it feeds is worth stating, because an earlier version of this comment claimed it
+ * "drives nothing but the vision placeholder and the UI badges", which was wrong and is
+ * exactly the kind of sentence that gets trusted: `vision` decides whether an image
+ * attachment travels as an `image_url` or reaches the model as a placeholder, `reasoning`
+ * decides whether chain-of-thought is replayed on outgoing messages carrying tool calls
+ * (DeepSeek 400s without it), and `tool_use` decides whether the tools are offered at all.
+ * A wrong guess here is a provider that fails on every turn.
  */
 export function guessCapabilities(modelId: string): ModelCapability[] {
   const id = modelId.toLowerCase();
@@ -5665,7 +5676,9 @@ export function seedFromConfig(
         providerId: p.id,
         modelId: m.id,
         name: m.name,
-        capabilities: guessCapabilities(m.id),
+        // Declared wins over guessed. A seed entry that names its capabilities knows
+        // something the id does not say.
+        capabilities: m.capabilities ?? guessCapabilities(m.id),
       });
     }
   }

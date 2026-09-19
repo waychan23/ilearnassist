@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parse } from "yaml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECT_PATHS,
@@ -16,6 +17,9 @@ import {
   withDefaults,
   type AppConfig,
 } from "../src/config.js";
+
+/** The seed file a fresh install actually reads. Three levels up: test/ → server/ → apps/ → root. */
+const SHIPPED_CONFIG = new URL("../../../config/config.yaml", import.meta.url);
 
 describe("resolveEnv", () => {
   beforeEach(() => {
@@ -124,6 +128,50 @@ describe("withDefaults", () => {
 
   it("ignores a non-array providers node", () => {
     expect(withDefaults({ providers: "nope" }).providers).toEqual([]);
+  });
+
+  it("reads a model's declared capabilities", () => {
+    const config = withDefaults({
+      providers: [
+        {
+          id: "p",
+          baseURL: "http://x",
+          models: [{ id: "glm-5.3", name: "GLM", capabilities: ["tool_use", "reasoning"] }],
+        },
+      ],
+    });
+    expect(config.providers[0]!.models[0]!.capabilities).toEqual(["tool_use", "reasoning"]);
+  });
+
+  it("leaves capabilities undefined so the id can be guessed", () => {
+    const config = withDefaults({
+      providers: [{ id: "p", baseURL: "http://x", models: [{ id: "m", name: "M" }] }],
+    });
+    expect(config.providers[0]!.models[0]!.capabilities).toBeUndefined();
+  });
+
+  it("refuses an unknown capability, naming the model", () => {
+    // Dropped rather than thrown would be the quieter failure, and the worse one: a model
+    // missing `vision` looks configured and silently stops seeing pictures.
+    expect(() =>
+      withDefaults({
+        providers: [
+          {
+            id: "p",
+            baseURL: "http://x",
+            models: [{ id: "m1", name: "M1", capabilities: ["tool_use", "reasonig"] }],
+          },
+        ],
+      })
+    ).toThrow(/p\/m1.*reasonig/s);
+  });
+
+  it("refuses a capabilities node that is not a list", () => {
+    expect(() =>
+      withDefaults({
+        providers: [{ id: "p", baseURL: "http://x", models: [{ id: "m", name: "M", capabilities: "vision" }] }],
+      })
+    ).toThrow(/capabilities must be a list/);
   });
 });
 
@@ -347,5 +395,93 @@ describe("the out-of-band reasoning switches", () => {
     // the reflection pass, and vice versa.
     expect(threadReasoningSetting({ [INSIGHT_REASONING_ENV]: "off" })).toBe("auto");
     expect(insightReasoningSetting({ [THREAD_REASONING_ENV]: "off" })).toBe("auto");
+  });
+});
+
+/**
+ * The shipped seed, read as the code reads it.
+ *
+ * Everything else here tests `withDefaults` against a YAML string written in the test. This
+ * group reads `config/config.yaml` itself, because that file is the one nobody exercises
+ * until a user boots: an unknown capability name, a duplicated provider id or a
+ * `defaultProvider` naming an entry that was renamed all fail at boot and nowhere earlier.
+ * A test that parses the real file turns each of those into a red suite instead.
+ */
+describe("config/config.yaml", () => {
+  const config = (() => {
+    const raw = parse(readFileSync(SHIPPED_CONFIG, "utf8")) as Record<string, unknown>;
+    return withDefaults(raw);
+  })();
+
+  it("parses, and validates against its own defaultProvider/defaultModel", () => {
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("seeds the built-in providers", () => {
+    expect(config.providers.map((p) => p.id)).toEqual([
+      "deepseek",
+      "zhipu",
+      "zhipu-intl",
+      "qwen",
+      "qwen-intl",
+      "kimi",
+      "kimi-intl",
+      "minimax",
+      "minimax-intl",
+      "openai",
+      "gemini",
+    ]);
+  });
+
+  it("gives every seeded model at least tool_use", () => {
+    // A model without `tool_use` is one the agent cannot call a tool on, which for a seeded
+    // entry is always a mistake rather than a decision.
+    for (const provider of config.providers) {
+      expect(provider.models.length, `${provider.id} has no models`).toBeGreaterThan(0);
+      for (const model of provider.models) {
+        expect(model.capabilities, `${provider.id}/${model.id}`).toContain("tool_use");
+      }
+    }
+  });
+
+  it("states capabilities rather than leaving the built-ins to a guess", () => {
+    // The point of the field. `glm-5.3` is the case that makes it necessary: the id says
+    // nothing about reasoning, so a guess reads it as a plain chat model and DeepSeek-shaped
+    // providers never get their chain-of-thought replayed.
+    for (const provider of config.providers) {
+      for (const model of provider.models) {
+        expect(model.capabilities, `${provider.id}/${model.id} relies on the guess`).toBeDefined();
+      }
+    }
+  });
+
+  it("gives the same models to both regions of a vendor", () => {
+    // The pairs exist so a user picks by network, not by capability. Two lists that drift
+    // would make the choice mean something it does not say.
+    const pairs: [string, string][] = [
+      ["zhipu", "zhipu-intl"],
+      ["qwen", "qwen-intl"],
+      ["kimi", "kimi-intl"],
+      ["minimax", "minimax-intl"],
+    ];
+    const ids = (id: string) =>
+      config.providers
+        .find((p) => p.id === id)!
+        .models.map((m) => `${m.id}:${m.capabilities!.join(",")}`);
+
+    for (const [cn, intl] of pairs) {
+      expect(ids(cn), `${cn} vs ${intl}`).toEqual(ids(intl));
+    }
+  });
+
+  it("does not declare reasoning for providers that cannot replay it", () => {
+    // OpenAI and Gemini are reached through an OpenAI-compatibility layer that has no
+    // `reasoning_content` field. Declaring the capability is what makes this app put the
+    // field on the wire, so the omission is the point — see the comment on those entries.
+    for (const id of ["openai", "gemini"]) {
+      for (const model of config.providers.find((p) => p.id === id)!.models) {
+        expect(model.capabilities, `${id}/${model.id}`).not.toContain("reasoning");
+      }
+    }
   });
 });

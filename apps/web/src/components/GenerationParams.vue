@@ -65,7 +65,21 @@ function load(s: SessionSettings): void {
 
 load({});
 
-const providers = computed(() => store.config?.providers ?? []);
+/**
+ * Only the providers this installation can actually use — a key is set and they have at
+ * least one model — plus whichever one this conversation already points at.
+ *
+ * The same rule `ModelSelector` applies in the chat header, and for the same reason: an
+ * installation ships eleven provider entries and configures one, so offering all eleven here
+ * would be a list of eleven ways to fail. The current one is kept even if its key has since
+ * been removed, because dropping it would make the select render blank (`<select>` bound to
+ * a value with no matching option) and then silently rewrite the session's choice on the
+ * next save — a setting changed by opening a dialog.
+ */
+const providers = computed(() => {
+  const all = store.config?.providers ?? [];
+  return all.filter((p) => p.id === draft.providerId || (p.hasApiKey && p.models.length > 0));
+});
 const models = computed(() => providers.value.find((p) => p.id === draft.providerId)?.models ?? []);
 
 function onProviderChange(): void {
