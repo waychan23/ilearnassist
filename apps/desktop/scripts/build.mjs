@@ -162,7 +162,16 @@ function copyRendererAssets() {
  */
 function copyTrayIcons() {
   mkdirSync(join(resources, "tray"), { recursive: true });
-  for (const file of ["trayTemplate.png", "trayTemplate@2x.png"]) {
+  // All four, not just the two macOS ones: the bundle is built once and may be packaged for
+  // any platform, and `main.ts` picks by `process.platform` at runtime. A missing sibling is
+  // an empty `nativeImage` and a tray that refuses to appear — on Windows only, which is the
+  // worst place to find out.
+  for (const file of [
+    "trayTemplate.png",
+    "trayTemplate@2x.png",
+    "tray.png",
+    "tray@2x.png",
+  ]) {
     cpSync(join(desktopRoot, "assets", file), join(resources, "tray", file));
   }
 }

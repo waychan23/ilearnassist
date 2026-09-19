@@ -89,7 +89,7 @@ Pick the file for your system from [Releases](https://github.com/waychan23/ilear
 | macOS (Apple silicon) | `ilearnassist-…-mac-arm64.dmg` |
 | macOS (Intel) | `ilearnassist-…-mac-x64.dmg` |
 | Windows | `ilearnassist-…-win-x64.exe` |
-| Linux | `ilearnassist-…-linux-x86_64.AppImage` or `.deb` |
+| Linux | `ilearnassist-…-linux-x64.AppImage` or `.deb` |
 
 The builds are **not code-signed** (no certificate is bought), so your system will warn you about
 an unidentified developer:

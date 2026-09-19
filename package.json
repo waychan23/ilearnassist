@@ -30,7 +30,10 @@
     "build": "pnpm --filter @ilearnassist/web build",
     "desktop:dev": "pnpm --filter @ilearnassist/desktop dev",
     "desktop:build": "pnpm --filter @ilearnassist/desktop build",
-    "desktop:package": "pnpm --filter @ilearnassist/desktop package"
+    "desktop:package": "pnpm --filter @ilearnassist/desktop package",
+    "desktop:package:mac": "pnpm --filter @ilearnassist/desktop package:mac",
+    "desktop:package:win": "pnpm --filter @ilearnassist/desktop package:win",
+    "desktop:package:linux": "pnpm --filter @ilearnassist/desktop package:linux"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

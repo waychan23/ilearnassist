@@ -76,7 +76,7 @@
 | macOS（Apple 芯片，M 系列） | `ilearnassist-…-mac-arm64.dmg` |
 | macOS（Intel 芯片） | `ilearnassist-…-mac-x64.dmg` |
 | Windows | `ilearnassist-…-win-x64.exe` |
-| Linux | `ilearnassist-…-linux-x86_64.AppImage` 或 `.deb` |
+| Linux | `ilearnassist-…-linux-x64.AppImage` 或 `.deb` |
 
 安装包**没有购买代码签名证书**，所以系统会提示"来自身份不明的开发者"：
 

@@ -45,6 +45,24 @@ export interface AppPaths {
   templateConfig: string;
 }
 
+/**
+ * Which of the two staged tray icons this platform wants.
+ *
+ * **Two files, because the same asset cannot work on all three.** macOS gets a *template*
+ * image — black with alpha, and the `Template` filename suffix is what tells the system to
+ * recolour it for a dark menu bar. Windows and Linux have no such convention, so that file
+ * there is a black glyph on a dark taskbar: present, drawn, and invisible in use. They get the
+ * coloured one.
+ *
+ * It lives here rather than in `main.ts` because `main.ts` needs a display to run at all and
+ * this is a pure question with a wrong answer that only shows up on Windows — the file the
+ * packaged bundle must contain, asserted by `paths.test.ts` against the files that are
+ * actually committed.
+ */
+export function trayIconFile(platform: NodeJS.Platform): string {
+  return platform === "darwin" ? "trayTemplate.png" : "tray.png";
+}
+
 export interface ResolveAppPathsInput {
   /** `app.getPath("userData")` — `~/Library/Application Support/ilearnassist` on macOS. */
   userDataDir: string;
