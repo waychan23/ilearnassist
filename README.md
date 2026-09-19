@@ -1,125 +1,255 @@
-# ilearnassist
+# 交互式学习助理 · ilearnassist
 
-A self-hosted agent product for one person, with a chatbox-style UI. Sign in
-under any username, give the agent a **workspace** (a sandboxed directory), pick
-a **Copilot** (a reusable system prompt + tool allow-list, your own or one another
-account published), choose a **provider/model**, and chat. The agent runs a ReAct
-loop and can search the web and read/write files inside its workspace. Each account
-has its own workspaces, conversations, Copilots and uploads, all inside a data
-directory you choose.
+[English](README.en.md) | **简体中文**
 
-Browser/Server architecture: a Node/TypeScript backend (Fastify + SQLite +
-LangChain.js) and a Vue 3 frontend.
+[![CI](https://github.com/waychan23/ilearnassist/actions/workflows/ci.yml/badge.svg)](https://github.com/waychan23/ilearnassist/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Features
+**交互式学习助理**是一个运行在你自己电脑上的 AI 学习助手。它不是又一个聊天框：它会
+制定学习计划、一项一项讲解、出选择题检验你是否真的理解、把你的疑问和笔记记下来，并把
+这些整理成看得见的面板。所有数据都在你选择的文件夹里，不上传到任何第三方服务器——除了
+你自己配置的大模型接口。
 
-- **Accounts** — a username is the whole credential (no passwords yet), and each
-  account owns its workspaces, conversations and uploads. Nothing one account
-  creates is reachable from another.
-- **Agent loop** — a manual ReAct loop (`model.bindTools` → stream → run tools →
-  feed `ToolMessage` back), streaming responses token-by-token over SSE.
-- **Workspaces** — sessions are scoped to a workspace, and all file tools are
-  sandboxed to its `workdir/`. Each workspace lives under the account that owns it,
-  inside the data directory you chose at launch.
-- **Tools** — `list_files`, `read_file`, `write_file`, `create_directory`,
-  `delete_file` (workspace-sandboxed) and `web_search` (Bing / DuckDuckGo /
-  Tavily / SearXNG).
-- **Copilots** — GPTs-style presets: a name, description, system prompt, generation
-  defaults and a tool allow-list. The tools are explicit — either every tool is
-  available, or exactly the ones ticked, which makes "no tools at all" a state you
-  can actually choose. Owned by the account that made them and
-  private by default; publish one and every account can use it, while only its
-  owner can edit or delete it. A conversation **copies** the whole definition when
-  it starts, so editing or deleting the Copilot later leaves that conversation
-  exactly as it was — its persona is then the conversation's own, editable from the
-  session settings.
-- **Provider/model config** — any OpenAI-compatible endpoint (DeepSeek, OpenAI,
-  Moonshot, Ollama, LM Studio, vLLM, …) configured via YAML, no code changes.
-- **Streaming chat UI** — markdown rendering, syntax-highlighted code,
-  collapsible tool-call cards, dark theme.
+它自带一个「引导学习」助理和一套学习控件，装好、填一个模型 API Key 就能开始用。适合不
+想折腾命令行的人：下载安装包 → 首次启动选一个放数据的文件夹 → 创建管理员 → 填 Key →
+开始学习。
 
-## Quick start
+> **数据在你手里。** 卸载应用不会删除你的数据——它在你首次启动时选择的那个文件夹里，
+> 与程序本身分离。见 [常见问题](#常见问题)。
 
-Prerequisites: Node.js ≥ 20 and pnpm ≥ 9 (repo uses corepack/lockfile on 12.x).
+---
+
+## 功能特点
+
+### 学习和对话
+
+- **引导学习助理（内置）** —— 一位懂得循序渐进的导师：先了解你想学什么，给出带多级编号
+  的学习计划，等你确认后逐项讲解；每讲完一个知识点出选择题检验，客观指出你的误区；学完
+  之后给出总结，列出需要加强的部分。详细设定见[内置助理](#内置助理引导学习)。
+- **计划 / 测验 / 脉络 / 笔记 / 图表 / 思考 / 参考资料 七个控件** —— 右侧面板上的学习工具：
+  - **计划**：一份可勾选进度的多级 TODO 列表，讲到哪里一目了然，可以跳到任意章节。
+  - **测验**：助手出题后，题卡可以直接作答，答完由助手判分解析；错过或跳过的题目可以补做。
+  - **脉络**：每一轮对话被自动归类到学习脉络里，可按主题回看。
+  - **笔记**：选中任意一段话写笔记，也可以给图表、表格、参考资料写；笔记带原文引用，点击
+    可以跳回原文位置。
+  - **图表**：助手画的结构图、流程图，以及它给出的表格，都在这里，点开即看。
+  - **思考**：一键让助手回顾整个过程，给出关于你学习状况的观察（难点、易混淆点、强项）。
+  - **参考资料**：本次对话用到的文件、网页，一目了然。
+- **追问任意对象** —— 选中一段话，或点一下某个图表/表格/笔记/参考资料，就能针对它提问，
+  助手回答时会去读它当前的样子，而不是它被写下来时的样子。
+- **助手（助理）可自定义** —— 人设提示词、可用工具、默认控件，都可以做成一个助理，供
+  自己反复使用，也可以公开给所有账号。对话开始时会复制一份，之后改助理不会影响已有对话。
+
+### 资料
+
+- **资料库** —— 上传 PDF / Word / Excel / PPT / 纯文本等文件，或收藏网页，集中管理。
+- **`@` 引用** —— 在输入框里打 `@` 挑一份资料，它就成为这轮对话的上下文；也可以 `@` 一个
+  工作区，让助手读取该工作区里的文件和对话。
+- **文档解析** —— PDF 和 Office 文档本地提取文字，不需要联网；也可以配置云端解析服务
+  （MinerU、LlamaParse 等）来解析扫描件。
+- **文件管理** —— 树状浏览工作区文件，支持新建、上传、重命名、移动（拖拽或对话框）、删除
+  （进回收站，字节保留）。
+- **网页搜索与抓取** —— 内置 Bing / DuckDuckGo（免 Key），也支持 Tavily / SearXNG；助手
+  可以把确认有用的网页收藏成资料。
+- **文件预览** —— 代码高亮、Markdown、Mermaid 图表、表格、图片、PDF 等直接在应用内查看。
+
+### 账号与部署
+
+- **多账号** —— 用户名 + 密码登录，每个账号有自己的工作区、对话、助理和上传文件，互相
+  不可见。三级权限：超级管理员 / 管理员 / 普通账号。
+- **桌面控制面板** —— 图形界面启动、停止服务，选择数据目录，一键用手机打开（局域网扫码）。
+  支持 macOS（Apple 芯片 / Intel）、Windows、Linux。
+- **用量统计** —— 每一次模型调用的 token 消耗都记账，可按天、按模型、按用途查看，控制成本。
+- **中英双语 + 明暗主题**。
+
+---
+
+## 快速上手
+
+### 方式一：下载安装包（推荐）
+
+到 [Releases](https://github.com/waychan23/ilearnassist/releases/latest) 下载对应你系统的
+安装包：
+
+| 系统 | 文件 |
+| --- | --- |
+| macOS（Apple 芯片，M 系列） | `ilearnassist-…-mac-arm64.dmg` |
+| macOS（Intel 芯片） | `ilearnassist-…-mac-x64.dmg` |
+| Windows | `ilearnassist-…-win-x64.exe` |
+| Linux | `ilearnassist-…-linux-x86_64.AppImage` 或 `.deb` |
+
+安装包**没有购买代码签名证书**，所以系统会提示"来自身份不明的开发者"：
+
+- **macOS**：在应用上点右键 → **打开** → 再点一次"打开"。只需一次。
+- **Windows**：在 SmartScreen 提示里点 **更多信息** → **仍要运行**。
+
+然后按下面的顺序走一遍：
+
+1. **启动应用**，控制面板出现。
+2. **选择数据文件夹**。面板会建议 `~/ilearnassist`（你的主目录下），点一下就用它；也可以
+   自己挑一个位置。这里将存放你的数据库、工作区和上传的文件。选好后面板会记住它。
+3. **创建超级管理员**：填一个用户名和密码。这是这台机器上权限最高的账号，请记住它。
+   忘了可以用控制面板重置，见 [常见问题](#常见问题)。
+4. 服务器会自动启动。点 **打开应用**，进入登录界面，用刚才的账号登录。
+5. **填一个模型 API Key**：点左侧菜单的 **控制台 → 模型服务商**，选一家你已经开通的服务商，
+   填入 API Key 并保存。**填好之前，模型列表是空的**——助手需要一个大模型才能工作。
+6. **开始学习**：回到首页，新建一个工作区，进去后新建对话，助理选 **引导学习**，然后告诉
+   它你想学什么。
+
+> 首次遇到防火墙询问时，请允许应用在本机（127.0.0.1）通信。默认不对外开放——只有你在控制
+> 面板里主动打开"局域网共享"，手机才能访问。
+
+### 方式二：从源码运行
+
+需要 Node.js ≥ 20 和 pnpm ≥ 9。
 
 ```bash
+git clone https://github.com/waychan23/ilearnassist.git
+cd ilearnassist
 pnpm install
 
-# Configure credentials and where your data goes
+# 配置：数据目录 + 模型 Key
 cp .env.example .env
-# edit .env and set DEEPSEEK_API_KEY=… (or OPENAI_API_KEY=…)
+# 编辑 .env，至少填一个 DEEPSEEK_API_KEY（或其他服务商的 Key）
 
-# A fresh data folder has no administrator — create one before starting the server.
-# --generate prints a password once; use --password-stdin to type your own.
-pnpm --filter @ilearnassist/server cli create-admin --username <you> --generate
+# 全新的数据目录里没有管理员，先创建一个
+pnpm --filter @ilearnassist/server cli create-admin --username <你的用户名> --generate
 
 pnpm dev
 ```
 
-Open <http://localhost:5173>. The backend listens on `127.0.0.1:3720`.
+打开 <http://localhost:5173> 登录。后端监听 `127.0.0.1:3720`。
 
-It opens on a login screen: sign in with the administrator you just created. The
-administrator creates every other account from the platform console in the app. Leave LAN
-sharing off unless you mean it — with it on, the login screen is reachable from anything on
-the network. (With it off, as in the desktop app, the only way to create the first
-administrator is the control panel or the command above, both of which work with the server
-stopped.)
+> `ILA_DATA_DIR` 是**必填**的，`.env.example` 里已经设成 `./data`（相对于项目根目录）。
+> 代码里刻意没有默认值：那个目录决定你的数据在哪里、能不能在卸载后留下来。
 
-> **`ILA_DATA_DIR` is required and `.env.example` already sets it** to `./data`, relative to
-> the project root. There is no default in the code on purpose: that directory holds the
-> database, your workspaces and your uploads, so it is the thing to put somewhere that
-> survives an uninstall of the app. Point it anywhere absolute if you would rather.
->
-> The default config ships with DeepSeek as the default provider and Bing as the
-> web-search provider (both keyless on the search side). Edit
-> [`config/config.yaml`](config/config.yaml) to switch models/providers. See
-> [docs/configuration.md](docs/configuration.md).
+---
 
-The desktop app asks for the data folder on first launch instead, and can be packaged as a
-Mac `.dmg` — see [docs/desktop.md](docs/desktop.md).
+## 内置的模型服务商
 
-## Tests
+首次启动时，下面的服务商会自动写入数据库，之后以 **控制台 → 模型服务商** 为准。国内和国际
+的接口是分开的条目（两边的地址和 Key 都不通用），按你的网络情况选一个填 Key 即可。
 
-The suite is offline — no API keys and no network. The agent is driven against a
-local fake OpenAI-compatible server, and the browser end-to-end run starts the
-real backend on a throwaway database.
+| 服务商 | 接口地址 |
+| --- | --- |
+| DeepSeek | `api.deepseek.com/v1` |
+| 智谱 GLM | `open.bigmodel.cn/api/paas/v4`（国际：`api.z.ai/api/paas/v4`） |
+| 通义千问 | `dashscope.aliyuncs.com/compatible-mode/v1`（国际：`dashscope-intl.aliyuncs.com/…`） |
+| Kimi | `api.moonshot.cn/v1`（国际：`api.moonshot.ai/v1`） |
+| MiniMax | `api.minimaxi.com/v1`（国际：`api.minimax.io/v1`） |
+| OpenAI | `api.openai.com/v1` |
+| Google Gemini | `generativelanguage.googleapis.com/v1beta/openai/` |
+
+**只显示已经配置好的。** 没填 Key 的服务商不会出现在对话的模型选择器里——与其给你一个
+点了没反应的服务商，不如不给。任何 OpenAI 兼容的服务（Ollama、LM Studio、vLLM、自建网关…）
+都可以在控制台里手动添加。
+
+## 内置助理：引导学习
+
+「引导学习」是一个公开助理，所有账号都能在助理列表里看到并使用。它同时启用了上面那七个
+控件，工作方式是：
+
+1. 你提出一个学习主题（或它引导你明确一个）；
+2. 它做网页搜索确认最新情况，然后给出学习计划：背景 → 一个整体实例（建立 Vision）→
+   核心内容清单（一项一项讲，每轮通常只讲一项）；
+3. 讲完一个知识点出一组选择题检验，等你作答后判分并客观解析——**它不会自己把答案说出来**；
+4. 你答完，它问你是否继续；你说继续，它进入下一项；
+5. 你可以随时打断追问、或按编号跳过某一项，它会回到主线；
+6. 全部讲完做总结，包括内容清单和过程中发现的、需要加强的部分。
+
+它的说话方式是深度、实战、最佳实践导向的，不是入门简介；遇到专业术语会附上英文原文。
+
+想改它的行为，在 **助理** 里打开它复制一份再改——内置那条本身是公开的，编辑它会影响到
+所有人（只有它的所有者能改）。
+
+---
+
+## 常见问题
+
+**我的数据在哪里？**
+在你首次启动时选择的那个数据文件夹里（默认建议 `~/ilearnassist`）。控制面板会显示这个
+路径，并有一个按钮可以在文件管理器里打开它。里面包含：`db/sqlite/ilearnassist.sqlite`
+（数据库）、`users/<用户名>/workspaces/`（工作区与对话文件）、`users/<用户名>/sources/`
+（上传的资料）。
+
+**怎么备份？**
+复制上面那个文件夹就是完整备份。应用本身可以随时重装。
+
+**忘记密码了怎么办？**
+用桌面控制面板的 **重置管理员密码**。它**不需要服务在运行**——忘了密码往往和别的问题一起
+被发现，所以恢复手段不能依赖一个可能已经出问题的服务。从源码运行时，用
+`pnpm --filter @ilearnassist/server cli reset-admin --username <用户名> --password-stdin`。
+出于安全考虑，超级管理员自己的密码只能这样重置，不能在网页的控制台里改。
+
+**为什么模型列表是空的？**
+没有填 API Key。到 **控制台 → 模型服务商** 配置一个，它会立刻出现在模型选择器里。
+
+**手机能一起用吗？**
+可以。控制面板里有 **局域网共享** 开关，打开后会显示一个二维码，手机连同一个 Wi-Fi 扫码
+即可。**打开之前请想清楚**：这会让你的工作区、对话和 API Key 配置对同一网络内的设备可见。
+默认是关闭的。
+
+**卸载会删掉我的数据吗？**
+不会。程序和数据在两个地方，卸载程序不动你的数据文件夹。想彻底清除，手动删除该文件夹。
+
+**支持哪些系统？**
+macOS（Apple 芯片与 Intel）、Windows、Linux 都有安装包。也可以直接从源码跑，任何能装
+Node.js 20+ 的系统都行。
+
+---
+
+## 项目结构
+
+```
+apps/server/      Fastify 后端 —— 路径、SQLite、Agent 循环、工具、路由
+apps/web/         Vue 3 前端 —— Pinia store、对话界面、SSE 客户端
+apps/desktop/     Electron 控制面板 —— 启动/停止服务，打包为桌面应用
+packages/shared/  两端共用的类型（零依赖）
+e2e/              Playwright 端到端测试
+config/           config.yaml（可选的 config.local.yaml 覆盖）
+docs/             架构与各子系统的详细文档
+```
+
+浏览器/服务端架构：后端是 Node/TypeScript（Fastify + SQLite + LangChain.js），前端是
+Vue 3。桌面应用只是一个控制面板，它启动的是同一个后端，没有重新实现任何东西。
+
+## 开发与测试
+
+整套测试**离线运行**——不需要 API Key，也不访问网络。Agent 的部分跑在一个本地假的
+OpenAI 兼容服务上，浏览器端到端测试会启动真实的服务器和一个一次性的数据库。
 
 ```bash
-pnpm test          # unit + integration (vitest, server + web)
-pnpm test:coverage # the same, with a coverage report
-pnpm exec playwright install chromium   # once
-pnpm test:e2e      # browser end-to-end (playwright)
+pnpm dev           # 同时跑后端 (:3720) 和前端 (:5173)
+pnpm typecheck     # tsc + vue-tsc + e2e 规格
+pnpm test          # 单元 + 集成测试
+pnpm test:coverage # 同上，带覆盖率报告
+pnpm test:e2e      # 浏览器端到端（需要先 pnpm exec playwright install chromium）
+pnpm build         # 生产构建前端
+pnpm desktop:dev   # 打包并启动桌面控制面板
 ```
 
-New behaviour is expected to arrive with tests; see the Testing section of
-[CLAUDE.md](CLAUDE.md), which also explains how to test agent behaviour without
-calling a real model.
+提交前请确保 `pnpm typecheck` 和 `pnpm test` 都是干净的。新功能请带上测试；
+[CLAUDE.md](CLAUDE.md) 记录了本仓库的约定，以及如何在**不调用真实模型**的前提下测试
+Agent 行为。
 
-## Project structure
+## 开源依赖
 
-```
-apps/server/      Fastify backend — paths, SQLite, agent loop, tools, routes
-apps/server/test/ unit + integration tests
-apps/web/         Vue 3 frontend — Pinia store, chat UI, SSE client
-apps/web/test/    unit tests
-apps/desktop/     Electron control panel — starts the server, packaged as a .dmg
-packages/shared/  dependency-free types shared across the API boundary
-e2e/              Playwright specs + the e2e config overlay
-config/           config.yaml (+ optional config.local.yaml override)
-```
+本项目的全部第三方依赖及其许可证列在 [CREDITS.md](CREDITS.md) 中。感谢每一位维护者。
 
-Your data is **not** in this tree: it lives in the directory `ILA_DATA_DIR` names. See
-[docs/configuration.md](docs/configuration.md) for the layout.
+有一点值得单独说明：文件预览支持 CAD 格式的那几个包是 **GPL-3.0**，属于可选的对等依赖，
+本项目**刻意没有引入**——这正是整个项目能够以 MIT 发布的原因。
 
-## Documentation
+## 许可
 
-- [Architecture](docs/architecture.md) — system overview, agent loop, sandboxing,
-  data model, SSE protocol.
-- [Configuration](docs/configuration.md) — full `config.yaml` reference and
-  provider/search setup.
-- [Reference (chatbox)](docs/reference.md) — the upstream project this app is
-  modeled on, and where to find relevant code in the local clone.
+[MIT](LICENSE) © ilearnassist contributors
 
-## License
+## 文档
 
-Private / self-hosted. Not for redistribution.
+- [架构](docs/architecture.md) —— 系统总览、Agent 循环、沙箱、数据模型、SSE 协议
+- [配置](docs/configuration.md) —— `config.yaml` 完整参考、服务商与搜索配置
+- [桌面应用](docs/desktop.md) —— 控制面板、打包、签名与跨平台
+- [控件系统](docs/widgets.md) —— 右侧面板的控件契约、生命周期与新增步骤
+- [提示词](docs/prompts.md) —— 系统提示词目录与覆盖方式
+- [用量统计](docs/usage.md) —— token 账本与统计页
+- [会话写锁](docs/session-locks.md) —— 多客户端同时打开一个对话时的规则
+- [参考资料](docs/reference.md) —— 本项目参考的上游项目 chatbox
