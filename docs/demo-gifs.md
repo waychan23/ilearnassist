@@ -20,8 +20,22 @@ English set `.en.gif`, and both live in `docs/assets/`.
 | 4 | `quiz-and-notes.{zh,en}.gif` | 功能特点 · 学习和对话 / Features · Studying and conversation |
 | 5 | `library-and-mention.{zh,en}.gif` | 功能特点 · 资料 / Features · Material |
 
-A sixth is planned but has no slot yet — `diagram-and-threads` — and it is the one to drop if
-recording five is already enough work. Say so and a slot gets added.
+A sixth — `diagram-and-threads` — was in this brief without a slot and now has one, after being
+recorded.
+
+## Status
+
+- **The Chinese set is recorded and wired up**: all six `docs/assets/*.zh.gif` are referenced by
+  `README.md`, each with a one-line caption under it.
+- **The English set is not yet distinct.** `docs/assets/*.en.gif` exist, but every one is
+  **byte-identical to its `.zh` counterpart**, so pointing `README.en.md` at them would show
+  Chinese-interface demos to English readers. The `.en` slots therefore stay commented out until
+  that is decided — see the note in the pull request or the commit that wired the Chinese set.
+- The brief's numbers were **soft**: a tight 1280×800 window and a ≤3 MB budget are preferences
+  for clone size, not platform limits. A committed image is bound by GitHub's 100 MB per-file cap
+  and the ~1 GB repository guideline, and the recordings are well inside both (largest 10.7 MB,
+  74 MB in total across both sets). What matters more is that a GIF is legible in a README
+  column, which is what the 1000px figure is really about.
 
 ## Before you record
 
