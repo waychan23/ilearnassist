@@ -38,8 +38,12 @@ config/config.local.yaml
 !.vscode/extensions.json
 *.log
 
-# Claude Code — per-machine state, not the shared parts. `.claude/skills/` and
-# `skills-lock.json` are shared (committed); the permission grants below are whatever this
-# clone happened to approve, and worktrees are scratch.
+# Claude Code — per-machine state, none of it shared. The permission grants are whatever this
+# clone happened to approve, and worktrees are scratch. The skills are third-party tooling
+# installed into this machine, and `skills-lock.json` is what records where each came from:
+# they are not this repository's work, so publishing it would redistribute somebody else's.
+# Nothing in the product reads any of this.
 .claude/settings.local.json
 .claude/worktrees/
+.claude/skills/
+skills-lock.json
