@@ -1876,6 +1876,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         for (const held of db.listWorkResourcesForResource(target.userId, "file", file.id)) {
           db.softDeleteWorkResourceForUser(held.id, target.userId);
         }
+        /*
+         * And every conversation's **reference** to it. A reference is not a holding row, so the
+         * sweep above does not reach it: it admits an entity rather than being admitted by it, and
+         * a reference left behind would be a row pointing at bytes that are gone. A real DELETE —
+         * this table records an act rather than an entity, and there is nothing to restore.
+         */
+        db.deleteReferencesToResource("file", file.id);
       }
       return { ok: true, path: removed.rel };
     } catch (err) {
@@ -5012,45 +5019,58 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
 
     /*
-     * A reference is the user pointing at their own material, wherever it is — and what makes it
-     * readable on the *next* turn too is a **link**, not a copy for this one. So each resolved
-     * reference gains a reference of this conversation's own, pointing at the same entity; that
-     * row is what puts it in the read whitelist from here on.
+     * A `@`-reference is the user pointing at their own material, wherever it is — and what makes
+     * it readable on the *next* turn too is a **reference of this conversation's own**, not a copy
+     * for this one. It is recorded in `session_references`: the fact that this conversation is
+     * *about* that entity, which is a different relation from *holding* it.
+     *
+     * **It deliberately does not create a holding row.** It used to, and that is what made the
+     * library show one file once per conversation that had mentioned it: the library lists
+     * holdings, and a link was wearing the same row shape. A conversation that already holds the
+     * entity has nothing to write at all — holding it already implies referring to it.
      *
      * A side effect of the request rather than of `resolveReferences`, which stays read-only on
      * purpose: replay resolves references on every later turn, and a replay that wrote would
      * resurrect rows a user had deleted.
-     *
-     * A reference that has never been parsed is queued here. Without this the model reads "still
-     * parsing" for ever — the feature looks right in the UI and fails only when the model tries
-     * to read the document, which is the worst place for it to fail.
      */
     const referencedAttachments: Attachment[] = [];
     for (const resolved of resolution.resolved) {
       if (resolved.kind !== "resource") continue;
       const held = db.getWorkResourceForUser(userId, resolved.resourceId);
       if (!held) continue;
-      const mine = ensureWorkResource(db, {
-        userId,
-        owner: { kind: "session", id },
-        resourceType: held.resourceType,
-        resourceId: held.resourceId,
-        title: held.title,
-        summary: held.summary,
-      });
-      if (!mine) continue;
-      referencedAttachments.push(toAttachment(mine, mine.title));
-      if (mine.parseStatus === "none") {
+
+      if (held.ownerType !== "session" || held.ownerId !== id) {
+        db.addSessionReference({
+          id: newId(),
+          sessionId: id,
+          resourceType: held.resourceType,
+          resourceId: held.resourceId,
+        });
+      }
+      referencedAttachments.push(toAttachment(held, held.title));
+
+      /*
+       * The parse is queued **on the holding row**, never on a row of this conversation's own —
+       * because there is no longer one to queue it on, and because a parse belongs to whoever
+       * holds the material. One document is extracted once, and every conversation that referred
+       * to it reads that extraction (the whitelist admits the owner's row, so the id the model is
+       * handed is the same one this put the text on).
+       *
+       * Without this the model reads "still parsing" for ever — the feature looks right in the UI
+       * and fails only when the model tries to read the document, which is the worst place for it
+       * to fail.
+       */
+      if (held.parseStatus === "none") {
         /*
          * A page is **adopted** rather than scheduled. It arrives already extracted, and its text
-         * is reachable only through a reference — so a second reference to the same page is born
-         * with no pointer, and `schedule` skips it (`text/html` is not a document MIME). See
-         * `adoptPageParse`, which answers false for everything else and for a page with no
-         * sibling text, leaving the schedule to run as it always did.
+         * is reachable only through a holding row — so a row born with no pointer, and `schedule`
+         * skips it (`text/html` is not a document MIME). See `adoptPageParse`, which answers false
+         * for everything else and for a page whose every holder is also unparsed, leaving the
+         * schedule to run as it always did.
          */
-        const adopted = adoptPageParse(db, userId, mine);
+        const adopted = adoptPageParse(db, userId, held);
         if (!adopted) {
-          void documents.schedule(treeFor(actor(request)), userId, mine).catch(() => undefined);
+          void documents.schedule(treeFor(actor(request)), userId, held).catch(() => undefined);
         }
       }
     }

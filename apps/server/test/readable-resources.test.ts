@@ -193,6 +193,51 @@ describe("with a grant", () => {
     expect(readableUnder({ workspaceIds: ["not-a-workspace"] })).toEqual(["mine"]);
   });
 
+  it("admits what the conversation referred to, even out of grant", () => {
+    /*
+     * Arm 1's second half, and the reason a reference is not a holding row.
+     *
+     * The material is workspace C's — never granted, never this conversation's — and the only
+     * thing that makes it readable is that the conversation was pointed at it once. That is what
+     * "pointing at something makes it readable on every later turn" has to mean, and it is the
+     * case the old link row served by being a holding row of the conversation's own. It is a
+     * reference now, and the row that comes back is still *C's* — which is what the model reads
+     * through and what `ila_query` lists.
+     */
+    resource("in-c", { owner: { kind: "workspace", id: WS_C } });
+    expect(readableUnder({ workspaceIds: [WS_B] })).toEqual([]);
+
+    const file = db.listWorkResourcesFiltered(OWNER, { ownerType: "workspace" })[0]!;
+    db.addSessionReference({
+      id: "sref-1",
+      sessionId: SESSION,
+      resourceType: "file",
+      resourceId: file.resourceId,
+    });
+
+    expect(readableUnder({ workspaceIds: [WS_B] })).toEqual(["in-c"]);
+    // And it is C's row rather than a row of the conversation's own — the id the model is handed
+    // is the one the reference admits, not a copy made for it.
+    expect(db.listReadableWorkResources(OWNER, SESSION, WS_A, NO_SCOPE)[0]!.ownerId).toBe(WS_C);
+  });
+
+  it("stops admitting it once the reference is gone", () => {
+    // The other direction, so the assertion above cannot pass on a widened arm 2 instead: with
+    // nothing referring to it, C's material is out of reach again.
+    resource("in-c", { owner: { kind: "workspace", id: WS_C } });
+    const file = db.listWorkResourcesFiltered(OWNER, { ownerType: "workspace" })[0]!;
+    db.addSessionReference({
+      id: "sref-1",
+      sessionId: SESSION,
+      resourceType: "file",
+      resourceId: file.resourceId,
+    });
+    expect(readableUnder({ workspaceIds: [] })).toEqual(["in-c"]);
+
+    db.deleteReferencesToResource("file", file.resourceId);
+    expect(readableUnder({ workspaceIds: [] })).toEqual([]);
+  });
+
   it("drops a deleted workspace's material without dismantling anything", () => {
     /*
      * Arm 2's liveness check, and **it is only reachable under `all`** — which is why it went

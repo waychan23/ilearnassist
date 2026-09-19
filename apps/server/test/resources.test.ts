@@ -235,6 +235,31 @@ describe("counting who holds a file", () => {
     expect(db.countReferencesForEntities(USER, "file", [row.id]).get(row.id)).toBe(1);
   });
 
+  it("counts a conversation that only refers to the file, which also loses it", () => {
+    /*
+     * Both relations, because the number is what the library's delete dialog says out loud: a
+     * conversation that merely *refers* to the file loses it when the bytes go — the delete
+     * sweeps `session_references` too — so counting holdings alone would answer "nobody else has
+     * this" about material two panels were about to lose.
+     */
+    const row = file("workspaces/a/workdir/notes.md");
+    ensureWorkResource(db, {
+      userId: USER,
+      owner: { kind: "workspace", id: WS },
+      resourceType: "file",
+      resourceId: row.id,
+      title: "notes.md",
+    });
+    db.addSessionReference({
+      id: "sref-1",
+      sessionId: SESSION,
+      resourceType: "file",
+      resourceId: row.id,
+    });
+
+    expect(db.countReferencesForEntities(USER, "file", [row.id]).get(row.id)).toBe(2);
+  });
+
   it("never counts another account's references", () => {
     const row = file("workspaces/a/workdir/notes.md");
     ensureWorkResource(db, {

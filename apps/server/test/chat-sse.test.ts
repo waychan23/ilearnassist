@@ -1,9 +1,16 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Attachment, ChatStreamEvent, Message, Session, Workspace } from "@ilearnassist/shared";
+import type {
+  Attachment,
+  ChatStreamEvent,
+  DirectoryListing,
+  Message,
+  Session,
+  Workspace,
+} from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
 import { serverTimeZone } from "../src/agent/clock.js";
 import { ensureWorkResource, registerFile } from "../src/resources.js";
@@ -374,17 +381,19 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(readable.map((r) => r.resourceId)).toContain(uploaded.id);
   });
 
-  it("gives a page reference the text its sibling already extracted", async () => {
+  it("refers to a page it does not hold, and makes the holder readable", async () => {
     /*
-     * The one kind `documents.schedule` cannot cover, and the reason the link loop asks
-     * `adoptPageParse` before it schedules.
+     * Two claims at once, and they are the shape of the whole change.
      *
-     * A page's extracted text is reachable **only through a reference**: `web_pages` names
-     * neither the stored body nor the text. So the reference a pointer creates is born `none`
-     * with no pointer, and the pipeline skips it — `text/html` is not a document MIME, and the
-     * service early-returns before writing anything. Left alone, `read_document` answers "no
-     * readable text" for the rest of the conversation, which is precisely what the schedule
-     * exists to prevent.
+     * **The link is a reference, not a holding.** Pointing at the workspace's page adds a
+     * `session_references` row and **no** `work_resources` row — which is what stops the library
+     * showing one file once per conversation that mentioned it.
+     *
+     * **And the text still has to be reachable.** A page's extracted text is reachable only
+     * through a holding row, and `documents.schedule` cannot produce one for a page — `text/html`
+     * is not a document MIME, and the service early-returns before writing anything. So the
+     * schedule (and `adoptPageParse` before it) runs against the **holder**, and the conversation
+     * reads through it: one extraction, every referrer.
      *
      * The page is seeded as the capture path leaves it — a `web_pages` row, a text file, and a
      * reference whose `parsed_file_id` points at it — because the real capture route fetches a
@@ -430,13 +439,25 @@ describe("POST /api/sessions/:id/chat", () => {
       refs: [{ kind: "resource", ref: kept.id, label: page.title }],
     });
 
-    // The conversation's own reference, and the whole point: it can be read.
-    const mine = db
-      .listWorkResourcesForResource(env.user.id, "web_page", page.id)
-      .find((r) => r.ownerType === "session");
-    expect(mine).toBeDefined();
-    expect(mine!.parseStatus).toBe("ready");
-    expect(mine!.parsedFileId).toBe(text.id);
+    // The reference, which is the only row this conversation gained.
+    expect(db.listSessionReferences(session.id)).toEqual([
+      { resourceType: "web_page", resourceId: page.id },
+    ]);
+    // And **no** holding row — the assertion the library's duplication was made of.
+    expect(
+      db.listWorkResourcesForResource(env.user.id, "web_page", page.id).map((r) => r.ownerType)
+    ).toEqual(["workspace"]);
+
+    // The holder's row is what the conversation reads, and it is readable.
+    const held = db.getWorkResourceForUser(env.user.id, kept.id)!;
+    expect(held.parseStatus).toBe("ready");
+    expect(held.parsedFileId).toBe(text.id);
+
+    // ...and the whitelist admits it through the reference, so `read_document` takes that id.
+    const readable = (
+      await env.inject({ method: "GET", url: `/api/sessions/${session.id}/resources` })
+    ).json<{ id: string }[]>();
+    expect(readable.map((r) => r.id)).toContain(kept.id);
   });
 
   it("says an image was not understood, rather than letting the reply imply it was", async () => {
@@ -518,6 +539,63 @@ describe("POST /api/sessions/:id/chat", () => {
       url: `/api/sessions/${session.id}/resources`,
     });
     expect(readable.statusCode).toBe(200);
+  });
+
+  it("does not hold what it merely refers to, so the library shows it once", async () => {
+    /*
+     * **The reported bug.** `@`-ing a workspace file used to write a holding row for the
+     * conversation, and the library lists holdings — so one file appeared once per conversation
+     * that had mentioned it. It is the same file throughout: a reference points at an entity, and
+     * the entity was never copied.
+     *
+     * The two halves are asserted separately because either alone passes while the bug is there:
+     * the conversation must *gain* a reference (or the panel and the whitelist lose it), and must
+     * *not* gain a holding row (or the library lists it again).
+     */
+    const { session, workdirPath } = await freshSession();
+    const db = env.server.db;
+    // A file in the workspace's own tree, which the listing registers.
+    writeFileSync(join(workdirPath, "shared.md"), "# shared");
+    const listed = (
+      await env.inject({ method: "GET", url: `/api/workspaces/${currentWorkspaceId}/files` })
+    ).json<DirectoryListing>();
+    const entry = listed.entries.find((e) => e.name === "shared.md")!;
+    const held = db
+      .listWorkResourcesForResource(env.user.id, "file", entry.fileId!)
+      .find((r) => r.ownerType === "workspace")!;
+
+    llm.setTurns([{ content: "看过了。" }]);
+    await chat(session.id, {
+      message: "看一下这个文件",
+      refs: [{ kind: "resource", ref: held.id, label: "shared.md" }],
+    });
+
+    expect(db.listSessionReferences(session.id)).toEqual([
+      { resourceType: "file", resourceId: entry.fileId },
+    ]);
+    expect(
+      db.listWorkResourcesForResource(env.user.id, "file", entry.fileId!).map((r) => r.ownerType)
+    ).toEqual(["workspace"]);
+
+    // The library — which is the listing, not the whitelist — has one row for that file, and it
+    // is the workspace's. This is the assertion that fails while the link writes a holding row.
+    const library = (await env.inject({ method: "GET", url: "/api/resources" })).json<
+      { id: string; resourceId: string }[]
+    >();
+    const rows = library.filter((r) => r.resourceId === entry.fileId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(held.id);
+
+    /*
+     * And the conversation's 参考资料 still shows it — the half that would break if the link had
+     * been removed without a reference to replace it. The row is the **holder's**, which is the
+     * point: its id, title and parse state are the ones the model reads, so the panel and the
+     * model cannot disagree about what is there.
+     */
+    const panel = (
+      await env.inject({ method: "GET", url: `/api/resources?sessionId=${session.id}` })
+    ).json<{ id: string }[]>();
+    expect(panel.map((r) => r.id)).toEqual([held.id]);
   });
 
   it("refuses a reference to somebody else's material", async () => {

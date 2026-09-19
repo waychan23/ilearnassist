@@ -86,6 +86,64 @@ test("lists files from every workspace, not only uploads", async ({ page, reques
   await expect(row.getByTestId("resource-origin")).toContainText("已有文件");
 });
 
+test("a file two conversations refer to is one row, not three", async ({ page, request }) => {
+  /*
+   * **The reported bug.** `@`-ing a workspace file used to write a *holding* row for the
+   * conversation, and this dialog lists holdings — so the same file appeared once per
+   * conversation that had mentioned it. It is one file throughout: a reference points at an
+   * entity, and nothing was ever copied.
+   *
+   * A browser is the right place for it because the claim is about what the *list* draws, and
+   * because the two conversations have to be made the way a reader makes them.
+   */
+  const suffix = Date.now();
+  const workspace = `Shared-${suffix}`;
+  // Named per test: the library lists the whole account, so a fixed name would collide with the
+  // file the other case in this file seeds.
+  const fileName = `shared-${suffix}.md`;
+  const workspaceId = await seedWorkspace(request, workspace, fileName);
+
+  /** A conversation in that workspace, with the file `@`-ed into it. */
+  async function refer(): Promise<void> {
+    const sessionId = await request
+      .post(`/api/workspaces/${workspaceId}/sessions`, { data: {} })
+      .then((r) => r.json<{ id: string }>())
+      .then((session) => session.id);
+    const file = await (await request.get("/api/resources"))
+      .json<{ id: string; resource: { path: string } }[]>()
+      .then((rows) => rows.find((r) => r.resource.path.endsWith(`/${fileName}`))!);
+
+    await scriptLlm(request, { turns: [{ content: "看过了。" }] });
+    await request.post(`/api/sessions/${sessionId}/chat`, {
+      data: {
+        message: "看一下这个文件",
+        refs: [{ kind: "resource", ref: file.id, label: fileName }],
+      },
+    });
+  }
+
+  await refer();
+  await refer();
+
+  await openBrowser(page);
+  await expect(
+    page.getByTestId("resource-row").filter({ hasText: fileName })
+  ).toHaveCount(1);
+
+  // And each conversation's own panel still shows it — the half a cross-conversation dedupe
+  // could have taken away. The panel's filter is `?sessionId=`, so this is asked directly.
+  for (const sessionId of await (
+    await request.get(`/api/workspaces/${workspaceId}/sessions`)
+  )
+    .json<{ id: string }[]>()
+    .then((rows) => rows.map((r) => r.id))) {
+    const panel = await (
+      await request.get(`/api/resources?sessionId=${sessionId}`)
+    ).json<{ resource: { path: string } }[]>();
+    expect(panel.some((r) => r.resource.path.endsWith(`/${fileName}`))).toBe(true);
+  }
+});
+
 test("deleting a file inside a workspace says what it will destroy", async ({ page, request }) => {
   /*
    * The false promise this closes. A file inside a workspace is deleted through the **file
@@ -100,7 +158,10 @@ test("deleting a file inside a workspace says what it will destroy", async ({ pa
    */
   const suffix = Date.now();
   const workspace = `Shared-${suffix}`;
-  const workspaceId = await seedWorkspace(request, workspace, "shared.md");
+  // Named per test: the library lists the whole account, so a fixed name would collide with the
+  // file the other case in this file seeds.
+  const fileName = `shared-${suffix}.md`;
+  const workspaceId = await seedWorkspace(request, workspace, fileName);
 
   /*
    * The **workspace's** row, not the conversation's. Both are on the list — they are two
@@ -111,7 +172,7 @@ test("deleting a file inside a workspace says what it will destroy", async ({ pa
   const listed = () =>
     page
       .getByTestId("resource-row")
-      .filter({ hasText: "shared.md" })
+      .filter({ hasText: fileName })
       .filter({ has: page.getByTestId("source-delete") });
 
   await openBrowser(page);
@@ -138,13 +199,13 @@ test("deleting a file inside a workspace says what it will destroy", async ({ pa
     await request.get("/api/resources")
   )
     .json<{ id: string; resource: { path: string } }[]>()
-    .then((rows) => rows.find((r) => r.resource.path.endsWith("/shared.md"))!);
+    .then((rows) => rows.find((r) => r.resource.path.endsWith(`/${fileName}`))!);
 
   await scriptLlm(request, { turns: [{ content: "看过了。" }] });
   await request.post(`/api/sessions/${sessionId}/chat`, {
     data: {
       message: "看一下这个文件",
-      refs: [{ kind: "resource", ref: file.id, label: "shared.md" }],
+      refs: [{ kind: "resource", ref: file.id, label: fileName }],
     },
   });
 

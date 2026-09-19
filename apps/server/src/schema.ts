@@ -380,6 +380,49 @@ export const DDL = `
   -- The listing query: one owner's material, in the order it arrived.
   CREATE INDEX IF NOT EXISTS idx_wr_owner ON work_resources(owner_type, owner_id, created_at);
 
+  /*
+   * A reference: this conversation is about that entity, without holding it.
+   *
+   * The second relation, and it exists because one row was carrying two meanings. A
+   * work_resources row says *this workspace, or this conversation, holds this material* — which
+   * is what the library lists, what the @ picker offers, and what a delete acts on. Pointing at
+   * something with @ is none of those: it is being **about** material that belongs somewhere
+   * else. Writing a holding row for it made the library show one file once per conversation that
+   * had mentioned it, which is what this table removes — the conversation's reach is now
+   * *what it holds or refers to*, and only the holding half is material.
+   *
+   * **No user_id**, following sessions and messages: the row reaches its owner through its
+   * session, and a second copy of the owner is a second thing to keep in agreement. Both sides
+   * are already account-scoped — the session by getSessionForUser, the entity by its own row.
+   *
+   * **No deleted_at**, unlike every entity around it. This is the record of an *act* rather than
+   * something a person made, so it is a real DELETE — session_locks' and session_threads'
+   * footing. There is nothing to restore, and pointing at the same thing again recreates it.
+   *
+   * **No parse columns, deliberately.** A reference is not a holder, so it has no parse of its
+   * own; the entity's holding row carries that, and the reference merely admits it. That is what
+   * keeps one parse per *holder* — the v4 rule — instead of one per mention.
+   */
+  CREATE TABLE IF NOT EXISTS session_references (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+
+    -- The same polymorphic pair work_resources carries, and the same argument for having no
+    -- foreign key: one column cannot point at two tables, and the entity is only ever reached
+    -- through the reference.
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+
+    created_at TEXT NOT NULL
+  );
+  -- One live reference per entity, per conversation. This is what makes pointing at the same
+  -- thing twice an upsert rather than a second row.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sref_place
+    ON session_references(session_id, resource_type, resource_id);
+  -- The reverse lookup, for the delete path: a file's references go when the file does.
+  CREATE INDEX IF NOT EXISTS idx_sref_resource
+    ON session_references(resource_type, resource_id);
+
   -- user_id is nullable here *and* in the migration that adds it to older databases. Not slack:
   -- ALTER TABLE ADD COLUMN with NOT NULL demands a default, and any default is a landmine for a
   -- later insert that forgets the owner. Every read names the owner in its WHERE and requires

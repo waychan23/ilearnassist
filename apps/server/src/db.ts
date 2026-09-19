@@ -1699,6 +1699,43 @@ export interface AppDb {
     resourceType: WorkResourceType,
     resourceId: string
   ): WorkResourceRecord[];
+
+  /* ----------------------- session references (参考) ----------------------- */
+
+  /**
+   * Record that a conversation is *about* an entity it does not hold.
+   *
+   * Idempotent on `(session_id, resource_type, resource_id)`, which is what makes `@`-ing the
+   * same thing on a later turn one statement rather than a duplicate row. There is no title and
+   * no parse state to keep in step — the entity's holding row carries both, and this row is only
+   * the fact that the conversation reached it.
+   */
+  addSessionReference(input: {
+    id: string;
+    sessionId: string;
+    resourceType: WorkResourceType;
+    resourceId: string;
+    now?: string;
+  }): void;
+
+  /**
+   * Every entity a conversation refers to, as `resource_type:resource_id` pairs.
+   *
+   * The pairs rather than rows, because a caller resolving them wants the *holding* row — the
+   * one with a title and a parse state — and the SQL that widens a listing does it with an
+   * `EXISTS` rather than by fetching these at all. This is for the callers that need the set
+   * itself: the delete sweep's reverse lookup.
+   */
+  listSessionReferences(sessionId: string): { resourceType: string; resourceId: string }[];
+
+  /**
+   * Drop every conversation's reference to one entity.
+   *
+   * A real `DELETE`, and reached when the *material* goes: a file deleted from the library takes
+   * the references pointing at it with it, so nothing is left pointing at bytes that are gone.
+   * The count of rows it removed is what the caller logs; the caller does not act on it.
+   */
+  deleteReferencesToResource(resourceType: WorkResourceType, resourceId: string): number;
   listWorkResourcesFiltered(
     userId: string,
     filter: WorkResourceFilter
@@ -1719,16 +1756,21 @@ export interface AppDb {
   softDeleteWorkResourceForUser(id: string, userId: string): boolean;
   /** Records what a parse did. `parsedFileId` is only ever set, never cleared. */
   /**
-   * How many live references point at each of these entities, keyed by entity id.
+   * How many places each of these entities is reachable from, keyed by entity id.
+   *
+   * **Both relations, and that is what the number is for.** A holding row is one place; a
+   * `session_references` row is another — a conversation that merely refers to the material still
+   * loses it when the bytes go, because the delete sweeps both. Counting only holdings would tell
+   * a reader "nobody else has this" while two conversations' panels were about to go empty.
    *
    * One statement per entity *type* rather than one per row, because the question is asked by a
-   * listing — the library answers it for every row it draws, so a lookup per row would be a
-   * query per row. `resourceIds` travels as JSON for `listReadableWorkResources`' reason:
+   * listing — the library answers it for every row it draws, so a lookup per row would be a query
+   * per row. `resourceIds` travels as JSON for `listReadableWorkResources`' reason:
    * `json_each('')` raises, and a raise on a listing is a 500.
    *
-   * **Live references only**, which is what makes the answer mean something: a reference the user
-   * deleted, or one whose owner is gone, is not a second copy of anything. `idx_wr_resource`
-   * carries the pair.
+   * **Live rows only**, which is what makes the answer mean something: a holding the user deleted
+   * is not a second copy of anything. `idx_wr_resource` and `idx_sref_resource` carry the pair.
+   * A reference needs no owner filter — the entity id is already this account's.
    */
   countReferencesForEntities(
     userId: string,
@@ -3034,6 +3076,31 @@ export function createDb(dbPath: string): AppDb {
       GROUP BY resource_id`
   );
 
+  /*
+   * The reference relation's three statements. Small on purpose: a reference is the fact that a
+   * conversation is about an entity, so there is nothing to update and nothing to soft-delete —
+   * the row is either there or it is not. See `session_references` in the schema.
+   */
+  const stmtUpsertSessionReference = db.prepare(
+    `INSERT INTO session_references (id, session_id, resource_type, resource_id, created_at)
+     VALUES (@id, @sessionId, @resourceType, @resourceId, @createdAt)
+     ON CONFLICT(session_id, resource_type, resource_id) DO NOTHING`
+  );
+  const stmtListSessionReferences = db.prepare(
+    `SELECT resource_type, resource_id FROM session_references WHERE session_id = ?`
+  );
+  const stmtDeleteReferencesToResource = db.prepare(
+    `DELETE FROM session_references WHERE resource_type = ? AND resource_id = ?`
+  );
+  /** The reference half of `countReferencesForEntities` — see there for why both are counted. */
+  const stmtCountSessionReferences = db.prepare(
+    `SELECT resource_id, COUNT(*) AS n
+       FROM session_references
+      WHERE resource_type = @resourceType
+        AND resource_id IN (SELECT value FROM json_each(@resourceIds))
+      GROUP BY resource_id`
+  );
+
   /** Every live reference to one entity — what answers "is this file still referenced". */
   const stmtListWorkResourcesForResource = db.prepare(
     `${WR_SELECT} WHERE wr.user_id = @userId AND wr.resource_type = @resourceType
@@ -3082,7 +3149,13 @@ export function createDb(dbPath: string): AppDb {
               OR (wr.owner_type = 'session' AND wr.owner_id IN (
                     SELECT s.id FROM sessions s WHERE s.workspace_id = @workspaceId))
             ))
-        AND (@sessionId IS NULL OR (wr.owner_type = 'session' AND wr.owner_id = @sessionId))
+        AND (@sessionId IS NULL OR (
+              (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
+              OR EXISTS (
+                SELECT 1 FROM session_references sr
+                 WHERE sr.session_id = @sessionId
+                   AND sr.resource_type = wr.resource_type
+                   AND sr.resource_id = wr.resource_id)))
       ORDER BY wr.created_at ASC, wr.id ASC`
   );
   const stmtSoftDeleteWorkResourceForUser = db.prepare(
@@ -3135,6 +3208,15 @@ export function createDb(dbPath: string): AppDb {
    * with the join. The `EXISTS` carries `user_id` for arm 3's reason: the owner is an id from a
    * settings blob, and this is what says it names *this* account's workspace.
    *
+   * **Arm 1 is the conversation's *reach*, not only its holdings.** Its second half is a
+   * `session_references` lookup: what this conversation *referred to*, which is the relation a
+   * `@` writes and a holding row is not. That half is what makes pointing at something sticky —
+   * a file in a granted workspace stays readable after the grant is withdrawn, because the
+   * conversation was pointed at it once. What comes back is still the **owner's** row, so the id
+   * the model reads through is the one `messages.refs` replays and `ila_query` lists: a reference
+   * *admits* an entity rather than becoming one, which is also why a reference carries no parse
+   * state of its own.
+   *
    * `linked_at` is `wr.created_at`, and there is no `MIN(...)`/`GROUP BY` any more. That
    * machinery existed because an upload wrote a row in *two* link tables with two `now()` calls,
    * so the same file could come back twice. The four-part unique index makes one row per
@@ -3149,6 +3231,11 @@ export function createDb(dbPath: string): AppDb {
         AND (f.id IS NOT NULL OR p.id IS NOT NULL)
         AND (
           (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
+          OR EXISTS (
+            SELECT 1 FROM session_references sr
+             WHERE sr.session_id = @sessionId
+               AND sr.resource_type = wr.resource_type
+               AND sr.resource_id = wr.resource_id)
           OR (wr.owner_type = 'workspace'
               AND EXISTS (
                 SELECT 1 FROM workspaces w
@@ -4403,17 +4490,46 @@ export function createDb(dbPath: string): AppDb {
         return entity ? [mapWorkResource(r, entity)] : [];
       });
     },
+    addSessionReference(input) {
+      stmtUpsertSessionReference.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        resourceType: input.resourceType,
+        resourceId: input.resourceId,
+        createdAt: input.now ?? now(),
+      });
+    },
+    listSessionReferences(sessionId) {
+      const rows = stmtListSessionReferences.all(sessionId) as {
+        resource_type: string;
+        resource_id: string;
+      }[];
+      return rows.map((r) => ({ resourceType: r.resource_type, resourceId: r.resource_id }));
+    },
+    deleteReferencesToResource(resourceType, resourceId) {
+      return stmtDeleteReferencesToResource.run(resourceType, resourceId).changes;
+    },
     countReferencesForEntities(userId, resourceType, resourceIds) {
       // An empty page of ids returns an empty map rather than asking the statement to parse
       // `json_each('[]')` — which would work, but a query that provably cannot match is worth
       // not making.
       if (resourceIds.length === 0) return new Map();
-      const rows = stmtCountReferences.all({
+      const bound = {
         userId,
         resourceType,
         resourceIds: JSON.stringify([...new Set(resourceIds)]),
-      }) as { resource_id: string; n: number }[];
-      return new Map(rows.map((r) => [r.resource_id, r.n]));
+      };
+      const counts = new Map<string, number>();
+      for (const row of stmtCountReferences.all(bound) as { resource_id: string; n: number }[]) {
+        counts.set(row.resource_id, row.n);
+      }
+      for (const row of stmtCountSessionReferences.all(bound) as {
+        resource_id: string;
+        n: number;
+      }[]) {
+        counts.set(row.resource_id, (counts.get(row.resource_id) ?? 0) + row.n);
+      }
+      return counts;
     },
     listWorkResourcesFiltered(userId, filter) {
       const rows = stmtListWorkResourcesFiltered.all({

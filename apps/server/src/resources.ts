@@ -546,8 +546,10 @@ export async function listResourceViewsForUser(
  *
  * The library's delete asks with it: destroying a file destroys every reference to it, so a
  * delete that would take another conversation's material with it has to say so *before* it
- * happens. One grouped statement per entity type on the page — at most two, since `file` and
- * `web_page` are the whole vocabulary — and never a query per row.
+ * happens. **Both relations count** — a conversation that merely *refers* to the file loses it
+ * too, so counting holdings alone would answer "nobody else has this" about material two panels
+ * were about to lose. One grouped statement per entity type on the page — at most two, since
+ * `file` and `web_page` are the whole vocabulary — and never a query per row.
  *
  * Absent rather than `1` when the count cannot be had: a listing is the only caller, and a row
  * from anywhere else leaves the field off, which the reader must treat as "unknown" rather than

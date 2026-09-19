@@ -18,6 +18,47 @@ The id space is now the reference's. The library browses references, `@` picks r
 chip names one. A file is what the bytes are, and is reached through a reference — which is also
 why a file may have **no** reference at all, and some deliberately do.
 
+### Holding and referring are two relations
+
+A `work_resources` row means **this workspace, or this conversation, holds this material**. That
+is what the library lists, what `@` picks from, and what a delete acts on. Pointing at something
+with `@` is a different thing — being **about** material that belongs somewhere else — and it has
+its own table, `session_references`.
+
+It used to have no table of its own, so the `/chat` link loop wrote a *holding* row for a
+conversation that had merely mentioned something. Nothing was ever copied: the bytes and the
+`files` row were shared throughout. What was duplicated was the **row**, and the library — which
+lists holdings — drew one file once per conversation that had referred to it.
+
+A reference is deliberately thin. No `title`, no `summary`, **no parse state**, no `deleted_at`,
+no `user_id`:
+
+- **It admits the holder's row rather than becoming one.** `read_document` still takes a
+  `work_resources.id`, `ila_query(kind: "resource")` still lists those rows, and a chip still
+  names one — a reference widens *which* rows a conversation's reach includes, and nothing else.
+  The row that comes back is the holder's, so the panel and the model cannot disagree about a
+  title or a parse state.
+- **So one document is still extracted once.** The link loop schedules the parse on the *holder*,
+  not on a row of the conversation's own — a referrer is not a holder, and the v4 rule ("the same
+  file held by two owners is parsed twice") is about owners. What disappears is the *third* parse
+  a mere mention used to create.
+- **No `deleted_at`**, unlike every entity around it: this records an *act*, not something a
+  person made, so it is a real `DELETE` — `session_locks`' and `session_threads`' footing.
+- **No `user_id`**, following `sessions` and `messages`: the row reaches its owner through its
+  session, and both sides are already account-scoped.
+
+One SQL clause carries it to both readers. The 参考资料 widget's filter (`?sessionId=`) and the
+read whitelist's arm 1 become *what this conversation holds **or** refers to* — the same
+`EXISTS (SELECT 1 FROM session_references …)` — so the panel shows a referred file and
+`read_document` can read it. That second half is what makes `@` sticky: a file in a **granted**
+workspace stays readable after the grant is withdrawn, because the conversation was pointed at it
+once. And because it is one `SELECT` over `work_resources` with a widened `WHERE`, a row matched
+by two arms comes back once.
+
+**What the library and the `@` picker needed was no change at all.** Both list `work_resources`,
+which is now holdings only — so the duplication is gone, and the surviving row is the one whose
+owner genuinely brought the material in.
+
 This file is the reference for three things that are easy to get wrong: the four questions a piece
 of material answers and which table answers each, the rules that keep the registry in step with the
 filesystem, and the write location — which is the part a user can change and therefore the part that

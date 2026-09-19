@@ -614,8 +614,21 @@ Fuller map in `docs/reference.md`.
 - **A `work_resource` is a reference; a `files` (or `web_pages`) row is the material.** The
   account owns the *entity* — bytes at a stored path, or a page at a URL — and a workspace or a
   conversation holds a **reference** to it. The library browses references, `@` picks one,
-  `read_document` takes one's id. See `docs/resources.md`. Three things follow, and each is load
+  `read_document` takes one's id. See `docs/resources.md`. Four things follow, and each is load
   bearing:
+  - **Holding and referring are two relations, and `session_references` is the second.** A
+    `work_resources` row means *this workspace, or this conversation, **holds** this material* —
+    which is what the library lists, what `@` picks from, and what a delete acts on. Pointing at
+    something with `@` is none of those; it is being **about** material that belongs elsewhere.
+    That used to be written as a holding row, which made the library show one file once per
+    conversation that had mentioned it — the *row* was duplicated, never the bytes. A reference
+    carries **no title and no parse state**: it admits the holder's row rather than becoming one,
+    so `read_document`'s id space stays a single table, one document is extracted once, and the
+    whitelist's arm 1 is the conversation's *reach* (what it holds **or** refers to) rather than
+    its holdings. That last half is what makes `@` sticky — a file in a granted workspace stays
+    readable after the grant is withdrawn. The table has **no `deleted_at`** (it records an act,
+    not an entity, so it is a real `DELETE`) and **no `user_id`** (it reaches its owner through
+    its session, like `sessions` and `messages`).
   - **Three identity rules, as partial unique indexes.** Identical *uploaded bytes* are one file
     (`idx_files_blob`, on `(user_id, sha256) WHERE sha256 IS NOT NULL AND source_type IN
     ('upload','attachment')`, deliberately not filtered by `deleted_at` — that is what makes
@@ -641,9 +654,11 @@ Fuller map in `docs/reference.md`.
   - **Parse state is columns on the *reference*, and `parsed_file_id` points at the text.**
     Deliberate on both counts: a file may have **no** reference at all (a diagram's `.mmd`, a
     document's extracted text), so parse columns on the entity would be columns that are usually
-    NULL; and the cost is stated rather than hidden — **the same file referenced by two owners is
-    parsed twice**, where v3 parsed once and showed the reparse to both. Only the extracted
-    *text* stays a file, and it is a registered `files` row like any other.
+    NULL; and the cost is stated rather than hidden — **the same file held by two owners is
+    parsed twice**, where v3 parsed once and showed the reparse to both. (A *referrer* is not a
+    holder, so a `@` costs no second parse: the loop schedules on the holder's row, which is what
+    the referrer reads through.) Only the extracted *text* stays a file, and it is a registered
+    `files` row like any other.
     `attachments.ts` has no root constant: the tree belongs to a user under a data directory the
     process chose at launch, so every function takes the layout — which is also what keeps any
     data path out of import time.

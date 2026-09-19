@@ -365,6 +365,31 @@ describe("delete", () => {
     // Live references, so nothing left pointing at bytes that are gone.
     expect(db.listWorkResourcesForResource(env.user.id, "file", id!)).toHaveLength(0);
   });
+
+  it("retires the conversations' references too, which are a different relation", async () => {
+    /*
+     * A `@`-reference is not a holding row, so the sweep above does not reach it: it *admits* an
+     * entity rather than being admitted by it, and a reference left behind is a row pointing at
+     * bytes that are gone — which the panel would resolve to an owner's row that no longer
+     * exists.
+     */
+    seed("referred.txt", "pointed at");
+    const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "referred.txt")!
+      .fileId;
+    const db = env.server.db;
+    const other = await newSession(env, workspace.id);
+    db.addSessionReference({
+      id: "sref-1",
+      sessionId: other.id,
+      resourceType: "file",
+      resourceId: id!,
+    });
+    expect(db.listSessionReferences(other.id)).toHaveLength(1);
+
+    await remove("referred.txt");
+
+    expect(db.listSessionReferences(other.id)).toEqual([]);
+  });
 });
 
 describe("what a listing says about a file's holders", () => {
