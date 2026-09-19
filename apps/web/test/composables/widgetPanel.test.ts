@@ -119,9 +119,9 @@ describe("the panel's layout", () => {
 
 describe("the open widget", () => {
   it("remembers which one was open", () => {
-    widgetPanel.setActive("session_stats");
+    widgetPanel.setActive("diagram");
     widgetPanel.reload();
-    expect(widgetPanel.activeId.value).toBe("session_stats");
+    expect(widgetPanel.activeId.value).toBe("diagram");
   });
 
   it("is null before anything has been opened", () => {

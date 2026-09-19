@@ -323,7 +323,8 @@ file chip — where `1em` would inherit something arbitrary.
 ### Not an icon
 
 Three characters are punctuation the copy is built from and stay as characters: the `→` in
-`Settings → Providers`, the `·` in a `1.2 MB · 3 pages` list, and the `▍` streaming cursor
+`Platform console → Model services`, the `·` in a `1.2 MB · 3 pages` list, and the `▍` streaming
+cursor
 in `style.css`. `icons.test.ts` strips the first two before it scans, and does not scan the
 sheet at all.
 

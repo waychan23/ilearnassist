@@ -40,7 +40,6 @@ import type {
   SessionLockRelease,
   SessionLockResult,
   SessionLockView,
-  SessionStats,
   SessionWidgets,
   SetSessionPinnedInput,
   TitleRetryResult,
@@ -67,7 +66,6 @@ import type {
   WorkResource,
   Workspace,
   WorkspaceSettings,
-  WorkspaceStats,
 } from "@ilearnassist/shared";
 import { AUTH_STORAGE_KEY, CLIENT_ID_HEADER } from "@ilearnassist/shared";
 import { ApiError, translateApiError } from "../utils/apiError";
@@ -828,11 +826,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ enabled }),
     }),
-
-  /* The statistics the widget panels read. About the object, not about a widget. */
-  getWorkspaceStats: (workspaceId: string) =>
-    request<WorkspaceStats>(`/workspaces/${workspaceId}/stats`),
-  getSessionStats: (sessionId: string) => request<SessionStats>(`/sessions/${sessionId}/stats`),
 
   // Plans. `{ plan: null }` is the ordinary empty state, not an error.
   getPlan: (sessionId: string) => request<GetPlanResponse>(`/sessions/${sessionId}/plan`),

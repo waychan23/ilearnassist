@@ -30,11 +30,16 @@ afterEach(() => {
 describe("dataLayout", () => {
   it("puts users and the database under the chosen root", () => {
     const layout = dataLayout("/data");
+    // Exhaustive on purpose: a new member of the layout is a decision about somebody's disk, so
+    // it should have to be written down here rather than appearing everywhere by default.
     expect(layout).toEqual({
       dataRoot: "/data",
       usersRoot: join("/data", "users"),
       sqliteDir: join("/data", "db", "sqlite"),
       sqliteFile: join("/data", "db", "sqlite", "ilearnassist.sqlite"),
+      // Inside the data root, so that "back up my work" stays "copy this folder" — including the
+      // snapshot taken before a migration, which is the one backup that has to exist.
+      backupsDir: join("/data", "backups"),
     });
   });
 

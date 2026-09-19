@@ -13,8 +13,8 @@ agent loop with tool calling. Three apps share a types package:
   the built frontend when there is one.
 - `apps/web` — Vue 3 (Composition API) + Pinia + Vite. Renders the chat UI.
 - `apps/desktop` — Electron. A "control panel" that starts/stops the server and opens
-  the app, packaged as a Mac `.dmg` for people who do not want a terminal. Supervises
-  the server as a child process; reimplements none of it. See `docs/desktop.md`.
+  the app, packaged for macOS, Windows and Linux for people who do not want a terminal.
+  Supervises the server as a child process; reimplements none of it. See `docs/desktop.md`.
 - `packages/shared` — dependency-free API/domain types used by both sides.
 
 The name the product **displays** is 交互式学习助理 / Interactive Learning Assistant
@@ -78,6 +78,7 @@ pnpm test:e2e          # playwright: real browser + real server + a fake LLM
 pnpm build             # production build of the web app
 pnpm desktop:dev       # bundle and launch the Electron control panel
 pnpm desktop:package   # build a Mac .dmg (apps/desktop/release/)
+pnpm desktop:package:mac | :win | :linux   # per platform; Windows needs Windows
 ```
 
 TypeScript is strict (`strict`, `noUncheckedIndexedAccess`, `isolatedModules`,
@@ -250,6 +251,7 @@ apps/server/src/
   prompts.json            # every system prompt and guidance block, keyed — see docs/prompts.md
   prompts.ts              # the catalog: rendering, {{placeholders}}, and config.patch.json overrides
   schema.ts               # the DDL, schemaProblem, and the user_version guard (one transaction)
+  migrations.ts           # the Flyway-model walk: steps, checksums, the history, the guard
   apiError.ts             # the { error: { code, message, params } } envelope, shared with the CLI
   auth.ts                 # accounts: scrypt passwords, credential policy, bearer tokens, the gate
   db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
@@ -260,7 +262,7 @@ apps/server/src/
   fileCategory.ts         # what a file is: one MIME type and one category, from a name
   resources.ts            # registerFile / ensureWorkResource / rename / reconcile
   fileOps.ts              # the file manager's writes: create, upload, move, delete-to-trash
-  migrations.ts           # the version walk (v2 -> v3), canMigrate, openRefusal
+  backup.ts               # the VACUUM INTO snapshot a walk must take before it writes
   writeLocation.ts        # the four-level chain deciding which sandbox a write goes to
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
@@ -273,6 +275,7 @@ apps/server/src/
   agent/threads.ts        # the out-of-band topic classifier call
   agent/insights.ts       # the out-of-band insight pass call
   agent/reasoning.ts      # the `thinking` body field, capability-gated (both calls above)
+  version.ts              # APP_VERSION, inlined from package.json at build time
   modelJson.ts            # fence-and-bracket stripping for an out-of-band answer (pure)
   modelLog.ts             # the append-only observation logs, one file per call kind
   documents/              # document → text: local extractors, cloud drivers, policy
@@ -291,7 +294,7 @@ apps/server/src/
   tools/resultPage.ts     # the paging engine ila_query and ila_explore share: clip, renderPage
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
-  widgets.ts              # sumUsage + the widget-selection validator (pure)
+  widgets.ts              # the widget-selection validator (pure)
   usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
   notes.ts                # the notes widget's records: what a body may become a note (pure)
   insights.ts             # the insight pass: prompt, defensive parse, the wipe-then-insert write
@@ -328,7 +331,7 @@ apps/web/src/
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
   widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/ResourcesWidget.vue # the material panel: what this conversation holds, filtered by category
-  widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
+  widgets/*Widget.vue     # the seven panels (plan, quiz, thread, notes, diagram, insight, sources)
   utils/mention.ts        # the `@`-mention: is the caret in one, and where the name goes
   utils/resourcePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
   utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
@@ -1053,24 +1056,34 @@ Fuller map in `docs/reference.md`.
   indistinguishable from a button that does nothing — which is how one was reported. The
   store's `answerQuestion` follows the same rule: a submission it cannot place is
   reported, never silently dropped.
-- **Schema changes follow one of two rules, and they cover different things.** *Adding* a
-  column goes through `ensureColumn` in `db.ts`: `CREATE TABLE IF NOT EXISTS` silently skips
-  existing tables, so a database created before the column would never gain it. *Changing
-  what an existing column means* bumps `SCHEMA_VERSION` in `schema.ts`, which refuses the
-  file outright — no missing column can signal that, so without a version an old database is
-  simply opened and read wrong (`dir_path` resolving to the wrong directory, ids referring to
-  a different kind of thing) with no error anywhere to explain it. The guard reads
-  `PRAGMA user_version`, which is in the file header and therefore readable *before* anything
-  is created; a version row in `app_settings` cannot be, because reading it means having
-  already touched the file you meant to refuse.
-  **There are no migrations at all right now, and that is a decision rather than an omission.**
-  v4 splits one table into three and changes what the bytes' locator means; no pure function of
-  the rows produces the new shape honestly, because a v3 row's owner would have to be guessed
-  wherever its links disagree — and a wrong owner is worse than a file that will not open, since
-  nothing downstream can tell it is wrong. So `MIGRATIONS` is empty and a v3 data root is
-  **refused**; the upgrade is deleting it, and the workspaces, sessions and every file on disk
-  survive that untouched. `canMigrate` keeps its loop over `MIGRATIONS` rather than collapsing to
-  `from === SCHEMA_VERSION`, so the next migration is an entry in the array and nothing else.
+- **Schema changes follow one of three rules, and `docs/migrations.md` is the reference.**
+  *Adding* a table or index is a `DDL` edit and nothing else (every statement is
+  `CREATE … IF NOT EXISTS` and the DDL runs on every open, so an existing file gains it on the
+  next start). *Adding* a column is that **and** an `ensureColumn` call — two edits, for two
+  audiences: the DDL is what a fresh install gets and `ensureColumn` is how an existing one
+  catches up. *Anything the idempotent DDL cannot express* — changing what a column means, a drop,
+  a data rewrite — bumps `SCHEMA_VERSION` **and** adds a step to `MIGRATIONS`, which walks an older
+  file forward. No missing column can signal that kind of change, so without a version an old
+  database is simply opened and read wrong (`dir_path` resolving to the wrong directory, ids
+  referring to a different kind of thing) with no error to explain it. The guard reads
+  `PRAGMA user_version`, which is in the file header and therefore readable *before* anything is
+  created; a version row in `app_settings` cannot be, because reading it means having already
+  touched the file you meant to refuse.
+  **The walk is Flyway's model with our runner, and the reasons are concrete** (see
+  `migrations.ts`): better-sqlite3 is synchronous while every migration library's API is a promise,
+  so taking one would make `createDb` async — and `createDb` is called synchronously from the
+  boot path, the CLI and every test; a library's own history table would be a **second version
+  authority** beside the `user_version` guard that `schemaProblem`/`canMigrate`/`openRefusal` and
+  the CLI's read-only `status` are built on; and the server is bundled to one file, so a runner
+  that globs a `migrations/` directory finds nothing in the packaged app. What a library would give
+  us is the walk, the history and the checksum; what it would not give us is the snapshot, which is
+  the part that protects the user's only copy of their data.
+  **`MIGRATIONS` is empty and v2–v4 are still refused**, deliberately: those steps would have to
+  invent a value the rows do not determine (a v3 link's owner wherever its links disagree), and a
+  wrong owner is worse than a file that will not open, since nothing downstream can tell it is
+  wrong. `canMigrate` keeps its loop over `MIGRATIONS` rather than collapsing to
+  `from === SCHEMA_VERSION`, so the next migration is an entry in the array and nothing else. v5 is
+  the first version of the migration era.
 - **Every user-owned read takes the owner and puts it in the `WHERE`.** `getWorkspaceForUser`,
   `getSessionForUser`, `listMessagesForUser` — the `ForUser` suffix is the rule, and another
   account's id returns `undefined` rather than a row. Looking a row up and *then* comparing
@@ -1808,6 +1821,17 @@ Fuller map in `docs/reference.md`.
   a user's machine, so the child is spawned from `process.execPath` with
   `ELECTRON_RUN_AS_NODE=1`. That is also what makes `better-sqlite3`'s prebuilt N-API
   binary the right one. Do not "simplify" it to a plain `node` invocation.
+- **The panel's title bar is the header, and it must reach the window's top edge and never
+  scroll.** The window has no title bar of its own on macOS (`titleBarStyle: hiddenInset`), so
+  `.header` is the only drag region — and a drag region is a *box*, so where the padding lives
+  decides whether the window can be moved at all. It was on `.panel`: the header's box therefore
+  began 50px down the window, `ELECTRON_DEBUG_DRAGGABLE_REGIONS=1` reported the draggable area as
+  a 440×47 strip at y=50, and grabbing the window where its title bar appears to be did nothing.
+  The padding is the header's now, and the rows are in `.panel__body` — a scroller of their own —
+  because with one scroller the title bar slid off the top of a short window and took the only
+  drag region with it. Both halves are pinned in `e2e/panel.spec.ts`, against computed
+  `-webkit-app-region` and the header's position after a scroll. A control inside the region
+  needs `no-drag` or pressing it moves the window (`.locale` is the one there).
 - **The panel enters `running` on exactly one signal**: the server printing
   `[ilearnassist] listening on <url>`. Not a fixed port, not a timer, and not
   Fastify's own "Server listening at …" banner, which is logged from inside `listen`
@@ -1932,6 +1956,19 @@ Fuller map in `docs/reference.md`.
   level is `WIDGET_SCOPE_UNSUPPORTED`. Reads resolve through the registry rather than the rows, so
   one entry comes back per widget at that level and a stored row is indistinguishable from a
   defaulted one.
+  **Every widget this build ships is session scope, and the workspace level is kept empty on
+  purpose.** It was the level of the two demo statistics panels, and removing them left it with
+  none while keeping the level itself: `WIDGET_SCOPES`, the two `/widgets` routes, the
+  `widget_instances` rows and both workspace dialogs all still exist. Four things follow, and each
+  is a decision rather than debris: the strip draws **one group and never a divider** (it filters
+  empty groups, so the divider code is dormant until a workspace widget returns); the workspace
+  dialogs **hide their widget sections** rather than drawing a label, a lead sentence and no
+  checkboxes (`v-if` on the resolved list, not on a constant, so a workspace widget restores them
+  with no edit); a stored workspace row is **not** an error, because reads resolve through the
+  registry and simply never return it; and `WIDGET_SCOPE_UNSUPPORTED` is reachable now only by
+  naming a *session* widget at workspace level — the reverse direction became `UNKNOWN_WIDGET` the
+  moment the ids stopped existing, which is a distinction worth keeping straight because both
+  produce the same refusal on screen. `apps/server/test/widgets.test.ts` holds all of it.
 - **Widget-bound tools are switched by the install, and bypass the tool allow-list.** A `WIDGETS` entry may name `boundTools`; `turnContext()` reads the session's installed widgets per turn and assembles those tools (context-gated like `read_document`) regardless of the `allTools`/`tools` snapshot in all three states, including the empty "no tools" list. They are filtered out of the Copilot tool checklist (`isWidgetBoundTool`), since a box there can neither enable nor remove them. The plan widget binds `ila_make_plan` / `ila_read_plan` / `ila_update_plan_progress` (session scope only).
   **A tool whose widget is a *viewer* must not be bound, and `ila_diagram` is the case that
   settles it.** Binding is the right answer only when the widget is the capability's home — a
@@ -2076,7 +2113,10 @@ Fuller map in `docs/reference.md`.
   `esbuild` are native/bundler; `electron` downloads the ~130 MB binary the desktop app
   runs on. `electron-winstaller` is explicitly `false` — it is Windows-only Squirrel
   tooling, and `pnpm install` otherwise rewrites the file with a
-  `set this to true or false` placeholder that is not valid YAML.
+  `set this to true or false` placeholder that is not valid YAML. It stays `false`:
+  the Windows target is **NSIS**, which does not use it, and a one-click Squirrel
+  installer offers no choice of location and no visible uninstaller. If a future release
+  switches targets, this is the line that changes.
 - `better-sqlite3` is a native module — it builds against your local Node. If you
   change Node versions, reinstall.
 - Config loads `config/config.yaml`, overlaid by a git-ignored
@@ -2108,4 +2148,6 @@ references rather than background: `docs/design-system.md` for anything visual, 
 before changing any system prompt or adding one, `docs/usage.md` before touching the token ledger or
 the statistics pages, `docs/widgets.md` before adding a widget to the right sidebar, and
 `docs/session-locks.md` before touching anything that writes to a conversation from more than one
-client.
+client. `docs/demo-gifs.md` is the recording brief for the READMEs' animated demos — the slots are
+in both READMEs as commented-out image lines, so the naming and the content are specified in one
+place rather than agreed per take.

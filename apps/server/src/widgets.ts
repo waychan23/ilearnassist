@@ -2,104 +2,22 @@ import {
   defaultWidgetEnabled,
   isWidgetId,
   widgetsForScope,
-  type MessageUsage,
-  type SessionStats,
   type WidgetId,
   type WidgetScope,
   type WidgetState,
-  type WorkspaceStats,
 } from "@ilearnassist/shared";
 
 /**
- * The arithmetic behind the statistics widgets, and the one place a raw `widgets` value from a
- * request becomes a list of ids.
+ * The one place a raw `widgets` value from a request becomes a list of ids.
  *
  * Pure on purpose — nothing here touches the database or a request — so the rules that are easy
- * to get subtly wrong (what a missing `totalTokens` means, which turn `contextTokens` comes
- * from) are testable without HTTP, and so `db.ts` can stay the layer that reads rows.
- */
-
-/**
- * What one conversation's usage rows add up to.
+ * to get subtly wrong (absent versus empty, unknown versus misplaced) are testable without HTTP,
+ * and so `db.ts` can stay the layer that reads rows.
  *
- * The reason this is JavaScript and not `SUM(json_extract(usage, …))`: `MessageUsage`'s fields
- * are **all optional**, so a total the provider did not send is the two halves it did, and
- * `contextTokens` means the opposite of a sum — it is the last step's own size, a level rather
- * than a running total. Expressing either inside a `GROUP BY` would bury the definition of the
- * type where no reader of the type would find it, and `usage` can hold junk (which is why
- * `safeParseObject` exists at all), so a malformed column would turn a panel into a 500 rather
- * than a wrong number.
- *
- * `usages` is expected in ascending `created_at`, i.e. the order the messages were written.
+ * The module's other half, the arithmetic behind the two demo statistics widgets, was removed
+ * with them. Nothing replaced it: the token figures that matter are the ledger's, and those are
+ * summed in `usage.ts` over `usage_events` rows.
  */
-export function sumUsage(usages: MessageUsage[]): {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  contextTokens: number;
-} {
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let totalTokens = 0;
-  let contextTokens = 0;
-
-  for (const usage of usages) {
-    const input = usage.inputTokens ?? 0;
-    const output = usage.outputTokens ?? 0;
-    inputTokens += input;
-    outputTokens += output;
-    totalTokens += usage.totalTokens ?? input + output;
-    // Last one wins, and `||` rather than `??`: a turn that reported no context leaves the
-    // previous level standing rather than resetting the conversation to zero.
-    contextTokens = usage.contextTokens || contextTokens;
-  }
-
-  return { inputTokens, outputTokens, totalTokens, contextTokens };
-}
-
-/** One conversation's numbers, from its messages. */
-export function buildSessionStats(input: {
-  sessionId: string;
-  title: string;
-  /**
-   * One entry per message, in `created_at` order — **including** the ones with no usage. The
-   * length is the message count, which is why a missing figure is `null` here rather than an
-   * empty object: a user message never carries usage, and a turn the user stopped reports none,
-   * and either would otherwise be counted as a turn that recorded nothing but happened to sum
-   * to zero.
-   */
-  usages: (MessageUsage | null)[];
-}): SessionStats {
-  return {
-    sessionId: input.sessionId,
-    title: input.title,
-    messageCount: input.usages.length,
-    ...sumUsage(input.usages.filter((u): u is MessageUsage => u !== null)),
-  };
-}
-
-/**
- * A workspace's numbers: its conversations' figures, plus the totals across them.
- *
- * The totals are summed from the rows rather than queried separately, so the headline and the
- * list below it cannot disagree — which is the whole failure a summary invites.
- */
-export function buildWorkspaceStats(input: {
-  workspaceId: string;
-  sessions: { sessionId: string; title: string; usages: (MessageUsage | null)[] }[];
-}): WorkspaceStats {
-  const sessions = input.sessions.map(buildSessionStats);
-  return {
-    workspaceId: input.workspaceId,
-    sessions,
-    messageCount: sessions.reduce((n, s) => n + s.messageCount, 0),
-    inputTokens: sessions.reduce((n, s) => n + s.inputTokens, 0),
-    outputTokens: sessions.reduce((n, s) => n + s.outputTokens, 0),
-    totalTokens: sessions.reduce((n, s) => n + s.totalTokens, 0),
-  };
-}
-
-/* --------------------------------- selections --------------------------------- */
 
 export type WidgetSelection =
   | { ok: true; ids: WidgetId[] | undefined }

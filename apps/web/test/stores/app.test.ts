@@ -17,7 +17,7 @@ import type {
   WorkResource,
   Workspace,
 } from "@ilearnassist/shared";
-import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
+import { MAX_ATTACHMENT_BYTES, widgetsForScope, WIDGET_SCOPES } from "@ilearnassist/shared";
 import { i18n } from "../../src/i18n.js";
 import { uiState } from "../../src/composables/ui.js";
 
@@ -60,8 +60,6 @@ const mocks = vi.hoisted(() => ({
     setWorkspaceWidget: vi.fn(),
     listSessionWidgets: vi.fn(),
     setSessionWidget: vi.fn(),
-    getWorkspaceStats: vi.fn(),
-    getSessionStats: vi.fn(),
     getPlan: vi.fn(),
     getPlanVersion: vi.fn(),
     jumpPlanNode: vi.fn(),
@@ -288,7 +286,7 @@ function copilotFixture(id: string, userId: string): Copilot {
     settings: {},
     // A selection, so a copy that dropped it would be visible — the same reason the tool list
     // above is a restriction rather than empty.
-    widgets: ["session_stats"],
+    widgets: ["diagram"],
     visibility: "private",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -302,17 +300,22 @@ function streamOf(...events: ChatStreamEvent[]) {
 }
 
 /**
- * A widget state, resolved as the server resolves it: one entry per widget this build knows.
+ * A widget state, resolved as the server resolves it: one entry per widget this build knows, in
+ * registry order, with the named ones switched on.
+ *
+ * **Derived from the registry, not hand-written.** The real reads walk `WIDGETS`, so a fixture
+ * with a list of its own is a second registry — one that agrees until it does not. This used to
+ * name the two demo statistics widgets, which was right for as long as they were the only ones
+ * anything here cared about, and wrong the moment a real widget needed a state.
  *
  * The default is **nothing installed**, which is also what a fresh object gets — so a test that
  * is not about widgets sees the same layout it saw before they existed, and the ones that are
  * about widgets say what they installed.
  */
 function widgetState(...enabled: WidgetId[]): WidgetState[] {
-  return [
-    { id: "workspace_stats", scope: "workspace", enabled: enabled.includes("workspace_stats") },
-    { id: "session_stats", scope: "session", enabled: enabled.includes("session_stats") },
-  ];
+  return WIDGET_SCOPES.flatMap((scope) =>
+    widgetsForScope(scope).map((w) => ({ id: w.id, scope, enabled: enabled.includes(w.id) }))
+  );
 }
 
 /**
@@ -1392,13 +1395,15 @@ describe("the workspace scope", () => {
 });
 
 describe("widgets", () => {
-  it("loads both groups when a conversation is selected", async () => {
-    const store = await readyStore({ widgets: ["workspace_stats", "session_stats"] });
-    expect(store.workspaceWidgetIds).toEqual(["workspace_stats"]);
-    expect(store.sessionWidgetIds).toEqual(["session_stats"]);
-    // In group order, which is what makes "workspace first, then session" a property of the data
-    // rather than of the render.
-    expect(store.enabledWidgetIds).toEqual(["workspace_stats", "session_stats"]);
+  it("loads the conversation's group, in registry order", async () => {
+    const store = await readyStore({ widgets: ["diagram", "notes"] });
+    // The workspace group is present and empty: nothing is installed at that level, and the
+    // strip reads the shape rather than the presence of the key.
+    expect(store.workspaceWidgetIds).toEqual([]);
+    // Registry order, not the order they were named in — `notes` comes before `diagram` in
+    // `WIDGET_IDS`, and the flattened list is what the strip draws left to right.
+    expect(store.sessionWidgetIds).toEqual(["notes", "diagram"]);
+    expect(store.enabledWidgetIds).toEqual(["notes", "diagram"]);
   });
 
   it("shows nothing when nothing is installed", async () => {
@@ -1411,62 +1416,57 @@ describe("widgets", () => {
     // The server resolves the state, so the reply is the record — a client that composed it
     // locally would be asserting its own intent rather than the stored fact.
     const store = await readyStore();
-    mocks.api.setWorkspaceWidget.mockResolvedValue({
-      id: "workspace_stats",
-      scope: "workspace",
+    mocks.api.setSessionWidget.mockResolvedValue({
+      id: "diagram",
+      scope: "session",
       enabled: true,
     });
 
-    await store.setWidgetEnabled("workspace", "w1", "workspace_stats", true);
+    await store.setWidgetEnabled("session", "s1", "diagram", true);
 
-    expect(mocks.api.setWorkspaceWidget).toHaveBeenCalledWith("w1", "workspace_stats", true);
-    expect(store.workspaceWidgetIds).toEqual(["workspace_stats"]);
+    expect(mocks.api.setSessionWidget).toHaveBeenCalledWith("s1", "diagram", true);
+    expect(store.sessionWidgetIds).toEqual(["diagram"]);
   });
 
   it("records an uninstall without dropping the row from the list", async () => {
     // `enabled: false` is the state, so the entry stays — which is also what the server stores.
-    const store = await readyStore({ widgets: ["session_stats"] });
+    const store = await readyStore({ widgets: ["diagram"] });
     mocks.api.setSessionWidget.mockResolvedValue({
-      id: "session_stats",
+      id: "diagram",
       scope: "session",
       enabled: false,
     });
 
-    await store.setWidgetEnabled("session", "s1", "session_stats", false);
+    await store.setWidgetEnabled("session", "s1", "diagram", false);
 
+    // Absent from the *enabled* list, still present in the resolved one with `enabled: false` —
+    // which is the row the server stores, and what makes the state readable back.
     expect(store.sessionWidgetIds).toEqual([]);
-    expect(store.sessionWidgets).toHaveLength(1);
-    expect(store.sessionWidgets[0]!.enabled).toBe(false);
+    expect(store.sessionWidgets.find((w) => w.id === "diagram")).toMatchObject({ enabled: false });
+    expect(store.sessionWidgets).toHaveLength(widgetState().filter((w) => w.scope === "session").length);
   });
 
   it("does not write a foreign object's installs into the active lists", async () => {
     /*
-     * The workspace settings dialog can be opened for a workspace nobody has entered, so it keeps
-     * its own rows — and this is the half that has to hold for that to be safe: a write to
-     * another workspace must not land in the list the panel is rendering.
+     * The settings dialog can be opened for an object nobody has entered, so it keeps its own
+     * rows — and this is the half that has to hold for that to be safe: a write to another
+     * object must not land in the list the panel is rendering.
      */
-    const store = await readyStore({ widgets: ["workspace_stats"] });
-    mocks.api.setWorkspaceWidget.mockResolvedValue({
-      id: "workspace_stats",
-      scope: "workspace",
+    const store = await readyStore({ widgets: ["diagram"] });
+    mocks.api.setSessionWidget.mockResolvedValue({
+      id: "diagram",
+      scope: "session",
       enabled: false,
     });
 
-    await store.setWidgetEnabled("workspace", "w-other", "workspace_stats", false);
+    await store.setWidgetEnabled("session", "s-other", "diagram", false);
 
-    expect(store.workspaceWidgetIds).toEqual(["workspace_stats"]);
+    expect(store.sessionWidgetIds).toEqual(["diagram"]);
   });
 
   it("installs a widget group as one action, skipping members already in the target state", async () => {
     // Plan already installed; the group button installs the other two and leaves plan alone.
-    // (The shared `widgetState` helper models only the stats widgets, so seed the study
-    // group's states directly.)
-    const store = await readyStore();
-    store.sessionWidgets = [
-      { id: "plan", scope: "session", enabled: true },
-      { id: "quiz", scope: "session", enabled: false },
-      { id: "thread", scope: "session", enabled: false },
-    ];
+    const store = await readyStore({ widgets: ["plan"] });
     mocks.api.setSessionWidget.mockImplementation(
       async (_scope: string, id: string, enabled: boolean) => ({
         id,
@@ -1516,60 +1516,33 @@ describe("widgets", () => {
     const installed = vi.fn(() => {
       throw new Error("hook bug");
     });
-    const original = WIDGET_MODULES.session_stats.onInstall;
-    WIDGET_MODULES.session_stats.onInstall = installed;
+    const original = WIDGET_MODULES.thread.onInstall;
+    WIDGET_MODULES.thread.onInstall = installed;
 
     try {
       const store = await readyStore();
       mocks.api.setSessionWidget.mockResolvedValue({
-        id: "session_stats",
+        id: "thread",
         scope: "session",
         enabled: true,
       });
 
       await expect(
-        store.setWidgetEnabled("session", "s1", "session_stats", true)
+        store.setWidgetEnabled("session", "s1", "thread", true)
       ).resolves.toBeDefined();
 
       expect(installed).toHaveBeenCalledWith({
         scope: "session",
         scopeId: "s1",
-        widgetId: "session_stats",
+        widgetId: "thread",
       });
       // The list is the server's answer, and the toast is untouched.
-      expect(store.sessionWidgetIds).toEqual(["session_stats"]);
+      expect(store.sessionWidgetIds).toEqual(["thread"]);
       expect(store.error).toBeNull();
       expect(warn).toHaveBeenCalled();
     } finally {
-      WIDGET_MODULES.session_stats.onInstall = original;
+      WIDGET_MODULES.thread.onInstall = original;
       warn.mockRestore();
-    }
-  });
-
-  it("runs the install hook for a workspace's widgets, which arrive in the create call", async () => {
-    /*
-     * The half of the lifecycle that a per-widget toggle cannot cover: the whole selection is
-     * chosen before the workspace exists, so the *creation* is the only moment there is. Unlike
-     * the `setWidgetEnabled` case, the list comes from the caller — with the default set empty,
-     * what was asked for and what was installed are the same list.
-     */
-    const { WIDGET_MODULES } = await import("../../src/widgets/registry.js");
-    const installed = vi.fn();
-    const original = WIDGET_MODULES.workspace_stats.onInstall;
-    WIDGET_MODULES.workspace_stats.onInstall = installed;
-
-    try {
-      const store = await readyStore();
-      mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
-      await store.createWorkspace("Fresh", ["workspace_stats"]);
-
-      expect(installed).toHaveBeenCalledWith({
-        scope: "workspace",
-        scopeId: WORKSPACE.id,
-        widgetId: "workspace_stats",
-      });
-    } finally {
-      WIDGET_MODULES.workspace_stats.onInstall = original;
     }
   });
 
@@ -1582,11 +1555,11 @@ describe("widgets", () => {
     const store = await readyStore();
     mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
 
-    await store.createWorkspace("Fresh", ["workspace_stats"], "线性代数的习题");
+    await store.createWorkspace("Fresh", [], "线性代数的习题");
 
     expect(mocks.api.createWorkspace).toHaveBeenCalledWith(
       "Fresh",
-      ["workspace_stats"],
+      [],
       "线性代数的习题"
     );
   });
@@ -1603,13 +1576,19 @@ describe("widgets", () => {
   });
 
   it("runs the install hook for what a new conversation actually got", async () => {
-    // From the *resolved* list rather than the request's: the server copies a Copilot's selection
-    // in, and a create may have named no widgets at all — so the reply is the only statement of
-    // what was installed.
+    /*
+     * From the *resolved* list rather than the request's: the server copies a Copilot's selection
+     * in, and a create may have named no widgets at all — so the reply is the only statement of
+     * what was installed.
+     *
+     * A twin of this test used to cover `createWorkspace` for the same reason, and it went when
+     * the workspace level lost its widgets: the create path for a session is the same code
+     * (`runInstallHooks`), so what is left is the path that still has something to install.
+     */
     const { WIDGET_MODULES } = await import("../../src/widgets/registry.js");
     const installed = vi.fn();
-    const original = WIDGET_MODULES.session_stats.onInstall;
-    WIDGET_MODULES.session_stats.onInstall = installed;
+    const original = WIDGET_MODULES.thread.onInstall;
+    WIDGET_MODULES.thread.onInstall = installed;
 
     try {
       const store = await readyStore();
@@ -1617,7 +1596,7 @@ describe("widgets", () => {
       // What the server resolved for the new conversation, which is what `selectSession` reads.
       mocks.api.listSessionWidgets.mockResolvedValue({
         workspace: [],
-        session: [{ id: "session_stats", scope: "session", enabled: true }],
+        session: widgetState("thread").filter((w) => w.scope === "session"),
       });
 
       await store.createSession();
@@ -1625,27 +1604,33 @@ describe("widgets", () => {
       expect(installed).toHaveBeenCalledWith({
         scope: "session",
         scopeId: "s1",
-        widgetId: "session_stats",
+        widgetId: "thread",
       });
     } finally {
-      WIDGET_MODULES.session_stats.onInstall = original;
+      WIDGET_MODULES.thread.onInstall = original;
     }
   });
 
   it("does not run a hook for a widget that was not installed", async () => {
     const { WIDGET_MODULES } = await import("../../src/widgets/registry.js");
     const installed = vi.fn();
-    const original = WIDGET_MODULES.workspace_stats.onInstall;
-    WIDGET_MODULES.workspace_stats.onInstall = installed;
+    const original = WIDGET_MODULES.thread.onInstall;
+    WIDGET_MODULES.thread.onInstall = installed;
 
     try {
       const store = await readyStore();
-      mocks.api.createWorkspace.mockResolvedValue(WORKSPACE);
-      await store.createWorkspace("Fresh");
+      mocks.api.createSession.mockResolvedValue(session());
+      // The defaults, which do not include the widget whose hook is stubbed.
+      mocks.api.listSessionWidgets.mockResolvedValue({
+        workspace: [],
+        session: widgetState("notes", "sources").filter((w) => w.scope === "session"),
+      });
+
+      await store.createSession();
 
       expect(installed).not.toHaveBeenCalled();
     } finally {
-      WIDGET_MODULES.workspace_stats.onInstall = original;
+      WIDGET_MODULES.thread.onInstall = original;
     }
   });
 
@@ -1653,7 +1638,7 @@ describe("widgets", () => {
     // Through `signOut` rather than `forgetAccount` directly, because the latter is deliberately
     // not on the store's public surface — it is reached from sign-out, from an expired session
     // and from nothing else.
-    const store = await readyStore({ widgets: ["workspace_stats", "session_stats"] });
+    const store = await readyStore({ widgets: ["notes", "diagram"] });
     expect(store.enabledWidgetIds).toHaveLength(2);
 
     mocks.api.logout.mockResolvedValue(undefined);
@@ -1666,19 +1651,17 @@ describe("widgets", () => {
 
 describe("the panel's open tab", () => {
   /**
-   * The install lists, split by scope the way the server resolves them. A local helper rather
-   * than the shared `widgetState`, which models only the two stats widgets — and widening that
-   * one would change what every other case in this file sees.
+   * The install lists, split by scope the way the server resolves them.
+   *
+   * A thin wrapper over the shared `widgetState` rather than a helper of its own: both now derive
+   * from the registry, so there is one idea of "which widgets exist" in this file and no way for
+   * the two to disagree.
    */
   function installed(...ids: WidgetId[]) {
-    const scopeOf = (id: WidgetId) => (id === "workspace_stats" ? "workspace" : "session");
+    const states = widgetState(...ids);
     return {
-      workspace: ids
-        .filter((id) => scopeOf(id) === "workspace")
-        .map((id) => ({ id, scope: "workspace" as const, enabled: true })),
-      session: ids
-        .filter((id) => scopeOf(id) === "session")
-        .map((id) => ({ id, scope: "session" as const, enabled: true })),
+      workspace: states.filter((w) => w.scope === "workspace"),
+      session: states.filter((w) => w.scope === "session"),
     };
   }
 
@@ -1701,17 +1684,18 @@ describe("the panel's open tab", () => {
     expect(widgetPanel.activeId.value).toBe("plan");
   });
 
-  it("counts the workspace group first, which is the order the strip draws", async () => {
-    // "First tab" is the first of the flattened groups, not the first session widget: a panel
-    // whose groups are drawn workspace-then-session opens on the workspace one.
+  it("opens on registry order, not on the order the create request listed", async () => {
+    // "First tab" is the first of the flattened groups in the order the *registry* has them, not
+    // the first id the request happened to name. Both are "plan" and "diagram" here, and the
+    // point is that the request's order would have given the other answer.
     const { widgetPanel } = await import("../../src/composables/widgetPanel.js");
     const store = await readyStore();
-    mocks.api.listSessionWidgets.mockResolvedValue(installed("workspace_stats", "session_stats"));
+    mocks.api.listSessionWidgets.mockResolvedValue(installed("plan", "diagram"));
     mocks.api.createSession.mockResolvedValue(session({ id: "s2" }));
 
-    await store.createSession({ widgets: ["workspace_stats", "session_stats"] });
+    await store.createSession({ widgets: ["diagram", "plan"] });
 
-    expect(widgetPanel.activeId.value).toBe("workspace_stats");
+    expect(widgetPanel.activeId.value).toBe("plan");
   });
 
   it("writes nothing when the new conversation installed nothing", async () => {

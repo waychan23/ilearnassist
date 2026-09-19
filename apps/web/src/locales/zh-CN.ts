@@ -154,8 +154,8 @@ export default {
      */
     title: "交互式学习助理",
     configBanner: {
-      before: "尚未配置可用的 API Key。点击右上角",
-      action: "设置 → Providers",
+      before: "尚未配置可用的 API Key。打开左侧菜单的",
+      action: "平台管理 → 模型服务",
       after: "添加一个 Provider 并填入 Key，保存后即刻生效。",
     },
   },
@@ -198,6 +198,14 @@ export default {
     identity: "账号",
     passwordLead: "修改密码后，这个账号在其他设备上的登录会全部失效。",
     passwordChanged: "密码已修改。",
+    /**
+     * The build and the schema, on the account page.
+     *
+     * Two numbers rather than one because they move independently — a build can be replaced with
+     * the schema unchanged, and a database can be upgraded by a build that is not newer — and
+     * somebody self-hosting is asked for both when they report a problem.
+     */
+    version: "版本 v{version} · 数据库 v{schema}",
     /**
      * The introduction, which is prompt input rather than a profile page's decoration.
      *
@@ -433,9 +441,9 @@ export default {
   composer: {
     parsing: "正在解析附件，完成后即可发送…",
     parseFailed:
-      "有 {count} 个附件解析失败，模型将无法读取其内容。可点击附件的重新解析按钮重试，或先在「设置 → 文档解析」中配置云解析服务。",
+      "有 {count} 个附件解析失败，模型将无法读取其内容。可点击附件的重新解析按钮重试，或先在「平台管理 → 文档解析」中配置云解析服务。",
     visionWarning:
-      "当前模型「{model}」未标记支持图片输入，图片将以文字占位符发送。可在「设置 → Providers」中为它勾选「图片输入」。",
+      "当前模型「{model}」未标记支持图片输入，图片将以文字占位符发送。可在「平台管理 → 模型服务」中为它勾选「图片输入」。",
     /*
      * The `@` is written as `{'@'}` because vue-i18n reads a bare one as a *linked message*
      * (`@:key`), and a message it cannot compile throws at render time — which takes down the
@@ -1219,25 +1227,13 @@ export default {
     },
     open: "打开控件栏",
     /**
-     * The session parameters dialog with no conversation open. Distinct from
-     * `widgets.sessionStats.noSession`, which is the panel saying it has nothing to show: this
-     * one says a widget has nowhere to be installed *yet*.
+     * The install list with no conversation open: a widget has nowhere to be installed *yet*.
+     * Distinct from the per-widget `noSession` strings below, which are a *panel* saying it has
+     * nothing to show — a different problem, with a different remedy.
      */
     noSession: "还没有会话，控件要装到某个会话里。",
     loadFailed: "读取数据失败",
     retry: "重试",
-    messages: "消息",
-    tokens: "Tokens",
-    workspaceStats: {
-      /**
-       * "（Demo）" is part of the name, not a note about it: these two are shipped as
-       * demonstrations of the framework rather than as features, and a tab that reads as a
-       * finished product would invite someone to rely on it.
-       */
-      name: "工作区统计（Demo）",
-      hint: "当前工作区的会话列表，以及每个会话的消息数与 token 消耗。",
-      empty: "这个工作区还没有会话。",
-    },
     workspaceSettings: {
       title: "工作区设置",
       liveHint: "改动会立刻反映在右侧栏上。",
@@ -1251,12 +1247,6 @@ export default {
       description: "工作区描述",
       descriptionPlaceholder: "这个工作区用来做什么？",
       descriptionHint: "仅供你自己参考，不会发送给模型。",
-    },
-    sessionStats: {
-      name: "会话统计（Demo）",
-      hint: "当前会话的消息数与 token 消耗。",
-      noSession: "打开一个会话后，这里会显示它的统计。",
-      context: "本轮上下文",
     },
     plan: {
       name: "计划",
@@ -1594,7 +1584,7 @@ export default {
     UNKNOWN_POLICY: "未知的解析策略：{policy}",
     UNKNOWN_PARSER: "未知的解析服务。",
     UNKNOWN_PROVIDER: "未知的 Provider。",
-    REASONING_NOT_DECLARED: "这个模型需要回传推理内容，但设置里没有为它开启「推理模型」，服务商因此拒绝了请求。请在设置中为这个模型勾选「推理模型」后重试。",
+    REASONING_NOT_DECLARED: "这个模型需要回传推理内容，但没有为它开启「推理模型」，服务商因此拒绝了请求。请在「平台管理 → 模型服务」中为这个模型勾选「推理模型」后重试。",
     MESSAGE_REQUIRED: "消息内容不能为空。",
     QUESTION_NOT_PENDING: "这组问题已经不需要回答了，可能已经提交或作废。",
     INVALID_ANSWER: "提交的回答不完整或已失效，请刷新页面后重试。",
@@ -1814,8 +1804,8 @@ export default {
     unsupported_type: "暂不支持解析该文件类型。",
     corrupt: "文件无法读取：{detail}",
     missing_file: "文件已丢失，无法解析。请重新上传。",
-    no_cloud_parser: "没有可用的云解析服务。请到「设置 → 文档解析」添加一个并启用。",
-    local_disabled: "本地解析已在设置中关闭。",
+    no_cloud_parser: "没有可用的云解析服务。请到「平台管理 → 文档解析」添加一个并启用。",
+    local_disabled: "本地解析已被关闭。",
     cloud_auth: "云解析服务拒绝了凭据，请检查 API Key。",
     cloud_failed: "云解析失败：{detail}",
     timeout: "解析超时。文件可能过大，或解析服务无响应。",

@@ -196,6 +196,18 @@ test("the account page writes the introduction the agent is given", async ({ pag
   await page.getByTestId("open-account").click();
   await expect(page.getByTestId("account-page")).toBeVisible();
 
+  /*
+   * The version line, which lives on this page because it is about the *installation* rather
+   * than about the account — and because this is the one page every account has, while the
+   * console is an administrator's. It is the only place a self-hoster can read what they are
+   * running without a terminal.
+   *
+   * Both numbers, and the schema one is not decoration: a build can be replaced with the schema
+   * unchanged, and a database can be upgraded by a build that is not newer.
+   */
+  await expect(page.getByTestId("account-version")).toContainText(/版本 v\d+\.\d+\.\d+/);
+  await expect(page.getByTestId("account-version")).toContainText(/数据库 v\d+/);
+
   // Nothing to save on arrival, so the button says so rather than offering a write that would
   // send the same text back.
   await expect(page.getByTestId("profile-save")).toBeDisabled();
@@ -388,13 +400,58 @@ test("an administrator configures a model provider from the console", async ({ p
   await expect(page.getByTestId("admin-provider-row")).toHaveCount(2);
   const second = page.locator('[data-testid="admin-provider-row"]').filter({ hasText: "Second" });
   await expect(second).toContainText("second-model");
-  // Not offered by the composer's picker yet, and that is the rule rather than an omission: a
-  // provider with no key answers nothing, so the picker hides it. It becomes choosable the
-  // moment an administrator gives it one.
+  // The console lists it, and must: this is the screen an administrator configures providers
+  // on, so a row that hid itself would be one nobody could ever give a key to.
   await expect(page.getByTestId("admin-default-provider").locator("option")).toContainText([
     "Fake Provider",
     "Second",
   ]);
+
+  /*
+   * And the *choosing* side hides it, which is the other half of "an administrator configures
+   * and an ordinary account chooses". A provider with no key answers nothing, so offering it
+   * to somebody picking a model is a promise the installation cannot keep. It becomes
+   * choosable the moment an administrator gives it a key.
+   *
+   * This assertion used to be missing: the comment above claimed the picker hid it while the
+   * code checked the console's list, which shows it. Two screens, two rules, and only one of
+   * them was being read — so the claim was true and untested, and a change that broke it would
+   * have stayed green.
+   */
+  /*
+   * A workspace of this spec's own, for the reason spelled out further down this file:
+   * `enterWorkspace(page)` with no name opens the suite's shared default workspace, and
+   * `chat.spec.ts` asserts that workspace holds **exactly one** conversation. Making a second one
+   * there fails a test in a different file, which points at the wrong thing entirely.
+   *
+   * A conversation, not just a workspace: the composer renders without a session, so
+   * `enterWorkspace` does not imply one, and both controls asserted below are session-scoped.
+   */
+  await page.getByTestId("admin-back").click();
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
+  const workspace = `provider-picker ${Date.now()}`;
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(workspace);
+  await page.getByTestId("workspace-create-submit").click();
+  await enterWorkspace(page, workspace);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
+
+  await page.getByTestId("chat-session-settings").click();
+  const providerSelect = page.getByTestId("param-provider");
+  // Two options and no more: the "inherit" placeholder and the one provider with a key.
+  await expect(providerSelect.locator("option")).toHaveCount(2);
+  await expect(providerSelect).toContainText("Fake Provider");
+  await expect(providerSelect).not.toContainText("Second");
+  await page.getByTestId("session-settings-close").click();
+
+  // Same rule in the composer's model picker, which is where a model is actually chosen.
+  await page.getByTestId("model-picker").click();
+  const menu = page.getByTestId("model-picker-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText("Fake Provider");
+  await expect(menu).not.toContainText("Second");
 });
 
 test("the documents section is the console's, not Settings'", async ({ page }) => {

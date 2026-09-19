@@ -3,7 +3,14 @@
   "private": true,
   "type": "module",
   "version": "0.1.0",
-  "description": "A self-hosted, single-user agent product (B/S architecture) with workspaces, Copilots, and an agent loop over LangChain.js.",
+  "description": "A self-hosted learning assistant (B/S architecture): workspaces, conversations, a widget side panel, file and document handling, and an agent loop over LangChain.js.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waychan23/ilearnassist.git"
+  },
+  "homepage": "https://github.com/waychan23/ilearnassist",
+  "bugs": "https://github.com/waychan23/ilearnassist/issues",
   "packageManager": "pnpm@12.3.4",
   "engines": {
     "node": ">=20"
@@ -23,7 +30,10 @@
     "build": "pnpm --filter @ilearnassist/web build",
     "desktop:dev": "pnpm --filter @ilearnassist/desktop dev",
     "desktop:build": "pnpm --filter @ilearnassist/desktop build",
-    "desktop:package": "pnpm --filter @ilearnassist/desktop package"
+    "desktop:package": "pnpm --filter @ilearnassist/desktop package",
+    "desktop:package:mac": "pnpm --filter @ilearnassist/desktop package:mac",
+    "desktop:package:win": "pnpm --filter @ilearnassist/desktop package:win",
+    "desktop:package:linux": "pnpm --filter @ilearnassist/desktop package:linux"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

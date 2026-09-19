@@ -20,6 +20,13 @@ import {
  * what the model is actually sent — hence the assertions against the fake LLM's recorded
  * request rather than against the rows alone. A turn that replayed the user message twice would
  * persist exactly the same messages and still be wrong.
+ *
+ * A third subject used to live here: that a deleted message drops out of the conversation's
+ * `messageCount` and token totals. Those totals were the demo statistics widget's, and they went
+ * with it. The rule itself is unchanged and still tested — the conversation's **list** hides a
+ * deleted message in "peels the tail", and the **model's context** hides it in "keeps a deleted
+ * message out of the model's context". Both read through `stmtListMessages`, which is the one
+ * statement the rule lives in.
  */
 
 let llm: FakeLlm;
@@ -180,26 +187,6 @@ describe("DELETE /api/sessions/:id/messages/:messageId", () => {
     const sent = lastSentMessages();
     expect(sent.map((m) => m.content)).not.toContain("an answer the user did not want");
     expect(sent.at(-1)).toMatchObject({ role: "user", content: "second question" });
-  });
-
-  it("keeps a deleted message out of the conversation's statistics", async () => {
-    const session = await freshSession();
-    llm.setTurns([{ content: "counted once", usage: { input: 100, output: 20 } }]);
-    await chat(session.id, { message: "question" });
-    const reply = (await messagesOf(session.id)).at(-1)!;
-
-    const withReply = (await env.inject({
-      method: "GET",
-      url: `/api/sessions/${session.id}/stats`,
-    })).json<{ messageCount: number; outputTokens: number }>();
-    await deleteMessage(session.id, reply.id);
-
-    const without = (await env.inject({
-      method: "GET",
-      url: `/api/sessions/${session.id}/stats`,
-    })).json<{ messageCount: number; outputTokens: number }>();
-    expect(without.messageCount).toBe(withReply.messageCount - 1);
-    expect(without.outputTokens).toBeLessThan(withReply.outputTokens);
   });
 
   it("refuses while a turn is streaming", async () => {

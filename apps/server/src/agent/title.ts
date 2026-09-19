@@ -17,8 +17,8 @@ const MAX_EXCERPT_CHARS = 6_000;
 const FALLBACK_TITLE_CHARS = 40;
 
 /**
- * Output budget. Deliberately generous: reasoning models (`deepseek-v4-pro`,
- * `deepseek-reasoner`, o-series) spend the budget on chain-of-thought *before* emitting
+ * Output budget. Deliberately generous: reasoning models (`deepseek-flash`, o-series) spend
+ * the budget on chain-of-thought *before* emitting
  * any content, so a tight cap produces `finish_reason: "length"` with an empty answer and
  * no title at all — which is exactly how this silently failed the first time.
  */

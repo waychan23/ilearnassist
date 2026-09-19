@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig(patch);
-  const { app, db } = await buildServer({
+  const { app, db, migrated } = await buildServer({
     config,
     dataRoot,
     webDir: PROJECT_PATHS.webDir,
@@ -66,6 +66,23 @@ async function main(): Promise<void> {
   assertHasAdministrator(db);
 
   const { host, port } = config.server;
+
+  /*
+   * What this boot migrated, printed **before** the listening line so the panel already has it by
+   * the time it reports the server up.
+   *
+   * An upgrade rewrites the user's only copy of their work, so it should not be silent — and the
+   * path of the snapshot taken beforehand is the file they would need if it turns out to have been
+   * wrong. `createDb` has already done the work by this point (it runs inside `buildServer`), which
+   * is also why a failed migration never reaches here: the process exits with the error instead.
+   */
+  if (migrated) {
+    console.log(
+      `[ilearnassist] migrated schema v${migrated.from} -> v${migrated.to}` +
+        (migrated.backup ? ` (backup: ${migrated.backup})` : " (no backup was taken)")
+    );
+  }
+
   const address = await app.listen({ host, port });
 
   // The one line the desktop control panel keys on to learn where the app came up. It

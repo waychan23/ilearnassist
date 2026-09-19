@@ -179,10 +179,10 @@ describe("copilots", () => {
   };
 
   it("round-trips tools, settings and widgets through JSON columns", () => {
-    const created = db.createCopilot({ ...input, widgets: ["session_stats"] });
+    const created = db.createCopilot({ ...input, widgets: ["diagram"] });
     expect(created.tools).toEqual(["read_file", "web_search"]);
     expect(created.settings).toEqual({ temperature: 0.3, modelId: "m1" });
-    expect(created.widgets).toEqual(["session_stats"]);
+    expect(created.widgets).toEqual(["diagram"]);
   });
 
   it("reads a Copilot whose widgets were never set as the defaults", () => {
@@ -771,6 +771,13 @@ describe("app settings", () => {
 });
 
 describe("guessCapabilities", () => {
+  /*
+   * The regex, probed with ids — which is all this is. `deepseek-v4-pro` is the case worth
+   * looking at: the guess reads it as an ordinary chat model because "pro" is not a marker, and
+   * it genuinely was a reasoning model in thinking mode by default. That is not a bug in the
+   * regex to fix (no marker can carry it) — it is the reason `capabilities` exists as a field
+   * the *config* states, and why every built-in entry declares its own.
+   */
   it.each([
     ["deepseek-v4-pro", ["tool_use"]], // "pro" is not a reasoning marker
     ["deepseek-reasoner", ["tool_use", "reasoning"]],
@@ -807,6 +814,25 @@ describe("seedFromConfig", () => {
   it("pre-fills capabilities", () => {
     seedFromConfig(db, seed);
     expect(db.getProvider("p")!.models[0]!.capabilities).toContain("tool_use");
+  });
+
+  it("prefers a declared capability over the guess", () => {
+    // `glm-5.3` is the case that makes the field worth having: the id says nothing about
+    // reasoning, so a guess reads it as a plain chat model — and a reasoning model that never
+    // gets its chain-of-thought replayed is a 400 from DeepSeek-shaped providers. Note the id
+    // is deliberately one the guess gets wrong, so this cannot pass by accident.
+    const declared = {
+      ...seed,
+      providers: [
+        {
+          ...seed.providers[0]!,
+          models: [{ id: "glm-5.3", name: "GLM", capabilities: ["tool_use", "reasoning"] as const }],
+        },
+      ],
+    };
+    expect(guessCapabilities("glm-5.3")).toEqual(["tool_use"]);
+    seedFromConfig(db, declared as unknown as typeof seed);
+    expect(db.getProvider("p")!.models[0]!.capabilities).toEqual(["tool_use", "reasoning"]);
   });
 
   it("is a no-op once providers exist, so UI edits survive a config change", () => {
@@ -1018,10 +1044,16 @@ describe("schema versioning", () => {
         slug: "w",
         dirPath: join(root, "w"),
       });
-      expect(opened.setWorkspaceWidgetForUser(OWNER, "w1", "workspace_stats", true)).toBe(true);
-      expect(opened.listWorkspaceWidgetsForUser(OWNER, "w1")).toEqual([
-        { id: "workspace_stats", scope: "workspace", enabled: true },
-      ]);
+      expect(opened.setWorkspaceWidgetForUser(OWNER, "w1", "diagram", true)).toBe(true);
+      // Read back through the table, not through the resolving read: `widget_instances` is what
+      // this test is about, and no widget is registered at workspace scope any more, so the
+      // resolved read would answer `[]` whatever the row said.
+      expect(
+        opened.raw
+          .prepare("SELECT widget_id, enabled FROM widget_instances WHERE scope_id = ?")
+          .get("w1")
+      ).toEqual({ widget_id: "diagram", enabled: 1 });
+      expect(opened.listWorkspaceWidgetsForUser(OWNER, "w1")).toEqual([]);
     } finally {
       opened.raw.close();
     }

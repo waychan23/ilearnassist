@@ -1,8 +1,6 @@
 import type { Component } from "vue";
 import type { WidgetId, WidgetScope } from "@ilearnassist/shared";
 import { api } from "../api/client";
-import WorkspaceStatsWidget from "./WorkspaceStatsWidget.vue";
-import SessionStatsWidget from "./SessionStatsWidget.vue";
 import PlanWidget from "./PlanWidget.vue";
 import QuizWidget from "./QuizWidget.vue";
 import ThreadWidget from "./ThreadWidget.vue";
@@ -79,10 +77,6 @@ type Translate = (key: string) => string;
  */
 export function widgetLabel(id: WidgetId, t: Translate): string {
   switch (id) {
-    case "workspace_stats":
-      return t("widgets.workspaceStats.name");
-    case "session_stats":
-      return t("widgets.sessionStats.name");
     case "plan":
       return t("widgets.plan.name");
     case "quiz":
@@ -103,10 +97,6 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
 /** One line on what the widget shows. Used by the two install lists. */
 export function widgetHint(id: WidgetId, t: Translate): string {
   switch (id) {
-    case "workspace_stats":
-      return t("widgets.workspaceStats.hint");
-    case "session_stats":
-      return t("widgets.sessionStats.hint");
     case "plan":
       return t("widgets.plan.hint");
     case "quiz":
@@ -191,8 +181,6 @@ export interface WidgetModule {
 }
 
 export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
-  workspace_stats: { component: WorkspaceStatsWidget },
-  session_stats: { component: SessionStatsWidget },
   plan: { component: PlanWidget },
   quiz: { component: QuizWidget },
   notes: {

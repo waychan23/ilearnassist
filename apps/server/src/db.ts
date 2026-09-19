@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
+import builtinCatalog from "./builtin.json";
 import type {
   Attachment,
   Copilot,
@@ -32,7 +33,6 @@ import type {
   Session,
   SessionLockView,
   SessionSettings,
-  SessionStats,
   StoredFile,
   ThreadBranch,
   TitleState,
@@ -50,7 +50,6 @@ import type {
   WorkResourceType,
   Workspace,
   WorkspaceSettings,
-  WorkspaceStats,
 } from "@ilearnassist/shared";
 import {
   DEFAULT_USER_ROLES,
@@ -65,7 +64,9 @@ import {
 import { workspaceWorkdir } from "./paths.js";
 import type { ScopeQuery } from "./workspaceScope.js";
 import { applySchema } from "./schema.js";
-import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
+import { MigrationBackupError, SKIP_BACKUP_ENV, snapshotForMigration } from "./backup.js";
+import { runMigrations, type MigrationOutcome } from "./migrations.js";
+import { resolveWidgetStates } from "./widgets.js";
 
 /**
  * What a source listing may be narrowed by. Every field is optional and independent.
@@ -740,6 +741,17 @@ export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId"
  * the user deliberately deleted.
  */
 export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
+
+/**
+ * Marks that `builtin.json`'s assistants have been created at least once.
+ *
+ * A marker rather than "the table is empty", for the reason above and one more: a built-in
+ * assistant the owner deletes must **stay** deleted. The row survives a soft delete, so
+ * "is the table empty" would answer no and re-insert nothing — until someone purged the rows,
+ * at which point every boot would resurrect an assistant somebody had deliberately removed.
+ * The marker makes "this installation has had its built-ins" a fact that outlives them.
+ */
+export const SETTING_BUILTIN_COPILOTS_SEEDED = "builtin.copilots.seeded";
 
 /**
  * The largest file an account may upload, in bytes, as an administrator set it.
@@ -1438,21 +1450,6 @@ function safeParseObject<T extends object>(json: string | null): T {
   } catch {
     return {} as T;
   }
-}
-
-/**
- * One message's usage, or `null` when the column held nothing.
- *
- * `null` and `{}` are different answers, and the difference is load-bearing for the statistics:
- * those count messages by their entries in an array, so a message with no usage has to arrive as
- * `null` rather than as a zeroed object — otherwise a user message and a turn the user stopped
- * would both look like turns that recorded figures.
- *
- * A column holding *malformed* JSON is the tolerant case and parses to `{}`, which sums to zero
- * and is what a damaged row should contribute.
- */
-function parseUsage(json: string | null): MessageUsage | null {
-  return json ? safeParseObject<MessageUsage>(json) : null;
 }
 
 /**
@@ -2474,7 +2471,6 @@ export interface AppDb {
   assignTableToThread(sessionId: string, tableId: string, threadId: string): number;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
-  statsForWorkspace(userId: string, workspaceId: string): WorkspaceStats | undefined;
 
   /*
    * The usage ledger. Four methods, and the split between them is the permission model rather
@@ -2496,7 +2492,6 @@ export interface AppDb {
   /** The instant of the first row ever written, or null. How a page says when counting began. */
   usageSince(userId?: string): string | null;
   /** The same numbers for one conversation. `undefined` when it is not the caller's. */
-  statsForSessionForUser(userId: string, sessionId: string): SessionStats | undefined;
 
   listProviders(): ProviderRecord[];
   getProvider(id: string): ProviderRecord | undefined;
@@ -2577,7 +2572,37 @@ export interface AppDb {
   transaction<T>(fn: () => T): T;
 }
 
-export function createDb(dbPath: string): AppDb {
+export interface CreateDbOptions {
+  /**
+   * Where a pre-migration snapshot goes, or `undefined` to take none.
+   *
+   * Omitted by every test that is not about migrating, and derived from the conventional layout
+   * when the path is the real one — see `defaultBackupsDir`. A walk **refuses to run** without
+   * somewhere to put the snapshot, which is why this is worth thinking about rather than
+   * defaulting to "no backup": the whole point of the snapshot is that it exists on the day it is
+   * needed, and a default of "none" is a safety net that is only there in the tests.
+   */
+  backupsDir?: string;
+  /** Reports a completed walk, so the caller can say so. The server prints it; tests assert it. */
+  onMigrated?: (outcome: MigrationOutcome) => void;
+}
+
+/**
+ * The `backups/` directory for a path in the conventional layout, or `undefined`.
+ *
+ * `<dataRoot>/db/sqlite/<file>` is the only shape this recognises, because "beside `db/`" is the
+ * only place with a documented meaning. Anything else — a bare temp file in a test, a path a
+ * caller assembled itself — gets `undefined` and therefore no snapshot, and the walk says so
+ * rather than writing a backup to a directory nobody chose.
+ */
+export function defaultBackupsDir(dbPath: string): string | undefined {
+  const sqliteDir = dirname(dbPath);
+  const dbDir = dirname(sqliteDir);
+  if (basename(sqliteDir) !== "sqlite" || basename(dbDir) !== "db") return undefined;
+  return join(dirname(dbDir), "backups");
+}
+
+export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
 
@@ -2602,6 +2627,35 @@ export function createDb(dbPath: string): AppDb {
     // See above: the other process has already put the file in the mode we wanted.
   }
   db.pragma("foreign_keys = ON");
+
+  /*
+   * Walk an older file up to this build's schema — and do it **before** the DDL below.
+   *
+   * The order is not a preference. `DDL` declares indexes, and a table that an older file already
+   * has will not gain a column from `CREATE TABLE IF NOT EXISTS`, so a `CREATE INDEX` over a
+   * column a step is about to add would fail on exactly the files the step exists for. This
+   * repository has already met that hazard once: `idx_messages_thread` is created after this
+   * transaction, outside the DDL, because `messages.thread_id` arrives through `ensureColumn`.
+   * Walking first means the DDL afterwards is a no-op for existing tables and only creates ones
+   * that are genuinely new.
+   *
+   * The snapshot is taken inside `runMigrations`, before it writes anything, and a snapshot that
+   * cannot be taken aborts the walk — see `backup.ts` for why that is the right way round.
+   */
+  const backupsDir = options.backupsDir ?? defaultBackupsDir(dbPath);
+  const migrated = runMigrations(db, {
+    snapshot: (from) => {
+      if (!backupsDir) {
+        throw new MigrationBackupError(
+          `No backup directory was given for ${dbPath}, and this build does not migrate without ` +
+            `taking a snapshot first. Pass one, or set ${SKIP_BACKUP_ENV}=1 to opt out.`,
+          dbPath
+        );
+      }
+      return snapshotForMigration(db, backupsDir, from);
+    },
+  });
+  if (migrated.applied.length > 0) options.onMigrated?.(migrated);
 
   /*
    * Everything that changes the file's *shape* is one write, with the lock taken up front.
@@ -4153,25 +4207,6 @@ export function createDb(dbPath: string): AppDb {
        updated_at = @now`
   );
 
-  /*
-   * Two narrow projections for the statistics: the role (so a count can tell the two apart if it
-   * ever wants to) and the usage blob. `usage` is read whole and parsed in `widgets.ts` rather
-   * than summed here — see the note on `sumUsage` for why the arithmetic is not in SQL.
-   *
-   * Ordered ascending by `created_at`, because `contextTokens` is the *last* turn's figure and
-   * "last" has to mean the same thing to the query as it does to the reader.
-   */
-  const stmtSessionUsageRows = db.prepare(
-    `SELECT m.role, m.usage FROM messages m
-      WHERE m.session_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at ASC`
-  );
-  const stmtWorkspaceUsageRows = db.prepare(
-    `SELECT m.session_id, m.role, m.usage FROM messages m
-       JOIN sessions s ON s.id = m.session_id
-      WHERE s.workspace_id = ? AND s.deleted_at IS NULL AND m.deleted_at IS NULL
-      ORDER BY m.created_at ASC`
-  );
-
   /* ------------------------------ providers ------------------------------- */
   const stmtListProviders = db.prepare(
     "SELECT * FROM providers WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC"
@@ -5424,43 +5459,6 @@ export function createDb(dbPath: string): AppDb {
       const row = stmtUsageSince.get({ userId: userId ?? null }) as { since: string | null };
       return row.since;
     },
-    statsForWorkspace(userId, workspaceId) {
-      const workspace = workspaceForUser(workspaceId, userId);
-      if (!workspace) return undefined;
-
-      const rows = stmtWorkspaceUsageRows.all(workspaceId) as {
-        session_id: string;
-        usage: string | null;
-      }[];
-      const bySession = new Map<string, (MessageUsage | null)[]>();
-      for (const row of rows) {
-        const list = bySession.get(row.session_id) ?? [];
-        list.push(parseUsage(row.usage));
-        bySession.set(row.session_id, list);
-      }
-
-      // Driven by the session list rather than by the rows, so a conversation with no messages
-      // still appears with zeros — a widget that silently omitted it would read as the
-      // conversation not existing. `listSessionsForUser` already orders newest first.
-      return buildWorkspaceStats({
-        workspaceId,
-        sessions: (stmtListSessionsForUser.all(workspaceId, userId) as SessionRow[]).map((s) => ({
-          sessionId: s.id,
-          title: s.title,
-          usages: bySession.get(s.id) ?? [],
-        })),
-      });
-    },
-    statsForSessionForUser(userId, sessionId) {
-      const row = getSessionRowForUser(sessionId, userId);
-      if (!row) return undefined;
-      const rows = stmtSessionUsageRows.all(sessionId) as { usage: string | null }[];
-      return buildSessionStats({
-        sessionId,
-        title: row.title,
-        usages: rows.map((r) => parseUsage(r.usage)),
-      });
-    },
 
     listProviders() {
       return (stmtListProviders.all() as ProviderRow[]).map(readProvider);
@@ -5617,13 +5615,24 @@ export interface SeedProviderDef {
   name: string;
   baseURL: string;
   apiKey?: string;
-  models: { id: string; name: string }[];
+  models: { id: string; name: string; capabilities?: ModelCapability[] }[];
 }
 
 /**
- * Best-effort capability guess for a model seeded from config. It only pre-fills the
- * checkboxes in Settings → Providers; the user can correct it there, and it drives
- * nothing but the vision placeholder and the UI badges.
+ * Best-effort capability guess, for a model entry that does not declare them.
+ *
+ * It is a **fallback, not the mechanism**: `config.yaml` can declare `capabilities` per
+ * model and does so for every built-in, because a model id does not reliably say what the
+ * model can do — see `ModelDef` for the two examples that settle it. This stays for models
+ * added by hand and for entries written before the field existed.
+ *
+ * What it feeds is worth stating, because an earlier version of this comment claimed it
+ * "drives nothing but the vision placeholder and the UI badges", which was wrong and is
+ * exactly the kind of sentence that gets trusted: `vision` decides whether an image
+ * attachment travels as an `image_url` or reaches the model as a placeholder, `reasoning`
+ * decides whether chain-of-thought is replayed on outgoing messages carrying tool calls
+ * (DeepSeek 400s without it), and `tool_use` decides whether the tools are offered at all.
+ * A wrong guess here is a provider that fails on every turn.
  */
 export function guessCapabilities(modelId: string): ModelCapability[] {
   const id = modelId.toLowerCase();
@@ -5665,7 +5674,9 @@ export function seedFromConfig(
         providerId: p.id,
         modelId: m.id,
         name: m.name,
-        capabilities: guessCapabilities(m.id),
+        // Declared wins over guessed. A seed entry that names its capabilities knows
+        // something the id does not say.
+        capabilities: m.capabilities ?? guessCapabilities(m.id),
       });
     }
   }
@@ -5741,6 +5752,72 @@ export function seedDocumentParsersFromConfig(
   }
 
   return !alreadySeeded;
+}
+
+/* ------------------------- built-in assistants (builtin.json) ------------------------- */
+
+/** One entry of `builtin.json`, which maps field-for-field onto a `copilots` row. */
+interface BuiltInCopilotDef {
+  id: string;
+  name: string;
+  description: string;
+  visibility: "private" | "public";
+  allTools: boolean;
+  tools: string[];
+  settings: CopilotDefaults;
+  widgets: string[];
+  systemPrompt: string;
+}
+
+const BUILT_IN_COPILOTS = (builtinCatalog as { copilots: BuiltInCopilotDef[] }).copilots;
+
+/**
+ * Create the assistants shipped in `builtin.json`, owned by the installation's administrator.
+ *
+ * **Ownership is why this is not part of `config.yaml`.** A Copilot carries a `user_id`, and on
+ * a fresh install there is no account to own one — so this runs at the two moments an
+ * administrator can come into being: inside `createAdmin`'s transaction, and at server start
+ * for a data root that already has one. There is deliberately no third path; a boot-time scan
+ * for "an admin exists but has no assistants" would recreate one the owner had deleted.
+ *
+ * **Every entry is `public`, and that is what makes it built in.** The row belongs to the
+ * administrator, and the read predicate is `user_id = ? OR visibility = 'public'`, so a private
+ * built-in would be invisible to every other account — present, correct, and useless to the
+ * people it was shipped for. `apps/server/test/builtin.test.ts` holds the shipped file to it.
+ *
+ * Returns whether anything was created, so a caller can stay quiet about a no-op.
+ */
+export function seedBuiltInCopilots(db: AppDb, ownerId: string): boolean {
+  if (db.getSetting(SETTING_BUILTIN_COPILOTS_SEEDED) !== undefined) return false;
+
+  for (const entry of BUILT_IN_COPILOTS) {
+    // Belt for a database somebody assembled by hand: the marker is normally what prevents a
+    // second insert, and without this an existing row would collide on the primary key and take
+    // the boot down. Every application entity is soft-deleted, so a *deleted* built-in still has
+    // its row — which is exactly the case the marker is there to respect.
+    const exists = db.raw.prepare("SELECT 1 FROM copilots WHERE id = ?").get(entry.id);
+    if (exists) continue;
+
+    db.createCopilot({
+      id: entry.id,
+      userId: ownerId,
+      name: entry.name,
+      description: entry.description,
+      systemPrompt: entry.systemPrompt,
+      allTools: entry.allTools,
+      tools: entry.tools,
+      settings: entry.settings,
+      // Filtered rather than written through: `widget_instances` is read through the registry,
+      // so an id this build does not know would install nothing while looking installed. A test
+      // asserts the shipped file names only ids that exist, which is where that belongs — the
+      // alternative is a boot that refuses over a bundled file.
+      widgets: entry.widgets.filter(isWidgetId),
+      visibility: entry.visibility,
+    });
+  }
+
+  db.setSetting(SETTING_BUILTIN_COPILOTS_SEEDED, "1");
+  return true;
 }
 
 /** Current parsing policy, falling back to the config file for anything unset. */

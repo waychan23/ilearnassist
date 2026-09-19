@@ -8,6 +8,7 @@ import {
   buildAdminSpec,
   buildLaunchSpec,
   parseListeningLine,
+  parseMigratedLine,
   serverEntryFor,
 } from "../src/main/launch.js";
 import type { AppPaths } from "../src/main/paths.js";
@@ -133,5 +134,52 @@ describe("buildLaunchSpec", () => {
 describe("serverEntryFor", () => {
   it("points inside the app's own dist, where the bundle is built to", () => {
     expect(serverEntryFor("/app")).toBe(join("/app", "dist", "server", "index.mjs"));
+  });
+});
+
+/**
+ * The second line the panel reads off the server's stdout.
+ *
+ * It exists so a user can be told their database was upgraded and where the copy from before it
+ * is. The failure modes worth pinning are the two that would make the panel lie: matching a line
+ * that is not a migration, and claiming a backup path when the deployment opted out of taking one.
+ */
+describe("parseMigratedLine", () => {
+  it("reads the versions and the backup", () => {
+    expect(
+      parseMigratedLine(
+        "[ilearnassist] migrated schema v5 -> v6 (backup: /data/backups/ilearnassist-v5-20260919-092740.sqlite)"
+      )
+    ).toEqual({
+      from: 5,
+      to: 6,
+      backup: "/data/backups/ilearnassist-v5-20260919-092740.sqlite",
+    });
+  });
+
+  it("reports no backup rather than inventing a path", () => {
+    // `ILA_SKIP_MIGRATION_BACKUP=1` is a deployment's own choice, and the panel says which of the
+    // two happened — pointing at a file that is not there is worse than saying none was taken.
+    expect(parseMigratedLine("[ilearnassist] migrated schema v5 -> v6 (no backup was taken)")).toEqual({
+      from: 5,
+      to: 6,
+      backup: null,
+    });
+  });
+
+  it("ignores every other line, including the listening one", () => {
+    // The two patterns must not overlap: a listening line read as a migration would put a note on
+    // screen about something that did not happen.
+    expect(parseMigratedLine("[ilearnassist] listening on http://127.0.0.1:50896")).toBeNull();
+    expect(parseMigratedLine("Server listening at http://0.0.0.0:3720")).toBeNull();
+    expect(parseMigratedLine("[ilearnassist] migrated schema v5 -> 6 (backup: x)")).toBeNull();
+    expect(parseMigratedLine("")).toBeNull();
+  });
+
+  it("handles a path that contains spaces", () => {
+    // A data root is a folder the user chose, and "My Documents" is an ordinary name for one.
+    expect(
+      parseMigratedLine("[ilearnassist] migrated schema v4 -> v5 (backup: /Users/me/My Documents/b.sqlite)")
+    ).toEqual({ from: 4, to: 5, backup: "/Users/me/My Documents/b.sqlite" });
   });
 });

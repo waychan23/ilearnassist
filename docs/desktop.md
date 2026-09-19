@@ -428,7 +428,7 @@ reduction turns the speech bubble's tail into a smudge.
 ```bash
 pnpm desktop:dev        # bundle, then run the panel against a live Electron
 pnpm desktop:build      # bundle everything, including the frontend (no .app)
-pnpm desktop:package    # build + electron-builder → apps/desktop/release/*.dmg
+pnpm desktop:package    # build + electron-builder → apps/desktop/release/*.dmg (arm64)
 ```
 
 Individual targets, from `apps/desktop`:
@@ -486,19 +486,85 @@ is external to the server bundle and resolved at runtime, not inlined.
 
 ### Cross-platform
 
-macOS only today. The layout is already platform-neutral — `paths.ts` derives everything from
-`app.getPath("userData")` and `process.resourcesPath`, and the icon script writes a plain
-`.png` on non-Mac hosts — so what remains is a `win`/`linux` block in
-`electron-builder.yml` and the icons those targets want. Nothing in `src/main` is
-Mac-specific except the `titleBarStyle` branch, which already falls back.
+All three, built on a runner of their own. `electron-builder.yml` carries a `win` (NSIS) and a
+`linux` (AppImage + deb) block beside `mac`, and `.github/workflows/release.yml` builds each on
+its own platform — a manual run leaves the installers as workflow artefacts, a `v*` tag also
+attaches them to a GitHub Release. Nothing here is macOS-specific any more except the
+`titleBarStyle` branch in `main.ts`, which already falls back.
 
-Two things to know before adding them:
+```bash
+pnpm desktop:package:mac     # arm64 + x64 .dmg
+pnpm desktop:package:win     # NSIS .exe          — Windows only
+pnpm desktop:package:linux   # .AppImage + .deb
+```
 
-- `electron-winstaller` is currently set to `false` in `pnpm-workspace.yaml`'s `allowBuilds`.
-  The Windows Squirrel target needs it flipped to `true`.
-- The `arch: [arm64]` list under `mac` is deliberately one entry so a bare `pnpm
-  desktop:package` is quick on an Apple Silicon machine. Use `pnpm desktop:package:mac` for
-  both architectures.
+**Windows has to be built on Windows.** NSIS needs Windows tooling; electron-builder will try
+wine when cross-building and that is a dependency to install and keep working rather than a
+thing to document. macOS and Linux build fine from a Mac.
+
+Four things about the platform blocks are decisions rather than defaults:
+
+- **NSIS, not Squirrel**, which is why `electron-winstaller` stays `false` in
+  `pnpm-workspace.yaml`'s `allowBuilds`. It is Squirrel's Windows-only toolchain and NSIS does
+  not use it. `oneClick: false` because this app's audience installs things by clicking through
+  a wizard: a one-click installer offers no choice of location and no visible uninstaller.
+- **The icons are three files, and each is drawn at the size it is used at.**
+  `assets/icon.icns` (macOS), `assets/icon.ico` (Windows: 16, 32, 48 and 256, because shipping
+  one size is what makes an app look blurry in Explorer and fine everywhere else), and
+  `assets/icon-512.png` (Linux). `make-icon.mjs` writes all of them from the same geometry —
+  see the note there on why nothing is ever scaled down from the 1024px master.
+- **The tray icon is two files, chosen by platform.** macOS gets `trayTemplate.png`, a
+  *template* image it recolours for a dark menu bar. Windows and Linux have no such convention,
+  so that file there is a black glyph on a dark taskbar — drawn, present, and invisible. They
+  get `tray.png`, in the accent colour. `trayIconFile()` in `paths.ts` is the choice, and
+  `paths.test.ts` asserts both names exist in `assets/` — the failure mode is a packaged app
+  with no tray item on Windows only.
+- **`artifactName` is spelled out**, so a release's files are
+  `ilearnassist-<version>-<os>-<arch>.<ext>` rather than four artefacts told apart by their
+  extension alone.
+
+**Neither the Windows nor the Linux artefacts are signed**, and macOS is ad-hoc signed only.
+Windows SmartScreen therefore shows its "unrecognised app" warning and Linux packages are
+unsigned; both are documented for the user in the README, because for a non-technical audience
+that warning is the first thing they meet. Signing them is a release-process decision, not a
+code change — see [Signing](#signing) for the macOS half.
+
+## Version and upgrade
+
+The panel shows the version it is running, and says so when a newer release exists. Both are new:
+before this, the only place a packaged user could read their version was the operating system's
+About box, and nothing ever told them a release had happened.
+
+**The check belongs to the panel rather than to the server**, because the thing being upgraded is
+the *application*. It also keeps the server free of a new outbound call — this codebase is
+deliberate about those (see `web_fetch`'s SSRF guard) — so there is one place to reason about
+instead of two. `update.ts` asks GitHub for the latest release, compares it against
+`app.getVersion()` as **numbers rather than strings** (`0.10.0` is newer than `0.9.0`, and a string
+comparison gets that exactly backwards), and **never throws**: every failure is "we do not know",
+which the panel treats as "nothing to report". The answer is cached in `desktop.json`, so an
+offline launch shows what the last successful check found rather than looking broken; a *failed*
+check leaves the cache alone rather than overwriting it with "you are up to date".
+
+**There is deliberately no self-update, and it is a signing decision rather than a feature that
+was not written.** On macOS an update can only be *installed* by a code-signed app, and this one is
+ad-hoc signed (see [Signing](#signing)) — `electron-updater` would download the release and then
+have Squirrel.Mac refuse it at the install step. So the notice opens the download page and the user
+replaces the app the way they installed it. That works identically on all three platforms, which is
+worth more than a button that works on two of them.
+
+**The database upgrade is the part that needs nothing from the user.** Any open of the database
+walks it forward and takes a snapshot first (see [migrations.md](migrations.md)), so somebody who
+installs a new version and launches it has already been upgraded by the time the window appears.
+The server prints one line when that happens:
+
+```text
+[ilearnassist] migrated schema v5 -> v6 (backup: <dataRoot>/backups/ilearnassist-v5-….sqlite)
+```
+
+The panel parses it — beside `parseListeningLine`, with `parseMigratedLine` — and shows the note
+with the path of the copy. A printed line rather than a new IPC path, for the same reason the
+listening line is one: the server is the only side that knows, and a launcher already reads its
+stdout. The migration does **not** touch the state machine: `running` still has exactly one cause.
 
 ## Signing
 

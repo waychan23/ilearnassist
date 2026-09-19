@@ -111,8 +111,13 @@ describe("loadConfig with a patch", () => {
 
   it("resolves ${ENV} inside the patch, the same as in the YAML", async () => {
     vi.stubEnv("ILA_PATCH_KEY", "from-env");
+    // The model list is incidental to this test, but it has to be *there*: a patch replaces an
+    // array wholesale, and a provider list with no models in it while `defaultModel` still names
+    // one is a config that cannot work.
     const config = await load({
-      providers: [{ id: "p", name: "P", baseURL: "http://x", apiKey: "${ILA_PATCH_KEY}", models: [] }],
+      providers: [
+        { id: "p", name: "P", baseURL: "http://x", apiKey: "${ILA_PATCH_KEY}", models: [{ id: "m", name: "M" }] },
+      ],
     });
     expect(config.providers[0]?.apiKey).toBe("from-env");
   });

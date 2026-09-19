@@ -54,12 +54,20 @@ written.
 the string is rendered through *their* translator and follows a locale switch. `widgetLabel(id, t)`
 is the shape.
 
-**A route for a widget is a route about the object.** The two demo widgets read
-`/api/workspaces/:id/stats` and `/api/sessions/:id/stats`, not `/api/widgets/…/stats`: a third
-widget will want the same numbers, and hanging them off one widget's namespace makes the next
-consumer add a second path to the same query. Likewise the arithmetic lives in
-[apps/server/src/widgets.ts](../apps/server/src/widgets.ts) — `sumUsage` owns every rule about
-`MessageUsage`, whose fields are all optional and whose `contextTokens` is a level rather than a sum.
+**A route for a widget is a route about the object.** A panel that shows numbers for a
+conversation reads the conversation's own route rather than one under `/api/widgets/…`: the next
+panel will want the same numbers, and hanging them off one widget's namespace makes the next
+consumer add a second path to the same query. The current widgets follow this — `DiagramWidget`
+over `/api/sessions/:id/diagrams`, `ResourcesWidget` over `/api/resources?sessionId=…` — and the
+list's own routes are all at the same level.
+
+**Everything here is session scope now.** `WIDGET_SCOPES` still has two entries and the workspace
+routes, storage and dialogs all still exist, but nothing is installed at workspace level: the two
+widgets that were are the demo statistics panels, and they were removed. So
+`widgetsForScope("workspace")` is `[]`, the strip draws one group and never a divider, and the
+workspace-side dialogs hide their widget sections rather than drawing an empty one. That is a
+state worth knowing before reading anything below about "the two groups", and
+`apps/server/test/widgets.test.ts` is where it is held in place.
 
 ## The contract a widget component must honour
 
@@ -580,10 +588,11 @@ that claim. Cost of leaving it out: one checkbox.
 ## Watching it work
 
 `e2e/widgets.spec.ts` is the feature's end-to-end coverage and doubles as a worked example:
-installing from a card, the two groups and the divider, switching and remembering the open tab,
-a new conversation opening on its first tab rather than on one read elsewhere, flipping the strip's
-orientation, dragging the width and its clamp, the overflow menu, the drawer on a phone, and the
-demo widgets counting again after a turn without a reload.
+installing from the conversation's create dialog and uninstalling from its settings, the single
+group and the *absence* of a divider, the workspace dialogs drawing no widget section at all,
+switching and remembering the open tab, a new conversation opening on its first tab rather than on
+one read elsewhere, falling back when the open widget is uninstalled, flipping the strip's
+orientation, dragging the width and its clamp, the overflow menu, and collapsing to a rail.
 
 Each widget that has a rule of its own has a spec of its own: `e2e/plan.spec.ts`,
 `e2e/quiz-widget.spec.ts`, `e2e/thread-widget.spec.ts`, `e2e/notes.spec.ts`,
@@ -595,8 +604,8 @@ some (an upload through the composer, a file a scripted tool call wrote) because
 in one list" is the registry's claim rather than the panel's.
 
 ```bash
-npx playwright test e2e/widgets.spec.ts   # the panel, end to end (16 flows)
-npx vitest run widget                     # the route + arithmetic tests and the three web units
+npx playwright test e2e/widgets.spec.ts   # the panel, end to end (15 flows)
+npx vitest run widget                     # the selection rules, plus the web units
 ```
 
 The store's own widget cases — `setWidgetEnabled`, the lifecycle hooks, the `turn.finished`

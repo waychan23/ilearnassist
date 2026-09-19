@@ -97,9 +97,9 @@ const en: typeof MessageSchema = {
      */
     title: "Interactive Learning Assistant",
     configBanner: {
-      before: "No API key is configured yet. Click",
-      action: "Settings → Providers",
-      after: "in the top right to add a Provider and its key; it takes effect as soon as you save.",
+      before: "No API key is configured yet. Open",
+      action: "Platform console → Model services",
+      after: "from the menu to add a Provider and its key; it takes effect as soon as you save.",
     },
   },
 
@@ -133,6 +133,8 @@ const en: typeof MessageSchema = {
     identity: "Account",
     passwordLead: "Changing your password signs this account out everywhere else.",
     passwordChanged: "Your password has been changed.",
+    /** The build and the schema — see the note in the Chinese catalog. */
+    version: "Version v{version} · database v{schema}",
     /**
      * The introduction, which is prompt input rather than a profile page's decoration.
      *
@@ -341,9 +343,9 @@ const en: typeof MessageSchema = {
   composer: {
     parsing: "Attachments are still being parsed; sending unlocks when they finish…",
     parseFailed:
-      "1 attachment could not be parsed, so the model will not be able to read it. Use the retry button on the attachment, or configure a cloud parser under Settings → Document parsing. | {count} attachments could not be parsed, so the model will not be able to read them. Use the retry button on an attachment, or configure a cloud parser under Settings → Document parsing.",
+      "1 attachment could not be parsed, so the model will not be able to read it. Use the retry button on the attachment, or configure a cloud parser under Platform console → Documents. | {count} attachments could not be parsed, so the model will not be able to read them. Use the retry button on an attachment, or configure a cloud parser under Platform console → Documents.",
     visionWarning:
-      "The current model “{model}” is not marked as accepting image input, so images will be sent as text placeholders. Tick “Image input” for it under Settings → Providers.",
+      "The current model “{model}” is not marked as accepting image input, so images will be sent as text placeholders. Tick “Image input” for it under Platform console → Model services.",
     /* The `@` is `{'@'}`: see the note in the Chinese catalog. */
     placeholder: "Type a message — Enter to send, Shift+Enter for a new line, {'@'} to reference a source",
     /** The `@` picker: nothing matched what has been typed, and nothing exists to match. */
@@ -979,14 +981,6 @@ const en: typeof MessageSchema = {
     noSession: "No conversation yet — a widget has to be installed into one.",
     loadFailed: "Couldn't load the data",
     retry: "Retry",
-    messages: "Messages",
-    tokens: "Tokens",
-    workspaceStats: {
-      /** "(Demo)" is part of the name, not a note about it — see the remark in `zh-CN.ts`. */
-      name: "Workspace stats (Demo)",
-      hint: "This workspace's conversations, with each one's message count and token use.",
-      empty: "This workspace has no conversations yet.",
-    },
     workspaceSettings: {
       title: "Workspace settings",
       liveHint: "Changes show up in the right sidebar immediately.",
@@ -995,12 +989,6 @@ const en: typeof MessageSchema = {
       description: "Workspace description",
       descriptionPlaceholder: "What is this workspace for?",
       descriptionHint: "For your own reference; never sent to the model.",
-    },
-    sessionStats: {
-      name: "Conversation stats (Demo)",
-      hint: "This conversation's message count and token use.",
-      noSession: "Open a conversation and its numbers appear here.",
-      context: "Context this turn",
     },
     plan: {
       name: "Plan",
@@ -1292,7 +1280,7 @@ const en: typeof MessageSchema = {
     UNKNOWN_POLICY: "Unknown parsing policy: {policy}",
     UNKNOWN_PARSER: "Unknown parser.",
     UNKNOWN_PROVIDER: "Unknown provider.",
-    REASONING_NOT_DECLARED: "This model needs its reasoning passed back, but \"Reasoning model\" is not enabled for it in settings, so the provider rejected the request. Enable it for this model in Settings, then try again.",
+    REASONING_NOT_DECLARED: "This model needs its reasoning passed back, but \"Reasoning model\" is not enabled for it, so the provider rejected the request. Enable it for this model under Platform console → Model services, then try again.",
     MESSAGE_REQUIRED: "A message is required.",
     QUESTION_NOT_PENDING: "Those questions no longer need an answer — they were submitted or retired already.",
     INVALID_ANSWER: "That answer is incomplete or out of date. Refresh the page and try again.",
@@ -1468,8 +1456,8 @@ const en: typeof MessageSchema = {
     corrupt: "The file could not be read: {detail}",
     missing_file: "The file is gone and cannot be parsed. Please upload it again.",
     no_cloud_parser:
-      "No cloud parser is available. Add and enable one under Settings → Document parsing.",
-    local_disabled: "Local parsing is turned off in settings.",
+      "No cloud parser is available. Add and enable one under Platform console → Documents.",
+    local_disabled: "Local parsing is turned off.",
     cloud_auth: "The cloud parser rejected our credentials. Check the API key.",
     cloud_failed: "Cloud parsing failed: {detail}",
     timeout: "Parsing timed out. The file may be too large, or the parser is unresponsive.",

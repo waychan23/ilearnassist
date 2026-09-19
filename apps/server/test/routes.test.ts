@@ -18,6 +18,8 @@ import { rawFilePath } from "../src/resourcePaths.js";
 import { captureWebPage } from "../src/webCapture.js";
 import { DEFAULT_SESSION_TITLE } from "../src/db.js";
 import { NO_SCOPE, resolveWorkspaceScope } from "../src/workspaceScope.js";
+import { SCHEMA_VERSION } from "../src/schema.js";
+import { APP_VERSION } from "../src/version.js";
 import type {
   ApiErrorBody,
   Attachment,
@@ -91,6 +93,15 @@ describe("GET /api/health and /api/config", () => {
     // on its next reload.
     const again = (await inject({ method: "GET", url: "/api/health" })).json<HealthResponse>();
     expect(again.instance).toBe(body.instance);
+
+    /*
+     * The two versions ride the same reply, and for the same reason: this is the one question a
+     * client asks before it has a session, and "which build is answering, writing which schema" is
+     * what an operator wants to know about a self-hosted install they maintain themselves. The
+     * values are pinned to their sources so a reply that hard-coded one would fail here.
+     */
+    expect(body.appVersion).toBe(APP_VERSION);
+    expect(body.schemaVersion).toBe(SCHEMA_VERSION);
   });
 
   it("publishes the bootstrap config", async () => {

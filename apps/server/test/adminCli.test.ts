@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type {
   AdminCliErrorCode,
   AdminCreateResult,
+  AdminMigrateStatusResult,
+  AdminMigrateUpResult,
   AdminResetResult,
   AdminStatusResult,
 } from "@ilearnassist/shared";
@@ -13,6 +15,8 @@ import { verifyPassword } from "../src/auth.js";
 import { createDb } from "../src/db.js";
 import {
   adminStatus,
+  migrateUp,
+  migrationStatus,
   assertHasAdministrator,
   createAdmin,
   noAdministratorMessage,
@@ -81,6 +85,22 @@ function codeOf(outcome: AnyOutcome): AdminCliErrorCode {
 function statusOf(outcome: AnyOutcome): AdminStatusResult {
   if (!outcome.ok || outcome.value.command !== "status") {
     throw new Error(`expected a status result, got ${JSON.stringify(outcome)}`);
+  }
+  return outcome.value;
+}
+
+/** The migrate-status value, asserting that is what came back. */
+function migrateStatusOf(outcome: AnyOutcome): AdminMigrateStatusResult {
+  if (!outcome.ok || outcome.value.command !== "migrate-status") {
+    throw new Error(`expected a migrate-status result, got ${JSON.stringify(outcome)}`);
+  }
+  return outcome.value;
+}
+
+/** The migrate-up value, asserting that is what came back. */
+function migrateUpOf(outcome: AnyOutcome): AdminMigrateUpResult {
+  if (!outcome.ok || outcome.value.command !== "migrate-up") {
+    throw new Error(`expected a migrate-up result, got ${JSON.stringify(outcome)}`);
   }
   return outcome.value;
 }
@@ -593,5 +613,188 @@ describe("reset-admin", () => {
     // of this module refuses these; the write half has to as well.
     unreadableDatabase();
     expect(codeOf(await resetAdmin({ dataRoot: root }))).toBe("SCHEMA_UNREADABLE");
+  });
+});
+
+/**
+ * The two migration commands, and what the read-only `status` says about a database that needs
+ * walking.
+ *
+ * The **walk** is `migrations.test.ts`'s subject and the snapshot is `backup.test.ts`'s. What is
+ * tested here is the command line's half: that `migrate-status` answers a question without writing,
+ * that `migrate-up` walks and reports what it did, and that `status` — which the panel runs before
+ * the user presses Start — says when a data root is about to be upgraded.
+ */
+describe("migrate-status", () => {
+  it("reports a fresh install as current, with nothing to do", async () => {
+    // `create-admin` opens the database, which applies the current schema, so the answer here is
+    // the ordinary one: nothing pending, and no way to be wrong about it.
+    await createAdmin({ dataRoot: root, username: "Ada", password: "ada-password" });
+    const value = migrateStatusOf(migrationStatus(root));
+
+    expect(value.found).toBe(SCHEMA_VERSION);
+    expect(value.needed).toBe(SCHEMA_VERSION);
+    expect(value.pending).toEqual([]);
+    expect(value.applied).toEqual([]);
+    expect(value.blocker).toBeNull();
+    expect(value.walkable).toBe(true);
+  });
+
+  it("says there is no database rather than inventing a version for one", () => {
+    // A data root nobody has set up. Answering `0` here would be a version the file does not
+    // have, and the caller cannot tell that apart from an empty database.
+    expect(codeOf(migrationStatus(root))).toBe("DATA_DIR_INVALID");
+  });
+
+  it("reports a refused database as unreadable, keeping its version", () => {
+    // A file from a newer build: `create-admin` refuses it, and this must agree rather than
+    // claim there is nothing to do.
+    freshDatabase();
+    const db = new Database(dbFile());
+    db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+    db.close();
+
+    const value = migrateStatusOf(migrationStatus(root));
+    expect(value.found).toBe(SCHEMA_VERSION + 1);
+    expect(value.walkable).toBe(false);
+    expect(value.blocker).toEqual({ found: SCHEMA_VERSION + 1, needed: SCHEMA_VERSION });
+    expect(value.pending).toEqual([]);
+  });
+
+  it("does not touch the file it is only asked about", () => {
+    // The read-only guarantee, and the sharpest edge of it: `status` and `migrate-status` must
+    // never be the thing that changes a database. The version is read before and after.
+    freshDatabase();
+    const db = new Database(dbFile());
+    db.exec("CREATE TABLE t (a TEXT)");
+    db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+    db.close();
+
+    migrationStatus(root);
+
+    const after = new Database(dbFile(), { readonly: true });
+    expect(after.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION + 1);
+    expect(after.prepare("SELECT name FROM sqlite_master WHERE name = 't'").get()).toBeDefined();
+    after.close();
+  });
+});
+
+describe("migrate-up", () => {
+  it("says there is nothing to do for a current database", async () => {
+    await createAdmin({ dataRoot: root, username: "Ada", password: "ada-password" });
+    const value = migrateUpOf(migrateUp(root));
+
+    expect(value.from).toBe(SCHEMA_VERSION);
+    expect(value.to).toBe(SCHEMA_VERSION);
+    expect(value.applied).toEqual([]);
+    // And it took no snapshot, because there was nothing to walk — the cost only exists where the
+    // risk does.
+    expect(value.backup).toBeNull();
+  });
+
+  it("refuses a database from a newer build rather than reporting success", () => {
+    // The one thing it must not do is claim a database is fine when this build cannot read it.
+    freshDatabase();
+    const db = new Database(dbFile());
+    db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+    db.close();
+
+    expect(codeOf(migrateUp(root))).toBe("SCHEMA_UNREADABLE");
+  });
+
+  it("reports the data root as unset up rather than creating one to migrate", () => {
+    expect(codeOf(migrateUp(root))).toBe("DATA_DIR_INVALID");
+  });
+});
+
+describe("status reports the schema", () => {
+  it("says nothing when the database is current", async () => {
+    await createAdmin({ dataRoot: root, username: "Ada", password: "ada-password" });
+    const value = statusOf(adminStatus(root));
+
+    expect(value.schema).toEqual({ found: SCHEMA_VERSION, needed: SCHEMA_VERSION, pending: 0 });
+  });
+
+  it("reports no schema at all when there is no database", () => {
+    // Nothing to describe: the file is about to be created, so pretending it is at v0 would be a
+    // version nothing has.
+    expect(statusOf(adminStatus(root)).schema).toBeNull();
+  });
+
+  it("refuses a database it cannot carry, rather than describing it", () => {
+    /*
+     * The refusal *is* the answer for a file this build cannot read, and it carries the two
+     * versions so the panel can say which. That is why `AdminStatusResult.schema` has no
+     * `walkable`: every file without a path forward is turned away here, so a successful status
+     * reply could only ever report `true`.
+     */
+    freshDatabase();
+    const db = new Database(dbFile());
+    db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+    db.close();
+
+    const outcome = adminStatus(root);
+    expect(codeOf(outcome)).toBe("SCHEMA_UNREADABLE");
+    if (outcome.ok) throw new Error("expected a refusal");
+    expect(outcome.body.error.params).toMatchObject({
+      found: SCHEMA_VERSION + 1,
+      needed: SCHEMA_VERSION,
+    });
+  });
+});
+
+describe("the commands agree with the server about a tampered history", () => {
+  /*
+   * The gap a live run found: `migrate-status` and `status` both reported a database as healthy
+   * while `migrate-up` refused it, because a **checksum** mismatch is not a version problem and
+   * neither command looked. The server refuses such a file at boot (`runMigrations` verifies
+   * before it walks), so a status that says "nothing to migrate" sends an operator to look at the
+   * wrong thing — which is the failure this command exists to prevent.
+   *
+   * The file here has the *right* version and a history row that does not match any step, which is
+   * what editing a shipped migration produces.
+   */
+  function databaseWithAForeignHistoryRow(): void {
+    freshDatabase();
+    const db = new Database(dbFile());
+    db.exec("CREATE TABLE t (a TEXT)");
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    db.prepare(
+      `INSERT INTO schema_migrations (version, id, checksum, applied_at, duration_ms)
+       VALUES (?, 'a-step-that-is-gone', 'deadbeef', '2026-01-01T00:00:00.000Z', 1)`
+    ).run(SCHEMA_VERSION);
+    db.close();
+  }
+
+  it("migrate-status reports it rather than saying nothing to migrate", () => {
+    databaseWithAForeignHistoryRow();
+    const value = migrateStatusOf(migrationStatus(root));
+
+    expect(value.found).toBe(SCHEMA_VERSION);
+    expect(value.walkable).toBe(false);
+    expect(value.pending).toEqual([]);
+    expect(value.historyProblem).toMatch(/no longer has/);
+  });
+
+  it("status refuses it with the code the server would fail on", () => {
+    databaseWithAForeignHistoryRow();
+    const outcome = adminStatus(root);
+
+    // `MIGRATION_FAILED`, not `SCHEMA_UNREADABLE`: the version is fine and the *history* is not,
+    // and an operator who is told the wrong one looks in the wrong place.
+    expect(codeOf(outcome)).toBe("MIGRATION_FAILED");
+  });
+
+  it("migrate-up refuses it too, on the same check", () => {
+    databaseWithAForeignHistoryRow();
+    expect(codeOf(migrateUp(root))).toBe("MIGRATION_FAILED");
+  });
+
+  it("leaves a healthy database alone", async () => {
+    // The other direction, so the check is not simply always failing.
+    await createAdmin({ dataRoot: root, username: "Ada", password: "ada-password" });
+    const value = migrateStatusOf(migrationStatus(root));
+    expect(value.historyProblem).toBeNull();
+    expect(value.walkable).toBe(true);
   });
 });

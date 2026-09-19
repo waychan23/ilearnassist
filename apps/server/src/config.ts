@@ -3,12 +3,28 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import type { DocumentParsePolicy, DocumentParserKind } from "@ilearnassist/shared";
+import { isModelCapability, MODEL_CAPABILITIES, type ModelCapability } from "@ilearnassist/shared";
 
 export type WebSearchProvider = "bing" | "tavily" | "duckduckgo" | "searxng";
 
 export interface ModelDef {
   id: string;
   name: string;
+  /**
+   * What this model can do. **Declared here rather than guessed**, because the three
+   * capabilities change behaviour and not just a badge: `vision` decides whether an image is
+   * sent or becomes a placeholder, `reasoning` decides whether chain-of-thought is replayed
+   * on tool-call messages, `tool_use` decides whether tools are offered.
+   *
+   * A vendor's model ids do not say any of that. `glm-5.3` and `glm-5v-turbo` differ by one
+   * word and only the second sees pictures; `kimi-k3` always thinks while `kimi-k2.6` can be
+   * told not to. A regex over ids guessed wrong quietly, which is how a seeded provider ends
+   * up failing on every turn.
+   *
+   * Omitted means `guessCapabilities(modelId)` — right for a model id that names its family
+   * (`gemini-…`, `gpt-5…`), and the fallback for an entry written before this field existed.
+   */
+  capabilities?: ModelCapability[];
 }
 
 export interface ProviderDef {
@@ -240,6 +256,32 @@ function asBool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
+/**
+ * Read a model's declared `capabilities`, or `undefined` for "let `guessCapabilities` decide".
+ *
+ * An unrecognised name **throws** rather than being dropped. Dropping is the wrong answer
+ * here even though this file drops an unrecognised parser `kind`: a parser without a kind
+ * cannot work at all, while a model missing one capability is a model that mostly works —
+ * so a typo would cost one silent behaviour (images arriving as a placeholder, or thinking
+ * never being replayed) and be found much later, if ever. `label` names the entry, because
+ * "unknown capability" without saying which model is a message about nothing.
+ */
+function parseCapabilities(v: unknown, label: string): ModelCapability[] | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v)) {
+    throw new Error(`Model ${label}: capabilities must be a list.`);
+  }
+  for (const entry of v) {
+    if (!isModelCapability(entry)) {
+      throw new Error(
+        `Model ${label}: unknown capability ${JSON.stringify(entry)}. ` +
+          `Expected one of ${MODEL_CAPABILITIES.join(", ")}.`
+      );
+    }
+  }
+  return v as ModelCapability[];
+}
+
 export function withDefaults(raw: Record<string, unknown>): AppConfig {
   const server = asObj(raw["server"]);
   const tools = asObj(raw["tools"]);
@@ -259,7 +301,20 @@ export function withDefaults(raw: Record<string, unknown>): AppConfig {
     providers: Array.isArray(raw["providers"])
       ? (raw["providers"] as unknown[]).map((p) => {
           const v = asObj(p);
-          const models = Array.isArray(v["models"]) ? (v["models"] as ModelDef[]) : [];
+          const models: ModelDef[] = Array.isArray(v["models"])
+            ? (v["models"] as unknown[]).map((m) => {
+                const mv = asObj(m);
+                const declared = mv["capabilities"];
+                return {
+                  id: String(mv["id"]),
+                  name: asStr(mv["name"], String(mv["id"])),
+                  capabilities: parseCapabilities(
+                    declared,
+                    `${String(v["id"])}/${String(mv["id"])}`
+                  ),
+                };
+              })
+            : [];
           return {
             id: String(v["id"]),
             name: asStr(v["name"], String(v["id"])),
@@ -409,6 +464,24 @@ export function validateConfig(config: AppConfig): void {
   }
   if (!config.defaultModel) {
     throw new Error("defaultModel must be set in config/config.yaml.");
+  }
+
+  /*
+   * And that it is a model the provider actually has.
+   *
+   * `defaultProvider` has been checked against the provider list since the beginning; the model
+   * half was not, and the hole is not theoretical — a *retired* model id read perfectly well as a
+   * string while naming nothing, so a fresh install seeded a default that its own provider could
+   * not serve, and the failure surfaced as a conversation that would not send rather than as a
+   * config error. The two fields are seeded together from this file, so "the pair is coherent
+   * here" is exactly the property a fresh install depends on.
+   */
+  const provider = config.providers.find((p) => p.id === config.defaultProvider);
+  if (provider && !provider.models.some((m) => m.id === config.defaultModel)) {
+    throw new Error(
+      `defaultModel "${config.defaultModel}" is not one of ${config.defaultProvider}'s models ` +
+        `(${provider.models.map((m) => m.id).join(", ") || "none"}).`
+    );
   }
 
   // Document parser ids are primary keys; a duplicate would fail at seed time with an

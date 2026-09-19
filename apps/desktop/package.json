@@ -4,6 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Desktop control panel: starts the ilearnassist server and opens the app.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/waychan23/ilearnassist.git",
+    "directory": "apps/desktop"
+  },
+  "homepage": "https://github.com/waychan23/ilearnassist",
+  "bugs": "https://github.com/waychan23/ilearnassist/issues",
   "main": "dist/main/main.cjs",
   "scripts": {
     "dev": "node scripts/build.mjs --no-web && electron .",
@@ -13,7 +21,10 @@
     "package": "node scripts/build.mjs && electron-builder --mac",
     "package:mac": "node scripts/build.mjs && electron-builder --mac --arm64 --x64",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package:win": "node scripts/build.mjs && electron-builder --win --x64",
+    "package:linux": "node scripts/build.mjs && electron-builder --linux --x64",
+    "package:all": "node scripts/build.mjs && electron-builder --mac --win --linux"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
@@ -26,5 +37,6 @@
     "esbuild": "^0.28.2",
     "jsqr": "^1.4.0",
     "qrcode-generator": "^2.0.4"
-  }
+  },
+  "author": "ilearnassist contributors"
 }

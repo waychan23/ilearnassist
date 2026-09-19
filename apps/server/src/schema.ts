@@ -32,7 +32,7 @@ import type Database from "better-sqlite3";
  */
 
 /*
- * The versions this file has been through, newest first. There are four:
+ * The versions this file has been through, newest first. There are five:
  *
  * 1 — the original schema.
  * 2 — `messages.attachments[].id` stops being an upload id and becomes a **source** id. Same
@@ -42,8 +42,17 @@ import type Database from "better-sqlite3";
  * 3 — a source stops being an upload and becomes the record for every piece of material an
  *     account holds.
  * 4 — that record splits in three: a **file** or a **web page** is the entity, and a
- *     **work resource** is the reference to it; below. A v3 file is refused rather than walked
- *     forward, so `migrations.ts` has no steps at all.
+ *     **work resource** is the reference to it; below.
+ * 5 — `session_references` names a work resource rather than an entity; see the note on
+ *     `SCHEMA_VERSION` below.
+ *
+ * **v5 is where the migration era starts, and every later change is expected to reach an
+ * existing file rather than replace it.** `migrations.ts` now owns a walk: a version bump plus a
+ * step is how a change that the idempotent DDL cannot express — a column whose meaning moves, a
+ * drop, a data rewrite — gets to a database somebody is already using. Versions 2 through 4 are
+ * still *refused* rather than walked, and that stays: the values those steps would have to invent
+ * (which owner a link belonged to) are not recoverable from the rows, and a guessed owner is worse
+ * than a file that will not open. See `docs/migrations.md` for the three rules in full.
  */
 
 /**
@@ -150,6 +159,38 @@ export const SCHEMA_VERSION = 5;
  * `messages.attachments` is unchanged in spirit: a JSON snapshot of what was attached as it was
  * sent, so a chip does not vanish from history because the file was deleted afterwards.
  */
+/**
+ * The migration history table, declared once because **two things create it**.
+ *
+ * `DDL` declares it for a fresh install, and the walk declares it for a database that predates it:
+ * the walk runs *before* the DDL, so it has to be able to write its own history on a file whose
+ * DDL has never run. Two copies of this statement would be two chances for the table a fresh
+ * install gets and the table a walked install gets to differ — which is exactly the kind of
+ * difference nothing downstream could detect.
+ */
+export const MIGRATION_HISTORY_DDL = `
+  -- What the migration walk has run on this file, one row per step — see migrations.ts.
+  --
+  -- This is the half PRAGMA user_version cannot express. The pragma says WHERE a file is; this
+  -- says HOW it got there, which is what an operator wants when a release changed something and
+  -- they need to know whether their database has been through it. It also carries a step's
+  -- checksum, which is what makes "this migration was edited after it ran" a startup error rather
+  -- than a silent difference between two users' data.
+  --
+  -- version is the primary key rather than an autoincrement id: steps are single-hop and a
+  -- version is applied once, so the key IS the fact — a second insert of the same version is a
+  -- bug the database refuses rather than a duplicate row nobody notices.
+  --
+  -- (No backticks anywhere in here: it is interpolated into the template literal below.)
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    id TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL
+  );
+`;
+
 export const DDL = `
   -- An account carries a password now, which is what changed this table's meaning: a
   -- username used to *be* the credential, so the login route created the row if the name was
@@ -1058,6 +1099,9 @@ export const DDL = `
   CREATE INDEX IF NOT EXISTS idx_usage_workspace ON usage_events(workspace_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_usage_purpose ON usage_events(purpose, created_at);
+
+  -- Declared above and interpolated here, so a fresh install and a walked one cannot differ.
+${MIGRATION_HISTORY_DDL}
 `;
 
 /**

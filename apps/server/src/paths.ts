@@ -21,6 +21,7 @@ import { join } from "node:path";
  *       web/<fileId>.<ext>       a page's fetched body
  *       parsed/<fileId>.txt      extracted text, a file of its own
  *   db/sqlite/ilearnassist.sqlite
+ *   backups/ilearnassist-v5-<stamp>.sqlite
  * ```
  *
  * The session directory is deliberately a *sibling* of `workdir/` rather than a corner of it:
@@ -34,6 +35,10 @@ import { join } from "node:path";
  * `users.slug` and the directory do not, exactly as a workspace's display name and its
  * directory already relate. `db/sqlite/` is a directory rather than a bare file name so the
  * next database is a sibling, not a naming convention.
+ *
+ * `backups/` holds the snapshot taken before a migration walk (`backup.ts`). It is inside the
+ * data root on purpose: "back up my work" is already "copy this folder", and a snapshot kept
+ * somewhere else would quietly make that sentence false at the one moment it matters.
  */
 
 /** The data root and the database's home. Both are fixed for the life of a process. */
@@ -43,6 +48,8 @@ export interface DataLayout {
   usersRoot: string;
   sqliteDir: string;
   sqliteFile: string;
+  /** Snapshots taken before a migration walk. See `backup.ts`. */
+  backupsDir: string;
 }
 
 export function dataLayout(dataRoot: string): DataLayout {
@@ -52,6 +59,7 @@ export function dataLayout(dataRoot: string): DataLayout {
     usersRoot: join(dataRoot, "users"),
     sqliteDir,
     sqliteFile: join(sqliteDir, "ilearnassist.sqlite"),
+    backupsDir: join(dataRoot, "backups"),
   };
 }
 

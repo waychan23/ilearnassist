@@ -40,9 +40,11 @@ import {
   hasExistingData,
   resolveAppPaths,
   seedFirstRun,
+  trayIconFile,
   type AppPaths,
 } from "./paths.js";
 import { readSettings, writeSettings, type DesktopSettings } from "./settings.js";
+import { RELEASES_PAGE, checkForUpdate, isNewer } from "./update.js";
 import { ServerProcess } from "./serverProcess.js";
 
 /**
@@ -99,6 +101,8 @@ let server: ServerProcess;
 let panelWindow: BrowserWindow | null = null;
 let appWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+/** True while a version check is in flight, so the manual item can say so and cannot be doubled. */
+let checking = false;
 /** Set once a real quit is under way, so closing a window stops meaning "hide". */
 let quitting = false;
 /** Guards the async shutdown in `before-quit` against re-entering itself. */
@@ -215,7 +219,48 @@ function currentState(): PanelState {
     needsAdmin: hasAdmin === undefined ? undefined : !hasAdmin,
     localeChoice,
     locale,
+    // Read from the bundle, which is what electron-builder stamped from package.json. The panel
+    // is the only place a packaged user can find out which version they are running.
+    appVersion: app.getVersion(),
+    update: {
+      // The cached answer, so a launch with no network still shows what the last check found.
+      latestVersion: settings.updateCheck?.latestVersion ?? null,
+      url: settings.updateCheck?.url ?? null,
+      available: isNewer(settings.updateCheck?.latestVersion ?? null, app.getVersion()),
+      checking,
+    },
   };
+}
+
+/**
+ * Ask GitHub whether there is a newer release, remember the answer, and repaint.
+ *
+ * Fire-and-forget from `whenReady`, never awaited by anything the user waits for: the panel draws
+ * immediately and adopts the answer when it arrives. A **failed** check leaves the cache alone
+ * rather than writing "nothing found" into it — a flaky network must not look like a confirmed
+ * up-to-date app, and the cached notice from last week is more useful than an empty answer.
+ *
+ * `checking` is on the state because the manual menu item needs it: a control that looks live and
+ * does nothing is the failure this panel's own docblock names, and "checking…" is the honest thing
+ * to show for the two seconds it takes.
+ */
+async function runUpdateCheck(): Promise<void> {
+  if (checking) return;
+  checking = true;
+  broadcast();
+  try {
+    const result = await checkForUpdate({ current: app.getVersion() });
+    if (result.latest) {
+      settings = {
+        ...settings,
+        updateCheck: { latestVersion: result.latest, url: result.url ?? RELEASES_PAGE, checkedAt: new Date().toISOString() },
+      };
+      writeSettings(settingsFile, settings);
+    }
+  } finally {
+    checking = false;
+    broadcast();
+  }
 }
 
 /**
@@ -483,6 +528,13 @@ function createPanelWindow(): BrowserWindow {
 function showPanel(): void {
   if (!panelWindow || panelWindow.isDestroyed()) {
     panelWindow = createPanelWindow();
+
+    /*
+     * One check per launch, fire-and-forget. Not awaited, and deliberately after the window is
+     * up: nothing the user is waiting for depends on GitHub answering, and a slow network must not
+     * delay the panel. See `runUpdateCheck` for what a failure does (nothing).
+     */
+    void runUpdateCheck();
     return;
   }
   if (panelWindow.isMinimized()) panelWindow.restore();
@@ -582,21 +634,20 @@ async function resetAppWindow(): Promise<void> {
 
 // ---- tray ------------------------------------------------------------------
 
-/**
- * The menu-bar icon, which is what keeps the app reachable once its window is gone.
- *
- * A template image — black with alpha, filename ending in `Template` — so macOS inverts it
- * for a dark menu bar and it needs no light and dark variants of its own. `createFromPath`
- * picks up the `@2x` sibling automatically, so the icon is drawn once at two sizes rather
- * than scaled and blurred on a Retina display.
- */
 function createTray(): void {
-  const icon = nativeImage.createFromPath(join(resourcesDir, "tray", "trayTemplate.png"));
+  // Which file is `paths.ts`'s answer, not this one's: it is a platform question with a
+  // wrong answer that only shows up on Windows, so it is asserted against the committed
+  // assets in a test rather than here where nothing can reach it.
+  const file = trayIconFile(process.platform);
+  // `createFromPath` picks up the `@2x` sibling automatically, so the mark is drawn at two
+  // sizes rather than scaled and blurred.
+  const icon = nativeImage.createFromPath(join(resourcesDir, "tray", file));
   if (icon.isEmpty()) {
     // A missing icon would otherwise appear as an invisible tray item that still swallows
     // clicks — worse than no tray, because the app would look like it had quit. The panel
-    // still works; only the menu-bar half does not.
-    console.error("Tray icon missing from the app bundle; running without a menu-bar item");
+    // still works; only the tray half does not. Naming the file, because on Windows this is
+    // the difference between "the tray is broken" and "one asset was not staged".
+    console.error(`Tray icon ${file} missing from the app bundle; running without a tray item`);
     return;
   }
 
@@ -708,6 +759,28 @@ function registerIpc(): void {
     if (result.ok) await refreshAdminState();
     return result;
   });
+  /*
+   * The version check, on demand and on request.
+   *
+   * `checkForUpdates` resolves when the check has finished rather than returning immediately, so
+   * the manual menu item can await it and the renderer's spinner is honest. It cannot fail: an
+   * unreachable GitHub resolves with the state unchanged, which is the same thing the panel shows
+   * for "no newer release".
+   */
+  ipcMain.handle(PANEL_CHANNELS.checkForUpdates, async () => {
+    await runUpdateCheck();
+    return currentState();
+  });
+
+  /*
+   * Open the release page. No argument from the renderer — the address is this process's own,
+   * because a `shell.openExternal` a page can aim is a phishing primitive.
+   */
+  ipcMain.handle(PANEL_CHANNELS.openUpdatePage, async () => {
+    const url = settings.updateCheck?.url;
+    if (url) await shell.openExternal(url);
+  });
+
   /**
    * Switch the panel's language.
    *
@@ -784,6 +857,15 @@ function buildMenu(): void {
             label: t("action.open"),
             accelerator: "CmdOrCtrl+O",
             click: () => void openAppWindow(),
+          },
+          /*
+           * Manual, and next to the automatic one: the check runs once a launch, so a user who
+           * has just installed a release from this menu item's notice can ask again without
+           * restarting the app.
+           */
+          {
+            label: t("action.checkUpdates"),
+            click: () => void runUpdateCheck(),
           },
           { type: "separator" as const },
           ...(isMac ? [] : [{ role: "quit" as const, label: t("action.quit") }]),
@@ -875,6 +957,13 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
 
     panelWindow = createPanelWindow();
+
+    /*
+     * One check per launch, fire-and-forget. Not awaited, and deliberately after the window is
+     * up: nothing the user is waiting for depends on GitHub answering, and a slow network must not
+     * delay the panel. See `runUpdateCheck` for what a failure does (nothing).
+     */
+    void runUpdateCheck();
 
     // Auto-start, because the panel's whole purpose is to be the thing that has the server
     // running. A user who wants it stopped has a button; a user who has to remember to press

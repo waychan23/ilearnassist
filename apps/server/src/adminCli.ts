@@ -18,7 +18,18 @@ import {
   revokeAllTokens,
   usernameProblem,
 } from "./auth.js";
-import { createDb, parseStoredRoles, type AppDb } from "./db.js";
+import { createDb, parseStoredRoles, seedBuiltInCopilots, type AppDb } from "./db.js";
+import {
+  MigrationError,
+  appliedMigrations,
+  canMigrate,
+  currentVersion,
+  pendingSteps,
+  verifyApplied,
+  type MigrationOutcome,
+} from "./migrations.js";
+import { MigrationBackupError } from "./backup.js";
+import { SCHEMA_VERSION } from "./schema.js";
 import { dataLayout, ensureUserLayout, userLayout } from "./paths.js";
 import { applySchema, SchemaUnreadableError } from "./schema.js";
 import { openRefusal } from "./migrations.js";
@@ -178,6 +189,16 @@ export function adminStatus(dataRoot: string): AdminCliOutcome {
       });
     }
 
+    /*
+     * And the history, which `openRefusal` cannot see: a file whose version is right but whose
+     * recorded step no longer matches this build's code is one the **server will refuse to
+     * start** — `runMigrations` verifies before it walks, and `createDb` is where the boot dies.
+     * Reporting it as healthy here would send an operator to look at the wrong thing, which is
+     * exactly what this command exists to prevent.
+     */
+    const historyProblem = historyRefusal(db);
+    if (historyProblem) return fail("MIGRATION_FAILED", historyProblem);
+
     // An empty SQLite file — one this build would happily adopt and create tables in — has no
     // `users` table. That is "no administrator", not a read failure, and checking for the table
     // is what tells the two apart without matching on SQLite's error strings.
@@ -191,7 +212,20 @@ export function adminStatus(dataRoot: string): AdminCliOutcome {
       ).found === 1;
 
     const admin = hasUsers ? findAdministrator(db) : null;
-    return status(dataRoot, "present", admin?.username ?? null);
+    /*
+     * What the file is, and what it would take to open it. Reported by a read-only command, so it
+     * decides nothing — the panel uses it to say "this data folder needs upgrading" *before* the
+     * user presses Start, rather than letting them find out from a server that will not come up.
+     *
+     * An empty file has no version to report: it is about to be created, so there is nothing to
+     * walk and nothing to warn about.
+     */
+    const found = currentVersion(db);
+    return status(dataRoot, "present", admin?.username ?? null, {
+      found,
+      needed: SCHEMA_VERSION,
+      pending: pendingSteps(found).length,
+    });
   } catch (error) {
     // A file that is not a database at all throws here rather than at `new Database`, because
     // SQLite reads lazily and only notices on the first statement.
@@ -201,13 +235,19 @@ export function adminStatus(dataRoot: string): AdminCliOutcome {
   }
 }
 
-function status(dataRoot: string, database: "absent" | "present", adminUsername: string | null): AdminCliOutcome {
+function status(
+  dataRoot: string,
+  database: "absent" | "present",
+  adminUsername: string | null,
+  schema: AdminStatusResult["schema"] = null
+): AdminCliOutcome {
   const value: AdminStatusResult = {
     ok: true,
     command: "status",
     dataRoot,
     database,
     hasAdmin: adminUsername !== null,
+    schema,
     adminUsername,
   };
   return { ok: true, value };
@@ -355,6 +395,14 @@ export async function createAdmin(input: CreateAdminInput): Promise<AdminCliOutc
           newSlug = user.slug;
         }
 
+        /*
+         * Inside the transaction, and after the account exists — the built-in assistants need
+         * an owner, and "an administrator exists" and "the assistants a new installation ships"
+         * should land together or not at all. A half-bootstrap whose Copilots are missing is a
+         * state no later boot repairs, because the marker is written here.
+         */
+        seedBuiltInCopilots(db, user.id);
+
         outcome = {
           ok: true,
           value: {
@@ -381,6 +429,147 @@ export async function createAdmin(input: CreateAdminInput): Promise<AdminCliOutc
     return fail("INTERNAL", messageOf(error));
   } finally {
     db.raw.close();
+  }
+}
+
+/**
+ * Whether this file's recorded history matches the code, or the sentence saying why not.
+ *
+ * One place, because two commands ask it and the answer has to be the same one the server will
+ * give. `verifyApplied` throws; this turns that into a message for a caller that reports rather
+ * than refuses.
+ */
+function historyRefusal(db: Database.Database): string | null {
+  try {
+    verifyApplied(db);
+    return null;
+  } catch (error) {
+    return error instanceof MigrationError ? error.message : messageOf(error);
+  }
+}
+
+/* ----------------------------------- migrate ---------------------------------- */
+
+/**
+ * What the database is, and what a walk would do to it. **Read-only**, like `status`.
+ *
+ * The history is reported rather than summarised, because the question an operator has when they
+ * run this is "which migrations has this database been through", and a count is not an answer to
+ * it. `pending` is the other half: what a `migrate-up` would run.
+ */
+export function migrationStatus(dataRoot: string): AdminCliOutcome {
+  const dirProblem = dataRootProblem(dataRoot);
+  if (dirProblem) return dirProblem;
+
+  const layout = dataLayout(dataRoot);
+  if (!existsSync(layout.sqliteFile)) {
+    return fail("DATA_DIR_INVALID", "there is no database in this data root yet", {
+      path: layout.sqliteFile,
+    });
+  }
+
+  let db: Database.Database;
+  try {
+    db = new Database(layout.sqliteFile, { readonly: true, fileMustExist: true });
+  } catch (error) {
+    return fail("UNREADABLE", messageOf(error));
+  }
+
+  try {
+    const found = currentVersion(db);
+    const blocked = openRefusal(db);
+    // The other thing that makes a file unopenable, and the one a version number cannot show.
+    const historyProblem = historyRefusal(db);
+    return {
+      ok: true,
+      value: {
+        ok: true,
+        command: "migrate-status",
+        dataRoot,
+        found,
+        needed: SCHEMA_VERSION,
+        // Reported even when the file is refused: "there is no way to carry this" and "there is
+        // nothing to carry" are different answers, and the caller renders them differently.
+        walkable: canMigrate(found) && historyProblem === null,
+        pending:
+          blocked || historyProblem
+            ? []
+            : pendingSteps(found).map((s) => ({ id: s.id, from: s.from, to: s.to })),
+        applied: appliedMigrations(db),
+        blocker: blocked ?? null,
+        historyProblem,
+      },
+    };
+  } catch (error) {
+    return fail(isNotADatabase(error) ? "NOT_A_DATABASE" : "UNREADABLE", messageOf(error));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Walk the database up to this build's schema — deliberately, with the snapshot `createDb` takes.
+ *
+ * `createDb` already migrates whenever it opens a file, so why does this exist? Because a walk is
+ * the one operation that rewrites a user's only copy of their data, and some operators want to run
+ * it with the server stopped, on purpose, and see what happened — rather than discovering it in
+ * the logs of a boot they did not watch. It is the same code path, so there is no second
+ * implementation to drift; this is the explicit door.
+ */
+export function migrateUp(dataRoot: string): AdminCliOutcome {
+  const dirProblem = dataRootProblem(dataRoot);
+  if (dirProblem) return dirProblem;
+
+  const layout = dataLayout(dataRoot);
+  if (!existsSync(layout.sqliteFile)) {
+    return fail("DATA_DIR_INVALID", "there is no database in this data root yet", {
+      path: layout.sqliteFile,
+    });
+  }
+
+  let outcome: MigrationOutcome | undefined;
+  try {
+    const db = createDb(layout.sqliteFile, { onMigrated: (result) => (outcome = result) });
+    db.raw.close();
+  } catch (error) {
+    if (error instanceof SchemaUnreadableError) {
+      return fail("SCHEMA_UNREADABLE", error.message, {
+        found: error.found,
+        needed: error.needed,
+      });
+    }
+    if (error instanceof MigrationBackupError) {
+      return fail("MIGRATION_BACKUP_FAILED", error.message);
+    }
+    if (error instanceof MigrationError) {
+      return fail("MIGRATION_FAILED", error.message);
+    }
+    return fail(isNotADatabase(error) ? "NOT_A_DATABASE" : "UNREADABLE", messageOf(error));
+  }
+
+  // No `onMigrated` means the file was already current: nothing to report but the truth.
+  const result = outcome;
+  return {
+    ok: true,
+    value: {
+      ok: true,
+      command: "migrate-up",
+      dataRoot,
+      from: result?.from ?? currentVersionOf(layout.sqliteFile),
+      to: currentVersionOf(layout.sqliteFile),
+      applied: result?.applied.map((s) => s.id) ?? [],
+      backup: result?.backup ?? null,
+    },
+  };
+}
+
+/** The version, through a fresh read-only handle — for reporting after `createDb` has closed its own. */
+function currentVersionOf(sqliteFile: string): number {
+  const db = new Database(sqliteFile, { readonly: true, fileMustExist: true });
+  try {
+    return currentVersion(db);
+  } finally {
+    db.close();
   }
 }
 
@@ -462,6 +651,16 @@ export async function resetAdmin(input: ResetAdminInput): Promise<AdminCliOutcom
         needed: problem.needed,
       });
     }
+
+    /*
+     * And the history, which `openRefusal` cannot see: a file whose version is right but whose
+     * recorded step no longer matches this build's code is one the **server will refuse to
+     * start** — `runMigrations` verifies before it walks, and `createDb` is where the boot dies.
+     * Reporting it as healthy here would send an operator to look at the wrong thing, which is
+     * exactly what this command exists to prevent.
+     */
+    const historyProblem = historyRefusal(db);
+    if (historyProblem) return fail("MIGRATION_FAILED", historyProblem);
 
     const target = input.username?.trim()
       ? findSuperadminByName(db, input.username.trim())

@@ -116,20 +116,30 @@ Accounts are real: `auth.ts` finds or creates one by username, and every route i
 the caller (see [Authentication](#authentication-authts)). A Copilot's owner is that account,
 exactly as a workspace's is.
 
-Schema changes follow one of two rules, and they are for different things:
+Schema changes follow one of three rules, and they are for different things. The full version is
+[migrations.md](migrations.md); this is what a reader of the data model needs:
 
-- **Adding** a column goes through `ensureColumn()` (`PRAGMA table_info` +
+- **Adding** a table or an index is a `DDL` edit and nothing else — the DDL is applied on every
+  open and every statement in it is `CREATE … IF NOT EXISTS`, so an existing database gains it on
+  the next start.
+- **Adding** a column is that *and* an `ensureColumn()` call (`PRAGMA table_info` +
   `ALTER TABLE ADD COLUMN`), because `CREATE TABLE IF NOT EXISTS` silently skips tables that
-  already exist — an existing database would otherwise never gain it.
-- **Changing what an existing column means** bumps `SCHEMA_VERSION` in `schema.ts`, which
-  refuses the file outright with a message naming both versions. No missing column can
-  signal that kind of change, and without a version the file is simply opened and read wrong
-  — `dir_path` resolving somewhere else, ids referring to a different kind of thing — with
-  no error to explain it. The guard reads `PRAGMA user_version`, which lives in the file
-  header and is therefore readable *before* anything is created; a version row in
-  `app_settings` cannot be, because reading it means having already touched the file you
-  meant to refuse. A file with tables but `user_version = 0` predates versioning and is
-  refused rather than adopted.
+  already exist — an existing database would otherwise never gain it. Two edits, for two
+  audiences: the DDL is what a fresh install gets, and `ensureColumn` is how an existing one
+  catches up.
+- **Anything the idempotent DDL cannot express** — changing what a column means, a drop, a data
+  rewrite — bumps `SCHEMA_VERSION` in `schema.ts` **and** adds a step to `MIGRATIONS`, which walks
+  an older file forward. No missing column can signal that kind of change, and without a version
+  the file is simply opened and read wrong — `dir_path` resolving somewhere else, ids referring to
+  a different kind of thing — with no error to explain it. The guard reads `PRAGMA user_version`,
+  which lives in the file header and is therefore readable *before* anything is created; a version
+  row in `app_settings` cannot be, because reading it means having already touched the file you
+  meant to refuse. A file with tables but `user_version = 0` predates versioning and is refused
+  rather than adopted.
+
+A file **newer** than this build is still refused outright, and versions 2–4 still are too: their
+steps would have to invent values the rows do not determine. A walk also cannot go backwards, so
+"refuse" is the only honest answer to a file from the future.
 
 One migration is a **one-off** rather than an `ensureColumn` call with no follow-up, and it is
 why that function returns whether it added anything. On the single boot that gives Copilots an
@@ -1556,17 +1566,19 @@ throws is logged, and a widget whose *data* fails reports it inside its own pane
 `fileTreeError`/`filePreviewError` make.
 
 `onInstall` therefore fires at **two** moments, because a level's widgets can arrive two ways: one
-at a time through `setWidgetEnabled`, or all at once in a create request — the create dialogs
-choose a selection before the object exists. The creation case runs the hooks from the *resolved*
-read where there is one (a conversation copies its Copilot's selection, so the request may name no
-widgets at all), and from the requested list for a workspace, where what was asked for and what the
-route wrote are the same list. Neither demo widget has a hook; the mechanism is covered by store
-tests with a stubbed registry entry.
+at a time through `setWidgetEnabled`, or all at once in a create request — the create dialog
+chooses a selection before the object exists. The creation case runs the hooks from the *resolved*
+read, because a conversation copies its Copilot's selection and the request may name no widgets at
+all. The hook mechanism is covered by the store tests with a stubbed registry entry
+(`WIDGET_MODULES.thread`), since a hook that has to exist for the test to run would be asserting
+itself.
 
-The two demo widgets read `GET /api/workspaces/:id/stats` and `GET /api/sessions/:id/stats`. Those
-are about the object rather than about a widget — two widgets read the same route and a third will
-— and the arithmetic is in `apps/server/src/widgets.ts` rather than in SQL, because `MessageUsage`'s
-fields are all optional and `contextTokens` means the opposite of a sum.
+**The workspace level has no widgets.** It kept its routes, its `widget_instances` rows, its
+dialogs and its half of `WIDGET_SCOPES` when the two demo statistics panels were removed, so
+`widgetsForScope("workspace")` is `[]`: the strip draws one group, no divider, and the workspace
+dialogs hide their widget sections. A stored workspace row is not an error — reads resolve through
+the registry, so it is simply never returned — and `apps/server/test/widgets.test.ts` is where
+that state is asserted rather than assumed.
 
 Not built, deliberately: external/dynamic widget installation (there is nothing to load at
 runtime — `widgetsForScope()` is the seam), any server-side event bus, and a resizable panel on a
