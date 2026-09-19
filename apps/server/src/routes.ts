@@ -2454,30 +2454,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { ok: true, state };
   }
 
-  /* ----------------------------------- stats ----------------------------------- */
-
-  /*
-   * Not under `/widgets`, deliberately: these are numbers about the object, not about a widget.
-   * Two widgets already read the same two endpoints and a third will, so hanging them off one
-   * widget's namespace would make the next consumer add a second path to the same query.
-   */
-
-  app.get("/api/workspaces/:id/stats", async (request, reply) => {
-    const userId = actor(request).id;
-    const { id } = request.params as { id: string };
-    const stats = db.statsForWorkspace(userId, id);
-    if (!stats) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
-    return stats;
-  });
-
-  app.get("/api/sessions/:id/stats", async (request, reply) => {
-    const userId = actor(request).id;
-    const { id } = request.params as { id: string };
-    const stats = db.statsForSessionForUser(userId, id);
-    if (!stats) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    return stats;
-  });
-
   /* ----------------------------------- plans ----------------------------------- */
 
   /*

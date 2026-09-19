@@ -215,16 +215,16 @@ describe("workspace files", () => {
   });
 });
 
-describe("widgets and statistics", () => {
+describe("widgets", () => {
   it("addresses one widget as a resource, and toggles it with a PUT", async () => {
     // A `PUT` on the triple rather than a `PATCH` on a list: the widget *is* the resource and
     // `enabled` is its whole state, which is what makes a double-clicked toggle idempotent.
     const fetchMock = stubFetch(() =>
-      jsonResponse({ id: "session_stats", scope: "session", enabled: true })
+      jsonResponse({ id: "diagram", scope: "session", enabled: true })
     );
-    await api.setSessionWidget("s1", "session_stats", true);
+    await api.setSessionWidget("s1", "diagram", true);
 
-    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s1/widgets/session_stats");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s1/widgets/diagram");
     expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("PUT");
     expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe('{"enabled":true}');
   });
@@ -245,32 +245,23 @@ describe("widgets and statistics", () => {
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/workspaces/w1/widgets");
   });
 
-  it("reads statistics from the object rather than from a widget's namespace", async () => {
-    // Two widgets read the same two routes and a third will; hanging them off one widget would
-    // make the next consumer add a second path to the same query.
-    const fetchMock = stubFetch(() => jsonResponse({}));
-    await api.getWorkspaceStats("w1");
-    await api.getSessionStats("s1");
-
-    expect(fetchMock.mock.calls[0]![0]).toBe("/api/workspaces/w1/stats");
-    expect(fetchMock.mock.calls[1]![0]).toBe("/api/sessions/s1/stats");
-  });
-
   it("sends a workspace's widget selection in the create request", async () => {
+    // `[]` rather than a named widget, because the workspace level has none to name — and the
+    // empty list is not the same request as an absent field, which the test below covers.
     const fetchMock = stubFetch(() => jsonResponse({ id: "w1" }));
-    await api.createWorkspace("Notes", ["workspace_stats"]);
+    await api.createWorkspace("Notes", []);
 
     expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe(
-      '{"name":"Notes","widgets":["workspace_stats"]}'
+      '{"name":"Notes","widgets":[]}'
     );
   });
 
   it("sends the description the create form was filled in with", async () => {
     const fetchMock = stubFetch(() => jsonResponse({ id: "w1" }));
-    await api.createWorkspace("Notes", ["workspace_stats"], "线性代数的习题");
+    await api.createWorkspace("Notes", [], "线性代数的习题");
 
     expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe(
-      '{"name":"Notes","widgets":["workspace_stats"],"description":"线性代数的习题"}'
+      '{"name":"Notes","widgets":[],"description":"线性代数的习题"}'
     );
   });
 

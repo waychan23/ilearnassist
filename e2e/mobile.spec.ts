@@ -446,18 +446,26 @@ test("layout: the widget panel is a drawer at the right", async ({ page, request
    * here is the *layout*, and going through four dialogs to arrange it would make this a test of
    * something else.
    */
+  /*
+   * No install step, and no `enterWorkspace` after the reload, and both are the change rather
+   * than an omission.
+   *
+   * This used to seed a *workspace*-scope widget over HTTP. That was reachable by URL, it needed
+   * no conversation, and it was load-bearing here for a reason the removal exposed: the topbar's
+   * toggle is `v-if="isCompact && store.enabledWidgetIds.length > 0"`, and session widgets only
+   * arrive with an open conversation — so a workspace widget was the only way to have one showing
+   * with nothing open. The workspace level has no widgets now, and a session-scoped write is gated
+   * on the write lease the browser itself holds, so that fixture is gone.
+   *
+   * Neither is needed. A new conversation installs the notes and sources panels by default, and
+   * the page is a URL: reloading lands back in that conversation with its widgets loaded, which is
+   * exactly the state this test is about. `enterWorkspace` would navigate to the workspace *root*,
+   * where no conversation is open and the toggle correctly does not exist.
+   */
   await converse(page, request, "你好");
 
-  const workspaces = await (await request.get("/api/workspaces")).json();
-  const workspaceId = workspaces[0].id;
-  const installed = await request.put(
-    `/api/workspaces/${workspaceId}/widgets/workspace_stats`,
-    { data: { enabled: true } },
-  );
-  expect(installed.ok()).toBe(true);
-
   await page.reload();
-  await enterWorkspace(page);
+  await expect(page.getByTestId("composer-input")).toBeVisible();
 
   // Off-canvas until asked for, and the control that asks is the topbar's **last** control —
   // where the panel it opens appears, rather than beside the nav toggle at the other edge.

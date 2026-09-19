@@ -102,9 +102,10 @@ export type ExploreKind = (typeof EXPLORE_KINDS)[number];
 /**
  * The things `ila_query` can be asked about, and therefore its discriminator.
  *
- * Deliberately **not** the widget ids: `workspace_stats` and `session_stats` have no records
- * to read, and a thread is a thing this tool returns while never being a thing the model can
- * name as a widget. The two lists answer different questions and are free to differ.
+ * Deliberately **not** the widget ids: a quiz question and a plan node are records this tool
+ * reads, while the panels that show them are named by a different list. The two answer
+ * different questions and are free to differ — a thread, for instance, is something this tool
+ * returns and never something the model can name as a widget.
  */
 export const QUERY_KINDS = [
   "plan",
@@ -517,8 +518,6 @@ export type WidgetScope = (typeof WIDGET_SCOPES)[number];
  * it is a `vue-tsc` error rather than a blank tab.
  */
 export const WIDGET_IDS = [
-  "workspace_stats",
-  "session_stats",
   "plan",
   "quiz",
   "thread",
@@ -581,8 +580,6 @@ export interface WidgetDefinition {
 }
 
 export const WIDGETS: readonly WidgetDefinition[] = [
-  { id: "workspace_stats", scopes: ["workspace"] },
-  { id: "session_stats", scopes: ["session"] },
   /*
    * The plan tools are `auto-install`, and that is what makes "帮我制定一个学习计划" work in a
    * conversation nobody has installed anything into. With `required` the tool would be assembled
@@ -1472,37 +1469,6 @@ export interface UsageQuery {
   timezone?: string;
   /** An administrator's filter. Ignored for everybody else, whose scope is themselves. */
   userId?: string;
-}
-
-/**
- * One conversation's numbers, for the statistics widgets.
- *
- * Sums cover the assistant messages that recorded usage; a turn the user stopped reports none,
- * so it contributes to the counts and nothing else. `contextTokens` is deliberately **not** a
- * sum: it is the last turn's input+output, i.e. what the conversation had grown to.
- */
-export interface SessionStats {
-  sessionId: string;
-  title: string;
-  /** Every message in the conversation, both roles. */
-  messageCount: number;
-  /** Summed over the assistant messages that recorded usage. */
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  /** The last turn's size — a level, not a running total. `0` when nothing reported one. */
-  contextTokens: number;
-}
-
-export interface WorkspaceStats {
-  workspaceId: string;
-  /** Newest first, matching the sidebar's conversation list. */
-  sessions: SessionStats[];
-  /** The workspace's own totals — the sum of the rows above. */
-  messageCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
 }
 
 /** What the client POSTs back to `/api/sessions/:id/answers`. */

@@ -291,7 +291,7 @@ apps/server/src/
   tools/resultPage.ts     # the paging engine ila_query and ila_explore share: clip, renderPage
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
-  widgets.ts              # sumUsage + the widget-selection validator (pure)
+  widgets.ts              # the widget-selection validator (pure)
   usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
   notes.ts                # the notes widget's records: what a body may become a note (pure)
   insights.ts             # the insight pass: prompt, defensive parse, the wipe-then-insert write
@@ -328,7 +328,7 @@ apps/web/src/
   widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
   widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/ResourcesWidget.vue # the material panel: what this conversation holds, filtered by category
-  widgets/*Widget.vue     # the two demo widgets (workspace stats, session stats)
+  widgets/*Widget.vue     # the seven panels (plan, quiz, thread, notes, diagram, insight, sources)
   utils/mention.ts        # the `@`-mention: is the caret in one, and where the name goes
   utils/resourcePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
   utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
@@ -1932,6 +1932,19 @@ Fuller map in `docs/reference.md`.
   level is `WIDGET_SCOPE_UNSUPPORTED`. Reads resolve through the registry rather than the rows, so
   one entry comes back per widget at that level and a stored row is indistinguishable from a
   defaulted one.
+  **Every widget this build ships is session scope, and the workspace level is kept empty on
+  purpose.** It was the level of the two demo statistics panels, and removing them left it with
+  none while keeping the level itself: `WIDGET_SCOPES`, the two `/widgets` routes, the
+  `widget_instances` rows and both workspace dialogs all still exist. Four things follow, and each
+  is a decision rather than debris: the strip draws **one group and never a divider** (it filters
+  empty groups, so the divider code is dormant until a workspace widget returns); the workspace
+  dialogs **hide their widget sections** rather than drawing a label, a lead sentence and no
+  checkboxes (`v-if` on the resolved list, not on a constant, so a workspace widget restores them
+  with no edit); a stored workspace row is **not** an error, because reads resolve through the
+  registry and simply never return it; and `WIDGET_SCOPE_UNSUPPORTED` is reachable now only by
+  naming a *session* widget at workspace level — the reverse direction became `UNKNOWN_WIDGET` the
+  moment the ids stopped existing, which is a distinction worth keeping straight because both
+  produce the same refusal on screen. `apps/server/test/widgets.test.ts` holds all of it.
 - **Widget-bound tools are switched by the install, and bypass the tool allow-list.** A `WIDGETS` entry may name `boundTools`; `turnContext()` reads the session's installed widgets per turn and assembles those tools (context-gated like `read_document`) regardless of the `allTools`/`tools` snapshot in all three states, including the empty "no tools" list. They are filtered out of the Copilot tool checklist (`isWidgetBoundTool`), since a box there can neither enable nor remove them. The plan widget binds `ila_make_plan` / `ila_read_plan` / `ila_update_plan_progress` (session scope only).
   **A tool whose widget is a *viewer* must not be bound, and `ila_diagram` is the case that
   settles it.** Binding is the right answer only when the widget is the capability's home — a

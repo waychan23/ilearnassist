@@ -82,7 +82,6 @@ const EXEMPT = [
   // makes the refusal a read-only conversation rather than an error.
   "GET /api/sessions/:id/messages",
   "GET /api/sessions/:id/widgets",
-  "GET /api/sessions/:id/stats",
   "GET /api/sessions/:id/plan",
   "GET /api/sessions/:id/plan/versions/:version",
   "GET /api/sessions/:id/quizzes",

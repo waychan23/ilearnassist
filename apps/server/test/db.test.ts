@@ -179,10 +179,10 @@ describe("copilots", () => {
   };
 
   it("round-trips tools, settings and widgets through JSON columns", () => {
-    const created = db.createCopilot({ ...input, widgets: ["session_stats"] });
+    const created = db.createCopilot({ ...input, widgets: ["diagram"] });
     expect(created.tools).toEqual(["read_file", "web_search"]);
     expect(created.settings).toEqual({ temperature: 0.3, modelId: "m1" });
-    expect(created.widgets).toEqual(["session_stats"]);
+    expect(created.widgets).toEqual(["diagram"]);
   });
 
   it("reads a Copilot whose widgets were never set as the defaults", () => {
@@ -1037,10 +1037,16 @@ describe("schema versioning", () => {
         slug: "w",
         dirPath: join(root, "w"),
       });
-      expect(opened.setWorkspaceWidgetForUser(OWNER, "w1", "workspace_stats", true)).toBe(true);
-      expect(opened.listWorkspaceWidgetsForUser(OWNER, "w1")).toEqual([
-        { id: "workspace_stats", scope: "workspace", enabled: true },
-      ]);
+      expect(opened.setWorkspaceWidgetForUser(OWNER, "w1", "diagram", true)).toBe(true);
+      // Read back through the table, not through the resolving read: `widget_instances` is what
+      // this test is about, and no widget is registered at workspace scope any more, so the
+      // resolved read would answer `[]` whatever the row said.
+      expect(
+        opened.raw
+          .prepare("SELECT widget_id, enabled FROM widget_instances WHERE scope_id = ?")
+          .get("w1")
+      ).toEqual({ widget_id: "diagram", enabled: 1 });
+      expect(opened.listWorkspaceWidgetsForUser(OWNER, "w1")).toEqual([]);
     } finally {
       opened.raw.close();
     }

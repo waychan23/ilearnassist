@@ -1,42 +1,42 @@
 import { expect, test, type Page } from "./fixtures";
-import { scriptLlm } from "./llm";
 import { enterWorkspace, leaveWorkspace } from "./workspaces";
 
 /**
- * The right sidebar: installing widgets, the strip that draws them, and the two demo panels
- * reading live numbers out of the database.
+ * The right sidebar: installing widgets, the strip that draws them, and the panels themselves.
  *
- * **Almost every flow here installs first**, and that is not incidental. Nothing is installed by
- * default — the panel is opt-in, and the create dialog is where the choice is presented — so the
- * install path is a precondition for every other assertion rather than a case of its own. The one
- * test that *does* start from nothing is the one about the panel being absent.
+ * **Everything here is session scope, because that is the only scope with widgets.** There were
+ * two at workspace level — demo panels reading numbers out of the database — and removing them
+ * left the level with none, so the strip the app draws has a single group and never a divider.
+ * That is asserted rather than assumed (see the divider test), since a spec that simply stopped
+ * mentioning the group would not fail if one came back.
+ *
+ * **Almost every flow creates a conversation first**, and that is the install path now rather than
+ * a precondition: a new conversation installs the notes and sources panels by default, so the
+ * create dialog is where the choice is presented and the strip is where it shows up. The one test
+ * that *does* start from nothing is the one about the panel being absent.
  */
 
 /**
- * Create a workspace through the dialog, ticking the given widgets, and answer its id.
+ * Create a workspace through the dialog and answer its id.
  *
- * Through the UI rather than the API on purpose: the tick boxes are the thing being tested on the
- * way in, and a spec that seeded the install over HTTP would leave the dialog's own wiring
- * unexercised for every flow below.
+ * Through the UI rather than the API on purpose: the card is what the rest of the flow starts
+ * from, and a spec that seeded the workspace over HTTP would leave the dialog's own wiring
+ * unexercised.
  *
  * The id is read back **off the card it just made**, and matched by name rather than taken from
  * the first card in the list: the suite's own earlier tests leave workspaces behind, and the
- * first card is the oldest of them. Reading the wrong one installs a widget somewhere the test
- * never looks.
+ * first card is the oldest of them.
+ *
+ * No widget argument: a workspace has no widgets to tick. Its dialog used to carry a checklist,
+ * and the section is now hidden entirely — which `the workspace level has no widgets` below is
+ * what holds in place.
  */
-async function createWorkspaceWith(
-  page: Page,
-  name: string,
-  widgets: string[] = [],
-): Promise<string> {
+async function createWorkspace(page: Page, name: string): Promise<string> {
   await page.goto("/");
   await expect(page.getByTestId("workspace-home")).toBeVisible();
   await page.getByTestId("workspace-new").click();
 
   await page.getByTestId("workspace-name-input").fill(name);
-  for (const id of widgets) {
-    await page.getByTestId(`workspace-widget-check-${id}`).check();
-  }
   await page.getByTestId("workspace-create-submit").click();
 
   const card = page.getByTestId("workspace-card").filter({ hasText: name });
@@ -47,50 +47,57 @@ async function createWorkspaceWith(
 }
 
 /**
- * Install one widget into a workspace that already exists, from the card's gear.
+ * Start a conversation, ticking the given widgets in the create dialog.
  *
- * Also the only coverage of the gear itself, which is the entry point that does not require
- * entering the workspace first — the reason anyone can install a widget *before* there is a panel
- * to see it in.
+ * The session half of the install path, and the only one left: the whole selection is chosen
+ * before the conversation exists, so the create request is the only moment there is.
  */
-async function installFromCard(page: Page, workspaceId: string, widgetId: string): Promise<void> {
-  await page.goto("/");
-  await page
-    .locator(`[data-workspace-id="${workspaceId}"]`)
-    .getByTestId("workspace-settings-open")
-    .click();
-  await page.getByTestId(`workspace-widget-toggle-${widgetId}`).click();
-  // The button's label is the *action*, so "uninstall" is what says it is now installed.
-  await expect(page.getByTestId(`workspace-widget-toggle-${widgetId}`)).toHaveText("卸载");
-  await page.getByTestId("workspace-settings-done").click();
+async function newConversation(page: Page, widgets: string[] = []): Promise<void> {
+  await page.getByTestId("new-session").click();
+  for (const id of widgets) {
+    await page.getByTestId(`new-session-widget-check-${id}`).check();
+  }
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
 }
 
 const unique = (prefix: string): string => `${prefix} ${Date.now()}`;
 
-test.describe("the widget panel", () => {
-  test("is absent until something is installed, and appears when the first widget is", async ({
-    page,
-  }) => {
-    const name = unique("Empty");
-    const id = await createWorkspaceWith(page, name);
+/** A workspace with one conversation in it, which is where every widget flow starts. */
+async function workspaceWithConversation(
+  page: Page,
+  name: string,
+  widgets: string[] = []
+): Promise<void> {
+  await createWorkspace(page, name);
+  await enterWorkspace(page, name);
+  await newConversation(page, widgets);
+}
 
+test.describe("the widget panel", () => {
+  test("is absent until something is installed, and appears once it is", async ({ page }) => {
+    const name = unique("Empty");
+    await createWorkspace(page, name);
     await enterWorkspace(page, name);
+
     // The rule the whole feature is built on: a panel nobody installed anything into is not a
-    // panel with an empty state, it is not there at all.
+    // panel with an empty state, it is not there at all. A workspace with no conversation has
+    // nothing installed, because a conversation's widgets arrive with the conversation.
     await expect(page.getByTestId("widget-panel")).toHaveCount(0);
 
-    await leaveWorkspace(page);
-    await installFromCard(page, id, "workspace_stats");
-
-    await enterWorkspace(page, name);
+    /*
+     * And the create dialog is what changes it — without ticking anything, because the defaults
+     * are the point of this assertion: a conversation nobody configured still shows what the
+     * learner wrote and what it is working from.
+     */
+    await newConversation(page);
     await expect(page.getByTestId("widget-panel")).toBeVisible();
-    await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
+    await expect(page.getByTestId("widget-tab-notes")).toBeVisible();
   });
 
   test("is a third column beside the conversation, not an overlay over it", async ({ page }) => {
     const name = unique("Column");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
+    await workspaceWithConversation(page, name);
 
     const panel = page.getByTestId("widget-panel");
     await expect(panel).toBeVisible();
@@ -106,153 +113,124 @@ test.describe("the widget panel", () => {
     expect(panelBox.height).toBeGreaterThan(400);
   });
 
-  test("installs and uninstalls from the workspace settings, repeatedly", async ({ page }) => {
+  test("installs and uninstalls from the conversation settings, repeatedly", async ({ page }) => {
     const name = unique("Toggle");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
+    await workspaceWithConversation(page, name);
+    await expect(page.getByTestId("widget-tab-notes")).toBeVisible();
 
-    // The strip is a UI element in a page that never reloads during this test, and the settings
-    // dialog is opened from the sidebar's own workspace name.
-    await page.getByTestId("workspace-settings-open").click();
-    const toggle = page.getByTestId("workspace-widget-toggle-workspace_stats");
+    // The settings dialog is opened from the composer's own button, and a session-scope widget is
+    // installed and removed there.
+    await page.getByTestId("open-session-settings").click();
+    const toggle = page.getByTestId("session-widget-toggle-notes");
     await expect(toggle).toHaveText("卸载");
 
     await toggle.click();
     await expect(toggle).toHaveText("安装");
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
-    await page.getByTestId("workspace-settings-done").click();
-    // The tab is gone from the strip while the panel itself stays: it is still installed for
-    // nothing, so the panel goes too — but that is asserted below rather than here.
-    await expect(page.getByTestId("widget-tab-workspace_stats")).toHaveCount(0);
-    await expect(page.getByTestId("widget-panel")).toHaveCount(0);
+    await page.getByTestId("session-settings-save").click();
+    // The tab goes with it. `sources` is still installed, so the panel itself stays.
+    await expect(page.getByTestId("widget-tab-notes")).toHaveCount(0);
+    await expect(page.getByTestId("widget-panel")).toBeVisible();
 
     // Back on again, which is the "repeated install/uninstall of the same object" requirement.
-    await page.getByTestId("workspace-settings-open").click();
+    await page.getByTestId("open-session-settings").click();
     await toggle.click();
     await expect(toggle).toHaveText("卸载");
-    await page.getByTestId("workspace-settings-done").click();
-    await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
+    await page.getByTestId("session-settings-save").click();
+    await expect(page.getByTestId("widget-tab-notes")).toBeVisible();
 
     // And the record is a record: a reload shows the same state rather than a fresh default.
     await page.reload();
     await enterWorkspace(page, name);
-    await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
+    await page.getByTestId("session-item").first().click();
+    await expect(page.getByTestId("widget-tab-notes")).toBeVisible();
   });
 
-  test("groups the two levels with a divider, workspace first", async ({ page, request }) => {
-    const name = unique("Groups");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-
-    // The session widget has to come from the session parameters dialog, which needs a session.
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("new-session-widget-check-session_stats").check();
-    await page.getByTestId("create-session").click();
-
+  test("draws one group and no divider, because only one scope has widgets", async ({ page }) => {
     /*
-     * The workspace level first and every session-level tab after it — which is what the divider
-     * separates. Asserted as an *order* rather than at fixed positions, because how many widgets
-     * a fresh conversation starts with is not this case's claim: it begins with the notes and
-     * sources panels, so the session group is three tabs wide before this case's own one is added.
+     * The state the workspace level is in, asserted rather than assumed.
+     *
+     * The strip used to draw the workspace group first and then the session group, separated by a
+     * rule. With nothing installed at workspace scope there is one group, so the divider — which
+     * only exists between two visible groups — must not be drawn at all: a rule with nothing on
+     * one side of it is a claim about grouping that is not on screen. A spec that merely stopped
+     * mentioning the workspace tab would pass whether or not a divider came back.
      */
-    await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
-    await expect(page.getByTestId("widget-tab-session_stats")).toBeVisible();
-    await expect(page.getByTestId("widget-tabs-divider")).toBeVisible();
+    const name = unique("Groups");
+    await workspaceWithConversation(page, name, ["diagram"]);
 
+    await expect(page.getByTestId("widget-tab-notes")).toBeVisible();
+    await expect(page.getByTestId("widget-tab-diagram")).toBeVisible();
+    await expect(page.getByTestId("widget-tabs-divider")).toHaveCount(0);
+
+    // And the order is the registry's, not the create request's: `notes` comes before `diagram`
+    // in `WIDGET_IDS`, and the request named diagram first.
     const labels = (await page.locator(".widget-tab").allInnerTexts()).map((s) => s.trim());
-    expect(labels[0]).toContain("工作区统计");
-    expect(labels.findIndex((l) => l.includes("会话统计"))).toBeGreaterThan(0);
-
-    // The divider sits between them rather than at either end.
-    const divider = (await page.getByTestId("widget-tabs-divider").boundingBox())!;
-    const first = (await page.getByTestId("widget-tab-workspace_stats").boundingBox())!;
-    const second = (await page.getByTestId("widget-tab-session_stats").boundingBox())!;
-    expect(divider.x).toBeGreaterThan(first.x + first.width - 1);
-    expect(divider.x + divider.width).toBeLessThanOrEqual(second.x + 1);
-
-    void request;
+    expect(labels.findIndex((l) => l.includes("笔记"))).toBeLessThan(
+      labels.findIndex((l) => l.includes("图表"))
+    );
   });
 
   test("switches the open widget and remembers the choice", async ({ page }) => {
     const name = unique("Switch");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("new-session-widget-check-session_stats").check();
-    await page.getByTestId("create-session").click();
+    await workspaceWithConversation(page, name, ["diagram"]);
 
-    await page.getByTestId("widget-tab-session_stats").click();
-    await expect(page.getByTestId("widget-session-stats")).toBeVisible();
-    await expect(page.getByTestId("widget-workspace-stats")).toHaveCount(0);
+    await page.getByTestId("widget-tab-diagram").click();
+    await expect(page.getByTestId("widget-diagram")).toBeVisible();
+    await expect(page.getByTestId("widget-notes")).toHaveCount(0);
 
     /*
      * Remembered across a reload, so the panel comes back to the tab that was open — and the
-     * session has to be reopened first, because a conversation's own installs cannot be known
+     * conversation has to be reopened first, because a conversation's own installs cannot be known
      * until one is. That is the design rather than a gap: the strip belongs to whatever is on
      * screen, and with no conversation open there is nothing for a session widget to show.
      */
     await page.reload();
     await enterWorkspace(page, name);
-    await expect(page.getByTestId("widget-tab-session_stats")).toHaveCount(0);
+    await expect(page.getByTestId("widget-tab-diagram")).toHaveCount(0);
 
     await page.getByTestId("session-item").first().click();
-    await expect(page.getByTestId("widget-session-stats")).toBeVisible();
+    await expect(page.getByTestId("widget-diagram")).toBeVisible();
   });
 
-  test("opens a new conversation on its first tab, not on one read elsewhere", async ({
-    page,
-  }) => {
+  test("opens a new conversation on its first tab, not on one read elsewhere", async ({ page }) => {
     const name = unique("FirstTab");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("new-session-widget-check-session_stats").check();
-    await page.getByTestId("create-session").click();
+    await workspaceWithConversation(page, name, ["diagram"]);
 
     // Read the *second* tab. The panel remembers the open tab in one global preference, so this
     // is the value that used to decide what every later conversation opened on.
-    await page.getByTestId("widget-tab-session_stats").click();
-    await expect(page.getByTestId("widget-session-stats")).toBeVisible();
+    await page.getByTestId("widget-tab-diagram").click();
+    await expect(page.getByTestId("widget-diagram")).toBeVisible();
 
-    // A conversation made fresh has no last-read tab of its own, so it opens on the strip's
-    // first — the workspace group's — rather than on the tab just read in the one before it.
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("new-session-widget-check-session_stats").check();
-    await page.getByTestId("create-session").click();
+    // A conversation made fresh has no last-read tab of its own, so it opens on the strip's first
+    // — `notes`, by registry order — rather than on the tab just read in the one before it.
+    await newConversation(page, ["diagram"]);
 
-    await expect(page.getByTestId("widget-workspace-stats")).toBeVisible();
-    await expect(page.getByTestId("widget-session-stats")).toHaveCount(0);
+    await expect(page.getByTestId("widget-notes")).toBeVisible();
+    await expect(page.getByTestId("widget-diagram")).toHaveCount(0);
   });
 
   test("uninstalling the open widget falls back rather than emptying the body", async ({
     page,
   }) => {
     const name = unique("Fallback");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("new-session-widget-check-session_stats").check();
-    await page.getByTestId("create-session").click();
+    await workspaceWithConversation(page, name, ["diagram"]);
 
-    // Open the session widget, then uninstall it from session parameters, which is where a
-    // session-scope widget is installed and removed.
-    await page.getByTestId("widget-tab-session_stats").click();
-    await expect(page.getByTestId("widget-session-stats")).toBeVisible();
+    await page.getByTestId("widget-tab-diagram").click();
+    await expect(page.getByTestId("widget-diagram")).toBeVisible();
 
     await page.getByTestId("open-session-settings").click();
-    await page.getByTestId("session-widget-toggle-session_stats").click();
+    await page.getByTestId("session-widget-toggle-diagram").click();
     await page.getByTestId("session-settings-save").click();
 
-    // The other tab takes over. An empty body would be the alternative, and it reads as broken.
-    await expect(page.getByTestId("widget-workspace-stats")).toBeVisible();
+    // Another tab takes over. An empty body would be the alternative, and it reads as broken.
+    await expect(page.getByTestId("widget-notes")).toBeVisible();
     await expect(page.getByTestId("widget-body")).not.toBeEmpty();
   });
 
   test("flips the strip to the left edge and back, across a reload", async ({ page }) => {
     const name = unique("Layout");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
+    await workspaceWithConversation(page, name);
 
     const strip = page.getByTestId("widget-tabs");
     const horizontal = (await strip.boundingBox())!;
@@ -267,6 +245,7 @@ test.describe("the widget panel", () => {
 
     await page.reload();
     await enterWorkspace(page, name);
+    await page.getByTestId("session-item").first().click();
     await expect(page.getByTestId("widget-panel")).toHaveClass(/vertical/);
 
     await page.getByTestId("widget-layout-toggle").click();
@@ -275,8 +254,7 @@ test.describe("the widget panel", () => {
 
   test("resizes by dragging, clamps, and remembers the width", async ({ page }) => {
     const name = unique("Resize");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
+    await workspaceWithConversation(page, name);
 
     const panel = page.getByTestId("widget-panel");
     const before = (await panel.boundingBox())!.width;
@@ -294,6 +272,7 @@ test.describe("the widget panel", () => {
 
     await page.reload();
     await enterWorkspace(page, name);
+    await page.getByTestId("session-item").first().click();
     expect((await panel.boundingBox())!.width).toBeCloseTo(wider, 0);
 
     // Dragged far past the ceiling, it stops at it rather than taking the conversation's room.
@@ -311,19 +290,16 @@ test.describe("the widget panel", () => {
      * that the button opens a menu, that the menu lists what is missing, and that picking from it
      * switches the panel is a browser question.
      *
-     * The strip starts with four tabs, because a conversation installs the notes and sources
-     * panels by default, and `widgetsForScope` walks the registry — so the session group is
-     * `session_stats, notes, sources` and it is the **last** of those that is the tail. The drag
-     * is still the case's subject: it is what guarantees the tail rather than hoping for it.
+     * Five tabs, from the live registry: the create dialog's own boxes for three more, plus the two
+     * defaults (`notes`, `sources`). `widgetsForScope` walks `WIDGETS`, so the strip is
+     * `plan, notes, diagram, insight, sources` — and it is the **last** of those that is the tail.
+     * The drag is the case's subject: it is what guarantees the overflow rather than hoping for it,
+     * and the count is what makes the overflow certain at the panel's own minimum width.
      */
     const name = unique("Overflow");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("new-session-widget-check-session_stats").check();
-    await page.getByTestId("create-session").click();
+    await workspaceWithConversation(page, name, ["plan", "diagram", "insight"]);
 
-    // Drag the panel to its narrowest, which is well past where four tabs stop fitting.
+    // Drag the panel to its narrowest, which is well past where five tabs stop fitting.
     const handle = (await page.getByTestId("widget-resize").boundingBox())!;
     await page.mouse.move(handle.x + 2, handle.y + handle.height / 2);
     await page.mouse.down();
@@ -341,7 +317,7 @@ test.describe("the widget panel", () => {
      * nothing but its "more" button cannot say which widget is open. Dragging as far as the panel
      * goes is therefore never a state with an unreadable strip.
      */
-    await expect(page.getByTestId("widget-tab-workspace_stats")).toBeVisible();
+    await expect(page.getByTestId("widget-tab-plan")).toBeVisible();
     await expect(page.getByTestId("widget-tab-sources")).toBeHidden();
 
     // Open it: the menu lists what is missing, and it anchors *under* the button rather than above
@@ -375,8 +351,7 @@ test.describe("the widget panel", () => {
 
   test("collapses to a rail, with the control still there to undo it", async ({ page }) => {
     const name = unique("Collapse");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
+    await workspaceWithConversation(page, name);
 
     const panel = page.getByTestId("widget-panel");
     await expect(page.getByTestId("widget-body")).toBeVisible();
@@ -398,90 +373,38 @@ test.describe("the widget panel", () => {
   });
 });
 
-test.describe("the demo widgets", () => {
-  test("count again after a turn, without a reload", async ({ page, request }) => {
-    /*
-     * The whole point of the event subscription. The server wrote a message and moved the token
-     * totals; nothing the client did knows by how much, so the widget refetches — and it must do
-     * so on the turn's own signal rather than on a timer or a page load.
-     */
-    await scriptLlm(request, {
-      turns: [
-        { content: "第一轮", usage: { input: 100, output: 20 } },
-        { content: "第二轮", usage: { input: 300, output: 40 } },
-      ],
-    });
+test("the workspace level has no widgets, and says nothing about installing one", async ({
+  page,
+}) => {
+  /*
+   * The other half of "the strip draws one group": the *dialogs* at workspace scope.
+   *
+   * Both used to draw a section — the create dialog a labelled checklist, the settings dialog a
+   * toggle list with a sentence about what installing there does. With nothing to install, a
+   * label, a lead sentence and no checkboxes is a section claiming something exists when nothing
+   * does. Asserted through the UI because that is where it was visible: the server side is
+   * `apps/server/test/widgets.test.ts`'s "the workspace level".
+   */
+  const name = unique("NoWorkspaceWidgets");
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-home")).toBeVisible();
 
-    const name = unique("Live");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("new-session-widget-check-session_stats").check();
-    await page.getByTestId("create-session").click();
+  await page.getByTestId("workspace-new").click();
+  // No heading, and no checkbox for any id — the section is gone rather than empty.
+  await expect(page.getByText("控件", { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-testid^="workspace-widget-check-"]')).toHaveCount(0);
+  await page.getByTestId("workspace-name-input").fill(name);
+  await page.getByTestId("workspace-create-submit").click();
+  await expect(page.getByTestId("workspace-card").filter({ hasText: name })).toBeVisible();
 
-    await page.getByTestId("widget-tab-session_stats").click();
-    await expect(page.getByTestId("widget-session-messages")).toHaveText("0");
-
-    await page.getByTestId("composer-input").fill("第一条");
-    await page.getByTestId("composer-send").click();
-    await expect(page.getByTestId("message-assistant").last()).toContainText("第一轮");
-
-    // Two messages (the user's and the reply) and the first turn's tokens, with no reload.
-    await expect(page.getByTestId("widget-session-messages")).toHaveText("2");
-    await expect(page.getByTestId("widget-session-input")).toHaveText("100");
-
-    await page.getByTestId("composer-input").fill("第二条");
-    await page.getByTestId("composer-send").click();
-    await expect(page.getByTestId("message-assistant").last()).toContainText("第二轮");
-
-    // Moved again, still without a reload — which is the assertion the first pair cannot make.
-    await expect(page.getByTestId("widget-session-messages")).toHaveText("4");
-    await expect(page.getByTestId("widget-session-input")).toHaveText("400");
-  });
-
-  test("list the workspace's conversations and open one", async ({ page, request }) => {
-    await scriptLlm(request, { turns: [{ content: "好的" }] });
-
-    const name = unique("Rows");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("create-session").click();
-
-    await page.getByTestId("widget-tab-workspace_stats").click();
-    await expect(page.getByTestId("widget-workspace-stats")).toBeVisible();
-
-    const row = page.getByTestId("widget-session-row").first();
-    await expect(row).toBeVisible();
-
-    // The workspace total is the sum of the rows, so an empty conversation shows a zero rather
-    // than being omitted — a conversation that vanished from the list would read as one that
-    // does not exist.
-    await expect(page.getByTestId("widget-total-messages")).toHaveText("0");
-
-    // Two conversations, and clicking a row opens that one.
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("create-session").click();
-    await expect(page.getByTestId("widget-session-row")).toHaveCount(2);
-
-    await page.getByTestId("widget-session-row").last().click();
-    await expect(page.getByTestId("composer-input")).toBeVisible();
-  });
-
-  test("stay in step with the conversation list as sessions come and go", async ({ page }) => {
-    const name = unique("InStep");
-    await createWorkspaceWith(page, name, ["workspace_stats"]);
-    await enterWorkspace(page, name);
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("create-session").click();
-    await page.getByTestId("widget-tab-workspace_stats").click();
-    await expect(page.getByTestId("widget-session-row")).toHaveCount(1);
-
-    // A second conversation is announced as it is created, so the list is already right.
-    await page.getByTestId("new-session").click();
-    await page.getByTestId("create-session").click();
-    await expect(page.getByTestId("widget-session-row")).toHaveCount(2);
-  });
+  await page
+    .getByTestId("workspace-card")
+    .filter({ hasText: name })
+    .getByTestId("workspace-settings-open")
+    .click();
+  await expect(page.getByTestId("workspace-settings-done")).toBeVisible();
+  await expect(page.locator('[data-testid^="workspace-widget-toggle-"]')).toHaveCount(0);
+  await page.getByTestId("workspace-settings-done").click();
 });
 
 test("the workspace settings have two entries, and that is deliberate", async ({ page }) => {
@@ -496,7 +419,7 @@ test("the workspace settings have two entries, and that is deliberate", async ({
    * survives a refactor as a comment and stops being true in the code.
    */
   const name = unique("TwoDoors");
-  await createWorkspaceWith(page, name, ["workspace_stats"]);
+  await createWorkspace(page, name);
   await enterWorkspace(page, name);
 
   await page.getByTestId("open-workspace-settings").click();
@@ -507,4 +430,16 @@ test("the workspace settings have two entries, and that is deliberate", async ({
   // a strict-mode locator matching both would fail every spec that uses it.
   await page.getByTestId("workspace-settings-open").click();
   await expect(page.getByTestId("workspace-settings-done")).toBeVisible();
+});
+
+test("leaving a workspace from the rail still works with the panel drawn", async ({ page }) => {
+  // A cheap guard on the one interaction the removal touched: the rail's back button sits beside
+  // a panel whose widget list is now session-only, and a workspace with nothing installed must
+  // still be leavable. `leaveWorkspace` is the suite's own helper, so this is really asserting
+  // that the suite's front door did not become order-dependent.
+  const name = unique("Leave");
+  await createWorkspace(page, name);
+  await enterWorkspace(page, name);
+  await expect(page.getByTestId("widget-panel")).toHaveCount(0);
+  await leaveWorkspace(page);
 });

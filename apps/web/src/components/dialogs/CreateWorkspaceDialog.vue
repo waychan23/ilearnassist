@@ -118,8 +118,14 @@ async function submit() {
             Visible rather than behind a disclosure, unlike the new-session dialog's advanced
             section: for a fresh installation this is the only place the choice is offered, so
             tucking it away would be how the feature goes unnoticed.
+
+            `v-if` because the level can be empty, and is right now: nothing is installed at
+            workspace scope, so without this the dialog would draw the `widgets.heading` label, a
+            lead sentence about installing some, and no checkboxes — a section that says something
+            exists when nothing does. The condition is on the *list*, not on a constant, so a
+            workspace-scope widget restores the section with no edit here.
           -->
-          <div class="field widget-checks">
+          <div v-if="available.length > 0" class="field widget-checks">
             <label>{{ t("widgets.heading") }}</label>
             <div class="form-grid tool-checks">
               <label
