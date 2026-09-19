@@ -1334,6 +1334,54 @@ describe("sources", () => {
     });
   });
 
+  it("tells a reference's title apart from the file's own name", async () => {
+    /*
+     * **The bug this closes.** A reference's title is prose and the preview's classification was
+     * made from it, so a picture titled 截图 came back with no extension at all and the dialog's
+     * gate answered "this format cannot be previewed" — for a `.png` it renders perfectly well.
+     *
+     * The two names answer two questions: `name` is what to call it (the title the user chose),
+     * `fileName` is what it *is* (the last segment of the path the bytes are at). Only the second
+     * can decide anything — the viewer picks a plugin by it, the highlighter picks a grammar, a
+     * download is saved under it — and it is also what keeps a document's extracted text
+     * previewing as text rather than as the PDF it came from.
+     */
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    const created = (
+      await inject({
+        method: "POST",
+        url: `/api/workspaces/${workspace.id}/files/upload`,
+        payload: {
+          dir: "",
+          name: "shot.png",
+          mimeType: "image/png",
+          data: png.toString("base64"),
+          title: "截图",
+        },
+      })
+    ).json<WorkResource>();
+
+    const res = await inject({ method: "GET", url: `/api/resources/${created.id}/preview` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<FileContent>()).toMatchObject({
+      name: "截图",
+      fileName: "shot.png",
+      kind: "binary",
+    });
+
+    // And the untitled case is unchanged: one name, both fields.
+    const plain = (
+      await inject({
+        method: "POST",
+        url: `/api/workspaces/${workspace.id}/files/upload`,
+        payload: { dir: "", name: "plain.txt", data: Buffer.from("hi").toString("base64") },
+      })
+    ).json<WorkResource>();
+    expect(
+      (await inject({ method: "GET", url: `/api/resources/${plain.id}/preview` })).json<FileContent>()
+    ).toMatchObject({ name: "plain.txt", fileName: "plain.txt", kind: "text" });
+  });
+
   it("carries the page's URL when the source is one, and nothing when it is not", async () => {
     /*
      * The preview dialog's "open in browser" control is gated on this field, so the two halves are

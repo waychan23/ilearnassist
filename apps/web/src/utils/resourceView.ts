@@ -56,6 +56,38 @@ export function resourceSize(row: WorkResource): number {
   return fileOf(row)?.size ?? 0;
 }
 
+/**
+ * A file's extension, lowercased and including the dot — or `undefined` when it has none.
+ *
+ * **Derived from the entity's own name, not from the row's title**, and that is the whole reason
+ * the library draws it: the title is what a person called the material, and a title that says
+ * 季度对比 tells the reader nothing about it being an `.xlsx`. The name it comes from is the
+ * file's: `StoredFile.title`, which is its name for an upload and for anything a writer made, and
+ * which a *rename* moves (so a renamed file's extension follows the name it actually has).
+ *
+ * The path is the fallback rather than the primary, deliberately: an upload's bytes live at
+ * `sources/raw/<id>.<ext>` where the extension comes from the MIME table, so a `.jpeg` the user
+ * uploaded is stored `.jpg` — the same format, and the pill should not contradict the title that
+ * says otherwise. `undefined` for anything without a dot in its last segment, and for a segment
+ * whose "extension" is longer than a real one (a title like `报告 v1.2 定稿` has no format in it).
+ */
+export function resourceExtension(row: WorkResource): string | undefined {
+  const file = fileOf(row);
+  if (!file) return undefined;
+  const fromTitle = extensionOf(file.title);
+  if (fromTitle) return fromTitle;
+  // The path's own last segment, for a row whose title carries no name at all.
+  return extensionOf(file.path.slice(file.path.lastIndexOf("/") + 1));
+}
+
+/** A plausible extension, or `undefined` — four characters is the longest real one (`.jpeg`). */
+function extensionOf(name: string): string | undefined {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return undefined;
+  const ext = name.slice(dot + 1);
+  return ext.length <= 4 && /^[a-z0-9]+$/i.test(ext) ? `.${ext.toLowerCase()}` : undefined;
+}
+
 /** Whether this is a picture, which is what decides a chip's thumbnail and a row's icon. */
 export function resourceIsImage(row: WorkResource): boolean {
   return resourceMime(row).startsWith("image/");

@@ -48,7 +48,9 @@ import type {
   UpdateSessionInput,
   UpdateUserInput,
   UpdateWorkspaceInput,
+  AddResourcePageInput,
   UploadAttachmentInput,
+  UploadWorkspaceFileInput,
   User,
   UserCredentials,
   UserRole,
@@ -1673,7 +1675,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     userId: string,
     relPath: string,
     size: number,
-    sourceType: "upload" | "discovered"
+    sourceType: "upload" | "discovered",
+    /**
+     * What the person adding it called it, when they added it by hand.
+     *
+     * Absent everywhere else — a reconcile discovers a file it did not name — and absent means
+     * the file row's own title (its name), which is the reference's default.
+     */
+    named: { title?: string } = {}
   ): WorkResourceRecord | undefined {
     const path = workspaceFilePath(workspace.slug, relPath);
     const existing = db.getFileByPath(userId, path);
@@ -1690,7 +1699,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       owner: { kind: "workspace", id: workspace.id },
       resourceType: "file",
       resourceId: file.id,
-      title: file.title,
+      title: named.title ?? file.title,
     });
   }
 
@@ -1734,7 +1743,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     async (request, reply) => {
       const target = writeTarget(request);
       if (!target) return reply.code(404).send(apiError("WORKSPACE_NOT_FOUND", "workspace not found"));
-      const body = request.body as { dir?: string; name?: string; data?: string };
+      const body = request.body as UploadWorkspaceFileInput;
 
       const name = body?.name?.trim() ?? "";
       if (!name || name.includes("/") || name.includes("\\") || name.includes("\0")) {
@@ -1761,13 +1770,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
       try {
         const written = await writeFileAt(target.workspace.workdirPath, relPath, bytes);
-        const row = fileAt(
-          target.workspace,
-          target.userId,
-          written.rel,
-          bytes.byteLength,
-          "upload"
-        );
+        const row = fileAt(target.workspace, target.userId, written.rel, bytes.byteLength, "upload", {
+          // Optional, and the default is the file's own name — which is what the dialog's
+          // placeholder promises and what every caller before this got.
+          title: body?.title?.trim() || undefined,
+        });
         return reply.code(201).send(row ? { ...toResource(row), missing: false } : { missing: true });
       } catch (err) {
         const { status, body: failure } = fileErrorReply(err);
@@ -3572,9 +3579,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (!path) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
     try {
-      // The *stored* title, not the path's: the title is the only part of the two that the user
-      // ever chose, and a file deduped onto an earlier upload would otherwise show a uuid.
-      const content = await readPreviewFile(path, resource.title);
+      /*
+       * The *stored* title is what to call it — not what it *is*: the extension the preview
+       * decides by comes from the file's own name, which `readPreviewFile` reads off the path the
+       * bytes are at. The title is the only part of the two the user ever chose, and a file
+       * deduped onto an earlier upload would otherwise be shown as its uuid.
+       */
+      const content = await readPreviewFile(path, resource.title, resource.title);
       /*
        * …and the page it came from, when it is one. Carried here rather than fetched by the
        * client, because this route is the only one that knows *both* the bytes and the row: a
@@ -3642,7 +3653,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    */
   app.post("/api/resources/pages", async (request, reply) => {
     const user = actor(request);
-    const body = request.body as { url?: string; workspaceId?: string; summary?: string };
+    const body = request.body as AddResourcePageInput & { summary?: string };
 
     const url = body?.url?.trim();
     if (!url) return reply.code(400).send(apiError("DATA_REQUIRED", "a URL is required"));
@@ -3659,6 +3670,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         userId: user.id,
         owner: { kind: "workspace", id: workspace.id },
         url,
+        // Optional, and the *reference's*: a page's own title is what the document says it is
+        // called, and this is what the person adding it decided to call it.
+        title: body?.title?.trim() || undefined,
         // A link somebody pasted has no summary: a summary is a reading of a page by something
         // that understood it, and nothing has read this one yet.
         summary: body?.summary?.trim() || undefined,

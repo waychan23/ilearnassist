@@ -1246,8 +1246,13 @@ export const useAppStore = defineStore("app", () => {
       if (seq !== filePreviewSeq) return;
       fileContent.value = content;
 
-      if (content.kind === "binary" && fileViewerSupported(content.name)) {
-        const file = await loadBytes(content.name);
+      /*
+       * The **file's** name decides whether a viewer is worth the chunk, and names the bytes it
+       * gets: a title says what a person called the material, not what the material is — and the
+       * viewer matches its plugins by the extension a title need not have.
+       */
+      if (content.kind === "binary" && fileViewerSupported(content.fileName)) {
+        const file = await loadBytes(content.fileName);
         if (seq !== filePreviewSeq) return;
         filePreviewFile.value = file;
       }

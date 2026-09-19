@@ -54,7 +54,9 @@ import type {
   UpdateSessionInput,
   UpdateUploadSettingsInput,
   UpdateUserInput,
+  AddResourcePageInput,
   UploadAttachmentInput,
+  UploadWorkspaceFileInput,
   UsageQuery,
   UsageSessionsResponse,
   UsageStats,
@@ -648,10 +650,7 @@ export const api = {
    * rule as well: a name that could carry a separator would let an upload land somewhere the
    * person did not point at.
    */
-  uploadWorkspaceFile: (
-    workspaceId: string,
-    input: { dir: string; name: string; mimeType?: string; data: string }
-  ) =>
+  uploadWorkspaceFile: (workspaceId: string, input: UploadWorkspaceFileInput) =>
     request<WorkResource>(`/workspaces/${workspaceId}/files/upload`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -662,7 +661,7 @@ export const api = {
    * A workspace, never a conversation — the same rule the upload picker follows, and the same
    * reason: material added from outside a conversation belongs to the workspace it was added to.
    */
-  addResourcePage: (input: { url: string; workspaceId: string }) =>
+  addResourcePage: (input: AddResourcePageInput) =>
     request<WorkResource>("/resources/pages", { method: "POST", body: JSON.stringify(input) }),
   moveWorkspaceEntry: (workspaceId: string, input: { from: string; to: string }) =>
     request<{ from: string; to: string }>(`/workspaces/${workspaceId}/files/move`, {

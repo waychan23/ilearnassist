@@ -45,6 +45,35 @@ export function flattenTree(
   return rows;
 }
 
+/** One stop on the way down to a directory: what to call it, and the path it stands for. */
+export interface FolderCrumb {
+  /** The segment, or the root's own label. A label, never a path — the caller translates it. */
+  name: string;
+  /** The workspace-relative path this crumb navigates to. `""` for the root. */
+  path: string;
+}
+
+/**
+ * A directory path as the stops above it, root first — a breadcrumb's arithmetic.
+ *
+ * The root is the first crumb and carries `""`, because "the workspace root" has to be clickable
+ * like any other stop: a picker whose only way back to the top is a separate button is a picker
+ * that hides the most common destination.
+ *
+ * An empty segment is skipped rather than kept (`a//b` is `a/b`), which the server never produces
+ * but a hand-typed value could, and a crumb with no name would be an invisible button.
+ */
+export function folderCrumbs(path: string, rootName: string): FolderCrumb[] {
+  const crumbs: FolderCrumb[] = [{ name: rootName, path: "" }];
+  let walked = "";
+  for (const segment of path.split("/")) {
+    if (!segment) continue;
+    walked = walked ? `${walked}/${segment}` : segment;
+    crumbs.push({ name: segment, path: walked });
+  }
+  return crumbs;
+}
+
 /** Move `delta` rows from `index`, stopping at either end rather than wrapping. */
 export function moveIndex(rows: readonly FileTreeRow[], index: number, delta: number): number {
   if (rows.length === 0) return -1;

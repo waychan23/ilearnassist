@@ -60,6 +60,15 @@ export interface CapturePageInput {
   owner: ResourceOwner;
   url: string;
   /**
+   * What the *user* called it, when they added it from the library.
+   *
+   * Optional, and it lands on the **reference** rather than on the page: the page's own title is
+   * what the fetched document says it is called, while this is what one owner calls it — the same
+   * split `title` has everywhere else. Absent means the page's title (or its URL, when the
+   * document has no title at all).
+   */
+  title?: string;
+  /**
    * The model's one line about the page.
    *
    * Absent for a link the **user** added, and that absence is honest rather than a gap: a
@@ -195,7 +204,7 @@ export async function captureWebPage(
     owner: input.owner,
     resourceType: "web_page",
     resourceId: page.id,
-    title: page.title,
+    title: input.title?.trim() || page.title,
     summary: input.summary,
     now,
   });

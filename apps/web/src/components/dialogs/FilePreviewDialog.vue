@@ -214,13 +214,25 @@ const rendered = computed(() =>
 const highlighted = computed(() => {
   const loaded = content.value;
   if (!loaded || loaded.text === null) return "";
-  return highlightFile(loaded.text, loaded.name);
+  return highlightFile(loaded.text, fileFullName.value);
 });
 
 /** `"notes/a.md"` → `"a.md"`. The server sends the name too; this covers the loading state. */
 function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
+
+/**
+ * The file's **own** name — what a viewer, a highlighter or a download needs.
+ *
+ * `name` is what to *call* it, which is the owner's title when there is one, and a title is prose:
+ * it can have no extension at all, and then the viewer's gate says "unsupported" and the
+ * highlighter has no grammar. So every *decision* about the bytes goes by this — the reply's
+ * `fileName` when it has arrived, and the path's last segment while it is still loading.
+ */
+const fileFullName = computed(
+  () => content.value?.fileName ?? basename(store.filePreviewPath ?? "")
+);
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
@@ -416,7 +428,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           <FileViewer
             v-else-if="view === 'binary'"
             :file="store.filePreviewFile"
-            :name="content?.name ?? name"
+            :name="fileFullName"
           />
 
           <div

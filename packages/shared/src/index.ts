@@ -1764,10 +1764,11 @@ export interface WorkResource {
    * How many places this entity is reachable from — **this row included**.
    *
    * Both relations, and that is what the number is for. A holding row is one place; a
-   * conversation that merely *refers* to the material is another, and it loses it too when the
-   * bytes go. The library asks one question with it: destroying the file behind this row
-   * destroys everyone's access, so a delete that would take somebody else's material with it has
-   * to say so before it happens. `1` is "nobody else has this", which is the common case.
+   * conversation that merely *points at* the material is another, and it loses the reading too
+   * when the bytes go — the reference stays and starts reporting the object as gone. The library
+   * asks one question with it: destroying the material behind this row affects every holder, so a
+   * delete that would take somebody else's material with it has to say so before it happens. `1`
+   * is "nobody else has this", which is the common case.
    *
    * Optional rather than required, because it is a *listing* fact and not a property of a
    * reference: a route that answers with one row (or a build that predates the field) leaves it
@@ -2760,7 +2761,23 @@ export interface PreviewReference {
 
 export interface FileContent {
   path: string;
+  /**
+   * What to call this file — the owner's **title** when there is one, its own name otherwise.
+   *
+   * Display only. Anything that has to *decide* something about the bytes goes by `fileName`
+   * instead, because a title is prose: 季度对比 carries no format at all.
+   */
   name: string;
+  /**
+   * The file's **own** name: the last segment of `path`, extension included.
+   *
+   * The half that decides things, and it is a field of its own because conflating the two is a
+   * bug this repo already had: the preview asked the *title* for an extension, so a referenced
+   * `.xlsx` the user had titled opened as "this format cannot be previewed". The viewer picks its
+   * plugin by name, the highlighter picks its grammar by name, and the browser saves a download
+   * under it — none of which a title can answer.
+   */
+  fileName: string;
   size: number;
   modifiedAt: string;
   kind: FileContentKind;
@@ -3402,6 +3419,29 @@ export interface UploadAttachmentInput {
   mimeType: string;
   /** Base64-encoded file bytes (no data-URL prefix). */
   data: string;
+}
+
+/**
+ * The library's two writes: add a file, add a page.
+ *
+ * `title` is optional on both, and it is the **reference's** rather than the entity's — what this
+ * workspace calls the material. Absent is the ordinary case: a file's title defaults to its own
+ * name and a page's to the title the fetch found (or the URL when the page has none).
+ */
+export interface UploadWorkspaceFileInput {
+  /** The directory inside the workspace's sandbox. Empty means its root. */
+  dir: string;
+  name: string;
+  mimeType?: string;
+  /** Base64-encoded file bytes (no data-URL prefix). */
+  data: string;
+  title?: string;
+}
+
+export interface AddResourcePageInput {
+  url: string;
+  workspaceId: string;
+  title?: string;
 }
 
 export interface ProviderModelInput {

@@ -93,6 +93,40 @@ describe("a workspace page — the user pasted a link", () => {
     expect((listed?.resource as { url: string }).url).toBe(url);
   });
 
+  it("takes the caller's title, and defaults it to the page's own", async () => {
+    /*
+     * The library's optional field, and the default the dialog's placeholder promises: the page's
+     * own title is the *entity's* — what the fetched document says it is called — while `title`
+     * here is the **reference's**, which is what one owner calls it. Absent means that default,
+     * and a page whose document has no title at all has already fallen back to its URL
+     * (`extracted.title || finalUrl`), which is what makes "降级：网址" true without the route
+     * doing anything.
+     */
+    const url = "https://example.com/recursion";
+    const named = await captureWebPage(db, {
+      user,
+      userId: "u1",
+      owner: { kind: "workspace", id: "w1" },
+      url,
+      title: "递归这一章",
+      cache: cacheWith(url),
+    });
+    expect(named.title).toBe("递归这一章");
+    // The page keeps its own title: the entity is what the document says, the reference is what
+    // the person decided to call it.
+    expect((named.resource as { title: string }).title).toBe("递归入门");
+
+    const plain = await captureWebPage(db, {
+      user,
+      userId: "u1",
+      owner: { kind: "workspace", id: "w1" },
+      url: "https://example.com/plain",
+      cache: cacheWith("https://example.com/plain", "<html><body><p>没有标题的页面。</p></body></html>"),
+    });
+    // No `<title>`: the URL is the title, which is the degradation the requirement names.
+    expect(plain.title).toBe("https://example.com/plain");
+  });
+
   it("stores the bytes and the text, and links it to the workspace", async () => {
     const url = "https://example.com/recursion";
     const row = await captureWebPage(db, {

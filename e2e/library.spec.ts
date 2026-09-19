@@ -237,6 +237,63 @@ test("deleting material says what happens to the references that stay", async ({
   await expect(page.getByTestId("library-empty")).toBeVisible();
 });
 
+test("lists a file by the title it was added with, and its format beside it", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The optional field, from the dialog to the list. A **title** is what a person called the
+   * material, so it can say nothing about what the material is — a quarterly comparison could be a
+   * spreadsheet, a chart or a photo — which is exactly why the row draws the format as its own
+   * pill, read from the file's real name rather than from the title.
+   *
+   * The empty case is the other half: a file added without a title is listed by its own name.
+   */
+  const suffix = Date.now();
+  const workspace = `Named-${suffix}`;
+  await seedWorkspace(request, workspace, "seed.md");
+  const csv = `quarterly-${suffix}.csv`;
+
+  await openBrowser(page);
+  await page.getByTestId("library-add").click();
+  const dialog = page.getByTestId("add-source-dialog");
+  await dialog.getByTestId("add-source-workspace").selectOption({ label: workspace });
+
+  // One file picked, so the title and the description apply to it — see `fieldsApply`.
+  await dialog.getByTestId("add-source-input").setInputFiles({
+    name: csv,
+    mimeType: "text/csv",
+    buffer: Buffer.from("a,b\n1,2\n"),
+  });
+  await dialog.getByTestId("add-source-title").fill("季度对比");
+  await dialog.getByTestId("add-source-submit").click();
+  await settle(page);
+
+  const row = page
+    .getByTestId("resource-row")
+    .filter({ has: page.getByTestId("resource-extension") })
+    .filter({ hasText: "季度对比" });
+  await expect(row).toHaveCount(1);
+  // The pill is the format, and it is not in the title.
+  await expect(row.getByTestId("resource-extension")).toHaveText(".csv");
+
+  // A file added with no title: listed by its own name, with the same pill and no description.
+  await page.getByTestId("library-add").click();
+  await dialog.getByTestId("add-source-workspace").selectOption({ label: workspace });
+  const plain = `plain-${suffix}.ts`;
+  await dialog.getByTestId("add-source-input").setInputFiles({
+    name: plain,
+    mimeType: "text/plain",
+    buffer: Buffer.from("export {}\n"),
+  });
+  await dialog.getByTestId("add-source-submit").click();
+  await settle(page);
+
+  const fallback = page.getByTestId("resource-row").filter({ hasText: plain });
+  await expect(fallback).toHaveCount(1);
+  await expect(fallback.getByTestId("resource-extension")).toHaveText(".ts");
+});
+
 test("filters by workspace", async ({ page, request }) => {
   const suffix = Date.now();
   const first = await seedWorkspace(request, `Filter-A-${suffix}`, "alpha.md");
@@ -310,7 +367,25 @@ test("adds a file to a workspace from the browser", async ({ page, request }) =>
   const dialog = page.getByTestId("add-source-dialog");
   await expect(dialog).toBeVisible();
   await dialog.getByTestId("add-source-workspace").selectOption({ label: name });
-  await dialog.getByTestId("add-source-dir").fill("reading");
+
+  /*
+   * The destination is *chosen*, and making the folder is part of choosing it. It used to be a
+   * path typed into a text field — with a datalist of directories somebody had already listed —
+   * which is a form asking a person to spell something a file manager lets them point at.
+   */
+  await dialog.getByTestId("add-source-dir").click();
+  const picker = page.getByTestId("dir-picker");
+  await expect(picker).toBeVisible();
+  await picker.getByTestId("dir-new").click();
+  await picker.getByTestId("dir-new-name").fill("reading");
+  await picker.getByTestId("dir-new-submit").click();
+  // Creating one lands *inside* it, so choosing it — the second half of "put the file in it" —
+  // is one press.
+  await expect(picker.getByTestId("dir-crumb").last()).toContainText("reading");
+  await picker.getByTestId("dir-pick-confirm").click();
+  await expect(picker).toHaveCount(0);
+  await expect(dialog.getByTestId("add-source-dir")).toContainText("reading");
+
   await dialog.getByTestId("add-source-input").setInputFiles({
     name: "added.txt",
     mimeType: "text/plain",
@@ -328,6 +403,50 @@ test("adds a file to a workspace from the browser", async ({ page, request }) =>
     .get(`/api/workspaces/${workspaceId}/files?path=reading`)
     .then((r) => r.json());
   expect(listed.entries.map((e: { name: string }) => e.name)).toContain("added.txt");
+});
+
+test("the folder picker browses the tree, and the root is one press away", async ({
+  page,
+  request,
+}) => {
+  /*
+   * What the picker *is*: one level at a time, directories only, with a breadcrumb that walks back
+   * up. Three of those are assertions a unit test cannot make — that a file is not offered as a
+   * destination, that descending and returning land where they should, and that the root is a
+   * crumb like any other rather than a control of its own.
+   */
+  const suffix = Date.now();
+  const name = `Picking-${suffix}`;
+  const workspaceId = await seedWorkspace(request, name, "seed.md");
+  await request.post(`/api/workspaces/${workspaceId}/files/directory`, {
+    data: { path: "reports/2026" },
+  });
+
+  await openBrowser(page);
+  await page.getByTestId("library-add").click();
+  const dialog = page.getByTestId("add-source-dialog");
+  await dialog.getByTestId("add-source-workspace").selectOption({ label: name });
+  await dialog.getByTestId("add-source-dir").click();
+
+  const picker = page.getByTestId("dir-picker");
+  // Directories only: `seed.md` is a file, and a file is not somewhere anything can be put.
+  await expect(picker.getByTestId("dir-row")).toHaveCount(1);
+  await expect(picker.getByTestId("dir-row")).toContainText("reports");
+
+  await picker.getByTestId("dir-row").click();
+  await expect(picker.getByTestId("dir-list")).toContainText("2026");
+  await expect(picker.getByTestId("dir-crumb")).toHaveCount(2);
+
+  // Back up to the root by its crumb — the first one, which stands for the workspace root.
+  await picker.getByTestId("dir-crumb").first().click();
+  await expect(picker.getByTestId("dir-row")).toContainText("reports");
+  await expect(picker.getByTestId("dir-crumb")).toHaveCount(1);
+  // An empty listing is a sentence, not a blank panel.
+  await expect(picker.getByTestId("dir-list")).toHaveCount(1);
+
+  // Choosing the root is what an untouched field means, so nothing needs selecting for that.
+  await picker.getByTestId("dir-pick-confirm").click();
+  await expect(dialog.getByTestId("add-source-dir")).toContainText("根目录");
 });
 
 test("a conversation opens it on its own workspace, and the picker moves it", async ({

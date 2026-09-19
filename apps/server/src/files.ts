@@ -1,5 +1,5 @@
 import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
-import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DIAGRAM_FILE_EXTENSIONS, MAX_FILE_PREVIEW_BYTES } from "@ilearnassist/shared";
 import type {
   ApiErrorCode,
@@ -326,8 +326,19 @@ export async function readFileContent(
  *
  * `rel` is whatever the caller calls the file — a workspace-relative path, or a source's name.
  * It is carried through for `path` and for error messages; nothing here resolves it.
+ *
+ * **`displayName` is what to call it, and `rel`'s last segment is what it *is*.** They differ
+ * exactly when the owner named the material: a reference's title is prose (`季度对比`) and every
+ * decision below — binary, markdown, diagram, the sniff — is made from the *file's* name, while
+ * `name` carries the title for the reader. Passing the title where the name belongs is a bug this
+ * repo shipped: a `.xlsx` whose reference had been titled opened as "unsupported format",
+ * because the extension lookup asked the title.
  */
-export async function readPreviewFile(absPath: string, rel: string): Promise<FileContent> {
+export async function readPreviewFile(
+  absPath: string,
+  rel: string,
+  displayName?: string
+): Promise<FileContent> {
   const info = await stat(absPath).catch((err) => {
     throw asFileError(err, rel);
   });
@@ -335,15 +346,24 @@ export async function readPreviewFile(absPath: string, rel: string): Promise<Fil
     throw new FileAccessError("NOT_A_FILE", `"${rel}" is a directory, not a file.`);
   }
 
-  const name = rel.slice(rel.lastIndexOf("/") + 1);
+  /*
+   * The file's own name, taken from **the path the bytes are at** rather than from `rel`.
+   *
+   * `rel` is the caller's name for it (a workspace-relative path, a source's name, an owner's
+   * title) and is display only; the absolute path is where the file actually is, so its last
+   * segment is what the file is called on disk — the parsed `.txt` of a document included, which
+   * is what keeps a PDF-with-extracted-text previewing as text rather than as a PDF.
+   */
+  const fileName = basename(absPath);
   const base: Omit<FileContent, "kind" | "text" | "truncated"> = {
     path: rel,
-    name,
+    name: displayName?.trim() || fileName,
+    fileName,
     size: info.size,
     modifiedAt: new Date(info.mtimeMs).toISOString(),
   };
 
-  const ext = extname(name).slice(1).toLowerCase();
+  const ext = extname(fileName).slice(1).toLowerCase();
 
   // First, and with **no read at all**: a name that says "binary" is enough to answer, and
   // answering here is what spares a `.png` the quarter-megabyte the head would cost.

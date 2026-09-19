@@ -336,6 +336,7 @@ apps/web/src/
   components/…            # App, LoginView, WorkspaceHome, UsageView, Sidebar, ChatView, MessageItem,
                           #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
                           #   AskUserCard, Composer, ResourceMentionPicker, WriteLocationField,
+                          #   FolderPickerDialog,
                           #   FileTree, WidgetPanel, AppMenu,
                           #   WidgetTabStrip, GenerationParams, NoteEditor,
                           #   MessageSelectionToolbar,
@@ -420,6 +421,14 @@ Fuller map in `docs/reference.md`.
   `switch` with an `unhandled(kind: never)` arm in the same change, which is what makes the next
   member a `vue-tsc` error rather than a fallthrough. A new kind is only a compile error once a
   site says so; until then the fallthrough is what handles it.
+- **A preview carries two names, and only one of them may decide anything.** `FileContent.name`
+  is what to *call* the file — the owner's title when the reference has one — and `fileName` is
+  the file's own name, taken from the path the bytes are at. Every decision goes by the second:
+  the viewer's gate and its plugin matching, the highlighter's grammar, the name a download is
+  saved under. Conflating them is a bug this repo shipped — a `.xlsx` whose reference had been
+  titled came back with no extension, so the dialog answered "this format cannot be previewed"
+  for a file it draws perfectly well. The path is what the name is read from, which is also what
+  keeps an extracted `…/<id>.txt` previewing as text rather than as the PDF it came from.
 - **`binary` means "not text — hand the bytes to the viewer", and `unsupported` is now the
   client's claim rather than the server's.** The rule above ("the server decides, not the
   client") is about *text versus binary*, which is the question bytes are needed for. Whether
@@ -1599,6 +1608,29 @@ Fuller map in `docs/reference.md`.
   conversation's own folder is written by the agent and by uploads made inside it. The file tab
   takes several files and sends **one request each**, so a partial failure names the file it failed
   on and a retry resends only what is left.
+  **The destination is chosen, not typed.** `FolderPickerDialog` browses the workspace's tree a
+  level at a time (the same `GET …/files?path=` the file tree reads, so a folder nobody opened
+  costs nothing), lists **directories only** — a file is not a destination, and a row that cannot
+  be pressed is noise in a list whose purpose is pressing — and can **create a folder**, because
+  "put it in this month's folder" arrives while the upload is being set up; creating one lands you
+  *inside* it, so choosing it is the next press. The breadcrumb's first stop is the root and stands
+  for `""` (`folderCrumbs` in `utils/fileTree.ts`, pure and unit-tested), so "put it at the top" is
+  a press like any other; the field shows the chosen path and defaults to the root's label, which
+  is the same word the first crumb carries. The workspace picker beside it **clears the choice**
+  when it changes: a relative path would not error in another workspace, it would quietly create
+  that folder there.
+  **Both kinds carry an optional title, and it lands on the *reference*.** The hint states the
+  default rather than pre-filling it — a title somebody has to delete before typing their own is
+  worse than an empty field — and the two defaults are what the server already did: a file is
+  called by its own name and a page by the title the fetch found (or its URL when the document has
+  none). It is shown only where it can mean something — the link tab always, the file tab with
+  exactly **one** file picked (`fieldsApply`) — because one title for a batch is a claim about
+  neither file, and it is cleared on a tab switch since it describes *what is being added*. Two
+  consequences in the list: its item shows the **title**, and beside it a file's **extension** as
+  an outlined capsule (`resourceExtension`, read from the file's own name rather than from the
+  title, which is the whole reason the pill exists) — a page needs none, and the origin column
+  already says 网页 there. (A description field lived here for one release and was dropped: the
+  list's own spec is title + format, and a field nothing draws is a claim nobody reads.)
 - **A `<select>` bound to `undefined` paints blank, not its placeholder option.** The browser's
   filters open from `?workspaceId=`-style props, which are absent rather than empty, and every
   control rendered as an empty box — so `asFilters` gives every key the empty string, spelled out

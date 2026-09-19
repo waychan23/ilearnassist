@@ -5,10 +5,10 @@ import { api, fileToBase64, type ResourceFilterQuery } from "../../api/client";
 import type { Session, StoredFile, WorkResource, WorkResourceType } from "../../api/types";
 import {
   resourceCategory,
+  resourceExtension,
   resourceIsImage,
   resourceMime,
   resourceName,
-  resourceSandboxPath,
   resourceSize,
   resourceUrl,
 } from "../../utils/resourceView";
@@ -398,28 +398,6 @@ async function remove(row: WorkResource): Promise<void> {
   }
 }
 
-/**
- * The directories this workspace is known to have, for the add dialog's suggestions.
- *
- * Derived from the sources already listed rather than from a directory walk: the walk is one
- * request per level, and a suggestion list is not worth that. Free text is what actually
- * decides, and an unknown path is created by the upload — so a stale or short list costs a
- * suggestion, never a mistake.
- */
-const knownDirectories = computed(() => {
-  const dirs = new Set<string>();
-  for (const row of scopeRows.value) {
-    // Only the workspace's own files: an upload has no directory to suggest and a
-    // conversation's files are not somewhere the add dialog can put anything.
-    if (row.ownerType !== "workspace") continue;
-    const rel = resourceSandboxPath(row);
-    if (!rel) continue;
-    const cut = rel.lastIndexOf("/");
-    if (cut > 0) dirs.add(rel.slice(0, cut));
-  }
-  return [...dirs].sort();
-});
-
 /** A source was added: re-read both lists, so the new row is there and the facets see it too. */
 async function onAdded(): Promise<void> {
   await Promise.all([loadScope(), loadRows()]);
@@ -561,7 +539,7 @@ function expandAll(): void {
   <Teleport v-if="uiState.sourcesOpen" to="body">
     <div class="modal-overlay" @click.self="emit('close')">
       <div
-        class="modal source-browser"
+        class="modal resource-browser"
         role="dialog"
         aria-modal="true"
         data-testid="library-dialog"
@@ -753,8 +731,8 @@ function expandAll(): void {
             </p>
 
             <!-- The flat view: one row per source, newest first, with where it came from. -->
-            <ul v-else-if="view === 'flat'" class="sources-list">
-              <li v-for="source in rows" :key="source.id" class="source" data-testid="resource-row">
+            <ul v-else-if="view === 'flat'" class="resource-list">
+              <li v-for="source in rows" :key="source.id" class="resource-row" data-testid="resource-row">
                 <button
                   class="resource-open"
                   :title="t('sources.preview', { name: resourceName(source) })"
@@ -770,10 +748,28 @@ function expandAll(): void {
                           : 'file'
                     "
                   />
-                  <span class="label truncate">{{ resourceName(source) }}</span>
+                  <!--
+                    The title, and — for a file — the format as its own pill.
+                    A title is what a person called the material, so it may say nothing about what
+                    the material *is*: "quarterly comparison" could be a spreadsheet, a chart or a
+                    photo. The pill answers that from the file's own name, which is why it is drawn
+                    rather than the extension being expected in the title. A page needs none: it has
+                    no extension, and the origin column beside it already says it is a web page.
+                  -->
+                  <span class="resource-ident">
+                    <span class="resource-title">
+                      <span class="label truncate">{{ resourceName(source) }}</span>
+                      <span
+                        v-if="resourceExtension(source)"
+                        class="badge muted resource-extension"
+                        data-testid="resource-extension"
+                        >{{ resourceExtension(source) }}</span
+                      >
+                    </span>
+                  </span>
                 </button>
-                <span class="source-detail truncate" data-testid="resource-detail">{{ detailOf(source) }}</span>
-                <span class="source-origin truncate" data-testid="resource-origin">
+                <span class="resource-detail truncate" data-testid="resource-detail">{{ detailOf(source) }}</span>
+                <span class="resource-origin truncate" data-testid="resource-origin">
                   {{ originLabel(source) }}
                 </span>
                 <!-- A sibling of the row's own control, never a child of it: a button inside a
@@ -806,7 +802,7 @@ function expandAll(): void {
               conversation that holds them, then their path. It answers a different question than
               the flat list does, which is why both exist.
             -->
-            <div v-else class="source-tree" role="tree" data-testid="sources-tree">
+            <div v-else class="resource-tree" role="tree" data-testid="sources-tree">
               <template v-for="line in lines" :key="line.key">
                 <button
                   v-if="line.kind === 'group'"
@@ -821,7 +817,7 @@ function expandAll(): void {
                   <Icon :name="expanded.includes(line.key) ? 'folder-open' : 'folder'" />
                   <span class="label truncate">{{ line.label }}</span>
                 </button>
-                <div v-else class="source tree-row" data-testid="resource-row">
+                <div v-else class="resource-row" data-testid="resource-row">
                   <button
                     class="resource-open"
                     :style="{ '--depth': line.depth }"
@@ -831,8 +827,16 @@ function expandAll(): void {
                   >
                     <Icon :name="resourceIsImage(line.source!) ? 'image' : 'file'" />
                     <span class="label truncate">{{ line.label }}</span>
+                    <!-- The same pill, for the same reason: this view's leaf labels are titles
+                         too, so a renamed file's extension is just as invisible here. -->
+                    <span
+                      v-if="resourceExtension(line.source!)"
+                      class="badge muted resource-extension"
+                      data-testid="resource-extension"
+                      >{{ resourceExtension(line.source!) }}</span
+                    >
                   </button>
-                  <span class="source-detail truncate" data-testid="resource-detail">
+                  <span class="resource-detail truncate" data-testid="resource-detail">
                     {{ detailOf(line.source!) }}
                   </span>
                   <button
@@ -890,7 +894,6 @@ function expandAll(): void {
     <AddResourceDialog
       v-if="addOpen"
       :locked-workspace-id="filters.workspaceId"
-      :directories="knownDirectories"
       @close="addOpen = false"
       @added="onAdded"
     />
@@ -906,7 +909,7 @@ function expandAll(): void {
  * library browser is a browser: it should be as tall as it can be, and the controls should be a
  * strip at the top of it.
  */
-.source-browser {
+.resource-browser {
   width: min(880px, calc(100vw - 2 * var(--space-6)));
   height: min(660px, calc(100dvh - 120px));
 }
@@ -915,7 +918,7 @@ function expandAll(): void {
  * rows scroll. `:deep` because the padding and the scroll belong to the shared `.modal-body`
  * and this is the one dialog that wants them rearranged.
  */
-.source-browser :deep(.modal-body) {
+.resource-browser :deep(.modal-body) {
   /*
    * Grows into the dialog's height, so the *list* gets the space and the footer sits at the
    * bottom. Without it the three parts stack from the top and the leftover height collects
@@ -982,22 +985,23 @@ function expandAll(): void {
   color: var(--danger-text);
   padding-bottom: var(--space-4);
 }
-.sources-list {
+.resource-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.source {
+.resource-row {
   display: flex;
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-2);
   border-radius: var(--radius-sm);
 }
-.source:hover {
+.resource-row:hover {
   background: var(--panel-2);
 }
-.source-open {
+
+.resource-open {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -1012,17 +1016,47 @@ function expandAll(): void {
   padding-left: calc(var(--depth, 0) * var(--space-6));
   cursor: pointer;
 }
-.source-detail,
-.source-origin {
+/*
+ * The identity column: the title and its format pill.
+ *
+ * A column rather than a bare row of text because the tree's rows put the label beside the icon
+ * and the flat list's beside nothing, and one element that can hold a second line is what keeps
+ * the two views' rows the same height. (The description the add dialog collects is *not* drawn
+ * here: the list's own spec is title + format, and the record keeps the sentence for whatever
+ * surface wants it next.)
+ */
+.resource-ident {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+.resource-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+/*
+ * The format, as an outlined capsule: the badge's colours and border with a full radius, because
+ * it carries a unit-like token (`.md`) rather than a category word.
+ */
+.resource-extension {
+  flex: none;
+  border-radius: var(--radius-full);
+}
+.resource-detail,
+.resource-origin {
   color: var(--text-3);
   font-size: var(--fs-2);
   flex-shrink: 0;
   max-width: 22ch;
 }
-.source-origin {
+.resource-origin {
   max-width: 18ch;
 }
-.source-tree {
+.resource-tree {
   display: flex;
   flex-direction: column;
 }
@@ -1043,27 +1077,11 @@ function expandAll(): void {
 .tree-group:hover {
   background: var(--panel-2);
 }
-.add-workspace {
-  /* The foot is right-aligned by the modal's own layout; this is the widest thing in it. */
-  max-width: 180px;
-  margin-right: auto;
-}
 
 @media (max-width: 560px) {
-  .filter-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
   /* The detail columns are the first thing to go: the name is what the row is for. */
-  .source-origin {
+  .resource-origin {
     display: none;
   }
-}
-/*
- * The file picker the upload button drives. `display: none` rather than a visually-hidden clip:
- * the button above it is the control, and an input that stayed focusable would be a second,
- * invisible tab stop on a control the user never sees.
- */
-.hidden-input {
-  display: none;
 }
 </style>

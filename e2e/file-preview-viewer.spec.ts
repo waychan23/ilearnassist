@@ -60,7 +60,7 @@ async function seedSource(
   name: string,
   mimeType: string,
   bytes: Buffer
-): Promise<void> {
+): Promise<string> {
   const workspace = await request
     .post("/api/workspaces", { data: { name: `Viewer-${Date.now()}-${name}` } })
     .then((r) => r.json());
@@ -72,6 +72,7 @@ async function seedSource(
     data: { name, mimeType, data: bytes.toString("base64") },
   });
   expect(res.status()).toBe(201);
+  return ((await res.json()) as { resourceId: string }).resourceId;
 }
 
 /** The uploaded-files dialog, which lives on the workspace home. */
@@ -178,19 +179,74 @@ test("an uploaded image opens in the viewer, over the list it came from", async 
   await expect(page.getByTestId("library-dialog")).toBeVisible();
 });
 
-test("an uploaded PDF opens in the viewer", async ({ page, request }) => {
-  // The same route with a format that has no text fallback at all: a PDF's bytes are the only
-  // thing that can show it, which is the shape the sources list could not reach before.
-  await seedSource(request, "doc.pdf", "application/pdf", buildPdf(["Viewer fixture"]));
-  await openUploads(page, "doc.pdf");
+test("a titled reference opens the viewer, which goes by the file's own name", async ({
+  page,
+  request,
+}) => {
+  /*
+   * **The reported bug.** A reference's title is prose — 截图, 季度对比 — and the preview's
+   * classification used to be made from it, so a picture the user had titled came back with no
+   * extension at all and the viewer's gate answered "this format cannot be previewed" for a file
+   * it draws perfectly well. Only the *file's* name can decide anything (`FileContent.fileName`),
+   * and the title is what to call it.
+   *
+   * This is the path a **library row** takes — an upload with a title, opened from the list rather
+   * than from the file tree, which is the route that carries a title at all.
+   */
+  const suffix = Date.now();
+  const workspace = (await (
+    await request.post("/api/workspaces", { data: { name: `Titled-${suffix}` } })
+  ).json()) as { id: string };
+  const created = await request.post(`/api/workspaces/${workspace.id}/files/upload`, {
+    data: {
+      dir: "",
+      name: "shot.png",
+      mimeType: "image/png",
+      data: ONE_PX_PNG.toString("base64"),
+      title: "截图",
+    },
+  });
+  expect(created.status()).toBe(201);
 
-  await page.getByTestId("resource-open").filter({ hasText: "doc.pdf" }).click();
+  await openLibrary(page);
+  await page.getByTestId("resource-row").filter({ hasText: "截图" }).getByTestId("resource-open").click();
 
   const viewer = page.getByTestId("file-viewer");
   await expect(viewer).toHaveAttribute("data-render-state", "ready", { timeout: 15000 });
-  const canvas = viewer.locator("canvas").first();
-  await expect(canvas).toBeVisible();
-  expect(await canvas.evaluate((el) => (el as HTMLCanvasElement).width)).toBeGreaterThan(0);
+  // Drawn, not merely present: the same measurement the untitled case makes.
+  const image = viewer.locator("img").first();
+  expect(await image.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  // And the panel it must *not* be showing.
+  await expect(page.getByTestId("file-preview-unsupported")).toHaveCount(0);
+});
+
+test("an uploaded document settles into its extracted text", async ({ page, request }) => {
+  /*
+   * **A document's preview is its text, and the upload route is what decides when.** The
+   * extraction is scheduled by `POST /sessions/:id/resources`, and `resourcePath` prefers the
+   * extracted file once it exists — deliberately, so a PDF no viewer can open still reads — so an
+   * upload's preview changes under the reader's feet and *settles* into the text view.
+   *
+   * This waits for the parse and asserts the settled state. It used to assert a canvas, and it
+   * passed only while the extraction had not landed: a test winning a race. The titled-preview
+   * fix is what stopped it winning, because the classification now follows the bytes actually
+   * read — which is the point. The "viewer draws a PDF" case is the workspace file above, where
+   * nothing schedules an extraction at all.
+   */
+  const id = await seedSource(request, "doc.pdf", "application/pdf", buildPdf(["Viewer fixture"]));
+  await expect
+    .poll(async () =>
+      (await request.get(`/api/resources/${id}`).then((r) => r.json())).parsedFileId ?? ""
+    )
+    .not.toBe("");
+
+  await openUploads(page, "doc.pdf");
+  await page.getByTestId("resource-open").filter({ hasText: "doc.pdf" }).click();
+
+  // The text the extractor found, and no viewer: the bytes it would have drawn are not what this
+  // preview reads any more.
+  await expect(page.getByTestId("file-preview-text")).toContainText("Viewer fixture");
+  await expect(page.getByTestId("file-viewer")).toHaveCount(0);
 });
 
 test("an unpreviewable binary reaches the panel without fetching a byte", async ({

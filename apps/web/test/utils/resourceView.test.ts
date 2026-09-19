@@ -5,6 +5,7 @@ import {
   pageOf,
   resourceAttachment,
   resourceCategory,
+  resourceExtension,
   resourceIsImage,
   resourceMime,
   resourceName,
@@ -106,6 +107,55 @@ describe("the two arms", () => {
   it("has a URL only for a page", () => {
     expect(resourceUrl(pageResource())).toBe("https://example.com/a");
     expect(resourceUrl(fileResource())).toBeUndefined();
+  });
+});
+
+describe("resourceExtension", () => {
+  /*
+   * The pill the library draws beside a title. It exists because a title is what a person called
+   * the material, so it may say nothing about the format — and it is read from the **file's own
+   * name**, never from the reference title, which is the whole point.
+   */
+  it("reads the format from the file's name, not from the row's title", () => {
+    const row = fileResource({ title: "季度对比" }, { title: "report.xlsx" });
+    expect(resourceExtension(row)).toBe(".xlsx");
+  });
+
+  it("lowercases it, so a camera's IMG_1234.JPG does not shout", () => {
+    expect(resourceExtension(fileResource({}, { title: "IMG_1234.JPG" }))).toBe(".jpg");
+  });
+
+  it("falls back to the stored path when the name carries no format", () => {
+    // An upload's bytes are named from the MIME table, so a `.jpeg` the user picked is stored
+    // `.jpg` — the same format, and the fallback is what keeps the pill truthful for a row whose
+    // title is a bare label with no dot in it.
+    const row = fileResource({}, { title: "photo", path: "sources/raw/abc123.jpg" });
+    expect(resourceExtension(row)).toBe(".jpg");
+  });
+
+  it("says nothing when neither the name nor the path has a format", () => {
+    const bare = (name: string) =>
+      resourceExtension(fileResource({}, { title: name, path: `workspaces/study/workdir/${name}` }));
+    expect(bare("Makefile")).toBeUndefined();
+    expect(bare("trailing.")).toBeUndefined();
+    expect(bare(".hidden")).toBeUndefined();
+  });
+
+  it("ignores a dot that carries no format, and answers with the path's", () => {
+    // A version number is the case this is for: the title has a dot in it, and what follows is a
+    // format only if you did not read the whole word. The stored name is the authority, and it
+    // says `.md`.
+    const row = fileResource(
+      {},
+      { title: "报告 v1.2 定稿", path: "workspaces/study/workdir/notes.md" }
+    );
+    expect(resourceExtension(row)).toBe(".md");
+  });
+
+  it("has none for a page, which is a URL rather than a file", () => {
+    // A page's row is drawn with 网页 in the origin column instead — an extension would be the
+    // app inventing a format for something that has none.
+    expect(resourceExtension(pageResource())).toBeUndefined();
   });
 });
 

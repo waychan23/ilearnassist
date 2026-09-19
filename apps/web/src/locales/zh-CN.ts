@@ -1697,8 +1697,30 @@ export default {
     addKind: "资料类型",
     tabFile: "文件",
     tabLink: "网页链接",
+    /**
+     * The add dialog's two optional fields, for both kinds.
+     *
+     * A hint states the **default** rather than the field being pre-filled: a title the user has
+     * to delete before typing their own is worse than an empty one, and the default differs per
+     * kind — a file is called by its name, a page by the title the fetch found.
+     */
+    addTitle: "标题",
+    addTitleFileHint: "留空则用文件名",
+    addTitleLinkHint: "留空则用网页标题；网页没有标题时用网址",
     addDir: "目录",
-    addDirHint: "留空表示放到根目录",
+    /**
+     * The destination picker: its title, the root's label, and the three things it can say.
+     *
+     * `dirRoot` is what an unchosen destination shows, and it is also the first crumb in the
+     * picker — one word for one place, so the field and the breadcrumb cannot disagree.
+     */
+    dirPick: "选择目录",
+    dirRoot: "根目录",
+    dirEmpty: "这个目录下没有子目录",
+    dirNew: "新建文件夹",
+    dirNameHint: "文件夹名称",
+    dirNameInvalid: "名称里不能带 / 或 \\",
+    dirChoose: "选择此目录",
     addFiles: "文件",
     pickFiles: "选择文件",
     addLinkHint: "服务端会抓取这个页面并保存下来，稍后可以在会话里引用。",

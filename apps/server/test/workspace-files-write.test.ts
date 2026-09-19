@@ -139,6 +139,39 @@ describe("upload a file", () => {
     expect(row!.missing).toBe(false);
   });
 
+  it("takes a title, and defaults it to the file's own name", async () => {
+    /*
+     * The library's optional field. It lands on the **reference**, which is what the list draws —
+     * and it is optional in the strict sense: with nothing sent, the title is the file's own name,
+     * which is what every caller before this dialog got and what a file the agent wrote still
+     * gets.
+     */
+    const named = await env.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/files/upload`,
+      payload: {
+        dir: "",
+        name: "photo.jpeg",
+        data: Buffer.from("bytes").toString("base64"),
+        title: "假期照片",
+      },
+    });
+    expect(named.statusCode).toBe(201);
+    expect((named.json() as WorkResource).title).toBe("假期照片");
+
+    await upload("", "plain.txt", "x");
+    const plain = await rowFor("plain.txt");
+    expect(plain!.title).toBe("plain.txt");
+
+    // Whitespace is not a value: a field typed into and cleared again is the default.
+    const blank = await env.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/files/upload`,
+      payload: { dir: "", name: "blank.txt", data: Buffer.from("x").toString("base64"), title: "  " },
+    });
+    expect((blank.json() as WorkResource).title).toBe("blank.txt");
+  });
+
   it("creates the directory it is aimed at", async () => {
     await upload("fresh/deeper", "a.txt", "x");
     expect(existsSync(join(workdir(), "fresh/deeper/a.txt"))).toBe(true);

@@ -48,6 +48,16 @@ a dialog that could only take a workspace-relative path had nothing to open with
 reference is what lets one dialog serve all three. A reference whose entity is gone resolves to
 nothing, which is the 404 the dialog already knows how to show.
 
+A **reference's** preview carries two names, and only one of them decides anything.
+`FileContent.name` is what to call the file — the reference's **title** when it has one, which is
+why the route passes it — and `FileContent.fileName` is the file's own name, read off the path the
+bytes are at. Every decision goes by the second: which `kind` the file is, whether the viewer is
+worth fetching, which plugin draws it, which grammar highlights it, what a download is called. A
+title is prose and need not have an extension, so a preview that asked it was one extension lookup
+away from nonsense — a titled `.xlsx` came back as "this format cannot be previewed". Reading the
+name off the path is also what keeps a document's *extracted text* previewing as text rather than
+as the PDF it came from.
+
 A **page's** preview also carries where the page came from — `FileContent.url`, attached by
 `GET /api/resources/:id/preview` from the row — which is what puts "open in browser" in this
 dialog's header. The dialog shows the app's stored copy of the reading, so a reader who wants the
