@@ -1175,8 +1175,12 @@ const mapSession = (r: SessionRow): Session => ({
   titleSource: r.title_source === "user" ? "user" : "auto",
   // A value nothing recognises reads as "never attempted" rather than as a title that landed —
   // which is the safe direction, since the only thing the answer decides is whether a retry is
-  // worth making.
-  titleState: r.title_state === "model" || r.title_state === "fallback" ? r.title_state : undefined,
+  // worth making. Adding a state to `TitleState` means adding it here too: this list is the whole
+  // of what reaches the wire, and a member left out is a state the client cannot see.
+  titleState:
+    r.title_state === "model" || r.title_state === "unnamed" || r.title_state === "fallback"
+      ? r.title_state
+      : undefined,
   // `=== 1`, not a truthiness test: a row written before the column existed reads `NULL`, and
   // `Boolean(null)` would be the right answer by accident rather than by rule.
   pinned: r.pinned === 1,
@@ -1998,6 +2002,17 @@ export interface AppDb {
     title: string,
     titleState: TitleState
   ): Session | undefined;
+  /**
+   * Record what the auto-titler decided **without writing a title** — the `"unnamed"` half of how
+   * a pass can end, where the model looked at the conversation and found nothing to name yet.
+   *
+   * The title column is untouched, so the conversation keeps the placeholder it was created with,
+   * which is the state the requirement asks for. Returns false when nothing was written: no live
+   * session of this account has that id, or a user rename has since taken the title out of the
+   * titler's hands — the same `title_source = 'auto'` guard `setAutoTitleForUser` carries, and for
+   * the same reason.
+   */
+  setTitleStateForUser(id: string, userId: string, titleState: TitleState): boolean;
   /**
    * Marks the conversation deleted. Returns false when no live session existed, or it belonged
    * to someone else. Its messages, links, plans and quiz rows all stay, as does the reserved
@@ -3453,6 +3468,20 @@ export function createDb(dbPath: string): AppDb {
       WHERE id = ? AND deleted_at IS NULL AND title_source = 'auto'
         AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
   );
+  /*
+   * The auto-titler's *other* write: it looked, and there was nothing to name.
+   *
+   * Same guard as the statement above, and the title column is not in the `SET` at all — the
+   * placeholder stays, which is what "still unnamed" means. `updated_at` is absent for the reason
+   * the pin toggle gives below: it is not activity. Nothing about the conversation changed, and a
+   * decline bumping it would reorder the sidebar to say a conversation had moved when all that
+   * happened is that a question was answered with "not yet".
+   */
+  const stmtSetTitleStateForUser = db.prepare(
+    `UPDATE sessions SET title_state = ?
+      WHERE id = ? AND deleted_at IS NULL AND title_source = 'auto'
+        AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
+  );
   const stmtSoftDeleteSessionForUser = db.prepare(
     `UPDATE sessions SET deleted_at = ?
       WHERE id = ? AND deleted_at IS NULL
@@ -4757,6 +4786,9 @@ export function createDb(dbPath: string): AppDb {
       if (changes === 0) return undefined;
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);
+    },
+    setTitleStateForUser(id, userId, titleState) {
+      return stmtSetTitleStateForUser.run(titleState, id, userId).changes > 0;
     },
     softDeleteSessionForUser(id, userId) {
       return stmtSoftDeleteSessionForUser.run(now(), id, userId).changes > 0;

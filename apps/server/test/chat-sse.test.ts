@@ -12,6 +12,7 @@ import type {
   Workspace,
 } from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
+import { DEFAULT_SESSION_TITLE } from "../src/db.js";
 import { serverTimeZone } from "../src/agent/clock.js";
 import { ensureWorkResource, registerFile } from "../src/resources.js";
 import { resolveFilePath } from "../src/resourcePaths.js";
@@ -808,16 +809,70 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(await sessionOf(session.id)).toMatchObject({ title: "My Own Title", titleSource: "user" });
   });
 
-  it("only titles the first turn", async () => {
+  it("keeps asking until the conversation has something to be named after", async () => {
+    /*
+     * The whole of the new rule. A conversation that opens with a greeting has nothing to name, and
+     * the titler says so rather than inventing a title from it — so the conversation keeps its
+     * placeholder and the *next* turn asks again. Nothing else could produce a name that means
+     * anything: an attempt is the only way to find out, and the first one can only be answered
+     * "not yet".
+     */
     const { session } = await freshSession();
-    llm.setTurns([{ content: "first" }]);
-    await chat(session.id, { message: "one" });
+    llm.setTitle("NO_TITLE");
+    llm.setTurns([{ content: "你好！有什么可以帮你的？" }]);
 
+    const first = await chat(session.id, { message: "你好" });
+
+    expect(first.events.some((e) => e.type === "title")).toBe(false);
+    expect(await sessionOf(session.id)).toMatchObject({
+      title: DEFAULT_SESSION_TITLE,
+      titleSource: "auto",
+      titleState: "unnamed",
+    });
+
+    // A turn with something in it: the same conversation, now nameable.
+    llm.setTitle("快速排序入门");
     llm.reset();
-    llm.setTurns([{ content: "second" }]);
-    const { events } = await chat(session.id, { message: "two" });
+    llm.setTurns([{ content: "快速排序是…" }]);
+    const second = await chat(session.id, { message: "帮我讲讲快速排序" });
 
-    expect(events.some((e) => e.type === "title")).toBe(false);
+    expect(second.events.find((e) => e.type === "title")).toEqual({
+      type: "title",
+      sessionId: session.id,
+      title: "快速排序入门",
+    });
+    expect(await sessionOf(session.id)).toMatchObject({
+      title: "快速排序入门",
+      titleState: "model",
+    });
+
+    // And having been named, it is left alone — the gate the leave path shares.
+    llm.setTitle("另一个标题");
+    llm.reset();
+    llm.setTurns([{ content: "继续。" }]);
+    const third = await chat(session.id, { message: "再讲讲" });
+
+    expect(third.events.some((e) => e.type === "title")).toBe(false);
+    expect(await sessionOf(session.id)).toMatchObject({ title: "快速排序入门" });
+  });
+
+  it("gives a conversation the model declined to name a title on a later turn", async () => {
+    // The same rule from the other side: a decline is not a decision about the conversation, only
+    // about what was in it when it was asked.
+    const { session } = await freshSession();
+    llm.setTitle("NO_TITLE");
+    llm.setTurns([{ content: "嗯。" }]);
+    await chat(session.id, { message: "你好" });
+
+    llm.setTitle("数据库索引");
+    llm.reset();
+    llm.setTurns([{ content: "索引是…" }]);
+    await chat(session.id, { message: "讲讲数据库索引" });
+
+    expect(await sessionOf(session.id)).toMatchObject({
+      title: "数据库索引",
+      titleState: "model",
+    });
   });
 
   it("replays the earlier turns as history", async () => {

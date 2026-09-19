@@ -769,35 +769,49 @@ Reasoning is persisted for display but **never replayed into history** — see
 
 #### Naming a conversation
 
-On the first turn only (`history.length === 0`), and only when the session is still
-`titleSource === "auto"`, the route calls `generateTitle()` (`agent/title.ts`) — a
-separate, non-streaming completion with `maxRetries: 0` and a 512-token cap. The budget is
-generous because reasoning models spend it on chain-of-thought before emitting any
-content; a tight cap returns an empty answer and no title. On failure the route falls back
-to `fallbackTitle()` (the user's own words, one line, ~40 chars), so a first turn always
-produces a usable name. Either way the title is saved and a `title` event is emitted
-between `message_done` and `done`, and neither path can turn a successful chat turn into
-an error.
+After **every** turn whose conversation is still `titleSource === "auto"` and not yet
+`title_state === "model"`, the route calls `generateTitle()` (`agent/title.ts`) — a separate,
+non-streaming completion with `maxRetries: 0` and a 512-token cap. The budget is generous because
+reasoning models spend it on chain-of-thought before emitting any content; a tight cap returns an
+empty answer and no title. What it reads is the conversation as it now stands (the opening message
+plus the most recent — `conversationExcerpt`), so a conversation that opens with a greeting can be
+named on a later turn, which is the whole reason the gate is not "the first turn".
 
-**Which of the two paths it took is recorded**, in `sessions.title_state` (`'model'` /
-`'fallback'`, absent for never attempted). That is a third question beside `title_source`;
-without it a model-written title and the user's own clipped words were the same value to every
-reader, so nothing could tell a named conversation from one that had merely failed to be named.
-The write is guarded — `title_source = 'auto'` is in the statement's own `WHERE`, not in its
+Three answers, and the caller must tell them apart:
+
+- **a title** — saved, and a `title` event is emitted between `message_done` and `done`;
+- **`NO_TITLE`** — the model read the conversation and there is nothing to name in it yet. No title
+  is written, `title_state` becomes `"unnamed"`, and the **next turn asks again**;
+- **a throw** — the route falls back to `fallbackTitle()` (the user's own words, one line, ~40
+  chars) and records `"fallback"`, so the next turn and the leave path both try again.
+
+Neither failure can turn a successful chat turn into an error, and a decline is not a failure: the
+difference is between a call that never worked and a model that looked and said no. `title_state`
+(`'model'` / `'unnamed'` / `'fallback'`, absent for never attempted) is a third question beside
+`title_source`; without it a model-written title and the user's own clipped words were the same
+value to every reader, and a decline had nowhere to be expressed at all.
+
+The writes are guarded — `title_source = 'auto'` is in the statement's own `WHERE`, not in its
 callers' checks — because a rename landing between the read and the write is otherwise an
 automatic title overwriting the name a person chose; `changes === 0` is how the caller learns it
-lost that race, and the SSE event is sent only when the write landed.
+lost that race, and the SSE event is sent only when the title write landed. Recording a decline
+(`setTitleStateForUser`) is the same statement with the title column left out of the `SET`, and
+deliberately does **not** bump `updated_at`: a conversation nobody has said anything in has not
+moved, and a decline reordering the sidebar would say it had.
 
-**A failed or never-attempted title gets a second chance when the reader leaves**, through
+**A titling that failed gets a second chance when the reader leaves**, through
 `POST /api/sessions/:id/leave`. The trigger is the client's, because only the browser knows the
 reader has gone and the server's own hook (`finishTurn`) is a turn ending rather than a reader
 leaving; the answer comes back on that response rather than on an SSE stream that no longer
 exists. Three things it deliberately is not: it never blocks the leave (the client reports and
 forgets), it cannot fail one (every failure is a 200, and the client says nothing), and it does
 **not** write the fallback — repeating that string would be a no-op that also marked the row as
-attempted. One in-flight attempt per conversation is joined rather than duplicated, and the
-client gates on the same predicate *before* reporting, so a conversation the model already named
-costs no request at all. `composables/sessionLeave.ts` holds the debounce.
+attempted. It is also not asked of a conversation whose state is `'unnamed'`: that means the turn
+which just ended put *this* conversation to the titler and was told there was nothing to name, so
+the second look would buy the same answer twice. One in-flight attempt per conversation is joined
+rather than duplicated, and the client gates on the same predicate *before* reporting — reading the
+live row rather than the one it was handed, since `loadSessions` replaces the list at the end of
+every turn. `composables/sessionLeave.ts` holds the debounce.
 
 The name is then run through `uniqueSessionTitle` (`sessionTitles.ts`) against its siblings in
 the workspace, which is why the answer that is *stored* may carry a `(2)` the model never
@@ -1136,7 +1150,7 @@ Deleting the last provider or the current default returns 409.
 
 The two endpoints that run a turn share `turnContext()` — provider, model and tool set,
 resolved identically — and `finishTurn()` — persist the assistant message, emit
-`message_done`, auto-title a first turn, emit `done`. It reads the **session and nothing
+`message_done`, auto-title the conversation while it has no name yet, emit `done`. It reads the **session and nothing
 else**: `session.settings` for the provider/model, `session.allTools`/`session.tools` for the
 allowlist, and no
 Copilot at all, since the conversation carries its own copy of everything a Copilot

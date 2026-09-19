@@ -155,7 +155,7 @@ import { serverTimeZone, turnClock, type TurnClock } from "./agent/clock.js";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { describeModel } from "./agent/model.js";
 import { classifyProviderError } from "./agent/providerErrors.js";
-import { fallbackTitle, generateTitle } from "./agent/title.js";
+import { fallbackTitle, generateTitle, type TitleMessage } from "./agent/title.js";
 import { uniqueSessionTitle } from "./sessionTitles.js";
 import { writeParsedText } from "./documents/store.js";
 import { needsSummary, summarizeImage } from "./agent/mediaSummary.js";
@@ -2601,36 +2601,36 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   const titleRetries = new Map<string, Promise<TitleRetryResult>>();
 
   /**
-   * The first thing the user said and the first thing the assistant said back — the same pair the
-   * first turn's titler was given.
+   * What the titler is given: the conversation as it now reads, or `undefined` when there is
+   * nothing worth a call yet.
    *
-   * Rebuilt from the persisted messages rather than remembered, because the attempt happens long
-   * after the turn that would have held them. The assistant side takes the first message with
-   * *content*: a turn that only called tools has an assistant message with nothing in it, and
-   * naming a conversation after that pair is exactly the case this route exists to retry.
+   * **Read from the persisted messages, never remembered** — and that is not only because the
+   * attempt outlives the turn that would have held them. It is what lets the titler run *again*
+   * on a later turn and see more than the first exchange: a conversation that opens with a
+   * greeting has its substance in turn two, and the whole point of asking more than once is being
+   * able to name it then.
+   *
+   * Both roles have to be present, an assistant message with actual text included: a turn that
+   * only called tools leaves an assistant message with nothing in it, and a conversation nobody has
+   * answered has nothing to name — the placeholder is the honest state until somebody has.
    */
-  function firstExchangeOf(
-    sessionId: string,
-    userId: string
-  ): { user: string; assistant: string } | undefined {
+  function titleMessagesFor(sessionId: string, userId: string): TitleMessage[] | undefined {
     const messages = db.listMessagesForUser(sessionId, userId);
-    const user = messages.find((m) => m.role === "user" && m.content.trim());
-    if (!user) return undefined;
-    const assistant = messages.find(
-      (m) => m.role === "assistant" && m.createdAt >= user.createdAt && m.content.trim()
-    );
-    if (!assistant) return undefined;
-    return { user: user.content, assistant: assistant.content };
+    if (!messages.some((m) => m.role === "user" && m.content.trim())) return undefined;
+    if (!messages.some((m) => m.role === "assistant" && m.content.trim())) return undefined;
+    return messages.map((m) => ({ role: m.role, content: m.content }));
   }
 
   /**
    * The reader has left this conversation — try again at the title it did not get.
    *
-   * The titler runs **once**, on the first turn, and `finishTurn` only reaches it when that turn
-   * produced text. So a conversation whose first reply was stopped, or whose titling call failed
-   * (no key, a rate limit, a reasoning model that spent its whole budget thinking), keeps the
-   * placeholder or the user's own clipped words for good — there was no second attempt and no way
-   * to ask for one. This is the way to ask.
+   * The titler runs after every turn the conversation is still its to name, so this is no longer
+   * the only second chance — it is the chance a *turn* cannot give. `finishTurn` only reaches the
+   * titler when a turn ends in prose, so a conversation whose replies were all stopped, or whose
+   * turns produced no text at all, keeps the placeholder for good; and a titling call that
+   * *failed* (no key, a rate limit, a reasoning model that spent its whole budget thinking) leaves
+   * the user's own clipped words standing until somebody asks again. The reader leaving is the
+   * moment to ask.
    *
    * **The trigger is the client's**, which is why this is an event API rather than a timer: only
    * the browser knows the reader has gone, and the server-side hook that would otherwise look for
@@ -2644,9 +2644,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * - **Not able to fail a leave.** Every failure is a response, not an error: the client has
    *   already navigated away, and a red toast about a conversation the reader has left is worse
    *   than the placeholder it is about. `skipped` and `failed` are both 200.
-   * - **Not the fallback path.** `autoTitle` falls back to the user's own words so a first turn is
-   *   never left nameless; repeating that here would write the same string again and mark the row
-   *   as attempted. Only a model title is a success.
+   * - **Not the fallback path.** `autoTitle` falls back to the user's own words when the call
+   *   fails; repeating that here would write the same string again and mark the row as attempted.
+   *   Only a model title is a success.
    *
    * One in-flight attempt per conversation, joined rather than duplicated: the client debounces,
    * but two tabs can still ask at once, and this is a model call.
@@ -2661,18 +2661,27 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const { session } = owned;
 
     /*
-     * Eligible when the title is still the titler's to set and it has not already succeeded. The
-     * client gates on the same pair before reporting at all, and the check is repeated here
-     * because that gate is two fields it may be holding from an hour ago.
+     * Eligible when the title is still the titler's to set, it has not already succeeded, and the
+     * last judgement is not still current — `"unnamed"` means the turn that just ended asked, of
+     * this exact conversation, and was told there was nothing to name. Asking again on the way out
+     * would cost a call to get the same answer back. `"fallback"` and absent are both worth
+     * another try: the first is a call that never worked, the second a turn that never asked.
+     *
+     * The client gates on the same fields before reporting at all, and the check is repeated here
+     * because that gate is state it may be holding from a while ago.
      */
-    if (session.titleSource !== "auto" || session.titleState === "model") {
+    if (
+      session.titleSource !== "auto" ||
+      session.titleState === "model" ||
+      session.titleState === "unnamed"
+    ) {
       return { status: "skipped" as const };
     }
 
-    const exchange = firstExchangeOf(session.id, userId);
-    // Nothing to name: the conversation has not been answered yet, so there is no exchange to
-    // read and the next leave is the one that will have something to work with.
-    if (!exchange) return { status: "skipped" as const };
+    const messages = titleMessagesFor(session.id, userId);
+    // Nothing to name: nobody has answered this conversation yet, so there is no exchange to read
+    // and the next leave — once there is one — is the one that will have something to work with.
+    if (!messages) return { status: "skipped" as const };
 
     const inFlight = titleRetries.get(id);
     if (inFlight) return inFlight;
@@ -2681,12 +2690,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       const provider = db.getProvider(resolveProviderId(undefined, session.settings));
       const modelId = resolveModelId(provider, undefined, session.settings);
       try {
-        const generated = await generateTitle({
-          provider,
-          modelId,
-          userMessage: exchange.user,
-          assistantMessage: exchange.assistant,
-        });
+        const generated = await generateTitle({ provider, modelId, messages });
+        /*
+         * The same decline the turn path records, for the same reason: nothing is written as a
+         * title, and the state moves so the next leave does not ask this question again.
+         */
+        if (generated === null) {
+          db.setTitleStateForUser(id, userId, "unnamed");
+          return { status: "skipped" as const };
+        }
         const unique = uniqueTitleIn(session.workspaceId, userId, generated, id);
         // The write can lose a race with a rename, and then there is no new title to report.
         if (!db.setAutoTitleForUser(id, userId, unique, "model")) {
@@ -4011,14 +4023,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Best-effort conversation naming.
-   *
-   * A model-written title is preferred, but a failure must never leave the conversation
-   * showing the create-time placeholder — the whole point is that a first turn produces
-   * a usable name. So any throw degrades to a title derived from the user's own words,
-   * and only a total absence of text leaves the placeholder in place.
-   */
-  /**
    * Describe the images this turn sent to the model, once per source.
    *
    * Fire-and-forget from `finishTurn`, like the titler, and for the same reason: it is a model
@@ -4126,30 +4130,46 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   /**
-   * A title for a new conversation, and **how it was arrived at**.
+   * A title for a conversation, and **how it was arrived at** — the answers a caller has to tell
+   * apart, in the vocabulary of the column that records them.
    *
-   * The second half is new and it is the whole reason the retry can exist: this used to return a
-   * bare string, so a model-written title and the user's own clipped words were the same value to
-   * every caller — both leave `titleSource: "auto"` with a non-empty title, and nothing anywhere
-   * could tell a named conversation from one that had merely failed to be named.
+   * `"model"` is the model naming it and `"fallback"` is the call not working, so the successful
+   * pair is returned as the `TitleState` to store and the caller writes it straight through.
+   * `"declined"` is the third answer and the new one: the model read the conversation and found
+   * nothing to name in it yet — no title, and the next turn asks again.
+   *
+   * They used to be one value. This returned a bare string, so a model-written title and the user's
+   * own clipped words were indistinguishable to every caller — both leave `titleSource: "auto"`
+   * with a non-empty title — and a *decline* had nowhere to be expressed, so the only way to leave
+   * a conversation unnamed was never to ask at all.
    */
   async function autoTitle(input: {
     provider: ProviderRecord | undefined;
     modelId: string;
-    userMessage: string;
-    assistantMessage: string;
+    messages: readonly TitleMessage[];
     /** This pass's own ledger reporter — see `passRecorder`. */
     onUsage?: (usage: MessageUsage, durationMs: number) => void;
-  }): Promise<{ title: string; state: TitleState } | undefined> {
+  }): Promise<{ status: "model" | "fallback"; title: string } | { status: "declined" }> {
     try {
-      return { title: await generateTitle(input), state: "model" };
+      const title = await generateTitle(input);
+      if (title === null) return { status: "declined" };
+      return { status: "model", title };
     } catch (err) {
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
         "auto-title fell back to the user's own words"
       );
-      const title = fallbackTitle(input.userMessage, input.assistantMessage);
-      return title ? { title, state: "fallback" } : undefined;
+      /*
+       * A failed call is not a decline: nothing was learned about whether the conversation has
+       * substance, so the conversation is named after the user's own words and the state is the one
+       * that says "this is worth another try" rather than the one that says "there is nothing
+       * here". The two converge only when the user's own words clean up to nothing at all (a
+       * question mark on its own), and then a decline is the honest summary: either way no title is
+       * written, and the conversation stays on its placeholder.
+       */
+      const first = input.messages.find((m) => m.role === "user" && m.content.trim());
+      const title = fallbackTitle(first?.content ?? "");
+      return title ? { status: "fallback", title } : { status: "declined" };
     }
   }
 
@@ -4688,7 +4708,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
   /**
    * Persist what a turn produced and close the stream: the assistant message, its
-   * `message_done`, the conversation title when this was the first turn, and `done`.
+   * `message_done`, the conversation title when the conversation has not got one yet, and `done`.
    *
    * A turn that suspended on `ask_user` goes through here like any other — its assistant
    * message simply carries a tool call with `status: "awaiting"` and no `output`, which
@@ -4702,7 +4722,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     result: RunAgentResult,
     sse: ReturnType<typeof createSseWriter>,
     opts: {
-      historyLength: number;
       userMessage: string | null;
       /** Whose tree the image bytes live in, for the summary pass below. */
       user: UserLayout;
@@ -4805,47 +4824,63 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       }),
     });
 
-    // Name the conversation from its first exchange, unless the user already typed a
-    // title (which flips `titleSource` to `user`) or this isn't the first turn. A resume
-    // has no user message to name it from, and is never the first turn anyway. A turn
-    // stopped before any text arrived has nothing to name it after either.
-    const isFirstTurn = opts.historyLength === 0;
-    if (
-      isFirstTurn &&
-      session.titleSource !== "user" &&
-      opts.userMessage !== null &&
-      result.content.trim()
-    ) {
-      const titled = await autoTitle({
-        provider: ctx.provider,
-        modelId: ctx.modelId,
-        userMessage: opts.userMessage,
-        assistantMessage: result.content,
-        onUsage: passRecorder({
-          userId,
-          workspaceId: session.workspaceId,
-          sessionId: id,
+    /*
+     * Name the conversation, unless the user already typed a title (which flips `titleSource` to
+     * `user`) or the model has already named it.
+     *
+     * **On every turn, not only the first.** A conversation that opens with `你好` has nothing to
+     * name, and the model says so rather than inventing a title from it — and then the *next* turn
+     * asks again, which is the only way a name that means something can ever arrive. The state that
+     * closes this gate is the model having actually produced one.
+     *
+     * The excerpt comes from the persisted messages rather than from this turn's arguments, so a
+     * turn nobody typed (`/regenerate`, a resumed `ask_user`) is a legitimate attempt too: the
+     * question it is answering is already in the history.
+     */
+    if (session.titleSource !== "user" && session.titleState !== "model") {
+      // Read only once the gate is open: a conversation the model has already named must not pay
+      // for a message query on every turn of its life.
+      const messagesToTitle = titleMessagesFor(id, userId);
+      if (messagesToTitle) {
+        const titled = await autoTitle({
           provider: ctx.provider,
           modelId: ctx.modelId,
-          purpose: "title",
-        }),
-      });
-      if (titled) {
-        /*
-         * Numbered against its siblings, itself excluded — the titler is guessing at a name and
-         * has no idea what else is in the list, so two conversations that open the same way
-         * would otherwise both be called `什么是递归`. The number is what the SSE event
-         * carries, so the sidebar shows the same string the database now holds.
-         */
-        const unique = uniqueTitleIn(session.workspaceId, userId, titled.title, id);
-        /*
-         * The write decides whether there is anything to announce: it refuses when the title is
-         * no longer the titler's to set, which the user can make true by renaming mid-turn. The
-         * event used to be sent regardless, so the sidebar would show a name the database had
-         * just declined to hold.
-         */
-        if (db.setAutoTitleForUser(id, userId, unique, titled.state)) {
-          sse.send({ type: "title", sessionId: id, title: unique });
+          messages: messagesToTitle,
+          onUsage: passRecorder({
+            userId,
+            workspaceId: session.workspaceId,
+            sessionId: id,
+            provider: ctx.provider,
+            modelId: ctx.modelId,
+            purpose: "title",
+          }),
+        });
+        if (titled.status === "declined") {
+          /*
+           * The model read the conversation and there was nothing in it to name. The title column
+           * is left alone — the conversation keeps the placeholder it was created with, which is
+           * the state the requirement asks for and the reason no event is sent — and only the
+           * state moves, so the next turn knows the question has already been asked of *this*
+           * content and a leave does not ask it a third time.
+           */
+          db.setTitleStateForUser(id, userId, "unnamed");
+        } else {
+          /*
+           * Numbered against its siblings, itself excluded — the titler is guessing at a name and
+           * has no idea what else is in the list, so two conversations that open the same way
+           * would otherwise both be called `什么是递归`. The number is what the SSE event
+           * carries, so the sidebar shows the same string the database now holds.
+           */
+          const unique = uniqueTitleIn(session.workspaceId, userId, titled.title, id);
+          /*
+           * The write decides whether there is anything to announce: it refuses when the title is
+           * no longer the titler's to set, which the user can make true by renaming mid-turn. The
+           * event used to be sent regardless, so the sidebar would show a name the database had
+           * just declined to hold.
+           */
+          if (db.setAutoTitleForUser(id, userId, unique, titled.status)) {
+            sse.send({ type: "title", sessionId: id, title: unique });
+          }
         }
       }
     }
@@ -5204,7 +5239,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
       await finishTurn(id, userId, session, ctx, result, sse, {
         durationMs: Date.now() - turnStartedAt,
-        historyLength: history.length,
         userMessage: message,
         user: treeFor(actor(request)),
         // The attachments *and* the references: both were sent as material, and an image the
@@ -5366,7 +5400,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
       await finishTurn(id, userId, session, ctx, result, sse, {
         durationMs: Date.now() - turnStartedAt,
-        historyLength: history.length,
         userMessage: null,
         user: treeFor(actor(request)),
       });
@@ -5394,9 +5427,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * answer it is being asked to replace. It is replaced rather than duplicated, and a failure
    * leaves the ⚠️ row `failTurn` writes as the new tail — the user can retry again.
    *
-   * No title: a regenerate is never a first turn (`history` holds at least the user message,
-   * so `finishTurn`'s `historyLength === 0` test is false), and the conversation already has
-   * whatever name it earned.
+   * A regenerate *does* reach the titler, and that is deliberate rather than incidental: the
+   * excerpt is read from the persisted messages, so a conversation the titler has not managed to
+   * name yet — because the call failed, or because the model found nothing to name in the old
+   * reply — gets the new answer as evidence on the way through. A conversation that already has a
+   * name is one the gate leaves alone, exactly as on any other turn.
    */
   app.post("/api/sessions/:id/regenerate", { config: { requiresSessionLock: true } }, async (request, reply) => {
     const userId = actor(request).id;
@@ -5510,7 +5545,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
       await finishTurn(id, userId, session, ctx, result, sse, {
         durationMs: Date.now() - turnStartedAt,
-        historyLength: history.length,
         userMessage: null,
         user: treeFor(actor(request)),
       });

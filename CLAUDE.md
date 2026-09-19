@@ -974,10 +974,20 @@ Fuller map in `docs/reference.md`.
   used to appear only when the model had said nothing at all, which meant every truncated
   turn that had narrated anything — the common case — read as a finished answer. Like the
   `⚠️ ` prefix it is untranslated on purpose: it is content, replayed to the model next turn.
-- **A user's title is permanent.** `session.titleSource` is `auto` until a human
-  supplies a title via `PATCH /api/sessions/:id`, which flips it to `user`; the
-  auto-titler must then never touch it. The titler runs on the first turn only, and
-  every failure is swallowed — it must not be able to fail a chat turn.
+- **A user's title is permanent, and an automatic one is not until it means something.**
+  `session.titleSource` is `auto` until a human supplies a title via `PATCH /api/sessions/:id`,
+  which flips it to `user`; the auto-titler must then never touch it. Otherwise the titler runs
+  after **every** turn, not only the first, and `sessions.title_state` is what says how the last
+  pass fared: `"model"` closes the gate, `"fallback"` is a call that failed (the user's own words
+  are showing, and the next turn and the leave path both ask again), and `"unnamed"` is the model
+  having **looked and found nothing to name** — the conversation keeps its placeholder, the next
+  turn asks again, and a *leave* deliberately does not, because the turn that just ended already
+  asked about the same content. That answer is `NO_TITLE`, parsed by `isDeclined`, and the match is
+  one-directional on purpose: a title read as a decline costs one more turn, while a decline read as
+  a title would be written down and marked done. What the titler reads is the conversation
+  (`conversationExcerpt`, the opening message plus the most recent), never the turn's own arguments,
+  which is also why a `regenerate` is a legitimate attempt. Every failure is swallowed — it must not
+  be able to fail a chat turn.
 - **Thread classification is a best-effort post-turn side effect, never part of the turn.**
   The thread widget (`apps/server/src/threads.ts` + `agent/threads.ts`) classifies *turns*
   (a user message plus its assistant replies), not individual messages, after every

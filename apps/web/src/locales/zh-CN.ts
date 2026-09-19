@@ -423,7 +423,7 @@ export default {
      * button: the title itself is the control, so this is where the gesture is taught.
      */
     editTitleHint: "点击编辑标题",
-    autoBadgeTitle: "标题由 AI 根据第一轮对话自动生成",
+    autoBadgeTitle: "标题由 AI 根据对话内容自动生成",
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
     startAction: "新建会话（选择助理）",
@@ -640,8 +640,8 @@ export default {
      * Two roles, one string: the store **writes** this as the title at creation — in the
      * language being read, which is why it is a catalog key rather than the server's constant —
      * and it is still the fallback a list renders for a title that is somehow empty. It is a
-     * placeholder either way: `titleSource` stays `auto`, so the auto-titler replaces it after
-     * the first turn.
+     * placeholder either way: `titleSource` stays `auto`, so the auto-titler replaces it once the
+     * conversation has something to be named after.
      */
     fallbackTitle: "（未命名）会话",
     new: {

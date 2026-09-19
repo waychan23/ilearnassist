@@ -29,7 +29,12 @@ import { closeCopilots, closeSources, uiState } from "../composables/ui";
 // see `router/index.ts`.
 import { router } from "../router";
 import { emitWidgetEvent } from "../composables/widgetEvents";
-import { forgetSession, noteSession, onRetitled } from "../composables/sessionLeave";
+import {
+  forgetSession,
+  noteSession,
+  onRetitled,
+  onSessionLookup,
+} from "../composables/sessionLeave";
 import { widgetPanel } from "../composables/widgetPanel";
 import { WIDGET_MODULES, type WidgetInstall } from "../widgets/registry";
 import type {
@@ -1382,8 +1387,9 @@ export const useAppStore = defineStore("app", () => {
        * way and for the same reason — see `workspace.defaultName`, which this mirrors.
        *
        * It is sent **with** `titleSource: "auto"`, which is what makes it a placeholder: the
-       * auto-titler still replaces it after the first turn. A name the user actually typed is a
-       * different thing, and `NewSessionDialog` sets it afterwards so it reads as `user`.
+       * auto-titler replaces it as soon as it has something to name the conversation after, which
+       * may take a turn or two. A name the user actually typed is a different thing, and
+       * `NewSessionDialog` sets it afterwards so it reads as `user`.
        */
       title: options.title ?? i18n.global.t("session.fallbackTitle"),
       copilotId: options.copilotId ?? activeCopilotId.value ?? null,
@@ -1467,6 +1473,13 @@ export const useAppStore = defineStore("app", () => {
   // Registered once per store, and an assignment rather than a subscription — see
   // `composables/sessionLeave.ts` for why that is the shape with no lifetime to get wrong.
   onRetitled(applyRetitle);
+  /*
+   * …and the same shape for the read the leave gate makes. It goes through the store because this
+   * is where the live rows are: `loadSessions` replaces the whole list at the end of every turn,
+   * so a session object handed to `sessionLeave` on the way into a conversation is a snapshot of
+   * what it looked like then — and the field the gate reads is one the turn has since changed.
+   */
+  onSessionLookup((id) => sessions.value.find((s) => s.id === id));
 
   async function loadWorkspaceWidgets(): Promise<void> {
     const workspaceId = activeWorkspaceId.value;

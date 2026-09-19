@@ -302,16 +302,31 @@ describe("POST /api/sessions/:id/regenerate", () => {
     ]);
   });
 
-  it("does not re-title the conversation", async () => {
-    const session = await freshSession();
+  it("leaves a named conversation alone, and lets an unnamed one be named", async () => {
+    /*
+     * A regenerate is not a first turn, and it no longer has to be one: the titler reads the
+     * conversation rather than the turn's arguments, so what decides is whether the conversation
+     * has a name yet. A named one is left alone; one the titler has not managed to name is handed
+     * the replacement answer as evidence, which is the only turn that reply will ever be part of.
+     */
+    const named = await freshSession();
     llm.setTurns([{ content: "an answer" }]);
-    const first = await chat(session.id, { message: "name this conversation" });
+    const first = await chat(named.id, { message: "name this conversation" });
     expect(eventTypes(first.res.body)).toContain("title");
 
     llm.setTurns([{ content: "another answer" }]);
-    const { res } = await regenerate(session.id);
-    // A regenerate is never a first turn: the user message it answers is still there.
-    expect(eventTypes(res.body)).not.toContain("title");
+    const quiet = await regenerate(named.id);
+    expect(eventTypes(quiet.res.body)).not.toContain("title");
+
+    const unnamed = await freshSession();
+    llm.setTitle("");
+    llm.setTurns([{ content: "an answer" }]);
+    await chat(unnamed.id, { message: "name this conversation" });
+
+    llm.setTitle("Now It Has A Name");
+    llm.setTurns([{ content: "another answer" }]);
+    const { res } = await regenerate(unnamed.id);
+    expect(eventTypes(res.body)).toContain("title");
   });
 
   it("refuses on an empty conversation, a user tail, and an active turn", async () => {

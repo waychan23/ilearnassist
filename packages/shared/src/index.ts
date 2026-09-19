@@ -3015,8 +3015,8 @@ export interface Copilot {
 }
 
 /**
- * Where a conversation's title came from. `auto` means a model wrote it after the first
- * turn and may rewrite it; `user` means a person typed it and it must never be touched.
+ * Where a conversation's title came from. `auto` means a model wrote it after a turn and may
+ * rewrite it; `user` means a person typed it and it must never be touched.
  */
 export type TitleSource = "auto" | "user";
 
@@ -3027,14 +3027,18 @@ export type TitleSource = "auto" | "user";
  * exists: that one says *who owns* the title, and this says **how the automatic pass fared**.
  *
  * - `"model"` — the model wrote the title. Nothing left to do.
+ * - `"unnamed"` — the titler looked and declined: the conversation has nothing to name yet, so it
+ *   keeps its placeholder and the **next turn asks again**. A different fact from absent, which is
+ *   "never asked", and the difference is load-bearing on the leave path: a reader leaving right
+ *   after a turn that asked and found nothing would otherwise pay for the same question twice.
  * - `"fallback"` — the call failed, and what is showing is the user's own clipped words. This is
- *   the state the retry exists for, and it used to be indistinguishable from the one above: both
+ *   the state the retry exists for, and it used to be indistinguishable from `"model"`: both
  *   leave `titleSource: "auto"` and a non-empty title, so nothing could tell a titled conversation
  *   from one that had merely failed to be.
  * - absent — never attempted, because the turn produced no text to name. The title is still the
  *   create-time placeholder, which is equally worth another try.
  */
-export type TitleState = "model" | "fallback";
+export type TitleState = "model" | "unnamed" | "fallback";
 
 /**
  * What `POST /api/sessions/:id/leave` answers.
@@ -3694,7 +3698,11 @@ export type ChatStreamEvent =
    * stream. `id` names the row; nothing else about it travels.
    */
   | { type: "message_removed"; id: string }
-  /** Sent after the first turn when a model-written title replaced the placeholder. */
+  /**
+   * A turn named the conversation. Sent whenever the titler produces a title — which is any turn
+   * up to the one where it lands, not only the first — and never for a decline, since nothing on
+   * screen changed.
+   */
   | { type: "title"; sessionId: string; title: string }
   /**
    * The `ila_make_plan` "new session" fork committed a V1 plan into a freshly created
