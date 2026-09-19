@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import builtinCatalog from "./builtin.json";
 import type {
   Attachment,
   Copilot,
@@ -740,6 +741,17 @@ export const SETTING_DOCUMENT_DEFAULT_PARSER = "documentParsing.defaultParserId"
  * the user deliberately deleted.
  */
 export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
+
+/**
+ * Marks that `builtin.json`'s assistants have been created at least once.
+ *
+ * A marker rather than "the table is empty", for the reason above and one more: a built-in
+ * assistant the owner deletes must **stay** deleted. The row survives a soft delete, so
+ * "is the table empty" would answer no and re-insert nothing — until someone purged the rows,
+ * at which point every boot would resurrect an assistant somebody had deliberately removed.
+ * The marker makes "this installation has had its built-ins" a fact that outlives them.
+ */
+export const SETTING_BUILTIN_COPILOTS_SEEDED = "builtin.copilots.seeded";
 
 /**
  * The largest file an account may upload, in bytes, as an administrator set it.
@@ -5754,6 +5766,72 @@ export function seedDocumentParsersFromConfig(
   }
 
   return !alreadySeeded;
+}
+
+/* ------------------------- built-in assistants (builtin.json) ------------------------- */
+
+/** One entry of `builtin.json`, which maps field-for-field onto a `copilots` row. */
+interface BuiltInCopilotDef {
+  id: string;
+  name: string;
+  description: string;
+  visibility: "private" | "public";
+  allTools: boolean;
+  tools: string[];
+  settings: CopilotDefaults;
+  widgets: string[];
+  systemPrompt: string;
+}
+
+const BUILT_IN_COPILOTS = (builtinCatalog as { copilots: BuiltInCopilotDef[] }).copilots;
+
+/**
+ * Create the assistants shipped in `builtin.json`, owned by the installation's administrator.
+ *
+ * **Ownership is why this is not part of `config.yaml`.** A Copilot carries a `user_id`, and on
+ * a fresh install there is no account to own one — so this runs at the two moments an
+ * administrator can come into being: inside `createAdmin`'s transaction, and at server start
+ * for a data root that already has one. There is deliberately no third path; a boot-time scan
+ * for "an admin exists but has no assistants" would recreate one the owner had deleted.
+ *
+ * **Every entry is `public`, and that is what makes it built in.** The row belongs to the
+ * administrator, and the read predicate is `user_id = ? OR visibility = 'public'`, so a private
+ * built-in would be invisible to every other account — present, correct, and useless to the
+ * people it was shipped for. `apps/server/test/builtin.test.ts` holds the shipped file to it.
+ *
+ * Returns whether anything was created, so a caller can stay quiet about a no-op.
+ */
+export function seedBuiltInCopilots(db: AppDb, ownerId: string): boolean {
+  if (db.getSetting(SETTING_BUILTIN_COPILOTS_SEEDED) !== undefined) return false;
+
+  for (const entry of BUILT_IN_COPILOTS) {
+    // Belt for a database somebody assembled by hand: the marker is normally what prevents a
+    // second insert, and without this an existing row would collide on the primary key and take
+    // the boot down. Every application entity is soft-deleted, so a *deleted* built-in still has
+    // its row — which is exactly the case the marker is there to respect.
+    const exists = db.raw.prepare("SELECT 1 FROM copilots WHERE id = ?").get(entry.id);
+    if (exists) continue;
+
+    db.createCopilot({
+      id: entry.id,
+      userId: ownerId,
+      name: entry.name,
+      description: entry.description,
+      systemPrompt: entry.systemPrompt,
+      allTools: entry.allTools,
+      tools: entry.tools,
+      settings: entry.settings,
+      // Filtered rather than written through: `widget_instances` is read through the registry,
+      // so an id this build does not know would install nothing while looking installed. A test
+      // asserts the shipped file names only ids that exist, which is where that belongs — the
+      // alternative is a boot that refuses over a bundled file.
+      widgets: entry.widgets.filter(isWidgetId),
+      visibility: entry.visibility,
+    });
+  }
+
+  db.setSetting(SETTING_BUILTIN_COPILOTS_SEEDED, "1");
+  return true;
 }
 
 /** Current parsing policy, falling back to the config file for anything unset. */
