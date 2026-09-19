@@ -184,6 +184,7 @@ import {
 } from "./resourcePaths.js";
 import {
   adoptPageParse,
+  deleteWorkResource,
   ensureWorkResource,
   filePathsFor,
   fileOwner,
@@ -1810,15 +1811,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Delete a file, or an empty directory.
+   * Delete a file from the file manager, or an empty directory.
    *
-   * **The bytes move to `trash/`, they are not destroyed**, and the row is soft-deleted: the row
-   * is what hides the file from every listing at once, and the bytes being kept is what a future
-   * restore would restore. `storage: "trash"` records *where* they went, which is the one field
-   * that changes about a source and the reason it is a field.
+   * **The route is a path; the operation is a reference.** A file tree can only name what it is
+   * showing, so this is where "delete `notes/plan.md`" is turned into "delete the work resource
+   * that represents that file here" — and the deleting itself is
+   * `deleteWorkResource`'s, the same call the library's rows make. That is what makes one intent
+   * have one consequence and one sentence in the dialog, whichever surface the reader pressed.
    *
-   * A populated directory is refused, exactly as the agent's `delete_file` refuses it. One click
-   * in a browser is not a good place to be recursively destroying work someone never saw.
+   * Two things a directory needs that a file does not: the bytes move without a row to mark (its
+   * contents are separate rows, each deleted on the way down), and an unreferenced file — one no
+   * writer ever made referenceable — has no work resource at all, so there is nothing to delete
+   * but the bytes. Both are the file manager's own cases, not exceptions to the rule.
+   *
+   * **The bytes move to `trash/`, they are not destroyed**: the row is what hides the file from
+   * every listing at once, and the bytes being kept is what a future restore would restore. A
+   * populated directory is refused, exactly as the agent's `delete_file` refuses it — one click in
+   * a browser is not a good place to be recursively destroying work someone never saw.
    */
   app.delete("/api/workspaces/:workspaceId/files", async (request, reply) => {
     const target = writeTarget(request);
@@ -1829,9 +1838,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
 
     try {
-      // The file row is resolved (or made) before the bytes move, because its id is what
-      // namespaces the trash directory — two deletions from different directories must not
-      // collide.
+      // The file row is resolved (or made) before anything moves, because its id namespaces the
+      // trash directory — two deletions from different directories must not collide — and because
+      // it is what says which work resource represents this file.
       const size = await stat(join(target.workspace.workdirPath, path)).then(
         (info) => info.size,
         () => 0
@@ -1846,6 +1855,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           size,
         });
 
+      const held = db
+        .listWorkResourcesForResource(target.userId, "file", file.id)
+        .find((row) => row.ownerType === "workspace" && row.ownerId === target.workspace.id);
+      if (held) {
+        // The one operation: the reference goes, its material goes, and every *other* reference
+        // to that material stays where it is and reports the loss when it is opened.
+        await deleteWorkResource(db, treeFor(actor(request)), {
+          userId: target.userId,
+          id: held.id,
+        });
+        return { ok: true, path };
+      }
+
       const removed = await deletePath(
         target.workspace.workdirPath,
         workspaceTrashDir(target.workspace.dirPath),
@@ -1859,30 +1881,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           path: trashFilePath(target.workspace.slug, file.id, path),
         });
         db.softDeleteFileForUser(file.id, target.userId);
-        /*
-         * And every reference to it, explicitly.
-         *
-         * The entity join already *hides* them — a reference whose file is soft-deleted resolves
-         * to no entity and drops out of every listing — so this changes nothing a reader sees.
-         * What it changes is what the rows mean: "the thing this points at is gone" is now a fact
-         * on them rather than a conclusion drawn from somebody else's column, and
-         * `countReferencesForEntities` answers about live rows. A reference left behind would be
-         * a second copy of nothing, which is what the library's delete dialog tells the reader it
-         * is about to do.
-         *
-         * A directory has no single file row, so there is nothing to sweep for one — its contents
-         * are separate rows, deleted one at a time by the same route on the way down.
-         */
-        for (const held of db.listWorkResourcesForResource(target.userId, "file", file.id)) {
-          db.softDeleteWorkResourceForUser(held.id, target.userId);
-        }
-        /*
-         * And every conversation's **reference** to it. A reference is not a holding row, so the
-         * sweep above does not reach it: it admits an entity rather than being admitted by it, and
-         * a reference left behind would be a row pointing at bytes that are gone. A real DELETE —
-         * this table records an act rather than an entity, and there is nothing to restore.
-         */
-        db.deleteReferencesToResource("file", file.id);
       }
       return { ok: true, path: removed.rel };
     } catch (err) {
@@ -3690,22 +3688,22 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Remove this conversation's *reference* to a file.
+   * Delete a reference — **and the material it names**, which is its internal consequence.
    *
-   * The **reference**, not the file, and the difference is the whole of the v4 model. A file is
-   * the account's; a work resource is one owner's use of it. Deleting here takes the row out of
-   * this owner's list and leaves the bytes, the file's row and every *other* owner's reference
-   * exactly where they were — deleting a file from a conversation must not take it out of
-   * another conversation that is working from it.
+   * The one delete. A `work_resources` row is the handle everything else reaches material through,
+   * so this is what "delete this" means: the reference goes, its file or page goes with it, and
+   * every *other* reference to that material stays where it is — dangling, and reported as gone
+   * wherever it is opened (the panel omits it, `read_document` loses it, the chip in a message
+   * says so). Nothing here rewrites another conversation's records, and nothing sweeps
+   * `session_references`: see the table's own comment in the schema for why standing on the
+   * reference is what makes that safe.
    *
-   * Removing the bytes is the file manager's job, and it says so by moving them to the trash —
-   * a different action with a different consequence, which is why the two are not one route.
+   * The file manager's route reaches the same operation from a path, which is the only thing a
+   * file tree can name. `messages.attachments` snapshots were always kept: a message sent with a
+   * PDF keeps showing what was sent rather than the chip vanishing from history it was part of.
    *
-   * The `messages.attachments` snapshots were always kept: a message sent with a PDF keeps
-   * showing what was sent, rather than the chip vanishing from history it was part of.
-   *
-   * An in-flight parse is still cancelled — not to protect the bytes, which are staying, but so
-   * a parse that can never be read does not keep running against a file the user has put away.
+   * An in-flight parse is cancelled — not to protect bytes that are on their way out, but so a
+   * parse that can never be read does not keep running against a file the user has deleted.
    */
   app.delete("/api/resources/:id", async (request, reply) => {
     const user = actor(request);
@@ -3714,7 +3712,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     if (!resource) return reply.code(404).send(apiError("RESOURCE_NOT_FOUND", "file not found"));
 
     documents.cancelResource(resource.id);
-    db.softDeleteWorkResourceForUser(resource.id, user.id);
+    try {
+      await deleteWorkResource(db, treeFor(user), { userId: user.id, id: resource.id });
+    } catch (err) {
+      const { status, body: failure } = fileErrorReply(err);
+      return reply.code(status).send(failure);
+    }
     return { ok: true };
   });
 
@@ -4411,6 +4414,35 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
             title: file.title,
           })?.id;
         },
+        /*
+         * The other half, and it is `deleteWorkResource` rather than an unlink — the same call the
+         * file manager's route and the library's rows end in. Two writers of "this file is gone"
+         * is how a `files` row ends up naming bytes that are not there, which is the state
+         * `delete_file` used to leave: it unlinked and touched no row at all.
+         *
+         * The reference looked up is **this turn's owner** — the workspace's for a workdir file,
+         * this conversation's for its own — because that is the row the tool is deleting from
+         * under itself. A sibling conversation's reference to the same bytes is none of its
+         * business; it keeps its row and reports the loss when somebody opens it.
+         */
+        unregister: async ({ location, relPath }) => {
+          const stored =
+            location === "workspace"
+              ? workspaceFilePath(workspace.slug, relPath)
+              : sessionFilePath(workspace.slug, session.id, relPath);
+          const file = db.getFileByPath(input.userId, stored);
+          if (!file) return false;
+          const owner = fileOwner(location, {
+            workspaceId: workspace.id,
+            sessionId: session.id,
+          });
+          const held = db
+            .listWorkResourcesForResource(input.userId, "file", file.id)
+            .find((row) => row.ownerType === owner.kind && row.ownerId === owner.id);
+          if (!held) return false;
+          await deleteWorkResource(db, input.user, { userId: input.userId, id: held.id });
+          return true;
+        },
       },
       webSearch: config.tools.webSearch,
       webFetch: config.tools.webFetch,
@@ -5020,14 +5052,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     /*
      * A `@`-reference is the user pointing at their own material, wherever it is — and what makes
-     * it readable on the *next* turn too is a **reference of this conversation's own**, not a copy
-     * for this one. It is recorded in `session_references`: the fact that this conversation is
-     * *about* that entity, which is a different relation from *holding* it.
+     * it readable on the *next* turn too is a **link of this conversation's own**, not a copy for
+     * this one. It is recorded in `session_references`: the fact that this conversation is *about*
+     * that **work resource**, which is a different relation from *holding* it.
+     *
+     * **The handle is the reference id, and that is v5's change.** The row used to name the
+     * *entity*, which made "referred to" mean "any holder of" — the panel then listed every holder
+     * of anything the conversation had pointed at. What the user points at is a reference, and it
+     * is what gets recorded.
      *
      * **It deliberately does not create a holding row.** It used to, and that is what made the
      * library show one file once per conversation that had mentioned it: the library lists
-     * holdings, and a link was wearing the same row shape. A conversation that already holds the
-     * entity has nothing to write at all — holding it already implies referring to it.
+     * holdings, and a link was wearing the same row shape. A conversation that already holds *this
+     * row* has nothing to write at all — holding it already implies referring to it.
      *
      * A side effect of the request rather than of `resolveReferences`, which stays read-only on
      * purpose: replay resolves references on every later turn, and a replay that wrote would
@@ -5043,8 +5080,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         db.addSessionReference({
           id: newId(),
           sessionId: id,
-          resourceType: held.resourceType,
-          resourceId: held.resourceId,
+          workResourceId: held.id,
         });
       }
       referencedAttachments.push(toAttachment(held, held.title));

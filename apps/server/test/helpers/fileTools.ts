@@ -19,6 +19,16 @@ export interface FileToolHarness {
   ctx: FileToolContext;
   /** Every `register` call, in order — what the registry would have been handed. */
   written: Array<{ location: FileLocation; relPath: string; size: number }>;
+  /** Every `unregister` call, in order — the deletions the registry would have performed. */
+  removed: Array<{ location: FileLocation; relPath: string }>;
+  /**
+   * Whether `unregister` claims to have handled the file, per test.
+   *
+   * The real one answers by whether the file has a reference; here it is a switch, because the
+   * tool's own behaviour is what these tests are about — "did it unlink when the registry said
+   * no" and "did it leave the bytes alone when the registry said yes" are the two cases.
+   */
+  handlesRemoval: boolean;
   workdir: string;
   sessionDir: string;
 }
@@ -33,6 +43,16 @@ export function fileToolsFor(
   mkdirSync(sessionDir, { recursive: true });
 
   const written: FileToolHarness["written"] = [];
+  const removed: FileToolHarness["removed"] = [];
+  /*
+   * A mutable holder rather than a plain field: a test flips this *after* the harness is built,
+   * and `{ ...harness }` would copy the boolean and leave the closure reading the original.
+   *
+   * `false` is the default because this harness has no registry behind it — nothing it wrote was
+   * ever made referenceable — so a file it deletes is deleted by the tool, which is what every
+   * test here that does not say otherwise is about.
+   */
+  const state = { handlesRemoval: false };
   const ctx: FileToolContext = {
     workdir,
     sessionDir,
@@ -48,7 +68,24 @@ export function fileToolsFor(
       written.push(input);
       return id;
     },
+    unregister: async (input) => {
+      removed.push(input);
+      return state.handlesRemoval;
+    },
   };
 
-  return { tools: buildFileTools(ctx), ctx, written, workdir, sessionDir };
+  return {
+    tools: buildFileTools(ctx),
+    ctx,
+    written,
+    removed,
+    workdir,
+    sessionDir,
+    get handlesRemoval(): boolean {
+      return state.handlesRemoval;
+    },
+    set handlesRemoval(next: boolean) {
+      state.handlesRemoval = next;
+    },
+  };
 }

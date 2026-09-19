@@ -16,6 +16,15 @@ const props = defineProps<{ toolCall: ToolCall }>();
 const store = useAppStore();
 const { t } = useI18n();
 
+/*
+ * The card's root carries `data-tool-call-id` — its identity as a *call* rather than as a
+ * question, and what `ChatView.revealToolCall` matches to bring it on screen. Two things send
+ * that id: the quiz panel's 定位, and the reference chip in a message that asked about the
+ * question. The generic card and the two file-shaped ones have always carried it; this one, the
+ * plan-conflict card and the ask card were the three that did not, so a pending question's 定位
+ * found no element and did nothing at all, silently.
+ */
+
 /**
  * Questions come out of the tool call's `input`, which the tool numbered and the server
  * validated against the same limits — so this parse has no failure path worth a message.
@@ -178,7 +187,13 @@ const panelId = `${uid.value}-panel`;
 </script>
 
 <template>
-  <div class="quiz-card" :class="{ live: answerable }" data-testid="quiz-card">
+  <!-- The call's own id, for the reason the script block gives. -->
+  <div
+    class="quiz-card"
+    :class="{ live: answerable }"
+    data-testid="quiz-card"
+    :data-tool-call-id="toolCall.id"
+  >
     <div class="quiz-head">
       <Icon name="bulb" class="mark" />
       <span class="title">{{ t("quiz.title") }}</span>

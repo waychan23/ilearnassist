@@ -181,6 +181,84 @@ describe("ensureWorkResource", () => {
   });
 });
 
+describe("a conversation-scoped listing", () => {
+  /** A second conversation in the same workspace, which is what several holders need. */
+  const OTHER_SESSION = "s2";
+  beforeEach(() => {
+    db.createSession({
+      id: OTHER_SESSION,
+      workspaceId: WS,
+      copilotId: null,
+      copilotName: "",
+      systemPrompt: "",
+      allTools: true,
+      tools: [],
+      title: DEFAULT_SESSION_TITLE,
+    });
+  });
+
+  /** Hold `entity` for each owner given, in order — the rows a listing has to choose between. */
+  function hold(owner: { kind: "workspace" | "session"; id: string }, resourceId: string) {
+    return ensureWorkResource(db, {
+      userId: USER,
+      owner,
+      resourceType: "file",
+      resourceId,
+      title: "mindmap.png",
+    })!;
+  }
+
+  it("lists the row a link names, and not the other holders of the same file", () => {
+    /*
+     * **The reported bug, and the fix that is a model change rather than a filter.** An image
+     * uploaded into a workspace and then again from two conversations is one file with three
+     * holders; a fourth conversation that merely *referred* to it listed all three — three
+     * identical rows in 参考资料 — because a link named the *entity* and this arm therefore
+     * matched every holder of it.
+     *
+     * A link names a reference now, so the arm returns that row and nothing else. No dedupe is
+     * involved, and none is wanted: two links to two different holders are two rows, because they
+     * are two references and the user chose each of them.
+     */
+    const row = file("workspaces/a/workdir/mindmap.png", { sourceType: "upload" });
+    const theirs = hold({ kind: "workspace", id: WS }, row.id);
+    hold({ kind: "session", id: OTHER_SESSION }, row.id);
+    db.addSessionReference({ id: "sref-1", sessionId: SESSION, workResourceId: theirs.id });
+
+    const listed = db.listWorkResourcesFiltered(USER, { sessionId: SESSION });
+    expect(listed.map((r) => r.id)).toEqual([theirs.id]);
+
+    /*
+     * And the library — unscoped — still answers with one row per reference, which is not a leak
+     * of the same bug: each of those rows is a thing its owner can be rid of on its own, and the
+     * delete acts on the reference it was pressed on.
+     */
+    expect(db.listWorkResourcesFiltered(USER, {})).toHaveLength(2);
+  });
+
+  it("keeps a dangling link out of the answer, which is how it reports itself", () => {
+    // A link whose reference was deleted resolves to nothing: that *omission* is the report, and
+    // it is why nothing has to sweep links when material goes.
+    const row = file("workspaces/a/workdir/mindmap.png", { sourceType: "upload" });
+    const theirs = hold({ kind: "workspace", id: WS }, row.id);
+    db.addSessionReference({ id: "sref-1", sessionId: SESSION, workResourceId: theirs.id });
+    expect(db.listWorkResourcesFiltered(USER, { sessionId: SESSION })).toHaveLength(1);
+
+    db.softDeleteWorkResourceForUser(theirs.id, USER);
+    expect(db.listWorkResourcesFiltered(USER, { sessionId: SESSION })).toEqual([]);
+  });
+
+  it("still lists what the conversation holds, which is the other half of the arm", () => {
+    // The arm the listing has always had. Its own workspace's material is deliberately *not*
+    // here — that is the read whitelist's wider question, and the panel's narrower one.
+    const owned = file("workspaces/a/workdir/notes.md", { sourceType: "upload" });
+    const mine = hold({ kind: "session", id: SESSION }, owned.id);
+
+    const ids = db.listWorkResourcesFiltered(USER, { sessionId: SESSION }).map((r) => r.id);
+    expect(ids).toEqual([mine.id]);
+  });
+});
+
 describe("counting who holds a file", () => {
   it("counts every live reference to one entity, whatever owns it", () => {
     /*
@@ -235,27 +313,25 @@ describe("counting who holds a file", () => {
     expect(db.countReferencesForEntities(USER, "file", [row.id]).get(row.id)).toBe(1);
   });
 
-  it("counts a conversation that only refers to the file, which also loses it", () => {
+  it("counts a conversation that only points at the file, through the reference it names", () => {
     /*
-     * Both relations, because the number is what the library's delete dialog says out loud: a
-     * conversation that merely *refers* to the file loses it when the bytes go — the delete
-     * sweeps `session_references` too — so counting holdings alone would answer "nobody else has
-     * this" about material two panels were about to lose.
+     * Both relations, because the number is what the delete dialog says out loud: a conversation
+     * that merely *refers* to the file loses it when the material goes — its link stays and starts
+     * reporting the object is gone — so counting holdings alone would answer "nobody else is
+     * working from this" about material two panels were built around.
+     *
+     * The link names a *reference*, so the count reaches the entity through it. That join is the
+     * whole implementation of "this conversation is about that file".
      */
     const row = file("workspaces/a/workdir/notes.md");
-    ensureWorkResource(db, {
+    const held = ensureWorkResource(db, {
       userId: USER,
       owner: { kind: "workspace", id: WS },
       resourceType: "file",
       resourceId: row.id,
       title: "notes.md",
-    });
-    db.addSessionReference({
-      id: "sref-1",
-      sessionId: SESSION,
-      resourceType: "file",
-      resourceId: row.id,
-    });
+    })!;
+    db.addSessionReference({ id: "sref-1", sessionId: SESSION, workResourceId: held.id });
 
     expect(db.countReferencesForEntities(USER, "file", [row.id]).get(row.id)).toBe(2);
   });

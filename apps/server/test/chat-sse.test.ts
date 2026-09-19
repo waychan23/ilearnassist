@@ -290,6 +290,53 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(existsSync(join(sessionDirPath, "notes/a.md"))).toBe(true);
   });
 
+  it("deletes a file it wrote through the reference, so no row outlives the bytes", async () => {
+    /*
+     * **The path that used to bypass the registry.** `delete_file` unlinked and touched no row, so
+     * the `files` row went on naming a file that was not there and the library went on listing it
+     * — the state every read has to *compute* its way out of (`missing`, `fileMissing`). It goes
+     * through `deleteWorkResource` now, which is the same operation the file manager's route and
+     * the library's rows end in: the reference, the row and the bytes go together, and any other
+     * conversation that pointed at the file keeps its row and starts reporting it as gone.
+     */
+    const { session, sessionDirPath } = await freshSession();
+    llm.setTurns([
+      {
+        content: "Writing.",
+        toolCalls: [{ id: "call_1", name: "write_file", args: { path: "scratch.md", content: "# hi" } }],
+      },
+      { content: "Done." },
+    ]);
+    await chat(session.id, { message: "write a note" });
+
+    const before = (await env.inject({ method: "GET", url: "/api/resources" })).json<
+      { id: string; resource: { id: string; path: string } }[]
+    >();
+    const written = before.find((r) => r.resource.path.endsWith("/scratch.md"))!;
+    expect(written).toBeTruthy();
+
+    llm.setTurns([
+      {
+        content: "Deleting.",
+        toolCalls: [{ id: "call_2", name: "delete_file", args: { path: "scratch.md" } }],
+      },
+      { content: "Deleted." },
+    ]);
+    await chat(session.id, { message: "delete that note" });
+
+    // The bytes are gone from the sandbox — moved to the workspace's trash, which is what the
+    // unified delete does with a sandbox file rather than unlinking it.
+    expect(existsSync(join(sessionDirPath, "scratch.md"))).toBe(false);
+    // Nothing lists it any more, and the two rows it was made of are gone as live rows: the
+    // reference, and the file. A row left behind is what this test exists to catch.
+    const after = (await env.inject({ method: "GET", url: "/api/resources" })).json<
+      { resource: { path: string } }[]
+    >();
+    expect(after.some((r) => r.resource.path.endsWith("/scratch.md"))).toBe(false);
+    expect(env.server.db.getWorkResourceForUser(env.user.id, written.id)).toBeUndefined();
+    expect(env.server.db.getFileForUser(env.user.id, written.resource.id)).toBeUndefined();
+  });
+
   it("records a workspace write as the workspace's", async () => {
     // The other half of `fileOwner`, and the reason it is a function: the *act* happened in a
     // conversation, but a file every conversation in the workspace can read belongs to the
@@ -439,10 +486,9 @@ describe("POST /api/sessions/:id/chat", () => {
       refs: [{ kind: "resource", ref: kept.id, label: page.title }],
     });
 
-    // The reference, which is the only row this conversation gained.
-    expect(db.listSessionReferences(session.id)).toEqual([
-      { resourceType: "web_page", resourceId: page.id },
-    ]);
+    // The link, which is the only row this conversation gained — and it names the **reference**
+    // the user pointed at, which is what every other reader reaches material through.
+    expect(db.listSessionReferences(session.id)).toEqual([kept.id]);
     // And **no** holding row — the assertion the library's duplication was made of.
     expect(
       db.listWorkResourcesForResource(env.user.id, "web_page", page.id).map((r) => r.ownerType)
@@ -570,9 +616,7 @@ describe("POST /api/sessions/:id/chat", () => {
       refs: [{ kind: "resource", ref: held.id, label: "shared.md" }],
     });
 
-    expect(db.listSessionReferences(session.id)).toEqual([
-      { resourceType: "file", resourceId: entry.fileId },
-    ]);
+    expect(db.listSessionReferences(session.id)).toEqual([held.id]);
     expect(
       db.listWorkResourcesForResource(env.user.id, "file", entry.fileId!).map((r) => r.ownerType)
     ).toEqual(["workspace"]);

@@ -216,13 +216,31 @@ describe("create_directory and delete_file", () => {
     expect(existsSync(join(h.sessionDir, "a.txt"))).toBe(false);
   });
 
-  it("deletes without unregistering", async () => {
-    // `delete_file` is a filesystem operation, not an application deletion: the row stays and
-    // the next read reports the file missing. A stored "deleted" flag would have to be written
-    // from here, which is what would make this tool a database writer.
+  it("hands a file that has a reference to the registry rather than unlinking it", async () => {
+    /*
+     * **The v5 rule, stated where the model can violate it.** A file some writer made
+     * referenceable is deleted *through* that reference — one operation owns the rows, the bytes
+     * and the trash — so the tool must not remove the bytes first: the registry's delete would
+     * then be handed a file that is already gone. It calls `unregister` instead, and the bytes
+     * are left for whoever handles it.
+     */
+    h.handlesRemoval = true;
     writeFileSync(join(h.sessionDir, "a.txt"), "x");
-    await tools().deleteFile.invoke({ path: "a.txt" });
-    expect(h.written).toEqual([]);
+    await expect(tools().deleteFile.invoke({ path: "a.txt" })).resolves.toBe(
+      "Deleted a.txt from the session folder."
+    );
+    expect(h.removed).toEqual([{ location: "session", relPath: "a.txt" }]);
+    expect(existsSync(join(h.sessionDir, "a.txt"))).toBe(true);
+  });
+
+  it("unlinks the file itself when nothing ever referenced it", async () => {
+    // The other answer: a `.mmd` nobody drew, a parse result — no reference, so the bytes are the
+    // whole of it, and the tool has to do the work the registry declined.
+    h.handlesRemoval = false;
+    writeFileSync(join(h.sessionDir, "loose.txt"), "x");
+    await tools().deleteFile.invoke({ path: "loose.txt" });
+    expect(h.removed).toEqual([{ location: "session", relPath: "loose.txt" }]);
+    expect(existsSync(join(h.sessionDir, "loose.txt"))).toBe(false);
   });
 
   it("deletes an empty directory", async () => {

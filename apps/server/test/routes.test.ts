@@ -1513,17 +1513,17 @@ describe("sources", () => {
     expect(theirs).toEqual([]);
   });
 
-  it("removes this conversation's reference, and leaves the file alone", async () => {
+  it("deletes the reference and its material, and leaves the other readers standing", async () => {
     /*
-     * The v4 split, and the behaviour that makes it worth having.
-     *
-     * Deleting from the library removes a **reference**, not a file. The bytes, the file's row
-     * and every *other* owner's reference are untouched — which is what stops one conversation
-     * tidying up from taking a document out of another conversation that is working from it.
-     * Removing the bytes is the file manager's job, and it moves them to the trash.
+     * **The v5 delete, and it is one operation.** A reference is the handle every other part of
+     * the model reaches material through, so deleting one deletes what it names — and every
+     * *other* reader's row stays exactly where it is. Standing means inert: a reference whose
+     * material is gone resolves to nothing, which is how the panel, the whitelist and a message's
+     * chip each report it. Nothing has to rewrite another conversation's records to say so, and
+     * the conversation that was working from this file keeps the fact that it was.
      *
      * The chips are the second half: a message sent with a file keeps showing what was sent, so
-     * the snapshot survives the reference it came from.
+     * the snapshot survives the reference and the material both.
      */
     const attachment = await uploadAttachment(env, session.id, {
       name: "doomed.txt",
@@ -1547,28 +1547,37 @@ describe("sources", () => {
     });
     expect(res.statusCode).toBe(200);
 
-    // Gone from the library as the row this conversation held...
-    const all = (await inject({ method: "GET", url: "/api/resources" })).json<
-      { id: string; resourceId: string }[]
-    >();
+    /*
+     * Neither row is listed: this one because its reference is deleted, the sibling's because the
+     * file it names is. That is the whole report — no reader has to ask why.
+     */
+    const all = (await inject({ method: "GET", url: "/api/resources" })).json<{ id: string }[]>();
     expect(all.map((r) => r.id)).not.toContain(attachment.resourceId);
-    // ...and still there for the conversation that did not delete it.
-    expect(all.map((r) => r.id)).toContain(also.resourceId);
+    expect(all.map((r) => r.id)).not.toContain(also.resourceId);
+
+    // The bytes stay where they are — a source has no trash directory, and a soft delete costs no
+    // disk, which is what a future restore would read.
     expect(existsSync(rawPathOf(attachment))).toBe(true);
+    // The *file* is gone as far as any reader is concerned: the raw route resolves the row first.
     expect(
       (await inject({ method: "GET", url: `/api/files/${attachment.id}/raw` })).statusCode
-    ).toBe(200);
+    ).toBe(404);
+    expect(
+      (await inject({ method: "GET", url: `/api/sessions/${other.id}/resources` })).json<
+        { resourceId: string }[]
+      >()
+    ).toEqual([]);
 
     /*
-     * And the conversation can **still read the file** — through the sibling's reference, which
-     * the whitelist admits because both conversations are in one workspace. That is not a loose
-     * end: it is the same rule that makes a document uploaded next door readable here, and it is
-     * why "remove my reference" and "delete the file" have to be two different actions.
+     * And nothing was dismantled: reviving the file brings the sibling's reference back. That is
+     * what "kept" has to mean — a sweep would have left the conversation unable to tell that it
+     * had ever been working from this file, which is the state v4 chose and v5 undoes.
      */
-    const still = (await inject({ method: "GET", url: `/api/sessions/${session.id}/resources` })).json<
-      { resourceId: string }[]
-    >();
-    expect(still.map((r) => r.resourceId)).toEqual([attachment.id]);
+    env.server.db.reviveFileForUser(attachment.id, env.user.id);
+    const back = (await inject({ method: "GET", url: "/api/resources" })).json<{ id: string }[]>();
+    expect(back.map((r) => r.id)).toContain(also.resourceId);
+    // The deleted *reference* stays deleted, which is the half the user asked for.
+    expect(back.map((r) => r.id)).not.toContain(attachment.resourceId);
   });
 
   it("re-uploading deleted bytes revives the file, and makes a fresh reference", async () => {

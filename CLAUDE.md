@@ -616,19 +616,39 @@ Fuller map in `docs/reference.md`.
   conversation holds a **reference** to it. The library browses references, `@` picks one,
   `read_document` takes one's id. See `docs/resources.md`. Four things follow, and each is load
   bearing:
-  - **Holding and referring are two relations, and `session_references` is the second.** A
-    `work_resources` row means *this workspace, or this conversation, **holds** this material* —
-    which is what the library lists, what `@` picks from, and what a delete acts on. Pointing at
-    something with `@` is none of those; it is being **about** material that belongs elsewhere.
-    That used to be written as a holding row, which made the library show one file once per
-    conversation that had mentioned it — the *row* was duplicated, never the bytes. A reference
-    carries **no title and no parse state**: it admits the holder's row rather than becoming one,
-    so `read_document`'s id space stays a single table, one document is extracted once, and the
-    whitelist's arm 1 is the conversation's *reach* (what it holds **or** refers to) rather than
-    its holdings. That last half is what makes `@` sticky — a file in a granted workspace stays
-    readable after the grant is withdrawn. The table has **no `deleted_at`** (it records an act,
-    not an entity, so it is a real `DELETE`) and **no `user_id`** (it reaches its owner through
-    its session, like `sessions` and `messages`).
+  - **Holding and referring are two relations, and `session_references` is the second — and it
+    names a *reference*.** A `work_resources` row means *this workspace, or this conversation,
+    **holds** this material*, which is what the library lists, what `@` picks from, and what a
+    delete acts on. Pointing at something with `@` is none of those; it is being **about**
+    material that belongs elsewhere. That used to be written as a holding row, which made the
+    library show one file once per conversation that had mentioned it — the *row* was duplicated,
+    never the bytes.
+    **`session_references.work_resource_id` is the handle, and v5 is where it stopped being the
+    entity.** v4 stored `resource_type` + `resource_id`, which made this the one relation in the
+    model that went *around* the reference instead of through it, and the consequence was
+    concrete: a link to a file is indistinguishable from "some holder of that file exists", so a
+    conversation that pointed at an image listed **every holder** of it — a file uploaded into a
+    workspace and then from two conversations arrived in a fourth one's 参考资料 panel as three
+    identical rows. A link names the row the user actually pointed at, which is what the picker
+    offers and what the chip's label describes.
+    It carries **no title and no parse state**: the row it names has both, so `read_document`'s id
+    space stays a single table, one document is extracted once per *holder*, and the whitelist's
+    arm 1 is the conversation's *reach* (what it holds **plus** the rows it points at, by id)
+    rather than its holdings. That last half is what makes `@` sticky — a file in a granted
+    workspace stays readable after the grant is withdrawn. The table has **no `deleted_at`** (it
+    records an act, not an entity, so it is a real `DELETE`) and **no `user_id`** (it reaches its
+    owner through its session, like `sessions` and `messages`).
+  - **A link is never swept, so a dangling one is reported rather than dismantled.** Nothing
+    deletes `session_references` when material goes — v4's delete did — and the reason is the
+    same one that governs the diagram and table drifts: a reader can *say* the object is gone, and
+    a conversation's record of having been about something is not a delete's to rewrite. Every
+    read resolves the link through `work_resources` (`wr.id IN (SELECT work_resource_id …)`), so a
+    link to a deleted row, or one whose entity was deleted, resolves to nothing and is simply
+    absent — the panel lists nothing, `read_document` loses the id, and the reference chip in a
+    message says so out loud. A restore brings it back, which is the other half of why the rows
+    stay. **The delete is one operation**: `deleteWorkResource` removes a reference and the
+    material it names, from the library's rows, the file tree's path-based route and the agent's
+    `delete_file` alike — see the `deleted_at` bullet below.
   - **Three identity rules, as partial unique indexes.** Identical *uploaded bytes* are one file
     (`idx_files_blob`, on `(user_id, sha256) WHERE sha256 IS NOT NULL AND source_type IN
     ('upload','attachment')`, deliberately not filtered by `deleted_at` — that is what makes
@@ -682,17 +702,23 @@ Fuller map in `docs/reference.md`.
   **On-disk bytes are kept too** — workspace and session directories, a file's bytes and the
   extracted text — so a delete costs no disk and a future restore has something to restore. Two hard
   `DELETE`s survive on purpose: `pruneAuthTokens`' housekeeping, and one-time migrations (the
-  `DELETE FROM copilots` that drops rows written before ownership existed). The agent's
-  `delete_file` tool is *not* an application deletion — it is a real filesystem operation inside
-  the workspace sandbox, and it stays one. **A file is the entity with a rule of its own, and the
-  rule now has two halves.** `idx_files_blob` means identical *user-supplied* bytes can never be
-  two rows, so re-uploading a deleted file revives that row (`findDeletedFileByHash` +
-  `reviveFileForUser`) rather than inserting beside it. And **the delete people reach for removes a
-  reference, not a file**: `DELETE /api/resources/:id` soft-deletes the `work_resources` row and
-  leaves the bytes, the file row and every *other* owner's reference alone — which is why a
-  conversation can go on reading a file through a sibling's reference after "deleting" it. Removing
-  the bytes is the file manager's job, and it moves them to the trash. `DocumentService.cancelResource`
-  is per *reference* rather than per session because a reference outlives the conversation.
+  `DELETE FROM copilots` that drops rows written before ownership existed).
+  **There is one delete, and it acts on a reference.** `deleteWorkResource` (in `resources.ts`) is
+  reached by all three writers — `DELETE /api/resources/:id` for the library's rows, the file
+  manager's path-based `DELETE /api/workspaces/:id/files`, and the agent's `delete_file` through
+  the `FileToolContext.unregister` callback — and it does two things: the reference is
+  soft-deleted, and the **material it names goes with it** (a file inside a sandbox moves to its
+  workspace's `trash/`; an upload, a parse result or a page is soft-deleted in place, because a
+  soft delete costs no disk). Nothing else is touched: another conversation's reference to the
+  same material stays as a row and starts reporting the object as gone. The agent's tool used to
+  unlink the bytes and leave every row standing, which is the state that made `missing` a
+  computation rather than a fact; the file manager's route used to sweep the other references,
+  which is how one conversation's tidy-up rewrote another's records. **A file is the entity with a
+  rule of its own**: `idx_files_blob` means identical *user-supplied* bytes can never be two rows,
+  so re-uploading a deleted file revives that row (`findDeletedFileByHash` + `reviveFileForUser`)
+  rather than inserting beside it — and because nothing was dismantled, the revive brings the
+  sibling references back to life with it. `DocumentService.cancelResource` is per *reference*
+  rather than per session because a reference outlives the conversation.
 - **One conversation has one writer, and the lease is keyed on a client id the browser makes up.**
   A client that opens a conversation holds its write lock; every other client of the same account
   reads it read-only. `docs/session-locks.md` is the reference, including the tolerances the
@@ -1192,14 +1218,15 @@ Fuller map in `docs/reference.md`.
   read last week's file.
 - **Destructive UI actions confirm first.** Session, Copilot, workspace, provider and material
   deletes go through `confirm()` from `composables/confirm.ts`. The agent's own `delete_file`
-  tool is deliberately *not* gated. **A library delete is two deletes and the copy must say which
-  one a press is.** A *session-owned reference* — an upload, a page — removes this owner's hold
-  and leaves the file and every other owner's reference alone, so its dialog must not promise to
-  destroy the file. A **file inside a workspace** has no reference separable from the bytes: it
-  goes through the file manager's route, which trashes them and takes the shared `files` row —
-  and so every conversation's reference — with it, which is why the listing carries
-  `referenceCount` and the dialog names how many other holders are about to lose it. One sentence
-  used to describe the first case while the second case ran.
+  tool is deliberately *not* gated. **A material delete is one operation and the copy says what it
+  does** — `sources.delete.*`, used by the library's rows *and* by the file tree, whose delete
+  used to carry a sentence of its own about the recycle directory and leave out the part a reader
+  needs. What the copy has to name is the half they would otherwise be surprised by: the material
+  goes, and **every other reference to it stays and reports the object as gone** when it is opened.
+  The listing carries `referenceCount` so the dialog can name how many others that is (the count
+  is `required` plus `@`-links, and an unknown count reads as "somebody might", never as
+  "nobody"). It used to be two branches with two promises, chosen by which kind of row was
+  pressed — one said other conversations were unaffected, the other described only the bytes.
 - **A canned reply is the sentence, and the button sends what it shows.** The composer's chips
   (继续 / 是的 / 可以, `composer.quick.*`) send their own rendered label rather than a second
   string beside it, so the words on the button and the words in the conversation cannot drift —
@@ -1668,12 +1695,15 @@ Fuller map in `docs/reference.md`.
   nothing quietly. Tool descriptions and the out-of-band *user*-prompt templates stay in code — they
   are bound to schemas and to data assembly, not free-standing prompt text. See `docs/prompts.md`.
 - **A reference is *linked*, not copied — and `@` and 追问 are one mechanism now.** Both send a
-  `TurnReference`, and a resource one carries a **reference id**. The link is a `work_resources`
-  row of this conversation's own, pointing at the same entity: **`/chat` writes it**, which is
-  what lets a later turn `read_document` what the user pointed at once — and what puts it in the
-  read whitelist from then on. That side effect is deliberately *not* in `resolveReferences`,
-  which stays read-only because replay resolves references on every later turn and a replay that
-  wrote would resurrect rows a user had deleted. The same call **schedules a parse** for a
+  `TurnReference`, and a resource one carries a **reference id**. The link is a row in
+  `session_references` naming that reference: **`/chat` writes it**, which is what lets a later
+  turn `read_document` what the user pointed at once — and what puts it in the read whitelist from
+  then on. It is deliberately **not** a holding row of the conversation's own (that is what used
+  to make the library show one file once per conversation that had mentioned it), and it is
+  deliberately **not** the entity either (that is what used to make a panel show every holder of
+  the file). A side effect of the request rather than of `resolveReferences`, which stays read-only
+  because replay resolves references on every later turn and a replay that wrote would resurrect
+  rows a user had deleted. The same call **schedules a parse** on the row it names, for a
   reference that has never been parsed; without it the model reads "still parsing" for ever, and
   the feature looks right in the UI while failing exactly where it is used.
   `messages.attachments` stays a separate column, because an upload and a pointer are different
@@ -1891,19 +1921,23 @@ Fuller map in `docs/reference.md`.
   events bullet gives: every change to the list is a decision it made itself. See
   `docs/widgets.md` → "An on-demand widget with no tools".
   **The sources widget settles which of a conversation's two lists a panel shows, and it is not
-  the one the model reads.** It calls `GET /api/sources?sessionId=…` — held by this conversation
+  the one the model reads.** It calls `GET /api/resources?sessionId=…` — held by this conversation
   *or* linked into it: its own files, its uploads, its pages, its `@`-references — and
-  deliberately **not** `/api/sessions/:id/sources`, which is the session ∪ workspace union and is
+  deliberately **not** `/api/sessions/:id/resources`, which is the session ∪ workspace union and is
   the `read_document` whitelist verbatim. A panel on that route would list a workspace's whole
   corpus beside the three files the conversation is about, because "what may be read" and "what
-  this is working from" are different questions. Two consequences that look like inconsistencies
-  with the browser and are not: its **category filter is client-side** with its options derived
-  from the rows already fetched (one conversation, not a workspace with a `node_modules` — and it
-  keeps the server's bounded `reconcileFilesystem` walk off every filter click), and it has **no
-  folders, no rename, no move and no delete**, because a conversation's material is written by the
-  agent and by what the user references rather than laid out by hand. `turn.finished` is the only
-  event it takes: a turn is what links a reference and what a tool writes a file through, and
-  there is deliberately no `source.added`, since the client is what asked for every addition.
+  this is working from" are different questions. Three consequences that look like inconsistencies
+  with the browser and are not: **its rows are the relation, not the material** — what this
+  conversation holds plus the exact references it points at, each once, which is why the panel
+  needs no dedupe and why a file held by three other conversations and pointed at by none of them
+  is not a row at all (a `referenceCount` on a row is what says others have it too); its **category
+  filter is client-side** with its options derived from the rows already fetched (one conversation,
+  not a workspace with a `node_modules` — and it keeps the server's bounded `reconcileFilesystem`
+  walk off every filter click); and it has **no folders, no rename, no move and no delete**, because
+  a conversation's material is written by the agent and by what the user references rather than laid
+  out by hand. `turn.finished` is the only event it takes: a turn is what links a reference and what
+  a tool writes a file through, and there is deliberately no `source.added`, since the client is
+  what asked for every addition.
 - **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget, and `/sessions/:id/quizzes/:qid/answer` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: the make-up POST does a status-guarded UPDATE of the SAME row (never an insert, clearing stale grading), then the client drives an ordinary `/chat` turn quoting the UUID so the model grades it instead of posing a new quiz. An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in a system-prompt-only note (`renderMakeupKeyNote`, gated by `ChatInput.makeupQuizId` naming an owned **answered** row) for a make-up. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
 - **A note is about a passage, or about a 图、表, or the material the conversation works from.**
   `table` | `resource`, and `target_ref` holds a figure's canonical `name` — the same handle
@@ -1935,6 +1969,7 @@ Fuller map in `docs/reference.md`.
   - **The block goes in the user turn's content, not the system prompt.** `/regenerate` sends `userMessage: null` and rebuilds the turn from history, so a block living only in the prompt would be lost there and the model asked the same question again with no antecedent. One renderer serves the live turn and every replayed one; `referencesForHistory` resolves the stored references per run, exactly as `resourcePaths` does for attachments and for the same reason.
   - **Refused, never dropped, on the live path** — the inverse of `body.sources`, and the difference is what the two are. A source is material the model may *read*, so losing it narrows the turn and the answer is still an answer; a reference is **the object of the question**, so losing it changes what was asked. The message is not written on a refusal either: a row recording a question the server declined to run would be a turn in the conversation that never happened. On the **replay** path the rule inverts — a target that has since gone is *reported*, never refused — because a turn that happened cannot be un-happened, and a history that failed to load over a deleted diagram would break every later turn.
   - **A passage's quote is not verified against the message.** The client measured it over the *rendered* DOM, the server holds markdown, and this repo will not grow a second renderer to check itself against — so a quote that does not appear verbatim is normal rather than suspicious. What the server does verify is ownership and session, which is the part a client-supplied id must never be trusted for. The block labels the passage as the learner's own selection and as data rather than instruction, the sentence `ila_query`'s note handler already carries.
+  - **The chip over a sent turn is a control, and each kind has a home.** `msg-refs` was a record and nothing more until a reader could come back to a week-old answer and want the figure it was about; `ChatView.openReference` is now the one place that knows what "open" means per kind, and `MessageItem` emits the reference unchanged and learns none of it. A **passage** scrolls the conversation to its own words (`rangeForAnchor` over the message's note root, falling back to the message when the quote no longer resolves — the same anchor arithmetic a note's 定位 uses, and `landingOffset` is shared with it); a **note** opens the panel's window by id through `openNoteFromHighlight`, so it obeys the claim and the writability rather than this view knowing what a note is; a **quiz question** scrolls to the card that asked it, which is where a pending question is answered and a settled one discloses what was chosen; and the three **figure** kinds go through `useFigureViewer` — the same opener the notes panel's chip and the note window call, so a fourth kind reaches the chip for free. **A note is the only object a reader can delete out from under a chip**, so it is the only arm that reports (`turnRef.gone`, and `turnRef.noNotesPanel` where nothing holds the conversation's notes); the rest either cannot fail or fail through a viewer that already says so. Two consequences of the quiz arm: a jump anchor addresses `[data-tool-call-id]`, which `QuizCard`, `AskUserCard` and `PlanConflictCard` did **not** carry (the generic, diagram and file cards did) — so a pending question's 定位 in the quiz panel had been doing nothing at all, silently — and a reference stores the question's *global* id, so the card is found by looking the question up, not by the id in the message. The composer's staged chips are deliberately **not** clickable: they are a draft's controls, and one of them is already the remove button.
   A turn may be **nothing but references** — "what about this?" is a complete question — so the store's send guard and the route's `MESSAGE_REQUIRED` check both know about them; the two disagreeing is how a question asked by pointing gets refused by a server that never looked. `ila_query(kind: "note"|"quiz")` and the figure kind's `name` are what a reference resolves *through*, so a kind the model cannot look up is a kind it cannot be given: the quiz listing carried only the `Qn` for as long as nothing resolved the global id the old template quoted.
 - **Plan versions are structural snapshots; progress lives on node identities.** `plan_versions.tree_json` holds id/title/children only — history is status-free and read-only; node status, the start-jump anchor and tombstones live once in `plan_nodes`, keyed by server-assigned UUIDs (never readable numbers or titles; the `1` / `1.1` a user sees is derived from sibling position by `planNodeNumbers`, and is display, not identity). A node dropped from an edit becomes a `deleted` tombstone: struck through in the current view, frozen in its last place, absent from that version's snapshot, still visible in older history; tombstone ids can't be reused and a progress update can't mark `deleted` (only an edit removes). The anchor is the node's **start**: the `in_progress` call placed before its content (`done_tool_call_id` column, widened without a rename), kept through completion, cleared when the node returns to not-started/skipped; a click scrolls the chat to that tool-call card. "Make a second plan" is the third suspending tool — its `SuspendingTool.commit` side-effect fork in `tools/suspending.ts` either overwrites as a new version or auto-creates a snapshot session (Copilot/settings/tools copied and the plan widget installed), writes V1 there and navigates via the `plan_session_created` SSE event. The store refreshes the panel mid-turn by emitting `plan.changed` from the existing `tool_end` arm — no extra SSE event for that — and **only `ila_make_plan` additionally opens the panel on the plan tab**, because it is the one of the three that creates or edits rather than reads or marks progress; narrowing the *event* instead would stop the tree moving on a progress update, which is the opposite of the point. The **edit** path cannot be caught at `tool_end` at all: a conflicting `ila_make_plan` suspends, and a suspended call emits no `tool_end` (the same absence that keeps a pending `ask_user` out of the model's context), so the store's own record of the user's `{choice: "edit"}` in `answerQuestion` is the only client-visible moment — a thing the client decided and holds, which is why it is not an event. The `new_session` fork's own conversation is surfaced by the `plan_session_created` tail, after the session switch. Two panel actions compose a user message and go through the ordinary `/chat` flow: the footer "adjust plan" composer, and "jump to chapter" (which first POSTs `/plan/nodes/:id/jump` — server-side skip of prior undone nodes plus open the target — then sends `调整进度，跳到章节…`). While the widget is installed the turn's system prompt also carries `PLAN_GUIDANCE` (mark a node before teaching it, stay on the plan, hand back after a detour).
 - **The widget panel is a third grid track, and `--widget-w` is always set when the class is.**

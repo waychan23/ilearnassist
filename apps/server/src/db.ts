@@ -1650,6 +1650,15 @@ export interface AppDb {
   reviveFileForUser(id: string, userId: string): FileRecord | undefined;
 
   getWebPageForUser(userId: string, id: string): WebPage | undefined;
+  /**
+   * Marks the page deleted — the material half of deleting the reference that names it.
+   *
+   * The file's rule, applied to the other entity: a delete of a reference takes the material with
+   * it, and the fetched body under `sources/web/` stays where it is (a soft delete costs no disk).
+   * There was no such accessor until the delete was unified, because a page could only ever lose
+   * its *reference* — which left the row live and unreachable, the state this closes.
+   */
+  softDeleteWebPageForUser(id: string, userId: string): boolean;
   /** The live page whose reading hashes to this, which is what makes keeping it again a no-op. */
   findWebPageByHash(userId: string, sha256: string): WebPage | undefined;
   createWebPage(input: {
@@ -1703,39 +1712,32 @@ export interface AppDb {
   /* ----------------------- session references (参考) ----------------------- */
 
   /**
-   * Record that a conversation is *about* an entity it does not hold.
+   * Record that a conversation is *about* a work resource it does not hold.
    *
-   * Idempotent on `(session_id, resource_type, resource_id)`, which is what makes `@`-ing the
-   * same thing on a later turn one statement rather than a duplicate row. There is no title and
-   * no parse state to keep in step — the entity's holding row carries both, and this row is only
-   * the fact that the conversation reached it.
+   * The handle is the **reference**, not the entity it resolves to — v5's change, and the one
+   * sentence to keep in mind about this relation: everything else in the model reaches material
+   * through `work_resources`, and this table used not to. Idempotent on
+   * `(session_id, work_resource_id)`, which is what makes `@`-ing the same thing on a later turn
+   * one statement rather than a duplicate row. There is no title and no parse state to keep in
+   * step — the row it names carries both, and this row is only the fact that the conversation
+   * reached it.
    */
   addSessionReference(input: {
     id: string;
     sessionId: string;
-    resourceType: WorkResourceType;
-    resourceId: string;
+    workResourceId: string;
     now?: string;
   }): void;
 
   /**
-   * Every entity a conversation refers to, as `resource_type:resource_id` pairs.
+   * Every reference a conversation points at, by id.
    *
-   * The pairs rather than rows, because a caller resolving them wants the *holding* row — the
-   * one with a title and a parse state — and the SQL that widens a listing does it with an
-   * `EXISTS` rather than by fetching these at all. This is for the callers that need the set
-   * itself: the delete sweep's reverse lookup.
+   * The ids rather than rows, because a caller resolving them wants the row itself — the one
+   * with a title and a parse state — and the SQL that widens a listing resolves it in the query
+   * rather than by fetching these at all. This is for the callers that need the set itself, and
+   * for the tests that assert what a turn wrote.
    */
-  listSessionReferences(sessionId: string): { resourceType: string; resourceId: string }[];
-
-  /**
-   * Drop every conversation's reference to one entity.
-   *
-   * A real `DELETE`, and reached when the *material* goes: a file deleted from the library takes
-   * the references pointing at it with it, so nothing is left pointing at bytes that are gone.
-   * The count of rows it removed is what the caller logs; the caller does not act on it.
-   */
-  deleteReferencesToResource(resourceType: WorkResourceType, resourceId: string): number;
+  listSessionReferences(sessionId: string): string[];
   listWorkResourcesFiltered(
     userId: string,
     filter: WorkResourceFilter
@@ -1759,9 +1761,13 @@ export interface AppDb {
    * How many places each of these entities is reachable from, keyed by entity id.
    *
    * **Both relations, and that is what the number is for.** A holding row is one place; a
-   * `session_references` row is another — a conversation that merely refers to the material still
-   * loses it when the bytes go, because the delete sweeps both. Counting only holdings would tell
-   * a reader "nobody else has this" while two conversations' panels were about to go empty.
+   * conversation pointing at it with `@` is another — under v5 those references are *kept* when
+   * the material goes, so what the number says is how many places will start reporting "the
+   * object is gone". Counting only holdings would answer "nobody else is working from this" about
+   * material two panels were built around.
+   *
+   * The reference half is counted *through* the entity (`session_references` joins
+   * `work_resources`), because a link names a reference and the question is about a file.
    *
    * One statement per entity *type* rather than one per row, because the question is asked by a
    * listing — the library answers it for every row it draws, so a lookup per row would be a query
@@ -3011,6 +3017,9 @@ export function createDb(dbPath: string): AppDb {
   const stmtGetWebPageForUser = db.prepare(
     "SELECT * FROM web_pages WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   );
+  const stmtSoftDeleteWebPageForUser = db.prepare(
+    "UPDATE web_pages SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
   const stmtFindWebPageByHash = db.prepare(
     "SELECT * FROM web_pages WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL"
   );
@@ -3077,28 +3086,39 @@ export function createDb(dbPath: string): AppDb {
   );
 
   /*
-   * The reference relation's three statements. Small on purpose: a reference is the fact that a
-   * conversation is about an entity, so there is nothing to update and nothing to soft-delete —
-   * the row is either there or it is not. See `session_references` in the schema.
+   * The reference relation's statements. Small on purpose: a reference is the fact that a
+   * conversation is about a work resource, so there is nothing to update and nothing to
+   * soft-delete — the row is either there or it is not. See `session_references` in the schema.
+   *
+   * **There is no delete-sweep among them, and its absence is the v5 rule.** v4 swept this table
+   * when a file's bytes went; a link now survives that, because what it names is a *reference* —
+   * one that may itself be revived — and because a conversation's record of having been about
+   * something is not the delete's to rewrite. Every reader reports a dangling link instead: the
+   * panel and the whitelist omit it, and the chip in a message says the object is gone.
    */
   const stmtUpsertSessionReference = db.prepare(
-    `INSERT INTO session_references (id, session_id, resource_type, resource_id, created_at)
-     VALUES (@id, @sessionId, @resourceType, @resourceId, @createdAt)
-     ON CONFLICT(session_id, resource_type, resource_id) DO NOTHING`
+    `INSERT INTO session_references (id, session_id, work_resource_id, created_at)
+     VALUES (@id, @sessionId, @workResourceId, @createdAt)
+     ON CONFLICT(session_id, work_resource_id) DO NOTHING`
   );
   const stmtListSessionReferences = db.prepare(
-    `SELECT resource_type, resource_id FROM session_references WHERE session_id = ?`
+    `SELECT work_resource_id FROM session_references WHERE session_id = ?`
   );
-  const stmtDeleteReferencesToResource = db.prepare(
-    `DELETE FROM session_references WHERE resource_type = ? AND resource_id = ?`
-  );
-  /** The reference half of `countReferencesForEntities` — see there for why both are counted. */
+  /**
+   * The reference half of `countReferencesForEntities` — see there for why both are counted.
+   *
+   * Through the entity rather than by it: a link names a work resource, so the link belongs to
+   * entity E when the row it names *is* a reference to E. That join is what makes this count the
+   * same number it counted in v4 — every holder, plus every conversation pointing at any of them.
+   */
   const stmtCountSessionReferences = db.prepare(
-    `SELECT resource_id, COUNT(*) AS n
-       FROM session_references
-      WHERE resource_type = @resourceType
-        AND resource_id IN (SELECT value FROM json_each(@resourceIds))
-      GROUP BY resource_id`
+    `SELECT wr.resource_id AS resource_id, COUNT(*) AS n
+       FROM session_references sr
+       JOIN work_resources wr ON wr.id = sr.work_resource_id
+      WHERE wr.user_id = @userId
+        AND wr.resource_type = @resourceType
+        AND wr.resource_id IN (SELECT value FROM json_each(@resourceIds))
+      GROUP BY wr.resource_id`
   );
 
   /** Every live reference to one entity — what answers "is this file still referenced". */
@@ -3128,12 +3148,21 @@ export function createDb(dbPath: string): AppDb {
    *
    * - **A workspace** holds what it owns *and* what its conversations own, because a file
    *   uploaded into a conversation is readable from the whole workspace.
-   * - **A conversation** holds what it owns. There is no second arm any more — the link table
-   *   that used to supply it has no successor — because a reference owned by the session *is*
-   *   the link.
+   * - **A conversation** holds what it owns, plus **the references it points at** — see below.
    *
    * Neither looks at whether the owning conversation is soft-deleted: deleting a conversation
    * hides the conversation, not the files it produced.
+   *
+   * **A session-scoped listing is "what this conversation holds or points at", one row per
+   * relation.** The second half is a `session_references` lookup by *reference id*, which is what
+   * makes the panel's answer exactly the rows the user's `@` chose: it used to store the entity,
+   * so this arm matched every holder of anything the conversation had referred to — a file held
+   * by three owners arrived in a fourth conversation's panel as three identical rows. It is one
+   * row per link now, and no dedupe is needed to get there: the link is the row.
+   *
+   * The link is followed *through* `work_resources` rather than being trusted: a link whose row
+   * was deleted (or whose entity was) resolves to nothing here, which is how a dangling reference
+   * reports itself. See `session_references` in the schema.
    */
   const stmtListWorkResourcesFiltered = db.prepare(
     `${WR_SELECT}
@@ -3151,11 +3180,9 @@ export function createDb(dbPath: string): AppDb {
             ))
         AND (@sessionId IS NULL OR (
               (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
-              OR EXISTS (
-                SELECT 1 FROM session_references sr
-                 WHERE sr.session_id = @sessionId
-                   AND sr.resource_type = wr.resource_type
-                   AND sr.resource_id = wr.resource_id)))
+              OR wr.id IN (
+                SELECT sr.work_resource_id FROM session_references sr
+                 WHERE sr.session_id = @sessionId)))
       ORDER BY wr.created_at ASC, wr.id ASC`
   );
   const stmtSoftDeleteWorkResourceForUser = db.prepare(
@@ -3209,13 +3236,13 @@ export function createDb(dbPath: string): AppDb {
    * settings blob, and this is what says it names *this* account's workspace.
    *
    * **Arm 1 is the conversation's *reach*, not only its holdings.** Its second half is a
-   * `session_references` lookup: what this conversation *referred to*, which is the relation a
-   * `@` writes and a holding row is not. That half is what makes pointing at something sticky —
-   * a file in a granted workspace stays readable after the grant is withdrawn, because the
-   * conversation was pointed at it once. What comes back is still the **owner's** row, so the id
-   * the model reads through is the one `messages.refs` replays and `ila_query` lists: a reference
-   * *admits* an entity rather than becoming one, which is also why a reference carries no parse
-   * state of its own.
+   * `session_references` lookup by **reference id**: the rows this conversation *pointed at*,
+   * which is the relation a `@` writes and a holding row is not. That half is what makes pointing
+   * at something sticky — a file in a granted workspace stays readable after the grant is
+   * withdrawn, because the conversation was pointed at it once. The row that comes back is the
+   * one the user chose, so the id the model reads through is exactly the one `messages.refs`
+   * replays and the chip names. (v4 looked this up by *entity*, which made "referred to" mean
+   * "any holder of", and handed the model whichever holder the join reached first.)
    *
    * `linked_at` is `wr.created_at`, and there is no `MIN(...)`/`GROUP BY` any more. That
    * machinery existed because an upload wrote a row in *two* link tables with two `now()` calls,
@@ -3231,11 +3258,9 @@ export function createDb(dbPath: string): AppDb {
         AND (f.id IS NOT NULL OR p.id IS NOT NULL)
         AND (
           (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
-          OR EXISTS (
-            SELECT 1 FROM session_references sr
-             WHERE sr.session_id = @sessionId
-               AND sr.resource_type = wr.resource_type
-               AND sr.resource_id = wr.resource_id)
+          OR wr.id IN (
+            SELECT sr.work_resource_id FROM session_references sr
+             WHERE sr.session_id = @sessionId)
           OR (wr.owner_type = 'workspace'
               AND EXISTS (
                 SELECT 1 FROM workspaces w
@@ -4419,6 +4444,9 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetWebPageForUser.get(id, userId) as WebPageRow | undefined;
       return r ? mapWebPage(r) : undefined;
     },
+    softDeleteWebPageForUser(id, userId) {
+      return stmtSoftDeleteWebPageForUser.run(now(), id, userId).changes > 0;
+    },
     findWebPageByHash(userId, sha256) {
       const r = stmtFindWebPageByHash.get(userId, sha256) as WebPageRow | undefined;
       return r ? mapWebPage(r) : undefined;
@@ -4494,20 +4522,13 @@ export function createDb(dbPath: string): AppDb {
       stmtUpsertSessionReference.run({
         id: input.id,
         sessionId: input.sessionId,
-        resourceType: input.resourceType,
-        resourceId: input.resourceId,
+        workResourceId: input.workResourceId,
         createdAt: input.now ?? now(),
       });
     },
     listSessionReferences(sessionId) {
-      const rows = stmtListSessionReferences.all(sessionId) as {
-        resource_type: string;
-        resource_id: string;
-      }[];
-      return rows.map((r) => ({ resourceType: r.resource_type, resourceId: r.resource_id }));
-    },
-    deleteReferencesToResource(resourceType, resourceId) {
-      return stmtDeleteReferencesToResource.run(resourceType, resourceId).changes;
+      const rows = stmtListSessionReferences.all(sessionId) as { work_resource_id: string }[];
+      return rows.map((r) => r.work_resource_id);
     },
     countReferencesForEntities(userId, resourceType, resourceIds) {
       // An empty page of ids returns an empty map rather than asking the statement to parse

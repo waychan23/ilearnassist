@@ -46,6 +46,21 @@ export interface FileToolContext {
     relPath: string;
     size: number;
   }) => string | undefined;
+  /**
+   * The other half of `register`: this file is being deleted, so the rows about it go with it.
+   *
+   * **Returns whether it handled the file, and that is the interesting part.** A file some writer
+   * made referenceable is deleted *through* that reference — one operation, which owns the rows,
+   * the bytes and the trash — while a file nothing ever referenced (a diagram's `.mmd`, a document's
+   * extracted text) has nothing to delete but itself. So this is called **instead of** unlinking:
+   * a tool that removed the bytes first would hand the reference route a file that is already gone
+   * and make the registry's own delete fail on nothing.
+   *
+   * Optional, and its absence is honest rather than lazy: a caller that assembled the tools
+   * without a registry (a unit test, or a context with no database behind it) writes no rows and
+   * forgets none.
+   */
+  unregister?: (input: { location: FileLocation; relPath: string }) => Promise<boolean>;
 }
 
 /**
@@ -288,8 +303,22 @@ export function buildFileTools(ctx: FileToolContext) {
       }
       const abs = resolveAt(where, path);
       const st = await fs.lstat(abs);
-      if (st.isDirectory()) await fs.rmdir(abs);
-      else await fs.unlink(abs);
+      if (st.isDirectory()) {
+        // An empty directory, and nothing else knows about it: no row, no reference, no entity.
+        await fs.rmdir(abs);
+        return `Deleted ${path} from the ${where} folder.`;
+      }
+      /*
+       * A **file** goes through the registry, which is what keeps the model's own deletion and the
+       * file manager's one behaviour: the reference is the handle everything else reaches material
+       * through, so the file and the row that names it go together, and a reference held by another
+       * conversation starts reporting the object as gone rather than being swept.
+       *
+       * `unregister` answers whether it handled it. `false` is a file no writer ever made
+       * referenceable — and then the bytes are the whole of it.
+       */
+      const handled = (await ctx.unregister?.({ location: where, relPath: path })) ?? false;
+      if (!handled) await fs.unlink(abs);
       return `Deleted ${path} from the ${where} folder.`;
     },
     {

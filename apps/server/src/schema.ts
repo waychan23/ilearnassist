@@ -77,8 +77,23 @@ import type Database from "better-sqlite3";
  * A v3 data root is **refused**, not walked: there are no `MIGRATIONS` steps, so `canMigrate`
  * means "exactly this version" and `openRefusal` names the situation. Deleting the v3 file is the
  * upgrade, and the bytes of every workspace and session directory survive that untouched.
+ *
+ * ### v5: `session_references` names a work resource
+ *
+ * v4 stored the *entity* (`resource_type` + `resource_id`) in that table, which is the one place
+ * the model went around the reference instead of through it — with the consequence that "this
+ * conversation referred to that file" was indistinguishable from "some holder of that file
+ * exists", and a listing that asked the first question answered with every holder of the entity.
+ * v5 stores `work_resource_id`, so a link names the row the user pointed at (see the table's own
+ * comment in the DDL).
+ *
+ * That is a change of what a column means, which is what this constant is for: a v4 root is
+ * **refused**, not guessed at. There is no v4→v5 migration, and the reason is the one this file
+ * has always given — the row's new value would have to be *chosen* from the several holders an
+ * old link's entity had, and a wrong owner is worse than a file that will not open, because
+ * nothing downstream could tell that it was wrong.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Every table, with the columns that earlier releases added by migration folded back in.
@@ -381,7 +396,7 @@ export const DDL = `
   CREATE INDEX IF NOT EXISTS idx_wr_owner ON work_resources(owner_type, owner_id, created_at);
 
   /*
-   * A reference: this conversation is about that entity, without holding it.
+   * A reference: this conversation is about that **work resource**, without holding it.
    *
    * The second relation, and it exists because one row was carrying two meanings. A
    * work_resources row says *this workspace, or this conversation, holds this material* — which
@@ -391,37 +406,52 @@ export const DDL = `
    * had mentioned it, which is what this table removes — the conversation's reach is now
    * *what it holds or refers to*, and only the holding half is material.
    *
+   * **It names a work resource, and that is the v5 change.** v4 stored the *entity*
+   * (resource_type + resource_id), which made this the one relation in the model that did not go
+   * through the reference: the panel's filter then matched *every holder* of anything the
+   * conversation had referred to, so a file held by three owners arrived in a fourth
+   * conversation's panel as three identical rows. It also meant a conversation's aboutness was a
+   * fact about a file rather than about the row the user actually pointed at. The entity is now
+   * reached the same way it is reached everywhere else — through work_resources, which is what a
+   * file or a page being an implementation detail of a reference means.
+   *
+   * A consequence worth stating, because it is the point: **a link to a deleted reference stays
+   * and dangles**. Nothing sweeps this table when bytes go (v4's delete did), so the material can
+   * come back and the conversation's record of having been about it is not silently rewritten.
+   * Every reader reports it instead — the panel omits it, read_document loses it, and the
+   * reference chip in a message says the object is gone. Reporting rather than dismantling is the
+   * rule the diagram and table drifts follow too.
+   *
    * **No user_id**, following sessions and messages: the row reaches its owner through its
-   * session, and a second copy of the owner is a second thing to keep in agreement. Both sides
-   * are already account-scoped — the session by getSessionForUser, the entity by its own row.
+   * session, and a second copy of the owner is a second thing to keep in agreement. The work
+   * resource it names is account-scoped by its own column, and every read joins it.
    *
    * **No deleted_at**, unlike every entity around it. This is the record of an *act* rather than
    * something a person made, so it is a real DELETE — session_locks' and session_threads'
    * footing. There is nothing to restore, and pointing at the same thing again recreates it.
    *
    * **No parse columns, deliberately.** A reference is not a holder, so it has no parse of its
-   * own; the entity's holding row carries that, and the reference merely admits it. That is what
-   * keeps one parse per *holder* — the v4 rule — instead of one per mention.
+   * own; the holding row it names carries that. That is what keeps one parse per *holder* — the
+   * v4 rule — instead of one per mention.
    */
   CREATE TABLE IF NOT EXISTS session_references (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
 
-    -- The same polymorphic pair work_resources carries, and the same argument for having no
-    -- foreign key: one column cannot point at two tables, and the entity is only ever reached
-    -- through the reference.
-    resource_type TEXT NOT NULL,
-    resource_id TEXT NOT NULL,
+    -- The handle, and the whole of the row's meaning. No foreign key, for the reason nothing in
+    -- this schema declares one: relations here are never dismantled, and a link to a row that
+    -- went away is a state a reader reports rather than one the database refuses.
+    work_resource_id TEXT NOT NULL,
 
     created_at TEXT NOT NULL
   );
-  -- One live reference per entity, per conversation. This is what makes pointing at the same
-  -- thing twice an upsert rather than a second row.
+  -- One link per reference, per conversation. This is what makes pointing at the same thing
+  -- twice an upsert rather than a second row.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_sref_place
-    ON session_references(session_id, resource_type, resource_id);
-  -- The reverse lookup, for the delete path: a file's references go when the file does.
+    ON session_references(session_id, work_resource_id);
+  -- The reverse lookup: who refers to this reference (the library's count, and the delete's).
   CREATE INDEX IF NOT EXISTS idx_sref_resource
-    ON session_references(resource_type, resource_id);
+    ON session_references(work_resource_id);
 
   -- user_id is nullable here *and* in the migration that adds it to older databases. Not slack:
   -- ALTER TABLE ADD COLUMN with NOT NULL demands a default, and any default is a landmine for a

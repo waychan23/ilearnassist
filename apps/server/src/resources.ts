@@ -13,7 +13,12 @@ import type {
 import { newId } from "./db.js";
 import type { AppDb, FileRecord, WorkResourceFilter, WorkResourceRecord } from "./db.js";
 import { classifyFile } from "./fileCategory.js";
-import { sessionDir, workspaceWorkdir } from "./paths.js";
+import { deletePath } from "./fileOps.js";
+import {
+  sessionDir,
+  workspaceTrashDir,
+  workspaceWorkdir,
+} from "./paths.js";
 import type { UserLayout } from "./paths.js";
 import { resolveFilePath } from "./resourcePaths.js";
 
@@ -672,3 +677,142 @@ export function filePathsFor(
 
 /** Re-exported so a caller reasoning about a resource's bytes has one import. */
 export type { WorkResource, WebPage, StoredFile };
+
+/* --------------------------------- deleting --------------------------------- */
+
+/**
+ * Delete a reference — and, as its internal consequence, the material it names.
+ *
+ * **One operation, and this is the only way material goes.** There used to be two, split by which
+ * kind of row the reader happened to click: remove this session's reference and leave everything
+ * alone, or trash the bytes through the file manager and take every reference with them. Same
+ * intent, two consequences, two sentences in the dialog — and the *file* was reachable by a route
+ * that never mentioned a reference at all, which is what made "the entity is an implementation
+ * detail of the reference" untrue in practice.
+ *
+ * What a person means is "delete this", and the cost is stated before it happens: the reference
+ * goes, the material goes, and **every other reference to that material stays where it is** —
+ * dangling, and reported as gone wherever somebody opens it. Nothing here reaches for another
+ * owner's `work_resources` row, and nothing touches `session_references` or `notes`: those are
+ * other readers' records of having been about this material, and a delete is not theirs to
+ * rewrite. That is what makes standing on the reference rather than on the entity safe to
+ * report, instead of something that has to be swept up — see `session_references` in the schema.
+ *
+ * The bytes: a file inside one of the sandboxes (`workdir/` or a conversation's own directory)
+ * moves to its workspace's `trash/`, which is the file manager's promise and what a restore would
+ * read. An upload, a parse result or a page has nowhere to go and is soft-deleted in place — the
+ * rule that a delete costs no disk.
+ *
+ * Returns false when the reference is not this account's or is already gone; a caller turns that
+ * into the 404 it already answers for an unknown id.
+ */
+export async function deleteWorkResource(
+  db: AppDb,
+  layout: UserLayout,
+  input: { userId: string; id: string }
+): Promise<boolean> {
+  const reference = db.getWorkResourceForUser(input.userId, input.id);
+  if (!reference) return false;
+
+  /*
+   * The material first, then the reference. The order is the reverse of the obvious one and it is
+   * deliberate: a move that fails must leave the reference alone, so the operation either lands
+   * whole or reports an error over material that is still listed. Deleting the reference first
+   * would leave a file the reader can no longer see, still on disk, after an error they cannot do
+   * anything with.
+   */
+  await deleteEntity(db, layout, input.userId, reference);
+  return db.softDeleteWorkResourceForUser(reference.id, input.userId);
+}
+
+/** The material half — a `files` or `web_pages` row, and the bytes if they live in a sandbox. */
+async function deleteEntity(
+  db: AppDb,
+  layout: UserLayout,
+  userId: string,
+  reference: WorkResourceRecord
+): Promise<void> {
+  if (reference.resourceType === "web_page") {
+    // The fetched body under `sources/web/` stays: a page's identity is its *reading*, and the
+    // row is what every reader resolved through.
+    db.softDeleteWebPageForUser(reference.resource.id, userId);
+    return;
+  }
+
+  const file = db.getFileForUser(userId, reference.resource.id);
+  if (!file) return;
+
+  const workspace = workspaceOfReference(db, userId, reference);
+  const sandbox = workspace ? sandboxFor(layout, workspace, file.path) : null;
+  if (workspace && sandbox) {
+    /*
+     * `deletePath` moves the bytes and refuses a populated directory, which is the file manager's
+     * own rule — one click in a browser is not a good place to be recursively destroying work
+     * nobody looked at.
+     */
+    await deletePath(sandbox.abs, workspaceTrashDir(workspace.dirPath), sandbox.rel, file.id);
+    db.updateFilePath(file.id, userId, {
+      path: trashFilePath(workspace.slug, file.id, sandbox.rel),
+    });
+  }
+  db.softDeleteFileForUser(file.id, userId);
+}
+
+/**
+ * The workspace a reference's bytes belong to, whether it names one directly or through a
+ * conversation.
+ *
+ * `undefined` for a reference whose owner is gone (a deleted conversation, a deleted workspace).
+ * That is not a failure: the rows still go, and only the bytes stay where they were — which is
+ * the same state a soft delete leaves them in anyway.
+ */
+function workspaceOfReference(
+  db: AppDb,
+  userId: string,
+  reference: WorkResourceRecord
+): { id: string; slug: string; dirPath: string } | undefined {
+  if (reference.ownerType === "workspace") {
+    const own = db.getWorkspaceForUser(reference.ownerId, userId);
+    return own ? { id: own.id, slug: own.slug, dirPath: own.dirPath } : undefined;
+  }
+  const owned = db.getSessionForUser(reference.ownerId, userId);
+  if (!owned) return undefined;
+  const { workspace } = owned;
+  return { id: workspace.id, slug: workspace.slug, dirPath: workspace.dirPath };
+}
+
+/**
+ * Which sandbox a stored path is in, or null for one that is in none.
+ *
+ * A stored `files.path` is relative to the user root, so the two sandboxes are its prefixes —
+ * computed from the workspace's own slug and the conversation's id rather than parsed out of the
+ * path, which is the same reason `resolveFilePath` re-validates instead of trusting a column.
+ * An upload under `sources/raw/` and a parse result under `sources/parsed/` are in neither, which
+ * is what leaves their bytes in place.
+ */
+function sandboxFor(
+  layout: UserLayout,
+  workspace: { slug: string; dirPath: string },
+  storedPath: string
+): { abs: string; rel: string } | null {
+  const workdirPrefix = workspaceFilePath(workspace.slug, "");
+  if (storedPath.startsWith(workdirPrefix)) {
+    return {
+      abs: workspaceWorkdir(workspace.dirPath),
+      rel: storedPath.slice(workdirPrefix.length),
+    };
+  }
+  const sessionsPrefix = `workspaces/${workspace.slug}/sessions/`;
+  if (storedPath.startsWith(sessionsPrefix)) {
+    const rest = storedPath.slice(sessionsPrefix.length);
+    const cut = rest.indexOf("/");
+    // A file *at* the session root has no name to restore under, which is not a shape the writers
+    // produce; the rows still go and the bytes stay.
+    if (cut === -1) return null;
+    return {
+      abs: sessionDir(workspace.dirPath, rest.slice(0, cut)),
+      rel: rest.slice(cut + 1),
+    };
+  }
+  return null;
+}

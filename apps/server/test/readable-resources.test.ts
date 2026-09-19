@@ -85,11 +85,14 @@ afterEach(() => {
  * The path has to be unique per call, because identity for a file *is* its path — two references
  * to "the same file" are two references to one row, and only the last of two identical paths
  * would be meaningful.
+ *
+ * Returns the reference's id, which is the handle a link takes: what a conversation points at is
+ * a reference, so a case that wants one referred to has to say *which* row.
  */
 function resource(
   id: string,
   opts: { userId?: string; owner?: { kind: "workspace" | "session"; id: string } } = {}
-): void {
+): string {
   const userId = opts.userId ?? OWNER;
   const owner = opts.owner ?? { kind: "session" as const, id: SESSION };
   const file = registerFile(db, {
@@ -98,13 +101,13 @@ function resource(
     sourceType: "agent_create",
     size: 1,
   });
-  ensureWorkResource(db, {
+  return ensureWorkResource(db, {
     userId,
     owner,
     resourceType: "file",
     resourceId: file.id,
     title: id,
-  });
+  })!.id;
 }
 
 /** The whitelist this conversation resolves to with `grant` stored on it. */
@@ -204,37 +207,31 @@ describe("with a grant", () => {
      * reference now, and the row that comes back is still *C's* — which is what the model reads
      * through and what `ila_query` lists.
      */
-    resource("in-c", { owner: { kind: "workspace", id: WS_C } });
+    const inC = resource("in-c", { owner: { kind: "workspace", id: WS_C } });
     expect(readableUnder({ workspaceIds: [WS_B] })).toEqual([]);
 
-    const file = db.listWorkResourcesFiltered(OWNER, { ownerType: "workspace" })[0]!;
-    db.addSessionReference({
-      id: "sref-1",
-      sessionId: SESSION,
-      resourceType: "file",
-      resourceId: file.resourceId,
-    });
+    db.addSessionReference({ id: "sref-1", sessionId: SESSION, workResourceId: inC });
 
     expect(readableUnder({ workspaceIds: [WS_B] })).toEqual(["in-c"]);
     // And it is C's row rather than a row of the conversation's own — the id the model is handed
-    // is the one the reference admits, not a copy made for it.
+    // is the one the link names, not a copy made for it.
     expect(db.listReadableWorkResources(OWNER, SESSION, WS_A, NO_SCOPE)[0]!.ownerId).toBe(WS_C);
   });
 
-  it("stops admitting it once the reference is gone", () => {
-    // The other direction, so the assertion above cannot pass on a widened arm 2 instead: with
-    // nothing referring to it, C's material is out of reach again.
-    resource("in-c", { owner: { kind: "workspace", id: WS_C } });
-    const file = db.listWorkResourcesFiltered(OWNER, { ownerType: "workspace" })[0]!;
-    db.addSessionReference({
-      id: "sref-1",
-      sessionId: SESSION,
-      resourceType: "file",
-      resourceId: file.resourceId,
-    });
+  it("stops admitting it once its reference is deleted", () => {
+    /*
+     * The other direction, so the assertion above cannot pass on a widened arm 2 instead: with
+     * nothing referring to it, C's material is out of reach again.
+     *
+     * Deleted rather than swept: under v5 nothing dismantles a link when material goes, so the way
+     * a link stops admitting anything is the reference itself being deleted — which is what the
+     * link's own id resolves against.
+     */
+    const inC = resource("in-c", { owner: { kind: "workspace", id: WS_C } });
+    db.addSessionReference({ id: "sref-1", sessionId: SESSION, workResourceId: inC });
     expect(readableUnder({ workspaceIds: [] })).toEqual(["in-c"]);
 
-    db.deleteReferencesToResource("file", file.resourceId);
+    db.softDeleteWorkResourceForUser(inC, OWNER);
     expect(readableUnder({ workspaceIds: [] })).toEqual([]);
   });
 

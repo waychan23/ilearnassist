@@ -330,14 +330,14 @@ describe("delete", () => {
     expect((await remove("never-existed.txt")).statusCode).toBe(404);
   });
 
-  it("retires every reference to the file, not just the row it deleted", async () => {
+  it("leaves the other holder's reference standing, inert", async () => {
     /*
-     * A file a second conversation also holds. The bytes moving is not enough on its own: the
-     * shared `files` row goes with them, and a reference left behind is a row pointing at nothing
-     * — hidden by the entity join, and so *indistinguishable* from one that is still live except
-     * by reading the row. Retiring them explicitly is what makes "delete the file and every
-     * reference to it" a fact rather than a conclusion drawn from somebody else's column, and it
-     * is what the library's dialog tells the reader is about to happen.
+     * **The v5 rule, and it inverts what this case used to assert.** A delete used to retire every
+     * reference to the file, because a row pointing at bytes that are gone was thought of as a row
+     * that lies. It does not: a reference resolves *through* its entity, so one whose material went
+     * resolves to nothing and is simply omitted — which is how a reader is told the object is gone,
+     * and the same rule a diagram whose file vanished follows. Keeping the row is what leaves a
+     * conversation's record of having been working from something intact.
      */
     seed("shared.txt", "held twice");
     const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "shared.txt")!
@@ -362,33 +362,40 @@ describe("delete", () => {
 
     await remove("shared.txt");
 
-    // Live references, so nothing left pointing at bytes that are gone.
-    expect(db.listWorkResourcesForResource(env.user.id, "file", id!)).toHaveLength(0);
+    // The sibling's conversation lists nothing, because there is nothing left to resolve to...
+    expect(db.listWorkResourcesFiltered(env.user.id, { sessionId: other.id })).toEqual([]);
+    /*
+     * ...and its row was never touched, which is what the revive shows. A listing cannot assert
+     * this: an inert reference is *omitted by that very rule*, so the only honest way to say "the
+     * row is still there" is to make the material resolvable again and watch it come back.
+     */
+    db.reviveFileForUser(id!, env.user.id);
+    expect(db.listWorkResourcesFiltered(env.user.id, { sessionId: other.id })).toHaveLength(1);
   });
 
-  it("retires the conversations' references too, which are a different relation", async () => {
+  it("keeps the conversations' links too, which is the same rule one relation over", async () => {
     /*
-     * A `@`-reference is not a holding row, so the sweep above does not reach it: it *admits* an
-     * entity rather than being admitted by it, and a reference left behind is a row pointing at
-     * bytes that are gone — which the panel would resolve to an owner's row that no longer
-     * exists.
+     * A `@`-link names a work resource rather than an entity, so the entity going leaves the link
+     * pointing at a reference whose material is deleted — dangling, and reported when opened. It
+     * used to be swept, and the sweep was the reason a conversation could not tell "I was about
+     * this once" from "I never was".
      */
     seed("referred.txt", "pointed at");
     const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "referred.txt")!
       .fileId;
     const db = env.server.db;
     const other = await newSession(env, workspace.id);
-    db.addSessionReference({
-      id: "sref-1",
-      sessionId: other.id,
-      resourceType: "file",
-      resourceId: id!,
-    });
-    expect(db.listSessionReferences(other.id)).toHaveLength(1);
+    const held = db
+      .listWorkResourcesForResource(env.user.id, "file", id!)
+      .find((row) => row.ownerType === "workspace")!;
+    db.addSessionReference({ id: "sref-1", sessionId: other.id, workResourceId: held.id });
+    expect(db.listSessionReferences(other.id)).toEqual([held.id]);
 
     await remove("referred.txt");
 
-    expect(db.listSessionReferences(other.id)).toEqual([]);
+    expect(db.listSessionReferences(other.id)).toEqual([held.id]);
+    // And the panel says nothing about it, which is the "object is gone" report.
+    expect(db.listWorkResourcesFiltered(env.user.id, { sessionId: other.id })).toEqual([]);
   });
 });
 

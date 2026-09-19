@@ -33,11 +33,11 @@ lists holdings — drew one file once per conversation that had referred to it.
 A reference is deliberately thin. No `title`, no `summary`, **no parse state**, no `deleted_at`,
 no `user_id`:
 
-- **It admits the holder's row rather than becoming one.** `read_document` still takes a
+- **It names the holder's row rather than becoming one.** `read_document` still takes a
   `work_resources.id`, `ila_query(kind: "resource")` still lists those rows, and a chip still
-  names one — a reference widens *which* rows a conversation's reach includes, and nothing else.
-  The row that comes back is the holder's, so the panel and the model cannot disagree about a
-  title or a parse state.
+  names one — a link widens *which* rows a conversation's reach includes, and nothing else. The
+  row that comes back is the holder's, so the panel and the model cannot disagree about a title
+  or a parse state, and a link carries neither.
 - **So one document is still extracted once.** The link loop schedules the parse on the *holder*,
   not on a row of the conversation's own — a referrer is not a holder, and the v4 rule ("the same
   file held by two owners is parsed twice") is about owners. What disappears is the *third* parse
@@ -48,16 +48,41 @@ no `user_id`:
   session, and both sides are already account-scoped.
 
 One SQL clause carries it to both readers. The 参考资料 widget's filter (`?sessionId=`) and the
-read whitelist's arm 1 become *what this conversation holds **or** refers to* — the same
-`EXISTS (SELECT 1 FROM session_references …)` — so the panel shows a referred file and
-`read_document` can read it. That second half is what makes `@` sticky: a file in a **granted**
-workspace stays readable after the grant is withdrawn, because the conversation was pointed at it
-once. And because it is one `SELECT` over `work_resources` with a widened `WHERE`, a row matched
-by two arms comes back once.
+read whitelist's arm 1 become *what this conversation holds **or** points at*, by **reference id**
+(`wr.id IN (SELECT work_resource_id FROM session_references …)`) — so the panel shows exactly the
+rows the user's `@` chose, and `read_document` can read them. That second half is what makes `@`
+sticky: a file in a **granted** workspace stays readable after the grant is withdrawn, because the
+conversation was pointed at it once. And because it is one `SELECT` over `work_resources` with a
+widened `WHERE`, a row matched by two arms comes back once.
 
-**What the library and the `@` picker needed was no change at all.** Both list `work_resources`,
-which is now holdings only — so the duplication is gone, and the surviving row is the one whose
-owner genuinely brought the material in.
+**A link names a reference, and that is what the panel's answer is.** v4 stored the *entity*
+(`resource_type` + `resource_id`), which made this the one relation in the model that went around
+the reference instead of through it — and the cost was visible: a link to a file was
+indistinguishable from "some holder of that file exists", so a conversation that pointed at an
+image listed **every holder** of it. One image, uploaded into a workspace and then again from two
+conversations, arrived in a fourth conversation's panel as three identical rows. With the handle
+being a reference, the rule is the one every other reader already follows, and no listing needs a
+dedupe to get there:
+
+- The **library** lists references — three holders is three rows, each a thing its owner can be rid
+  of on its own, with its own title and parse state.
+- A **scoped** view — the conversation's 参考资料 panel (`?sessionId=`) and the `@` picker — lists
+  *that relation again*: what this conversation holds, plus the exact rows it points at. Two links
+  to two different holders are two rows, because those are two choices the user made; the same
+  file held by a conversation that never pointed at it is not a row at all.
+
+**Nothing sweeps a link, so a dangling one is the report.** v4 deleted `session_references` rows
+when a file's bytes went. v5 keeps them: the material can come back (a re-upload revives the
+`files` row), and a conversation's record of having been about something is not a delete's to
+rewrite. Every read resolves through `work_resources`, so a link to a deleted row — or to a row
+whose entity was deleted — resolves to nothing and is simply absent. That absence *is* what the
+panel, `read_document` and the reference chip in a message each say out loud.
+
+**The delete is one operation, and it stands on the reference.** `deleteWorkResource` removes the
+reference and the material it names; every *other* reference to that material stays where it is and
+starts reporting the object as gone. The three writers — the library's rows, the file manager's
+path-based route, and the agent's `delete_file` — all end in that one call, which is what stops a
+file manager and a model from disagreeing about what deleting a file means.
 
 This file is the reference for three things that are easy to get wrong: the four questions a piece
 of material answers and which table answers each, the rules that keep the registry in step with the

@@ -2,7 +2,13 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
-import { isInteractiveTool, TABLE_TOOL_NAME, type Message, type ToolCall } from "../api/types";
+import {
+  isInteractiveTool,
+  TABLE_TOOL_NAME,
+  type Message,
+  type ToolCall,
+  type TurnReference,
+} from "../api/types";
 import { codeCopyClick, tableCopyClick } from "../composables/codeCopy";
 import { confirm } from "../composables/confirm";
 import { openNoteFromHighlight, requestNoteEditor } from "../composables/messageNotes";
@@ -48,6 +54,17 @@ const props = defineProps<{
    */
   noteMarks?: readonly NoteHighlightMark[];
 }>();
+
+/**
+ * A reference in a sent message was pressed.
+ *
+ * The message list owns the chip and nothing else about it: what a reference *points at*, and
+ * therefore what opening one means, is decided one level up — `ChatView` is the renderer of this
+ * component and the only thing holding the scroll container, the figure viewer and the note
+ * window. So the kind travels unchanged, exactly as a selection's button id does, and this
+ * component never learns that a diagram is a file and a quiz question is a call.
+ */
+const emit = defineEmits<{ openRef: [reference: TurnReference] }>();
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -413,19 +430,36 @@ const usageText = computed(() => {
         checking whether the model answered the right question needs to see the words, not a
         label saying which words they were.
 
+        **Each chip is a control**, because a reference is a pointer that outlives the gesture
+        that made it: the reader comes back a week later, reads the answer, and wants the figure
+        it was about. Which is the one thing the chip could not do while it was a `div` — it
+        named the object and left the reader to go and find it. The kinds differ in where they
+        open, never in whether they can, so the *button* is drawn for every kind and the
+        decision is handed up; a kind that has since gone is reported there rather than drawn
+        dead here, which this component could not know anyway (a table's row is not in the
+        message).
+
         A **sibling** of `data-note-root`, exactly as the chips above are. The anchor arithmetic
         counts a note's offsets over the message's visible text, so a block inside the bubble
         would shift every passage by its own height the moment a reference was added — the same
         reason an avatar may not live in there.
       -->
       <div v-if="refs.length" class="msg-refs" data-testid="message-refs">
-        <div v-for="ref in refs" :key="referenceKey(ref)" class="msg-ref">
+        <button
+          v-for="ref in refs"
+          :key="referenceKey(ref)"
+          type="button"
+          class="msg-ref"
+          data-testid="message-ref"
+          :title="t('turnRef.open')"
+          @click="emit('openRef', ref)"
+        >
           <span class="msg-ref-kind">{{ kindLabel(ref.kind) }}</span>
           <!-- A passage shows its words; a named object shows what it was called, because the
                agent looks the content up and a copy here would be a copy that can go stale. -->
           <span v-if="ref.kind === 'message'" class="msg-ref-quote">{{ ref.quote }}</span>
           <span v-else class="msg-ref-name">{{ ref.label }}</span>
-        </div>
+        </button>
       </div>
       <!-- `data-note-root` marks the element an annotation is measured against: the anchor's
            offsets are counted over this element's visible text, so it has to be the content
@@ -565,20 +599,41 @@ const usageText = computed(() => {
   gap: var(--space-2);
   width: 100%;
 }
+/*
+ * A button that reads as a quote block, so the reset is the point rather than the styling: the
+ * chrome a `<button>` arrives with (its own font, its centred text, its borders, its
+ * `buttontext` colour) is everything this must not look like. What is left is the block it always
+ * was, plus the two things that say it can be pressed — a pointer, and a tint on hover that the
+ * kind label colours in.
+ */
 .msg-ref {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  width: 100%;
   padding: var(--space-2) var(--space-4);
+  border: none;
   background: var(--panel-2);
   /* The bubble's own corner in reverse: this is the user speaking, so the flat corner is the
      one nearest them. */
   border-radius: var(--radius-lg) var(--radius-2xs) var(--radius-lg) var(--radius-lg);
+  font: inherit;
   font-size: var(--fs-3);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.msg-ref:hover {
+  background: var(--accent-bg);
 }
 .msg-ref-kind {
   font-size: var(--fs-1);
   color: var(--text-3);
+  transition: color var(--dur-fast);
+}
+.msg-ref:hover .msg-ref-kind {
+  color: var(--accent);
 }
 .msg-ref-quote {
   color: var(--text-2);

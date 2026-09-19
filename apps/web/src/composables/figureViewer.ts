@@ -54,9 +54,15 @@ export interface FigureViewer {
    * before it offers one (`fileMissing`, `targetMissing`) — so this is the last line rather than a
    * user-facing failure. The dialog simply does not appear.
    *
-   * A **reference** is the one kind that cannot be known in advance: it is a database row reached
-   * by id, and the note window that offers the control holds only the id. So a lookup that fails
-   * there is reported — a click that did nothing at all is the outcome nobody can act on.
+   * A **reference** is the kind that cannot be known in advance: it is a database row reached by
+   * id, and both callers that offer one — the note window and the reference chip in a sent
+   * message — hold only the id. So a lookup that fails there is reported, because a click that
+   * did nothing at all is the outcome nobody can act on.
+   *
+   * The chip passes the two *figure* kinds through here as well, and it is not a caller that can
+   * know in advance either — but it does not have to be: a diagram's handle is a file name and a
+   * table's is a row's name, both read off a message that is still on screen, and neither the
+   * `session_diagrams` row nor the `session_tables` one can go while that message lives.
    */
   open(
     kind: NoteTargetKindChoice,

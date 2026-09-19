@@ -107,11 +107,13 @@ test("a file two conversations refer to is one row, not three", async ({ page, r
   async function refer(): Promise<void> {
     const sessionId = await request
       .post(`/api/workspaces/${workspaceId}/sessions`, { data: {} })
-      .then((r) => r.json<{ id: string }>())
+      .then((r) => r.json() as Promise<{ id: string }>)
       .then((session) => session.id);
     const file = await (await request.get("/api/resources"))
-      .json<{ id: string; resource: { path: string } }[]>()
-      .then((rows) => rows.find((r) => r.resource.path.endsWith(`/${fileName}`))!);
+      .json()
+      .then((rows: { id: string; resource: { path: string } }[]) =>
+        rows.find((r) => r.resource.path.endsWith(`/${fileName}`))!
+      );
 
     await scriptLlm(request, { turns: [{ content: "看过了。" }] });
     await request.post(`/api/sessions/${sessionId}/chat`, {
@@ -135,26 +137,28 @@ test("a file two conversations refer to is one row, not three", async ({ page, r
   for (const sessionId of await (
     await request.get(`/api/workspaces/${workspaceId}/sessions`)
   )
-    .json<{ id: string }[]>()
-    .then((rows) => rows.map((r) => r.id))) {
+    .json()
+    .then((rows: { id: string }[]) => rows.map((r) => r.id))) {
     const panel = await (
       await request.get(`/api/resources?sessionId=${sessionId}`)
-    ).json<{ resource: { path: string } }[]>();
+    ).json() as { resource: { path: string } }[];
     expect(panel.some((r) => r.resource.path.endsWith(`/${fileName}`))).toBe(true);
   }
 });
 
-test("deleting a file inside a workspace says what it will destroy", async ({ page, request }) => {
+test("deleting material says what happens to the references that stay", async ({
+  page,
+  request,
+}) => {
   /*
-   * The false promise this closes. A file inside a workspace is deleted through the **file
-   * manager's** route — the bytes move to that workspace's trash and the shared `files` row goes
-   * — so every conversation referencing it loses it. The dialog used to describe the other delete
-   * (this account's reference, and nothing else), which promised other conversations were
-   * unaffected, in front of an irreversible action.
+   * **One delete, and the copy has to describe it.** A press removes the reference and the
+   * material it names; every *other* responsibility for that material stays — a conversation that
+   * pointed at it keeps its link and reports the object as gone when somebody opens it.
    *
-   * Two branches, and a browser is the only place either is visible: the *wording* is rendered,
-   * and the second branch needs a real second holder. The count that decides is the server's —
-   * one grouped statement on the listing, not a query per row.
+   * The dialog used to have two branches and two promises, chosen by which kind of row was
+   * pressed: one said other conversations were unaffected, the other described only the bytes.
+   * What a browser can see that a unit test cannot is the *wording* of the single sentence, and
+   * the count that switches it — which the server computes on the listing, not per row.
    */
   const suffix = Date.now();
   const workspace = `Shared-${suffix}`;
@@ -163,45 +167,39 @@ test("deleting a file inside a workspace says what it will destroy", async ({ pa
   const fileName = `shared-${suffix}.md`;
   const workspaceId = await seedWorkspace(request, workspace, fileName);
 
-  /*
-   * The **workspace's** row, not the conversation's. Both are on the list — they are two
-   * references to one file — and only the workspace's offers a delete from here, because a
-   * conversation's own file belongs to that conversation. Filtering on the control rather than on
-   * position is what keeps this test about the count rather than about ordering.
-   */
-  const listed = () =>
-    page
-      .getByTestId("resource-row")
-      .filter({ hasText: fileName })
-      .filter({ has: page.getByTestId("source-delete") });
+  /** The row for this file, whichever of its references the listing happens to be showing. */
+  const listed = () => page.getByTestId("resource-row").filter({ hasText: fileName });
 
   await openBrowser(page);
   await expect(listed()).toHaveCount(1);
   await listed().getByTestId("source-delete").click();
 
-  // Nobody else holds it: the file wording, and no number to speak about.
+  // Nobody else points at it: one material, one sentence, and no number to speak about.
   const dialog = page.locator(".confirm-overlay");
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("删除这个文件");
+  await expect(dialog).toContainText("删除这份资料");
+  await expect(dialog).toContainText("打开时会提示对象已删除");
   await expect(dialog).not.toContainText("另外还有");
   await dialog.getByTestId("confirm-cancel").click();
 
   /*
-   * A second holder, made the way a reader makes one: a conversation referencing the file, which
-   * is the reference `@`-pointing writes. The link happens before the turn runs, so a scripted
-   * reply is enough for the request to finish cleanly.
+   * A second reader, made the way a reader makes one: a conversation that points at the file,
+   * which is the link an `@` writes. The link happens before the turn runs, so a scripted reply is
+   * enough for the request to finish cleanly.
    */
   const sessionId = await request
-    .post(`/api/workspaces/${workspaceId}/sessions`, { data: {} })
-    .then((r) => r.json<{ id: string }>())
+    .post(`/api/workspaces/${workspaceId}/sessions`, { data: { title: "指过它的会话" } })
+    .then((r) => r.json() as Promise<{ id: string }>)
     .then((session) => session.id);
   const file = await (
     await request.get("/api/resources")
   )
-    .json<{ id: string; resource: { path: string } }[]>()
-    .then((rows) => rows.find((r) => r.resource.path.endsWith(`/${fileName}`))!);
+    .json()
+    .then((rows: { id: string; resource: { path: string } }[]) =>
+      rows.find((r) => r.resource.path.endsWith(`/${fileName}`))!
+    );
 
-  await scriptLlm(request, { turns: [{ content: "看过了。" }] });
+  await scriptLlm(request, { matches: [{ includes: "titling function", content: "指过它的会话" }], turns: [{ content: "看过了。" }] });
   await request.post(`/api/sessions/${sessionId}/chat`, {
     data: {
       message: "看一下这个文件",
@@ -209,13 +207,34 @@ test("deleting a file inside a workspace says what it will destroy", async ({ pa
     },
   });
 
-  // Re-read the listing, and the number is there — which is what the dialog branches on.
+  // Re-read the listing, and the number is there — which is what the second sentence needs.
   await page.getByTestId("sources-close").click();
   await openBrowser(page);
   await expect(listed()).toHaveCount(1);
   await listed().getByTestId("source-delete").click();
   await expect(dialog).toContainText("另外还有");
-  await expect(dialog).toContainText("一并删除文件与所有引用");
+  // One action word, because there is one action.
+  await expect(dialog).toContainText("删除");
+  await dialog.getByTestId("confirm-accept").click();
+  await settle(page);
+
+  // The material is gone from the library, and from the tree it was uploaded into.
+  await expect(listed()).toHaveCount(0);
+  await page.getByTestId("sources-close").click();
+  await enterWorkspace(page, workspace);
+  await page.getByTestId("sidebar-tab-files").click();
+  await expect(page.getByTestId("file-tree")).toBeVisible();
+  await expect(page.getByTestId("file-tree")).not.toContainText(fileName);
+
+  /*
+   * And the conversation that pointed at it keeps its link — which is the half this change is
+   * about. Its panel lists nothing, because a reference whose material is gone resolves to
+   * nothing; nothing had to sweep the row to say so.
+   */
+  await page.getByTestId("sidebar-tab-sessions").click();
+  await page.getByTestId("session-item").first().click();
+  await page.getByTestId("widget-tab-sources").click();
+  await expect(page.getByTestId("library-empty")).toBeVisible();
 });
 
 test("filters by workspace", async ({ page, request }) => {

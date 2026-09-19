@@ -299,6 +299,15 @@ function noteTargetText(note: Note): string {
   return note.content.trim() || note.quote;
 }
 
+/*
+ * There is deliberately no "one row per entity" filter here, and the note is worth keeping
+ * because it was one for a release. The picker collapsed two references to the same file into a
+ * single option, which was right while pointing at either of them linked the same *entity*.
+ * A link names a **reference** now, so the choice is real — the row the conversation will read
+ * through, with its own owner, title and parse state — and collapsing them would be the picker
+ * deciding which reference the user meant.
+ */
+
 function push(
   groups: ReferenceGroup[],
   kind: ReferenceGroupKind,

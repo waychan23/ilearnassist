@@ -179,6 +179,41 @@ describe("the type pills", () => {
   });
 });
 
+describe("two references to one file", () => {
+  /**
+   * The same file, held twice: the registry's identity rules make identical user-supplied bytes
+   * one *file* whatever uploaded them, so an image uploaded into a workspace and then from a
+   * conversation is one entity with two references, and the account's listing draws both rows.
+   */
+  function heldTwice(): [WorkResource, WorkResource] {
+    const first = source("s1", "photo.png", "image");
+    const second: WorkResource = {
+      ...source("s2", "photo.png", "image"),
+      resourceId: first.resource.id,
+      resource: first.resource,
+    };
+    return [first, second];
+  }
+
+  it("is two options, because a link names the reference rather than the file", () => {
+    /*
+     * **Both rows, deliberately.** They used to be collapsed into one — right while pointing at
+     * either linked the same *entity*, since a link is what makes material readable later. A link
+     * names a reference now, so this is a real choice: the conversation will read through the row
+     * that was picked, with its own owner, title and parse state, and its chip names that row.
+     * Collapsing them would be the picker deciding which reference the reader meant.
+     *
+     * The rows are told apart by their keys rather than their names, which are identical — the
+     * `where` column is what a reader uses, and both sit in the same workspace here.
+     */
+    const [first, second] = heldTwice();
+    const rows = flatten(build({ sources: heldTwice() }).groups).filter(
+      (row) => row.name === "photo.png"
+    );
+    expect(rows.map((row) => row.key)).toEqual([`src:${first.id}`, `src:${second.id}`]);
+  });
+});
+
 describe("matching", () => {
   it("matches everything on a bare `@`", () => {
     // Workspaces, the all-workspaces row, and every source — the picker is opened to browse as

@@ -598,9 +598,7 @@ export default {
     upload: "上传文件",
     rename: "重命名或移动",
     renameHint: "相对于工作区根目录的路径。输入新路径即可移动。",
-    deleteTitle: "删除这个文件？",
     deleteDirectoryTitle: "删除这个文件夹？",
-    deleteMessage: "「{name}」将从工作区中移除。文件会保留在回收目录中，但这里不再显示。",
     deleteDirectoryMessage: "「{name}」将从工作区中移除。只有空文件夹可以这样删除。",
     preview: {
       loading: "正在读取…",
@@ -896,6 +894,19 @@ export default {
     remove: "取消引用",
     /** The button that turns a selection into a staged reference. */
     ask: "追问",
+    /**
+     * A reference's chip **in a sent message** is a control: it opens what the turn was about.
+     * Its title, since the chip's own text is the kind and the passage or the name.
+     */
+    open: "查看详情",
+    /** The object a reference names is gone from this conversation. Params: kind. */
+    gone: "{kind}已不在这个会话里，无法打开。",
+    /**
+     * A note is shown by the panel that holds the records, so a conversation without that panel
+     * has nowhere to open one. Said out loud because the chip is a record of a gesture made in an
+     * earlier tab, where the panel may well have been installed.
+     */
+    noNotesPanel: "这个会话没有安装笔记面板，无法打开这条笔记。",
   },
 
   message: {
@@ -1722,31 +1733,30 @@ export default {
       other: "其他",
     },
     /*
-     * Two deletes, and the dialog has to say which one a press is. `delete.*` is the
-     * **reference-only** case — an upload or a page, where this account's hold goes and the bytes
-     * and every other owner's reference stay. `deleteFile.*` is a file inside a workspace, which
-     * is deleted through the file manager: the bytes move to that workspace's trash and the
-     * shared file row goes, taking *every* conversation's reference with it.
+     * **One delete, and the copy says what one press does.** The reference goes, the material it
+     * names goes with it, and every *other* reference stays — inert, and reporting the object as
+     * gone when somebody opens it. That last half is the sentence a reader needs, because it is
+     * the part they would otherwise be surprised by: a message that pointed at this file keeps
+     * its chip and says the attachment will not open.
      *
-     * They used to share one sentence, and it described the first while the file branch did the
-     * second — promising that other conversations were unaffected, in front of an irreversible
-     * action. The `.shared` pair is the third case: somebody else holds this too, so the reader
-     * is told how many and asked rather than warned.
+     * It used to be two pairs, chosen by which kind of row was pressed — a session-owned upload
+     * lost only this account's hold, while a workspace file went through the file manager and took
+     * every conversation's reference with it. Two consequences for one intent, and the file half
+     * was reachable by a click that never mentioned a reference at all.
+     *
+     * `.shared` is the same sentence with the number of other references, which the listing
+     * carries and the dialog says out loud because it is what a reader weighing the delete wants
+     * to know.
      */
     delete: {
-      title: "删除这条资料",
+      title: "删除这份资料",
       message: "确定要删除「{name}」吗？",
-      detail: "这条引用会被移除，无法恢复。其他对话对同一份资料的引用不受影响。已发出的消息仍会显示附件，但打不开了。",
+      detail:
+        "这份资料会被删除，无法恢复。其他对话对它的引用会保留，但打开时会提示对象已删除。已发出的消息仍会显示附件，但打不开了。",
+      /** `count` other references point at it, and will start reporting it as gone. */
+      shared:
+        "这份资料会被删除，无法恢复。另外还有 {count} 处引用，它们会保留，但打开时会提示对象已删除。已发出的消息仍会显示附件，但打不开了。",
       action: "删除",
-    },
-    deleteFile: {
-      title: "删除这个文件",
-      message: "确定要删除文件「{name}」吗？",
-      detail: "文件会从工作区移到回收站，无法恢复。已发出的消息仍会显示附件，但打不开了。",
-      action: "删除文件",
-      /** `count` others hold it too — named, because they are about to lose it as well. */
-      shared: "文件会从工作区移到回收站，无法恢复。另外还有 {count} 处引用着同一个文件，它们会一起失效。已发出的消息仍会显示附件，但打不开了。",
-      sharedAction: "一并删除文件与所有引用",
     },
     /**
      * Leaving the app for the page a web source was fetched from. Its own verb rather than a

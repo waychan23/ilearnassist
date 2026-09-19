@@ -310,29 +310,20 @@ function detailOf(row: WorkResource): string {
 }
 
 /**
- * Whether this row can be deleted from here, and how.
+ * Whether this row offers a delete, which is now every row.
  *
- * A file **inside a workspace's own tree** is deleted through the **file manager's** route, which
- * moves its bytes to the trash and takes the row with them. Deleting it through the reference
- * route instead would drop this account's reference while the bytes stayed in the tree — and the
- * next listing reconciles the file straight back, which is a delete that visibly does nothing.
+ * It used to be a rule with a hole in it: a file inside a workspace's tree had to be deleted
+ * through the **file manager's** route (or the next listing would reconcile it straight back and
+ * the delete would visibly do nothing), so this dialog offered the control only on the rows whose
+ * bytes live outside a sandbox. That distinction is the *route's* business now, not this dialog's:
+ * one operation deletes a reference and the material it names, whichever id the caller happens to
+ * hold — and the file tree, which can only name a path, reaches the same operation from there.
  *
- * A conversation's own file offers no delete at all: it belongs to that conversation, and the
- * place to remove it is the conversation (whose dialog is the one that shows it in context). It
- * is told apart from a *session-owned upload* by having a sandbox path: an upload's bytes are
- * under `sources/raw/`, so it is nobody's file and the reference route is exactly right for it.
+ * Kept as a function rather than deleted outright because the template asks it, and because the
+ * next rule about which rows may be deleted belongs here rather than in the row's markup.
  */
-function canDelete(row: WorkResource): boolean {
-  return row.ownerType !== "session" || resourceSandboxPath(row) === undefined;
-}
-
-/**
- * The workspace-relative path this row is a *file* at, when the file manager is what should
- * delete it: a file in a workspace's `workdir/`, and nothing else.
- */
-function fileManagerPath(row: WorkResource): string | undefined {
-  if (row.ownerType !== "workspace") return undefined;
-  return resourceSandboxPath(row);
+function canDelete(_row: WorkResource): boolean {
+  return true;
 }
 
 /**
@@ -364,68 +355,42 @@ function openInBrowser(row: WorkResource): void {
 /**
  * Delete a row, **saying first what the delete will actually destroy**.
  *
- * Two different things happen behind one button, and the dialog has to say which one this press
- * is. A **session-owned reference** — an upload, a page — goes through the reference-only route:
- * this account's hold goes and the bytes and every other owner's reference stay, which is what
- * the copy has always said. A **file inside a workspace** is deleted through the file manager's
- * route: the bytes move to the workspace's trash and the shared `files` row goes, which takes
- * *every* conversation's reference to that file with it.
+ * One sentence for one operation. A press goes to `DELETE /api/resources/:id` whatever kind of
+ * row it is: the reference goes, the file or page it names goes with it, and every *other*
+ * reference to that material stays where it is — inert, and reported as gone when somebody opens
+ * it. That last half is what the copy has to say, because it is the part a reader would otherwise
+ * be surprised by: a message that pointed at this file keeps its chip and says the object is
+ * deleted.
  *
- * The second case used to be described by the first case's sentence, which promised that other
- * conversations were unaffected — a promise the route does not keep, in front of an irreversible
- * action. So the file branch asks the server how many references the entity has (the listing
- * carries it), names the number when there is somebody else, and offers the choice the user is
- * actually making: destroy the file and every reference to it, or nothing at all.
+ * It used to be two sentences and two routes, chosen by which kind of row was pressed: a
+ * session-owned upload lost only this account's hold, while a file inside a workspace went
+ * through the file manager and took *every* conversation's reference with it. Same intent, two
+ * consequences, two dialogs — and the *file* was reachable by a click that never mentioned a
+ * reference at all.
  *
- * Nothing changes for the reference branch, and nothing *can*: those rows have no second owner by
- * construction — an upload belongs to the account, and the two ids a reference carries (the
- * entity's and its own) are what make that visible.
+ * `referenceCount` is asked for and named when there is somebody else, because "two other things
+ * will start reporting this as gone" is the number a reader weighing the delete wants. It is
+ * absent when the server did not answer it, and absent must not read as "nobody else has this" —
+ * so an unknown count is treated as *somebody might*, which asks the question rather than skipping
+ * it.
  */
 async function remove(row: WorkResource): Promise<void> {
-  const path = fileManagerPath(row);
-  const isWorkspaceFile = Boolean(row.workspaceId) && path !== undefined;
-  /*
-   * `referenceCount` is absent when the server did not answer it, and absent must not read as
-   * "nobody else holds this" — the count is the whole of what makes the warning possible. So an
-   * unknown count is treated as *somebody might*, which asks the question rather than skipping it.
-   */
   const others = (row.referenceCount ?? 2) - 1;
 
-  const ok = await confirm(
-    isWorkspaceFile
-      ? {
-          title: t("sources.deleteFile.title"),
-          message: t("sources.deleteFile.message", { name: resourceName(row) }),
-          detail:
-            others > 0
-              ? t("sources.deleteFile.shared", { count: others })
-              : t("sources.deleteFile.detail"),
-          confirmText:
-            others > 0
-              ? t("sources.deleteFile.sharedAction")
-              : t("sources.deleteFile.action"),
-          danger: true,
-        }
-      : {
-          // The same four strings the uploads dialog has always used, and the wording is right
-          // here: this account's hold on it goes, for good, and nothing else does.
-          title: t("sources.delete.title"),
-          message: t("sources.delete.message", { name: resourceName(row) }),
-          detail: t("sources.delete.detail"),
-          confirmText: t("sources.delete.action"),
-          danger: true,
-        }
-  );
+  const ok = await confirm({
+    title: t("sources.delete.title"),
+    message: t("sources.delete.message", { name: resourceName(row) }),
+    detail:
+      others > 0 ? t("sources.delete.shared", { count: others }) : t("sources.delete.detail"),
+    confirmText: t("sources.delete.action"),
+    danger: true,
+  });
   if (!ok) return;
 
   try {
-    if (isWorkspaceFile) {
-      await api.deleteWorkspaceEntry(row.workspaceId!, path!);
-      // The tree is showing this workspace's files, and one of them has just gone.
-      if (store.activeWorkspaceId === row.workspaceId) await store.refreshFileTree({ silent: true });
-    } else {
-      await store.deleteResource(row.id);
-    }
+    await store.deleteResource(row.id);
+    // A file inside a workspace is also in the tree, which is showing that workspace's files.
+    if (store.activeWorkspaceId === row.workspaceId) await store.refreshFileTree({ silent: true });
     rows.value = rows.value.filter((r) => r.id !== row.id);
     scopeRows.value = scopeRows.value.filter((r) => r.id !== row.id);
   } catch (e) {

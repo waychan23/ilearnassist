@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { api } from "../api/client";
+import type { QuizQuestionView, TurnReference } from "../api/types";
 import { useAppStore } from "../stores/app";
 import { isCompact } from "../composables/breakpoints";
 import { useScrollFollow } from "../composables/scrollFollow";
@@ -17,20 +19,22 @@ import { buildMinimapAnchors, type MessageMinimapAnchor } from "../utils/minimap
 import {
   captureMessageNote,
   currentSelectionActions,
+  isMessageNotesActive,
   noteClaim,
+  openNoteFromHighlight,
   registerMessageNotesHost,
   type NoteEditorRequest,
   type NoteRevealTarget,
   type NoteSaveInput,
   type SelectionAction,
 } from "../composables/messageNotes";
-import { notesWritable } from "../composables/notes";
+import { noteList, notesWritable } from "../composables/notes";
 import { useMessageSelection } from "../composables/messageSelection";
 import { useWidgetActivation } from "../composables/widgetActivation";
 import { useSessionLock } from "../composables/sessionLock";
 import { useFigureViewer } from "../composables/figureViewer";
-import type { NoteHighlightMark } from "../utils/noteAnchor";
-import { messageReference } from "../utils/turnRefs";
+import { NOTE_ROOT_ATTR, rangeForAnchor, type NoteHighlightMark } from "../utils/noteAnchor";
+import { kindLabel, messageReference } from "../utils/turnRefs";
 import MessageItem from "./MessageItem.vue";
 import MessageMinimapRail from "./MessageMinimapRail.vue";
 import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
@@ -97,33 +101,41 @@ const minimapAnchors = computed(() => buildMinimapAnchors(store.messages));
 const showMinimap = computed(() => !isCompact.value && minimapAnchors.value.length > 0);
 
 /**
- * Scroll the list so the target sits `offsetAbove` pixels down from the top of the pane.
+ * Scroll the list so `rect` sits `offsetAbove` pixels down from the top of the pane.
  * Computed from rects rather than `offsetTop`, which is measured against whichever ancestor
  * happens to be positioned.
+ *
+ * Takes the rectangle rather than the element because one caller has no element to point at: a
+ * reference to a *passage* is a `Range` inside a message, and the thing to bring on screen is
+ * where the words are, not the block they are in.
  */
+function scrollToRect(container: HTMLElement, rect: DOMRect, offsetAbove = 8): void {
+  const containerRect = container.getBoundingClientRect();
+  container.scrollTo({
+    top: container.scrollTop + (rect.top - containerRect.top) - offsetAbove,
+    behavior: "smooth",
+  });
+}
+
 function scrollRectIntoView(
   container: HTMLElement,
   target: HTMLElement,
   offsetAbove = 8
 ): void {
-  const containerRect = container.getBoundingClientRect();
-  const targetRect = target.getBoundingClientRect();
-  container.scrollTo({
-    top: container.scrollTop + (targetRect.top - containerRect.top) - offsetAbove,
-    behavior: "smooth",
-  });
+  scrollToRect(container, target.getBoundingClientRect(), offsetAbove);
 }
 
 /**
- * How far down the pane a located mark should land: about five lines of its own text.
+ * How far down the pane a located passage should land: about five lines of its own text.
  *
  * Measured from the element rather than fixed, because "five lines" is a property of the
  * text being pointed at — a heading is a different height from body copy, and a constant
  * would put a one-line note near the top of the pane in one message and halfway down it in
- * another. Pinning a mark to the very top instead reads as the message beginning there, which
- * is the thing a note about the middle of a paragraph must not look like.
+ * another. Pinning a passage to the very top instead reads as the message beginning there, which
+ * is the thing a note about the middle of a paragraph must not look like. Two callers, one idea:
+ * a note's 定位 flashes its mark and a reference chip scrolls to its quote.
  */
-function markLandingOffset(target: HTMLElement): number {
+function landingOffset(target: HTMLElement): number {
   const lineHeight = parseFloat(getComputedStyle(target).lineHeight);
   return (Number.isFinite(lineHeight) ? lineHeight : 24) * 5;
 }
@@ -179,6 +191,24 @@ async function revealToolCall(container: HTMLElement, id: string): Promise<HTMLE
   return null;
 }
 
+/**
+ * Put one tool-call card on screen, opening the folded run that is hiding it.
+ *
+ * Two callers, and they arrive by different routes: the widget bus, for a plan node's start
+ * anchor or a thread's first message, and the reference chip in a user message, whose quiz
+ * question is a call in this conversation. The card is the same card and the reveal is the same
+ * work, so it is one function rather than two.
+ */
+function jumpToToolCall(toolCallId: string): void {
+  const container = messagesEl.value;
+  if (!container) return;
+  // The attribute is on every tool-call card, persisted or currently streaming — but a card
+  // inside a collapsed run is not rendered at all, which `revealToolCall` answers.
+  void revealToolCall(container, toolCallId).then((target) => {
+    if (target) scrollRectIntoView(container, target);
+  });
+}
+
 // A plan node's start anchor jumps to the exact tool-call card (placed before the node's
 // teaching content), which is more precise than scrolling the whole message to the top; a
 // thread's heading jumps to its first message row. The widget cannot reach this scroll
@@ -187,13 +217,7 @@ async function revealToolCall(container: HTMLElement, id: string): Promise<HTMLE
 onMounted(() => {
   unsubscribeFromWidgets = subscribeWidgetEvents((event) => {
     if (event.type === "chat.jump") {
-      const container = messagesEl.value;
-      if (!container) return;
-      // The attribute is on every tool-call card, persisted or currently streaming — but a
-      // card inside a collapsed run is not rendered at all, which `revealToolCall` answers.
-      void revealToolCall(container, event.toolCallId).then((target) => {
-        if (target) scrollRectIntoView(container, target);
-      });
+      jumpToToolCall(event.toolCallId);
     } else if (event.type === "chat.jumpToMessage") {
       scrollToMessage(event.messageId);
     }
@@ -380,7 +404,7 @@ function revealNote(target: NoteRevealTarget): void {
     return;
   }
 
-  scrollRectIntoView(container, first, markLandingOffset(first));
+  scrollRectIntoView(container, first, landingOffset(first));
 
   const generation = ++flashGeneration;
   for (const mark of marks) mark.classList.add("note-flash");
@@ -504,6 +528,148 @@ function onEditorOpenTarget(): void {
   const target = editorRequest.value?.draft.target;
   if (!target) return;
   void openFigure(target.kind, target.ref, target.label, target.summary);
+}
+
+/* --------------------------- opening a reference --------------------------- */
+
+/**
+ * Open the detail of something a sent message was about.
+ *
+ * The `msg-refs` block is a record of the 追问 gesture, and the reader who comes back to it is
+ * asking the question the chip could not answer while it was a `div`: *show me that thing*. So
+ * every kind has a home, and this view is where they meet — the scroll container (a passage, a
+ * question's card), the figure viewer (a diagram's file, a table's markdown, a reference's bytes)
+ * and the note window's host. `MessageItem` emits the reference unchanged and knows none of it.
+ *
+ * **A kind that cannot be opened says so, and only where that is reachable.** A note is the one
+ * object a reader can delete out from under a chip (and the one kind whose panel may not be
+ * installed in this conversation), so its arm reports both. Every other arm either cannot fail —
+ * a message's row, a table's row and a diagram's row all outlive the message naming them — or
+ * fails through a viewer that already reports it: a missing diagram file opens the preview saying
+ * so, and a reference whose row is gone is the figure viewer's own reported lookup.
+ */
+async function openReference(reference: TurnReference): Promise<void> {
+  switch (reference.kind) {
+    case "message":
+      revealPassage(reference);
+      return;
+    case "note":
+      openReferencedNote(reference);
+      return;
+    case "quiz":
+      await revealQuizQuestion(reference);
+      return;
+    case "diagram":
+    case "table":
+    case "resource":
+      // The three that have a viewer go through the one implementation of "how do I show one of
+      // these" — the notes panel's chip and the note window call the same function, so a fourth
+      // kind is answered there and reaches this chip for free.
+      await openFigure(reference.kind, reference.ref, reference.label);
+      return;
+    default: {
+      // `reference.kind` rather than `reference`: this is one interface with a union for its
+      // discriminant, not a union of interfaces, so only the field narrows to `never`. It is the
+      // same guard either way — a seventh kind is a compile error here rather than a chip that
+      // offers a control doing nothing.
+      const unhandled: never = reference.kind;
+      return unhandled;
+    }
+  }
+}
+
+/** A referenced object this conversation no longer holds. Never a press that did nothing. */
+function reportGone(reference: TurnReference): void {
+  store.setError(t("turnRef.gone", { kind: kindLabel(reference.kind) }));
+}
+
+/**
+ * Scroll to the passage a reference quoted.
+ *
+ * The passage and not the message, for `revealNote`'s reason: "somewhere in this reply" and
+ * "this phrase in it" are different answers, and a chip is always about the phrase. The quote was
+ * measured over the message's *rendered* text by the tab that made it and the server never
+ * verified it — see the note on `TurnReference.quote` — so it is re-resolved through the same
+ * `rangeForAnchor` a note's anchor goes through, and a quote that no longer resolves falls back
+ * to the message rather than to nothing.
+ */
+function revealPassage(reference: TurnReference): void {
+  const container = messagesEl.value;
+  if (!container) return;
+  // Scanned rather than interpolated into a selector: an id is server-authored text, and a value
+  // that reaches `querySelector` as syntax is a selector injection — the rule `revealToolCall`
+  // follows. The row is always there: the message list holds every live message, and the one
+  // carrying this chip is one of them.
+  const row = [...container.querySelectorAll<HTMLElement>("[data-message-id]")].find(
+    (element) => element.dataset.messageId === reference.ref
+  );
+  if (!row) return;
+  const root = row.querySelector<HTMLElement>(`[${NOTE_ROOT_ATTR}]`);
+  const range =
+    root && reference.quote
+      ? rangeForAnchor(root, {
+          quote: reference.quote,
+          occurrence: reference.occurrence ?? 0,
+        })
+      : null;
+  if (range && root) {
+    scrollToRect(container, range.getBoundingClientRect(), landingOffset(root));
+    return;
+  }
+  scrollRectIntoView(container, row);
+}
+
+/**
+ * Open the note a message pointed at, in the window the notes capability writes through.
+ *
+ * Two ways this can come to nothing, and both are **said out loud**: the note may have been
+ * deleted, and the panel that holds the records may not be installed in this conversation at all.
+ * A chip is a record of a gesture made in an earlier tab, so unlike the panel's own chip it cannot
+ * check either in advance — which is exactly when a press that did nothing reads as a broken app.
+ * `openNoteFromHighlight` is the panel's own route by id, so the window opens with the note in its
+ * saved state and with the panel's writability, and this view stays out of what a note *is*.
+ */
+function openReferencedNote(reference: TurnReference): void {
+  if (!isMessageNotesActive(store.activeSessionId)) {
+    store.setError(t("turnRef.noNotesPanel"));
+    return;
+  }
+  if (!noteList.value.some((note) => note.id === reference.ref)) {
+    reportGone(reference);
+    return;
+  }
+  openNoteFromHighlight(reference.ref);
+}
+
+/**
+ * Put a referenced quiz question's card on screen.
+ *
+ * The **card**, not a dialog, because that is the shape a question has in this app: a pending one
+ * is answered there — which is where the quiz panel's own row sends the reader — and a settled one
+ * shows the question, the recorded answer and the verdict. A dialog would be a second surface for
+ * something the conversation already draws, and it would exist only while the quiz panel happened
+ * to be installed.
+ *
+ * The lookup is what turns the handle into the call: a reference stores the question's *global*
+ * id, the one `ila_review_quiz` takes, and the card is anchored by the tool call that drew it,
+ * which is nowhere in the message. A failure here is reported rather than swallowed — the reader
+ * pressed a control this app drew.
+ */
+async function revealQuizQuestion(reference: TurnReference): Promise<void> {
+  const sessionId = store.activeSessionId;
+  if (!sessionId) return;
+  let questions: QuizQuestionView[];
+  try {
+    ({ questions } = await api.listQuizQuestions(sessionId));
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+    return;
+  }
+  // A switch mid-request must not scroll the conversation the reader has moved to.
+  if (sessionId !== store.activeSessionId) return;
+  const question = questions.find((candidate) => candidate.id === reference.ref);
+  if (!question) return;
+  jumpToToolCall(question.toolCallId);
 }
 
 /**
@@ -693,6 +859,7 @@ onBeforeUnmount(() => {
           :message="m"
           :note-marks="noteMarks"
           :is-last="i === store.messages.length - 1"
+          @open-ref="openReference"
         />
         <!-- The streaming bubble gets no marks: an annotation needs a message row to be filed
              against, and this one has none yet. It draws none for the same reason. -->
