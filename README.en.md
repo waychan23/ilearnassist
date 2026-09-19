@@ -107,7 +107,7 @@ Then walk through this once:
    on this machine, so keep it somewhere safe. If you lose it, the control panel can reset it —
    see [FAQ](#faq).
 4. The server starts by itself. Click **Open app**, sign in with the account you just made.
-5. **Paste a model API key**: open **Console → Model providers** from the menu, pick a provider
+5. **Paste a model API key**: open **Platform console → Model services** from the menu, pick a provider
    you have an account with, paste its API key and save. **Until you do this the model list is
    empty** — the assistant needs a model to work at all.
 6. **Start learning**: go back to the home page, create a workspace, open a conversation, choose
@@ -146,7 +146,7 @@ Open <http://localhost:5173> and sign in. The backend listens on `127.0.0.1:3720
 ## Built-in model providers
 
 On first launch the providers below are written into the database; after that
-**Console → Model providers** is the source of truth. Chinese and international endpoints are
+**Platform console → Model services** is the source of truth. Chinese and international endpoints are
 separate entries — the address and the key are not interchangeable between regions — so pick
 whichever suits your network and paste one key.
 
@@ -209,7 +209,7 @@ source checkout, use
 safety, a superadmin's own password can *only* be reset this way, never from the web console.
 
 **Why is the model list empty?**
-No API key is configured. Set one in **Console → Model providers** and it appears in the model
+No API key is configured. Set one in **Platform console → Model services** and it appears in the model
 picker immediately.
 
 **Can I use it from my phone?**

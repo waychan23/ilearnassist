@@ -28,7 +28,7 @@ describe("translateApiError", () => {
   it("renders a parse code from the same lookup", () => {
     // The two unions share one namespace resolution, so a parse code resolves too.
     expect(translateParseError("local_disabled", undefined, "local disabled")).toBe(
-      "本地解析已在设置中关闭。"
+      "本地解析已被关闭。"
     );
   });
 

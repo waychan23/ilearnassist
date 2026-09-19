@@ -72,21 +72,55 @@ endpoints: a `PUT` with no `apiKey` field leaves the stored key untouched, which
 is how the UI can save edits to a provider whose key it is not allowed to read.
 An empty string clears the key.
 
-Models added in the UI carry a display name, an optional context window and max
-output (used by the context-usage indicator), and capability flags:
+Models carry a display name, an optional context window and max output (used by
+the context-usage indicator), and capability flags. **These are not badges** —
+each one changes behaviour, and a model configured with the wrong one misbehaves
+rather than merely displaying something odd:
 
 | Capability | Effect |
 | --- | --- |
-| `vision` | attachments sent as real `image_url` content blocks; without it images degrade to a text placeholder |
-| `reasoning` | UI badge only |
-| `tool_use` | UI badge only |
+| `vision` | attachments travel as real `image_url` content blocks and the model's own description of a picture is written. Without it images degrade to a text placeholder |
+| `reasoning` | chain-of-thought is **replayed** on outgoing messages that carry tool calls, and the out-of-band calls may be told to think or not to. Withholding it from a provider that requires it breaks every later turn (DeepSeek answers `400 The reasoning_content in the thinking mode must be passed back to the API`, and the offending message stays in history); declaring it for a provider that has no such field puts one on the wire |
+| `tool_use` | whether tools are offered to the model at all |
 
-Chain-of-thought is shown whenever the provider sends it, regardless of these flags —
-`reasoning_content` (DeepSeek and most OpenAI-compatible gateways), `reasoning`
-(OpenRouter), or a `reasoning`/`thinking` content block.
+Chain-of-thought is *displayed* whenever the provider sends it, regardless of the
+`reasoning` flag — `reasoning_content` (DeepSeek and most OpenAI-compatible
+gateways), `reasoning` (OpenRouter), or a `reasoning`/`thinking` content block.
+The flag governs only what is sent *back*.
 
-Models seeded from YAML get a best-effort guess from the model id
-(`guessCapabilities`); correct it in Settings → Providers if it is wrong.
+Capabilities can be declared per model in YAML, and every built-in entry does:
+
+```yaml
+- id: glm-5.3
+  name: "GLM-5.3"
+  capabilities: [tool_use, reasoning]
+```
+
+Omitted means `guessCapabilities(modelId)` guesses from the id. That is a
+fallback for a model whose id names its family (`gemini-…`, `gpt-5…`) and for
+entries written before the field existed — **not** the mechanism, because an id
+does not reliably say what a model can do: `glm-5.3` cannot see pictures while
+`glm-5v-turbo` can, and `kimi-k3` always thinks while `kimi-k2.6` can be told not
+to. An unrecognised name in the list stops the server at boot rather than being
+dropped, because a silently dropped `vision` is a model that looks configured and
+quietly stops seeing images.
+
+### Built-in providers
+
+`config/config.yaml` seeds eleven entries — `deepseek`, `openai`, `gemini`, and a
+Chinese/International pair for each of `zhipu` (智谱 GLM), `qwen` (通义千问),
+`kimi` and `minimax`. A vendor's two regions are separate entries because neither
+the host nor the API key is interchangeable between them; a key issued for one
+answers `404` on the other.
+
+Seeding eleven costs nothing, because **only a provider whose key is set is
+offered in a conversation's model picker**: fill in one and the other ten stay out
+of the way. The console lists all of them with each one's key state, since that is
+the screen an administrator configures them on.
+
+The endpoints, model ids and capabilities of each are in the file itself, under
+comments that say why each pair exists. That file is the authoritative list; this
+page deliberately does not repeat it.
 
 ## Environment variables (`.env`)
 

@@ -212,4 +212,31 @@ describe("the console's sections", () => {
       }
     }
   });
+
+  /*
+   * A message may not send the reader to a screen that does not exist.
+   *
+   * `Settings → Providers` and `Settings → Document parsing` lived in a global settings dialog
+   * that the console replaced. Six messages kept pointing at it — including the banner a fresh
+   * install shows when no API key is set, which is the first thing a new user reads, and the
+   * `REASONING_NOT_DECLARED` error, which names where to fix the very thing it is complaining
+   * about. A wrong destination is worse than no destination: the reader concludes the feature
+   * is missing rather than that the sentence is stale.
+   *
+   * Matched on the *path*, not on the word, so these remain writable: "in Settings" is vague
+   * but harmless, and `settings.providers.*` is a live namespace.
+   */
+  it("sends nobody to the retired settings dialog", () => {
+    const RETIRED = ["设置 → ", "Settings → "];
+    for (const [name, catalog] of [
+      ["zh-CN", zh],
+      ["en", enFlat],
+    ] as const) {
+      for (const [key, value] of Object.entries(catalog)) {
+        for (const path of RETIRED) {
+          expect(value, `${name} ${key} points at the retired dialog`).not.toContain(path);
+        }
+      }
+    }
+  });
 });

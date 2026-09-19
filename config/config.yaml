@@ -40,6 +40,28 @@ defaultModel: deepseek-v4-pro
 # supply a key via ${ENV_VAR} rather than typing it into the browser.
 # ----------------------------------------------------------------------------
 providers:
+  # ---------------------------------------------------------------------------
+  # The built-in providers.
+  #
+  # A vendor's Chinese and international endpoints are **two separate entries**, because
+  # neither the host nor the API key is interchangeable between them (a Chinese-region key
+  # sent to the international host answers 404). Extra entries cost nothing: only a provider
+  # whose key is set appears in a conversation's model picker.
+  #
+  # `capabilities` is how a seed entry says what its models can do, and for the entries below
+  # it is always stated rather than left to `guessCapabilities`. That is not tidiness — the
+  # three flags change behaviour, not a badge: `vision` decides whether an image travels as
+  # an `image_url` or reaches the model as a placeholder, `reasoning` decides whether
+  # chain-of-thought is replayed on messages carrying tool calls (DeepSeek 400s without it),
+  # `tool_use` decides whether the tools are offered at all. A model id does not reliably say
+  # any of it: `glm-5.3` cannot see pictures while `glm-5v-turbo` can, and `kimi-k3` always
+  # thinks while `kimi-k2.6` can be told not to.
+  #
+  # Model ids are the vendors' own and do change. Correcting one is a console edit
+  # (控制台 → 模型服务商) — no rebuild.
+  # ---------------------------------------------------------------------------
+
+  # ---- DeepSeek ------------------------------------------------------------
   - id: deepseek
     name: DeepSeek
     baseURL: https://api.deepseek.com/v1
@@ -47,17 +69,148 @@ providers:
     models:
       - id: deepseek-v4-pro
         name: DeepSeek V4 Pro
+        capabilities: [tool_use, reasoning]
 
+  # ---- 智谱 GLM / Zhipu GLM ------------------------------------------------
+  - id: zhipu
+    name: 智谱 GLM
+    baseURL: https://open.bigmodel.cn/api/paas/v4
+    apiKey: ${ZHIPU_API_KEY}
+    models:
+      - id: glm-5.3
+        name: GLM-5.3
+        capabilities: [tool_use, reasoning]
+      - id: glm-5.3-flash
+        name: GLM-5.3 Flash
+        capabilities: [tool_use, reasoning]
+
+  - id: zhipu-intl
+    name: 智谱 GLM（国际）
+    baseURL: https://api.z.ai/api/paas/v4
+    apiKey: ${ZHIPU_INTL_API_KEY}
+    models:
+      - id: glm-5.3
+        name: GLM-5.3
+        capabilities: [tool_use, reasoning]
+      - id: glm-5.3-flash
+        name: GLM-5.3 Flash
+        capabilities: [tool_use, reasoning]
+
+  # ---- 通义千问 / Qwen (Alibaba Model Studio) ------------------------------
+  # The flat host below is the long-standing one and still works. Model Studio is moving to
+  # a workspace-scoped host — https://{WorkspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1
+  # — which needs an id only your console knows, so the seed uses the flat form.
+  - id: qwen
+    name: 通义千问
+    baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
+    apiKey: ${DASHSCOPE_API_KEY}
+    models:
+      - id: qwen3.8-max
+        name: Qwen3.8 Max
+        capabilities: [tool_use, reasoning, vision]
+      - id: qwen3.8-flash
+        name: Qwen3.8 Flash
+        capabilities: [tool_use, reasoning, vision]
+
+  - id: qwen-intl
+    name: 通义千问（国际）
+    baseURL: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    apiKey: ${DASHSCOPE_INTL_API_KEY}
+    models:
+      - id: qwen3.8-max
+        name: Qwen3.8 Max
+        capabilities: [tool_use, reasoning, vision]
+      - id: qwen3.8-flash
+        name: Qwen3.8 Flash
+        capabilities: [tool_use, reasoning, vision]
+
+  # ---- Kimi / Moonshot -----------------------------------------------------
+  - id: kimi
+    name: Kimi
+    baseURL: https://api.moonshot.cn/v1
+    apiKey: ${MOONSHOT_API_KEY}
+    models:
+      - id: kimi-k3
+        name: Kimi K3
+        capabilities: [tool_use, reasoning, vision]
+      - id: kimi-k2.6
+        name: Kimi K2.6
+        capabilities: [tool_use, reasoning, vision]
+
+  - id: kimi-intl
+    name: Kimi（国际）
+    baseURL: https://api.moonshot.ai/v1
+    apiKey: ${MOONSHOT_INTL_API_KEY}
+    models:
+      - id: kimi-k3
+        name: Kimi K3
+        capabilities: [tool_use, reasoning, vision]
+      - id: kimi-k2.6
+        name: Kimi K2.6
+        capabilities: [tool_use, reasoning, vision]
+
+  # ---- MiniMax -------------------------------------------------------------
+  # Note the extra "i": api.minimaxi.com is the Chinese host and api.minimax.io the
+  # international one. They are different hosts, not two spellings of one.
+  - id: minimax
+    name: MiniMax
+    baseURL: https://api.minimaxi.com/v1
+    apiKey: ${MINIMAX_API_KEY}
+    models:
+      - id: MiniMax-M3
+        name: MiniMax M3
+        capabilities: [tool_use, reasoning, vision]
+      - id: MiniMax-M2.7
+        name: MiniMax M2.7
+        capabilities: [tool_use, reasoning]
+
+  - id: minimax-intl
+    name: MiniMax（国际）
+    baseURL: https://api.minimax.io/v1
+    apiKey: ${MINIMAX_INTL_API_KEY}
+    models:
+      - id: MiniMax-M3
+        name: MiniMax M3
+        capabilities: [tool_use, reasoning, vision]
+      - id: MiniMax-M2.7
+        name: MiniMax M2.7
+        capabilities: [tool_use, reasoning]
+
+  # ---- OpenAI --------------------------------------------------------------
+  # Deliberately **not** `reasoning`. OpenAI does not expose chain-of-thought as a
+  # `reasoning_content` field, so there is nothing to replay — while declaring the capability
+  # is what makes this app put that field on the wire. Reasoning still streams and is still
+  # displayed: the SSE tap is installed for every model, and only the *replay* is gated.
   - id: openai
     name: OpenAI
     baseURL: https://api.openai.com/v1
     apiKey: ${OPENAI_API_KEY}
     models:
-      - id: gpt-4o-mini
-        name: GPT-4o mini
+      - id: gpt-5.4
+        name: GPT-5.4
+        capabilities: [tool_use, vision]
+      - id: gpt-5.4-mini
+        name: GPT-5.4 mini
+        capabilities: [tool_use, vision]
+
+  # ---- Google Gemini -------------------------------------------------------
+  # Same omission as OpenAI, for the same reason: Gemini's thinking is not a replayed field.
+  # This is the OpenAI-compatibility layer, not the native API.
+  - id: gemini
+    name: Google Gemini
+    baseURL: https://generativelanguage.googleapis.com/v1beta/openai/
+    apiKey: ${GEMINI_API_KEY}
+    models:
+      - id: gemini-3.5-flash
+        name: Gemini 3.5 Flash
+        capabilities: [tool_use, vision]
+      - id: gemini-3.1-pro-preview
+        name: Gemini 3.1 Pro (preview)
+        capabilities: [tool_use, vision]
 
   # Local / keyless example — uncomment to use a self-hosted OpenAI-compatible
-  # server such as Ollama (http://localhost:11434/v1) or LM Studio.
+  # server such as Ollama (http://localhost:11434/v1) or LM Studio. `capabilities` may be
+  # omitted for a model whose id names its family, in which case it is guessed from the id.
   # - id: local
   #   name: Local (Ollama)
   #   baseURL: http://localhost:11434/v1
