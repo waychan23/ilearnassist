@@ -9,6 +9,7 @@ import {
   hasExistingData,
   resolveAppPaths,
   seedFirstRun,
+  trayIconFile,
 } from "../src/main/paths.js";
 
 /**
@@ -201,5 +202,31 @@ describe("hasExistingData", () => {
     // opens, or the picker would warn about a folder the server reads happily, or stay quiet
     // about one it does not.
     expect(databaseIn("/data")).toBe(join("/data", "db", "sqlite", "ilearnassist.sqlite"));
+  });
+});
+
+describe("the tray icon", () => {
+  it("gives macOS the template image, and everyone else the coloured one", () => {
+    // macOS recolours a template image for a dark menu bar; Windows and Linux have no such
+    // convention, so that file there is a black glyph on a dark taskbar. Two files, and the
+    // wrong one is invisible rather than broken — which is why it is a tested function.
+    expect(trayIconFile("darwin")).toBe("trayTemplate.png");
+    for (const platform of ["win32", "linux"] as const) {
+      expect(trayIconFile(platform), platform).toBe("tray.png");
+    }
+  });
+
+  it("names files that are actually committed, with their @2x siblings", () => {
+    // The assertion that matters, and the reason this is not just a switch: `main.ts` reads
+    // the file out of the *packaged bundle*, where a name that does not exist is an empty
+    // `nativeImage` and no tray item at all. `build.mjs` stages whatever is in `assets/`, so
+    // checking the source assets is checking what ships.
+    const assets = new URL("../assets/", import.meta.url);
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const file = trayIconFile(platform);
+      for (const name of [file, file.replace(/\.png$/, "@2x.png")]) {
+        expect(existsSync(new URL(name, assets)), `${name} (${platform})`).toBe(true);
+      }
+    }
   });
 });

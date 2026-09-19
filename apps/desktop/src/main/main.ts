@@ -40,6 +40,7 @@ import {
   hasExistingData,
   resolveAppPaths,
   seedFirstRun,
+  trayIconFile,
   type AppPaths,
 } from "./paths.js";
 import { readSettings, writeSettings, type DesktopSettings } from "./settings.js";
@@ -582,21 +583,20 @@ async function resetAppWindow(): Promise<void> {
 
 // ---- tray ------------------------------------------------------------------
 
-/**
- * The menu-bar icon, which is what keeps the app reachable once its window is gone.
- *
- * A template image — black with alpha, filename ending in `Template` — so macOS inverts it
- * for a dark menu bar and it needs no light and dark variants of its own. `createFromPath`
- * picks up the `@2x` sibling automatically, so the icon is drawn once at two sizes rather
- * than scaled and blurred on a Retina display.
- */
 function createTray(): void {
-  const icon = nativeImage.createFromPath(join(resourcesDir, "tray", "trayTemplate.png"));
+  // Which file is `paths.ts`'s answer, not this one's: it is a platform question with a
+  // wrong answer that only shows up on Windows, so it is asserted against the committed
+  // assets in a test rather than here where nothing can reach it.
+  const file = trayIconFile(process.platform);
+  // `createFromPath` picks up the `@2x` sibling automatically, so the mark is drawn at two
+  // sizes rather than scaled and blurred.
+  const icon = nativeImage.createFromPath(join(resourcesDir, "tray", file));
   if (icon.isEmpty()) {
     // A missing icon would otherwise appear as an invisible tray item that still swallows
     // clicks — worse than no tray, because the app would look like it had quit. The panel
-    // still works; only the menu-bar half does not.
-    console.error("Tray icon missing from the app bundle; running without a menu-bar item");
+    // still works; only the tray half does not. Naming the file, because on Windows this is
+    // the difference between "the tray is broken" and "one asset was not staged".
+    console.error(`Tray icon ${file} missing from the app bundle; running without a tray item`);
     return;
   }
 

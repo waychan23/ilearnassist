@@ -5,18 +5,25 @@ import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
 
 /**
- * Draw `assets/icon.icns`.
+ * Draw the icon set: `assets/icon.icns` for macOS, `assets/icon.ico` for Windows, and the
+ * PNGs the Linux targets use.
  *
- * Committed as a script rather than as a binary so the mark is reviewable and changeable:
- * a `.icns` in the repository is a file nobody can read, and the next person who wants the
+ * Committed as a script rather than as binaries so the mark is reviewable and changeable:
+ * an `.icns` in the repository is a file nobody can read, and the next person who wants the
  * accent colour to move cannot tell whether it did. Run `pnpm --filter
  * @ilearnassist/desktop icon` after editing anything below, and commit the result — the
- * build does not depend on this script, only the icon does.
+ * build does not depend on this script, only the icons do.
  *
  * Rasterised with signed distance fields rather than through a drawing library, so the
  * output has real anti-aliasing at 16px (where a hard-edged rasteriser turns the mark into
  * a blob) with no dependency to install. The shapes are a rounded-rectangle "squircle" tile
  * with a chat bubble on it, which is what the product is: a conversation.
+ *
+ * **Everything is drawn at the size it is used at, never scaled down.** Geometry is derived
+ * from `size` rather than written in pixels, because a 1024px raster reduced to 16 turns the
+ * bubble's tail into a smudge — which is the same reason the tray mark has proportions of
+ * its own. The fractions reproduce the original 1024px numbers exactly, so `icon.png` and
+ * `icon.icns` are unchanged by the parameterisation.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -87,32 +94,48 @@ function polygonCentreSign(points) {
 const coverage = (distance) => Math.min(1, Math.max(0, 0.5 - distance));
 
 /**
- * The mark: a speech bubble with a tail at its lower left.
+ * The mark: a speech bubble with a tail at its lower left, as fractions of the canvas.
  *
  * The tail is a separate triangle that overlaps the body on purpose — unioning two shapes
  * that merely touch leaves a hairline seam where their anti-aliased edges both come up
  * short of full cover.
+ *
+ * Written as fractions rather than pixels because the icon is drawn at 1024 for macOS and at
+ * 16, 32, 48 and 256 for a Windows `.ico`, and a reduction of the big one is a smudge. Each
+ * fraction is the original pixel value over 1024, so at 1024 the geometry below is identical
+ * to the numbers this started as — which is what keeps the committed `.icns` unchanged.
  */
-const BUBBLE = { x0: 286, y0: 332, x1: 738, y1: 636, radius: 84 };
+const BUBBLE = { x0: 286 / 1024, y0: 332 / 1024, x1: 738 / 1024, y1: 636 / 1024, radius: 84 / 1024 };
 const TAIL = [
-  [356, 588],
-  [500, 588],
-  [366, 754],
+  [356 / 1024, 588 / 1024],
+  [500 / 1024, 588 / 1024],
+  [366 / 1024, 754 / 1024],
 ];
 
-function render() {
-  const tileA = INSET;
-  const tileB = SIZE - INSET;
-  const tailSign = polygonCentreSign(TAIL);
-  const rgba = Buffer.alloc(SIZE * SIZE * 4);
+/** The mark, drawn on its tile at `size`×`size`. */
+function render(size = SIZE) {
+  const tileA = (INSET / SIZE) * size;
+  const tileB = size - tileA;
+  const tileRadius = (TILE_RADIUS / SIZE) * size;
 
-  for (let y = 0; y < SIZE; y += 1) {
-    for (let x = 0; x < SIZE; x += 1) {
+  const bubble = {
+    x0: BUBBLE.x0 * size,
+    y0: BUBBLE.y0 * size,
+    x1: BUBBLE.x1 * size,
+    y1: BUBBLE.y1 * size,
+    radius: BUBBLE.radius * size,
+  };
+  const tail = TAIL.map(([x, y]) => [x * size, y * size]);
+  const tailSign = polygonCentreSign(tail);
+  const rgba = Buffer.alloc(size * size * 4);
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
       // Sample at pixel centres, so the tile lands symmetrically in the canvas.
       const px = x + 0.5;
       const py = y + 0.5;
 
-      const tile = coverage(roundedBox(px, py, tileA, tileA, tileB, tileB, TILE_RADIUS));
+      const tile = coverage(roundedBox(px, py, tileA, tileA, tileB, tileB, tileRadius));
       if (tile <= 0) continue;
 
       const mix = (py - tileA) / (tileB - tileA);
@@ -122,12 +145,18 @@ function render() {
         GRADIENT_TOP[2] + (GRADIENT_BOTTOM[2] - GRADIENT_TOP[2]) * mix,
       ];
 
-      const body = coverage(roundedBox(px, py, BUBBLE.x0, BUBBLE.y0, BUBBLE.x1, BUBBLE.y1, BUBBLE.radius));
-      const tail = coverage(convexPolygon(px, py, TAIL, tailSign));
+      // No extra softening at small sizes: the coverage ramp is one *pixel in the drawing's
+      // own units*, which is what makes a 16px render crisp rather than a reduction of the
+      // 1024px one. Blurring the distance instead — the obvious-looking fix — drives every
+      // distance toward zero and paints the whole tile half white.
+      const body = coverage(
+        roundedBox(px, py, bubble.x0, bubble.y0, bubble.x1, bubble.y1, bubble.radius)
+      );
+      const tailCover = coverage(convexPolygon(px, py, tail, tailSign));
       // Union: the nearer surface wins.
-      const markCover = Math.max(body, tail);
+      const markCover = Math.max(body, tailCover);
 
-      const offset = (y * SIZE + x) * 4;
+      const offset = (y * size + x) * 4;
       for (let channel = 0; channel < 3; channel += 1) {
         rgba[offset + channel] = Math.round(
           background[channel] * (1 - markCover) + MARK[channel] * markCover
@@ -141,19 +170,21 @@ function render() {
 }
 
 /**
- * The menu-bar mark: the same speech bubble, as a **template image**.
+ * The menu-bar / tray mark: the same speech bubble, without the macOS icon-grid tile.
  *
- * A template image is shape only — black pixels with an alpha channel — and macOS draws it
- * in whatever colour the menu bar currently needs, inverting it for dark mode and dimming
- * it when the app is not frontmost. That is why there is no gradient and no colour here: any
- * hue written into these channels is discarded, and a coloured source would only mislead the
- * next person to open it.
+ * `rgb` is `null` for macOS and a colour for everywhere else, and that is the whole reason
+ * this takes an argument. **macOS wants a template image**: shape only, black pixels with an
+ * alpha channel, which it draws in whatever colour the menu bar currently needs — inverting
+ * it for dark mode and dimming it when the app is not frontmost. Any hue written into those
+ * channels is discarded. **Windows and Linux have no such convention**, so a template image
+ * there is a black glyph on a dark taskbar, which is indistinguishable from a missing icon.
+ * They get the accent colour, which is visible on either background.
  *
  * Drawn at each size rather than scaled down from the app icon, because a 16px reduction of
  * the 1024px artwork turns the bubble's tail into a smudge. The proportions are restated for
  * the small canvas instead: a wider margin, a shallower tail, and a thicker body.
  */
-function renderTray(size) {
+function renderTray(size, rgb) {
   const margin = size * 0.08;
   const body = {
     x0: margin,
@@ -179,14 +210,20 @@ function renderTray(size) {
         coverage(convexPolygon(px, py, tail, tailSign))
       );
       const offset = (y * size + x) * 4;
-      // RGB stays zero: the channels are ignored for drawing, and leaving them white would
-      // make this file look like a white square in any viewer.
+      if (rgb) {
+        for (let channel = 0; channel < 3; channel += 1) rgba[offset + channel] = rgb[channel];
+      }
+      // For a template image RGB stays zero: the channels are ignored for drawing, and
+      // leaving them white would make this file look like a white square in any viewer.
       rgba[offset + 3] = Math.round(cover * 255);
     }
   }
 
   return rgba;
 }
+
+/** The colour a non-macOS tray icon is drawn in: the accent ramp's middle, legible on light or dark. */
+const TRAY_RGB = [78, 140, 245];
 
 // ---- a minimal PNG encoder -------------------------------------------------
 
@@ -240,6 +277,52 @@ function encodePng(rgba, size) {
   ]);
 }
 
+// ---- a minimal ICO encoder -------------------------------------------------
+
+/**
+ * The sizes a Windows `.ico` carries, and where each is actually seen: 16 in the title bar and
+ * the small taskbar, 32 in the taskbar and Alt-Tab, 48 in Explorer's default (medium) view,
+ * 256 for the large-thumbnails view. Shipping only one size is what makes an app look blurry in
+ * Explorer and fine everywhere else, which is a bug nobody traces back to its icon.
+ */
+const ICO_SIZES = [16, 32, 48, 256];
+
+/**
+ * An `.ico` holding PNG-compressed entries.
+ *
+ * The format allows either a BMP or a PNG payload per entry, and every Windows this app runs on
+ * reads the PNG form (Vista and later) — which is why there is no BMP encoder here, and why the
+ * entries above can be the same PNG encoder the other platforms use.
+ */
+function encodeIco(entries) {
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved, always 0
+  header.writeUInt16LE(1, 2); // 1 = icon (2 would be a cursor)
+  header.writeUInt16LE(entries.length, 4);
+
+  const directory = Buffer.alloc(16 * entries.length);
+  // The payloads start after the directory, in the order they are listed.
+  let offset = header.length + directory.length;
+
+  entries.forEach(({ size, png }, index) => {
+    const at = index * 16;
+    // 0 means 256 in these two fields — the only way 256 fits in a byte, and the reason a
+    // 256px-only icon written as 255 looks nearly right and is wrong.
+    const dimension = size >= 256 ? 0 : size;
+    directory[at] = dimension;
+    directory[at + 1] = dimension;
+    directory[at + 2] = 0; // palette size: 0 for a true-colour image
+    directory[at + 3] = 0; // reserved
+    directory.writeUInt16LE(1, at + 4); // colour planes
+    directory.writeUInt16LE(32, at + 6); // bits per pixel
+    directory.writeUInt32LE(png.length, at + 8);
+    directory.writeUInt32LE(offset, at + 12);
+    offset += png.length;
+  });
+
+  return Buffer.concat([header, directory, ...entries.map((entry) => entry.png)]);
+}
+
 /** The set of sizes `iconutil` requires. The `@2x` entries are the same pixels as the next step up. */
 const ICONSET = [
   [16, "icon_16x16.png"],
@@ -256,30 +339,61 @@ const ICONSET = [
 
 function main() {
   if (process.platform !== "darwin") {
-    // `iconutil` and `sips` are macOS tooling. The `.png` is still written, which is what
-    // the Windows and Linux builders will want when they are added.
-    console.warn("[icon] not on macOS: writing assets/icon.png only, no .icns");
+    // `iconutil` and `sips` are macOS tooling, so the `.icns` cannot be rebuilt here. Every
+    // other artefact can, and the `.icns` is committed — so this is a note rather than a
+    // failure, and the Windows and Linux icons are still refreshed.
+    console.warn("[icon] not on macOS: skipping assets/icon.icns (macOS tooling)");
   }
 
   mkdirSync(assetsDir, { recursive: true });
-  const png = encodePng(render(), SIZE);
-  writeFileSync(join(assetsDir, "icon.png"), png);
-  console.log(`[icon] assets/icon.png (${SIZE}×${SIZE})`);
 
-  // The `Template` suffix is what tells macOS to recolour it, and the `@2x` sibling is what
-  // keeps it sharp on a Retina menu bar. Both names are load-bearing.
+  // Linux wants a plain PNG, and electron-builder reads it at whatever size it needs. 512 is
+  // the size freedesktop.org's icon themes top out at for an application icon.
   for (const [size, name] of [
-    [16, "trayTemplate.png"],
-    [32, "trayTemplate@2x.png"],
+    [SIZE, "icon.png"],
+    [512, "icon-512.png"],
   ]) {
-    writeFileSync(join(assetsDir, name), encodePng(renderTray(size), size));
+    writeFileSync(join(assetsDir, name), encodePng(render(size), size));
     console.log(`[icon] assets/${name} (${size}×${size})`);
+  }
+
+  writeFileSync(
+    join(assetsDir, "icon.ico"),
+    encodeIco(ICO_SIZES.map((size) => ({ size, png: encodePng(render(size), size) })))
+  );
+  console.log(`[icon] assets/icon.ico (${ICO_SIZES.join(", ")})`);
+
+  /*
+   * Two tray marks per size, and the pair is not redundancy.
+   *
+   * `trayTemplate` is the macOS one: the `Template` suffix is what tells macOS to recolour it,
+   * and the `@2x` sibling is what keeps it sharp on a Retina menu bar — both names are
+   * load-bearing. `tray` is the coloured one Windows and Linux get, because they have no
+   * template-image convention and would draw the black glyph as a near-invisible smudge on a
+   * dark taskbar. `main.ts` picks by platform; whichever file it asks for must exist.
+   */
+  for (const [size, suffix] of [
+    [16, ""],
+    [32, "@2x"],
+  ]) {
+    writeFileSync(
+      join(assetsDir, `trayTemplate${suffix}.png`),
+      encodePng(renderTray(size, null), size)
+    );
+    writeFileSync(
+      join(assetsDir, `tray${suffix}.png`),
+      encodePng(renderTray(size, TRAY_RGB), size)
+    );
+    console.log(`[icon] assets/tray*${suffix}.png (${size}×${size})`);
   }
 
   if (process.platform !== "darwin") return;
 
   rmSync(iconsetDir, { recursive: true, force: true });
   mkdirSync(iconsetDir, { recursive: true });
+  // `sips` resamples the committed 1024px PNG rather than the script re-rendering each size:
+  // the `.icns` is a macOS artefact and its sizes are all large enough that a downsample of
+  // the master is what Apple's own tooling expects.
   for (const [size, name] of ICONSET) {
     execFileSync("sips", ["-z", String(size), String(size), join(assetsDir, "icon.png"), "--out", join(iconsetDir, name)], {
       stdio: "ignore",

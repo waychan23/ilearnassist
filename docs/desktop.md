@@ -428,7 +428,7 @@ reduction turns the speech bubble's tail into a smudge.
 ```bash
 pnpm desktop:dev        # bundle, then run the panel against a live Electron
 pnpm desktop:build      # bundle everything, including the frontend (no .app)
-pnpm desktop:package    # build + electron-builder → apps/desktop/release/*.dmg
+pnpm desktop:package    # build + electron-builder → apps/desktop/release/*.dmg (arm64)
 ```
 
 Individual targets, from `apps/desktop`:
@@ -486,19 +486,48 @@ is external to the server bundle and resolved at runtime, not inlined.
 
 ### Cross-platform
 
-macOS only today. The layout is already platform-neutral — `paths.ts` derives everything from
-`app.getPath("userData")` and `process.resourcesPath`, and the icon script writes a plain
-`.png` on non-Mac hosts — so what remains is a `win`/`linux` block in
-`electron-builder.yml` and the icons those targets want. Nothing in `src/main` is
-Mac-specific except the `titleBarStyle` branch, which already falls back.
+All three, built on a runner of their own. `electron-builder.yml` carries a `win` (NSIS) and a
+`linux` (AppImage + deb) block beside `mac`, and `.github/workflows/release.yml` builds each on
+its own platform — a manual run leaves the installers as workflow artefacts, a `v*` tag also
+attaches them to a GitHub Release. Nothing here is macOS-specific any more except the
+`titleBarStyle` branch in `main.ts`, which already falls back.
 
-Two things to know before adding them:
+```bash
+pnpm desktop:package:mac     # arm64 + x64 .dmg
+pnpm desktop:package:win     # NSIS .exe          — Windows only
+pnpm desktop:package:linux   # .AppImage + .deb
+```
 
-- `electron-winstaller` is currently set to `false` in `pnpm-workspace.yaml`'s `allowBuilds`.
-  The Windows Squirrel target needs it flipped to `true`.
-- The `arch: [arm64]` list under `mac` is deliberately one entry so a bare `pnpm
-  desktop:package` is quick on an Apple Silicon machine. Use `pnpm desktop:package:mac` for
-  both architectures.
+**Windows has to be built on Windows.** NSIS needs Windows tooling; electron-builder will try
+wine when cross-building and that is a dependency to install and keep working rather than a
+thing to document. macOS and Linux build fine from a Mac.
+
+Four things about the platform blocks are decisions rather than defaults:
+
+- **NSIS, not Squirrel**, which is why `electron-winstaller` stays `false` in
+  `pnpm-workspace.yaml`'s `allowBuilds`. It is Squirrel's Windows-only toolchain and NSIS does
+  not use it. `oneClick: false` because this app's audience installs things by clicking through
+  a wizard: a one-click installer offers no choice of location and no visible uninstaller.
+- **The icons are three files, and each is drawn at the size it is used at.**
+  `assets/icon.icns` (macOS), `assets/icon.ico` (Windows: 16, 32, 48 and 256, because shipping
+  one size is what makes an app look blurry in Explorer and fine everywhere else), and
+  `assets/icon-512.png` (Linux). `make-icon.mjs` writes all of them from the same geometry —
+  see the note there on why nothing is ever scaled down from the 1024px master.
+- **The tray icon is two files, chosen by platform.** macOS gets `trayTemplate.png`, a
+  *template* image it recolours for a dark menu bar. Windows and Linux have no such convention,
+  so that file there is a black glyph on a dark taskbar — drawn, present, and invisible. They
+  get `tray.png`, in the accent colour. `trayIconFile()` in `paths.ts` is the choice, and
+  `paths.test.ts` asserts both names exist in `assets/` — the failure mode is a packaged app
+  with no tray item on Windows only.
+- **`artifactName` is spelled out**, so a release's files are
+  `ilearnassist-<version>-<os>-<arch>.<ext>` rather than four artefacts told apart by their
+  extension alone.
+
+**Neither the Windows nor the Linux artefacts are signed**, and macOS is ad-hoc signed only.
+Windows SmartScreen therefore shows its "unrecognised app" warning and Linux packages are
+unsigned; both are documented for the user in the README, because for a non-technical audience
+that warning is the first thing they meet. Signing them is a release-process decision, not a
+code change — see [Signing](#signing) for the macOS half.
 
 ## Signing
 

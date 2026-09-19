@@ -13,8 +13,8 @@ agent loop with tool calling. Three apps share a types package:
   the built frontend when there is one.
 - `apps/web` — Vue 3 (Composition API) + Pinia + Vite. Renders the chat UI.
 - `apps/desktop` — Electron. A "control panel" that starts/stops the server and opens
-  the app, packaged as a Mac `.dmg` for people who do not want a terminal. Supervises
-  the server as a child process; reimplements none of it. See `docs/desktop.md`.
+  the app, packaged for macOS, Windows and Linux for people who do not want a terminal.
+  Supervises the server as a child process; reimplements none of it. See `docs/desktop.md`.
 - `packages/shared` — dependency-free API/domain types used by both sides.
 
 The name the product **displays** is 交互式学习助理 / Interactive Learning Assistant
@@ -78,6 +78,7 @@ pnpm test:e2e          # playwright: real browser + real server + a fake LLM
 pnpm build             # production build of the web app
 pnpm desktop:dev       # bundle and launch the Electron control panel
 pnpm desktop:package   # build a Mac .dmg (apps/desktop/release/)
+pnpm desktop:package:mac | :win | :linux   # per platform; Windows needs Windows
 ```
 
 TypeScript is strict (`strict`, `noUncheckedIndexedAccess`, `isolatedModules`,
@@ -2089,7 +2090,10 @@ Fuller map in `docs/reference.md`.
   `esbuild` are native/bundler; `electron` downloads the ~130 MB binary the desktop app
   runs on. `electron-winstaller` is explicitly `false` — it is Windows-only Squirrel
   tooling, and `pnpm install` otherwise rewrites the file with a
-  `set this to true or false` placeholder that is not valid YAML.
+  `set this to true or false` placeholder that is not valid YAML. It stays `false`:
+  the Windows target is **NSIS**, which does not use it, and a one-click Squirrel
+  installer offers no choice of location and no visible uninstaller. If a future release
+  switches targets, this is the line that changes.
 - `better-sqlite3` is a native module — it builds against your local Node. If you
   change Node versions, reinstall.
 - Config loads `config/config.yaml`, overlaid by a git-ignored

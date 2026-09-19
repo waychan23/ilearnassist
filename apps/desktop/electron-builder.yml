@@ -80,3 +80,49 @@ dmg:
       y: 200
       type: link
       path: /Applications
+
+# NSIS rather than Squirrel, and that choice is what keeps `electron-winstaller` set to
+# `false` in `pnpm-workspace.yaml` — that package is Squirrel's Windows-only toolchain, and
+# NSIS uses the makensis binaries electron-builder fetches itself. `oneClick: false` because
+# the audience for this app installs things by clicking through a wizard: a one-click
+# installer gives no chance to choose a location and no visible uninstaller.
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Per-user rather than per-machine: installing for everybody needs elevation, and this app
+  # never writes anywhere that requires it — its own state is under `app.getPath("userData")`
+  # and the user's data is wherever they chose on first launch.
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+linux:
+  icon: assets/icon-512.png
+  category: Education
+  synopsis: Interactive learning assistant
+  description: >-
+    A self-hosted learning assistant: workspaces, conversations, a study-plan and quiz panel,
+    and an agent loop over any OpenAI-compatible model. Your data lives in a folder you choose.
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  # Debian policy requires one. There is no better answer available from here: electron-builder
+  # will not infer it, and a package with an empty maintainer is one apt complains about.
+  maintainer: ilearnassist contributors
+
+# Spelled out rather than left to the default, which is `<productName>-<version>-<arch>` with
+# no platform segment — so the Mac and Windows artefacts of one release would be told apart
+# only by their extension, and `release/` would still hold a mis-named `.dmg` from before the
+# product rename. `${os}` is electron-builder's own platform token.
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
