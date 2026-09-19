@@ -771,6 +771,13 @@ describe("app settings", () => {
 });
 
 describe("guessCapabilities", () => {
+  /*
+   * The regex, probed with ids — which is all this is. `deepseek-v4-pro` is the case worth
+   * looking at: the guess reads it as an ordinary chat model because "pro" is not a marker, and
+   * it genuinely was a reasoning model in thinking mode by default. That is not a bug in the
+   * regex to fix (no marker can carry it) — it is the reason `capabilities` exists as a field
+   * the *config* states, and why every built-in entry declares its own.
+   */
   it.each([
     ["deepseek-v4-pro", ["tool_use"]], // "pro" is not a reasoning marker
     ["deepseek-reasoner", ["tool_use", "reasoning"]],

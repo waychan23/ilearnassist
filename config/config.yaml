@@ -26,7 +26,13 @@ server:
 defaultProvider: deepseek
 
 # The model used when a conversation has no explicit model selected.
-defaultModel: deepseek-v4-pro
+#
+# DeepSeek's ids move, and this one is a good example of why the comment is here: the
+# `deepseek-v4-pro` this shipped with was **retired on 2026-09-14**, and its requests now
+# route to V4.1 Flash. An id that no longer exists is a first-run failure for every new
+# install, so it is worth re-checking against the provider's own `/models` when a release
+# is cut.
+defaultModel: deepseek-flash
 
 # ----------------------------------------------------------------------------
 # Providers / Models (OpenAI-compatible).
@@ -62,14 +68,24 @@ providers:
   # ---------------------------------------------------------------------------
 
   # ---- DeepSeek ------------------------------------------------------------
+  #
+  # `deepseek-flash` is DeepSeek's canonical id for V4.1 Flash, and it carries **no version
+  # number** — the dated names were the old convention, and the ones still accepted
+  # (`deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`) are compatibility aliases whose
+  # underlying models are retired. When a Pro tier of V4.1 ships it becomes a second entry
+  # here rather than a replacement for this one.
   - id: deepseek
     name: DeepSeek
     baseURL: https://api.deepseek.com/v1
     apiKey: ${DEEPSEEK_API_KEY}
     models:
-      - id: deepseek-v4-pro
-        name: DeepSeek V4 Pro
-        capabilities: [tool_use, reasoning]
+      - id: deepseek-flash
+        name: DeepSeek V4.1 Flash
+        # `vision` because V4.1 Flash is natively multimodal: images travel as real
+        # `image_url` content rather than degrading to a placeholder. `reasoning` because its
+        # thinking mode is on by default and a tool-calling turn must pass
+        # `reasoning_content` back — the 400 this app already replays to avoid.
+        capabilities: [tool_use, reasoning, vision]
 
   # ---- 智谱 GLM / Zhipu GLM ------------------------------------------------
   - id: zhipu

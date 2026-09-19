@@ -176,8 +176,13 @@ describe("withDefaults", () => {
 });
 
 describe("validateConfig", () => {
+  /*
+   * The provider has the model it defaults to, which the fixture used not to say — a provider with
+   * no models whose default named one is a config that cannot work, and it sat here looking fine
+   * until the check below was added and refused it.
+   */
   const base: AppConfig = withDefaults({
-    providers: [{ id: "p", name: "P", baseURL: "http://x", models: [] }],
+    providers: [{ id: "p", name: "P", baseURL: "http://x", models: [{ id: "m", name: "M" }] }],
     defaultProvider: "p",
     defaultModel: "m",
   });
@@ -198,6 +203,37 @@ describe("validateConfig", () => {
 
   it("rejects an empty defaultModel", () => {
     expect(() => validateConfig({ ...base, defaultModel: "" })).toThrow(/defaultModel must be set/);
+  });
+
+  it("rejects a defaultModel the default provider does not have", () => {
+    /*
+     * The hole a retired model id goes through: `deepseek-v4-pro` was still a perfectly good
+     * string after DeepSeek retired it, so nothing objected — and a fresh install seeded a default
+     * its own provider could not serve, which surfaces as a conversation that will not send rather
+     * than as a config error. The two fields are seeded together from this file, so their
+     * coherence here is what a first run depends on.
+     */
+    const withModels: AppConfig = withDefaults({
+      providers: [{ id: "p", name: "P", baseURL: "http://x", models: [{ id: "m1", name: "M1" }] }],
+      defaultProvider: "p",
+      defaultModel: "m1",
+    });
+    expect(() => validateConfig(withModels)).not.toThrow();
+
+    expect(() => validateConfig({ ...withModels, defaultModel: "retired-model" })).toThrow(
+      /defaultModel "retired-model" is not one of p's models \(m1\)/
+    );
+  });
+
+  it("names no models at all when the provider has none", () => {
+    // The message has to stay readable for the empty case, which is what a half-written provider
+    // entry looks like.
+    const empty = withDefaults({
+      providers: [{ id: "p", name: "P", baseURL: "http://x", models: [] }],
+      defaultProvider: "p",
+      defaultModel: "m",
+    });
+    expect(() => validateConfig(empty)).toThrow(/\(none\)/);
   });
 });
 

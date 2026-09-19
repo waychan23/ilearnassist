@@ -24,7 +24,7 @@ server:
   port: 3720             # backend port (Vite proxies /api here)
 
 defaultProvider: deepseek   # seed value; change it in the UI afterwards
-defaultModel: deepseek-chat # seed value; change it in the UI afterwards
+defaultModel: deepseek-flash # seed value; change it in the UI afterwards
 
 providers: [ … ]            # OpenAI-compatible endpoints (seed data, see below)
 
@@ -412,7 +412,7 @@ same dialog the composer's sliders button opens also carries the title and a fre
 **description**, which is display-only — it reaches no prompt.
 
 The titler gets a 512-token output budget on purpose. Reasoning models
-(`deepseek-v4-pro`, `deepseek-reasoner`, o-series) spend that budget on chain-of-thought
+(`deepseek-flash`, o-series) spend that budget on chain-of-thought
 *before* emitting any content, so a tight cap yields `finish_reason: "length"` with an
 empty answer and no title at all.
 

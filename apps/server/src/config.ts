@@ -466,6 +466,24 @@ export function validateConfig(config: AppConfig): void {
     throw new Error("defaultModel must be set in config/config.yaml.");
   }
 
+  /*
+   * And that it is a model the provider actually has.
+   *
+   * `defaultProvider` has been checked against the provider list since the beginning; the model
+   * half was not, and the hole is not theoretical — a *retired* model id read perfectly well as a
+   * string while naming nothing, so a fresh install seeded a default that its own provider could
+   * not serve, and the failure surfaced as a conversation that would not send rather than as a
+   * config error. The two fields are seeded together from this file, so "the pair is coherent
+   * here" is exactly the property a fresh install depends on.
+   */
+  const provider = config.providers.find((p) => p.id === config.defaultProvider);
+  if (provider && !provider.models.some((m) => m.id === config.defaultModel)) {
+    throw new Error(
+      `defaultModel "${config.defaultModel}" is not one of ${config.defaultProvider}'s models ` +
+        `(${provider.models.map((m) => m.id).join(", ") || "none"}).`
+    );
+  }
+
   // Document parser ids are primary keys; a duplicate would fail at seed time with an
   // opaque SQLite constraint error instead of naming the offending entry.
   const parserIds = new Set<string>();
