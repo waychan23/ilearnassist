@@ -1,6 +1,13 @@
 import { pathToFileURL } from "node:url";
 import type { AdminCliErrorBody } from "@ilearnassist/shared";
-import { adminStatus, createAdmin, resetAdmin, type AdminCliOutcome } from "./adminCli.js";
+import {
+  adminStatus,
+  createAdmin,
+  migrateUp,
+  migrationStatus,
+  resetAdmin,
+  type AdminCliOutcome,
+} from "./adminCli.js";
 import { resolveDataRoot } from "./config.js";
 import { apiError } from "./apiError.js";
 
@@ -99,6 +106,18 @@ async function run(args: Args): Promise<AdminCliOutcome | { usage: AdminCliError
     case "status":
       return adminStatus(dataRoot);
 
+    /*
+     * Two commands rather than one with an `--up` flag, and the reason is worth keeping: a flag
+     * that turns a read-only command into one that rewrites the database is exactly the kind of
+     * thing that gets typed by accident. `migrate-status` cannot write, and `migrate-up` says what
+     * it does.
+     */
+    case "migrate-status":
+      return migrationStatus(dataRoot);
+
+    case "migrate-up":
+      return migrateUp(dataRoot);
+
     case "create-admin":
     case "ensure-admin": {
       const username = args.username?.trim();
@@ -178,6 +197,39 @@ function report(outcome: AdminCliOutcome): void {
         ? `Administrator: ${value.adminUsername}\n`
         : `No administrator in ${value.dataRoot}. Create one with: cli create-admin --username <name>\n`
     );
+    /*
+     * The schema, when there is something to say about it. A data root that needs upgrading is
+     * worth knowing *before* pressing Start — the server walks it on boot, and a walk is the one
+     * operation that rewrites somebody's only copy of their data. Silent when the file is current,
+     * which is the ordinary case.
+     */
+    if (value.schema && value.schema.found !== value.schema.needed) {
+      process.stdout.write(
+        `Schema v${value.schema.found} → v${value.schema.needed}: ` +
+          `${value.schema.pending} step(s) will run on the next start (a backup is taken first).\n`
+      );
+    }
+    return;
+  }
+
+  if (value.command === "migrate-status") {
+    process.stdout.write(
+      `Schema: v${value.found} (this build writes v${value.needed}).\n` +
+        (value.historyProblem
+          ? `This database cannot be opened by this build: ${value.historyProblem}\n`
+          : value.blocker
+            ? `This build cannot carry this database — it needs v${value.blocker.needed}.\n` +
+              `Move the data root aside, or run a build that writes v${value.found}.\n`
+            : value.pending.length === 0
+              ? "Nothing to migrate.\n"
+              : `${value.pending.length} step(s) to run; \`cli migrate-up\` will apply them.\n`)
+    );
+    if (value.applied.length > 0) {
+      process.stdout.write("\nApplied so far:\n");
+      for (const row of value.applied) {
+        process.stdout.write(`  v${row.version}  ${row.id}  ${row.appliedAt}\n`);
+      }
+    }
     return;
   }
 
@@ -196,6 +248,21 @@ function report(outcome: AdminCliOutcome): void {
     return;
   }
 
+  if (value.command === "migrate-up") {
+    if (value.applied.length === 0) {
+      process.stdout.write(`Database is already at v${value.to}; nothing to do.\n`);
+      return;
+    }
+    process.stdout.write(
+      `Migrated the database from v${value.from} to v${value.to} (${value.applied.length} step(s)).\n` +
+        (value.backup
+          ? `A copy from before the migration is at:\n  ${value.backup}\n`
+          : "No backup was taken (this deployment opted out).\n")
+    );
+    return;
+  }
+
+  // create-admin / ensure-admin, the only arm left.
   if (!value.created) {
     process.stdout.write(`Already administered by "${value.username}" — nothing to do.\n`);
     return;
@@ -213,6 +280,8 @@ function report(outcome: AdminCliOutcome): void {
 
 const USAGE = `Usage:
   cli status [--json]
+  cli migrate-status [--json]                 what the database is, and what a walk would do
+  cli migrate-up [--json]                     walk it up to this build's schema (takes a backup)
   cli create-admin --username <name> (--password-stdin | --generate) [--json]
   cli ensure-admin --username <name> (--password-stdin | --generate) [--json]
   cli reset-admin [--username <name>] (--password-stdin | --generate) [--json]

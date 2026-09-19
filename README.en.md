@@ -287,6 +287,7 @@ whole application can be released under MIT.
 
 ## Documentation
 
+- [Migrations](docs/migrations.md) — the three ways a schema change lands, immutable steps, and the snapshot taken before an upgrade
 - [Architecture](docs/architecture.md) — system overview, agent loop, sandboxing, data model, SSE protocol
 - [Configuration](docs/configuration.md) — full `config.yaml` reference, providers and search setup
 - [Desktop app](docs/desktop.md) — the control panel, packaging, signing and cross-platform notes

@@ -251,6 +251,7 @@ apps/server/src/
   prompts.json            # every system prompt and guidance block, keyed — see docs/prompts.md
   prompts.ts              # the catalog: rendering, {{placeholders}}, and config.patch.json overrides
   schema.ts               # the DDL, schemaProblem, and the user_version guard (one transaction)
+  migrations.ts           # the Flyway-model walk: steps, checksums, the history, the guard
   apiError.ts             # the { error: { code, message, params } } envelope, shared with the CLI
   auth.ts                 # accounts: scrypt passwords, credential policy, bearer tokens, the gate
   db.ts                   # better-sqlite3 CRUD (snake_case cols), user-scoped accessors
@@ -261,7 +262,7 @@ apps/server/src/
   fileCategory.ts         # what a file is: one MIME type and one category, from a name
   resources.ts            # registerFile / ensureWorkResource / rename / reconcile
   fileOps.ts              # the file manager's writes: create, upload, move, delete-to-trash
-  migrations.ts           # the version walk (v2 -> v3), canMigrate, openRefusal
+  backup.ts               # the VACUUM INTO snapshot a walk must take before it writes
   writeLocation.ts        # the four-level chain deciding which sandbox a write goes to
   routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
   stream.ts               # SSE framing helper
@@ -274,6 +275,7 @@ apps/server/src/
   agent/threads.ts        # the out-of-band topic classifier call
   agent/insights.ts       # the out-of-band insight pass call
   agent/reasoning.ts      # the `thinking` body field, capability-gated (both calls above)
+  version.ts              # APP_VERSION, inlined from package.json at build time
   modelJson.ts            # fence-and-bracket stripping for an out-of-band answer (pure)
   modelLog.ts             # the append-only observation logs, one file per call kind
   documents/              # document → text: local extractors, cloud drivers, policy
@@ -1054,24 +1056,34 @@ Fuller map in `docs/reference.md`.
   indistinguishable from a button that does nothing — which is how one was reported. The
   store's `answerQuestion` follows the same rule: a submission it cannot place is
   reported, never silently dropped.
-- **Schema changes follow one of two rules, and they cover different things.** *Adding* a
-  column goes through `ensureColumn` in `db.ts`: `CREATE TABLE IF NOT EXISTS` silently skips
-  existing tables, so a database created before the column would never gain it. *Changing
-  what an existing column means* bumps `SCHEMA_VERSION` in `schema.ts`, which refuses the
-  file outright — no missing column can signal that, so without a version an old database is
-  simply opened and read wrong (`dir_path` resolving to the wrong directory, ids referring to
-  a different kind of thing) with no error anywhere to explain it. The guard reads
-  `PRAGMA user_version`, which is in the file header and therefore readable *before* anything
-  is created; a version row in `app_settings` cannot be, because reading it means having
-  already touched the file you meant to refuse.
-  **There are no migrations at all right now, and that is a decision rather than an omission.**
-  v4 splits one table into three and changes what the bytes' locator means; no pure function of
-  the rows produces the new shape honestly, because a v3 row's owner would have to be guessed
-  wherever its links disagree — and a wrong owner is worse than a file that will not open, since
-  nothing downstream can tell it is wrong. So `MIGRATIONS` is empty and a v3 data root is
-  **refused**; the upgrade is deleting it, and the workspaces, sessions and every file on disk
-  survive that untouched. `canMigrate` keeps its loop over `MIGRATIONS` rather than collapsing to
-  `from === SCHEMA_VERSION`, so the next migration is an entry in the array and nothing else.
+- **Schema changes follow one of three rules, and `docs/migrations.md` is the reference.**
+  *Adding* a table or index is a `DDL` edit and nothing else (every statement is
+  `CREATE … IF NOT EXISTS` and the DDL runs on every open, so an existing file gains it on the
+  next start). *Adding* a column is that **and** an `ensureColumn` call — two edits, for two
+  audiences: the DDL is what a fresh install gets and `ensureColumn` is how an existing one
+  catches up. *Anything the idempotent DDL cannot express* — changing what a column means, a drop,
+  a data rewrite — bumps `SCHEMA_VERSION` **and** adds a step to `MIGRATIONS`, which walks an older
+  file forward. No missing column can signal that kind of change, so without a version an old
+  database is simply opened and read wrong (`dir_path` resolving to the wrong directory, ids
+  referring to a different kind of thing) with no error to explain it. The guard reads
+  `PRAGMA user_version`, which is in the file header and therefore readable *before* anything is
+  created; a version row in `app_settings` cannot be, because reading it means having already
+  touched the file you meant to refuse.
+  **The walk is Flyway's model with our runner, and the reasons are concrete** (see
+  `migrations.ts`): better-sqlite3 is synchronous while every migration library's API is a promise,
+  so taking one would make `createDb` async — and `createDb` is called synchronously from the
+  boot path, the CLI and every test; a library's own history table would be a **second version
+  authority** beside the `user_version` guard that `schemaProblem`/`canMigrate`/`openRefusal` and
+  the CLI's read-only `status` are built on; and the server is bundled to one file, so a runner
+  that globs a `migrations/` directory finds nothing in the packaged app. What a library would give
+  us is the walk, the history and the checksum; what it would not give us is the snapshot, which is
+  the part that protects the user's only copy of their data.
+  **`MIGRATIONS` is empty and v2–v4 are still refused**, deliberately: those steps would have to
+  invent a value the rows do not determine (a v3 link's owner wherever its links disagree), and a
+  wrong owner is worse than a file that will not open, since nothing downstream can tell it is
+  wrong. `canMigrate` keeps its loop over `MIGRATIONS` rather than collapsing to
+  `from === SCHEMA_VERSION`, so the next migration is an entry in the array and nothing else. v5 is
+  the first version of the migration era.
 - **Every user-owned read takes the owner and puts it in the `WHERE`.** `getWorkspaceForUser`,
   `getSessionForUser`, `listMessagesForUser` — the `ForUser` suffix is the rule, and another
   account's id returns `undefined` rather than a row. Looking a row up and *then* comparing

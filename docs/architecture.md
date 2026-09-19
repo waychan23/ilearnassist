@@ -116,20 +116,30 @@ Accounts are real: `auth.ts` finds or creates one by username, and every route i
 the caller (see [Authentication](#authentication-authts)). A Copilot's owner is that account,
 exactly as a workspace's is.
 
-Schema changes follow one of two rules, and they are for different things:
+Schema changes follow one of three rules, and they are for different things. The full version is
+[migrations.md](migrations.md); this is what a reader of the data model needs:
 
-- **Adding** a column goes through `ensureColumn()` (`PRAGMA table_info` +
+- **Adding** a table or an index is a `DDL` edit and nothing else — the DDL is applied on every
+  open and every statement in it is `CREATE … IF NOT EXISTS`, so an existing database gains it on
+  the next start.
+- **Adding** a column is that *and* an `ensureColumn()` call (`PRAGMA table_info` +
   `ALTER TABLE ADD COLUMN`), because `CREATE TABLE IF NOT EXISTS` silently skips tables that
-  already exist — an existing database would otherwise never gain it.
-- **Changing what an existing column means** bumps `SCHEMA_VERSION` in `schema.ts`, which
-  refuses the file outright with a message naming both versions. No missing column can
-  signal that kind of change, and without a version the file is simply opened and read wrong
-  — `dir_path` resolving somewhere else, ids referring to a different kind of thing — with
-  no error to explain it. The guard reads `PRAGMA user_version`, which lives in the file
-  header and is therefore readable *before* anything is created; a version row in
-  `app_settings` cannot be, because reading it means having already touched the file you
-  meant to refuse. A file with tables but `user_version = 0` predates versioning and is
-  refused rather than adopted.
+  already exist — an existing database would otherwise never gain it. Two edits, for two
+  audiences: the DDL is what a fresh install gets, and `ensureColumn` is how an existing one
+  catches up.
+- **Anything the idempotent DDL cannot express** — changing what a column means, a drop, a data
+  rewrite — bumps `SCHEMA_VERSION` in `schema.ts` **and** adds a step to `MIGRATIONS`, which walks
+  an older file forward. No missing column can signal that kind of change, and without a version
+  the file is simply opened and read wrong — `dir_path` resolving somewhere else, ids referring to
+  a different kind of thing — with no error to explain it. The guard reads `PRAGMA user_version`,
+  which lives in the file header and is therefore readable *before* anything is created; a version
+  row in `app_settings` cannot be, because reading it means having already touched the file you
+  meant to refuse. A file with tables but `user_version = 0` predates versioning and is refused
+  rather than adopted.
+
+A file **newer** than this build is still refused outright, and versions 2–4 still are too: their
+steps would have to invent values the rows do not determine. A walk also cannot go backwards, so
+"refuse" is the only honest answer to a file from the future.
 
 One migration is a **one-off** rather than an `ensureColumn` call with no follow-up, and it is
 why that function returns whether it added anything. On the single boot that gives Copilots an

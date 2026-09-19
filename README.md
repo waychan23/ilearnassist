@@ -251,6 +251,7 @@ Agent 行为。
 
 ## 文档
 
+- [迁移](docs/migrations.md) —— 数据库结构的三种改法、不可变的迁移步骤，以及升级前的自动快照
 - [架构](docs/architecture.md) —— 系统总览、Agent 循环、沙箱、数据模型、SSE 协议
 - [配置](docs/configuration.md) —— `config.yaml` 完整参考、服务商与搜索配置
 - [桌面应用](docs/desktop.md) —— 控制面板、打包、签名与跨平台

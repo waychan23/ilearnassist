@@ -157,6 +157,17 @@ export interface PanelMessages {
   "cli.fault.SCHEMA_UNREADABLE": string;
   "cli.fault.NOT_A_DATABASE": string;
   "cli.fault.UNREADABLE": string;
+  /**
+   * The two codes only `migrate-up` can return, and the panel does not call it yet.
+   *
+   * Here anyway, because this interface enumerates every code the CLI can produce — an exception
+   * would be the first, and the next person to add a command would have to work out whether the
+   * gap was a decision. The fallback in `panel.ts` means a missing key renders the child's own
+   * sentence rather than a raw code, so nothing breaks either way; this is about the list staying
+   * a list.
+   */
+  "cli.fault.MIGRATION_FAILED": string;
+  "cli.fault.MIGRATION_BACKUP_FAILED": string;
   "cli.fault.USAGE": string;
   "cli.fault.INTERNAL": string;
   "hint.needAdmin": string;
@@ -287,6 +298,9 @@ const zhCN: PanelMessages = {
   "cli.fault.SCHEMA_UNREADABLE": "这个数据库是旧版本（v{found}），当前版本无法读取（需要 v{needed}）。",
   "cli.fault.NOT_A_DATABASE": "那个文件不是交互式学习助理的数据库。",
   "cli.fault.UNREADABLE": "数据库无法读取。",
+  "cli.fault.MIGRATION_FAILED": "数据库升级失败，已保持原样。服务器日志里写明了是哪一步失败。",
+  "cli.fault.MIGRATION_BACKUP_FAILED":
+    "升级前没能备份数据库，所以没有进行升级。请先清理磁盘空间后重试。",
   "cli.fault.USAGE": "创建程序的参数不正确。",
   "cli.fault.INTERNAL": "创建时发生了内部错误。",
   "hint.needAdmin": "这个数据文件夹还没有超级管理员，先创建管理员，服务才能启动。",
@@ -397,6 +411,10 @@ const en: PanelMessages = {
     "That database is from an older schema (v{found}); this build needs v{needed}.",
   "cli.fault.NOT_A_DATABASE": "That file is not an Interactive Learning Assistant database.",
   "cli.fault.UNREADABLE": "The database could not be read.",
+  "cli.fault.MIGRATION_FAILED":
+    "The database could not be upgraded, and was left as it was. The server's log names the step that failed.",
+  "cli.fault.MIGRATION_BACKUP_FAILED":
+    "A copy of the database could not be saved before upgrading, so nothing was upgraded. Free some disk space and try again.",
   "cli.fault.USAGE": "The administrator tool was called incorrectly.",
   "cli.fault.INTERNAL": "An internal error occurred while creating the account.",
   "hint.needAdmin": "This data folder has no superadmin yet — create one before the server can start.",
