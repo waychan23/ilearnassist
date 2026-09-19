@@ -45,7 +45,14 @@ function dismiss(): void {
 </script>
 
 <template>
-  <div class="plan-conflict-card" :class="{ live: answerable }" data-testid="plan-conflict-card">
+  <!-- The call's own id, for the reason `QuizCard` gives: a jump anchor addresses a card, and a
+       card with no id on it cannot be found. -->
+  <div
+    class="plan-conflict-card"
+    :class="{ live: answerable }"
+    data-testid="plan-conflict-card"
+    :data-tool-call-id="toolCall.id"
+  >
     <div class="pc-head">
       <Icon name="help" class="mark" />
       <span class="title">{{ t("planConflict.title") }}</span>

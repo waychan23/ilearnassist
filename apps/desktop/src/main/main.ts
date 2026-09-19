@@ -333,6 +333,7 @@ async function chooseDataDir(): Promise<PanelState> {
   // lets the panel show the create control instead of reporting a start failure.
   await server.stop();
   await refreshAdminState();
+  await resetAppWindow();
 
   broadcast();
   return currentState();
@@ -420,6 +421,7 @@ async function useDefaultDataDir(): Promise<PanelState> {
 
   await server.stop();
   await refreshAdminState();
+  await resetAppWindow();
 
   broadcast();
   return currentState();
@@ -501,6 +503,11 @@ async function openAppWindow(): Promise<void> {
   if (!url) return;
 
   if (appWindow && !appWindow.isDestroyed()) {
+    // The window is reused, but not when it is on a *different* address — which is what a
+    // restart on another port leaves behind: a page from a server that is no longer running.
+    // Compared rather than reloaded unconditionally, so re-opening the app does not throw away
+    // whatever the page has in hand.
+    if (appWindow.webContents.getURL() !== url) await appWindow.loadURL(url);
     appWindow.show();
     appWindow.focus();
     return;
@@ -531,6 +538,46 @@ async function openAppWindow(): Promise<void> {
   });
 
   await window.loadURL(url);
+}
+
+/**
+ * Throw the app window away when the data root changes, and its storage with it.
+ *
+ * The app surface is **not** what this feature is for — it is a browser window on the server's own
+ * address, and a data-root switch leaves it holding a bearer token and a `/w/<id>/s/<id>` that
+ * belong to the database that is no longer there. The client now settles that for itself, by
+ * comparing the installation id before it uses the token (see
+ * `apps/web/src/composables/instance.ts`), and this is deliberately **not** a second
+ * implementation of it: what the window cannot do for itself is survive at all, because the
+ * server it is pointed at has just been stopped and may come back on another port.
+ *
+ * So the window is closed rather than reloaded. The next Start opens a fresh one against the
+ * address that exists, which is the same path a user who had closed the window takes. Closing it
+ * would look like a rude interruption if it were not for where this is called from: the data-root
+ * picker is a deliberate, confirmed act, and the app window is the thing it makes stale.
+ *
+ * `clearStorageData` covers the origin the window was on, and is defence in depth rather than the
+ * mechanism: the token in it is already dead, and the client's own check would drop it. It is here
+ * because a session that ends by comparison leaves the dead credential *read* first, and not
+ * writing one at all is better than reading one.
+ */
+async function resetAppWindow(): Promise<void> {
+  if (!appWindow || appWindow.isDestroyed()) return;
+
+  const window = appWindow;
+  appWindow = null;
+  try {
+    const origin = new URL(window.webContents.getURL()).origin;
+    await window.webContents.session.clearStorageData({
+      origin,
+      storages: ["localstorage", "indexdb", "cachestorage"],
+    });
+  } catch (err) {
+    // A window with no URL yet, or a storage layer that refuses — neither is a reason to leave
+    // the window standing on a server that is gone, which is what the close below is for.
+    console.error("Could not clear the app window's storage:", err);
+  }
+  if (!window.isDestroyed()) window.destroy();
 }
 
 // ---- tray ------------------------------------------------------------------

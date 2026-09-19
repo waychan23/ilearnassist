@@ -148,7 +148,7 @@ function label(bucket: UsageBucket): string {
  * server) shows itself rather than a blank, which is the same rule `label` follows.
  */
 function purposeLabel(key: string): string {
-  const known = ["chat", "title", "thread", "insight", "summary.media", "summary.notes"];
+  const known = ["chat", "title", "thread", "insight", "summary.media"];
   return known.includes(key) ? t(`usage.purpose.${key}`) : key;
 }
 

@@ -22,12 +22,11 @@ import { dirname } from "node:path";
  */
 
 /** Which out-of-band call a block came from. One log file each. */
-export type ModelLogKind = "threads" | "insights" | "notes";
+export type ModelLogKind = "threads" | "insights";
 
 const logFiles: Record<ModelLogKind, string | null> = {
   threads: null,
   insights: null,
-  notes: null,
 };
 
 /**

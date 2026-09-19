@@ -74,6 +74,24 @@ export default {
    * about the *drawing* rather than about the call: the same sentences are shown by the file
    * preview, which knows nothing about a tool call.
    */
+  /**
+   * A table's title bar in a reply — the strip above the markdown, not the table itself.
+   *
+   * Its own namespace rather than a corner of `diagram`: the bar is drawn by the *message* renderer
+   * (`utils/markdown.ts`), which knows nothing about the 图表 panel, and the two are only the same
+   * table by coincidence of the reader looking at both.
+   */
+  table: {
+    /**
+     * The bar's text for a table no `ila_table` call recorded.
+     *
+     * Deliberately vague rather than an invented name: the count guard abandons the pairing the
+     * moment the two disagree, and a bar that guessed a title would be stating something the app
+     * cannot know.
+     */
+    untitled: "表格",
+  },
+
   diagram: {
     /** While mermaid is parsing and laying out — measured in tens of milliseconds, not seconds,
      *  but a diagram that appears from nowhere is a jump. */
@@ -271,7 +289,6 @@ export default {
       thread: "脉络整理",
       insight: "洞察生成",
       "summary.media": "图片摘要",
-      "summary.notes": "笔记摘要",
     },
   },
 
@@ -406,7 +423,7 @@ export default {
      * button: the title itself is the control, so this is where the gesture is taught.
      */
     editTitleHint: "点击编辑标题",
-    autoBadgeTitle: "标题由 AI 根据第一轮对话自动生成",
+    autoBadgeTitle: "标题由 AI 根据对话内容自动生成",
     start: "开始对话",
     startHint: "在下方输入消息，Agent 将按需调用工具。",
     startAction: "新建会话（选择助理）",
@@ -435,12 +452,12 @@ export default {
     tabAll: "全部",
     tabWorkspace: "工作区",
     tabSource: "资料",
-    /* The type filter's five pills. Coarser than the eight categories a source really has:
-     * 文本 is text and markdown, 代码 is code and a diagram. */
+    /* The type filter's four pills. Coarser than the seven categories a file really has:
+     * 文本 is text and markdown, 代码 is code and a diagram. A page is no longer a pill — it is a
+     * kind of reference rather than a content type, so there is nothing for one to name. */
     pillImage: "图片",
     pillText: "文本",
     pillCode: "代码",
-    pillPage: "网页链接",
     pillOther: "其他文件",
     /*
      * The row that opens every workspace at once, `{'@'}`-escaped for the reason above. What it
@@ -448,8 +465,29 @@ export default {
      * can tell the size of.
      */
     allWorkspaces: "{'@'}所有工作区",
-    /** Said when more rows matched than the list shows. */
-    moreHidden: "还有 {count} 项未显示",
+    /*
+     * The dividers over the conversation's own objects, and the reason 资料 is not just files: a
+     * 图, a 表 and a 笔记 are things a conversation works from exactly as a PDF is. Three separate
+     * headings rather than one, because a 图 and a 表 can share a name and a flat list would then
+     * be two identical rows.
+     */
+    pickGroupDiagram: "图",
+    pickGroupTable: "表",
+    pickGroupNote: "笔记",
+    /**
+     * The workspace filter over the 资料 list.
+     *
+     * Its own label rather than a second tab strip, because it narrows *one group* of an already
+     * filtered list — a fourth tab would say it narrowed everything.
+     */
+    sourceWorkspace: "所属工作区",
+    /** The select's empty option — no narrowing, which is the state the picker opens in. */
+    anyWorkspace: "所有工作区",
+    /**
+     * The pager, under the list. One control for the whole list rather than one per group,
+     * because the window is one — see `LIST_PAGE` in `utils/resourcePicker.ts`.
+     */
+    loadMore: "还有 {count} 项未显示，点击加载更多",
     noWorkspaceMatch: "没有匹配的工作区。",
     /** Removing one workspace from what this conversation may read. */
     scopeRemove: "不再引用「{name}」",
@@ -525,6 +563,20 @@ export default {
    * the tree is not a part of the sidebar conceptually — the sidebar is just where it lives.
    */
   files: {
+    /**
+     * The card a `write_file` call draws in the conversation — the artifact, not its text.
+     *
+     * Its own sub-namespace rather than three more keys beside the file tree's: the card is the
+     * *message* side of a file, and the tree is the browser's, and the two only meet when a reader
+     * opens one from the other.
+     */
+    card: {
+      /** Opening the whole file in the preview dialog, which is where reading it belongs. */
+      open: "打开文件",
+      /** Said under the preview, so a head of a file is not mistaken for the file. */
+      moreLines: "还有 {count} 行未显示，打开可查看全文",
+      copy: "复制文件内容",
+    },
     tab: "工作区文件",
     refresh: "刷新文件列表",
     empty: "这个工作区还没有文件",
@@ -546,9 +598,7 @@ export default {
     upload: "上传文件",
     rename: "重命名或移动",
     renameHint: "相对于工作区根目录的路径。输入新路径即可移动。",
-    deleteTitle: "删除这个文件？",
     deleteDirectoryTitle: "删除这个文件夹？",
-    deleteMessage: "「{name}」将从工作区中移除。文件会保留在回收目录中，但这里不再显示。",
     deleteDirectoryMessage: "「{name}」将从工作区中移除。只有空文件夹可以这样删除。",
     preview: {
       loading: "正在读取…",
@@ -590,8 +640,8 @@ export default {
      * Two roles, one string: the store **writes** this as the title at creation — in the
      * language being read, which is why it is a catalog key rather than the server's constant —
      * and it is still the fallback a list renders for a title that is somehow empty. It is a
-     * placeholder either way: `titleSource` stays `auto`, so the auto-titler replaces it after
-     * the first turn.
+     * placeholder either way: `titleSource` stays `auto`, so the auto-titler replaces it once the
+     * conversation has something to be named after.
      */
     fallbackTitle: "（未命名）会话",
     new: {
@@ -838,11 +888,25 @@ export default {
       table: "表",
       note: "笔记",
       quiz: "题目",
+      resource: "资料",
     },
     /** The composer's chip row, and the control that takes one back off. */
     remove: "取消引用",
     /** The button that turns a selection into a staged reference. */
     ask: "追问",
+    /**
+     * A reference's chip **in a sent message** is a control: it opens what the turn was about.
+     * Its title, since the chip's own text is the kind and the passage or the name.
+     */
+    open: "查看详情",
+    /** The object a reference names is gone from this conversation. Params: kind. */
+    gone: "{kind}已不在这个会话里，无法打开。",
+    /**
+     * A note is shown by the panel that holds the records, so a conversation without that panel
+     * has nowhere to open one. Said out loud because the chip is a record of a gesture made in an
+     * earlier tab, where the panel may well have been installed.
+     */
+    noNotesPanel: "这个会话没有安装笔记面板，无法打开这条笔记。",
   },
 
   message: {
@@ -1321,14 +1385,32 @@ export default {
     /** A note with neither a body nor an annotation — the row still has to say something. */
     untitled: "（无内容）",
     open: "打开这条笔记",
+    /**
+     * One button, two nouns — and the name is deliberately both of them.
+     *
+     * It marks the object *and* it opens a window to write in, because which of the two the reader
+     * wants is not knowable when the button is drawn: a 标注 is filed on one click from the bar
+     * over a selection, but an object can only be annotated through the window, so a button named
+     * 标注 alone would promise the quick action it cannot perform.
+     */
+    annotate: "标注/笔记",
     /** The row's chip for a note written about a 图 or a 表 instead of a passage. */
     target: {
       label: "打开它写的那{kind}",
       kinds: {
         diagram: "图",
         table: "表",
+        resource: "资料",
       },
       missing: "它写的{kind}已不存在",
+      /**
+       * A reference that resolves to something with no viewer — a web page.
+       *
+       * Said out loud rather than swallowed: the reader pressed a control the app drew, so a
+       * click that did nothing would be the one outcome they cannot act on. The page is still
+       * openable from its own URL, which is where the library's row sends them.
+       */
+      notViewable: "这条资料没有可预览的文件（例如网页链接），请在资料库中打开。",
     },
     /** The conversation is marked up by a different widget. Deliberately nameless. */
     claimedByOther: "另一个控件正在使用本会话的标注能力，暂时无法在此标注。",
@@ -1348,8 +1430,12 @@ export default {
       newTitle: "新建笔记",
       editTitle: "编辑笔记",
       quoteLabel: "标注原文",
-      /** The counterpart of 标注原文, for a note about a 图 or a 表. */
+      /**
+       * The counterpart of 标注原文, for a note about an object — a 图, a 表 or a piece of 资料.
+       */
       targetLabel: "标注对象",
+      /** What pressing the object opens. It is a control only while the object is still there. */
+      openTarget: "打开这个对象",
       contentLabel: "笔记内容",
       contentPlaceholder: "写下你的想法…",
       typeLabel: "笔记类型",
@@ -1370,29 +1456,6 @@ export default {
       detail: "消息本身和它的标注原文都会保留。",
       action: "删除",
     },
-  },
-
-  /**
-   * Exporting a conversation's notes into the source library — the topbar control, and the state
-   * of the run it starts.
-   *
-   * Its own namespace rather than a corner of `notes.*`: this is about the *library*, and the
-   * notes panel knows nothing about it. The three settled outcomes keep their own sentences,
-   * because "there were no notes", "it worked" and "it produced nothing usable" ask the reader
-   * for different things and a single failure line would conflate them.
-   */
-  noteSync: {
-    action: "同步到资料库",
-    /** The button's tooltip: what it does, and the one consequence worth knowing before pressing. */
-    hint: "把这次会话的笔记导出成资料：会写进资料库，账号内其他会话也能引用。",
-    running: "正在同步…",
-    /** `count` is a plural: `en` carries both branches, `zh-CN` the one. */
-    done: "已同步 {count} 条笔记",
-    empty: "这次会话还没有笔记",
-    failed: "同步失败",
-    /** A `running` run past its timeout — the process that owned it is gone. */
-    stuck: "上一次同步没有结束",
-    force: "强制重新同步",
   },
 
   /**
@@ -1514,8 +1577,8 @@ export default {
     SESSION_NOT_FOUND: "会话不存在，可能已被删除。",
     TITLE_EMPTY: "标题不能为空。",
     UNSUPPORTED_FILE_TYPE: "不支持该文件类型：{mimeType}",
-    SOURCE_NOT_FOUND: "文件不存在，可能已被删除。",
-    SOURCE_STORE_FAILED: "文件保存失败，请重试。",
+    RESOURCE_NOT_FOUND: "文件不存在，可能已被删除。",
+    FILE_STORE_FAILED: "文件保存失败，请重试。",
     DATA_REQUIRED: "缺少文件内容。",
     INVALID_BASE64: "文件内容不是合法的 base64 编码。",
     EMPTY_FILE: "文件是空的。",
@@ -1554,7 +1617,6 @@ export default {
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
     FIGURE_NOT_FOUND: "找不到这个图表，它可能已经被修改或删除了。",
     REFERENCE_NOT_FOUND: "引用对象已经不存在了（可能已被删除或修改），请重新发送。",
-    SYNC_IN_PROGRESS: "这个会话正在同步到资料库，请稍候。",
     INSIGHT_NOT_FOUND: "找不到这条洞察，可能已经被新一次总结替换了。",
     MESSAGE_NOT_FOUND: "找不到这条消息，可能已经被删除了。",
     MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
@@ -1588,9 +1650,8 @@ export default {
    * the agent kept, or a file a conversation wrote.
    *
    * `title` is the *only* string behind the name, and it is read by two surfaces — the rail's
-   * row and this dialog's heading. It says 资料库 rather than 资料源 because the note-export
-   * feature already calls the same place 资料库 (`noteSync.*`), and one destination with two
-   * names is the drift this key exists to prevent.
+   * row and this dialog's heading. One destination with two names is the drift this key exists
+   * to prevent, so every surface that opens the browser reads this one.
    *
    * `delete.detail` carries the part a user cannot guess: that deleting a conversation did
    * *not* delete this file, and which way round the two actions are. Without it, "delete"
@@ -1612,12 +1673,19 @@ export default {
     filterWorkspace: "工作区",
     filterSession: "会话",
     filterCategory: "内容类型",
-    filterOrigin: "来源",
+    filterOwnerType: "归属",
+    allOwnerTypes: "全部归属",
+    /** The two levels a reference can belong to — the filter's values. */
+    ownerType: {
+      session: "本会话",
+      workspace: "工作区",
+    },
+    filterResourceType: "资料种类",
     filterMime: "MIME 类型",
     allWorkspaces: "全部工作区",
     allSessions: "全部会话",
     allCategories: "全部类型",
-    allOrigins: "全部来源",
+    allResourceTypes: "全部种类",
     allMimes: "全部 MIME",
     viewFlat: "列表",
     viewTree: "树状",
@@ -1629,20 +1697,50 @@ export default {
     addKind: "资料类型",
     tabFile: "文件",
     tabLink: "网页链接",
+    /**
+     * The add dialog's two optional fields, for both kinds.
+     *
+     * A hint states the **default** rather than the field being pre-filled: a title the user has
+     * to delete before typing their own is worse than an empty one, and the default differs per
+     * kind — a file is called by its name, a page by the title the fetch found.
+     */
+    addTitle: "标题",
+    addTitleFileHint: "留空则用文件名",
+    addTitleLinkHint: "留空则用网页标题；网页没有标题时用网址",
     addDir: "目录",
-    addDirHint: "留空表示放到根目录",
+    /**
+     * The destination picker: its title, the root's label, and the three things it can say.
+     *
+     * `dirRoot` is what an unchosen destination shows, and it is also the first crumb in the
+     * picker — one word for one place, so the field and the breadcrumb cannot disagree.
+     */
+    dirPick: "选择目录",
+    dirRoot: "根目录",
+    dirEmpty: "这个目录下没有子目录",
+    dirNew: "新建文件夹",
+    dirNameHint: "文件夹名称",
+    dirNameInvalid: "名称里不能带 / 或 \\",
+    dirChoose: "选择此目录",
     addFiles: "文件",
     pickFiles: "选择文件",
     addLinkHint: "服务端会抓取这个页面并保存下来，稍后可以在会话里引用。",
     viewLabel: "视图",
-    /** The four origin values, as the filter and every row's byline spell them. */
-    origin: {
-      session_attachment: "会话附件",
-      workspace_upload: "工作区上传",
-      agent_workspace: "助理写入工作区",
-      agent_session: "助理写入会话",
-      web: "网页",
-      note_export: "学习笔记",
+    /**
+     * What a reference *is*, which is the entity it points at — the filter's values and every
+     * row's byline. A closed set, so a key per value rather than a pattern.
+     */
+    resourceType: {
+      file: "文件",
+      web_page: "网页",
+    },
+    /**
+     * How a file came to exist — the row's byline, and the question a reader checking
+     * "is this mine or the assistant's" is asking. `discovered` is the one nobody claimed.
+     */
+    fileSource: {
+      attachment: "会话附件",
+      upload: "主动上传",
+      agent_create: "助理生成",
       discovered: "已有文件",
     },
     /** The coarse content types. A closed set, so a key per value rather than a pattern. */
@@ -1656,11 +1754,31 @@ export default {
       document: "文档",
       other: "其他",
     },
+    /*
+     * **One delete, and the copy says what one press does.** The reference goes, the material it
+     * names goes with it, and every *other* reference stays — inert, and reporting the object as
+     * gone when somebody opens it. That last half is the sentence a reader needs, because it is
+     * the part they would otherwise be surprised by: a message that pointed at this file keeps
+     * its chip and says the attachment will not open.
+     *
+     * It used to be two pairs, chosen by which kind of row was pressed — a session-owned upload
+     * lost only this account's hold, while a workspace file went through the file manager and took
+     * every conversation's reference with it. Two consequences for one intent, and the file half
+     * was reachable by a click that never mentioned a reference at all.
+     *
+     * `.shared` is the same sentence with the number of other references, which the listing
+     * carries and the dialog says out loud because it is what a reader weighing the delete wants
+     * to know.
+     */
     delete: {
-      title: "删除文件",
+      title: "删除这份资料",
       message: "确定要删除「{name}」吗？",
-      detail: "文件本身、已解析的文本，以及在所有对话里的引用都会被删除，无法恢复。这些对话里已发出的消息仍会显示附件，但打不开了。",
-      action: "删除文件",
+      detail:
+        "这份资料会被删除，无法恢复。其他对话对它的引用会保留，但打开时会提示对象已删除。已发出的消息仍会显示附件，但打不开了。",
+      /** `count` other references point at it, and will start reporting it as gone. */
+      shared:
+        "这份资料会被删除，无法恢复。另外还有 {count} 处引用，它们会保留，但打开时会提示对象已删除。已发出的消息仍会显示附件，但打不开了。",
+      action: "删除",
     },
     /**
      * Leaving the app for the page a web source was fetched from. Its own verb rather than a

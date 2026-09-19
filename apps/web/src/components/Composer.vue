@@ -4,10 +4,10 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import AttachmentChips from "./AttachmentChips.vue";
-import SourceMentionPicker from "./SourceMentionPicker.vue";
+import ResourceMentionPicker from "./ResourceMentionPicker.vue";
 import { activeMention, insertMention, type ActiveMention } from "../utils/mention";
-import type { ReferenceChoice } from "../utils/referencePicker";
-import type { Source } from "../api/types";
+import type { ReferenceChoice } from "../utils/resourcePicker";
+import { resourceName } from "../utils/resourceView";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
 import { closeWidgetDrawer, openSessionSettings } from "../composables/ui";
@@ -40,7 +40,7 @@ const canSend = computed(
     !store.documentsParsing &&
     (!!text.value.trim() ||
       store.pendingAttachments.length > 0 ||
-      store.pendingSources.length > 0 ||
+      store.pendingResources.length > 0 ||
       // A staged 追问 chip is a complete question on its own: "what about this?" needs no words
       // around it, and the server's own guard agrees — see `MESSAGE_REQUIRED` in routes.ts.
       store.pendingRefs.length > 0)
@@ -103,6 +103,8 @@ const scopeChips = computed(() =>
  * this only asks it and hands the caret back afterwards.
  */
 const mention = ref<ActiveMention | null>(null);
+/** The box the picker lives in — what decides whether a blur left the composer. See `onBlur`. */
+const surface = ref<HTMLElement | null>(null);
 
 function refreshMention(): void {
   const el = textarea.value;
@@ -110,14 +112,37 @@ function refreshMention(): void {
 }
 
 /**
+ * The textarea lost focus.
+ *
+ * A bare `mention = null` was right for as long as the picker held only buttons, because those
+ * keep the textarea focused with `mousedown.prevent`. A `<select>` cannot work that way: it needs
+ * real focus to open at all, and clearing the mention on the way in would close the picker the
+ * control sits inside — a filter that dismisses the thing it filters.
+ *
+ * So the mention is kept while focus stays inside the composer's surface, which is the element the
+ * picker lives in, and dropped the moment it leaves. A blur with nowhere to go (`relatedTarget`
+ * null — focus moved to the window) is treated as leaving, which is what it is.
+ */
+function onBlur(event: FocusEvent): void {
+  const next = event.relatedTarget as Node | null;
+  if (next && surface.value?.contains(next)) return;
+  mention.value = null;
+}
+
+/**
  * Put the chosen thing's name where the mention was, and put the caret after it.
  *
- * `insertMention` runs for all three kinds, because the `@` is how something is *picked* and not
+ * `insertMention` runs for all four kinds, because the `@` is how something is *picked* and not
  * what it means: the name goes into the sentence so it reads naturally, and what the reference
  * *means* is the chip beside the composer. A workspace's name is inserted the same way a file's
  * is, and what follows differs.
  *
- * The `switch` is exhaustive over `ReferenceChoice`, so a fourth kind of reference is a
+ * **`turnRef` stages through the same call 追问 uses**, which is the whole point of the arm: an
+ * `@` on a diagram and a click on "ask about this" produce the same `TurnReference` and go through
+ * the same `stageReference`, so there is one answer to "what is this figure called" rather than
+ * two that agree until a name is awkward.
+ *
+ * The `switch` is exhaustive over `ReferenceChoice`, so a fifth kind of reference is a
  * `vue-tsc` error here rather than a row that inserts a name and does nothing else.
  */
 function onPickReference(choice: ReferenceChoice): void {
@@ -125,14 +150,17 @@ function onPickReference(choice: ReferenceChoice): void {
   const current = mention.value;
   if (!el || !current) return;
 
-  const name = choice.kind === "source" ? choice.source.name : choice.name;
+  const name = choice.kind === "resource" ? resourceName(choice.resource) : choice.name;
   const result = insertMention(text.value, current, name);
   text.value = result.text;
   mention.value = null;
 
   switch (choice.kind) {
-    case "source":
-      void store.referenceSource(choice.source);
+    case "resource":
+      void store.referenceResource(choice.resource);
+      break;
+    case "turnRef":
+      store.stageReference(choice.ref);
       break;
     case "scope":
       void store.referenceScope(choice);
@@ -317,7 +345,7 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-const picker = ref<InstanceType<typeof SourceMentionPicker> | null>(null);
+const picker = ref<InstanceType<typeof ResourceMentionPicker> | null>(null);
 
 function onInput() {
   refreshMention();
@@ -371,8 +399,8 @@ function onInput() {
 
       <!-- One surface owns the input, the attachments and the toolbar (chatbox's
            InputBox layout), so the composer reads as a single control. -->
-      <div class="surface">
-        <SourceMentionPicker ref="picker" :mention="mention" @pick="onPickReference" />
+      <div ref="surface" class="surface">
+        <ResourceMentionPicker ref="picker" :mention="mention" @pick="onPickReference" />
         <div class="input-row">
           <textarea
             ref="textarea"
@@ -385,7 +413,7 @@ function onInput() {
             @keyup="refreshMention"
             @click="refreshMention"
             @paste="onPaste"
-            @blur="mention = null"
+            @blur="onBlur"
           ></textarea>
 
           <!--
@@ -427,16 +455,18 @@ function onInput() {
         </div>
 
         <!--
-          The referenced sources, as chips of their own. A `Source` is an `Attachment` in every
-          field the chip reads, so the same component draws both — and drawing them as two rows
-          rather than one is what says which was uploaded for this turn and which was pointed at.
+          The referenced files, as chips of their own. A `WorkResource` becomes an `Attachment` in
+          every field the chip reads — see `resourceAttachment` — so the same component draws both,
+          and drawing them as two rows rather than one is what says which was uploaded for this
+          turn and which was pointed at. They join the refs row below at send time, which is where
+          the two stop being different things.
         -->
-        <div v-if="store.pendingSources.length" data-testid="composer-sources">
+        <div v-if="store.pendingResources.length" data-testid="composer-resources">
           <AttachmentChips
-            :attachments="store.pendingSources"
+            :attachments="store.pendingResources"
             removable
-            @remove="store.removePendingSource"
-            @reparse="(source) => store.referenceSource(source as Source)"
+            @remove="store.removePendingResource"
+            @reparse="store.reparseAttachment"
           />
         </div>
 

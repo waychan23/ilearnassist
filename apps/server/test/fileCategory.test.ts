@@ -3,9 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DIAGRAM_FILE_EXTENSIONS } from "@ilearnassist/shared";
-import { categoryFor, classifySource, extensionOf, mimeForName } from "../src/sourceCategory.js";
+import { categoryFor, classifyFile, extensionOf, mimeForName } from "../src/fileCategory.js";
 import { isDocumentMime } from "../src/documents/formats.js";
-import { normalizeMime } from "../src/sourcePaths.js";
+import { normalizeMime } from "../src/resourcePaths.js";
 
 /**
  * What a file is, and the guard that keeps this answer in agreement with the two other places
@@ -107,9 +107,9 @@ describe("categoryFor", () => {
   });
 });
 
-describe("classifySource", () => {
+describe("classifyFile", () => {
   it("answers both questions and resolves the MIME type", () => {
-    expect(classifySource("paper.pdf")).toEqual({
+    expect(classifyFile("paper.pdf")).toEqual({
       category: "document",
       mimeType: "application/pdf",
     });
@@ -118,8 +118,8 @@ describe("classifySource", () => {
   it("believes the caller's MIME type over the extension", () => {
     // An upload knows what the browser said, and a file dumped in a workspace does not — so
     // the same name can honestly be two things, and the caller decides.
-    expect(classifySource("export.bin", "image/png").category).toBe("image");
-    expect(classifySource("export.bin").category).toBe("other");
+    expect(classifyFile("export.bin", "image/png").category).toBe("image");
+    expect(classifyFile("export.bin").category).toBe("other");
   });
 });
 
@@ -127,7 +127,7 @@ describe("classifySource", () => {
  * The drift guard, and the reason this test file exists rather than a handful of cases above.
  *
  * Three modules classify files and they must agree, because they answer three questions about
- * the same bytes: *what kind of thing is this* (here), *may it be uploaded* (`sourcePaths`'s
+ * the same bytes: *what kind of thing is this* (here), *may it be uploaded* (`resourcePaths`'s
  * MIME table), *is it text or binary for a reader* (`files.ts`'s read-avoidance list). A new
  * member of either of the other two sets that this classifier calls `text` or `code` is a file
  * the browser offers as text and cannot open — a `.mmd` drawn in one panel and shown as source

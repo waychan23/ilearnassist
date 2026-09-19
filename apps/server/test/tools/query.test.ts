@@ -374,6 +374,7 @@ describe("ila_query — notes", () => {
       id: "d1",
       sessionId: SESSION,
       name: "auth-flow.mmd",
+      fileId: "f-1",
       summary: "登录流程",
       toolCallId: null,
     });
@@ -407,6 +408,7 @@ describe("ila_query — notes", () => {
       id: "d1",
       sessionId: SESSION,
       name: "gone.mmd",
+      fileId: "f-1",
       summary: "",
       toolCallId: null,
     });
@@ -505,6 +507,7 @@ describe("ila_query — diagrams", () => {
   beforeEach(() => {
     registerDiagram(db, SESSION, {
       name: "auth-flow.mmd",
+      fileId: "f-1",
       summary: "登录流程",
       toolCallId: "call-9",
     });
@@ -568,7 +571,7 @@ describe("ila_query — ownership", () => {
   it("answers nothing about another account's conversation", async () => {
     // Every kind is owner-scoped, so the ids are the whole defence: a guessed session id must
     // fail the scan rather than trusting that its route resolved the owner.
-    registerDiagram(db, SESSION, { name: "x.mmd", summary: "s", toolCallId: null });
+    registerDiagram(db, SESSION, { name: "x.mmd", fileId: "f-x", summary: "s", toolCallId: null });
     addNote("mine");
     const other = { userId: OTHER, sessionId: OTHER_SESSION };
     expect(await ask({ kind: "plan" }, other)).toMatchObject({ plan: null });

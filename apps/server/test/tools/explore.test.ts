@@ -195,7 +195,7 @@ describe("ila_explore — messages", () => {
         },
       ],
       attachments: [
-        { id: "att-1", name: "lecture.pdf", mimeType: "application/pdf", size: 1, kind: "file" },
+        { id: "att-1", resourceId: "res-1", name: "lecture.pdf", mimeType: "application/pdf", size: 1, kind: "file" },
       ],
     });
   });
@@ -253,6 +253,116 @@ describe("ila_explore — messages", () => {
 
     const second = await call({ kind: "messages", sessionId: "sGranted", limit: 1, offset: 1 });
     expect((second.items as { id: string }[])[0]!.id).toBe("m2");
+  });
+});
+
+describe("ila_explore — message_search", () => {
+  beforeEach(() => {
+    db.createMessage({ id: "m1", sessionId: "sGranted", role: "user", content: "什么是递归？" });
+    db.createMessage({
+      id: "m2",
+      sessionId: "sGranted",
+      role: "assistant",
+      content: "递归就是自己调用自己。",
+      reasoning: "SECRET-CHAIN-OF-THOUGHT",
+    });
+    // In the workspace somebody did *not* open, so the grant is what keeps it out.
+    db.createMessage({ id: "m3", sessionId: SESSION_HERE, role: "user", content: "递归在这里" });
+  });
+
+  it("finds a message by its text across the opened workspaces", async () => {
+    const out = await call({ kind: "message_search", query: "递归" });
+    const ids = (out.items as { messageId: string }[]).map((m) => m.messageId);
+    expect(ids).toContain("m1");
+    expect(ids).toContain("m2");
+    // The whole point of the kind: `sessions` matches titles and would find neither.
+    expect(ids).not.toContain("m3");
+  });
+
+  it("searches everything under `all`, including the conversation's own workspace", async () => {
+    /*
+     * The reported bug, and its shape is why it went unnoticed: `scope.workspaces` excludes the
+     * conversation's **own** workspace on purpose — every other reader already has it — so an
+     * account with one workspace resolves `@所有工作区` to `{ all: true, workspaces: [] }`. A
+     * default set read off that list searched nothing, and said so in the result: *"Messages in 0
+     * opened workspaces"*, beside a search the user had aimed at everything.
+     *
+     * What `all` means to the person who chose it is "my conversations", and the one they are
+     * reading is one of them. So the set is the account's own.
+     */
+    const tool = buildExploreTool({ db, userId: OWNER, scope: { all: true, workspaces: [] } });
+
+    const out = JSON.parse(
+      (await tool.invoke({ kind: "message_search", query: "递归" })) as string
+    ) as { total: number; items: { sessionId: string }[]; note: string };
+    // Both workspaces, and every message: the search is not narrowed by the grant's own list.
+    expect(out.total).toBe(3);
+    expect(new Set(out.items.map((i) => i.sessionId))).toEqual(
+      new Set(["sGranted", SESSION_HERE])
+    );
+    // And the sentence says what it searched, rather than reporting the empty grant.
+    expect(out.note).toContain("every workspace in this account");
+    expect(out.note).not.toContain("0 opened");
+  });
+
+  it("reads a hit's conversation under `all`, which is the next call the result asks for", async () => {
+    /*
+     * The half that makes the search usable: the result tells the model to call `messages` with
+     * the id it returned. A hit in a workspace the grant's own list omits — the conversation's
+     * own, under `all` — has to be readable, or the search answers with an address that cannot be
+     * opened.
+     */
+    const tool = buildExploreTool({ db, userId: OWNER, scope: { all: true, workspaces: [] } });
+    await expect(tool.invoke({ kind: "messages", sessionId: SESSION_HERE })).resolves.toBeTruthy();
+  });
+
+  it("names each hit's conversation, because that id is the next call", async () => {
+    // A search that answered with text and no address would leave the model unable to read the
+    // exchange around the hit — which is the only reason to search in the first place.
+    const out = await call({ kind: "message_search", query: "自己调用自己" });
+    const hit = (out.items as { sessionId: string; title: string }[])[0]!;
+    expect(hit.sessionId).toBe("sGranted");
+    expect(hit.title).toContain("sGranted");
+
+    const around = await call({ kind: "messages", sessionId: hit.sessionId });
+    expect(around.total).toBe(2);
+  });
+
+  it("never returns chain of thought, the same as reading a conversation", async () => {
+    expect(await callText({ kind: "message_search", query: "递归" })).not.toContain(
+      "SECRET-CHAIN-OF-THOUGHT"
+    );
+  });
+
+  it("takes a query literally, so a typed % is a character", async () => {
+    // `%` and `_` are wildcards to SQLite, and a term that was not escaped would match things
+    // nobody asked for, silently — which is the failure mode this shares with the library's
+    // name filter, and now with it the one `likePattern` implementation.
+    db.createMessage({ id: "m4", sessionId: "sGranted", role: "user", content: "50% 覆盖率" });
+    expect((await call({ kind: "message_search", query: "50%" })).total).toBe(1);
+    // A bare `%` matches only messages that actually contain one, not everything.
+    expect((await call({ kind: "message_search", query: "%" })).total).toBe(1);
+  });
+
+  it("narrows to one workspace, and refuses one that was not opened", async () => {
+    const out = await call({ kind: "message_search", query: "递归", workspaceId: GRANTED });
+    expect(out.total).toBe(2);
+    await expect(
+      call({ kind: "message_search", query: "递归", workspaceId: CLOSED })
+    ).rejects.toThrow(/not a workspace opened/);
+  });
+
+  it("refuses an empty query rather than returning everything", async () => {
+    // Without the guard this is a `LIKE '%%'` over every message in every opened workspace —
+    // an unbounded transcript dump dressed up as a search.
+    await expect(call({ kind: "message_search", query: "   " })).rejects.toThrow(/needs a `query`/);
+    await expect(call({ kind: "message_search" })).rejects.toThrow(/needs a `query`/);
+  });
+
+  it("does not take a sessionId — that is the other kind", async () => {
+    await expect(
+      call({ kind: "message_search", query: "递归", sessionId: "sGranted" })
+    ).rejects.toThrow(/"sessionId"/);
   });
 });
 

@@ -3,16 +3,17 @@ import { FAKE_LLM, scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
 
 /**
- * The second attempt at a name.
+ * Naming a conversation, and not naming it too early.
  *
- * The auto-titler runs once, on a conversation's first turn, and when it fails what is left is the
- * user's own clipped words — indistinguishable, until now, from a title the model wrote. This spec
- * is the whole loop: a failed titling, a reader walking away, and the name that is there when they
- * come back.
+ * The titler runs after every turn the conversation is still its to name, and what it may answer is
+ * as much the subject as a title: a conversation with nothing in it yet stays 未命名 and is asked
+ * about again on the next turn. The three cases below are that rule, the retry a reader walking away
+ * triggers, and the gate that keeps the whole thing free for a conversation the model already named.
  *
- * The wait is real rather than simulated, and it has to be: the client's debounce is three seconds
- * of wall clock, and the point of the feature is that nothing is waiting on it. So the assertion
- * polls the *effect* — one more non-streaming call at the fake LLM — rather than sleeping.
+ * The wait in the second case is real rather than simulated, and it has to be: the client's debounce
+ * is three seconds of wall clock, and the point of the feature is that nothing is waiting on it. So
+ * the assertion polls the *effect* — one more non-streaming call at the fake LLM — rather than
+ * sleeping.
  */
 
 const unique = (prefix: string): string => `${prefix} ${Date.now()}`;
@@ -73,11 +74,50 @@ test("a conversation the titler failed to name is retried when the reader leaves
   await expect(page.getByTestId("session-item").first()).toContainText("递归入门");
 });
 
+test("a conversation with nothing to name yet keeps its placeholder, and is named later", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The whole of the new rule, from the outside. A conversation that opens with a greeting has
+   * nothing to be named after, so the model says so rather than inventing a title from it — and the
+   * sidebar keeps saying 未命名. Nothing else could produce a name that means anything: asking is
+   * the only way to find out, and the first asking can only be answered "not yet".
+   */
+  const name = unique("Untitled");
+  await page.goto("/");
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(name);
+  await page.getByTestId("workspace-create-submit").click();
+  await enterWorkspace(page, name);
+
+  await scriptLlm(request, {
+    title: "NO_TITLE",
+    turns: [{ content: "你好！有什么可以帮你的？" }],
+  });
+  await page.getByTestId("composer-input").fill("你好");
+  await page.getByTestId("composer-send").click();
+
+  // Wait for the turn itself — the titler runs after it, so this is what makes the assertion below
+  // about a decline rather than about a title that has not arrived yet.
+  await expect(page.getByTestId("message-assistant").last()).toContainText("你好！有什么可以帮你的？");
+  // The placeholder the client sent at creation, unchanged, and no name invented from a greeting.
+  await expect(page.getByTestId("session-title")).toHaveText("（未命名）会话");
+
+  // A turn with something in it: the titler is asked again, and this time there is an answer.
+  await scriptLlm(request, { title: "快速排序入门", turns: [{ content: "快速排序是…" }] });
+  await page.getByTestId("composer-input").fill("帮我讲讲快速排序");
+  await page.getByTestId("composer-send").click();
+
+  await expect(page.getByTestId("session-title")).toHaveText("快速排序入门");
+});
+
 test("a conversation the model already named is left alone", async ({ page, request }) => {
   /*
-   * The gate, from the outside: no re-titling for a conversation that was named on its first turn.
-   * Asserted on the request count, because a `skipped` that had still paid for a completion would
-   * look identical from the UI — and it is the common case, so it is the one that has to be free.
+   * The gate, from the outside: no re-titling for a conversation the model has already named, on
+   * any later turn or on the way out of it. Asserted on the request count, because a `skipped` that
+   * had still paid for a completion would look identical from the UI — and this is the common case,
+   * so it is the one that has to be free.
    */
   const name = unique("NoRetitle");
   await page.goto("/");

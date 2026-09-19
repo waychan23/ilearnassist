@@ -393,7 +393,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
  *
  * Extraction is deliberately off the request path, so every test that uploads a document
  * has to wait for a background job rather than for a response. It polls the conversation's
- * sources — the same rows the browser reads — rather than any file, so the assertion observes
+ * references — the same rows the browser reads — rather than any file, so the assertion observes
  * exactly what a user would.
  */
 export async function waitForParsing(
@@ -401,10 +401,15 @@ export async function waitForParsing(
   sessionId: string,
   timeoutMs = 15_000
 ): Promise<void> {
+  /*
+   * The conversation's own references, filtered rather than read through the read whitelist:
+   * this is asking "is anything still parsing *here*", and the whitelist would also answer for
+   * the whole workspace — whose parses this call has no business waiting on.
+   */
   const isBusy = (): boolean =>
     env.server.db
-      .listSessionSources(env.user.id, sessionId)
-      .some((s) => s.parseStatus === "pending" || s.parseStatus === "parsing");
+      .listWorkResourcesFiltered(env.user.id, { sessionId })
+      .some((r) => r.parseStatus === "pending" || r.parseStatus === "parsing");
 
   const deadline = Date.now() + timeoutMs;
 
@@ -432,7 +437,7 @@ export async function uploadAttachment(
 ): Promise<Attachment> {
   const res = await env.inject({
     method: "POST",
-    url: `/api/sessions/${sessionId}/sources`,
+    url: `/api/sessions/${sessionId}/resources`,
     payload: { name: file.name, mimeType: file.mimeType, data: file.data.toString("base64") },
   });
   if (res.statusCode !== 201) {

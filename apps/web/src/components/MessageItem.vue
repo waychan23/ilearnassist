@@ -2,11 +2,18 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
-import { isInteractiveTool, type Message, type ToolCall } from "../api/types";
-import { codeCopyClick } from "../composables/codeCopy";
+import {
+  isInteractiveTool,
+  TABLE_TOOL_NAME,
+  type Message,
+  type ToolCall,
+  type TurnReference,
+} from "../api/types";
+import { codeCopyClick, tableCopyClick } from "../composables/codeCopy";
 import { confirm } from "../composables/confirm";
-import { openNoteFromHighlight } from "../composables/messageNotes";
-import { renderMarkdown } from "../utils/markdown";
+import { openNoteFromHighlight, requestNoteEditor } from "../composables/messageNotes";
+import { objectNoteRequest } from "../composables/notes";
+import { renderMarkdown, type TableHeading } from "../utils/markdown";
 import { formatTokens } from "../utils/format";
 import { applyNoteHighlights, noteIdAt, type NoteHighlightMark } from "../utils/noteAnchor";
 import { groupToolCalls } from "../utils/toolCallGroups";
@@ -47,6 +54,17 @@ const props = defineProps<{
    */
   noteMarks?: readonly NoteHighlightMark[];
 }>();
+
+/**
+ * A reference in a sent message was pressed.
+ *
+ * The message list owns the chip and nothing else about it: what a reference *points at*, and
+ * therefore what opening one means, is decided one level up — `ChatView` is the renderer of this
+ * component and the only thing holding the scroll container, the figure viewer and the note
+ * window. So the kind travels unchanged, exactly as a selection's button id does, and this
+ * component never learns that a diagram is a file and a quiz question is a call.
+ */
+const emit = defineEmits<{ openRef: [reference: TurnReference] }>();
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -133,10 +151,11 @@ const refs = computed(() => props.message?.refs ?? []);
 
 const attachments = computed(() =>
   (props.message?.attachments ?? []).map((a) => {
-    // The message's own snapshot is a *source* — the server reassembled it when the turn was
-    // sent — so the live overlay is the same object, later. `status` used to be the field
-    // name; there is no trimming step any more, which is why this reads `parseStatus`.
-    const live = store.parseStatus[a.id];
+    // The message's own snapshot is an `Attachment` the server reassembled when the turn was
+    // sent, and the live overlay is the *reference* it was reassembled from, later. Looked up by
+    // `resourceId` and never by `id`: the parse is recorded on the reference, and the file id
+    // would find nothing — see `Attachment` in the shared package.
+    const live = store.resourceParseStatus[a.resourceId];
     if (!live) return a;
     return {
       ...a,
@@ -166,9 +185,51 @@ const markdownLabels = computed(() => ({
   copied: t("common.copied"),
 }));
 
+/**
+ * The tables this reply recorded, in the order the model wrote them.
+ *
+ * Read off the `ila_table` **calls**, which is the only place in this message that knows a table's
+ * canonical name — the row it was saved to lives in `session_tables` and nothing joins the two.
+ * `renderMarkdown` pairs them positionally and gives up when the counts disagree, so a malformed
+ * argument here costs a title rather than a wrong one; a call whose JSON will not parse is one
+ * that never reached the save path either, and is skipped for the same reason.
+ */
+const tableHeadings = computed(() => {
+  const headings: TableHeading[] = [];
+  for (const call of props.message?.toolCalls ?? []) {
+    if (call.name !== TABLE_TOOL_NAME) continue;
+    try {
+      const args = JSON.parse(call.input) as { name?: unknown; summary?: unknown };
+      if (typeof args.name === "string" && args.name) {
+        headings.push({
+          name: args.name,
+          ...(typeof args.summary === "string" ? { summary: args.summary } : {}),
+        });
+      }
+    } catch {
+      /* a call with unparseable arguments recorded nothing to title */
+    }
+  }
+  return headings;
+});
+
+/**
+ * The words a table's bar needs, or `null` where a table should be left alone.
+ *
+ * Null in a **streaming** message: the calls arrive as the turn runs, so a table drawn before its
+ * `ila_table` call has landed would be titling against a moving set — and the count guard would
+ * flip a bar on and off as the turn went. The bar appears with the message, which is when its
+ * headings are settled.
+ */
+const tableWords = computed(() =>
+  props.streaming
+    ? null
+    : { headings: tableHeadings.value, labels: { untitled: t("table.untitled"), annotate: t("notes.annotate") } }
+);
+
 const rendered = computed(() => {
   if (!content.value) return "";
-  const html = renderMarkdown(content.value, markdownLabels.value);
+  const html = renderMarkdown(content.value, markdownLabels.value, tableWords.value ?? undefined);
   return props.streaming ? html + '<span class="streaming-cursor"></span>' : html;
 });
 
@@ -220,11 +281,40 @@ onMounted(() => void nextTick(drawNoteMarks));
  * message — including on a link — is left alone.
  */
 function onContentClick(event: MouseEvent): void {
-  // A code block's copy control first, and it reports whether it took the event: the two
-  // behaviours are distinguished by what was pressed, not by which ran first.
+  // The rendered controls first, and each reports whether it took the event: the behaviours are
+  // distinguished by what was pressed, not by which ran first.
   if (codeCopyClick(event)) return;
+  if (tableCopyClick(event)) return;
+  if (noteTable(event)) return;
   const noteId = noteIdAt(event.target as Element | null);
   if (noteId) openNoteFromHighlight(noteId);
+}
+
+/**
+ * A table's 标注/笔记 button, which is chrome rather than anything worth copying.
+ *
+ * The name and summary ride on the button's own attributes, put there by `renderMarkdown` from the
+ * `ila_table` call — so this reads what the bar already says rather than looking anything up. The
+ * handle is the model's spelling of the name, which is deliberate: the server normalises it with
+ * `tableName`, the same function the writer used, so the spelling that reaches the note is
+ * canonical either way and this side never has to know which of the two it is holding.
+ */
+function noteTable(event: MouseEvent): boolean {
+  const button = (event.target as Element | null)?.closest<HTMLElement>("[data-table-note]");
+  if (!button) return false;
+  event.stopPropagation();
+  event.preventDefault();
+
+  const name = button.dataset.tableName ?? "";
+  if (!name) return true;
+  const request = objectNoteRequest({
+    kind: "table",
+    ref: name,
+    label: name,
+    summary: button.dataset.tableSummary || undefined,
+  });
+  if (request) requestNoteEditor(request);
+  return true;
 }
 
 /** Token accounting for a finished assistant turn, when the provider reported it. */
@@ -340,19 +430,36 @@ const usageText = computed(() => {
         checking whether the model answered the right question needs to see the words, not a
         label saying which words they were.
 
+        **Each chip is a control**, because a reference is a pointer that outlives the gesture
+        that made it: the reader comes back a week later, reads the answer, and wants the figure
+        it was about. Which is the one thing the chip could not do while it was a `div` — it
+        named the object and left the reader to go and find it. The kinds differ in where they
+        open, never in whether they can, so the *button* is drawn for every kind and the
+        decision is handed up; a kind that has since gone is reported there rather than drawn
+        dead here, which this component could not know anyway (a table's row is not in the
+        message).
+
         A **sibling** of `data-note-root`, exactly as the chips above are. The anchor arithmetic
         counts a note's offsets over the message's visible text, so a block inside the bubble
         would shift every passage by its own height the moment a reference was added — the same
         reason an avatar may not live in there.
       -->
       <div v-if="refs.length" class="msg-refs" data-testid="message-refs">
-        <div v-for="ref in refs" :key="referenceKey(ref)" class="msg-ref">
+        <button
+          v-for="ref in refs"
+          :key="referenceKey(ref)"
+          type="button"
+          class="msg-ref"
+          data-testid="message-ref"
+          :title="t('turnRef.open')"
+          @click="emit('openRef', ref)"
+        >
           <span class="msg-ref-kind">{{ kindLabel(ref.kind) }}</span>
           <!-- A passage shows its words; a named object shows what it was called, because the
                agent looks the content up and a copy here would be a copy that can go stale. -->
           <span v-if="ref.kind === 'message'" class="msg-ref-quote">{{ ref.quote }}</span>
           <span v-else class="msg-ref-name">{{ ref.label }}</span>
-        </div>
+        </button>
       </div>
       <!-- `data-note-root` marks the element an annotation is measured against: the anchor's
            offsets are counted over this element's visible text, so it has to be the content
@@ -492,20 +599,41 @@ const usageText = computed(() => {
   gap: var(--space-2);
   width: 100%;
 }
+/*
+ * A button that reads as a quote block, so the reset is the point rather than the styling: the
+ * chrome a `<button>` arrives with (its own font, its centred text, its borders, its
+ * `buttontext` colour) is everything this must not look like. What is left is the block it always
+ * was, plus the two things that say it can be pressed — a pointer, and a tint on hover that the
+ * kind label colours in.
+ */
 .msg-ref {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  width: 100%;
   padding: var(--space-2) var(--space-4);
+  border: none;
   background: var(--panel-2);
   /* The bubble's own corner in reverse: this is the user speaking, so the flat corner is the
      one nearest them. */
   border-radius: var(--radius-lg) var(--radius-2xs) var(--radius-lg) var(--radius-lg);
+  font: inherit;
   font-size: var(--fs-3);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.msg-ref:hover {
+  background: var(--accent-bg);
 }
 .msg-ref-kind {
   font-size: var(--fs-1);
   color: var(--text-3);
+  transition: color var(--dur-fast);
+}
+.msg-ref:hover .msg-ref-kind {
+  color: var(--accent);
 }
 .msg-ref-quote {
   color: var(--text-2);

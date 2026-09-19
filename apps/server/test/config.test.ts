@@ -8,8 +8,6 @@ import {
   deepMerge,
   insightReasoningSetting,
   INSIGHT_REASONING_ENV,
-  NOTE_SYNC_REASONING_ENV,
-  noteSyncReasoningSetting,
   parseReasoning,
   resolveDataRoot,
   resolveEnv,
@@ -299,7 +297,6 @@ describe("the out-of-band reasoning switches", () => {
     expect(parseReasoning("   ", NAME)).toBe("auto");
     expect(threadReasoningSetting({})).toBe("auto");
     expect(insightReasoningSetting({})).toBe("auto");
-    expect(noteSyncReasoningSetting({})).toBe("auto");
   });
 
   it.each([
@@ -326,14 +323,11 @@ describe("the out-of-band reasoning switches", () => {
   });
 
   it("names the switch that was actually set, not whichever one is first", () => {
-    // Three switches now share the parser, and the error is the only thing that tells an operator
+    // Two switches share the parser, and the error is the only thing that tells an operator
     // which one they mistyped. A shared message naming the classifier's variable would send
     // them to the wrong line of their `.env`.
     expect(() => insightReasoningSetting({ [INSIGHT_REASONING_ENV]: "oops" })).toThrow(
       new RegExp(`${INSIGHT_REASONING_ENV}.*auto, on, off`)
-    );
-    expect(() => noteSyncReasoningSetting({ [NOTE_SYNC_REASONING_ENV]: "oops" })).toThrow(
-      new RegExp(`${NOTE_SYNC_REASONING_ENV}.*auto, on, off`)
     );
   });
 

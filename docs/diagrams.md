@@ -24,7 +24,7 @@ apps/web/src/widgets/            DiagramWidget               the panel: a list o
 ```
 
 The `.mmd` file holds the bytes; the `session_diagrams` row holds what the file cannot answer.
-See [What is a file and what is a row](#what-is-a-file-and-what-is-a-row).
+See [What is a file and what are the rows](#what-is-a-file-and-what-are-the-rows).
 
 ## The tool
 
@@ -88,8 +88,8 @@ The session directory has **two writers** and two readers:
 It used to be one writer, and the reason it no longer is is the write-location setting: a
 conversation's default folder is its own, so `write_file` has to be able to reach it. What
 protected the directory was never really the count — it was that every file in it is a row, and
-now that is true of both writers: each leaves a **source** row (see `docs/sources.md`), so a
-file here is addressable by id whatever wrote it.
+now that is true of both writers: each calls `registerFile`, so a file here is addressable by id
+whatever wrote it (see `docs/resources.md`).
 
 That asymmetry is inherited rather than invented: it is the same one the workspace browser and the
 file tools already have, and for the same reason. See the invariant in `CLAUDE.md`.
@@ -102,9 +102,10 @@ a 404.
 
 ## What is a file and what are the rows
 
-A diagram is a **file plus two rows**, and each record holds only what the others cannot answer.
-The argument that used to sit here — "a table would be a second copy of bytes" — is the reason for
-the split rather than against it: neither row holds any of the source.
+A diagram is a **file, a `session_diagrams` row, and a `file_id`**, and each record holds only what
+the others cannot answer. The argument that used to sit here — "a table would be a second copy of
+bytes" — is the reason for the split rather than against it: neither row holds any of the source.
+Since v4 the file is a `files` row like every other file, and the diagram table points at it.
 
 | the `session_diagrams` row holds | because the file cannot |
 | --- | --- |
@@ -112,30 +113,36 @@ the split rather than against it: neither row holds any of the source.
 | `summary` | the model's one-line description of the drawing; nothing else records it |
 | `tool_call_id` | "which reply drew this" without scanning the message list |
 | `thread_id` | which 脉络 node the classifier put it in — not derivable from the bytes at all |
+| `file_id` | which `files` row the bytes are, so a drawing is opened, previewed and status-checked without re-deriving a path from the session and the name |
 
-| the `sources` row holds | because the diagram table cannot |
+| the `files` row holds | because the diagram table cannot |
 | --- | --- |
-| `storage: "session"` + `rel_path` | where the file is, in the one shape every other file answers with |
+| `path` | where the file is, relative to the user root, in the one shape every other file answers with |
 | `category: "diagram"` | what kind of thing it is, for the browser's filters |
-| `origin: "agent_session"` | that the assistant wrote it, which is what the browser prints |
-| an **id** shared with every other source | so a diagram can be referenced, listed and opened by the same machinery as an upload |
+| `source_type: "agent_create"` | that the assistant wrote it, which is what the browser prints |
+| an **id** shared with every other file | so a thumbnail, a raw read and a preview reach it by the same machinery as an upload |
 
-Both rows and the file are written **in one transaction** (`registerDiagram` + `registerFileSource`
-in the tool's `save` callback): a diagram whose file exists but whose rows half-landed is a file
-the conversation draws and the registry cannot name. Without the source row a diagram would be the
-one file in the app the source browser and `@`-reference could not see — the exact split the
-registry exists to close. See `docs/sources.md`.
+**And it gets no `work_resources` reference, deliberately.** That is the file/reference split doing
+its job rather than a gap in it: a reference is what puts material in the library and in the `@`
+picker, and a diagram is read in the 图表 panel, from its own row. Making it referenceable as well
+would put every drawing the agent ever drew into the same list as the material the learner is
+working from — the one place `docs/resources.md` says the split earns its keep. The drift that
+follows is stated rather than hidden: a `.mmd` is a file the library does **not** list.
 
-What is **not** in the row is as deliberate. No `source` (the file is the source; a second copy
-is free to disagree), no `source_path` (a pure function of the session and the name), no
-`message_id` (the assistant message does not exist when the tool runs), and no `deleted_at` — the
-row is derived data like `session_threads`, nothing in the product deletes a diagram, and a
-soft-deleted session keeps its bytes anyway.
+The file and the row are written **in one transaction** (`registerFile` + `registerDiagram` in the
+tool's `save` callback): a diagram whose file exists but whose row half-landed is a drawing the
+conversation cannot name. See `docs/resources.md`.
+
+What is **not** in the row is as deliberate. No `source` (the bytes are the file the `file_id`
+points at; a second copy is free to disagree), no `path` (the file row already carries one, and a
+second would drift from it), no `message_id` (the assistant message does not exist when the tool
+runs), and no `deleted_at` — the row is derived data like `session_threads`, nothing in the
+product deletes a diagram, and a soft-deleted session keeps its bytes anyway.
 
 Two things can drift between the halves, and both are *reported* rather than prevented:
 
-- a `.mmd` nobody drew has a file but no row. The conversation-files dialog shows it; the diagram
-  panel (which lists rows) does not.
+- a `.mmd` nobody drew has a file but no row. It is a file like any other — registered, and
+  referenceable when a walk discovered it — but the 图表 panel lists *rows*, so it is not there.
 - a row whose file is gone reads `fileMissing` in `GET /diagrams`, the same way a note's read
   reports `messageMissing`.
 
@@ -228,10 +235,11 @@ half-renders is worse than one that renders with a visible complaint in it.
 - **The widget**, in the right panel: the conversation's **rows** — name, the model's summary,
   the thread each diagram belongs to, and a jump to the reply that drew it. `DiagramWidget.vue`,
   a viewer with no tools — see [widgets.md](widgets.md#a-viewer-widget-with-no-tools-the-diagram-widget).
-- **The source browser** lists the whole folder as sources — a conversation's own file is a
-  `storage='session'` row like any other, and one of the browser's filters is the conversation. It
-  is where a `.mmd` nobody drew stays reachable, because the folder carries the file and the
-  diagram row does not.
+- **The library browser**, with the conversation as its filter, lists the material the
+  conversation is working from. A `.mmd` it shows is one the registry holds a *reference* to — a file
+  a `write_file` landed there, or one a reconcile walk discovered — while a `.mmd` `ila_diagram` drew
+  is registered and deliberately **not** referenced, so it is the one file in the folder the library
+  does not list. It is reachable from its card and from the 图表 panel instead.
 
 One viewer serves all three, and the file preview as well: `DiagramDialog.vue` owns the zoom and
 shows the summary above the drawing. Zoom is the CSS `zoom` property rather than
@@ -248,7 +256,7 @@ browser. Every row opens the ordinary file preview, which renders a diagram beca
 `kind: "diagram"` is a member of `FILE_CONTENT_KINDS`.
 
 **They no longer have a browser of their own.** The dialog that listed the whole folder is gone:
-every entry to it was a second way to see a folder the source browser already lists by scope, and
+every entry to it was a second way to see a folder the library browser already covers by scope, and
 two surfaces for one folder are two places to keep in step. The folder view that remains is that
 browser with the conversation as its filter. The *routes* stay, and are not vestigial — the
 diagram widget opens one of its rows through `…/files/content` + `…/files/raw` (a `.mmd` is
@@ -275,7 +283,10 @@ pnpm dev:restart
 ```
 
 Ask for a diagram ("画一个登录流程的流程图"), and check: the card draws it, the head names it, the
-expand button opens the viewer, zoom works, and the source browser (the header's library button,
-with this conversation as the scope) lists the `.mmd` under it. Then flip the theme —
-the diagram redraws. A malformed request ("画一张坏掉的图") should leave the reply standing with the
-complaint in place of the drawing.
+expand button opens the viewer, zoom works, and the 图表 panel lists it for this conversation.
+Then flip the theme — the diagram redraws. A malformed request ("画一张坏掉的图") should leave the
+reply standing with the complaint in place of the drawing.
+
+Worth checking the other half in the same pass: open the library over this workspace and confirm
+the `.mmd` is **not** in it. A drawn diagram is registered and never referenced, so the library is
+the one list it is deliberately absent from — see `docs/resources.md`.

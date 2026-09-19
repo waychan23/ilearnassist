@@ -105,7 +105,7 @@ function onOpenSources(): void {
       <button
         class="menu-item side-menu-row"
         :title="t('sources.title')"
-        data-testid="open-sources"
+        data-testid="open-library"
         @click="onOpenSources"
       >
         <span class="gear"><Icon name="folder" /></span>

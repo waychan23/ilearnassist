@@ -137,7 +137,7 @@ describe("filterFigures", () => {
 
 describe("presentKinds", () => {
   it("offers only the kinds that are there", () => {
-    // `SourcesWidget`'s rule for its category filter: an option that can only ever produce the
+    // `ResourcesWidget`'s rule for its category filter: an option that can only ever produce the
     // empty state is a control that does nothing.
     expect(presentKinds(figureRows([diagram()], []))).toEqual(["diagram"]);
     expect(presentKinds(figureRows([], [table()]))).toEqual(["table"]);

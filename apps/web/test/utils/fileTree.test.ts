@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DirectoryListing, FileEntry } from "@ilearnassist/shared";
-import { flattenTree, moveIndex, parentRowIndex } from "../../src/utils/fileTree";
+import { flattenTree, folderCrumbs, moveIndex, parentRowIndex } from "../../src/utils/fileTree";
 
 /**
  * The tree's arithmetic. This is why it is not in the component: the rows a press of
@@ -121,5 +121,43 @@ describe("parentRowIndex", () => {
 
   it("survives an index past the end", () => {
     expect(parentRowIndex(rows, 99)).toBe(99);
+  });
+});
+
+describe("folderCrumbs", () => {
+  /*
+   * The destination picker's breadcrumb. The root is the first crumb and stands for `""`, which
+   * is what makes "put it at the top" a press like any other rather than a control of its own.
+   */
+  it("starts at the root and walks down, root first", () => {
+    expect(folderCrumbs("", "根目录")).toEqual([{ name: "根目录", path: "" }]);
+    expect(folderCrumbs("a", "根目录")).toEqual([
+      { name: "根目录", path: "" },
+      { name: "a", path: "a" },
+    ]);
+    // The *name* is the segment and the *path* is cumulative: a breadcrumb shows the folder's own
+    // name — writing `a/b` on the middle stop would be a path, not a place to click back to.
+    expect(folderCrumbs("a/b/c", "根目录")).toEqual([
+      { name: "根目录", path: "" },
+      { name: "a", path: "a" },
+      { name: "b", path: "a/b" },
+      { name: "c", path: "a/b/c" },
+    ]);
+  });
+
+  it("skips an empty segment rather than drawing a nameless button", () => {
+    // `a//b` is `a/b`. The server never produces one; a hand-typed value could, and the crumb it
+    // would otherwise add has no name to show and no place to go.
+    expect(folderCrumbs("a//b", "根目录").map((c) => c.path)).toEqual(["", "a", "a/b"]);
+    expect(folderCrumbs("/a/", "根目录").map((c) => c.path)).toEqual(["", "a"]);
+  });
+
+  it("takes the root's own label, which is the caller's to translate", () => {
+    // A pure module cannot translate, and the picker's field shows the same word — one label for
+    // one place, so the field and the breadcrumb cannot disagree.
+    expect(folderCrumbs("notes", "Workspace root")[0]).toEqual({
+      name: "Workspace root",
+      path: "",
+    });
   });
 });

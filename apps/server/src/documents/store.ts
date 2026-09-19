@@ -1,22 +1,23 @@
 import { promises as fs } from "node:fs";
-import { join } from "node:path";
-import { isSafeId } from "../ids.js";
+import { parsedFilePath } from "../resourcePaths.js";
 import type { UserLayout } from "../paths.js";
 
 /**
- * Extracted document text, one file per source.
+ * Extracted document text, one file per parse.
  *
  * ```
  * <userRoot>/sources/
- *   raw/<sourceId>.<ext>      the uploaded bytes
- *   parsed/<sourceId>.txt     the extracted plain text
+ *   raw/<fileId>.<ext>      the bytes as they arrived
+ *   parsed/<fileId>.txt     the extracted plain text
  * ```
  *
- * **Parse state is not here any more.** It lives in the `sources` row, which is where every
- * reader consults it — so a reparse is visible in every conversation at once rather than only
- * in the messages written after it, and a source uploaded once and referenced twice is parsed
- * once. This module is now only about the text, which is the one part too large for a column
- * and which `read_document` streams by offset.
+ * **Parse state is not here.** It lives on the `work_resources` row, which is where every reader
+ * consults it, and the row's `parsed_file_id` is what points at the text this module holds. Two
+ * conversations working from the same file therefore each have their own reference and *their own
+ * parse* — the consequence the v4 model takes deliberately, stated in `schema.ts`.
+ *
+ * This module is only about the text, which is the one part too large for a column and which
+ * `read_document` streams by offset.
  *
  * The two directories are siblings, which used to be *load-bearing*: `findStoredAttachment()`
  * located an attachment by globbing `<id>.*` inside the session directory, and `txt` is a
@@ -27,19 +28,28 @@ import type { UserLayout } from "../paths.js";
  * thing and a reader should not have to check which it is holding.
  */
 
-/** Absolute path of one source's extracted text, or undefined for an unsafe id. */
-export function sourceParsedPath(user: UserLayout, sourceId: string): string | undefined {
-  if (!isSafeId(sourceId)) return undefined;
-  return join(user.parsedDir, `${sourceId}.txt`);
+/**
+ * Absolute path of one parse's text, or undefined for an id that cannot be trusted in a path.
+ *
+ * The id is the **file row's**, which is what `work_resources.parsed_file_id` names — so the
+ * caller that has a reference resolves the file first and then asks here, exactly as it would for
+ * any other file's bytes.
+ */
+export function parsedTextPath(user: UserLayout, fileId: string): string | undefined {
+  try {
+    return parsedFilePath(user, fileId);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Read only the first `maxChars` characters, without slurping a multi-MB file. */
 export async function readParsedTextHead(
   user: UserLayout,
-  sourceId: string,
+  fileId: string,
   maxChars: number
 ): Promise<string | undefined> {
-  const path = sourceParsedPath(user, sourceId);
+  const path = parsedTextPath(user, fileId);
   if (!path) return undefined;
 
   let handle: fs.FileHandle | undefined;
@@ -61,9 +71,9 @@ export async function readParsedTextHead(
 
 export async function readParsedText(
   user: UserLayout,
-  sourceId: string
+  fileId: string
 ): Promise<string | undefined> {
-  const path = sourceParsedPath(user, sourceId);
+  const path = parsedTextPath(user, fileId);
   if (!path) return undefined;
   try {
     return await fs.readFile(path, "utf8");
@@ -74,18 +84,18 @@ export async function readParsedText(
 
 export async function writeParsedText(
   user: UserLayout,
-  sourceId: string,
+  fileId: string,
   text: string
 ): Promise<void> {
-  const path = sourceParsedPath(user, sourceId);
-  if (!path) throw new Error("Invalid source id.");
+  const path = parsedTextPath(user, fileId);
+  if (!path) throw new Error("Invalid file id.");
   await fs.mkdir(user.parsedDir, { recursive: true });
   await fs.writeFile(path, text, "utf8");
 }
 
 /** Drop the extracted text, so a re-parse starts from nothing rather than from a stale read. */
-export async function removeParsedText(user: UserLayout, sourceId: string): Promise<void> {
-  const path = sourceParsedPath(user, sourceId);
+export async function removeParsedText(user: UserLayout, fileId: string): Promise<void> {
+  const path = parsedTextPath(user, fileId);
   if (!path) return;
   await fs.rm(path, { force: true }).catch(() => undefined);
 }

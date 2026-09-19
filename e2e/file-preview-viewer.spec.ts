@@ -60,7 +60,7 @@ async function seedSource(
   name: string,
   mimeType: string,
   bytes: Buffer
-): Promise<void> {
+): Promise<string> {
   const workspace = await request
     .post("/api/workspaces", { data: { name: `Viewer-${Date.now()}-${name}` } })
     .then((r) => r.json());
@@ -68,18 +68,19 @@ async function seedSource(
     .post(`/api/workspaces/${workspace.id}/sessions`, { data: {} })
     .then((r) => r.json());
 
-  const res = await request.post(`/api/sessions/${session.id}/sources`, {
+  const res = await request.post(`/api/sessions/${session.id}/resources`, {
     data: { name, mimeType, data: bytes.toString("base64") },
   });
   expect(res.status()).toBe(201);
+  return ((await res.json()) as { resourceId: string }).resourceId;
 }
 
 /** The uploaded-files dialog, which lives on the workspace home. */
 async function openLibrary(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByTestId("workspace-home")).toBeVisible();
-  await page.getByTestId("open-sources").click();
-  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await page.getByTestId("open-library").click();
+  await expect(page.getByTestId("library-dialog")).toBeVisible();
 }
 
 /**
@@ -89,10 +90,13 @@ async function openLibrary(page: Page): Promise<void> {
  * browser over every source the account holds now, and this file seeds the same names as
  * workspace files (that is how the tree cases above work) — so a lookup by name alone is
  * ambiguous, and the filter that tells them apart is the one the dialog was given for it.
+ *
+ * v4 has no `origin` filter, so the scope is what separates them: an upload is owned by the
+ * conversation it arrived in, and a workspace file by the workspace.
  */
 async function openUploads(page: Page, name: string): Promise<void> {
   await openLibrary(page);
-  await page.getByTestId("sources-filter-origin").selectOption("session_attachment");
+  await page.getByTestId("resources-filter-owner-type").selectOption("session");
   /*
    * Wait for the filtered list to *arrive* before anything is clicked.
    *
@@ -102,7 +106,7 @@ async function openUploads(page: Page, name: string): Promise<void> {
    * rather than lucky.
    */
   await expect(
-    page.getByTestId("source-row").filter({ hasText: name })
+    page.getByTestId("resource-row").filter({ hasText: name })
   ).toHaveCount(1);
 }
 
@@ -157,7 +161,7 @@ test("an uploaded image opens in the viewer, over the list it came from", async 
   await seedSource(request, "shot.png", "image/png", ONE_PX_PNG);
   await openUploads(page, "shot.png");
 
-  await page.getByTestId("source-open").filter({ hasText: "shot.png" }).click();
+  await page.getByTestId("resource-open").filter({ hasText: "shot.png" }).click();
 
   const viewer = page.getByTestId("file-viewer");
   await expect(viewer).toHaveAttribute("data-render-state", "ready", { timeout: 15000 });
@@ -172,22 +176,77 @@ test("an uploaded image opens in the viewer, over the list it came from", async 
    */
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("file-viewer")).toHaveCount(0);
-  await expect(page.getByTestId("sources-dialog")).toBeVisible();
+  await expect(page.getByTestId("library-dialog")).toBeVisible();
 });
 
-test("an uploaded PDF opens in the viewer", async ({ page, request }) => {
-  // The same route with a format that has no text fallback at all: a PDF's bytes are the only
-  // thing that can show it, which is the shape the sources list could not reach before.
-  await seedSource(request, "doc.pdf", "application/pdf", buildPdf(["Viewer fixture"]));
-  await openUploads(page, "doc.pdf");
+test("a titled reference opens the viewer, which goes by the file's own name", async ({
+  page,
+  request,
+}) => {
+  /*
+   * **The reported bug.** A reference's title is prose — 截图, 季度对比 — and the preview's
+   * classification used to be made from it, so a picture the user had titled came back with no
+   * extension at all and the viewer's gate answered "this format cannot be previewed" for a file
+   * it draws perfectly well. Only the *file's* name can decide anything (`FileContent.fileName`),
+   * and the title is what to call it.
+   *
+   * This is the path a **library row** takes — an upload with a title, opened from the list rather
+   * than from the file tree, which is the route that carries a title at all.
+   */
+  const suffix = Date.now();
+  const workspace = (await (
+    await request.post("/api/workspaces", { data: { name: `Titled-${suffix}` } })
+  ).json()) as { id: string };
+  const created = await request.post(`/api/workspaces/${workspace.id}/files/upload`, {
+    data: {
+      dir: "",
+      name: "shot.png",
+      mimeType: "image/png",
+      data: ONE_PX_PNG.toString("base64"),
+      title: "截图",
+    },
+  });
+  expect(created.status()).toBe(201);
 
-  await page.getByTestId("source-open").filter({ hasText: "doc.pdf" }).click();
+  await openLibrary(page);
+  await page.getByTestId("resource-row").filter({ hasText: "截图" }).getByTestId("resource-open").click();
 
   const viewer = page.getByTestId("file-viewer");
   await expect(viewer).toHaveAttribute("data-render-state", "ready", { timeout: 15000 });
-  const canvas = viewer.locator("canvas").first();
-  await expect(canvas).toBeVisible();
-  expect(await canvas.evaluate((el) => (el as HTMLCanvasElement).width)).toBeGreaterThan(0);
+  // Drawn, not merely present: the same measurement the untitled case makes.
+  const image = viewer.locator("img").first();
+  expect(await image.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  // And the panel it must *not* be showing.
+  await expect(page.getByTestId("file-preview-unsupported")).toHaveCount(0);
+});
+
+test("an uploaded document settles into its extracted text", async ({ page, request }) => {
+  /*
+   * **A document's preview is its text, and the upload route is what decides when.** The
+   * extraction is scheduled by `POST /sessions/:id/resources`, and `resourcePath` prefers the
+   * extracted file once it exists — deliberately, so a PDF no viewer can open still reads — so an
+   * upload's preview changes under the reader's feet and *settles* into the text view.
+   *
+   * This waits for the parse and asserts the settled state. It used to assert a canvas, and it
+   * passed only while the extraction had not landed: a test winning a race. The titled-preview
+   * fix is what stopped it winning, because the classification now follows the bytes actually
+   * read — which is the point. The "viewer draws a PDF" case is the workspace file above, where
+   * nothing schedules an extraction at all.
+   */
+  const id = await seedSource(request, "doc.pdf", "application/pdf", buildPdf(["Viewer fixture"]));
+  await expect
+    .poll(async () =>
+      (await request.get(`/api/resources/${id}`).then((r) => r.json())).parsedFileId ?? ""
+    )
+    .not.toBe("");
+
+  await openUploads(page, "doc.pdf");
+  await page.getByTestId("resource-open").filter({ hasText: "doc.pdf" }).click();
+
+  // The text the extractor found, and no viewer: the bytes it would have drawn are not what this
+  // preview reads any more.
+  await expect(page.getByTestId("file-preview-text")).toContainText("Viewer fixture");
+  await expect(page.getByTestId("file-viewer")).toHaveCount(0);
 });
 
 test("an unpreviewable binary reaches the panel without fetching a byte", async ({
@@ -367,4 +426,45 @@ test("the preview header is a title, the file's controls, and the window's", asy
 
   // The title is nowhere near any of it, which is what keeps the row reading as two things.
   expect(fileGroup.left - title.right).toBeGreaterThan(betweenGroups);
+});
+
+test("writing a note about the file puts the note window on top of the preview", async ({
+  page,
+  request,
+}) => {
+  /*
+   * A layering bug, and only a browser can see it. The preview is deliberately at `--z-preview`
+   * — above every dialog, because it is the layer opened *from* things — while the note window
+   * is a floating card at `--z-window`, below it. So the window appeared **underneath** the
+   * dialog that had just asked for it, with its own controls unreachable: the same failure
+   * `--z-confirm` was added for, one layer down.
+   *
+   * The fix is `DiagramDialog`'s: the opener closes, and the file is one press away again
+   * because the note window draws its 标注对象 as a control. The second half is asserted below.
+   */
+  const name = `Viewer-note-${Date.now()}`;
+  await seedWorkspace(request, name);
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  // A conversation, and one with the notes panel installed — the button is drawn only where a
+  // window would render *and* the conversation accepts writes.
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+  await openFilesTab(page);
+  await openFile(page, "notes.md");
+
+  // The preview has to have found a reference for the control to be drawn at all — the file tree
+  // registers one as it lists, and the route resolves the path back to it.
+  await page.getByTestId("file-preview-note").click();
+
+  const editor = page.getByTestId("note-editor");
+  await expect(editor).toBeVisible();
+  // The preview is gone rather than merely behind it: a `toBeVisible` on the editor would pass
+  // for an element the dialog is covering, which is exactly the bug.
+  await expect(page.getByTestId("file-preview-body")).toHaveCount(0);
+
+  // ...and the object it names is one press away, which is what makes closing cost nothing.
+  await expect(editor.getByTestId("note-editor-target")).toBeVisible();
+  await editor.getByTestId("note-editor-target").click();
+  await expect(page.getByTestId("file-preview-body")).toContainText("标题");
 });

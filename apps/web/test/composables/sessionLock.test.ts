@@ -28,7 +28,6 @@ const mocks = vi.hoisted(() => ({
     getConfig: vi.fn(),
     listWorkspaces: vi.fn(),
     listCopilots: vi.fn(),
-    getNoteSync: vi.fn().mockResolvedValue({ sync: null }),
   },
 }));
 
@@ -40,7 +39,7 @@ vi.mock("../../src/api/client", () => ({
   streamAnswers: vi.fn(),
   streamRegenerate: vi.fn(),
   fileToBase64: vi.fn(),
-  sourceImageUrl: (id: string) => Promise.resolve(`blob:${id}`),
+  fileImageUrl: (id: string) => Promise.resolve(`blob:${id}`),
 }));
 
 const { useAppStore, SESSION_LOCK_HEARTBEAT_MS } = await import("../../src/stores/app.js");

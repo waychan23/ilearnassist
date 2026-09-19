@@ -315,23 +315,47 @@ cannot be selected or a selection that matches nothing:
 
 ## Conversation titles
 
-A new conversation is called **（未命名）会话** / **(Untitled) Session** until its first reply
-arrives, at which point a model writes a short title from that first exchange and the sidebar
-updates. The generated title is capped at 6 words / 20 characters (60 characters hard limit,
-beyond which it is truncated) and is asked to match the language of the conversation.
+A new conversation is called **（未命名）会话** / **(Untitled) Session** until a model can name it
+from what is actually in it. The generated title is capped at 6 words / 20 characters (60
+characters hard limit, beyond which it is truncated) and is asked to match the language of the
+conversation.
 
 That placeholder is written by the **client**, from `session.fallbackTitle`, so it is in the
 language the account is reading. The server's `DEFAULT_SESSION_TITLE` is the same string in
 English and is only what a caller that names nothing gets — the CLI, a script, another client.
 It stays `titleSource: "auto"`, which is what makes it a placeholder rather than a name.
 
-**If the first attempt does not work, leaving the conversation tries again.** A titling call can
-fail (no key, a rate limit, a reasoning model that spends its whole budget thinking) and then the
-title is the user's own clipped words; or the first turn can produce no text at all, and then the
-placeholder simply stays. Both are recorded in `sessions.title_state`, and when the reader leaves —
-switching conversations, going back to the workspace list, entering another workspace — the browser
-reports it and the server runs the titler once more. It is deliberately undramatic: it takes about
-three seconds before it fires, nothing waits on it, nothing is said when it fails, and the next
+**The titler runs after every turn until it produces a title, not only after the first.** A
+conversation that opens with `你好` has nothing to be named after, so it may answer `NO_TITLE`
+rather than inventing one — and then the conversation keeps its placeholder and the **next** turn
+asks again. That is the whole mechanism: asking is the only way to find out, and the first asking
+can only be answered "not yet". What it reads is the conversation as it now stands, not the first
+exchange: the opening question and the most recent messages, capped
+(`conversationExcerpt` in `agent/title.ts`).
+
+Pinned in `sessions.title_state`, which says *how the pass fared* — a different question from
+`title_source`, which says who owns the title:
+
+| `title_state` | after a turn | on leaving | meaning |
+| --- | --- | --- | --- |
+| absent | asks | asks | never asked — no reply with text in it yet |
+| `"unnamed"` | asks | — | asked, and there was nothing to name yet |
+| `"fallback"` | asks | asks | the call failed |
+| `"model"` | — | — | named; nothing left to do |
+
+So a title can be written on any turn, and a conversation is never given one that says nothing
+about it. A turn the reader stopped before it produced text, and a turn that only called tools,
+leave no prose — so there is nothing to name from and the state simply does not move.
+
+**Leaving a conversation tries once more.** The client debounces three seconds and reports
+`POST /api/sessions/:id/leave`, which runs the titler again over the same excerpt. What it adds is
+the chance a turn cannot give: a conversation whose titling call *failed* — no key, a rate limit, a
+reasoning model that spent its whole budget thinking — is showing the user's own clipped words, and
+this retries it. A conversation whose state is `"unnamed"` is deliberately **not** retried: that
+state means the turn that just ended asked about *this* conversation, and nothing has happened
+since, so the answer would be the same and the call would be paid for twice.
+
+It is deliberately undramatic: nothing waits on it, nothing is said when it fails, and the next
 departure tries again. A conversation the model already named is not reported at all.
 
 Closing the tab is **not** one of the triggers. It would need a `keepalive` request of its own,
@@ -358,10 +382,13 @@ The titler gets a 512-token output budget on purpose. Reasoning models
 *before* emitting any content, so a tight cap yields `finish_reason: "length"` with an
 empty answer and no title at all.
 
-If the titler still fails — no key, rate limit, a model that returns nothing — the
-conversation is named from the user's own first message instead, collapsed to one line and
-trimmed to ~40 characters. A first turn therefore always ends with a usable name; it can
-never leave the placeholder, and it can never fail the chat turn.
+**A call that fails is not a decline.** When the titler cannot run — no key, rate limit, a model
+that returns nothing at all — the conversation is named from the user's own first message instead,
+collapsed to one line and trimmed to ~40 characters, and recorded as `"fallback"` so the next turn
+asks again. The distinction matters in both directions: an empty answer means nothing was learned
+about whether the conversation has substance, while `NO_TITLE` is the model *having looked and
+said no*. A failed turn therefore leaves a usable name where a decline deliberately leaves the
+placeholder. Neither can fail the chat turn.
 
 ## Conversation parameters
 

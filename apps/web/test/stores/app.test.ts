@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  Attachment,
   ChatStreamEvent,
   Copilot,
   DirectoryListing,
@@ -9,10 +10,11 @@ import type {
   PublicConfig,
   Session,
   SessionLockView,
-  Source,
+  StoredFile,
   User,
   WidgetId,
   WidgetState,
+  WorkResource,
   Workspace,
 } from "@ilearnassist/shared";
 import { MAX_ATTACHMENT_BYTES } from "@ilearnassist/shared";
@@ -70,17 +72,18 @@ const mocks = vi.hoisted(() => ({
     stopSession: vi.fn(),
     // `selectSession` reads the export state on the way in, so these need a resting value rather
     // than `undefined` — the store tolerates a failure, but every test would pay for it.
-    startNoteSync: vi.fn(),
-    getNoteSync: vi.fn().mockResolvedValue({ sync: null }),
     listFiles: vi.fn(),
     readFileContent: vi.fn(),
     listSessionFiles: vi.fn(),
     readSessionFileContent: vi.fn(),
     uploadAttachment: vi.fn(),
-    listSessionSources: vi.fn(),
-    listSources: vi.fn(),
-    deleteSource: vi.fn(),
-    reparseSource: vi.fn(),
+    listSessionResources: vi.fn(),
+    listResources: vi.fn(),
+    deleteResource: vi.fn(),
+    reparseResource: vi.fn(),
+    getResource: vi.fn(),
+    readResourcePreview: vi.fn(),
+    readFileRaw: vi.fn(),
     listParserKinds: vi.fn(),
     listDocumentParsers: vi.fn(),
     createDocumentParser: vi.fn(),
@@ -133,10 +136,11 @@ vi.mock("../../src/api/client", () => ({
   streamRegenerate: mocks.streamRegenerate,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
-  sourceImageUrl: (sourceId: string) => Promise.resolve(`blob:sources/${sourceId}`),
+  fileImageUrl: (fileId: string) => Promise.resolve(`blob:files/${fileId}`),
 }));
 
 const { useAppStore } = await import("../../src/stores/app.js");
+const { resourceAttachment } = await import("../../src/utils/resourceView.js");
 const { ApiError } = await import("../../src/utils/apiError.js");
 
 /* --------------------------------- fixtures -------------------------------- */
@@ -233,26 +237,39 @@ function message(overrides: Partial<Message> & Pick<Message, "role">): Message {
 }
 
 /**
- * A source as the parse-status poll reports it — the server's own row for the file.
+ * A reference as the parse-status poll reports it — the server's own row for the material.
  *
  * An upload, since that is what this store deals with today: owned by the conversation it
- * arrived in, stored as a blob, and classified by its type. The newer fields are filled in
- * rather than left to the type to make optional, because a source without them is a source the
- * server does not produce.
+ * arrived in, with bytes under `sources/raw/` and a category derived from its type. The newer
+ * fields are filled in rather than left to the type to make optional, because a reference
+ * without them is a reference the server does not produce.
+ *
+ * The `title` is what the chip shows and the `id` is what the poll is keyed by; the file's own
+ * id is one level down, which is the split every test below depends on.
  */
-function sourceOf(overrides: Partial<Source> & Pick<Source, "id">): Source {
+function resourceOf(
+  overrides: Partial<WorkResource> & Pick<WorkResource, "id">,
+  file: Partial<StoredFile> = {}
+): WorkResource {
   return {
-    name: "lecture.pdf",
-    mimeType: "application/pdf",
-    size: 1000,
-    kind: "file",
+    resourceType: "file",
+    resourceId: `f-${overrides.id}`,
+    ownerType: "session",
+    ownerId: "s1",
+    title: "lecture.pdf",
     parseStatus: "pending",
     createdAt: "2026-01-01T00:00:00.000Z",
-    ownerKind: "session",
-    ownerId: "s1",
-    origin: "session_attachment",
-    storage: "upload",
-    category: "document",
+    resource: {
+      id: `f-${overrides.id}`,
+      sourceType: "attachment",
+      title: "lecture.pdf",
+      path: `sources/raw/f-${overrides.id}.pdf`,
+      mimeType: "application/pdf",
+      category: "document",
+      size: 1000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      ...file,
+    },
     ...overrides,
   };
 }
@@ -440,64 +457,64 @@ describe("init", () => {
   });
 });
 
-describe("uploaded files", () => {
-  it("loads the account's files on demand, not with everything else", async () => {
+describe("the library", () => {
+  it("loads the account's references on demand, not with everything else", async () => {
     // `init` must not fetch the whole library: this is a dialog most sessions never open.
     const store = useAppStore();
     await enterApp(store);
-    expect(mocks.api.listSources).not.toHaveBeenCalled();
+    expect(mocks.api.listResources).not.toHaveBeenCalled();
 
-    mocks.api.listSources.mockResolvedValue([sourceOf({ id: "a1", name: "one.pdf" })]);
-    await store.loadSources();
+    mocks.api.listResources.mockResolvedValue([resourceOf({ id: "a1", title: "one.pdf" })]);
+    await store.loadResources();
 
-    expect(store.sources.map((s) => s.name)).toEqual(["one.pdf"]);
-    expect(store.sourcesLoading).toBe(false);
+    expect(store.resources.map((r) => r.title)).toEqual(["one.pdf"]);
+    expect(store.resourcesLoading).toBe(false);
   });
 
   it("reports a failed load inside the dialog, not as a toast", async () => {
     // The user asked for this, so the place to say it failed is where they are looking.
-    mocks.api.listSources.mockRejectedValue(new ApiError("SOURCE_NOT_FOUND", "gone", 404));
+    mocks.api.listResources.mockRejectedValue(new ApiError("RESOURCE_NOT_FOUND", "gone", 404));
 
     const store = useAppStore();
-    await store.loadSources();
+    await store.loadResources();
 
-    expect(store.sourcesError).toBe("gone");
+    expect(store.resourcesError).toBe("gone");
     expect(store.error).toBeNull();
   });
 
-  it("drops a deleted file from the list and from the live overlay", async () => {
-    mocks.api.listSources.mockResolvedValue([
-      sourceOf({ id: "a1" }),
-      sourceOf({ id: "a2", name: "keep.pdf" }),
+  it("drops a deleted reference from the list and from the live overlay", async () => {
+    mocks.api.listResources.mockResolvedValue([
+      resourceOf({ id: "a1" }),
+      resourceOf({ id: "a2", title: "keep.pdf" }),
     ]);
-    mocks.api.deleteSource.mockResolvedValue({ ok: true });
+    mocks.api.deleteResource.mockResolvedValue({ ok: true });
 
     const store = useAppStore();
-    await store.loadSources();
+    await store.loadResources();
     // A chip on a sent message is being overlaid from this map; leaving the entry behind
-    // would keep showing parse state for a file that no longer exists.
-    store.parseStatus = { a1: sourceOf({ id: "a1" }), a2: sourceOf({ id: "a2" }) };
+    // would keep showing parse state for a reference that no longer exists.
+    store.resourceParseStatus = { a1: resourceOf({ id: "a1" }), a2: resourceOf({ id: "a2" }) };
 
-    await store.deleteSource("a1");
+    await store.deleteResource("a1");
 
-    expect(mocks.api.deleteSource).toHaveBeenCalledWith("a1");
-    expect(store.sources.map((s) => s.id)).toEqual(["a2"]);
-    expect(store.parseStatus["a1"]).toBeUndefined();
-    expect(store.parseStatus["a2"]).toBeDefined();
+    expect(mocks.api.deleteResource).toHaveBeenCalledWith("a1");
+    expect(store.resources.map((r) => r.id)).toEqual(["a2"]);
+    expect(store.resourceParseStatus["a1"]).toBeUndefined();
+    expect(store.resourceParseStatus["a2"]).toBeDefined();
   });
 
   it("keeps the row when the delete fails, and says why", async () => {
-    mocks.api.listSources.mockResolvedValue([sourceOf({ id: "a1" })]);
-    mocks.api.deleteSource.mockRejectedValue(new ApiError("SOURCE_NOT_FOUND", "gone", 404));
+    mocks.api.listResources.mockResolvedValue([resourceOf({ id: "a1" })]);
+    mocks.api.deleteResource.mockRejectedValue(new ApiError("RESOURCE_NOT_FOUND", "gone", 404));
 
     const store = useAppStore();
-    await store.loadSources();
-    await store.deleteSource("a1");
+    await store.loadResources();
+    await store.deleteResource("a1");
 
-    // The file is still there as far as the server is concerned, so the list must not have
+    // The reference is still there as far as the server is concerned, so the list must not have
     // pretended otherwise — a row that vanishes and comes back is worse than an error.
-    expect(store.sources.map((s) => s.id)).toEqual(["a1"]);
-    expect(store.sourcesError).toBe("gone");
+    expect(store.resources.map((r) => r.id)).toEqual(["a1"]);
+    expect(store.resourcesError).toBe("gone");
   });
 });
 
@@ -626,6 +643,11 @@ describe("signing in and out", () => {
     mocks.api.logout.mockResolvedValue({ ok: true });
     const store = await readyStore();
     expect(store.workspaces).toHaveLength(1);
+    // Staged material counts as part of the account too: a chip, a 追问 and the live parse
+    // overlay all name things the next person's session cannot reach.
+    store.pendingResources = [resourceAttachmentFixture()];
+    store.pendingRefs = [{ kind: "diagram", ref: "auth-flow", label: "auth-flow" }];
+    store.resourceParseStatus = { a1: resourceOf({ id: "a1" }) };
 
     await store.signOut();
 
@@ -635,6 +657,9 @@ describe("signing in and out", () => {
     expect(store.sessions).toEqual([]);
     expect(store.messages).toEqual([]);
     expect(store.activeWorkspaceId).toBeNull();
+    expect(store.pendingResources).toEqual([]);
+    expect(store.pendingRefs).toEqual([]);
+    expect(store.resourceParseStatus).toEqual({});
   });
 
   it("lands on the login screen even when the logout request fails", async () => {
@@ -2467,12 +2492,13 @@ describe("attachments", () => {
   it("removes and clears staged attachments", async () => {
     const store = await readyStore();
     store.pendingAttachments = [
-      { id: "a1", name: "a.txt", mimeType: "text/plain", size: 1, kind: "file" },
-      { id: "a2", name: "b.txt", mimeType: "text/plain", size: 1, kind: "file" },
+      { id: "f-a1", resourceId: "a1", name: "a.txt", mimeType: "text/plain", size: 1, kind: "file" },
+      { id: "f-a2", resourceId: "a2", name: "b.txt", mimeType: "text/plain", size: 1, kind: "file" },
     ];
 
-    store.removePendingAttachment("a1");
-    expect(store.pendingAttachments.map((a) => a.id)).toEqual(["a2"]);
+    // By the **file** id, which is what the chip is keyed and emitted by.
+    store.removePendingAttachment("f-a1");
+    expect(store.pendingAttachments.map((a) => a.id)).toEqual(["f-a2"]);
 
     store.clearPendingAttachments();
     expect(store.pendingAttachments).toEqual([]);
@@ -2480,7 +2506,7 @@ describe("attachments", () => {
 
   it("clears staged attachments once they have been sent", async () => {
     const store = await readyStore();
-    store.pendingAttachments = [{ id: "a1", name: "a.txt", mimeType: "text/plain", size: 1, kind: "file" }];
+    store.pendingAttachments = [{ id: "f-a1", resourceId: "a1", name: "a.txt", mimeType: "text/plain", size: 1, kind: "file" }];
     streamOf({ type: "done" });
 
     await store.sendMessage("look", store.pendingAttachments);
@@ -2489,9 +2515,100 @@ describe("attachments", () => {
   });
 });
 
+/**
+ * The chip `@`-ing a reference stages: the shape `resourceAttachment` produces and
+ * `AttachmentChips` draws, with the two ids kept apart.
+ */
+function resourceAttachmentFixture(overrides: Partial<Attachment> = {}): Attachment {
+  return {
+    id: "f-a1",
+    resourceId: "a1",
+    name: "lecture.pdf",
+    mimeType: "application/pdf",
+    size: 1000,
+    kind: "file",
+    parseStatus: "none",
+    ...overrides,
+  };
+}
+
+describe("referencing a resource", () => {
+  it("stages a chip keyed by the reference, not by the file", async () => {
+    const store = await readyStore();
+    await store.referenceResource(resourceOf({ id: "a1", parseStatus: "ready" }));
+
+    expect(store.pendingResources).toHaveLength(1);
+    // The reference id, because that is what the chip is removed by and what the turn sends;
+    // the file id is what the bytes are fetched by, and it is a different id on purpose.
+    expect(store.pendingResources[0]!.resourceId).toBe("a1");
+    expect(store.pendingResources[0]!.id).toBe("f-a1");
+    expect(store.pendingResources[0]!.name).toBe("lecture.pdf");
+  });
+
+  it("stages one chip for one reference", async () => {
+    // Two chips for one file would be two references in one turn.
+    const store = await readyStore();
+    const row = resourceOf({ id: "a1", parseStatus: "ready" });
+    await store.referenceResource(row);
+    await store.referenceResource(row);
+
+    expect(store.pendingResources).toHaveLength(1);
+  });
+
+  it("starts extraction for a reference the server is already working on", async () => {
+    /*
+     * The guard is v3's, carried over unchanged and pinned here so the asymmetry is visible
+     * rather than assumed: the client's reparse is the **retry** path for a reference that is
+     * settling (a parse that stalled, a settings change), not the thing that kicks one off —
+     * the server schedules the initial parse when a turn links the reference.
+     */
+    const store = await readyStore();
+    mocks.api.reparseResource.mockResolvedValue({ status: "pending" });
+
+    await store.referenceResource(resourceOf({ id: "a1", parseStatus: "pending" }));
+
+    expect(mocks.api.reparseResource).toHaveBeenCalledWith("a1", "lecture.pdf");
+    expect(store.pendingResources[0]!.parseStatus).toBe("pending");
+    // The live overlay is keyed by the reference too, or a chip would never leave "pending".
+    expect(store.resourceParseStatus["a1"]?.parseStatus).toBe("pending");
+  });
+
+  it("stages a document without re-parsing it, and never re-parses a text file", async () => {
+    const store = await readyStore();
+    await store.referenceResource(resourceOf({ id: "a1", parseStatus: "none" }));
+    await store.referenceResource(
+      resourceOf({ id: "a2", parseStatus: "pending" }, { mimeType: "text/plain", category: "text" })
+    );
+
+    // Nothing is settling that needs extraction: one has never been touched, and a text file is
+    // inlined verbatim rather than extracted.
+    expect(mocks.api.reparseResource).not.toHaveBeenCalled();
+    expect(store.pendingResources).toHaveLength(2);
+  });
+
+  it("takes a chip back off by the id the chip itself emits", async () => {
+    /*
+     * Keyed on the **file** id, which is what `AttachmentChips` emits for every row it draws —
+     * the same key the attachments row above it removes by. Removing by the reference id instead
+     * was a chip whose remove button removed nothing.
+     */
+    const store = await readyStore();
+    await store.referenceResource(resourceOf({ id: "a1", parseStatus: "ready" }));
+    store.removePendingResource("f-a1");
+
+    expect(store.pendingResources).toEqual([]);
+  });
+});
+
 describe("document parsing", () => {
+  /*
+   * An attachment as the upload route returns one: `id` is the **file** the bytes are fetched by
+   * and `resourceId` is the **reference** the parse state belongs to. Every fixture below pairs
+   * it with `resourceOf({ id })`, whose file is `f-<id>` and whose reference is `<id>`.
+   */
   const PDF = {
-    id: "d1",
+    id: "f-d1",
+    resourceId: "d1",
     name: "lecture.pdf",
     mimeType: "application/pdf",
     size: 1000,
@@ -2509,10 +2626,10 @@ describe("document parsing", () => {
   it("polls for parse state while a document is settling, then stops", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listSessionSources
-      .mockResolvedValueOnce([sourceOf({ id: "d1", parseStatus: "parsing" })])
+    mocks.api.listSessionResources
+      .mockResolvedValueOnce([resourceOf({ id: "d1", parseStatus: "parsing" })])
       .mockResolvedValue([
-        sourceOf({ id: "d1", parseStatus: "ready", parsedChars: 4200, pageCount: 3 }),
+        resourceOf({ id: "d1", parseStatus: "ready", parsedChars: 4200, pageCount: 3 }),
       ]);
 
     await store.uploadAttachment(new File(["x"], "lecture.pdf"));
@@ -2527,15 +2644,16 @@ describe("document parsing", () => {
     expect(store.documentsParsing).toBe(false);
 
     // Settled: no further polling, so an idle composer does not keep asking the server.
-    const calls = mocks.api.listSessionSources.mock.calls.length;
+    const calls = mocks.api.listSessionResources.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.api.listSessionSources).toHaveBeenCalledTimes(calls);
+    expect(mocks.api.listSessionResources).toHaveBeenCalledTimes(calls);
   });
 
   it("does not poll for an attachment that needs no parsing", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({
-      id: "t1",
+      id: "f-t1",
+      resourceId: "t1",
       name: "a.txt",
       mimeType: "text/plain",
       size: 3,
@@ -2544,15 +2662,15 @@ describe("document parsing", () => {
 
     await store.uploadAttachment(new File(["hi"], "a.txt"));
     await vi.advanceTimersByTimeAsync(3000);
-    expect(mocks.api.listSessionSources).not.toHaveBeenCalled();
+    expect(mocks.api.listSessionResources).not.toHaveBeenCalled();
     expect(store.documentsParsing).toBe(false);
   });
 
   it("surfaces a parse failure on the attachment", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listSessionSources.mockResolvedValue([
-      sourceOf({ id: "d1", parseStatus: "failed", parseError: "未检测到文本层" }),
+    mocks.api.listSessionResources.mockResolvedValue([
+      resourceOf({ id: "d1", parseStatus: "failed", parseError: "未检测到文本层" }),
     ]);
 
     await store.uploadAttachment(new File(["x"], "lecture.pdf"));
@@ -2567,23 +2685,23 @@ describe("document parsing", () => {
     const store = await readyStore();
     const failed = { ...PDF, parseStatus: "failed" as const, parseError: "boom" };
     store.pendingAttachments = [failed];
-    mocks.api.reparseSource.mockResolvedValue({ status: "pending" });
+    mocks.api.reparseResource.mockResolvedValue({ status: "pending" });
     // First poll still in progress, second one done — that is what makes the loop keep
     // going for a re-parse when nothing is staged in the composer.
-    mocks.api.listSessionSources
-      .mockResolvedValueOnce([sourceOf({ id: "d1", parseStatus: "parsing" })])
-      .mockResolvedValue([sourceOf({ id: "d1", parseStatus: "ready", parsedChars: 10 })]);
+    mocks.api.listSessionResources
+      .mockResolvedValueOnce([resourceOf({ id: "d1", parseStatus: "parsing" })])
+      .mockResolvedValue([resourceOf({ id: "d1", parseStatus: "ready", parsedChars: 10 })]);
 
     await store.reparseAttachment(failed);
-    // By the source alone: the file belongs to the account, so the conversation it was
-    // uploaded through is not part of its identity.
-    expect(mocks.api.reparseSource).toHaveBeenCalledWith("d1", "lecture.pdf");
+    // By the **reference**: the parse is recorded on the reference's own columns, and the file
+    // id would name a row no route reparses.
+    expect(mocks.api.reparseResource).toHaveBeenCalledWith("d1", "lecture.pdf");
     // Nothing is *pending* in the composer, so polling would stop immediately were it not
     // for the re-parse being tracked — this is the case that needs the extra bookkeeping.
     expect(store.pendingAttachments[0]!.parseStatus).not.toBe("failed");
 
     await vi.advanceTimersByTimeAsync(2000);
-    expect(mocks.api.listSessionSources.mock.calls.length).toBeGreaterThan(1);
+    expect(mocks.api.listSessionResources.mock.calls.length).toBeGreaterThan(1);
     expect(store.pendingAttachments[0]!.parseStatus).toBe("ready");
     expect(store.pendingAttachments[0]!.parseError).toBeUndefined();
   });
@@ -2591,17 +2709,17 @@ describe("document parsing", () => {
   it("stops polling when the staged attachments are cleared", async () => {
     const store = await readyStore();
     mocks.api.uploadAttachment.mockResolvedValue({ ...PDF, parseStatus: "pending" });
-    mocks.api.listSessionSources.mockResolvedValue({
-      d1: { status: "parsing", updatedAt: "" },
-    });
+    mocks.api.listSessionResources.mockResolvedValue([
+      resourceOf({ id: "d1", parseStatus: "parsing" }),
+    ]);
 
     await store.uploadAttachment(new File(["x"], "lecture.pdf"));
     await vi.advanceTimersByTimeAsync(0);
 
     store.clearPendingAttachments();
-    const calls = mocks.api.listSessionSources.mock.calls.length;
+    const calls = mocks.api.listSessionResources.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.api.listSessionSources).toHaveBeenCalledTimes(calls);
+    expect(mocks.api.listSessionResources).toHaveBeenCalledTimes(calls);
   });
 });
 
@@ -3591,117 +3709,6 @@ describe("deleting and regenerating the last message", () => {
     await store.regenerateLastMessage();
 
     expect(mocks.streamRegenerate).not.toHaveBeenCalled();
-  });
-});
-
-describe("the note export", () => {
-  /*
-   * The run is asynchronous on the server, so the store's half is a poll — and the poll is what
-   * these pin: that it starts, that it stops the moment the run settles, and that a reply
-   * arriving after the reader has switched conversations is dropped rather than shown as this
-   * conversation's state.
-   */
-  const settled = {
-    status: "ok" as const,
-    startedAt: "2026-09-16T06:00:00.000Z",
-    finishedAt: "2026-09-16T06:00:01.000Z",
-    added: 2,
-    updated: 0,
-    removed: 0,
-    error: null,
-    stuck: false,
-  };
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("follows a run to its end, then stops asking", async () => {
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-    mocks.api.getNoteSync
-      .mockResolvedValueOnce({ sync: { ...settled, status: "running" } })
-      .mockResolvedValue({ sync: settled });
-
-    await store.syncNotesToLibrary();
-    expect(store.noteSyncing).toBe(true);
-    expect(store.noteSync?.status).toBe("running");
-
-    // The first poll fires immediately rather than after a full interval, and reports that the
-    // run is still going — so the poll keeps going rather than settling on its first answer.
-    await vi.advanceTimersByTimeAsync(0);
-    expect(store.noteSync?.status).toBe("running");
-    expect(store.noteSyncing).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(store.noteSync?.status).toBe("ok");
-    expect(store.noteSyncing).toBe(false);
-
-    // Settled: no further polling, so an idle conversation does not keep asking the server.
-    const calls = mocks.api.getNoteSync.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(mocks.api.getNoteSync).toHaveBeenCalledTimes(calls);
-  });
-
-  it("forces only when the caller says the last run is stuck", async () => {
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-
-    await store.syncNotesToLibrary();
-    expect(mocks.api.startNoteSync).toHaveBeenLastCalledWith("s1", {});
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    // The recovery carries the flag; an ordinary press never does, because forcing a live run is
-    // a second export over the same files.
-    await store.syncNotesToLibrary(true);
-    expect(mocks.api.startNoteSync).toHaveBeenLastCalledWith("s1", { force: true });
-    await vi.advanceTimersByTimeAsync(10_000);
-  });
-
-  it("reports a refused start, and re-reads the state that refused it", async () => {
-    // A 409 means another run is live. The press has to say so — a button that does nothing is
-    // what this app keeps out of the UI — and the panel should then show the run that refused it.
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockRejectedValue(new ApiError("SYNC_IN_PROGRESS", "already", 409));
-    mocks.api.getNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-
-    await store.syncNotesToLibrary();
-    expect(store.error).toBeTruthy();
-    expect(store.noteSyncing).toBe(false);
-    expect(store.noteSync?.status).toBe("running");
-  });
-
-  it("does not carry one conversation's export state into the next", async () => {
-    /*
-     * The export state is per conversation, and both halves of that are asserted here: the switch
-     * clears what was on screen, and it stops the poll with it. A poll left running would settle
-     * the *previous* conversation's run into the one now open — a status line about somebody
-     * else's notes, which is exactly the "reply for a session that is no longer active" the other
-     * lists guard against with a sequence number.
-     */
-    const store = await readyStore();
-    mocks.api.startNoteSync.mockResolvedValue({ sync: { ...settled, status: "running" } });
-    // Each conversation answers for itself, which is what makes the clearing observable.
-    mocks.api.getNoteSync.mockImplementation((id: string) =>
-      Promise.resolve({ sync: id === "s1" ? settled : null })
-    );
-
-    await store.syncNotesToLibrary();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(store.noteSync?.status).toBe("ok");
-
-    mocks.api.listMessages.mockResolvedValue([]);
-    await store.selectSession("s2");
-    expect(store.noteSync).toBeNull();
-
-    // The poll went with it: only the switch's own read has been made since.
-    const calls = mocks.api.getNoteSync.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(mocks.api.getNoteSync).toHaveBeenCalledTimes(calls);
   });
 });
 

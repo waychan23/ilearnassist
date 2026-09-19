@@ -5,8 +5,8 @@ import { api } from "../api/client";
 import { relativeTime } from "../composables/relativeTime";
 import { useAppStore } from "../stores/app";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
-import { isMessageNotesActive, requestNoteEditor } from "../composables/messageNotes";
-import { figureNoteRequest } from "../composables/notes";
+import { requestNoteEditor } from "../composables/messageNotes";
+import { canAnnotate, objectNoteRequest } from "../composables/notes";
 import { figureReference } from "../utils/turnRefs";
 import type { Diagram, Table } from "../api/types";
 import {
@@ -148,11 +148,11 @@ function openRow(row: FigureRow): void {
  *
  * The notes panel is what owns notes-as-records, and it announces itself through the message
  * list's claim — so a conversation that never installed it has nothing to file a note into, and
- * this button is not drawn rather than drawn and refused. `isMessageNotesActive` is the same gate
- * the message list uses for its own marking-up, which is what keeps the two from disagreeing
- * about whether notes exist in this conversation.
+ * this button is not drawn rather than drawn and refused. `canAnnotate` is the same gate the
+ * message list uses for its own marking-up, which is what keeps the two from disagreeing about
+ * whether notes exist in this conversation.
  */
-const canNote = computed(() => isMessageNotesActive(store.activeSessionId));
+const canNote = canAnnotate;
 
 /**
  * Write a note about this figure.
@@ -167,8 +167,10 @@ const canNote = computed(() => isMessageNotesActive(store.activeSessionId));
 function noteAbout(row: FigureRow, event: MouseEvent): void {
   const ref = row.fileName ?? row.name;
   const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
-  const request = figureNoteRequest(
-    { kind: row.kind, ref, label: row.name },
+  const request = objectNoteRequest(
+    // The row's summary travels as the 标注原文 — the same sentence the panel draws, so the note
+    // and the row it came from cannot describe the figure differently.
+    { kind: row.kind, ref, label: row.name, summary: row.summary },
     rect ? { x: rect.right, y: rect.top + rect.height / 2 } : null
   );
   if (request) requestNoteEditor(request);
@@ -192,7 +194,7 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
       <!--
         The strip appears only once there is something to narrow, and it offers only the kinds
         that are there: an option that can only ever produce the empty state is a control that
-        does nothing. The count is the same one `SourcesWidget` carries, for the same reason —
+        does nothing. The count is the same one `ResourcesWidget` carries, for the same reason —
         it is what makes a filter honest about what it is hiding.
       -->
       <div v-if="rows.length > 0 && kinds.length > 1" class="figure-filter">

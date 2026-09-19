@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ApiErrorBody, DirectoryListing, Source, Workspace } from "@ilearnassist/shared";
+import type { ApiErrorBody, DirectoryListing, WorkResource, Workspace } from "@ilearnassist/shared";
 import { workspaceTrashDir } from "../src/paths.js";
-import { newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
+import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
+import { ensureWorkResource } from "../src/resources.js";
 
 /**
  * The file manager's writes: what a person does to a workspace's files from the browser.
@@ -79,24 +80,33 @@ function list(path = "") {
   });
 }
 
-async function sources(): Promise<Source[]> {
-  return (await env.inject({ method: "GET", url: "/api/sources" })).json<Source[]>();
+async function resources(): Promise<WorkResource[]> {
+  return (await env.inject({ method: "GET", url: "/api/resources" })).json<WorkResource[]>();
 }
 
-async function rowFor(relPath: string): Promise<Source | undefined> {
-  return (await sources()).find((s) => s.relPath === relPath && s.storage === "workspace");
+/**
+ * The library row for a workspace file, by the path it is listed under.
+ *
+ * A row is a **reference**, so its locator lives on the entity — the filter reads through
+ * `resource`, and `path` is stored relative to the user root, which is why the comparison is a
+ * suffix rather than an equality.
+ */
+async function rowFor(relPath: string): Promise<WorkResource | undefined> {
+  return (await resources()).find(
+    (r) => r.ownerType === "workspace" && (r.resource as { path: string }).path.endsWith(`/${relPath}`)
+  );
 }
 
 describe("create a directory", () => {
   it("makes the directory and registers nothing", async () => {
-    // A directory is not a source. The test is here rather than only in the file tools' file
+    // A directory is not a file. The test is here rather than only in the file tools' file
     // because the symmetry argument — "every write leaves a row" — is one line of code away
     // from being true in both places at once.
-    const before = (await sources()).length;
+    const before = (await resources()).length;
     const res = await createDir("reports");
     expect(res.statusCode).toBe(201);
     expect(existsSync(join(workdir(), "reports"))).toBe(true);
-    expect((await sources()).length).toBe(before);
+    expect((await resources()).length).toBe(before);
   });
 
   it("makes parents", async () => {
@@ -121,11 +131,45 @@ describe("upload a file", () => {
     expect(readFileSync(join(workdir(), "uploads/notes.md"), "utf8")).toBe("# hello");
     const row = await rowFor("uploads/notes.md");
     expect(row).toBeTruthy();
-    expect(row!.origin).toBe("workspace_upload");
-    expect(row!.category).toBe("markdown");
-    expect(row!.mimeType).toBe("text/markdown");
-    expect(row!.size).toBe(7);
+    const file = row!.resource as { sourceType: string; category: string; mimeType: string; size: number };
+    expect(file.sourceType).toBe("upload");
+    expect(file.category).toBe("markdown");
+    expect(file.mimeType).toBe("text/markdown");
+    expect(file.size).toBe(7);
     expect(row!.missing).toBe(false);
+  });
+
+  it("takes a title, and defaults it to the file's own name", async () => {
+    /*
+     * The library's optional field. It lands on the **reference**, which is what the list draws —
+     * and it is optional in the strict sense: with nothing sent, the title is the file's own name,
+     * which is what every caller before this dialog got and what a file the agent wrote still
+     * gets.
+     */
+    const named = await env.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/files/upload`,
+      payload: {
+        dir: "",
+        name: "photo.jpeg",
+        data: Buffer.from("bytes").toString("base64"),
+        title: "假期照片",
+      },
+    });
+    expect(named.statusCode).toBe(201);
+    expect((named.json() as WorkResource).title).toBe("假期照片");
+
+    await upload("", "plain.txt", "x");
+    const plain = await rowFor("plain.txt");
+    expect(plain!.title).toBe("plain.txt");
+
+    // Whitespace is not a value: a field typed into and cleared again is the default.
+    const blank = await env.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/files/upload`,
+      payload: { dir: "", name: "blank.txt", data: Buffer.from("x").toString("base64"), title: "  " },
+    });
+    expect((blank.json() as WorkResource).title).toBe("blank.txt");
   });
 
   it("creates the directory it is aimed at", async () => {
@@ -175,7 +219,7 @@ describe("move", () => {
   it("renames a file and keeps its row", async () => {
     seed("before.txt", "content");
     const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "before.txt")!
-      .sourceId;
+      .fileId;
 
     const res = await move("before.txt", "after.txt");
     expect(res.statusCode).toBe(200);
@@ -183,10 +227,10 @@ describe("move", () => {
     expect(readFileSync(join(workdir(), "after.txt"), "utf8")).toBe("content");
 
     const row = await rowFor("after.txt");
-    // Same id: that is what keeps a message's attachment snapshot, the summary and the parse
-    // state attached to the file that moved.
-    expect(row?.id).toBe(id);
-    expect(row?.name).toBe("after.txt");
+    // Same file id: that is what keeps every reference to it — and the message snapshots that
+    // name it — attached to the file that moved.
+    expect(row?.resourceId).toBe(id);
+    expect(row?.title).toBe("after.txt");
   });
 
   it("moves a file into a directory that is not there yet", async () => {
@@ -242,7 +286,7 @@ describe("delete", () => {
   it("takes the file out of the workspace and keeps the bytes", async () => {
     seed("doomed.txt", "still here");
     const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "doomed.txt")!
-      .sourceId;
+      .fileId;
 
     expect((await remove("doomed.txt")).statusCode).toBe(200);
     expect(existsSync(join(workdir(), "doomed.txt"))).toBe(false);
@@ -254,10 +298,10 @@ describe("delete", () => {
   it("hides the row from every listing", async () => {
     seed("gone.txt");
     const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "gone.txt")!
-      .sourceId;
+      .fileId;
     await remove("gone.txt");
 
-    expect((await sources()).some((s) => s.id === id)).toBe(false);
+    expect((await resources()).some((r) => r.resourceId === id)).toBe(false);
   });
 
   it("records that the bytes went to the trash", async () => {
@@ -270,17 +314,22 @@ describe("delete", () => {
      */
     seed("recorded.txt");
     const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "recorded.txt")!
-      .sourceId;
+      .fileId;
     await remove("recorded.txt");
 
+    /*
+     * The bytes moved and the row says so: `path` now points under the workspace's trash,
+     * namespaced by the file's id so two files deleted from different directories cannot collide.
+     * The deleted marker is what hides it from every reader, and the path is kept rather than
+     * blanked — a restore puts the file back where it was.
+     */
     const row = env.server.db.raw
-      .prepare("SELECT storage, deleted_at, rel_path FROM sources WHERE id = ?")
-      .get(id) as { storage: string; deleted_at: string | null; rel_path: string };
+      .prepare("SELECT path, deleted_at FROM files WHERE id = ?")
+      .get(id) as { path: string; deleted_at: string | null };
 
-    expect(row.storage).toBe("trash");
+    expect(row.path).toContain("/trash/");
+    expect(row.path.endsWith("/recorded.txt")).toBe(true);
     expect(row.deleted_at).toBeTruthy();
-    // The path is kept: a restore puts the file back where it was, not at the trash's own name.
-    expect(row.rel_path).toBe("recorded.txt");
   });
 
   it("frees the path for a new file of the same name", async () => {
@@ -293,7 +342,7 @@ describe("delete", () => {
     expect(readFileSync(join(workdir(), "reuse.txt"), "utf8")).toBe("second");
     const row = await rowFor("reuse.txt");
     expect(row).toBeTruthy();
-    expect(row!.size).toBe(6);
+    expect((row!.resource as { size: number }).size).toBe(6);
   });
 
   it("removes an empty directory without touching rows", async () => {
@@ -312,6 +361,103 @@ describe("delete", () => {
 
   it("refuses when nothing is there", async () => {
     expect((await remove("never-existed.txt")).statusCode).toBe(404);
+  });
+
+  it("leaves the other holder's reference standing, inert", async () => {
+    /*
+     * **The v5 rule, and it inverts what this case used to assert.** A delete used to retire every
+     * reference to the file, because a row pointing at bytes that are gone was thought of as a row
+     * that lies. It does not: a reference resolves *through* its entity, so one whose material went
+     * resolves to nothing and is simply omitted — which is how a reader is told the object is gone,
+     * and the same rule a diagram whose file vanished follows. Keeping the row is what leaves a
+     * conversation's record of having been working from something intact.
+     */
+    seed("shared.txt", "held twice");
+    const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "shared.txt")!
+      .fileId;
+    const db = env.server.db;
+
+    // The workspace's own reference, then a conversation's — the shape two holders make.
+    const other = await newSession(env, workspace.id);
+    for (const owner of [
+      { kind: "workspace" as const, id: workspace.id },
+      { kind: "session" as const, id: other.id },
+    ]) {
+      ensureWorkResource(db, {
+        userId: env.user.id,
+        owner,
+        resourceType: "file",
+        resourceId: id!,
+        title: "shared.txt",
+      });
+    }
+    expect(db.listWorkResourcesForResource(env.user.id, "file", id!)).toHaveLength(2);
+
+    await remove("shared.txt");
+
+    // The sibling's conversation lists nothing, because there is nothing left to resolve to...
+    expect(db.listWorkResourcesFiltered(env.user.id, { sessionId: other.id })).toEqual([]);
+    /*
+     * ...and its row was never touched, which is what the revive shows. A listing cannot assert
+     * this: an inert reference is *omitted by that very rule*, so the only honest way to say "the
+     * row is still there" is to make the material resolvable again and watch it come back.
+     */
+    db.reviveFileForUser(id!, env.user.id);
+    expect(db.listWorkResourcesFiltered(env.user.id, { sessionId: other.id })).toHaveLength(1);
+  });
+
+  it("keeps the conversations' links too, which is the same rule one relation over", async () => {
+    /*
+     * A `@`-link names a work resource rather than an entity, so the entity going leaves the link
+     * pointing at a reference whose material is deleted — dangling, and reported when opened. It
+     * used to be swept, and the sweep was the reason a conversation could not tell "I was about
+     * this once" from "I never was".
+     */
+    seed("referred.txt", "pointed at");
+    const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "referred.txt")!
+      .fileId;
+    const db = env.server.db;
+    const other = await newSession(env, workspace.id);
+    const held = db
+      .listWorkResourcesForResource(env.user.id, "file", id!)
+      .find((row) => row.ownerType === "workspace")!;
+    db.addSessionReference({ id: "sref-1", sessionId: other.id, workResourceId: held.id });
+    expect(db.listSessionReferences(other.id)).toEqual([held.id]);
+
+    await remove("referred.txt");
+
+    expect(db.listSessionReferences(other.id)).toEqual([held.id]);
+    // And the panel says nothing about it, which is the "object is gone" report.
+    expect(db.listWorkResourcesFiltered(env.user.id, { sessionId: other.id })).toEqual([]);
+  });
+});
+
+describe("what a listing says about a file's holders", () => {
+  it("carries the count, so the delete dialog can ask before it destroys", async () => {
+    /*
+     * The client's only source for "somebody else holds this too", and it is a *listing* fact —
+     * one grouped statement on the page rather than a query per row. `1` is the ordinary answer;
+     * the case that matters is `2`, because that is the one the dialog has to speak about.
+     */
+    seed("counted.txt", "one");
+    const id = (await list()).json<DirectoryListing>().entries.find((e) => e.name === "counted.txt")!
+      .fileId;
+    const db = env.server.db;
+
+    const before = (await resources()).find((r) => r.resourceId === id)!;
+    expect(before.referenceCount).toBe(1);
+
+    const other = await newSession(env, workspace.id);
+    ensureWorkResource(db, {
+      userId: env.user.id,
+      owner: { kind: "session", id: other.id },
+      resourceType: "file",
+      resourceId: id!,
+      title: "counted.txt",
+    });
+
+    const after = (await resources()).find((r) => r.resourceId === id)!;
+    expect(after.referenceCount).toBe(2);
   });
 });
 

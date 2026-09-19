@@ -80,8 +80,23 @@ export const EXPLORE_TOOL_NAME = "ila_explore";
  * `workspaces` is the index rather than a convenience: the other four kinds are addressed by
  * **id**, and the grant cannot be enumerated in the prompt when it is "every workspace" — that
  * flag covers workspaces which do not exist yet.
+ *
+ * **`message_search` is a kind of its own rather than a mode of `messages`.** Both concern the
+ * same table, and they are addressed differently in the way that matters: `messages` names one
+ * conversation by id and pages it, while this names a *term* and searches across the workspaces
+ * the grant covers. An `{sessionId?|query?}` pair on one kind would be the selector-shaped field
+ * the flat schema cannot express — a field that only means something together with another, where
+ * one of them chooses what the other addresses — and which `ila_query` was split into kinds to
+ * avoid.
  */
-export const EXPLORE_KINDS = ["workspaces", "sessions", "messages", "files", "file"] as const;
+export const EXPLORE_KINDS = [
+  "workspaces",
+  "sessions",
+  "messages",
+  "message_search",
+  "files",
+  "file",
+] as const;
 export type ExploreKind = (typeof EXPLORE_KINDS)[number];
 
 /**
@@ -98,7 +113,7 @@ export const QUERY_KINDS = [
   "note",
   "diagram",
   "table",
-  "source",
+  "resource",
 ] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
@@ -133,6 +148,17 @@ export const DIAGRAM_TOOL_NAME = "ila_diagram";
  * markdown and the conversation holds the rendering. See `Table`.
  */
 export const TABLE_TOOL_NAME = "ila_table";
+
+/**
+ * The tool the file card is drawn for.
+ *
+ * Shared for the `TABLE_TOOL_NAME` reason — the client switches on it to pick a call out of an
+ * assistant message — and it is the only one of the file tools that has a constant, because it is
+ * the only one whose *call* the client renders. `list_files` and `read_file` are things a model
+ * did on the way to an answer; a write is an artifact the conversation now holds, and the card is
+ * where it is shown.
+ */
+export const WRITE_FILE_TOOL_NAME = "write_file";
 
 /**
  * The plan tools' names. Declared here rather than in the plan section below because the
@@ -982,6 +1008,14 @@ export interface Diagram {
   threadTitle: string | null;
   /** The canonical file name inside the conversation's folder — `auth-flow.mmd`. */
   name: string;
+  /**
+   * The `.mmd` this row drew, as a **file id**.
+   *
+   * The one reference a diagram's file has — it gets no work resource, deliberately, so it is in
+   * the 图表 panel and not in the library. Absent on a row written before the column existed,
+   * which is why `fileMissing` still falls back to a `stat` on the name.
+   */
+  fileId?: string;
   /** The model's one- or two-sentence description of what the diagram is about. */
   summary: string;
   /** The tool call that wrote, or last revised, it; null when none was stamped. */
@@ -1097,28 +1131,43 @@ export interface NoteAnchor {
  * What a note is *about*, when it is not a passage in a message.
  *
  * A note has always been able to point at a message, and the pair it points with — `quote` and
- * `occurrence` — only works for text. A 图 and a 表 have no passage to quote, so they are named
- * instead: the whole object is the target, addressed by the canonical `name` the figure already
- * carries (`session_diagrams.name`, `session_tables.name`), which is the same handle `ila_query`
- * looks them up by and the same one a follow-up reference carries.
+ * `occurrence` — only works for text. A 图, a 表 and a reference have no passage to quote, so
+ * they are named instead: the whole object is the target, addressed by the canonical handle the
+ * object already carries (`session_diagrams.name`, `session_tables.name`, or a
+ * `work_resources.id`), which is the same handle `ila_query` looks them up by and the same one a
+ * follow-up reference carries.
  *
- * A figure is never *partly* annotated. A mermaid diagram is rendered SVG with no addressable
+ * An object is never *partly* annotated. A mermaid diagram is rendered SVG with no addressable
  * text nodes, and a table's cells are markdown the reader can see but the anchor arithmetic
- * counts over rendered geometry — so "the whole figure" is the only unit that means the same
- * thing on both sides of a reload.
+ * counts over rendered geometry — so "the whole object" is the only unit that means the same
+ * thing on both sides of a reload. What a target note carries in `quote` is therefore not an
+ * anchor but the object's own title, recorded so the note reads as something on its own.
  *
  * `text` is the default and what every row written before this existed means. It is a value
  * rather than NULL because NULL would say "we do not know", which is false of those rows: they
  * are text notes, all of them.
  */
-export const NOTE_TARGET_KINDS = ["text", "diagram", "table"] as const;
+export const NOTE_TARGET_KINDS = ["text", "diagram", "table", "resource"] as const;
 
 export type NoteTargetKind = (typeof NOTE_TARGET_KINDS)[number];
 
-/** The kinds a create may *choose*: `text` is what omitting the pair means, not a thing to send. */
-export type NoteFigureKind = Exclude<NoteTargetKind, "text">;
+/**
+ * The kinds a create may *choose*: `text` is what omitting the pair means, not a thing to send.
+ *
+ * Three, and they are not all figures — a note about the material a conversation is working from
+ * anchors to the whole thing by its **reference id**, exactly as it would to a diagram by its
+ * name. What they share is that the object is the target and the reader never annotated part of
+ * it, which is the rule this type exists to state.
+ */
+export type NoteTargetKindChoice = Exclude<NoteTargetKind, "text">;
 
-/** Cap on a figure's name, matching what the figure tables themselves hold. */
+/** Kept for the sites that genuinely mean "a figure", which is a drawing or a table. */
+export type NoteFigureKind = Exclude<NoteTargetKind, "text" | "resource">;
+
+/**
+ * Cap on a target's handle. A figure's is its canonical name; a resource's is a uuid, which is
+ * shorter — the same cap covers both because it is a bound, not a format.
+ */
 export const NOTE_TARGET_REF_MAX = 200;
 
 /**
@@ -1147,7 +1196,13 @@ export interface Note {
   /** The annotated message; null for a note added from the list with no annotation. */
   messageId: string | null;
   type: NoteType;
-  /** The annotated text, verbatim. Empty when there is no annotation. */
+  /**
+   * The annotated text, verbatim — or the target's own title, for a note about an object.
+   *
+   * One column for two things, which is honest rather than tidy: a note's 标注原文 is
+   * whatever it is *about*, and the only difference between a passage and a diagram is
+   * whether the reader wrote it or the app looked it up. Empty when there is neither.
+   */
   quote: string;
   /** Which occurrence of `quote` this was, counted over the message's visible text. */
   occurrence: number;
@@ -1155,12 +1210,14 @@ export interface Note {
   /** What this note is about. `text` for every note with a quote or nothing at all. */
   targetKind: NoteTargetKind;
   /**
-   * The figure's canonical name — `auth-flow.mmd` for a diagram, a bare slug for a table.
+   * The target's handle — a figure's canonical name, or a resource's reference id.
    *
-   * Null for a text note, and that NULL is honest rather than a sentinel: there is no figure, so
-   * there is no name. The client shows it as the chip's label and the follow-up passes it on, so
-   * it is the *server's* name that travels — the one `diagramFileName`/`tableName` produced —
-   * rather than the spelling the client happened to open the dialog with.
+   * `auth-flow.mmd` for a diagram, a bare slug for a table, and a uuid for the material a
+   * conversation works from. Null for a text note, and that NULL is honest rather than a
+   * sentinel: there is no target, so there is no handle. The client shows a figure's as the
+   * chip's label and the follow-up passes it on, so it is the *server's* name that travels —
+   * the one `diagramFileName`/`tableName` produced — rather than the spelling the client
+   * happened to open the dialog with. A resource's is already canonical, being an id.
    */
   targetRef: string | null;
   /**
@@ -1192,61 +1249,6 @@ export interface GetSessionNotesResponse {
   notes: Note[];
 }
 
-/* ------------------------------ notes → the library ------------------------------ */
-
-/**
- * What the export run for one conversation is doing, or last did.
- *
- * Three settled outcomes rather than two, for the reason the insight pass gives: "it looked and
- * there were no notes" and "it produced nothing usable" ask the reader for opposite things, and
- * a single `failed` would report a conversation with nothing in it as a broken button.
- *
- * `running` is written *before* the work starts, and that write is the lock — see
- * `runNoteSync`. A row left `running` by a process that died is reported as `stuck` rather than
- * quietly settled, because only the clock can tell "still working" from "the owner is gone".
- */
-export type NoteSyncStatus = "running" | "ok" | "empty" | "failed";
-
-/** One conversation's export state. */
-export interface SessionNoteSync {
-  status: NoteSyncStatus;
-  startedAt: string;
-  finishedAt: string | null;
-  /** Source rows created, rewritten, and soft-deleted by the run. */
-  added: number;
-  updated: number;
-  removed: number;
-  /**
-   * The run's failure sentence, in the server's own words.
-   *
-   * Deliberately not translated and not code-keyed: it is whatever the provider or the parser
-   * said, which has no code to key on — the same rule the raw SSE `error` body follows.
-   */
-  error: string | null;
-  /**
-   * A `running` run whose owner is gone. Derived on read from `startedAt`, never stored: only
-   * the clock can answer it, and a stored flag would freeze at whatever the answer was the
-   * first time somebody looked.
-   */
-  stuck: boolean;
-}
-
-/** `GET /api/sessions/:id/notes/sync`. `null` when this conversation was never exported. */
-export interface GetNoteSyncResponse {
-  sync: SessionNoteSync | null;
-}
-
-/** `POST /api/sessions/:id/notes/sync`. */
-export interface StartNoteSyncInput {
-  /**
-   * Start even though one is running.
-   *
-   * The recovery for a run whose process died before the timeout could call it stuck, and for
-   * a reader who does not want to wait out the timeout to be sure. Never coerced from a string:
-   * `"false"` is truthy, and a forced sync is a real cost.
-   */
-  force?: boolean;
-}
 
 /* ----------------------------------- insights ----------------------------------- */
 
@@ -1362,8 +1364,7 @@ export interface UpdateInsightInput {
  * The distinction the requirement asks for, and the reason a ledger exists rather than a sum over
  * `messages`: only `chat` produces a message. The other five are calls the server makes on its
  * own, and they cost real tokens that no transcript records — an auto-title, a post-turn
- * classification, a button-triggered reflection, an image description, and the summary a note
- * export writes.
+ * classification, a button-triggered reflection and an image description.
  *
  * Ids rather than labels: the client renders them through the catalog, so a new purpose is an
  * entry here and a key in two catalogs — the same rule `ApiErrorCode` follows.
@@ -1374,7 +1375,6 @@ export const USAGE_PURPOSES = [
   "thread",
   "insight",
   "summary.media",
-  "summary.notes",
 ] as const;
 
 export type UsagePurpose = (typeof USAGE_PURPOSES)[number];
@@ -1584,87 +1584,68 @@ export const PARSE_ERROR_CODES = [
  */
 export type ParseErrorCode = (typeof PARSE_ERROR_CODES)[number];
 
-/**
- * What may become a source, and the three questions a source answers about itself.
- *
- * A source used to be one thing — an uploaded file, owned by the account, stored once under
- * `sources/raw/`. It is now the single record for *every* piece of material an account has:
- * an upload, a page the agent fetched, a file the agent wrote into a workspace, and a file it
- * wrote into a conversation's own directory. Three fields, because the questions are genuinely
- * different and collapsing any two of them loses something:
- *
- * - **`origin`** — *how did this come to exist.* Fixed for the life of the row; it is
- *   provenance, and the user's own list (`会话附件 / 工作区上传 / 助理生成`).
- * - **`storage`** — *which root are the bytes under.* This is the one that *changes*: a file
- *   the user deletes from the file manager moves to `trash` rather than being erased, and an
- *   object store later would be a fifth value. It is also what the resolver switches on.
- * - **`category`** — *what is it*, coarsely, for the browser's filters and for deciding
- *   whether anything needs parsing at all.
- *
- * Declared as runtime lists wherever a catalog or a filter reads them, for the same reason
- * `PARSE_ERROR_CODES` is: a type alone is erased by the time a test runs.
- */
-export const SOURCE_ORIGINS = [
-  "session_attachment",
-  "workspace_upload",
-  "agent_workspace",
-  "agent_session",
-  "web",
-  /**
-   * A learner's own note, exported into the library by the conversation's 同步到资料库 action.
-   *
-   * Not one of the two `agent_*` values, and not `session_attachment` either: every one of
-   * those names *who wrote* the material, and the browser prints that beside the row. This
-   * material is the learner's own words — filing it under the assistant's name would attribute
-   * a person's notes to a model, which is the same lie the `discovered` note below guards.
-   */
-  "note_export",
-  /**
-   * A file that was in a sandbox with no row to account for it — dropped in from the Finder, a
-   * restored backup, a `git clone`, or a file from before this registry existed.
-   *
-   * Its own value rather than a guess between the two `agent_*` origins, because those two
-   * mean "the assistant wrote this" and the browser prints them as such. A file nobody's tool
-   * wrote, labelled with the assistant's name, is a lie the user has no way to catch.
-   */
-  "discovered",
-] as const;
-export type SourceOrigin = (typeof SOURCE_ORIGINS)[number];
 
-export function isSourceOrigin(value: unknown): value is SourceOrigin {
-  return typeof value === "string" && (SOURCE_ORIGINS as readonly string[]).includes(value);
+/**
+ * Which sandbox a file write lands in.
+ *
+ * A workspace's `workdir/` is shared by every conversation in that workspace; a session's own
+ * directory is not. The default is `session` — a conversation's own material is the common
+ * case, and a shared directory every conversation writes into turns into a junk drawer without
+ * deliberate organisation. See `docs/resources.md`.
+ */
+export const FILE_LOCATIONS = ["workspace", "session"] as const;
+export type FileLocation = (typeof FILE_LOCATIONS)[number];
+
+export function isFileLocation(value: unknown): value is FileLocation {
+  return value === "workspace" || value === "session";
+}
+
+/* ------------------------------- the v4 model -------------------------------- */
+
+/*
+ * An **entity** and a **reference** to it.
+ *
+ * A `StoredFile` or a `WebPage` is the material itself — bytes on disk or a page at a URL, owned
+ * by the account. A `WorkResource` is one workspace's or one conversation's *reference* to such
+ * an entity, and it is the only thing the rest of the app addresses: the library browses
+ * references, `@` picks a reference, `read_document` takes a reference's id.
+ *
+ * The split exists because a single row could not be both. The v3 source had exactly one owner
+ * and resolved its own path *through* that owner, so one file used by two conversations was
+ * unrepresentable. The cost is stated rather than hidden: a file with **no** reference at all is
+ * an ordinary state (a diagram's `.mmd`, a document's extracted text), and the same file
+ * referenced twice is parsed twice.
+ *
+ * Every list here is declared at runtime rather than as a bare type, for the reason
+ * `PARSE_ERROR_CODES` gives: the web catalogs and the filters iterate them, and a type alone is
+ * erased by the time a test runs.
+ */
+
+/** How a file came to exist. `discovered` is the one nobody's tool wrote — see schema.ts. */
+export const FILE_SOURCE_TYPES = ["attachment", "upload", "agent_create", "discovered"] as const;
+export type FileSourceType = (typeof FILE_SOURCE_TYPES)[number];
+
+export function isFileSourceType(value: unknown): value is FileSourceType {
+  return typeof value === "string" && (FILE_SOURCE_TYPES as readonly string[]).includes(value);
+}
+
+/** How a page came to exist: the user supplied the URL, or a tool kept it. */
+export const WEB_PAGE_SOURCE_TYPES = ["upload", "agent_fetch"] as const;
+export type WebPageSourceType = (typeof WEB_PAGE_SOURCE_TYPES)[number];
+
+export function isWebPageSourceType(value: unknown): value is WebPageSourceType {
+  return typeof value === "string" && (WEB_PAGE_SOURCE_TYPES as readonly string[]).includes(value);
 }
 
 /**
- * Where a source's bytes are. Not the same question as `origin`.
+ * Coarse content type: what the browser filters on, and what decides whether a parse is needed.
  *
- * `trash` is where a file goes when the user deletes it from the file manager: the bytes stay
- * (soft delete is the rule for on-disk bytes too) and the row keeps its identity, but the file
- * is gone from the sandbox the agent and the tree see. `upload` and `web` have no stored path
- * at all — their filename is `<id>.<ext>`, derived from the id and the MIME type.
+ * There is no `page` value, unlike `SOURCE_CATEGORIES`. A page is a `WebPage`, which is a
+ * `resourceType` — and that is where the distinction belonged all along: v3 had to set
+ * `category: "page"` by hand, because a category is derived from a file's *name* and a page's
+ * name cannot say what it is.
  */
-export const SOURCE_STORAGES = ["upload", "web", "workspace", "session", "trash"] as const;
-export type SourceStorage = (typeof SOURCE_STORAGES)[number];
-
-export function isSourceStorage(value: unknown): value is SourceStorage {
-  return typeof value === "string" && (SOURCE_STORAGES as readonly string[]).includes(value);
-}
-
-/**
- * Who holds a source.
- *
- * A pair rather than two loose arguments because the two halves are never meaningful apart:
- * every read of a source by its owner names both, and a helper that took only an id would be
- * the bug where one account's file answers another's request.
- */
-export interface SourceOwner {
-  kind: "session" | "workspace";
-  id: string;
-}
-
-/** Coarse content type: what the browser filters on, and what decides whether a parse is needed. */
-export const SOURCE_CATEGORIES = [
-  "page",
+export const FILE_CATEGORIES = [
   "text",
   "code",
   "markdown",
@@ -1673,25 +1654,138 @@ export const SOURCE_CATEGORIES = [
   "document",
   "other",
 ] as const;
-export type SourceCategory = (typeof SOURCE_CATEGORIES)[number];
+export type FileCategory = (typeof FILE_CATEGORIES)[number];
 
-export function isSourceCategory(value: unknown): value is SourceCategory {
-  return typeof value === "string" && (SOURCE_CATEGORIES as readonly string[]).includes(value);
+export function isFileCategory(value: unknown): value is FileCategory {
+  return typeof value === "string" && (FILE_CATEGORIES as readonly string[]).includes(value);
+}
+
+/** What a reference points at. The polymorphic half of `WorkResource.resourceId`. */
+export const WORK_RESOURCE_TYPES = ["file", "web_page"] as const;
+export type WorkResourceType = (typeof WORK_RESOURCE_TYPES)[number];
+
+export function isWorkResourceType(value: unknown): value is WorkResourceType {
+  return typeof value === "string" && (WORK_RESOURCE_TYPES as readonly string[]).includes(value);
+}
+
+/** Which level a reference belongs to. The same two levels a source's owner had. */
+export const WORK_RESOURCE_OWNER_TYPES = ["workspace", "session"] as const;
+export type WorkResourceOwnerType = (typeof WORK_RESOURCE_OWNER_TYPES)[number];
+
+export function isWorkResourceOwnerType(value: unknown): value is WorkResourceOwnerType {
+  return (
+    typeof value === "string" && (WORK_RESOURCE_OWNER_TYPES as readonly string[]).includes(value)
+  );
+}
+
+/** The workspace or conversation a reference belongs to. */
+export interface ResourceOwner {
+  kind: WorkResourceOwnerType;
+  id: string;
 }
 
 /**
- * Which sandbox a file write lands in.
+ * A file the account stores: the bytes, and where they are.
  *
- * A workspace's `workdir/` is shared by every conversation in that workspace; a session's own
- * directory is not. The default is `session` — a conversation's own material is the common
- * case, and a shared directory every conversation writes into turns into a junk drawer without
- * deliberate organisation. See `docs/sources.md`.
+ * `path` is relative to the **account's own root** (`<dataRoot>/users/<slug>/`), never absolute —
+ * a copied data root must still resolve, which was the point of v3's `storage`/`relPath` split
+ * too. What changed is that one field replaces the pair: v3 had to ask the owner where the bytes
+ * were, and a file with two owners has no single owner to ask.
+ *
+ * Named `StoredFile` rather than `File` because the web app uses the DOM `File` — the composer
+ * hands `fileToBase64(new File(...))` a real one — and a type import that shadowed it would break
+ * the constructor in whichever module imported this.
  */
-export const FILE_LOCATIONS = ["workspace", "session"] as const;
-export type FileLocation = (typeof FILE_LOCATIONS)[number];
+export interface StoredFile {
+  id: string;
+  sourceType: FileSourceType;
+  title: string;
+  path: string;
+  mimeType: string;
+  category: FileCategory;
+  size: number;
+  /** The model's one-liner, where something has produced one. */
+  summary?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
 
-export function isFileLocation(value: unknown): value is FileLocation {
-  return value === "workspace" || value === "session";
+/** A page the account holds. Its bytes (raw HTML, extracted text) are `StoredFile` rows. */
+export interface WebPage {
+  id: string;
+  sourceType: WebPageSourceType;
+  url: string;
+  title: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/**
+ * A workspace's or a conversation's reference to one piece of material.
+ *
+ * The parse is recorded **here** rather than on the entity, so `parsedFileId` is the extracted
+ * text when there is one and the parse columns describe *this reference's* run. That is what the
+ * requirement asks for, and the consequence is stated in `schema.ts`: two references to one file
+ * are parsed twice.
+ */
+export interface WorkResource {
+  id: string;
+  resourceType: WorkResourceType;
+  resourceId: string;
+  ownerType: WorkResourceOwnerType;
+  ownerId: string;
+  /** What this owner calls it. Defaulted from the entity, and per-owner thereafter. */
+  title: string;
+  summary?: string;
+  parsedFileId?: string;
+  parseStatus: ParseStatus;
+  parseError?: string;
+  parseErrorCode?: ParseErrorCode;
+  parserId?: string;
+  parsedChars?: number;
+  pageCount?: number;
+  parseUpdatedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+  /** The entity itself, carried inline so a list needs one request rather than one per row. */
+  resource: StoredFile | WebPage;
+  /**
+   * The bytes are gone, or the entity row is. Computed on read by a `stat`, never stored — a
+   * stored flag would freeze at whatever the answer was the first time somebody looked, the same
+   * argument `SessionNoteSync.stuck` makes.
+   */
+  missing?: boolean;
+  /** The owner's display name, for the library's tree. Absent when the owner is gone. */
+  ownerName?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  /**
+   * How many places this entity is reachable from — **this row included**.
+   *
+   * Both relations, and that is what the number is for. A holding row is one place; a
+   * conversation that merely *points at* the material is another, and it loses the reading too
+   * when the bytes go — the reference stays and starts reporting the object as gone. The library
+   * asks one question with it: destroying the material behind this row affects every holder, so a
+   * delete that would take somebody else's material with it has to say so before it happens. `1`
+   * is "nobody else has this", which is the common case.
+   *
+   * Optional rather than required, because it is a *listing* fact and not a property of a
+   * reference: a route that answers with one row (or a build that predates the field) leaves it
+   * absent, and absent reads as "unknown" — which a reader must not render as "nobody else".
+   */
+  referenceCount?: number;
+}
+
+/** `GET /api/resources`. The filters the library draws. */
+export interface WorkResourceFilterQuery {
+  name?: string;
+  resourceType?: WorkResourceType;
+  category?: FileCategory;
+  ownerType?: WorkResourceOwnerType;
+  workspaceId?: string;
+  sessionId?: string;
+  mime?: string;
 }
 
 /**
@@ -1710,8 +1804,8 @@ export const API_ERROR_CODES = [
   // Sources rather than attachments: the entity is the account's file, and a message only
   // holds a snapshot of one. `INVALID_ATTACHMENT_PATH` went with the old reader — the path is
   // a validated column now, so there is nothing for a client to get wrong about it.
-  "SOURCE_NOT_FOUND",
-  "SOURCE_STORE_FAILED",
+  "RESOURCE_NOT_FOUND",
+  "FILE_STORE_FAILED",
   "DATA_REQUIRED",
   "INVALID_BASE64",
   "EMPTY_FILE",
@@ -1780,7 +1874,6 @@ export const API_ERROR_CODES = [
   "REFERENCE_NOT_FOUND",
   // A note export is already running for this conversation. One at a time, so two presses
   // cannot interleave their writes into the same files or race each other's summary.
-  "SYNC_IN_PROGRESS",
   // A history version was asked for (…/plan/versions/:version) that never existed. No plan
   // at all is a 200 `{ plan: null }`, not this — that is the ordinary empty state.
   "PLAN_VERSION_NOT_FOUND",
@@ -1926,7 +2019,17 @@ export interface ApiErrorBody {
  * Bytes live on the server, never in this object.
  */
 export interface Attachment {
+  /** The **`StoredFile`** id. Where the bytes are, and what an image is fetched by. */
   id: string;
+  /**
+   * The **`WorkResource`** id — the reference this file is held through, and what
+   * `read_document` takes.
+   *
+   * Two ids for one row, deliberately, and the split is the v4 model in miniature: `id` locates
+   * the bytes, `resourceId` names the thing the model may read and whose parse state is current.
+   * Without it a chip would show a parse state it re-read through a lookup it cannot make.
+   */
+  resourceId: string;
   name: string;
   mimeType: string;
   size: number;
@@ -1946,86 +2049,22 @@ export interface Attachment {
   parseErrorCode?: ParseErrorCode;
   /** Which backend produced the text: `"local"`, or a configured parser's record id. */
   parserId?: string;
+  /**
+   * The **file** holding the extracted text, when there is one.
+   *
+   * A third id, and it is not redundant: the text is a file of its own (which is what lets one
+   * page reference share it, and what keeps a parse result out of the library), so a reader that
+   * wants the text has to be told where it is. Carried on the snapshot rather than looked up so
+   * that `attachments.ts` stays database-free, which is what lets `buildHistoryMessages` rebuild
+   * a replayed turn with no query at all.
+   */
+  parsedFileId?: string;
   /** Length of the extracted text in characters. */
   parsedChars?: number;
   /** Page count, when the parser could determine one (PDF and most cloud parsers). */
   pageCount?: number;
 }
 
-/**
- * One piece of material the account holds, as the *server* knows it.
- *
- * The entity behind `Attachment.id`, and — since sources became the one registry — behind
- * every file the agent writes and every page it fetches. Three things make it different from
- * the message snapshot above, and all three are why it exists:
- *
- * - **It is owned by a workspace or a conversation, and so by the account**, not by the
- *   message that happened to use it. The same PDF uploaded in two conversations is one source
- *   with two references, so its bytes are stored once and parsed once. `ownerKind`/`ownerId`
- *   say who holds it; a workspace picking up a source uploaded in one of its conversations is
- *   a *link*, not a second owner.
- * - **Its fields are current.** `parseStatus` is whatever the last parse did, not what it was
- *   when some message was sent — which is what lets a reparse be reflected everywhere at once
- *   instead of only in conversations that start afterwards.
- * - **It says where it came from and what it is.** `origin`, `storage` and `category` are the
- *   three questions the old upload-only row could answer only by implication.
- *
- * `name` is the first name the file was uploaded under. With dedupe that means a second
- * upload of the same bytes shows the first name, which is why the message snapshot keeps its
- * own: the name the user typed belongs to the message, not to the bytes.
- */
-export interface Source extends Attachment {
-  createdAt: string;
-  /** When the row last changed — a rename, a rewrite, a new summary. */
-  updatedAt?: string;
-  /** Who holds it. `ownerId` is that session's or workspace's id. */
-  ownerKind: "session" | "workspace";
-  ownerId: string;
-  /** How it came to exist. Fixed for the life of the row. */
-  origin: SourceOrigin;
-  /** Which root the bytes are under. The one field here that changes. */
-  storage: SourceStorage;
-  /** The coarse content type — what the browser filters on. */
-  category: SourceCategory;
-  /**
-   * Where it sits inside its root. Absent for `upload` and `web`, whose filename is
-   * `<id>.<ext>` and therefore derived from the id and the MIME type rather than stored.
-   */
-  relPath?: string;
-  /** The page this source is, when it is one. */
-  url?: string;
-  /**
-   * What to call the thing that holds it: a workspace's name, or a conversation's title.
-   *
-   * Resolved server-side because a *conversation* owner is not something the client can name —
-   * it holds the workspaces but not the conversations in them, and a list spanning the account
-   * would need a request per workspace to label one. Absent when the owner is gone, which is
-   * the same "reached through" rule the owner columns themselves follow.
-   */
-  ownerName?: string;
-  /**
-   * The workspace this source ultimately belongs to, whether it is owned by one or held by a
-   * conversation in it. The browser groups by this, and a session-owned upload would otherwise
-   * be grouped under nothing.
-   */
-  workspaceId?: string;
-  workspaceName?: string;
-  /**
-   * The model's one-liner about this source, when something has produced one — a page's
-   * abstract, an image's description. Distinct from `parsedChars`, which counts extracted
-   * text: a summary is the *only* text an image ever has.
-   */
-  summary?: string;
-  /**
-   * The row is live and the bytes are gone — deleted outside the app, or by the agent's own
-   * `delete_file`, which is a real filesystem operation rather than an application deletion.
-   *
-   * **Computed on read, never stored.** A stored flag would need somebody to clear it on the
-   * next write, and the one writer that can create the drift is the file tool — which must
-   * not become a database write. Same rule as `Diagram.fileMissing`.
-   */
-  missing?: boolean;
-}
 
 /**
  * Token accounting for one assistant turn.
@@ -2102,19 +2141,11 @@ export interface Message {
   toolCalls?: ToolCall[];
   attachments?: Attachment[];
   /**
-   * The sources this turn *referenced*, as snapshots taken when it was sent.
-   *
-   * The same rule as `attachments`, and the same reason for a snapshot rather than a live
-   * lookup: a message describes the turn that was had. A source referenced here and deleted
-   * afterwards still reads as referenced, and the chip keeps the name the composer showed.
-   */
-  sources?: Attachment[];
-  /**
    * What the user pointed at when they sent this turn — the 追问 chips, as they were shown.
    *
-   * A snapshot on the same rule `sources` follows, and for the same reason: a message describes
-   * the turn that was had, so a diagram referenced here and revised afterwards still reads as
-   * referenced, and the chip keeps the label the composer showed.
+   * A snapshot rather than a live lookup, and the reason is the one `attachments` gives: a message
+   * describes the turn that was *had*, so a diagram referenced here and revised afterwards still
+   * reads as referenced, and the chip keeps the label the composer showed.
    *
    * **It is replayed to the model, and that is load-bearing rather than tidy.** `/regenerate`
    * sends `userMessage: null` and rebuilds the turn from history; if a reference lived only in
@@ -2122,6 +2153,13 @@ export interface Message {
    * question with no idea what it was about. Replaying costs a re-resolution per stored reference
    * per turn — the same trade `sourcePaths` already makes for attachments — and what comes back
    * is current: a figure revised since is read as it is now, not as it was.
+   *
+   * **This is the whole of what a message records about being pointed at.** There used to be a
+   * `sources?: Attachment[]` beside it, from the v3 `messages.sources` column; the v4 split
+   * retired the column and the ref replaced it, and the field outlived both — declared here,
+   * written by nothing, and read only by a dead branch of `ila_explore` that told the model
+   * `sources` named files by id. A field nothing can produce is worse than an absent one: it
+   * type-checks every reader that asks for it.
    */
   refs?: TurnReference[];
   usage?: MessageUsage;
@@ -2329,6 +2367,30 @@ export interface AdminUser {
  * present itself as signed out — the session is a token now, so clearing cookies does nothing.
  */
 export const AUTH_STORAGE_KEY = "ila-auth";
+
+/**
+ * Where the client keeps the installation id it last talked to.
+ *
+ * Beside `AUTH_STORAGE_KEY` rather than in the web app, and for that key's reason: both name a
+ * piece of `localStorage` that the *e2e suite* also has to be able to clear, and a key spelled
+ * twice is a key that drifts. See `HealthResponse`.
+ */
+export const INSTANCE_STORAGE_KEY = "ila-instance";
+
+/**
+ * `GET /api/health` — the one route that answers without a session.
+ *
+ * `instance` is the installation's own id, and it is here rather than on `/api/config` because
+ * this is the **first** thing a client can ask: the question it answers — "is the database behind
+ * this origin still the one my stored token belongs to?" — has to be settled *before* the token is
+ * used, or the answer arrives as a 401 that looks exactly like an expired session. See
+ * `SETTING_INSTANCE_ID` on the server and `apps/web/src/composables/instance.ts` on the client.
+ */
+export interface HealthResponse {
+  ok: boolean;
+  /** Absent only in a reply from a build older than this field. */
+  instance?: string;
+}
 
 /** The shortest password the server will accept from a person choosing one. */
 export const PASSWORD_MIN_LENGTH = 8;
@@ -2619,15 +2681,15 @@ export interface FileEntry {
   size: number | null;
   modifiedAt: string | null;
   /**
-   * The source row this file *is* — its id, which is what a rename or a delete addresses it by.
+   * The **file** row this entry *is* — its id, which is what a rename or a delete addresses it by.
    *
-   * Present on files and absent on directories, because a directory is not a source. It is
-   * filled in by the listing itself: the route reconciles the rows for what it found before
-   * answering, so an id is always there — including for a file that appeared with no writer,
-   * which is a file the browser can still rename. A listing that returned entries without ids
-   * would make the file manager possible only for files the agent happened to have written.
+   * Present on files and absent on directories, because a directory is not a file. It is filled
+   * in by the listing itself: the route reconciles the rows for what it found before answering,
+   * so an id is always there — including for a file that appeared with no writer, which is a file
+   * the browser can still rename. A listing that returned entries without ids would make the file
+   * manager possible only for files the agent happened to have written.
    */
-  sourceId?: string;
+  fileId?: string;
 }
 
 /** One directory level. Children are fetched per level, so this is always a single layer. */
@@ -2683,9 +2745,39 @@ export type FileContentKind = (typeof FILE_CONTENT_KINDS)[number];
  * the UI states outright rather than letting a file look like it ends there. It is always
  * false for `binary`, where nothing was truncated because nothing was read.
  */
+/**
+ * The reference a previewed file is held by, as much of it as a preview needs.
+ *
+ * A whole `WorkResource` would be a second copy of the entity and the parse state in a reply that
+ * is about the *bytes*; these three fields are the ones a note's 标注原文 and its chip are built
+ * from, and nothing else on that record has a reader here.
+ */
+export interface PreviewReference {
+  id: string;
+  /** The reference's own title, which is what a chip shows. */
+  title: string;
+  summary?: string;
+}
+
 export interface FileContent {
   path: string;
+  /**
+   * What to call this file — the owner's **title** when there is one, its own name otherwise.
+   *
+   * Display only. Anything that has to *decide* something about the bytes goes by `fileName`
+   * instead, because a title is prose: 季度对比 carries no format at all.
+   */
   name: string;
+  /**
+   * The file's **own** name: the last segment of `path`, extension included.
+   *
+   * The half that decides things, and it is a field of its own because conflating the two is a
+   * bug this repo already had: the preview asked the *title* for an extension, so a referenced
+   * `.xlsx` the user had titled opened as "this format cannot be previewed". The viewer picks its
+   * plugin by name, the highlighter picks its grammar by name, and the browser saves a download
+   * under it — none of which a title can answer.
+   */
+  fileName: string;
   size: number;
   modifiedAt: string;
   kind: FileContentKind;
@@ -2697,6 +2789,24 @@ export interface FileContent {
    * and a `.mmd` nobody drew here — so the client treats "not present" as "no summary".
    */
   summary?: string;
+  /**
+   * The **reference** these bytes are held by, when this file has one.
+   *
+   * A note about an object is anchored to a reference id, and a file reached by *path* — from the
+   * file tree, or from the card a `write_file` call draws — has no id to anchor to; the file's own
+   * id is a different thing and the notes API refuses it. So the route that already resolves the
+   * path to a file row resolves the reference in the same breath and puts it here, which is what
+   * lets 标注/笔记 be offered on a preview at all.
+   *
+   * The title and summary travel with it because the *note* needs them: an object note's 标注原文
+   * holds the object's own words, and a chip reading a raw uuid would say nothing about what the
+   * note is about.
+   *
+   * Absent when the file has no live reference — a path the reconciler has not walked yet, or one
+   * whose references were all deleted. The control is then simply not drawn, the same answer
+   * `targetMissing` gives from the other side.
+   */
+  reference?: PreviewReference;
   /**
    * The page these bytes came from, set only on a `page` source's preview.
    *
@@ -2905,8 +3015,8 @@ export interface Copilot {
 }
 
 /**
- * Where a conversation's title came from. `auto` means a model wrote it after the first
- * turn and may rewrite it; `user` means a person typed it and it must never be touched.
+ * Where a conversation's title came from. `auto` means a model wrote it after a turn and may
+ * rewrite it; `user` means a person typed it and it must never be touched.
  */
 export type TitleSource = "auto" | "user";
 
@@ -2917,14 +3027,18 @@ export type TitleSource = "auto" | "user";
  * exists: that one says *who owns* the title, and this says **how the automatic pass fared**.
  *
  * - `"model"` — the model wrote the title. Nothing left to do.
+ * - `"unnamed"` — the titler looked and declined: the conversation has nothing to name yet, so it
+ *   keeps its placeholder and the **next turn asks again**. A different fact from absent, which is
+ *   "never asked", and the difference is load-bearing on the leave path: a reader leaving right
+ *   after a turn that asked and found nothing would otherwise pay for the same question twice.
  * - `"fallback"` — the call failed, and what is showing is the user's own clipped words. This is
- *   the state the retry exists for, and it used to be indistinguishable from the one above: both
+ *   the state the retry exists for, and it used to be indistinguishable from `"model"`: both
  *   leave `titleSource: "auto"` and a non-empty title, so nothing could tell a titled conversation
  *   from one that had merely failed to be.
  * - absent — never attempted, because the turn produced no text to name. The title is still the
  *   create-time placeholder, which is equally worth another try.
  */
-export type TitleState = "model" | "fallback";
+export type TitleState = "model" | "unnamed" | "fallback";
 
 /**
  * What `POST /api/sessions/:id/leave` answers.
@@ -3262,19 +3376,32 @@ export interface CreateNoteInput {
   messageId?: string | null;
   /** Defaults to `annotation` — the quick action sends nothing but the selection. */
   type?: NoteType;
+  /**
+   * The annotated text — or, for a target note, the object's own title or summary as recorded.
+   *
+   * The second reading is the reason a target may carry a quote at all: an object has something
+   * to put in 标注原文 and no passage to put there, so what travels is its title. It is a
+   * *snapshot*, kept so a note still reads as something after its target is gone, while the
+   * panel prefers a live lookup whenever the target is still there.
+   */
   quote?: string;
   occurrence?: number;
   content?: string;
   /**
-   * What the note is about, when it is a figure rather than a passage.
+   * What the note is about, when it is an object rather than a passage.
    *
    * The pair travels together, the rule `quote`/`occurrence` already follows, and they are
-   * mutually exclusive with the message anchor: a note about a 图 has no passage in it. Omitting
-   * both halves is a `text` note, which is why `text` is not among the values here — it is what
-   * saying nothing means, not a thing to send.
+   * mutually exclusive with the *message* anchor: a note about a 图 has no passage in it. A
+   * bare `quote` beside them is not an anchor — see `quote` above — which is why only
+   * `messageId` and `occurrence` are refused alongside a target. Omitting both halves is a
+   * `text` note, which is why `text` is not among the values here — it is what saying nothing
+   * means, not a thing to send.
    */
-  targetKind?: NoteFigureKind;
-  /** The figure's name. Normalised server-side, so any spelling of it resolves. */
+  targetKind?: NoteTargetKindChoice;
+  /**
+   * The target's handle: a figure's **name**, normalised server-side so any spelling resolves,
+   * or a resource's **reference id**, which is an id and resolves as one.
+   */
   targetRef?: string;
 }
 
@@ -3296,6 +3423,29 @@ export interface UploadAttachmentInput {
   mimeType: string;
   /** Base64-encoded file bytes (no data-URL prefix). */
   data: string;
+}
+
+/**
+ * The library's two writes: add a file, add a page.
+ *
+ * `title` is optional on both, and it is the **reference's** rather than the entity's — what this
+ * workspace calls the material. Absent is the ordinary case: a file's title defaults to its own
+ * name and a page's to the title the fetch found (or the URL when the page has none).
+ */
+export interface UploadWorkspaceFileInput {
+  /** The directory inside the workspace's sandbox. Empty means its root. */
+  dir: string;
+  name: string;
+  mimeType?: string;
+  /** Base64-encoded file bytes (no data-URL prefix). */
+  data: string;
+  title?: string;
+}
+
+export interface AddResourcePageInput {
+  url: string;
+  workspaceId: string;
+  title?: string;
 }
 
 export interface ProviderModelInput {
@@ -3380,30 +3530,16 @@ export interface UpdateUploadSettingsInput {
  * the snapshot model makes meaningless — re-pointing the link would move the label and leave
  * the persona behind. A conversation's behaviour is changed through its own `systemPrompt`.
  */
-/**
- * A source the user referenced, named by them, rather than one sent with the turn.
- *
- * The `@` in the composer, and the difference from `attachments` is *where it came from*: an
- * attachment is an upload made for this turn, and this is something already in the library — a
- * file in this workspace, in another one, in a past conversation. Both reach the model as
- * material to read; only the chip's provenance differs, which is why the two travel separately
- * rather than being merged into one array.
- *
- * `id` plus the name the composer showed: the same split `attachments` makes, and for the same
- * reason — the name is the client's, everything else about the source is re-read server-side.
- */
-export interface SourceReference {
-  id: string;
-  name: string;
-}
 
 /**
  * What a reference points at.
  *
- * Five, and each is addressed the way *that* thing can be addressed rather than by a uniform id:
+ * Six, and each is addressed the way *that* thing can be addressed rather than by a uniform id:
  * a message and a note and a quiz question by their ids, a figure by its canonical name (which is
- * what `ila_query` takes and what the panel labels the row with). The asymmetry is the honest
- * shape — a diagram has no id the model can use, and a note's name is not unique.
+ * what `ila_query` takes and what the panel labels the row with), and a **resource by its
+ * reference id** — because the reference is what carries the parse state and what `read_document`
+ * takes. The asymmetry is the honest shape: a diagram has no id the model can use, and a note's
+ * name is not unique.
  *
  * `quiz` is the one that arrived last, migrating an older gesture onto this mechanism: the quiz
  * widget used to compose a sentence naming the question and send that as the user's own message,
@@ -3411,7 +3547,14 @@ export interface SourceReference {
  * four are — so the chip, the block and the bubble are one implementation rather than five, and so
  * the question reaches the agent as a question id rather than as prose it has to parse.
  */
-export const TURN_REFERENCE_KINDS = ["message", "diagram", "table", "note", "quiz"] as const;
+export const TURN_REFERENCE_KINDS = [
+  "message",
+  "diagram",
+  "table",
+  "note",
+  "quiz",
+  "resource",
+] as const;
 
 export type TurnReferenceKind = (typeof TURN_REFERENCE_KINDS)[number];
 
@@ -3420,14 +3563,15 @@ export type TurnReferenceKind = (typeof TURN_REFERENCE_KINDS)[number];
  *
  * The 追问 gesture, and what it is *not* matters as much as what it is. It is not an attachment:
  * nothing is copied, nothing is sent twice, and the model is handed a **pointer** for everything
- * that has one. A diagram, a table and a note are read through `ila_query`, which is the same tool
- * the agent already uses to read this conversation's record — so the reference costs a few words
- * on the wire and the agent fetches the current content, not a stale copy of what the user was
- * looking at. A *passage* has no such handle — a text range inside a rendered message is not
- * addressable by id — so its text travels, which is the one case where copying is the only option.
+ * that has one. A diagram, a table, a note and a resource are read through `ila_query`, which is
+ * the same tool the agent already uses to read this conversation's record — so the reference costs
+ * a few words on the wire and the agent fetches the current content, not a stale copy of what the
+ * user was looking at. A *passage* has no such handle — a text range inside a rendered message is
+ * not addressable by id — so its text travels, which is the one case where copying is the only
+ * option.
  *
- * `label` is display only, the split `SourceReference.name` makes: the chip shows what the
- * composer showed, and the server re-reads everything it needs from `ref`.
+ * `label` is display only: the chip shows what the composer showed, and the server re-reads
+ * everything it needs from `ref`.
  */
 export interface TurnReference {
   kind: TurnReferenceKind;
@@ -3503,7 +3647,6 @@ export interface ChatInput extends TurnRequestMeta {
    * is *pointed at*. The server links each to the conversation, so a later turn can
    * `read_document` it without the user referencing it again.
    */
-  sources?: SourceReference[];
   /**
    * Things the user pointed at when they asked — the 追问 gesture, staged as chips in the
    * composer.
@@ -3555,7 +3698,11 @@ export type ChatStreamEvent =
    * stream. `id` names the row; nothing else about it travels.
    */
   | { type: "message_removed"; id: string }
-  /** Sent after the first turn when a model-written title replaced the placeholder. */
+  /**
+   * A turn named the conversation. Sent whenever the titler produces a title — which is any turn
+   * up to the one where it lands, not only the first — and never for a decline, since nothing on
+   * screen changed.
+   */
   | { type: "title"; sessionId: string; title: string }
   /**
    * The `ila_make_plan` "new session" fork committed a V1 plan into a freshly created

@@ -286,23 +286,33 @@ function submitDialog(value: string) {
 async function onDelete(row: FileTreeRow) {
   const isDir = row.entry.type === "dir";
   /*
-   * Both branches spelled out, rather than an id chosen inside one `t()` call.
+   * A **file** is the same delete the library's rows offer, and it says the same words: the route
+   * is the only thing that differs (a tree can name a path and not a reference), and both end in
+   * `deleteWorkResource`. It used to have a sentence of its own — "文件会保留在回收目录中" — which
+   * described the bytes accurately and left out the half a reader needs: the file's other
+   * references are about to start reporting that the object is gone.
    *
+   * A **directory** keeps its own pair, because the library has no equivalent: a directory is not
+   * a file, nothing references it, and only an empty one may go.
+   *
+   * Both branches spelled out rather than an id chosen inside one `t()` call:
    * `catalog.test.ts` finds keys by scanning for `t("…")` literals, so a key reached through a
-   * ternary is invisible to it and the dead-key scan reports both as unused. The narrower fix
-   * is this shape; the wider one would be a `files.` entry in the dynamic-prefix allowlist,
-   * and a prefix that broad is where a typo hides.
+   * ternary is invisible to it and the dead-key scan reports both as unused. The narrower fix is
+   * this shape; the wider one would be a `files.` entry in the dynamic-prefix allowlist, and a
+   * prefix that broad is where a typo hides.
    */
-  const title = isDir ? t("files.deleteDirectoryTitle") : t("files.deleteTitle");
+  const title = isDir ? t("files.deleteDirectoryTitle") : t("sources.delete.title");
   const message = isDir
     ? t("files.deleteDirectoryMessage", { name: row.entry.name })
-    : t("files.deleteMessage", { name: row.entry.name });
+    : t("sources.delete.message", { name: row.entry.name });
+  const detail = isDir ? undefined : t("sources.delete.detail");
 
   const ok = await confirm({
     title,
     message,
-    // Destructive, and the bytes survive — so the confirm is about the file leaving the tree,
-    // not about losing it. `danger` because the action is still not one to reach for casually.
+    detail,
+    // Destructive either way, and `danger` is not a judgement about how destructive: it is the
+    // colour a reader should hesitate at.
     danger: true,
   });
   if (!ok) return;

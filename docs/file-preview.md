@@ -1,6 +1,6 @@
 # File preview
 
-The file browser, the source browser and the diagram widget all open a file and show it. Text is highlighted,
+The file browser, the library browser and the diagram widget all open a file and show it. Text is highlighted,
 Markdown is rendered, diagrams are drawn, and everything else is handed to
 [`open-file-viewer`](https://github.com/xushanpei/open-file-viewer) — an MIT, framework-agnostic
 viewer with plugins for images, PDF, Office, media, archives, mail, drawings, 3D and GIS.
@@ -11,28 +11,29 @@ under "A file's preview `kind` is the extension point".
 ## The shape
 
 ```
-packages/shared/src/index.ts     FILE_CONTENT_KINDS, FileContent, MAX_FILE_PREVIEW_BYTES
-apps/server/src/files.ts         readPreviewFile          what a file *is* — both roots call it
-                                 readFileContent          path-resolved, capped at 256 KB
-                                 readRawFile              the bytes, capped at 32 MB
-apps/server/src/routes.ts        …/files/content          JSON: metadata + text
-                                 …/files/raw              bytes, octet-stream
-                                 /api/sources/:id/preview a source, described the same way
-apps/web/src/utils/fileViewer.ts      the gate + theme/locale mapping   (DOM-free, eager)
-apps/web/src/utils/openFileViewer.ts  the lazy chunk + the vendor sheet (the only importer)
-apps/web/src/components/FileViewer.vue        the lifecycle, and `data-render-state`
+packages/shared/src/index.ts           FILE_CONTENT_KINDS, FileContent, MAX_FILE_PREVIEW_BYTES
+apps/server/src/files.ts               readPreviewFile     what a file *is* — every caller uses it
+                                       readFileContent     path-resolved, capped at 256 KB
+                                       readRawFile         the bytes, capped at 32 MB
+apps/server/src/resourcePaths.ts       resolveFilePath     where a stored `files.path` points
+apps/server/src/routes.ts              …/files/content     JSON: metadata + text
+                                       …/files/raw         bytes, octet-stream
+                                       /api/resources/:id/preview   a reference, described the same way
+apps/web/src/utils/fileViewer.ts       the gate + theme/locale mapping   (DOM-free, eager)
+apps/web/src/utils/openFileViewer.ts   the lazy chunk + the vendor sheet (the only importer)
+apps/web/src/components/FileViewer.vue          the lifecycle, and `data-render-state`
 apps/web/src/components/dialogs/FilePreviewDialog.vue  the exhaustive switch on `kind`
-apps/web/src/components/dialogs/SourcesDialog.vue      a row opens an upload here
-e2e/file-preview-viewer.spec.ts       real PNGs and PDFs, from a workspace and from an upload
+apps/web/src/components/dialogs/LibraryBrowser.vue     a row opens a resource here
+e2e/file-preview-viewer.spec.ts        real PNGs and PDFs, from a workspace and from a resource
 ```
 
-## Three sources of a file, one dialog
+## Three ways a file is reached, one dialog
 
 | | addressed by | guard |
 | --- | --- | --- |
 | the file tree | a workspace-relative path | `resolveReal` |
 | a conversation's files | a path inside `sessions/<id>/` | `resolveReal` |
-| an uploaded file | the source's **id** | `resolveInSources` |
+| an upload or a page | the **reference's** id | `resolveFilePath` |
 
 All three end in the same `FilePreviewDialog`, which is why `readPreviewFile` exists as a separate
 export: the sandbox differs per root — and must — but *what is this file* does not, and two copies
@@ -40,18 +41,36 @@ of the extension tables is how a `.mmd` gets drawn in one dialog and shown as co
 `.md` uploaded to a conversation therefore renders exactly like a `.md` in a workspace, and a PDF
 behaves like a PDF either way.
 
-A **page source's** preview also carries where the page came from — `FileContent.url`, attached by
-`GET /api/sources/:id/preview` from the row — which is what puts "open in browser" in this dialog's
-header. The dialog shows the app's stored copy of the reading, so a reader who wants the page
-itself is standing here, and the route is the only place that holds both the bytes and the row.
-`docs/sources.md` has the rest of that control.
+The third row is the one v4 changed. It is addressed by a **`WorkResource`** id — a reference — and
+the path is read off the entity the reference names, through `resolveFilePath`. An upload's bytes
+live outside every workspace, at `sources/raw/<id>.<ext>`, and a page's are its stored reading, so
+a dialog that could only take a workspace-relative path had nothing to open with; addressing the
+reference is what lets one dialog serve all three. A reference whose entity is gone resolves to
+nothing, which is the 404 the dialog already knows how to show.
 
-`SourcesDialog` is where an upload is reachable at all: a source lives outside every workspace, so
-the file tree cannot list it, and until its rows gained an open control the list offered nothing but
-a delete button. The row's main area is one `<button>` and delete is its sibling, rather than a
-click handler on the `<li>` — a button inside a button is invalid. Both dialogs listen on `window`
-for Escape, so `SourcesDialog` returns early while a preview is up, the same guard the sidebar
-drawer makes; without it one press closes the file *and* the list underneath.
+A **reference's** preview carries two names, and only one of them decides anything.
+`FileContent.name` is what to call the file — the reference's **title** when it has one, which is
+why the route passes it — and `FileContent.fileName` is the file's own name, read off the path the
+bytes are at. Every decision goes by the second: which `kind` the file is, whether the viewer is
+worth fetching, which plugin draws it, which grammar highlights it, what a download is called. A
+title is prose and need not have an extension, so a preview that asked it was one extension lookup
+away from nonsense — a titled `.xlsx` came back as "this format cannot be previewed". Reading the
+name off the path is also what keeps a document's *extracted text* previewing as text rather than
+as the PDF it came from.
+
+A **page's** preview also carries where the page came from — `FileContent.url`, attached by
+`GET /api/resources/:id/preview` from the row — which is what puts "open in browser" in this
+dialog's header. The dialog shows the app's stored copy of the reading, so a reader who wants the
+page itself is standing here, and the route is the only place that holds both the bytes and the
+entity. `docs/resources.md` has the rest of that control.
+
+`LibraryBrowser` is where an upload is reachable at all: an upload's bytes live outside every
+workspace, so the file tree cannot list it, and until its rows gained an open control the list
+offered nothing but a delete button. The row's main area is one `<button>` and delete is its
+sibling, rather than a click handler on the `<li>` — a button inside a button is invalid. Both
+dialogs listen on `window` for Escape, so `LibraryBrowser` returns early while a preview is up, the
+same guard the sidebar drawer makes; without it one press closes the file *and* the list
+underneath.
 
 ## Two routes, because they carry different things
 
@@ -68,7 +87,7 @@ type and the bytes together and has nothing to revoke.
 Three details of that route are load-bearing:
 
 - **The response type is `application/octet-stream`, never the file's own.** This deliberately
-  diverges from `/api/sources/:id/raw`, which serves the real `mimeType` and should keep doing so:
+  diverges from `/api/files/:id/raw`, which serves the real `mimeType` and should keep doing so:
   that route serves the account's own uploads into an `<img>`, where an SVG is inert. These are
   bytes the *agent* may have written into a sandbox, and the viewer re-materialises some of them
   (a `.docx` becomes HTML), so making the type permanently unusable is cheap insurance. The client
@@ -205,11 +224,11 @@ and treat `ready` as the thing to wait for first. The first version of the image
   file, an escaping path and an escaping *symlink*. The last two are re-proved here rather than
   inherited from the read above, because this is the route that hands out whole files.
 - `apps/server/test/routes.test.ts` — the route's three headers, the 413, and the 400 for `..`;
-  then a source's preview for both a binary and a text upload. Note the fixtures there are
-  deliberately unique bodies: sources dedupe by content, so shared bytes come back under whichever
+  then a reference's preview for both a binary and a text upload. Note the fixtures there are
+  deliberately unique bodies: uploads dedupe by content, so shared bytes come back under whichever
   name was uploaded first.
 - `apps/web/test/api/client.test.ts` — that the raw fetch carries `/api` (below), and that a
-  source is addressed by id and comes back as the same `File` a workspace file does.
+  reference is addressed by id and comes back as the same `File` a workspace file does.
 - `apps/web/test/utils/fileViewer.test.ts` — the gate per family, and the assertion that the
   library is **not evaluated** by importing the eager module.
 - `apps/web/test/api/client.test.ts` — that the raw fetch carries `/api`. Every path in the `api`
@@ -218,7 +237,7 @@ and treat `ready` as the thing to wait for first. The first version of the image
   with `index.html` at **200**, so the viewer is handed a few kilobytes of HTML to draw as a PNG
   and the only symptom is a picture that will not decode.
 - `e2e/file-preview-viewer.spec.ts` — a real 1×1 PNG and a `buildPdf()` PDF seeded with `node:fs`,
-  and the same two uploaded as sources, each asserted on `data-render-state` and then on *measured
+  and the same two uploaded as resources, each asserted on `data-render-state` and then on *measured
   pixels*. The upload case also pins the Escape guard: one press closes the preview and leaves the
   list standing.
 
@@ -232,7 +251,7 @@ and treat `ready` as the thing to wait for first. The first version of the image
   `rendered` = the viewer and `source` = the `<pre>`. It is not in this cut because it makes the
   view state depend on the viewer gate and doubles the states the browser suite must cover.
 - **Files past 32 MB** are refused rather than streamed.
-- **No preview in the message list** — this is the file browser, the source browser and the
+- **No preview in the message list** — this is the file browser, the library browser and the
   diagram widget.
 
 ## Maximising, and copying a text file
@@ -262,5 +281,5 @@ somebody take a quarter of a log away believing it was all of it. That is `CopyB
 `hint`.
 
 A **code block** inside a message or a rendered Markdown file has its own control, which is a
-different mechanism for a different reason — see `docs/sources.md`'s neighbour in
+different mechanism for a different reason — see `docs/resources.md`'s neighbour in
 `utils/markdown.ts`, and the note there on why the button carries no text.

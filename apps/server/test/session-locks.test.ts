@@ -289,7 +289,7 @@ describe("the write gate", () => {
 
     for (const url of [
       `/api/sessions/${session.id}/messages`,
-      `/api/sessions/${session.id}/sources`,
+      `/api/sessions/${session.id}/resources`,
       `/api/sessions/${session.id}/stats`,
     ]) {
       expect((await second({ method: "GET", url })).statusCode).toBe(200);

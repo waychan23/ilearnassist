@@ -5,7 +5,8 @@ import { api } from "../api/client";
 import { useAppStore } from "../stores/app";
 import { subscribeWidgetEvents } from "../composables/widgetEvents";
 import { isOpenableUrl, openExternal } from "../utils/externalLink";
-import type { Source, SourceCategory } from "../api/types";
+import type { FileCategory, WorkResource } from "../api/types";
+import { resourceCategory, resourceIsImage, resourceName, resourceUrl } from "../utils/resourceView";
 import Icon from "../components/Icon.vue";
 
 /**
@@ -18,9 +19,9 @@ import Icon from "../components/Icon.vue";
  *
  * ### The list is the conversation's, not the model's
  *
- * `GET /api/sources?sessionId=…`, whose predicate is "held by this conversation **or** linked
+ * `GET /api/resources?sessionId=…`, whose predicate is "held by this conversation **or** linked
  * into it" — its own files, plus every upload, page and `@`-reference the conversation has
- * taken in. Deliberately *not* `/api/sessions/:id/sources`, which is the union with the
+ * taken in. Deliberately *not* `/api/sessions/:id/resources`, which is the union with the
  * workspace and answers a different question: that one is what a turn may **read** (the
  * whitelist `read_document` is bound to), and it would list a workspace's whole corpus beside
  * the three files this conversation is actually about.
@@ -43,7 +44,7 @@ import Icon from "../components/Icon.vue";
 const { t } = useI18n();
 const store = useAppStore();
 
-const rows = ref<Source[]>([]);
+const rows = ref<WorkResource[]>([]);
 const failed = ref(false);
 /** The chosen category, or `""` for all of them. An empty `<select>` value is not `undefined`. */
 const category = ref("");
@@ -56,7 +57,7 @@ async function load(): Promise<void> {
     return;
   }
   try {
-    const res = await api.listSources({ sessionId });
+    const res = await api.listResources({ sessionId });
     // A switch mid-request must not list one conversation's material under another's.
     if (sessionId !== store.activeSessionId) return;
     rows.value = res;
@@ -86,15 +87,8 @@ onMounted(() => {
      * through — and there is no narrower event to ride: nothing announces "a source was added",
      * because the client is what asked for every addition and the store already knows. A library
      * upload lands in a *workspace*, which this list does not show.
-     *
-     * `library.changed` is the exception, and the note export is why it is one: that run is the
-     * *server* writing sources, with no turn anywhere near it, so nothing local knows the list
-     * moved. Emitted only when the run actually changed something.
      */
-    if (
-      (event.type === "turn.finished" || event.type === "library.changed") &&
-      event.sessionId === store.activeSessionId
-    ) {
+    if (event.type === "turn.finished" && event.sessionId === store.activeSessionId) {
       void load();
     }
   });
@@ -111,8 +105,14 @@ onBeforeUnmount(() => {
  * typed as that union so a member added there is a `vue-tsc` error here rather than a category
  * that silently never appears in the filter. The *labels* need no work at all: `sources.category.*`
  * is a catalog key per value already, and `catalog.test.ts` allows the prefix.
+ *
+ * `"page"` is here and is **not** a `FileCategory`: a page is a `resourceType` in v4, so it has
+ * no category at all — see `resourceCategory`. The badge is what the reader reads, and calling a
+ * page a 网页 there is right for exactly the reason `category` is the wrong column to ask for it.
  */
-const CATEGORY_ORDER: readonly SourceCategory[] = [
+type DisplayCategory = FileCategory | "page";
+
+const CATEGORY_ORDER: readonly DisplayCategory[] = [
   "page",
   "document",
   "image",
@@ -123,20 +123,25 @@ const CATEGORY_ORDER: readonly SourceCategory[] = [
   "other",
 ];
 
+/** The badge's category, with a page's `resourceType` standing in for the category it has none of. */
+function displayCategory(row: WorkResource): DisplayCategory {
+  return resourceCategory(row) ?? "page";
+}
+
 /** The categories actually present, in that order. */
 const presentCategories = computed(() => {
-  const seen = new Set(rows.value.map((r) => r.category));
+  const seen = new Set(rows.value.map(displayCategory));
   return CATEGORY_ORDER.filter((c) => seen.has(c));
 });
 
 const visible = computed(() =>
-  category.value ? rows.value.filter((r) => r.category === category.value) : rows.value
+  category.value ? rows.value.filter((r) => displayCategory(r) === category.value) : rows.value
 );
 
 /** The icon rule the browser uses for its rows, so one file reads the same in both places. */
-function iconFor(source: Source): "image" | "diagram" | "file" {
-  if (source.kind === "image") return "image";
-  return source.category === "diagram" ? "diagram" : "file";
+function iconFor(row: WorkResource): "image" | "diagram" | "file" {
+  if (resourceIsImage(row)) return "image";
+  return resourceCategory(row) === "diagram" ? "diagram" : "file";
 }
 
 /**
@@ -145,9 +150,10 @@ function iconFor(source: Source): "image" | "diagram" | "file" {
  * `utils/externalLink.ts`'s, so the two surfaces cannot drift into asking different questions
  * before leaving for the same kind of destination.
  */
-function openBrowser(source: Source): void {
-  if (!source.url) return;
-  void openExternal(source.url);
+function openBrowser(row: WorkResource): void {
+  const url = resourceUrl(row);
+  if (!url) return;
+  void openExternal(url);
 }
 </script>
 
@@ -184,7 +190,7 @@ function openBrowser(source: Source): void {
         <span class="badge muted" data-testid="sources-count">{{ visible.length }}</span>
       </div>
 
-      <div v-if="rows.length === 0" class="widget-empty" data-testid="sources-empty">
+      <div v-if="rows.length === 0" class="widget-empty" data-testid="library-empty">
         {{ t("widgets.sources.empty") }}
       </div>
       <!-- A filter that matches nothing is a different sentence from a list that is empty. -->
@@ -197,26 +203,26 @@ function openBrowser(source: Source): void {
           <button
             class="sources-open"
             type="button"
-            data-testid="source-row"
-            :title="t('sources.preview', { name: row.name })"
-            @click="store.openSourceFile(row)"
+            data-testid="resource-row"
+            :title="t('sources.preview', { name: resourceName(row) })"
+            @click="store.openResourceFile(row)"
           >
-            <span class="sources-icon" :class="{ 'is-image': row.kind === 'image' }">
+            <span class="sources-icon" :class="{ 'is-image': resourceIsImage(row) }">
               <Icon :name="iconFor(row)" />
             </span>
-            <span class="sources-name truncate">{{ row.name }}</span>
+            <span class="sources-name truncate">{{ resourceName(row) }}</span>
             <span v-if="row.missing" class="badge danger">{{ t("widgets.sources.missing") }}</span>
-            <span v-else class="badge muted">{{ t(`sources.category.${row.category}`) }}</span>
+            <span v-else class="badge muted">{{ t(`sources.category.${displayCategory(row)}`) }}</span>
           </button>
           <!-- A sibling of the row's own control, never a child of it: a button inside a button
                is invalid. Only a page has somewhere to go. -->
           <button
-            v-if="isOpenableUrl(row.url)"
+            v-if="isOpenableUrl(resourceUrl(row))"
             class="icon-btn"
             type="button"
             :title="t('sources.openInBrowser')"
             :aria-label="t('sources.openInBrowser')"
-            data-testid="source-open-browser"
+            data-testid="resource-open-browser"
             @click="openBrowser(row)"
           >
             <Icon name="link" />

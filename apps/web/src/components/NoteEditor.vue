@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import type { NoteType } from "@ilearnassist/shared";
 import { NOTE_TYPES } from "@ilearnassist/shared";
 import { confirm } from "../composables/confirm";
-import type { NoteEditorDraft } from "../composables/messageNotes";
+import { targetKindIcon, type NoteEditorDraft } from "../composables/messageNotes";
 import Icon from "./Icon.vue";
 
 /**
@@ -63,6 +63,8 @@ const emit = defineEmits<{
   locate: [];
   /** Ask the agent about this note. The host knows what a note *is*; this window does not. */
   ask: [];
+  /** Show the object the note is about. The host owns the viewer; this window does not. */
+  openTarget: [];
   close: [];
 }>();
 
@@ -75,29 +77,39 @@ const card = ref<HTMLElement | null>(null);
 /** Whether the note exists yet. A create has nothing to delete until it is saved. */
 const existing = computed(() => !!props.draft.noteId);
 
+/** The object this note is about, if it is about one. */
+const target = computed(() => props.draft.target ?? null);
+
+/**
+ * Whether there is something to open.
+ *
+ * A target the server has reported as gone (`targetMissing`) has no viewer to offer — the note
+ * still reads, and the object it named is not there to show. Everything else does, subject to
+ * what the host can actually open.
+ */
+const openable = computed(() => !!target.value && !target.value.missing);
+
 /**
  * What kind this note may be — which is not always the whole list.
  *
- * 标注 means "this marks a passage", so offering it for a note with nothing marked is offering a
- * kind that cannot be true of the note being written. The window is opened with no passage in two
- * cases — the panel's own 新建笔记, and a note about a 图 or a 表 — and it is those this excludes
- * it from. The four that remain are stances on the material, and none of them needs a passage to
- * be about.
+ * 标注 means "this marks something", and there are two somethings: a passage, and an object. So a
+ * note with **either** anchor may be one — a note about a 图 or a 表 is as much a 标注 as one made
+ * by dragging over a sentence, which is what the second clause is for. With neither, 标注 would be
+ * a kind that cannot be true of the note being written, and only the panel's own 新建笔记 has
+ * neither. What the guard is really excluding is "a note that marks nothing"; it used to read as
+ * "a note with no quote", which quietly made 标注 unselectable for every object note.
  *
- * The second clause is for a row this window did not create: a note that *is* a 标注 keeps its own
+ * The third clause is for a row this window did not create: a note that *is* a 标注 keeps its own
  * kind in the strip even with an empty quote. Only the API can produce that (the server defaults
  * a missing type to `annotation`), and without the clause the strip would show nothing pressed —
  * which reads as a note of no kind rather than as one this window cannot name. A note's own kind
  * being hidden from it would be the worse of the two.
  */
 const offeredTypes = computed(() =>
-  props.draft.quote || props.draft.type === "annotation"
+  props.draft.quote || target.value || props.draft.type === "annotation"
     ? NOTE_TYPES
     : NOTE_TYPES.filter((candidate) => candidate !== "annotation")
 );
-
-/** The figure this note is about, if it is about one. */
-const target = computed(() => props.draft.target ?? null);
 
 /**
  * Whether there is anything to lose by closing.
@@ -397,8 +409,33 @@ function typeLabel(candidate: NoteType): string {
       -->
       <div v-if="target" class="field">
         <label>{{ t("notes.editor.targetLabel") }}</label>
-        <p class="note-target" data-testid="note-editor-target">
-          <Icon :name="target.kind === 'diagram' ? 'diagram' : 'table'" />
+        <!--
+          A control, not a sentence: the object a note is about is one click away from the window
+          that names it, which is where a reader editing that note has just been. It opens the
+          same viewer the panel's chip does — a diagram or a file through the preview, a table
+          through the dialog — and the *host* owns that decision, not this window, which is why
+          the click is an emit rather than a call.
+
+          Drawn as a button only where there is something to open. A note whose target is gone has
+          no viewer to offer, and a control that renders and does nothing is the failure this
+          repository names most often.
+        -->
+        <button
+          v-if="openable"
+          type="button"
+          class="note-target"
+          data-testid="note-editor-target"
+          :title="t('notes.editor.openTarget')"
+          @click="emit('openTarget')"
+        >
+          <!-- `targetKindIcon`, not a comparison: a two-arm ternary here fell through to a table
+               icon for every kind that was not a diagram, which is what a resource note got. -->
+          <Icon :name="targetKindIcon(target.kind)" />
+          <span class="truncate">{{ target.label }}</span>
+          <Icon name="expand" />
+        </button>
+        <p v-else class="note-target" data-testid="note-editor-target">
+          <Icon :name="targetKindIcon(target.kind)" />
           <span class="truncate">{{ target.label }}</span>
         </p>
       </div>
@@ -641,17 +678,41 @@ function typeLabel(candidate: NoteType): string {
  * `truncate` on the inner span rather than here, so the icon keeps its size while the name
  * ellipsises — the rule `style.css` gives for a truncated flex row.
  */
+/*
+ * Also a `<button>`, and it has to be told what the `<p>` it replaces got for free. A paragraph
+ * is a block, so it took the field's width and its nowrap label was truncated inside it; a button
+ * **shrink-wraps its content**, so that label made the row wider than the card — which is a
+ * horizontal scrollbar on the whole window. `width: 100%` plus `min-width: 0` is what the block
+ * was doing, and the label's own `.truncate` does the rest.
+ */
 .note-target {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
   margin: 0;
   padding: var(--space-3) var(--space-4);
   background: var(--panel-2);
   border-radius: var(--radius-sm);
   border-left: 2px solid var(--accent);
+  font-family: inherit;
   font-size: var(--fs-3);
   color: var(--text-2);
+  text-align: left;
+}
+/*
+ * The affordance, since a button here is one of two shapes of the same row. No hover *colour*:
+ * the row already sits on `--panel-2` and the palette has nothing above it to move to — the two
+ * tokens are the whole surface scale — so the mark is the accent rule it already carries, the
+ * pointer, and the expand icon beside the label.
+ */
+button.note-target {
+  cursor: pointer;
+}
+button.note-target:hover .truncate,
+button.note-target:focus-visible .truncate {
+  color: var(--text);
 }
 .note-target .icon {
   flex: none;

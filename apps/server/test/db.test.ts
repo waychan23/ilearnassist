@@ -322,6 +322,31 @@ describe("sessions", () => {
     expect(titled!.titleState).toBe("fallback");
   });
 
+  it("records a decline without writing a title", () => {
+    /*
+     * The other way an automatic pass can end. `"unnamed"` says the titler read the conversation
+     * and there was nothing to name in it yet — so the title column is not touched at all, and the
+     * conversation keeps whatever placeholder it was created with.
+     */
+    addSession("s1", { title: "(Untitled) Session" });
+    expect(db.setTitleStateForUser("s1", OWNER, "unnamed")).toBe(true);
+
+    const declined = db.getSessionForUser("s1", OWNER)!.session;
+    expect(declined.title).toBe("(Untitled) Session");
+    expect(declined.titleSource).toBe("auto");
+    expect(declined.titleState).toBe("unnamed");
+  });
+
+  it("refuses to record a decline on a conversation the user has renamed", () => {
+    // The same race `setAutoTitleForUser` guards, and the same answer for losing it: once a person
+    // has named the conversation, the titler's state has no meaning.
+    addSession("s1");
+    db.updateSessionForUser("s1", OWNER, { title: "Mine" });
+
+    expect(db.setTitleStateForUser("s1", OWNER, "unnamed")).toBe(false);
+    expect(db.getSessionForUser("s1", OWNER)!.session.titleState).toBeUndefined();
+  });
+
   it("refuses to auto-title a conversation the user has renamed", () => {
     /*
      * The guard is in the statement rather than in its callers' checks, because both callers read
@@ -585,7 +610,9 @@ describe("messages", () => {
       content: "answer",
       reasoning: "  thought  ",
       toolCalls: [{ id: "call_1", name: "read_file", input: "{}", output: "ok" }],
-      attachments: [{ id: "a1", name: "x.png", mimeType: "image/png", size: 3, kind: "image" }],
+      attachments: [
+        { id: "a1", resourceId: "r1", name: "x.png", mimeType: "image/png", size: 3, kind: "image" },
+      ],
       usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
     });
 

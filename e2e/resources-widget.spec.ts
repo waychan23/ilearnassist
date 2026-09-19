@@ -68,7 +68,7 @@ test("an empty conversation says so, and offers no filter to press", async ({ pa
    */
   await sourcesSession(page, unique("Empty Sources"));
 
-  await expect(page.getByTestId("sources-empty")).toBeVisible();
+  await expect(page.getByTestId("library-empty")).toBeVisible();
   await expect(page.getByTestId("sources-filter")).toHaveCount(0);
   await expect(page.getByTestId("sources-list")).toHaveCount(0);
 });
@@ -104,7 +104,7 @@ test("an upload and a file the agent wrote appear in the same list", async ({ pa
 
   // The turn is what links the upload and what wrote the file, so `turn.finished` is what the
   // panel refreshes on. Both rows, without a reload.
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
   await expect(page.getByTestId("sources-list")).toContainText(uploaded);
   await expect(page.getByTestId("sources-list")).toContainText("summary.md");
 
@@ -112,7 +112,7 @@ test("an upload and a file the agent wrote appear in the same list", async ({ pa
   await page.reload();
   await enterWorkspace(page, name);
   await page.getByTestId("session-item").first().click();
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
 });
 
 test("the category filter is built from what is there, and narrows to it", async ({
@@ -137,7 +137,7 @@ test("the category filter is built from what is there, and narrows to it", async
   await upload(page, uploaded);
   await page.getByTestId("composer-input").fill("把这次的小结写下来");
   await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
 
   const filter = page.getByTestId("sources-filter");
   // Only the categories actually present — the one question the server cannot answer in the same
@@ -147,7 +147,7 @@ test("the category filter is built from what is there, and narrows to it", async
   await expect(filter).toContainText("Markdown");
 
   await filter.selectOption("text");
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
   await expect(page.getByTestId("sources-list")).toContainText(uploaded);
   // The count is what makes the filter honest about what it is hiding.
   await expect(page.getByTestId("sources-count")).toHaveText("1");
@@ -157,7 +157,7 @@ test("the category filter is built from what is there, and narrows to it", async
   await expect(page.getByTestId("sources-list")).not.toContainText(uploaded);
 
   await filter.selectOption("");
-  await expect(page.getByTestId("source-row")).toHaveCount(2);
+  await expect(page.getByTestId("resource-row")).toHaveCount(2);
 });
 
 test("opening a row goes through the ordinary file preview", async ({ page, request }) => {
@@ -178,9 +178,9 @@ test("opening a row goes through the ordinary file preview", async ({ page, requ
   await sourcesSession(page, unique("Openable"));
   await page.getByTestId("composer-input").fill("把这次的小结写下来");
   await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
 
-  await page.getByTestId("source-row").first().click();
+  await page.getByTestId("resource-row").first().click();
   const preview = page.locator("body > .modal-overlay");
   await expect(preview).toBeVisible();
   await expect(preview).toContainText("summary.md");
@@ -188,6 +188,86 @@ test("opening a row goes through the ordinary file preview", async ({ page, requ
   // bytes are only findable if the preview fell back to a `<pre>`. This is the assertion the
   // `kind` union exists for.
   await expect(preview.locator("h1")).toHaveText("小结");
+});
+
+/** The conversation that only *refers* to the file — named once, asserted on by that name. */
+const REFERRING_TITLE = "引用它的会话";
+
+test("a file several conversations hold is one row in a conversation that refers to it", async ({
+  page,
+  request,
+}) => {
+  /*
+   * **The reported bug.** Uploading the same bytes into a workspace and then from two
+   * conversations is **one file with three holders** — that is the registry's identity rule, and
+   * it is right: a holding is what its owner can be rid of on its own. But `?sessionId=` matches
+   * every *holder* of anything the conversation referred to, so a fourth conversation that merely
+   * pointed at the image listed all three: three identical rows in 参考资料. The panel's question
+   * is the material, not the trail of places it has been uploaded to.
+   *
+   * Seeded through the API rather than by clicking three composers: the rows this is about are
+   * the registry's own, and the reader's half — a panel that draws them — is what is asserted.
+   */
+  const suffix = Date.now();
+  const name = `Held ${suffix}`;
+  const fileName = `mindmap-${suffix}.png`;
+  // One buffer for all three uploads: identical user-supplied bytes are one *file*, whatever
+  // uploaded them, which is what makes three holders of one entity rather than three files.
+  const data = Buffer.from(`png bytes ${suffix}`).toString("base64");
+
+  const workspace = (await (
+    await request.post("/api/workspaces", { data: { name } })
+  ).json()) as { id: string };
+  await request.post(`/api/workspaces/${workspace.id}/files/upload`, {
+    data: { dir: "", name: fileName, data },
+  });
+
+  /** A conversation named for what it does, so the sidebar can be read rather than counted. */
+  async function conversation(title: string): Promise<string> {
+    const created = (await (
+      await request.post(`/api/workspaces/${workspace.id}/sessions`, { data: { title } })
+    ).json()) as { id: string };
+    return created.id;
+  }
+
+  // Two conversations that hold it, through the composer's own upload route.
+  for (const title of ["第一次上传", "第二次上传"]) {
+    const id = await conversation(title);
+    const res = await request.post(`/api/sessions/${id}/resources`, {
+      data: { name: fileName, mimeType: "image/png", data },
+    });
+    expect(res.status()).toBe(201);
+  }
+
+  // …and one that only points at it, which is the gesture the report came from.
+  const referring = await conversation(REFERRING_TITLE);
+  const rows = (await (
+    await request.get(`/api/resources?workspaceId=${workspace.id}`)
+  ).json()) as { id: string }[];
+  expect(rows.length).toBeGreaterThan(0);
+  /*
+   * The title is pinned from both sides: the create call names it, and the auto-titler is told to
+   * agree. It overwrote the name this conversation was created with — a turn makes a conversation
+   * titled by the model unless a *human* named it, and a title sent to the create route is not
+   * that — which is the honest behaviour and would otherwise leave this test looking for a row
+   * whose label it cannot predict.
+   */
+  await scriptLlm(request, {
+    turns: [{ content: "看到了。" }],
+    matches: [{ includes: "titling function", content: REFERRING_TITLE }],
+  });
+  const asked = await request.post(`/api/sessions/${referring}/chat`, {
+    data: { message: "看看这张图", refs: [{ kind: "resource", ref: rows[0]!.id, label: fileName }] },
+  });
+  expect(asked.status()).toBe(200);
+
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  await page.getByTestId("session-item").filter({ hasText: REFERRING_TITLE }).click();
+  await page.getByTestId("widget-tab-sources").click();
+
+  await expect(page.getByTestId("resource-row").filter({ hasText: fileName })).toHaveCount(1);
+  await expect(page.getByTestId("sources-count")).toHaveText("1");
 });
 
 test("a load that fails is reported in the panel, and the retry is what fixes it", async ({
@@ -219,19 +299,19 @@ test("a load that fails is reported in the panel, and the retry is what fixes it
   await sourcesSession(page, name);
   await page.getByTestId("composer-input").fill("把这次的小结写下来");
   await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
 
-  await page.route("**/api/sources?**", (route) => route.abort());
+  await page.route("**/api/resources?**", (route) => route.abort());
   await page.reload();
   await enterWorkspace(page, name);
   await page.getByTestId("session-item").first().click();
 
   await expect(page.getByTestId("widget-sources")).toContainText("读取参考资料失败");
-  await expect(page.getByTestId("source-row")).toHaveCount(0);
+  await expect(page.getByTestId("resource-row")).toHaveCount(0);
   // Never the toast: the conversation itself did nothing wrong.
   await expect(page.locator("body > .toast")).toHaveCount(0);
 
-  await page.unroute("**/api/sources?**");
+  await page.unroute("**/api/resources?**");
   await page.getByTestId("widget-retry").click();
-  await expect(page.getByTestId("source-row")).toHaveCount(1);
+  await expect(page.getByTestId("resource-row")).toHaveCount(1);
 });

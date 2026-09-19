@@ -433,8 +433,9 @@ What that changes relative to the widgets above:
   carries the canonical file name, the model's `summary`, the call id, and the thread the
   classifier placed it in — what the file alone cannot answer. A table's row carries the summary,
   the call id, the thread, and **the markdown itself**, because a table has no file for the bytes
-  to live in. The whole-folder view is the source browser, so a `.mmd` copied in by hand is still
-  reachable but is not listed as something the agent drew.
+  to live in. The whole-folder view is the library browser, so a `.mmd` copied in by hand is still
+  reachable — it is registered and referenceable like any other file — but is not listed as
+  something the agent drew.
 - **Opening a row goes through the ordinary file preview for a diagram**, not a dialog of its own:
   that dialog already renders a diagram, already has the source toggle, already reports its own
   load failures, and already offers the enlarged viewer. A fourth surface drawing the same picture
@@ -508,42 +509,43 @@ What that changes relative to the widgets above:
   only been able to call a failure, and `提示词：0 字符` is what surfaced the declined case at all.
   See `docs/architecture.md` → the insight pass.
 
-### A viewer over the registry: the sources widget
+### A viewer over the registry: the resources widget
 
-The sources widget (`id: "sources"`, `SourcesWidget.vue`) is the diagram widget's shape applied to
-the source registry, and it settles one question that the others leave open: **which of a
-conversation's material a panel shows**，because there are two defensible lists and they are
-different.
+The resources widget (`id: "sources"` — the id is a key and did not move with the wording,
+`ResourcesWidget.vue`) is the diagram widget's shape applied to the material registry, and it
+settles one question that the others leave open: **which of a conversation's material a panel
+shows**，because there are two defensible lists and they are different.
 
-- It reads `GET /api/sources?sessionId=…`, whose predicate is "held by this conversation **or**
-  linked into it" — its own files plus every upload, page and `@`-reference the conversation has
-  taken in.
-- It deliberately does **not** read `GET /api/sessions/:id/sources`, which is the union with the
-  workspace. That route is the model's *whitelist*, verbatim — what `read_document` may open — and
-  a panel built on it would list a workspace's whole corpus beside the three files the
-  conversation is actually about. "What may be read" and "what this is working from" are not the
-  same question, and the app now asks both in different places.
+- It reads `GET /api/resources?sessionId=…`, whose predicate is "the references this conversation
+  holds" — its own files, its uploads, its pages and every `@`-reference it has taken in. Since v4
+  those are one row rather than two: a reference owned by the session *is* the link, which is why
+  the library lists an upload once where v3 listed it through two link tables.
+- It deliberately does **not** read `GET /api/sessions/:id/resources`. That route is the model's
+  *whitelist*, verbatim — the three arms `read_document` is bound to — and a panel built on it
+  would list the whole granted corpus beside the three files the conversation is actually about.
+  "What may be read" and "what this is working from" are not the same question, and the app now
+  asks both in different places.
 
 The consequences that are decisions rather than details:
 
 - **The category filter is client-side**, and its option list is derived from the rows already
-  fetched. Both halves are the opposite of the source browser's, and both are about scope: the
+  fetched. Both halves are the opposite of the library browser's, and both are about scope: the
   browser cannot answer "which categories exist" in the same request (so it makes a second,
   scope-only one) and must filter on the server (a workspace can hold tens of thousands of rows),
   while this list is one conversation's. Filtering here also keeps the server's bounded
-  `reconcileFilesystem` walk, which runs at the top of every `GET /api/sources`, off a control the
-  user may press repeatedly.
+  `reconcileFilesystem` walk, which runs at the top of every `GET /api/resources`, off a control
+  the user may press repeatedly.
 - **No folders, no rename, no move, no delete.** A conversation's material is written by the agent
-  and by what the user references; the place it gets organised is the library dialog the chat
-  header opens. A tree here would be a second, weaker file manager for a directory nobody laid
+  and by what the user references; the place it gets organised is the library dialog the rail's
+  library row opens. A tree here would be a second, weaker file manager for a directory nobody laid
   out — the requirement behind this panel says as much.
 - **`turn.finished` is the only event it subscribes to.** A turn is what links a `@`-reference and
   what a tool writes a file through, so it is the one moment the list can have changed. There is
-  no `source.added` event and there should not be: the client is what asked for every addition, so
-  the store already knows, and an event would be a second way to learn one fact.
-- **A row opens the ordinary file preview**, through `store.openSourceFile` — the same dialog the
-  file tree and the diagram panel reach, addressed by source id rather than by path. That path is
-  why `readPreviewFile` exists at all (`docs/file-preview.md`).
+  no `resource.added` event and there should not be: the client is what asked for every addition,
+  so the store already knows, and an event would be a second way to learn one fact.
+- **A row opens the ordinary file preview**, through `store.openResourceFile` — the same dialog the
+  file tree and the diagram panel reach, addressed by a **reference** id rather than by a path.
+  That a reference is addressable at all is why `readPreviewFile` exists (`docs/file-preview.md`).
 - Its category labels are **not** new keys: `sources.category.*` is already a catalog key per
   value and already an allowed dynamic prefix, so the filter spells a category the same way every
   other surface does. Its own strings are under `widgets.sources.*`.
@@ -588,7 +590,7 @@ Each widget that has a rule of its own has a spec of its own: `e2e/plan.spec.ts`
 `e2e/diagram.spec.ts`, `e2e/insight.spec.ts` — the last scripting a pass over HTTP and then
 asserting what a person sees: an item you keep surviving the next pass while the rest are
 replaced, and a pass that produced nothing usable leaving the list exactly as it was — and
-`e2e/sources-widget.spec.ts`, which makes its material the two ways a conversation really gets
+`e2e/resources-widget.spec.ts`, which makes its material the two ways a conversation really gets
 some (an upload through the composer, a file a scripted tool call wrote) because "those two land
 in one list" is the registry's claim rather than the panel's.
 

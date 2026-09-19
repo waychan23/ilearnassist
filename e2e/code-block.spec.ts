@@ -53,9 +53,12 @@ test("a code block shows the file and language its fence names", async ({ page, 
   await expect(second.locator(".code-lang")).toHaveText("ts");
   await expect(second.locator(".code-file")).toHaveCount(0);
 
-  // The third names nothing, and renders exactly as every code block did before this existed.
+  // The third names nothing, so neither name is drawn — but the strip is still there, because it
+  // is the copy control's row and not a decoration that happens to hold one.
   const third = content.locator("pre.code-block").nth(2);
-  await expect(third.locator(".code-head")).toHaveCount(0);
+  await expect(third.locator(".code-file")).toHaveCount(0);
+  await expect(third.locator(".code-lang")).toHaveCount(0);
+  await expect(third.locator(".code-copy")).toBeVisible();
   await expect(third).toContainText("plain text");
 });
 
@@ -95,6 +98,56 @@ test("a long filename stays clear of the copy control", async ({ page, request }
     .locator(".code-file")
     .evaluate((node) => getComputedStyle(node).textOverflow);
   expect(overflow).toBe("ellipsis");
+});
+
+test("the header stays put when a wide block is scrolled sideways", async ({ page, request }) => {
+  /*
+   * The layout claim this spec exists for now, and it is one only a browser can check: the strip
+   * is `position: sticky; left: 0` **inside** the `<pre>`, which is the `overflow-x` container —
+   * so scrolling the code sideways must leave the filename and the copy control where they are.
+   *
+   * It used to fail, and the way it failed is why the fix is a structure rather than a rule: the
+   * control was `position: absolute` against the `<pre>`, and an absolutely positioned child of a
+   * scroll container travels with the content. Scrolling a long line carried the button, the
+   * filename and the language off-screen together.
+   */
+  await scriptLlm(request, {
+    turns: [{ content: "```python wide.py\n" + "x = 1  # " + "y".repeat(300) + "\n```" }],
+  });
+
+  await page.goto("/");
+  await enterWorkspace(page);
+  await page.getByTestId("composer-input").fill("宽代码块");
+  await page.getByTestId("composer-send").click();
+
+  const block = page
+    .getByTestId("message-assistant")
+    .last()
+    .getByTestId("message-content")
+    .locator("pre.code-block")
+    .first();
+  await expect(block.locator(".code-file")).toBeVisible();
+
+  // Scroll the code its full width, and measure the strip before and after.
+  const scrolled = await block.evaluate((node) => {
+    node.scrollLeft = node.scrollWidth;
+    return node.scrollLeft;
+  });
+  // The premise: there *is* something to scroll, or the claim below is vacuous.
+  expect(scrolled).toBeGreaterThan(0);
+
+  const file = await block.locator(".code-file").boundingBox();
+  const copy = await block.locator(".code-copy").boundingBox();
+  const box = await block.boundingBox();
+  expect(file).not.toBeNull();
+  expect(copy).not.toBeNull();
+  expect(box).not.toBeNull();
+
+  // Both are still over the block, on the left where they started — not off the edge with the
+  // code they were scrolling over.
+  expect(file!.x).toBeGreaterThanOrEqual(box!.x - 1);
+  expect(copy!.x + copy!.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
+  expect(file!.x).toBeLessThan(box!.x + box!.width / 2);
 });
 
 test("the header is the renderer's chrome, not the message's text", async ({ page, request }) => {

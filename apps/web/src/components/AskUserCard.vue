@@ -233,7 +233,14 @@ const panelId = `${uid.value}-panel`;
 </script>
 
 <template>
-  <div class="ask-card" :class="{ live: answerable }" data-testid="ask-user-card">
+  <!-- The call's own id, for the reason `QuizCard` gives: a jump anchor addresses a card, and a
+       card with no id on it cannot be found. -->
+  <div
+    class="ask-card"
+    :class="{ live: answerable }"
+    data-testid="ask-user-card"
+    :data-tool-call-id="toolCall.id"
+  >
     <div class="ask-head">
       <Icon name="help" class="mark" />
       <span class="title">{{ t("askUser.title") }}</span>

@@ -494,17 +494,6 @@ export const THREAD_REASONING_ENV = "ILA_THREAD_REASONING";
 export const INSIGHT_REASONING_ENV = "ILA_INSIGHT_REASONING";
 
 /**
- * The environment variable that overrides the note export's reasoning mode.
- *
- * A **third switch**, for the reason the second is not a share of the first: each one changes
- * one call alone, and overloading one would make tuning that call silently re-tune another. This
- * one arguably wants thinking *least* of the three — it is writing a summary of a transcript
- * that is handed to it in full, not judging or reflecting — so an operator whose endpoint bills
- * for reasoning has a reason to switch exactly this one off.
- */
-export const NOTE_SYNC_REASONING_ENV = "ILA_NOTE_SYNC_REASONING";
-
-/**
  * Whether an out-of-band model call may run chain-of-thought.
  *
  * - `auto` (unset): follow the model record — a model with the `reasoning` capability thinks
@@ -564,13 +553,6 @@ export function insightReasoningSetting(
   env: NodeJS.ProcessEnv = process.env
 ): OutOfBandReasoningSetting {
   return parseReasoning(env[INSIGHT_REASONING_ENV], INSIGHT_REASONING_ENV);
-}
-
-/** Read the note export's reasoning override. Defaults to `auto`, like the other two. */
-export function noteSyncReasoningSetting(
-  env: NodeJS.ProcessEnv = process.env
-): OutOfBandReasoningSetting {
-  return parseReasoning(env[NOTE_SYNC_REASONING_ENV], NOTE_SYNC_REASONING_ENV);
 }
 
 /**

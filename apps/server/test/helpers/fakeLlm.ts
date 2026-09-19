@@ -67,7 +67,6 @@ export interface FakeTurn {
 const OUT_OF_BAND_MARKERS = [
   "topic-classification function", // threads.ts — thread.system
   "reflective study coach", // insights.ts — insight.system
-  "short summary of a study conversation", // notesExport.ts — notesSummary.system
   /*
    * `agent/title.ts` — TITLE_SYSTEM_PROMPT. In the list because a spec needs to make the titler
    * **fail**, and there is no other body-borne way to say so: the sticky `title` cannot be set to

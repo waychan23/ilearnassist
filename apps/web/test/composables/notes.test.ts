@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiErrorBody, Note, NoteType } from "@ilearnassist/shared";
+import { NOTE_QUOTE_MAX } from "@ilearnassist/shared";
 import { ApiError } from "../../src/utils/apiError";
 
 /**
@@ -39,15 +40,18 @@ vi.mock("../../src/api/client", () => ({
 
 import { useAppStore } from "../../src/stores/app";
 import {
+  canAnnotate,
   claimNotes,
-  figureNoteRequest,
   noteList,
   notesClaimRefused,
   notesError,
+  notesWritable,
+  objectNoteRequest,
   openNewNoteEditor,
   openNoteEditor,
   releaseNotes,
   resetNotes,
+  setNotesWritable,
 } from "../../src/composables/notes";
 import {
   registerMessageNotesHost,
@@ -157,6 +161,36 @@ describe("claiming", () => {
     releaseNotes();
     expect(noteList.value).toEqual([]);
     expect(list.marks.at(-1)).toEqual([]);
+  });
+
+  it("says annotating is possible only where a window would render and a write would land", async () => {
+    /*
+     * The gate every 标注/笔记 control outside the panel is drawn on, and both halves are a way
+     * the control could render and then do nothing: with no widget claimed there is no host for
+     * the window, and with another client holding the conversation every write on the notes route
+     * is refused — so a button offered then would open a window whose Save fails.
+     */
+    expect(canAnnotate.value).toBe(false);
+
+    // The conversation has to be the one on screen as well as the one claimed: a control is drawn
+    // for the message list the reader is looking at, and that is the store's active session.
+    useAppStore().activeSessionId = SESSION;
+    await claimed([note()]);
+    expect(canAnnotate.value).toBe(true);
+
+    // Another client takes the lease: the flag is what the widget context *told* this module,
+    // which is the same value the panel's own add button obeys.
+    setNotesWritable(false);
+    expect(canAnnotate.value).toBe(false);
+
+    setNotesWritable(true);
+    expect(canAnnotate.value).toBe(true);
+
+    releaseNotes();
+    expect(canAnnotate.value).toBe(false);
+    // And the flag goes back to its default with the capability: nothing is installed to be
+    // forbidden, so a control left disabled afterwards would be disabled for no reason.
+    expect(notesWritable.value).toBe(true);
   });
 
   it("reports a load failure in the panel, and not as a toast", async () => {
@@ -315,25 +349,27 @@ describe("a note with no annotation", () => {
 });
 
 /**
- * A note about a 图 or a 表, whose window is built from the figure rather than from a selection.
+ * A note about an object, whose window is built from the object rather than from a selection.
  *
- * Three things are the entity's rules rather than incidental plumbing: the pair travels together
- * to the API, the kind starts at a stance rather than at 标注 (there is no passage to mark), and
- * there is nothing to locate — a figure note names no message, so a 定位 button would scroll
- * nowhere while looking exactly like one that works.
+ * Four things are the entity's rules rather than incidental plumbing: the pair travels together
+ * to the API, the 标注原文 carries the object's own title or summary (an object note has no
+ * passage, and a note with nothing in that field is one the reader cannot place), the kind starts
+ * at 标注 — a note made by pressing 标注/笔记 on an object marks that object — and there is
+ * nothing to locate, since an object note names no message.
  */
-describe("a note about a figure", () => {
-  it("sends the target pair, and offers no 定位", async () => {
+describe("a note about an object", () => {
+  it("sends the target pair with the summary as its 标注原文, and offers no 定位", async () => {
     await claimed();
-    const request = figureNoteRequest({
+    const request = objectNoteRequest({
       kind: "diagram",
       ref: "auth-flow.mmd",
       label: "auth-flow",
+      summary: "登录与刷新的时序",
     })!;
 
     expect(request.draft).toMatchObject({
-      quote: "",
-      type: "idea",
+      quote: "登录与刷新的时序",
+      type: "annotation",
       content: "",
       target: { kind: "diagram", ref: "auth-flow.mmd", label: "auth-flow" },
     });
@@ -342,27 +378,61 @@ describe("a note about a figure", () => {
     mocks.api.createNote.mockResolvedValue(
       note({ id: "n10", messageId: null, quote: "", targetKind: "diagram", targetRef: "auth-flow.mmd" })
     );
-    await expect(request.save({ type: "idea", content: "这一步没看懂" })).resolves.toBe(true);
+    await expect(request.save({ type: "annotation", content: "这一步没看懂" })).resolves.toBe(true);
     expect(mocks.api.createNote).toHaveBeenCalledWith(SESSION, {
       targetKind: "diagram",
       targetRef: "auth-flow.mmd",
-      type: "idea",
+      quote: "登录与刷新的时序",
+      type: "annotation",
       content: "这一步没看懂",
     });
   });
 
-  it("carries a table the same way, with the kind that says which table to look in", async () => {
+  it("falls back to the object's title when there is no summary", async () => {
     await claimed();
-    const request = figureNoteRequest({ kind: "table", ref: "scores", label: "scores" })!;
-    mocks.api.createNote.mockResolvedValue(note({ id: "n11", targetKind: "table", targetRef: "scores" }));
+    const request = objectNoteRequest({ kind: "table", ref: "scores", label: "对比表" })!;
+    mocks.api.createNote.mockResolvedValue(
+      note({ id: "n11", targetKind: "table", targetRef: "scores" })
+    );
     await request.save({ type: "question", content: "第二列是什么？" });
     expect(mocks.api.createNote).toHaveBeenCalledWith(
       SESSION,
-      expect.objectContaining({ targetKind: "table", targetRef: "scores" })
+      expect.objectContaining({ targetKind: "table", targetRef: "scores", quote: "对比表" })
     );
   });
 
-  it("hands the editor the target when an existing figure note is opened, and nothing for a text note", async () => {
+  it("clips a long summary to the server's own cap", async () => {
+    // A summary is model-written prose of no particular length, and a create refused for being
+    // too long is a button that does nothing.
+    await claimed();
+    const request = objectNoteRequest({
+      kind: "resource",
+      ref: "file-1",
+      label: "handbook.pdf",
+      summary: "x".repeat(NOTE_QUOTE_MAX + 50),
+    })!;
+    expect(request.draft.quote).toHaveLength(NOTE_QUOTE_MAX);
+  });
+
+  it("carries a resource, which is addressed by id rather than by name", async () => {
+    await claimed();
+    const request = objectNoteRequest({
+      kind: "resource",
+      ref: "wr-7",
+      label: "handbook.pdf",
+      summary: "员工手册",
+    })!;
+    mocks.api.createNote.mockResolvedValue(
+      note({ id: "n14", targetKind: "resource", targetRef: "wr-7" })
+    );
+    await request.save({ type: "annotation", content: "" });
+    expect(mocks.api.createNote).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ targetKind: "resource", targetRef: "wr-7", quote: "员工手册" })
+    );
+  });
+
+  it("hands the editor the target when an existing object note is opened, and nothing for a text note", async () => {
     // The window has to keep showing what the note is about — it is the one place that would
     // otherwise have forgotten, since the note's own row is behind the card.
     await claimed([
@@ -374,19 +444,19 @@ describe("a note about a figure", () => {
     expect(list.editors.at(-1)!.draft.target).toMatchObject({ kind: "table", ref: "scores" });
 
     // And a text note gets none, so the window draws no 标注对象 field for a note that has no
-    // figure — the absence is the field, not a value saying "text".
+    // target — the absence is the field, not a value saying "text".
     openNoteEditor(noteList.value.find((n) => n.id === "n13")!);
     expect(list.editors.at(-1)!.draft.target).toBeUndefined();
   });
 
   it("builds no window at all when there is no conversation loaded", () => {
     /*
-     * `figureNoteRequest` reads the loaded session, so a figure row drawn before a conversation
+     * `objectNoteRequest` reads the loaded session, so a figure row drawn before a conversation
      * is on screen — which the panel renders for a moment on every switch — cannot file a note
      * against whichever conversation happens to be loaded next. Null is the caller's answer not
      * to offer the control.
      */
     resetNotes();
-    expect(figureNoteRequest({ kind: "diagram", ref: "x.mmd", label: "x" })).toBeNull();
+    expect(objectNoteRequest({ kind: "diagram", ref: "x.mmd", label: "x" })).toBeNull();
   });
 });

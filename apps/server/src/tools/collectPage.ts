@@ -79,16 +79,15 @@ export function buildCollectPageTool(ctx: CollectPageContext & { cache: PageCach
         user: ctx.user,
         userId: ctx.userId,
         owner: { kind: "session", id: ctx.sessionId },
-        workspaceId: ctx.workspaceId,
         url,
         summary,
         cache: ctx.cache,
       });
 
       return (
-        `Kept "${row.name}" as a source (id ${row.id}). ` +
+        `Kept "${row.title}" (id ${row.id}). ` +
         `It is now part of this conversation: it can be read with read_document, listed in the ` +
-        `source browser, and referenced again without fetching it a second time.`
+        `library, and referenced again without fetching it a second time.`
       );
     },
     {

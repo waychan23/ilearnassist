@@ -14,7 +14,7 @@ import {
   MAX_UPLOAD_CEILING_BYTES,
   MIN_UPLOAD_LIMIT_BYTES,
 } from "@ilearnassist/shared";
-import { sourceRawPath } from "../src/sourcePaths.js";
+import { rawFilePath } from "../src/resourcePaths.js";
 import { captureWebPage } from "../src/webCapture.js";
 import { DEFAULT_SESSION_TITLE } from "../src/db.js";
 import { NO_SCOPE, resolveWorkspaceScope } from "../src/workspaceScope.js";
@@ -24,9 +24,10 @@ import type {
   Copilot,
   DirectoryListing,
   FileContent,
+  HealthResponse,
   ProviderConfig,
   PublicConfig,
-  Source,
+  WorkResource,
   Session,
   Workspace,
 } from "@ilearnassist/shared";
@@ -72,10 +73,24 @@ const inject = (options: {
 }) => env.inject(options);
 
 describe("GET /api/health and /api/config", () => {
-  it("reports health", async () => {
+  it("reports health, and which installation is answering", async () => {
+    /*
+     * The instance id rides the one route a client can call before it has a session, because that
+     * is the question it settles: a token and a `/w/<id>/s/<id>` belong to one database, and an
+     * origin can outlive it — the desktop panel's data-root picker restarts the server on the
+     * same port. Without it the difference arrives as a 401 indistinguishable from an expired
+     * session. See `apps/web/src/composables/instance.ts`.
+     */
     const res = await inject({ method: "GET", url: "/api/health" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true });
+    const body = res.json<HealthResponse>();
+    expect(body.ok).toBe(true);
+    expect(body.instance).toBeTruthy();
+
+    // Stable for the installation — a value that changed per request would sign every client out
+    // on its next reload.
+    const again = (await inject({ method: "GET", url: "/api/health" })).json<HealthResponse>();
+    expect(again.instance).toBe(body.instance);
   });
 
   it("publishes the bootstrap config", async () => {
@@ -412,7 +427,7 @@ describe("workspace files", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    // Never `application/pdf`, and deliberately not the `mimeType` that `/api/sources/:id/raw`
+    // Never `application/pdf`, and deliberately not the `mimeType` that `/api/resources/:id/raw`
     // serves: these bytes are re-materialised into our own DOM by the office plugins.
     expect(res.headers["content-type"]).toBe("application/octet-stream");
     expect(res.headers["content-disposition"]).toBe("attachment");
@@ -450,7 +465,7 @@ describe("workspace files", () => {
     const session = await newSession(env, workspace.id);
     const res = await inject({
       method: "POST",
-      url: `/api/sessions/${session.id}/sources`,
+      url: `/api/sessions/${session.id}/resources`,
       payload: {
         name: "big.txt",
         mimeType: "text/plain",
@@ -977,7 +992,7 @@ describe("sessions", () => {
       mimeType: "text/plain",
       data: Buffer.from("hello"),
     });
-    const rawPath = sourceRawPath(env.userLayout, attachment.id, attachment.mimeType);
+    const rawPath = rawFilePath(env.userLayout, attachment.id, attachment.mimeType);
     expect(existsSync(rawPath)).toBe(true);
 
     await inject({ method: "DELETE", url: `/api/sessions/${session.id}` });
@@ -1159,16 +1174,16 @@ describe("sources", () => {
   });
 
   const upload = (payload: object) =>
-    inject({ method: "POST", url: `/api/sessions/${session.id}/sources`, payload });
+    inject({ method: "POST", url: `/api/sessions/${session.id}/resources`, payload });
 
   /** The bytes as the server stored them, which is what the assertions care about. */
   const rawPathOf = (attachment: Attachment) =>
-    sourceRawPath(env.userLayout, attachment.id, attachment.mimeType);
+    rawFilePath(env.userLayout, attachment.id, attachment.mimeType);
 
   it("404s for an unknown session", async () => {
     const res = await inject({
       method: "POST",
-      url: "/api/sessions/nope/sources",
+      url: "/api/sessions/nope/resources",
       payload: { name: "a.txt", mimeType: "text/plain", data: "aGk=" },
     });
     expect(res.statusCode).toBe(404);
@@ -1247,10 +1262,10 @@ describe("sources", () => {
     expect(readdirSync(env.userLayout.rawDir)).toHaveLength(before + 1);
   });
 
-  it("makes a source readable from another conversation in the same workspace", async () => {
-    // What the workspace link buys, and the whole reason the whitelist is a union: a
-    // document uploaded here is readable from a sibling conversation, while `read_file`
-    // could never reach it at all (it is outside every workspace sandbox).
+  it("makes a file readable from another conversation in the same workspace", async () => {
+    // What the workspace reference buys, and the whole reason the whitelist has a workspace arm:
+    // a document uploaded here is readable from a sibling conversation, while `read_file` could
+    // never reach it at all (it is outside every workspace sandbox).
     const attachment = await uploadAttachment(env, session.id, {
       name: "shared.pdf",
       mimeType: "application/pdf",
@@ -1258,13 +1273,13 @@ describe("sources", () => {
     });
     const sibling = await newSession(env, workspace.id);
 
-    const readable = env.server.db.listReadableSources(
+    const readable = env.server.db.listReadableWorkResources(
       env.user.id,
       sibling.id,
       workspace.id,
       NO_SCOPE
     );
-    expect(readable.map((s) => s.id)).toContain(attachment.id);
+    expect(readable.map((r) => r.resourceId)).toContain(attachment.id);
   });
 
   it("serves the bytes back with the right type and a long cache", async () => {
@@ -1272,7 +1287,7 @@ describe("sources", () => {
       await upload({ name: "a.txt", mimeType: "text/plain", data: Buffer.from("hello").toString("base64") })
     ).json<Attachment>();
 
-    const res = await inject({ method: "GET", url: `/api/sources/${attachment.id}/raw` });
+    const res = await inject({ method: "GET", url: `/api/files/${attachment.id}/raw` });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("text/plain");
     expect(res.headers["cache-control"]).toContain("immutable");
@@ -1280,8 +1295,8 @@ describe("sources", () => {
   });
 
   it("404s for an unknown source", async () => {
-    expect((await inject({ method: "GET", url: "/api/sources/nope/raw" })).statusCode).toBe(404);
-    expect((await inject({ method: "GET", url: "/api/sources/nope/preview" })).statusCode).toBe(404);
+    expect((await inject({ method: "GET", url: "/api/files/nope/raw" })).statusCode).toBe(404);
+    expect((await inject({ method: "GET", url: "/api/resources/nope/preview" })).statusCode).toBe(404);
   });
 
   /*
@@ -1307,7 +1322,7 @@ describe("sources", () => {
       })
     ).json<Attachment>();
 
-    const res = await inject({ method: "GET", url: `/api/sources/${attachment.id}/preview` });
+    const res = await inject({ method: "GET", url: `/api/resources/${attachment.resourceId}/preview` });
     expect(res.statusCode).toBe(200);
     expect(res.json<FileContent>()).toMatchObject({
       // The stored name, not the uuid the bytes sit under on disk.
@@ -1317,6 +1332,54 @@ describe("sources", () => {
       truncated: false,
       size: body.length,
     });
+  });
+
+  it("tells a reference's title apart from the file's own name", async () => {
+    /*
+     * **The bug this closes.** A reference's title is prose and the preview's classification was
+     * made from it, so a picture titled 截图 came back with no extension at all and the dialog's
+     * gate answered "this format cannot be previewed" — for a `.png` it renders perfectly well.
+     *
+     * The two names answer two questions: `name` is what to call it (the title the user chose),
+     * `fileName` is what it *is* (the last segment of the path the bytes are at). Only the second
+     * can decide anything — the viewer picks a plugin by it, the highlighter picks a grammar, a
+     * download is saved under it — and it is also what keeps a document's extracted text
+     * previewing as text rather than as the PDF it came from.
+     */
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    const created = (
+      await inject({
+        method: "POST",
+        url: `/api/workspaces/${workspace.id}/files/upload`,
+        payload: {
+          dir: "",
+          name: "shot.png",
+          mimeType: "image/png",
+          data: png.toString("base64"),
+          title: "截图",
+        },
+      })
+    ).json<WorkResource>();
+
+    const res = await inject({ method: "GET", url: `/api/resources/${created.id}/preview` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<FileContent>()).toMatchObject({
+      name: "截图",
+      fileName: "shot.png",
+      kind: "binary",
+    });
+
+    // And the untitled case is unchanged: one name, both fields.
+    const plain = (
+      await inject({
+        method: "POST",
+        url: `/api/workspaces/${workspace.id}/files/upload`,
+        payload: { dir: "", name: "plain.txt", data: Buffer.from("hi").toString("base64") },
+      })
+    ).json<WorkResource>();
+    expect(
+      (await inject({ method: "GET", url: `/api/resources/${plain.id}/preview` })).json<FileContent>()
+    ).toMatchObject({ name: "plain.txt", fileName: "plain.txt", kind: "text" });
   });
 
   it("carries the page's URL when the source is one, and nothing when it is not", async () => {
@@ -1334,7 +1397,6 @@ describe("sources", () => {
       user: env.userLayout,
       userId: env.user.id,
       owner: { kind: "workspace", id: workspace.id },
-      workspaceId: workspace.id,
       url,
       cache: new Map([
         [
@@ -1348,7 +1410,8 @@ describe("sources", () => {
       ]),
     });
 
-    const preview = await inject({ method: "GET", url: `/api/sources/${page.id}/preview` });
+    // `page.id` is the **reference**; `page.resourceId` is the page behind it.
+    const preview = await inject({ method: "GET", url: `/api/resources/${page.id}/preview` });
     expect(preview.statusCode).toBe(200);
     expect(preview.json<FileContent>()).toMatchObject({ kind: "text", url });
 
@@ -1362,7 +1425,7 @@ describe("sources", () => {
         data: Buffer.from(`plain ${Date.now()}`).toString("base64"),
       })
     ).json<Attachment>();
-    const plain = await inject({ method: "GET", url: `/api/sources/${attachment.id}/preview` });
+    const plain = await inject({ method: "GET", url: `/api/resources/${attachment.resourceId}/preview` });
     expect(plain.json<FileContent>().url).toBeUndefined();
   });
 
@@ -1377,7 +1440,7 @@ describe("sources", () => {
       })
     ).json<Attachment>();
 
-    const res = await inject({ method: "GET", url: `/api/sources/${attachment.id}/preview` });
+    const res = await inject({ method: "GET", url: `/api/resources/${attachment.resourceId}/preview` });
     expect(res.json<FileContent>()).toMatchObject({
       kind: "markdown",
       text: "# Source preview",
@@ -1399,7 +1462,7 @@ describe("sources", () => {
     expect(uploaded.body).not.toContain(env.userLayout.rawDir);
     expect(uploaded.body).not.toContain(env.user.id);
 
-    const listed = await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` });
+    const listed = await inject({ method: "GET", url: `/api/sessions/${session.id}/resources` });
     expect(listed.body).not.toContain("rawPath");
     expect(listed.body).not.toContain("userId");
     expect(listed.body).not.toContain(env.userLayout.rawDir);
@@ -1410,7 +1473,7 @@ describe("sources", () => {
     // reach a file either way: the path is a validated column, and the id never becomes one.
     const res = await inject({
       method: "GET",
-      url: `/api/sources/${encodeURIComponent("../../../../etc/passwd")}/raw`,
+      url: `/api/files/${encodeURIComponent("../../../../etc/passwd")}/raw`,
     });
     expect(res.statusCode).toBe(404);
   });
@@ -1423,43 +1486,43 @@ describe("sources", () => {
       await upload({ name: "a.txt", mimeType: "text/plain", data: "aGk=" })
     ).json<Attachment>();
 
-    const listed = (await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })).json<
-      { id: string }[]
+    const listed = (await inject({ method: "GET", url: `/api/sessions/${session.id}/resources` })).json<
+      { resourceId: string }[]
     >();
-    expect(listed.map((s) => s.id)).toEqual([attachment.id]);
+    expect(listed.map((r) => r.resourceId)).toEqual([attachment.id]);
   });
 
-  it("lists a file once when its conversation and its workspace both link it", async () => {
-    // Uploading writes *two* link rows — one to the conversation, one to the workspace — from
-    // two separate `now()` calls, and the read unioned them. A `UNION` dedupes whole rows, so
-    // it only collapsed the pair while both timestamps agreed to the millisecond; a
-    // millisecond apart and the same file came back twice, which is one file showing as two
-    // chips. Hence the wait: it puts the two links on opposite sides of a millisecond, which
-    // is the case a second conversation in the same workspace produces for free (its own link
-    // is written now, the workspace's keeps the time it was first uploaded).
+  it("lists a file once when its conversation and its workspace both hold it", async () => {
+    /*
+     * A conversation's own reference *is* its membership — there is no link table to union in a
+     * second row, so a file appearing twice is unrepresentable rather than merely avoided. The
+     * case is still worth pinning because the previous design got it wrong: an upload wrote two
+     * link rows from two `now()` calls, and a `UNION` only collapsed them while the two
+     * timestamps happened to agree.
+     *
+     * The second conversation uploads the *same bytes*, so `UNIQUE (user_id, sha256)` makes this
+     * one file with two references — which the whitelist's session arm must not double-count.
+     */
     const first = (
       await upload({ name: "dup.txt", mimeType: "text/plain", data: "aGk=" })
     ).json<Attachment>();
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
     const other = await newSession(env, workspace.id);
-    // The same bytes, so `UNIQUE (user_id, sha256)` makes this one source with two references
-    // rather than two sources — which is the whole reason both arms can name the same id.
     await uploadAttachment(env, other.id, {
       name: "dup.txt",
       mimeType: "text/plain",
       data: Buffer.from("hi"),
     });
 
-    const listed = (await inject({ method: "GET", url: `/api/sessions/${other.id}/sources` })).json<
-      { id: string }[]
+    const listed = (await inject({ method: "GET", url: `/api/sessions/${other.id}/resources` })).json<
+      { resourceId: string }[]
     >();
 
-    expect(listed.map((s) => s.id)).toEqual([first.id]);
+    expect(listed.map((r) => r.resourceId)).toEqual([first.id]);
   });
 
   it("lists the account's files, newest first, across every conversation", async () => {
-    // Account-wide rather than per-conversation: this is the list the sources dialog manages,
+    // Account-wide rather than per-conversation: this is the list the library dialog manages,
     // and the only place a file with no remaining references is still visible.
     const first = await uploadAttachment(env, session.id, {
       name: "older.txt",
@@ -1473,13 +1536,14 @@ describe("sources", () => {
       data: Buffer.from("two"),
     });
 
-    const listed = (await inject({ method: "GET", url: "/api/sources" })).json<Source[]>();
-    const ids = listed.map((s) => s.id);
+    const listed = (await inject({ method: "GET", url: "/api/resources" })).json<WorkResource[]>();
+    // Rows are **references**, so the id a caller addresses one by is `resourceId`.
+    const ids = listed.map((r) => r.resourceId);
     expect(ids).toContain(first.id);
     expect(ids).toContain(second.id);
     // Newest first, so the file just uploaded is the one at the top.
     expect(ids.indexOf(second.id)).toBeLessThan(ids.indexOf(first.id));
-    expect(listed.find((s) => s.id === second.id)?.name).toBe("newer.txt");
+    expect(listed.find((r) => r.resourceId === second.id)?.title).toBe("newer.txt");
   });
 
   it("does not list another account's files", async () => {
@@ -1490,47 +1554,108 @@ describe("sources", () => {
     });
 
     const bob = await env.asUser("Bob");
-    const theirs = (await bob.inject({ method: "GET", url: "/api/sources" })).json<Source[]>();
-    expect(theirs.map((s) => s.id)).not.toContain(mine.id);
+    const theirs = (await bob.inject({ method: "GET", url: "/api/resources" })).json<WorkResource[]>();
+    expect(theirs.map((r) => r.resourceId)).not.toContain(mine.id);
 
     // And Bob's empty list is empty, not a 404 — he has an account, it just holds nothing.
     expect(theirs).toEqual([]);
   });
 
-  it("hides a deleted file everywhere, and revives it on re-upload", async () => {
-    // The soft delete's one piece of real policy: `UNIQUE (user_id, sha256)` means the same
-    // bytes cannot become a second row, so a re-upload has to bring *this* row back — with its
-    // bytes, its parse state and its links, which is what makes it the same file rather than a
-    // lookalike that happens to have the same contents.
+  it("deletes the reference and its material, and leaves the other readers standing", async () => {
+    /*
+     * **The v5 delete, and it is one operation.** A reference is the handle every other part of
+     * the model reaches material through, so deleting one deletes what it names — and every
+     * *other* reader's row stays exactly where it is. Standing means inert: a reference whose
+     * material is gone resolves to nothing, which is how the panel, the whitelist and a message's
+     * chip each report it. Nothing has to rewrite another conversation's records to say so, and
+     * the conversation that was working from this file keeps the fact that it was.
+     *
+     * The chips are the second half: a message sent with a file keeps showing what was sent, so
+     * the snapshot survives the reference and the material both.
+     */
     const attachment = await uploadAttachment(env, session.id, {
       name: "doomed.txt",
       mimeType: "text/plain",
       data: Buffer.from("bye"),
     });
 
-    const res = await inject({ method: "DELETE", url: `/api/sources/${attachment.id}` });
-    expect(res.statusCode).toBe(200);
-
-    // Hidden from every reader, and the bytes stay.
-    expect(existsSync(rawPathOf(attachment))).toBe(true);
-    expect(
-      (await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })).json<unknown[]>()
-    ).toEqual([]);
-    const all = (await inject({ method: "GET", url: "/api/sources" })).json<{ id: string }[]>();
-    expect(all.map((s) => s.id)).not.toContain(attachment.id);
-    expect((await inject({ method: "GET", url: `/api/sources/${attachment.id}/raw` })).statusCode).toBe(404);
-
-    const revived = await uploadAttachment(env, session.id, {
+    // The same file, in a second conversation: one file, two references.
+    const other = await newSession(env, workspace.id);
+    const also = await uploadAttachment(env, other.id, {
       name: "doomed.txt",
       mimeType: "text/plain",
       data: Buffer.from("bye"),
     });
+    expect(also.id).toBe(attachment.id);
+    expect(also.resourceId).not.toBe(attachment.resourceId);
+
+    const res = await inject({
+      method: "DELETE",
+      url: `/api/resources/${attachment.resourceId}`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    /*
+     * Neither row is listed: this one because its reference is deleted, the sibling's because the
+     * file it names is. That is the whole report — no reader has to ask why.
+     */
+    const all = (await inject({ method: "GET", url: "/api/resources" })).json<{ id: string }[]>();
+    expect(all.map((r) => r.id)).not.toContain(attachment.resourceId);
+    expect(all.map((r) => r.id)).not.toContain(also.resourceId);
+
+    // The bytes stay where they are — a source has no trash directory, and a soft delete costs no
+    // disk, which is what a future restore would read.
+    expect(existsSync(rawPathOf(attachment))).toBe(true);
+    // The *file* is gone as far as any reader is concerned: the raw route resolves the row first.
+    expect(
+      (await inject({ method: "GET", url: `/api/files/${attachment.id}/raw` })).statusCode
+    ).toBe(404);
+    expect(
+      (await inject({ method: "GET", url: `/api/sessions/${other.id}/resources` })).json<
+        { resourceId: string }[]
+      >()
+    ).toEqual([]);
+
+    /*
+     * And nothing was dismantled: reviving the file brings the sibling's reference back. That is
+     * what "kept" has to mean — a sweep would have left the conversation unable to tell that it
+     * had ever been working from this file, which is the state v4 chose and v5 undoes.
+     */
+    env.server.db.reviveFileForUser(attachment.id, env.user.id);
+    const back = (await inject({ method: "GET", url: "/api/resources" })).json<{ id: string }[]>();
+    expect(back.map((r) => r.id)).toContain(also.resourceId);
+    // The deleted *reference* stays deleted, which is the half the user asked for.
+    expect(back.map((r) => r.id)).not.toContain(attachment.resourceId);
+  });
+
+  it("re-uploading deleted bytes revives the file, and makes a fresh reference", async () => {
+    /*
+     * The soft delete's other half: `UNIQUE (user_id, sha256)` means the same bytes cannot
+     * become a second *file*, so a re-upload after the file itself was deleted has to bring
+     * that row back — with its bytes and its summary, which is what makes it the same file
+     * rather than a lookalike. The reference is per conversation and is always new, because
+     * the old one may still be live for somebody else.
+     */
+    const attachment = await uploadAttachment(env, session.id, {
+      name: "doomed.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("bye again"),
+    });
+
+    // Deleting the *file*, the way the file manager does.
+    env.server.db.softDeleteFileForUser(attachment.id, env.user.id);
+    expect(env.server.db.getFileForUser(env.user.id, attachment.id)).toBeUndefined();
+
+    const revived = await uploadAttachment(env, session.id, {
+      name: "doomed.txt",
+      mimeType: "text/plain",
+      data: Buffer.from("bye again"),
+    });
     expect(revived.id).toBe(attachment.id);
     expect(
-      (await inject({ method: "GET", url: `/api/sessions/${session.id}/sources` })).json<
-        { id: string }[]
+      (await inject({ method: "GET", url: `/api/sessions/${session.id}/resources` })).json<
+        { id: string; resourceId: string }[]
       >()
-    ).toMatchObject([{ id: attachment.id }]);
-    expect((await inject({ method: "GET", url: `/api/sources/${attachment.id}/raw` })).statusCode).toBe(200);
+    ).toMatchObject([{ id: revived.resourceId, resourceId: revived.id }]);
   });
 });

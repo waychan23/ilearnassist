@@ -50,10 +50,26 @@ describe("write_file", () => {
     expect(existsSync(join(h.sessionDir, "deep/nested/a.txt"))).toBe(true);
   });
 
-  it("says which folder it wrote into", async () => {
+  it("says which folder it wrote into, and which reference it became", async () => {
+    /*
+     * The id in the sentence is the `ila_collect_page` shape, and both of its readers are why:
+     * the model gets a handle it can hand to `read_document` without listing a directory first,
+     * and the message list's file card reads it to offer 标注/笔记 — a note is anchored to a
+     * *reference*, and a card has only a path. `FileCard.vue` parses this sentence, so the
+     * wording is a contract rather than a message.
+     */
     await expect(
       tools().writeFile.invoke({ path: "a.txt", content: "hello" })
-    ).resolves.toBe("Wrote 5 characters to a.txt in the session folder.");
+    ).resolves.toBe("Wrote 5 characters to a.txt in the session folder (id wr-1).");
+  });
+
+  it("omits the id when the registry made no row", async () => {
+    // A caller whose `register` returns nothing still gets a sentence that reads as a sentence.
+    // `ctx` is the harness's own object, so this reaches the one callback the tools use.
+    h.ctx.register = () => undefined;
+    await expect(
+      h.tools.writeFile.invoke({ path: "b.txt", content: "hi" })
+    ).resolves.toBe("Wrote 2 characters to b.txt in the session folder.");
   });
 
   /*
@@ -200,13 +216,31 @@ describe("create_directory and delete_file", () => {
     expect(existsSync(join(h.sessionDir, "a.txt"))).toBe(false);
   });
 
-  it("deletes without unregistering", async () => {
-    // `delete_file` is a filesystem operation, not an application deletion: the row stays and
-    // the next read reports the file missing. A stored "deleted" flag would have to be written
-    // from here, which is what would make this tool a database writer.
+  it("hands a file that has a reference to the registry rather than unlinking it", async () => {
+    /*
+     * **The v5 rule, stated where the model can violate it.** A file some writer made
+     * referenceable is deleted *through* that reference — one operation owns the rows, the bytes
+     * and the trash — so the tool must not remove the bytes first: the registry's delete would
+     * then be handed a file that is already gone. It calls `unregister` instead, and the bytes
+     * are left for whoever handles it.
+     */
+    h.handlesRemoval = true;
     writeFileSync(join(h.sessionDir, "a.txt"), "x");
-    await tools().deleteFile.invoke({ path: "a.txt" });
-    expect(h.written).toEqual([]);
+    await expect(tools().deleteFile.invoke({ path: "a.txt" })).resolves.toBe(
+      "Deleted a.txt from the session folder."
+    );
+    expect(h.removed).toEqual([{ location: "session", relPath: "a.txt" }]);
+    expect(existsSync(join(h.sessionDir, "a.txt"))).toBe(true);
+  });
+
+  it("unlinks the file itself when nothing ever referenced it", async () => {
+    // The other answer: a `.mmd` nobody drew, a parse result — no reference, so the bytes are the
+    // whole of it, and the tool has to do the work the registry declined.
+    h.handlesRemoval = false;
+    writeFileSync(join(h.sessionDir, "loose.txt"), "x");
+    await tools().deleteFile.invoke({ path: "loose.txt" });
+    expect(h.removed).toEqual([{ location: "session", relPath: "loose.txt" }]);
+    expect(existsSync(join(h.sessionDir, "loose.txt"))).toBe(false);
   });
 
   it("deletes an empty directory", async () => {

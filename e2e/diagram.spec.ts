@@ -363,7 +363,7 @@ test("the widget lists what the conversation has drawn, and locates it", async (
   await expect(page.getByTestId("file-preview-diagram-source")).toContainText("开始");
 });
 
-test("the conversation's folder is browsable from the sidebar's library", async ({
+test("a diagram's own file stays out of the library, and is opened from the panel", async ({
   page,
   request,
 }) => {
@@ -375,19 +375,22 @@ test("the conversation's folder is browsable from the sidebar's library", async 
   await expect(page.getByTestId("diagram-row").first()).toBeVisible({ timeout: 20_000 });
 
   /*
-   * Opened from the sidebar's library row rather than from the panel: a diagram is a source like
-   * any other, so the one control that lists the workspace's material lists it too — by name, with
-   * the panel staying the *filtered* view for rows the model drew. The row is the sidebar's, and
-   * that rail is where this conversation's workspace is, so the browser opens already narrowed to
-   * it — which is what makes the conversation's own folder a row in the list below.
+   * **A diagram's `.mmd` is deliberately not in the library**, and this is the case that says so.
+   *
+   * v3 gave a diagram a `sources` row so it could be seen, which is exactly the muddle the v4
+   * split undoes: a diagram's file is a `files` row with **no** reference, so it is in the 图表
+   * panel and nowhere else. The requirement's own words — "cancel one source per diagram" — are
+   * what this asserts, and asserting the *absence* is the only way to tell "not listed" from
+   * "listed under a name I did not guess".
    */
-  await page.getByTestId("open-sources").click();
-  const dialog = page.getByTestId("sources-dialog");
+  await page.getByTestId("open-library").click();
+  const dialog = page.getByTestId("library-dialog");
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("resource-row").filter({ hasText: "browsable.mmd" })).toHaveCount(0);
 
-  const row = dialog.getByTestId("source-row").filter({ hasText: "browsable.mmd" });
-  await expect(row).toBeVisible();
-  await row.getByTestId("source-open").click();
+  // The panel is where it lives, and it opens the same viewer the library row would have.
+  await page.keyboard.press("Escape");
+  await page.getByTestId("diagram-row").first().click();
 
   await expect(page.getByTestId("file-preview-diagram").getByTestId("mermaid")).toHaveAttribute(
     "data-render-state",
@@ -395,7 +398,6 @@ test("the conversation's folder is browsable from the sidebar's library", async 
     { timeout: 20_000 }
   );
   await page.getByTestId("file-preview-close").click();
-  await dialog.getByTestId("sources-done").click();
   await expect(dialog).toBeHidden();
 });
 

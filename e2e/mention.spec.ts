@@ -67,7 +67,7 @@ test("picks a workspace file with @ and sends it as a reference", async ({ page,
   // *picked*, the chip is what it *means*.
   await expect(page.getByTestId("composer-input")).toHaveValue("看 @report.md ");
   await expect(
-    page.getByTestId("composer-sources").getByTestId("attachment-chip").filter({ hasText: "report.md" })
+    page.getByTestId("composer-resources").getByTestId("attachment-chip").filter({ hasText: "report.md" })
   ).toBeVisible();
 
   await page.getByTestId("composer-send").click();
@@ -85,6 +85,78 @@ test("picks a workspace file with @ and sends it as a reference", async ({ page,
       { timeout: 15000 }
     )
     .toContain("the referenced contents");
+});
+
+test("a long list is paged, and the pager keeps loading until nothing is left", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The list window, from the outside. `apps/web/test/utils/resourcePicker.test.ts` pins the
+   * arithmetic; what only a browser can show is that the pager is *wired* — that the control is
+   * drawn when rows are past the window, that pressing it grows the window, and that it retires
+   * itself once the list is complete rather than offering more of nothing.
+   *
+   * The rows are written straight to the workspace's folder rather than uploaded: the picker's
+   * list comes from `/api/resources`, whose route reconciles the filesystem first, so on-disk
+   * files are exactly the input it reads.
+   */
+  const name = `MentionPage-${Date.now()}`;
+  const res = await request.post("/api/workspaces", { data: { name } });
+  const { workdirPath } = (await res.json()) as { workdirPath: string };
+  const total = 115;
+  for (let i = 0; i < total; i++) {
+    writeFileSync(join(workdirPath, `paged-${String(i).padStart(3, "0")}.md`), `# ${i}`);
+  }
+
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  await page.getByTestId("composer-input").click();
+  await page.getByTestId("composer-input").type("@paged");
+
+  // One page, and the rest counted.
+  const pager = page.getByTestId("mention-more");
+  await expect(pager).toBeVisible();
+  await expect(page.getByTestId("mention-option")).toHaveCount(100);
+  await expect(pager).toContainText("15");
+
+  // Pressing it shows the rest, and retires the control: there is no more to ask for.
+  await pager.click();
+  await expect(page.getByTestId("mention-option")).toHaveCount(total);
+  await expect(page.getByTestId("mention-more")).toHaveCount(0);
+});
+
+test("the conversation's own objects load once per opening, not per keystroke", async ({
+  page,
+  request,
+}) => {
+  /*
+   * A request-count claim, which is the only way to see this one. The picker's 图/表/笔记 rows are
+   * **query-independent** — the same diagrams at every letter — so a load per keystroke would pay
+   * three requests a character for an answer that cannot have changed. Worse, each reply replaces
+   * the rows, so a click aimed at one lands on a detached node: the exact hazard the picker's own
+   * debounce exists for, reintroduced one group over.
+   */
+  const name = `MentionObjects-${Date.now()}`;
+  await seedWorkspace(request, name, "report.md");
+
+  let diagramCalls = 0;
+  page.on("request", (req) => {
+    if (/\/api\/sessions\/[^/]+\/diagrams/.test(req.url())) diagramCalls += 1;
+  });
+
+  await page.goto("/");
+  await enterWorkspace(page, name);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("create-session").click();
+
+  // Six keystrokes into one mention: one opening.
+  await page.getByTestId("composer-input").click();
+  await page.getByTestId("composer-input").type("@report");
+  await expect(page.getByTestId("mention-picker")).toBeVisible();
+  await expect(page.getByTestId("mention-option").first()).toBeVisible();
+
+  expect(diagramCalls).toBe(1);
 });
 
 test("a mention inside an address or a word does not open the picker", async ({ page, request }) => {
@@ -125,7 +197,7 @@ test("a reference can be dropped before sending", async ({ page, request }) => {
   await typeMention(page, "report");
   await page.getByTestId("mention-option").filter({ hasText: name }).click();
 
-  const chips = page.getByTestId("composer-sources");
+  const chips = page.getByTestId("composer-resources");
   await expect(chips.getByTestId("attachment-chip")).toHaveCount(1);
   await chips.getByTestId("attachment-chip").first().getByTestId("attachment-remove").click();
   await expect(chips.getByTestId("attachment-chip")).toHaveCount(0);
@@ -170,7 +242,7 @@ test("the tabs filter by kind, and the pills filter by source type", async ({ pa
   await expect(page.getByTestId("mention-option")).toHaveCount(0);
   await expect(page.getByTestId("mention-pill-image")).toHaveCount(0);
 
-  await page.getByTestId("mention-tab-source").click();
+  await page.getByTestId("mention-tab-resource").click();
   await expect(page.getByTestId("mention-option")).toHaveCount(3);
 
   // 图片 narrows to the one image. The pill is a toggle, so clicking it again clears it — which

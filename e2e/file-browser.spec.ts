@@ -124,7 +124,7 @@ test("the tree picks up a change on refresh, and after a turn", async ({ page, r
   /*
    * `location: "workspace"` is named, and it has to be. This tree browses `workdir/`, and the
    * default an unqualified write gets is the **conversation's** folder — a product decision, not
-   * an accident (see `docs/sources.md`). The subject here is the post-turn re-read, so the file
+   * an accident (see `docs/resources.md`). The subject here is the post-turn re-read, so the file
    * the turn writes is the one this panel shows; the default is covered by the server's own
    * tests, and by the case below.
    */
@@ -299,15 +299,24 @@ test("an unqualified write goes to the conversation, not the workspace tree", as
   await openFilesTab(page);
   await expect(page.getByTestId("file-row").filter({ hasText: "mine.txt" })).toHaveCount(0);
 
-  // …but there, in the conversation's own folder — which the source browser is now the way to
-  // see: it lists the row, and the row's byline says which folder wrote it.
-  await page.getByTestId("open-sources").click();
-  const browser = page.getByTestId("sources-dialog");
+  // …but there, in the conversation's own folder — which the library is now the way to see: it
+  // lists the row, and the row's byline says the assistant wrote it.
+  await page.getByTestId("open-library").click();
+  const browser = page.getByTestId("library-dialog");
   await expect(browser).toBeVisible();
 
-  const row = browser.getByTestId("source-row").filter({ hasText: "mine.txt" });
+  const row = browser.getByTestId("resource-row").filter({ hasText: "mine.txt" });
   await expect(row).toBeVisible();
-  await expect(row.getByTestId("source-origin")).toContainText("助理写入会话");
+  /*
+   * `助理生成`, not v3's `助理写入会话`.
+   *
+   * v4 folded the two sandbox origins into one because *which folder* is a fact about the
+   * reference's owner (`ownerType`), not about the file — so the byline answers "who wrote it",
+   * and the "which folder" half lands in the same line's owner label beside it. The distinction
+   * the v3 label carried is not lost; it moved to the column that can hold it.
+   */
+  await expect(row.getByTestId("resource-origin")).toContainText("助理生成");
+  await expect(row.getByTestId("resource-origin")).toContainText("·");
 });
 
 /*

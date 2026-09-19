@@ -53,12 +53,15 @@ const DYNAMIC_PREFIXES = [
      in any key outside the insight panel's type list. */
   "widgets.insight.types.",
   /*
-   * Both closed unions, reached by a value the server sent: a row's origin and its category.
-   * A key per value with a literal `switch` would be eight `t("…")` calls to spell out the
-   * same sentence path, and the guard that matters — every member has a message — is what the
-   * symmetry check above already proves for the other catalog.
+   * The closed `FileCategory` union, reached by a value the server sent. A key per value with a
+   * literal `switch` would be seven `t("…")` calls to spell out the same sentence path, and the
+   * guard that matters — every member has a message — is what the symmetry check above already
+   * proves for the other catalog.
+   *
+   * `sources.origin.` used to be here beside it. It went with the origin filter: a row's origin
+   * is not a value in v4 — a reference names the entity it points at, and a file's own
+   * `sourceType` is not a filter the library draws.
    */
-  "sources.origin.",
   "sources.category.",
 ];
 

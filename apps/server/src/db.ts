@@ -9,6 +9,8 @@ import type {
   CopilotVisibility,
   DocumentParsePolicy,
   DocumentParserKind,
+  FileCategory,
+  FileSourceType,
   Insight,
   InsightType,
   Message,
@@ -16,7 +18,6 @@ import type {
   MessageUsage,
   ModelCapability,
   Note,
-  NoteSyncStatus,
   NoteTargetKind,
   NoteType,
   ParseErrorCode,
@@ -32,20 +33,21 @@ import type {
   SessionLockView,
   SessionSettings,
   SessionStats,
-  Source,
-  SourceCategory,
-  SourceOrigin,
-  SourceOwner,
-  SourceStorage,
+  StoredFile,
   ThreadBranch,
   TitleState,
   ToolCall,
   TurnReference,
   User,
   UserRole,
+  WebPage,
+  WebPageSourceType,
   WidgetId,
   WidgetScope,
   WidgetState,
+  WorkResource,
+  WorkResourceOwnerType,
+  WorkResourceType,
   Workspace,
   WorkspaceSettings,
   WorkspaceStats,
@@ -61,7 +63,6 @@ import {
   MIN_UPLOAD_LIMIT_BYTES,
 } from "@ilearnassist/shared";
 import { workspaceWorkdir } from "./paths.js";
-import { migrateIfNeeded } from "./migrations.js";
 import type { ScopeQuery } from "./workspaceScope.js";
 import { applySchema } from "./schema.js";
 import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./widgets.js";
@@ -73,12 +74,21 @@ import { buildSessionStats, buildWorkspaceStats, resolveWidgetStates } from "./w
  * validates each against the union it knows and refuses an unknown value, and this layer
  * carries what it was given. A type here would only be a promise the caller could not keep.
  */
-export interface SourceFilter {
-  storage?: SourceStorage;
-  category?: SourceCategory;
-  origin?: SourceOrigin;
+
+/**
+ * The library's filters, as the statement takes them.
+ *
+ * `category` and `mime` read the **entity's** columns, not the reference's — they describe what
+ * the bytes are, which is a fact about a file rather than about somebody's use of it. So both
+ * are silently inapplicable to a page, and the statement's `@category IS NULL OR f.category = …`
+ * arm is false for one: filtering by `document` correctly returns no pages.
+ */
+export interface WorkResourceFilter {
+  resourceType?: WorkResourceType;
+  ownerType?: WorkResourceOwnerType;
+  category?: FileCategory;
   mime?: string;
-  /** A substring of the name, matched literally — see the escape in the query. */
+  /** A substring of the title, matched literally — see the escape in the query. */
   name?: string;
   workspaceId?: string;
   sessionId?: string;
@@ -86,31 +96,6 @@ export interface SourceFilter {
 
 /* ---------------------------------- row shapes ---------------------------------- */
 
-interface SourceRow {
-  id: string;
-  user_id: string;
-  owner_kind: string;
-  owner_id: string;
-  origin: string;
-  storage: string;
-  rel_path: string | null;
-  name: string;
-  mime_type: string;
-  category: string;
-  size: number;
-  source_url: string | null;
-  summary: string | null;
-  sha256: string | null;
-  parse_status: string;
-  parse_error: string | null;
-  parse_error_code: string | null;
-  parser_id: string | null;
-  parsed_chars: number | null;
-  page_count: number | null;
-  parse_updated_at: string | null;
-  created_at: string;
-  updated_at: string | null;
-}
 
 interface UserRow {
   id: string;
@@ -327,6 +312,7 @@ interface DiagramRow {
   id: string;
   session_id: string;
   thread_id: string | null;
+  file_id: string | null;
   name: string;
   summary: string;
   tool_call_id: string | null;
@@ -386,62 +372,13 @@ export interface InsightInsert {
  */
 export type InsightRecord = Insight;
 
-interface NoteSyncRow {
-  session_id: string;
-  status: string;
-  started_at: string;
-  finished_at: string | null;
-  added: number;
-  updated: number;
-  removed: number;
-  error: string | null;
-}
-
-/**
- * One conversation's note-export state, as the server holds it.
- *
- * Not the shared `SessionNoteSync`: that one carries `stuck`, which is derived from
- * `startedAt` against a clock and is therefore not a column. `readNoteSync` adds it.
- */
-export interface NoteSyncRecord {
-  sessionId: string;
-  status: NoteSyncStatus;
-  startedAt: string;
-  finishedAt: string | null;
-  added: number;
-  updated: number;
-  removed: number;
-  error: string | null;
-}
-
-/** What a run writes about itself. Every field but the first two is what the run did. */
-export interface NoteSyncStateInput {
-  sessionId: string;
-  status: NoteSyncStatus;
-  startedAt: string;
-  finishedAt?: string | null;
-  added?: number;
-  updated?: number;
-  removed?: number;
-  error?: string | null;
-}
-
-const mapNoteSync = (r: NoteSyncRow): NoteSyncRecord => ({
-  sessionId: r.session_id,
-  status: r.status as NoteSyncStatus,
-  startedAt: r.started_at,
-  finishedAt: r.finished_at,
-  added: r.added,
-  updated: r.updated,
-  removed: r.removed,
-  error: r.error,
-});
-
 /** A diagram as the rest of the server reads it. The route adds `fileMissing`. */
 export interface DiagramRecord {
   id: string;
   sessionId: string;
   threadId: string | null;
+  /** The `.mmd` this row drew. See `Diagram.fileId`. */
+  fileId?: string;
   name: string;
   summary: string;
   toolCallId: string | null;
@@ -456,6 +393,8 @@ export interface DiagramUpsert {
   sessionId: string;
   /** The canonical file name — `auth-flow.mmd`, not the model's "Auth Flow". */
   name: string;
+  /** The `.mmd` file's id. Written in the same transaction, which is why there is no FK. */
+  fileId: string;
   summary: string;
   toolCallId: string | null;
 }
@@ -572,7 +511,7 @@ export interface QuizQuestionInsert {
 }
 
 /**
- * One row per live conversation, with the workspace it belongs to, for labelling sources.
+ * One row per live conversation, with the workspace it belongs to, for labelling a list.
  *
  * Names and ids only: the source browser groups and labels by owner, and a *session* owner is
  * not something the client can name — it holds the workspaces, but fetching every conversation
@@ -588,6 +527,24 @@ export interface SessionLabelRow {
 /** The same, with the ordering field a reader of the whole list wants. */
 export interface SessionOverviewRow extends SessionLabelRow {
   updated_at: string;
+}
+
+/**
+ * One message that matched a search, with enough of its conversation to name it.
+ *
+ * The label columns are carried rather than looked up per row for `SessionLabelRow`'s reason: a
+ * result spanning the account would otherwise be one conversation lookup per hit, and the caller
+ * has no way to batch them — it does not know which conversations matched until it has the rows.
+ *
+ * `content` is the whole stored body and is **clipped by the caller**, not here: what counts as
+ * too long depends on which tool asked, and a statement that truncated would make the model's
+ * paging arithmetic wrong rather than merely verbose.
+ */
+export interface MessageSearchRow extends SessionLabelRow {
+  message_id: string;
+  role: string;
+  content: string;
+  created_at: string;
 }
 
 interface SessionRow {
@@ -695,7 +652,6 @@ interface MessageRow {
   tool_calls: string | null;
   attachments: string | null;
   /** JSON, nullable: absent on every row written before the `@`-reference existed. */
-  sources: string | null;
   /** JSON, nullable for the same reason: written only by a turn that pointed at something. */
   refs: string | null;
   usage: string | null;
@@ -795,6 +751,39 @@ export const SETTING_DOCUMENT_SEEDED = "documentParsing.seeded";
  * as it did before the setting existed.
  */
 export const SETTING_MAX_UPLOAD_BYTES = "upload.maxFileBytes";
+
+/**
+ * Which installation this database is.
+ *
+ * A value in the database rather than a hash of the data root's path, and the difference is the
+ * whole of what it is for: **a folder that was moved is the same installation** — its accounts,
+ * its sessions and its `auth_tokens` all travelled with it — while a different folder is a
+ * different one. A path-derived id would call a copy of the same data a new installation and sign
+ * everybody out of a browser that had never left.
+ *
+ * What it answers: a client holding a bearer token has no way to tell "my token expired" from
+ * "this origin is now serving somebody else's database", and the second is what a data-root switch
+ * looks like from a tab that was already open. The comparison is the client's — see
+ * `apps/web/src/composables/instance.ts` — and this is only the fact it compares against.
+ */
+export const SETTING_INSTANCE_ID = "instance.id";
+
+/**
+ * The installation's id, minted on first ask.
+ *
+ * Written on read rather than at creation because `createDb` is called by tests, by the CLI and by
+ * the server, and a value none of them reads does not need to exist. The race it could lose is
+ * against a second *process*, which this codebase already assumes away for DDL (see
+ * `resetAdmin`); two concurrent readers of one file would mint two ids and one would win, which is
+ * the same outcome as minting one.
+ */
+export function instanceId(db: AppDb): string {
+  const known = db.getSetting(SETTING_INSTANCE_ID);
+  if (known) return known;
+  const minted = newId();
+  db.setSetting(SETTING_INSTANCE_ID, minted);
+  return minted;
+}
 /*
  * `SETTING_AUTH_SECRET` ("auth.secret") is gone, and the *row* it wrote is deliberately left
  * alone rather than cleaned up. It signed the session cookie, which a bearer token replaced —
@@ -842,7 +831,7 @@ export interface AuthTokenRecord {
  *
  * The same split as `ProviderRecord` and its `apiKey`, and for a stronger reason: a password
  * hash is a credential. `mapUser` is the only place one is read, and a route returns `User`
- * by stripping these with a destructuring rest — the pattern `toSource` uses for `userId`.
+ * by stripping these with a destructuring rest — the pattern `toResource` uses for `userId`.
  * That is what makes "the hash is never serialised" a property of the shapes rather than of
  * every route remembering to leave a field out.
  */
@@ -891,6 +880,22 @@ export function toAuthTokenRecord(r: AuthTokenRow): AuthTokenRecord {
   };
 }
 
+/**
+ * A search term as a `LIKE` pattern: a substring, with what the caller typed taken literally.
+ *
+ * `%` and `_` are wildcards to SQLite, and the material this searches has both in it — a file
+ * named `report_final.docx`, a query containing `%` — so a term that was not escaped would match
+ * things the user did not ask for, and would do it silently. The `\` itself goes first in the
+ * character class for that reason: escaping it last would double the backslashes the other two
+ * substitutions just added.
+ *
+ * One implementation, used by every `LIKE` in this file: the paired `ESCAPE '\'` spent a while
+ * written out at each statement, which is a place for the two halves to disagree.
+ */
+function likePattern(term: string): string {
+  return `%${term.replace(/[\\%_]/g, "\\$&")}%`;
+}
+
 const mapUser = (r: UserRow): UserRecord => ({
   id: r.id,
   username: r.username,
@@ -903,54 +908,188 @@ const mapUser = (r: UserRow): UserRecord => ({
   disabled: r.disabled !== 0,
 });
 
-/**
- * A source as the **server** sees it: the wire shape plus the fields that never leave.
+
+/* ------------------- files, web pages and work resources (v4) ------------------- */
+
+/*
+ * The three new row shapes, and the one place a snake_case row becomes the wire type.
  *
- * Same split as `ProviderRecord` and its `apiKey`, and for the same reason: `userId` is the
- * scope every read is filtered by, and a client has no use for it — it cannot ask for another
- * account's sources, and carrying the owner would only invite a route that trusted it.
- *
- * There is deliberately **no stored path** here. Where the bytes are is `storage` plus
- * `relPath` (or, for a blob, neither), and turning that into a filesystem path is
- * `sourcePaths.ts`'s single question — because a path in this shape would be one more thing
- * every caller could disagree about, and the one caller that matters is the sandbox guard.
+ * `WorkResourceRecord` carries the entity **inline** rather than as a second lookup, because
+ * every reader of a list needs it: the library draws a size column and a URL control from it,
+ * and one request per row is the N+1 the v3 listing already refused. That is why its statements
+ * join both entity tables rather than selecting from `work_resources` alone.
  */
-export interface SourceRecord extends Source {
-  userId: string;
-  /** ISO, and absent on a row nothing has changed since it was written. */
-  updatedAt?: string;
+interface FileRow {
+  id: string;
+  user_id: string;
+  source_type: string;
+  title: string;
+  path: string;
+  mime_type: string;
+  category: string;
+  size: number;
+  summary: string | null;
+  sha256: string | null;
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
 }
 
-const mapSource = (r: SourceRow): SourceRecord => ({
+interface WebPageRow {
+  id: string;
+  user_id: string;
+  source_type: string;
+  url: string;
+  title: string;
+  summary: string | null;
+  sha256: string | null;
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
+}
+
+/**
+ * A work resource joined to its entity, with the entity's columns prefixed.
+ *
+ * Both entity joins are `LEFT` and both are conditional on `resource_type`, so exactly one of
+ * the two column sets is populated and the other is NULL — which is also how a reference to a
+ * soft-deleted entity reads. `mapWorkResource` turns that into "no entity", and the listing
+ * treats it as gone.
+ */
+interface WorkResourceRow {
+  id: string;
+  user_id: string;
+  resource_type: string;
+  resource_id: string;
+  owner_type: string;
+  owner_id: string;
+  title: string;
+  summary: string | null;
+  parsed_file_id: string | null;
+  parse_status: string;
+  parse_error: string | null;
+  parse_error_code: string | null;
+  parser_id: string | null;
+  parsed_chars: number | null;
+  page_count: number | null;
+  parse_updated_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
+  /** Present only when `resource_type = 'file'` and the file is live. */
+  file_entity_id: string | null;
+  file_source_type: string | null;
+  file_title: string | null;
+  file_path: string | null;
+  file_mime_type: string | null;
+  file_category: string | null;
+  file_size: number | null;
+  file_summary: string | null;
+  file_created_at: string | null;
+  file_updated_at: string | null;
+  /** Present only when `resource_type = 'web_page'` and the page is live. */
+  page_entity_id: string | null;
+  page_source_type: string | null;
+  page_url: string | null;
+  page_title: string | null;
+  page_summary: string | null;
+  page_created_at: string | null;
+  page_updated_at: string | null;
+}
+
+/** A file as the rest of the server reads it. */
+export interface FileRecord extends StoredFile {
+  userId: string;
+  sha256?: string;
+}
+
+/** A work resource with its entity resolved. The route adds `missing` and the owner labels. */
+export interface WorkResourceRecord extends Omit<WorkResource, "resource" | "missing"> {
+  userId: string;
+  resource: StoredFile | WebPage;
+}
+
+const mapFile = (r: FileRow): FileRecord => ({
   id: r.id,
   userId: r.user_id,
-  ownerKind: r.owner_kind === "workspace" ? "workspace" : "session",
-  ownerId: r.owner_id,
-  origin: r.origin as SourceOrigin,
-  storage: r.storage as SourceStorage,
-  category: r.category as SourceCategory,
-  // Absent rather than null when there is nothing to say, matching the wire type — a JSON
-  // `null` for `relPath` would reach the client as an empty string in a tree.
-  relPath: r.rel_path ?? undefined,
-  name: r.name,
+  sourceType: r.source_type as FileSourceType,
+  title: r.title,
+  path: r.path,
   mimeType: r.mime_type,
+  category: r.category as FileCategory,
   size: r.size,
-  // Derived, not stored. `image`/`file` is the only thing the client ever asked this column,
-  // and it is a question `category` answers exactly — so the column is gone rather than kept
-  // in agreement with a neighbour.
-  kind: r.category === "image" ? "image" : "file",
-  url: r.source_url ?? undefined,
   summary: r.summary ?? undefined,
+  sha256: r.sha256 ?? undefined,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at ?? undefined,
+});
+
+const mapWebPage = (r: WebPageRow): WebPage => ({
+  id: r.id,
+  sourceType: r.source_type as WebPageSourceType,
+  url: r.url,
+  title: r.title,
+  summary: r.summary ?? undefined,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at ?? undefined,
+});
+
+/**
+ * The entity a joined row carries, or `undefined` when there is none.
+ *
+ * `undefined` means the entity was soft-deleted between the reference being written and this
+ * read — the reference is not dismantled when its entity goes, so this is a reachable state
+ * rather than a defensive branch. Callers treat it as gone; the listing drops the row.
+ */
+function entityOf(r: WorkResourceRow): StoredFile | WebPage | undefined {
+  if (r.file_entity_id) {
+    return {
+      id: r.file_entity_id,
+      sourceType: r.file_source_type as FileSourceType,
+      title: r.file_title ?? "",
+      path: r.file_path ?? "",
+      mimeType: r.file_mime_type ?? "application/octet-stream",
+      category: r.file_category as FileCategory,
+      size: r.file_size ?? 0,
+      summary: r.file_summary ?? undefined,
+      createdAt: r.file_created_at ?? r.created_at,
+      updatedAt: r.file_updated_at ?? undefined,
+    };
+  }
+  if (r.page_entity_id) {
+    return {
+      id: r.page_entity_id,
+      sourceType: r.page_source_type as WebPageSourceType,
+      url: r.page_url ?? "",
+      title: r.page_title ?? "",
+      summary: r.page_summary ?? undefined,
+      createdAt: r.page_created_at ?? r.created_at,
+      updatedAt: r.page_updated_at ?? undefined,
+    };
+  }
+  return undefined;
+}
+
+const mapWorkResource = (r: WorkResourceRow, entity: StoredFile | WebPage): WorkResourceRecord => ({
+  id: r.id,
+  userId: r.user_id,
+  resourceType: r.resource_type as WorkResourceType,
+  resourceId: r.resource_id,
+  ownerType: r.owner_type as WorkResourceOwnerType,
+  ownerId: r.owner_id,
+  title: r.title,
+  summary: r.summary ?? undefined,
+  parsedFileId: r.parsed_file_id ?? undefined,
   parseStatus: r.parse_status as ParseStatus,
-  // Each of these is absent rather than null when there is nothing to say, matching the
-  // wire type — a JSON `null` for `parseError` would reach the client as an empty tooltip.
   parseError: r.parse_error ?? undefined,
   parseErrorCode: (r.parse_error_code ?? undefined) as ParseErrorCode | undefined,
   parserId: r.parser_id ?? undefined,
   parsedChars: r.parsed_chars ?? undefined,
   pageCount: r.page_count ?? undefined,
+  parseUpdatedAt: r.parse_updated_at ?? undefined,
   createdAt: r.created_at,
   updatedAt: r.updated_at ?? undefined,
+  resource: entity,
 });
 
 const mapWorkspace = (r: WorkspaceRow): Workspace => ({
@@ -1036,8 +1175,12 @@ const mapSession = (r: SessionRow): Session => ({
   titleSource: r.title_source === "user" ? "user" : "auto",
   // A value nothing recognises reads as "never attempted" rather than as a title that landed —
   // which is the safe direction, since the only thing the answer decides is whether a retry is
-  // worth making.
-  titleState: r.title_state === "model" || r.title_state === "fallback" ? r.title_state : undefined,
+  // worth making. Adding a state to `TitleState` means adding it here too: this list is the whole
+  // of what reaches the wire, and a member left out is a state the client cannot see.
+  titleState:
+    r.title_state === "model" || r.title_state === "unnamed" || r.title_state === "fallback"
+      ? r.title_state
+      : undefined,
   // `=== 1`, not a truthiness test: a row written before the column existed reads `NULL`, and
   // `Boolean(null)` would be the right answer by accident rather than by rule.
   pinned: r.pinned === 1,
@@ -1125,7 +1268,6 @@ const mapMessage = (r: MessageRow): Message => ({
   reasoning: r.reasoning ?? undefined,
   toolCalls: r.tool_calls ? safeParseArray<ToolCall>(r.tool_calls) : undefined,
   attachments: r.attachments ? safeParseArray<Attachment>(r.attachments) : undefined,
-  sources: r.sources ? safeParseArray<Attachment>(r.sources) : undefined,
   refs: r.refs ? safeParseArray<TurnReference>(r.refs) : undefined,
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
   model: messageModelOf(r),
@@ -1212,6 +1354,7 @@ const mapDiagram = (r: DiagramRow): DiagramRecord => ({
   id: r.id,
   sessionId: r.session_id,
   threadId: r.thread_id,
+  fileId: r.file_id ?? undefined,
   name: r.name,
   summary: r.summary,
   toolCallId: r.tool_call_id,
@@ -1421,180 +1564,242 @@ export interface AppDb {
   /** Delete rows that expired or were revoked before `before`, so the table stays small. */
   pruneAuthTokens(before: string): number;
 
-  /*
-   * Sources — uploaded files, owned by the account rather than by the conversation they
-   * arrived in. Same `ForUser` discipline as everything below, and it matters more here than
-   * anywhere: these rows carry a path, so a lookup that forgot the owner would not merely
-   * leak a name, it would hand over a file.
-   */
 
   /**
-   * The account's copy of these bytes, if it has one.
+   * Every live conversation's id, title and workspace name, for labelling a list.
    *
-   * Scoped by owner *and* hash, not by hash alone. `WHERE sha256 = ?` would hand one
-   * account's file to another who happened to upload the same content — which is exactly the
-   * case dedupe makes common, since the whole point is that identical bytes are one row.
-   */
-  findSourceByHash(userId: string, sha256: string): SourceRecord | undefined;
-  /**
-   * The account's soft-deleted copy of these bytes, if it has one.
-   *
-   * The second half of the dedupe rule, and it exists because `UNIQUE (user_id, sha256)` makes
-   * a separate row impossible: re-uploading a file the user deleted has to bring *that* row
-   * back, so something has to find it. Never merged into `findSourceByHash` — that one answers
-   * "is this file already here", and a deleted file is not.
-   */
-  findDeletedSourceByHash(userId: string, sha256: string): SourceRecord | undefined;
-  getSourceForUser(id: string, userId: string): SourceRecord | undefined;
-  /**
-   * Every live source the account holds, oldest first.
-   *
-   * `storage` narrows it to one root, which is what a caller that means "my uploads" wants: a
-   * source is now every file the agent wrote as well, and an account-wide list is not the same
-   * question as a library of uploads. The filter is in the query rather than over the result,
-   * because the reader `stat`s each row.
-   */
-  /**
-   * Every live conversation's id, title and workspace name, for labelling a source list.
-   *
-   * Not `listSessionsForUser` repeated per workspace: the source browser lists the whole
-   * account's material at once, and a request per workspace to find out what to call a
-   * conversation would be a request per workspace.
+   * Not `listSessionsForUser` repeated per workspace: the library lists the whole account's
+   * material at once, and a request per workspace to find out what to call a conversation would
+   * be a request per workspace.
    */
   listSessionLabels(userId: string): SessionLabelRow[];
-  /**
-   * The same rows with `updatedAt`, newest first — the account's conversations as a *list*.
-   *
-   * The difference from `listSessionLabels` is what the reader is doing: that one answers "what
-   * is this conversation called" for a row it already has, while this one answers "what is in
-   * this account", where an order is the point. Live rows only, owner-scoped, and narrowed to
-   * an `@` grant by the caller.
-   */
+  /** The same, newest first — what a reader of the whole list wants and a labeller does not. */
   listSessionOverviews(userId: string): SessionOverviewRow[];
+  /**
+   * Messages whose **text** contains `query`, across the given workspaces.
+   *
+   * `workspaceIds` is the `@` grant as a set, and it is a parameter rather than a filter the
+   * caller applies afterwards because the query is what makes this affordable: an account's whole
+   * transcript history is not something to page in memory and then narrow. An empty set returns
+   * nothing rather than everything — the safe reading, and the one a caller who forgot to resolve
+   * a grant should get.
+   *
+   * The match is a literal substring, case-insensitive, over `messages.content` only: tool output
+   * is not message text, and reasoning is not replayed into a model's context anywhere else in
+   * the app — searching it here would be the one place it leaks into one.
+   */
+  searchMessages(
+    userId: string,
+    workspaceIds: readonly string[],
+    query: string
+  ): MessageSearchRow[];
 
-  listSourcesForUser(userId: string, filter?: SourceFilter): SourceRecord[];
-  createSource(input: {
+  /* ----------------- files, web pages and work resources (v4) ----------------- */
+
+  /** One file by id, owner-scoped. "Not yours" and "does not exist" answer alike. */
+  getFileForUser(userId: string, id: string): FileRecord | undefined;
+  /**
+   * The live file at one path, or undefined.
+   *
+   * **By path, not by id**, and that is the whole of the rename story: a file the user moves is
+   * the same file, and the caller that wants it back asks by the new path. `deleted_at IS NULL`
+   * is what lets a file be deleted and a new one written at the same path.
+   */
+  getFileByPath(userId: string, path: string): FileRecord | undefined;
+  /** Every live file the account holds, in path order — the reconciler's read. */
+  listFilesForUser(userId: string): FileRecord[];
+  findFileByHash(userId: string, sha256: string): FileRecord | undefined;
+  /** The soft-deleted twin of the above, which is what a re-upload revives. */
+  findDeletedFileByHash(userId: string, sha256: string): FileRecord | undefined;
+  createFile(input: {
     id: string;
     userId: string;
-    ownerKind: "session" | "workspace";
-    ownerId: string;
-    origin: SourceOrigin;
-    storage: SourceStorage;
-    /** The path within its root. `null` for `upload` and `web`, whose name is derived. */
-    relPath: string | null;
-    name: string;
+    sourceType: FileSourceType;
+    title: string;
+    path: string;
     mimeType: string;
-    category: SourceCategory;
+    category: FileCategory;
     size: number;
-    /** The page this is, for a captured one. */
-    url: string | null;
-    summary: string | null;
-    /** The content hash, for account blobs only. `null` for everything with a place. */
-    sha256: string | null;
+    summary?: string;
+    sha256?: string;
     now?: string;
-  }): SourceRecord;
-
+  }): FileRecord;
   /**
-   * The live source at one place, or undefined.
+   * Update a file's place or its description of itself, in place.
    *
-   * **By place, not by path**, and that is the whole of the rename story: a file the user
-   * moves is the same source, and the caller that wants it back after a move asks by the new
-   * place. `deleted_at IS NULL` is what lets a file be deleted and a new one written at the
-   * same path — the second is a different source, and the index says so too.
+   * One statement for a rename, a rewrite and a size change because they are one operation: the
+   * row keeps its id and every reference to it, and only these columns move. Returns whether
+   * anything matched, so a caller can tell "not yours" from "done".
    */
-  getSourceByPlace(
-    userId: string,
-    owner: SourceOwner,
-    relPath: string
-  ): SourceRecord | undefined;
-  /** Every live source one workspace or conversation holds, in path order. */
-  listSourcesForOwner(userId: string, owner: SourceOwner): SourceRecord[];
-  /**
-   * Update a source's place or its description of itself, in place.
-   *
-   * One statement for a rename, a rewrite and a size change because they are one operation:
-   * the row keeps its id and everything hanging off it, and only these columns move. Returns
-   * whether anything matched, so a caller can tell "not yours" from "done".
-   */
-  updateSourcePlace(
+  updateFilePath(
     id: string,
     userId: string,
     patch: {
-      relPath?: string;
-      storage?: SourceStorage;
-      name?: string;
+      path?: string;
+      title?: string;
       mimeType?: string;
-      category?: SourceCategory;
+      category?: FileCategory;
       size?: number;
       summary?: string | null;
       now?: string;
     }
   ): boolean;
-  /** Marks the source deleted. Returns false when no live source existed, or it was not theirs. */
-  softDeleteSourceForUser(id: string, userId: string): boolean;
+  /** Marks the file deleted. Returns false when no live file existed, or it was not theirs. */
+  softDeleteFileForUser(id: string, userId: string): boolean;
   /**
-   * Clears the marker on a soft-deleted source and returns it, or undefined if there was
-   * nothing to revive. The bytes, the parse state and every link are untouched — the row was
-   * never dismantled, only hidden.
+   * Clears the marker on a soft-deleted file and returns it, or undefined if there was nothing
+   * to revive. The bytes and every reference to it are untouched — the row was never dismantled,
+   * only hidden.
    */
-  reviveSourceForUser(id: string, userId: string): SourceRecord | undefined;
+  reviveFileForUser(id: string, userId: string): FileRecord | undefined;
 
+  getWebPageForUser(userId: string, id: string): WebPage | undefined;
   /**
-   * Record what a parse did, in place.
+   * Marks the page deleted — the material half of deleting the reference that names it.
    *
-   * In place rather than appended, because the row is what every reader consults: a reparse
-   * is then reflected in every conversation at once, instead of only in the messages sent
-   * after it. The alternative — folding state into each message at the time it was written —
-   * is what made a reparse invisible to history.
+   * The file's rule, applied to the other entity: a delete of a reference takes the material with
+   * it, and the fetched body under `sources/web/` stays where it is (a soft delete costs no disk).
+   * There was no such accessor until the delete was unified, because a page could only ever lose
+   * its *reference* — which left the row live and unreachable, the state this closes.
    */
-  updateSourceParse(
+  softDeleteWebPageForUser(id: string, userId: string): boolean;
+  /** The live page whose reading hashes to this, which is what makes keeping it again a no-op. */
+  findWebPageByHash(userId: string, sha256: string): WebPage | undefined;
+  createWebPage(input: {
+    id: string;
+    userId: string;
+    sourceType: WebPageSourceType;
+    url: string;
+    title: string;
+    summary?: string;
+    sha256: string;
+    now?: string;
+  }): WebPage;
+  updateWebPage(
     id: string,
     userId: string,
-    patch: {
-      status: ParseStatus;
-      error?: string | null;
-      code?: ParseErrorCode | null;
-      parserId?: string | null;
-      parsedChars?: number | null;
-      pageCount?: number | null;
-    }
-  ): void;
+    patch: { url?: string; title?: string; summary?: string | null; now?: string }
+  ): boolean;
 
   /**
-   * Reference a source from a session or a workspace.
+   * Make an entity referenceable by one owner, and return the reference.
    *
-   * The statement asserts **both** ends in one `INSERT … SELECT`, so a cross-account link is
-   * unrepresentable rather than merely unwritten — the same defensive move as the scoped
-   * readers, for the case where a future caller forgets to check. Returns whether a row was
-   * inserted, so `false` covers both "not yours" and "already linked"; a route that needs to
-   * tell them apart resolves both ends itself first, which it has to do anyway to answer 404.
+   * **The only write that may create a `work_resources` row**, and it is idempotent on
+   * (owner, entity): calling it twice is one row whose title is refreshed. `undefined` means the
+   * entity is not this account's or is not there at all — the ownership check and the insert are
+   * one statement, so an id from another account cannot become a row.
    */
-  linkSourceToSession(userId: string, sessionId: string, sourceId: string): boolean;
-  linkSourceToWorkspace(userId: string, workspaceId: string, sourceId: string): boolean;
-
-  /** A conversation's own sources, for the parse-state the composer polls. */
-  listSessionSources(userId: string, sessionId: string): SourceRecord[];
+  upsertWorkResource(input: {
+    id: string;
+    userId: string;
+    resourceType: WorkResourceType;
+    resourceId: string;
+    ownerType: WorkResourceOwnerType;
+    ownerId: string;
+    title: string;
+    summary?: string;
+    now?: string;
+  }): WorkResourceRecord | undefined;
+  getWorkResourceForUser(userId: string, id: string): WorkResourceRecord | undefined;
   /**
-   * Everything the model may read in one conversation: its own sources plus its workspace's.
+   * Every live reference to one entity, with the entity attached.
    *
-   * The union is the widening this change is about — a document uploaded in one conversation
-   * is readable from another in the same workspace — and it is deliberately a *query* rather
-   * than a snapshot, so unlinking takes effect on the next turn. A workspace is already a
-   * shared sandbox (every session in it can `read_file` the same tree), so a document there
-   * is not more privileged than a file there; this rests on a workspace never being shared
-   * between accounts, which the scoping here is what enforces.
-   *
-   * `scope` is the conversation's `@` grant — the workspaces the user pointed at — and it is
-   * **required** rather than optional so that the compiler names every call site and no future
-   * caller can forget it into existence. A caller with no grant passes `NO_SCOPE`, which is the
-   * statement's pre-grant behaviour exactly.
+   * The reverse lookup the delete paths need: it is what answers "does anything still reference
+   * this file", which no foreign key can answer here because `resource_id` is polymorphic.
    */
-  listReadableSources(
+  listWorkResourcesForResource(
+    userId: string,
+    resourceType: WorkResourceType,
+    resourceId: string
+  ): WorkResourceRecord[];
+
+  /* ----------------------- session references (参考) ----------------------- */
+
+  /**
+   * Record that a conversation is *about* a work resource it does not hold.
+   *
+   * The handle is the **reference**, not the entity it resolves to — v5's change, and the one
+   * sentence to keep in mind about this relation: everything else in the model reaches material
+   * through `work_resources`, and this table used not to. Idempotent on
+   * `(session_id, work_resource_id)`, which is what makes `@`-ing the same thing on a later turn
+   * one statement rather than a duplicate row. There is no title and no parse state to keep in
+   * step — the row it names carries both, and this row is only the fact that the conversation
+   * reached it.
+   */
+  addSessionReference(input: {
+    id: string;
+    sessionId: string;
+    workResourceId: string;
+    now?: string;
+  }): void;
+
+  /**
+   * Every reference a conversation points at, by id.
+   *
+   * The ids rather than rows, because a caller resolving them wants the row itself — the one
+   * with a title and a parse state — and the SQL that widens a listing resolves it in the query
+   * rather than by fetching these at all. This is for the callers that need the set itself, and
+   * for the tests that assert what a turn wrote.
+   */
+  listSessionReferences(sessionId: string): string[];
+  listWorkResourcesFiltered(
+    userId: string,
+    filter: WorkResourceFilter
+  ): WorkResourceRecord[];
+  /**
+   * The read whitelist: what the model may read this turn.
+   *
+   * The same three arms the v3 statement had, over one table — see its docblock for what each
+   * covers and why arm 3 must not gain an `@workspaceId` clause.
+   */
+  listReadableWorkResources(
     userId: string,
     sessionId: string,
     workspaceId: string,
     scope: ScopeQuery
-  ): SourceRecord[];
+  ): WorkResourceRecord[];
+  /** Marks the reference deleted. The entity and its bytes are untouched. */
+  softDeleteWorkResourceForUser(id: string, userId: string): boolean;
+  /** Records what a parse did. `parsedFileId` is only ever set, never cleared. */
+  /**
+   * How many places each of these entities is reachable from, keyed by entity id.
+   *
+   * **Both relations, and that is what the number is for.** A holding row is one place; a
+   * conversation pointing at it with `@` is another — under v5 those references are *kept* when
+   * the material goes, so what the number says is how many places will start reporting "the
+   * object is gone". Counting only holdings would answer "nobody else is working from this" about
+   * material two panels were built around.
+   *
+   * The reference half is counted *through* the entity (`session_references` joins
+   * `work_resources`), because a link names a reference and the question is about a file.
+   *
+   * One statement per entity *type* rather than one per row, because the question is asked by a
+   * listing — the library answers it for every row it draws, so a lookup per row would be a query
+   * per row. `resourceIds` travels as JSON for `listReadableWorkResources`' reason:
+   * `json_each('')` raises, and a raise on a listing is a 500.
+   *
+   * **Live rows only**, which is what makes the answer mean something: a holding the user deleted
+   * is not a second copy of anything. `idx_wr_resource` and `idx_sref_resource` carry the pair.
+   * A reference needs no owner filter — the entity id is already this account's.
+   */
+  countReferencesForEntities(
+    userId: string,
+    resourceType: WorkResourceType,
+    resourceIds: readonly string[]
+  ): Map<string, number>;
+
+  updateWorkResourceParse(input: {
+    id: string;
+    userId: string;
+    status: ParseStatus;
+    error?: string | null;
+    code?: ParseErrorCode | null;
+    parserId?: string | null;
+    parsedChars?: number | null;
+    pageCount?: number | null;
+    parsedFileId?: string | null;
+    now?: string;
+  }): boolean;
 
   /**
    * Workspaces — and the pattern every user-owned accessor below follows.
@@ -1798,6 +2003,17 @@ export interface AppDb {
     titleState: TitleState
   ): Session | undefined;
   /**
+   * Record what the auto-titler decided **without writing a title** — the `"unnamed"` half of how
+   * a pass can end, where the model looked at the conversation and found nothing to name yet.
+   *
+   * The title column is untouched, so the conversation keeps the placeholder it was created with,
+   * which is the state the requirement asks for. Returns false when nothing was written: no live
+   * session of this account has that id, or a user rename has since taken the title out of the
+   * titler's hands — the same `title_source = 'auto'` guard `setAutoTitleForUser` carries, and for
+   * the same reason.
+   */
+  setTitleStateForUser(id: string, userId: string, titleState: TitleState): boolean;
+  /**
    * Marks the conversation deleted. Returns false when no live session existed, or it belonged
    * to someone else. Its messages, links, plans and quiz rows all stay, as does the reserved
    * `sessions/<id>/` directory — every one of them is reached through this row, so filtering
@@ -1879,8 +2095,6 @@ export interface AppDb {
     reasoning?: string;
     toolCalls?: ToolCall[];
     attachments?: Attachment[];
-    /** The sources this turn *referenced* rather than attached. See `ChatInput.sources`. */
-    sources?: Attachment[];
     /** What the turn pointed at, as the client sent it. See `ChatInput.refs`. */
     refs?: TurnReference[];
     usage?: MessageUsage;
@@ -2165,33 +2379,6 @@ export interface AppDb {
   softDeleteNote(sessionId: string, noteId: string): boolean;
 
   /**
-   * This conversation's note-export state, or `undefined` when it has never been exported.
-   *
-   * Bare session id, like `listDiagramsBySession`: the two routes that read it resolve the
-   * session through a `ForUser` read first, and the run itself is already inside the server.
-   * There is deliberately no `getSessionSummary` — nothing reads the summary except the export
-   * that just wrote it, and a getter nobody calls is a second thing to keep in agreement.
-   */
-  getNoteSyncState(sessionId: string): NoteSyncRecord | undefined;
-  /**
-   * Write the state of a run. An upsert on `session_id`, and **that write is the lock**.
-   *
-   * A start reads the state and writes `running` with no `await` between them — better-sqlite3
-   * is synchronous and the handler is one turn of the event loop — so of two concurrent starts
-   * exactly one sees anything but `running` and the other is refused. That is also why there is
-   * no in-flight map beside this: a `Map` cannot survive the process restart this guard has to
-   * survive, and two mechanisms for one fact drift apart.
-   */
-  saveNoteSyncState(input: NoteSyncStateInput): NoteSyncRecord;
-  /**
-   * The conversation's own summary, written by the export's model call.
-   *
-   * A column rather than a row of its own, because it is one value per conversation and every
-   * export replaces it — `NULL` before the first, which is why the column is nullable.
-   */
-  setSessionSummary(sessionId: string, summary: string): void;
-
-  /**
    * A conversation's insight observations, in the order the panel renders them: adopted first,
    * then the current pass in the model's own order. Owner-scoped, the route's read.
    */
@@ -2417,17 +2604,6 @@ export function createDb(dbPath: string): AppDb {
   db.pragma("foreign_keys = ON");
 
   /*
-   * Walk the file forward to this build's schema, if it has a path there.
-   *
-   * **Outside the transaction below, and that is a requirement rather than tidiness.** A
-   * migration that rebuilds a table has to run with `foreign_keys` off —
-   * `migrations.ts` explains at length what goes wrong otherwise — and SQLite will not change
-   * that pragma from inside a transaction. So the two are sequential: the walk first, then the
-   * shape. A database already at this version does nothing here.
-   */
-  migrateIfNeeded(db);
-
-  /*
    * Everything that changes the file's *shape* is one write, with the lock taken up front.
    *
    * Two processes can now do this at once — the administrator CLI is designed to be run
@@ -2452,14 +2628,8 @@ export function createDb(dbPath: string): AppDb {
     // return value is ignored.
     ensureColumn(db, "messages", "stopped", "stopped INTEGER NOT NULL DEFAULT 0");
     /*
-     * The sources a turn referenced with `@`, beside its attachments. Additive and nullable:
-     * NULL is "this turn referenced nothing", which is what every message written before the
-     * column existed means, and `[]` would have claimed somebody chose an empty list.
-     */
-    ensureColumn(db, "messages", "sources", "sources TEXT");
-    /*
      * What the turn *pointed at* — a diagram, a table, a note, or a passage selected in an earlier
-     * message. Beside `sources` rather than merged with it because the two answer different
+     * message. Beside `attachments` rather than merged with it because the two answer different
      * questions: a source is material the model may read on any later turn, a reference is the
      * object of the one question that was asked. Nullable for the same reason: NULL is "this turn
      * pointed at nothing", which is what every message written before the column means.
@@ -2566,19 +2736,6 @@ export function createDb(dbPath: string): AppDb {
     ensureColumn(db, "sessions", "description", "description TEXT NOT NULL DEFAULT ''");
 
     /*
-     * The conversation's own summary, written by the note export's model call.
-     *
-     * Nullable, unlike the two descriptions directly above, and the difference is the same one
-     * `settings` makes: `NULL` is "this conversation has never been exported", which is a
-     * different claim from "exported, and the summary came back empty". The export refuses to
-     * write an empty one at all, so a non-null value here is always usable text.
-     *
-     * `description` is *not* the home for it: that field is the user's own words about their
-     * conversation, and a model's summary landing there would overwrite what they wrote.
-     */
-    ensureColumn(db, "sessions", "summary", "summary TEXT");
-
-    /*
      * How the auto-titler last left the row: `'model'`, `'fallback'`, or `NULL` for never
      * attempted.
      *
@@ -2637,7 +2794,6 @@ export function createDb(dbPath: string): AppDb {
      */
     for (const table of [
       "workspaces",
-      "sources",
       "copilots",
       "sessions",
       "messages",
@@ -2708,43 +2864,21 @@ export function createDb(dbPath: string): AppDb {
     "DELETE FROM auth_tokens WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)"
   );
 
-  /* -------------------------------- sources -------------------------------- */
+
+
   /*
-   * The live hash lookup and the deleted one, and the pair is the soft delete's one piece of
-   * real policy. `UNIQUE (user_id, sha256)` means the same bytes can never be two rows, so a
-   * re-upload of a deleted file has to *revive* the row rather than insert beside it — and
-   * finding it is a second lookup, because the first one has to keep answering "is this file
-   * already here" with a no.
+   * Labelling a list that spans the account, which is what the library and `ila_explore` both
+   * need: a *conversation* is not something the client can name, and fetching every conversation
+   * of every workspace to label a row is a request per workspace. Two statements rather than one
+   * with a nullable ordering column, because the ordering is what one reader wants and the other
+   * has no use for.
    */
-  /*
-   * The two hash lookups are about *blobs*, and `sha256 IS NOT NULL` states it rather than
-   * relying on it. Only an upload or a captured page is hashed — a file with a place keeps a
-   * NULL there, because two identical files in two directories are two files — so a lookup
-   * that did not say so would be a lookup that could one day match a path-identified row and
-   * hand back the wrong source.
-   */
-  const stmtFindSourceByHash = db.prepare(
-    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL AND deleted_at IS NULL"
-  );
-  const stmtFindDeletedSourceByHash = db.prepare(
-    "SELECT * FROM sources WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL AND deleted_at IS NOT NULL"
-  );
   const stmtListSessionLabels = db.prepare(
     `SELECT s.id, s.title, w.id AS workspace_id, w.name AS workspace_name
        FROM sessions s
        JOIN workspaces w ON w.id = s.workspace_id
       WHERE w.user_id = ? AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
   );
-  /*
-   * The same rows with the two things a *reader* of the list needs and a labeller does not: when
-   * each conversation was last touched, and an order. `listSessionLabels` answers "what is this
-   * conversation called" for one source row and has no use for either; a model asking what is in
-   * a workspace is asking "what has been worked on", which is the ordering.
-   *
-   * Scoping to the grant is left to the caller: the set is one account's conversations, which is
-   * bounded and small, and filtering it in JS keeps the `@所有工作区` case from needing a second
-   * `json_each` arm for a set no turn reads more than once.
-   */
   const stmtListSessionOverviews = db.prepare(
     `SELECT s.id, s.title, s.updated_at, w.id AS workspace_id, w.name AS workspace_name
        FROM sessions s
@@ -2752,85 +2886,121 @@ export function createDb(dbPath: string): AppDb {
       WHERE w.user_id = ? AND s.deleted_at IS NULL AND w.deleted_at IS NULL
       ORDER BY s.updated_at DESC, s.id DESC`
   );
-  const stmtGetSourceForUser = db.prepare(
-    "SELECT * FROM sources WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  /*
+   * The message search, and every clause in it is a rule from somewhere else in this file.
+   *
+   * `deleted_at IS NULL` on **all three** tables — a peeled message, a deleted conversation and a
+   * deleted workspace each hide their rows, and the conversation arm is what makes "deleting one
+   * workspace hides a whole tree" true here as everywhere else.
+   *
+   * `LIKE ... ESCAPE '\'` with the pattern escaped by the caller (`likePattern`), so a `%` or an
+   * `_` the user actually typed is a character rather than a wildcard — the same escaping the work
+   * resource listing does.
+   *
+   * `LOWER(m.content) LIKE LOWER(@query)` rather than `LIKE` with a collation: SQLite's built-in
+   * `NOCASE` is ASCII-only, and the material this searches is as likely to be Chinese as not,
+   * where case does not arise. `LOWER` uppercases nothing there and leaves an ASCII query working.
+   *
+   * The workspace set arrives as JSON through `json_each`, the shape `stmtListReadableWorkResources`
+   * already uses for the same purpose. An empty array matches nothing, which is the answer a
+   * caller with no grant should get.
+   *
+   * Ordered by the *message's* own time, newest first: a search is a "when did anybody say this"
+   * question, and the conversation a hit belongs to is on the row either way.
+   */
+  const stmtSearchMessages = db.prepare(
+    `SELECT m.id AS message_id, m.role, m.content, m.created_at,
+            s.id, s.title, w.id AS workspace_id, w.name AS workspace_name
+       FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE w.user_id = @userId
+        AND m.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+        AND s.workspace_id IN (SELECT value FROM json_each(@workspaceIds))
+        AND LOWER(m.content) LIKE LOWER(@query) ESCAPE '\\'
+      ORDER BY m.created_at DESC, m.id DESC`
   );
-  const stmtListSourcesForUser = db.prepare(
-    "SELECT * FROM sources WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
+
+  /*
+   * The join every work-resource read shares.
+   *
+   * Both entity joins are conditional on `resource_type` **inside the ON clause**, which is what
+   * makes one statement serve a polymorphic foreign key: SQLite evaluates the constant against
+   * the outer row, so exactly one side can match and the other's columns are all NULL. The
+   * alternative — a `UNION ALL` of two nearly identical selects — is what the v3 listing did for
+   * its three arms, and the duplication it costs is a second place for a filter to be added to
+   * only one of them.
+   *
+   * `*_deleted_at IS NULL` is in the ON clause rather than the WHERE, deliberately: putting it
+   * in the WHERE would turn the LEFT JOIN into an INNER one and *hide* a reference whose entity
+   * was deleted, which would make `entityOf`'s undefined branch unreachable and the caller's
+   * reasoning a lie. Here the entity's columns come back NULL and the caller decides.
+   */
+  const WR_SELECT = `
+    SELECT wr.*,
+           f.id          AS file_entity_id,
+           f.source_type AS file_source_type,
+           f.title       AS file_title,
+           f.path        AS file_path,
+           f.mime_type   AS file_mime_type,
+           f.category    AS file_category,
+           f.size        AS file_size,
+           f.summary     AS file_summary,
+           f.created_at  AS file_created_at,
+           f.updated_at  AS file_updated_at,
+           p.id          AS page_entity_id,
+           p.source_type AS page_source_type,
+           p.url         AS page_url,
+           p.title       AS page_title,
+           p.summary     AS page_summary,
+           p.created_at  AS page_created_at,
+           p.updated_at  AS page_updated_at
+      FROM work_resources wr
+      LEFT JOIN files f
+        ON wr.resource_type = 'file' AND f.id = wr.resource_id AND f.deleted_at IS NULL
+      LEFT JOIN web_pages p
+        ON wr.resource_type = 'web_page' AND p.id = wr.resource_id AND p.deleted_at IS NULL`;
+
+  const stmtGetFileForUser = db.prepare(
+    "SELECT * FROM files WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtGetFileByPath = db.prepare(
+    "SELECT * FROM files WHERE user_id = ? AND path = ? AND deleted_at IS NULL"
+  );
+  const stmtListFilesForUser = db.prepare(
+    "SELECT * FROM files WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC"
   );
   /*
-   * The same list, filtered.
-   *
-   * Filtered **in the query**, not over the result, because the reader `stat`s every row it is
-   * given: a workspace with a thousand files would otherwise make "show me my uploads" cost a
-   * thousand metadata calls to then discard them all.
-   *
-   * One statement with `@x IS NULL OR …` guards rather than a statement per combination, which
-   * is the shape the filters' *meaning* needs anyway — each is independent, and seven
-   * statements for seven filters is fifteen combinations. SQLite's planner sees a nullable
-   * parameter and the whole predicate collapses; the `user_id` index is what carries the query.
-   *
-   * The two scope filters are the interesting ones, and both read wider than ownership:
-   *
-   * - **A workspace** holds the files owned by it, the files and uploads owned by its
-   *   conversations, *and* anything linked to it — because an upload is owned by the
-   *   conversation it arrived in while being readable by the whole workspace, so ownership
-   *   alone would hide exactly the sharing those tables exist for.
-   * - **A conversation** holds what it owns and what is linked to it, which is the same union
-   *   the read whitelist is built from.
-   *
-   * Neither looks at whether the owning conversation has been soft-deleted, and that is a
-   * decision: deleting a conversation hides the conversation, not the files it produced. The
-   * bytes are still on disk and the row is still live, so a browser of the user's material
-   * that omitted them would be answering a different question than the one it was asked.
+   * The live hash lookup and the deleted one, the pair the soft delete's revive policy needs.
+   * `source_type IN ('upload','attachment')` restates what `idx_files_blob` already encodes —
+   * the dedupe rule is about bytes a person supplied, and a parse result is not one.
    */
-  const stmtListSourcesFiltered = db.prepare(
-    `SELECT * FROM sources src
-      WHERE src.user_id = @userId AND src.deleted_at IS NULL
-        AND (@storage IS NULL OR src.storage = @storage)
-        AND (@category IS NULL OR src.category = @category)
-        AND (@origin IS NULL OR src.origin = @origin)
-        AND (@mime IS NULL OR src.mime_type = @mime)
-        AND (@name IS NULL OR src.name LIKE @name ESCAPE '\\')
-        AND (@workspaceId IS NULL OR (
-              (src.owner_kind = 'workspace' AND src.owner_id = @workspaceId)
-              OR (src.owner_kind = 'session' AND src.owner_id IN (
-                    SELECT s.id FROM sessions s WHERE s.workspace_id = @workspaceId))
-              OR EXISTS (SELECT 1 FROM workspace_sources ws
-                          WHERE ws.source_id = src.id AND ws.workspace_id = @workspaceId)
-            ))
-        AND (@sessionId IS NULL OR (
-              (src.owner_kind = 'session' AND src.owner_id = @sessionId)
-              OR EXISTS (SELECT 1 FROM session_sources ss
-                          WHERE ss.source_id = src.id AND ss.session_id = @sessionId)
-            ))
-      ORDER BY src.created_at ASC`
+  const stmtFindFileByHash = db.prepare(
+    `SELECT * FROM files
+      WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL
+        AND source_type IN ('upload', 'attachment') AND deleted_at IS NULL`
   );
-  const stmtGetSourceByPlace = db.prepare(
-    `SELECT * FROM sources
-      WHERE user_id = @userId AND owner_kind = @ownerKind AND owner_id = @ownerId
-        AND rel_path = @relPath AND deleted_at IS NULL`
+  const stmtFindDeletedFileByHash = db.prepare(
+    `SELECT * FROM files
+      WHERE user_id = ? AND sha256 = ? AND sha256 IS NOT NULL
+        AND source_type IN ('upload', 'attachment') AND deleted_at IS NOT NULL`
   );
-  const stmtListSourcesForOwner = db.prepare(
-    `SELECT * FROM sources
-      WHERE user_id = @userId AND owner_kind = @ownerKind AND owner_id = @ownerId
-        AND deleted_at IS NULL
-      ORDER BY rel_path ASC, created_at ASC`
+  const stmtCreateFile = db.prepare(
+    `INSERT INTO files
+       (id, user_id, source_type, title, path, mime_type, category, size, summary, sha256, created_at)
+     VALUES (@id, @userId, @sourceType, @title, @path, @mimeType, @category, @size, @summary,
+             @sha256, @createdAt)`
   );
   /*
-   * Every column is written on every update, with the row's own value as the fallback.
-   *
-   * `COALESCE` rather than a chain of `if`s building SQL: the patch is partial and the row is
-   * the default, so one statement expresses "whatever the caller did not mention stays". The
-   * exception is `summary`, which a caller may legitimately want to *clear* — hence the
-   * separate `@summarySet` flag rather than a null that would be indistinguishable from
-   * "not mentioned".
+   * Every column written on every update, with the row's own value as the fallback — the
+   * `stmtUpdateSourcePlace` shape, and the same reason: the patch is partial and the row is the
+   * default, so one statement says "whatever the caller did not mention stays". `summary` keeps
+   * its separate `@summarySet` flag, because a caller may legitimately want to *clear* it.
    */
-  const stmtUpdateSourcePlace = db.prepare(
-    `UPDATE sources
-        SET rel_path = COALESCE(@relPath, rel_path),
-            storage = COALESCE(@storage, storage),
-            name = COALESCE(@name, name),
+  const stmtUpdateFilePath = db.prepare(
+    `UPDATE files
+        SET path = COALESCE(@path, path),
+            title = COALESCE(@title, title),
             mime_type = COALESCE(@mimeType, mime_type),
             category = COALESCE(@category, category),
             size = COALESCE(@size, size),
@@ -2838,125 +3008,304 @@ export function createDb(dbPath: string): AppDb {
             updated_at = @updatedAt
       WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
   );
-  const stmtCreateSource = db.prepare(
-    `INSERT INTO sources
-       (id, user_id, owner_kind, owner_id, origin, storage, rel_path, name, mime_type, category,
-        size, source_url, summary, sha256, parse_status, created_at)
-     VALUES (@id, @userId, @ownerKind, @ownerId, @origin, @storage, @relPath, @name, @mimeType,
-             @category, @size, @url, @summary, @sha256, 'none', @createdAt)`
+  const stmtSoftDeleteFileForUser = db.prepare(
+    "UPDATE files SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
   );
   /*
-   * A soft delete and its undo. The revive clears the marker and nothing else — the row's
-   * parse state, its name and its links are all still what they were, which is what makes a
-   * re-upload of the same bytes the same file rather than a lookalike.
+   * A rename moves the *name* as well as the place, and a reference carries its own copy of it.
+   *
+   * Without this the library would go on showing the name a file had when it was first
+   * referenced — a rename in the file tree that visibly did not take effect in the panel that
+   * lists the same file. One statement per file rather than a join in every read, because a
+   * rename is rare and a listing is not.
    */
-  const stmtSoftDeleteSourceForUser = db.prepare(
-    "UPDATE sources SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  const stmtRetitleWorkResourcesForFile = db.prepare(
+    `UPDATE work_resources SET title = @title, updated_at = @updatedAt
+      WHERE user_id = @userId AND resource_type = 'file' AND resource_id = @fileId
+        AND deleted_at IS NULL`
   );
-  const stmtReviveSourceForUser = db.prepare(
-    `UPDATE sources SET deleted_at = NULL WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL
+  const stmtReviveFileForUser = db.prepare(
+    `UPDATE files SET deleted_at = NULL WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL
        RETURNING *`
   );
-  const stmtUpdateSourceParse = db.prepare(
-    `UPDATE sources
+
+  const stmtGetWebPageForUser = db.prepare(
+    "SELECT * FROM web_pages WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtSoftDeleteWebPageForUser = db.prepare(
+    "UPDATE web_pages SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtFindWebPageByHash = db.prepare(
+    "SELECT * FROM web_pages WHERE user_id = ? AND sha256 = ? AND deleted_at IS NULL"
+  );
+  const stmtCreateWebPage = db.prepare(
+    `INSERT INTO web_pages (id, user_id, source_type, url, title, summary, sha256, created_at)
+     VALUES (@id, @userId, @sourceType, @url, @title, @summary, @sha256, @createdAt)`
+  );
+  const stmtUpdateWebPage = db.prepare(
+    `UPDATE web_pages
+        SET url = COALESCE(@url, url),
+            title = COALESCE(@title, title),
+            summary = CASE WHEN @summarySet = 1 THEN @summary ELSE summary END,
+            updated_at = @updatedAt
+      WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
+  );
+
+  /*
+   * The write that makes a file referenceable, and **the only one that may**.
+   *
+   * One statement, with the ownership check and the insert together, which is the shape
+   * `stmtLinkSourceToWorkspace` had and for the reason its docblock gives: an id from another
+   * account must not be able to become a row. `ON CONFLICT DO UPDATE` rather than
+   * `INSERT OR IGNORE`, because re-referencing is the ordinary case (an `@`-reference to
+   * something already held) and the caller wants the row back either way — but only the title
+   * moves, so a re-reference does not reset a parse or a summary somebody already has.
+   *
+   * The partial index means the conflict target has to repeat its predicate.
+   */
+  const stmtUpsertWorkResource = db.prepare(
+    `INSERT INTO work_resources
+       (id, user_id, resource_type, resource_id, owner_type, owner_id, title, summary,
+        parse_status, created_at)
+     SELECT @id, @userId, @resourceType, @resourceId, @ownerType, @ownerId, @title, @summary,
+            'none', @createdAt
+       FROM (SELECT 1) WHERE (
+         @resourceType = 'file' AND EXISTS (
+           SELECT 1 FROM files f WHERE f.id = @resourceId AND f.user_id = @userId AND f.deleted_at IS NULL)
+       ) OR (
+         @resourceType = 'web_page' AND EXISTS (
+           SELECT 1 FROM web_pages p WHERE p.id = @resourceId AND p.user_id = @userId AND p.deleted_at IS NULL)
+       )
+     ON CONFLICT(user_id, owner_type, owner_id, resource_type, resource_id)
+       WHERE deleted_at IS NULL
+       DO UPDATE SET title = excluded.title, updated_at = @createdAt
+     RETURNING *`
+  );
+  const stmtGetWorkResourceForUser = db.prepare(
+    `${WR_SELECT} WHERE wr.id = ? AND wr.user_id = ? AND wr.deleted_at IS NULL`
+  );
+  /*
+   * The listing's "how many owners hold this", for every row at once.
+   *
+   * Grouped by entity rather than by owner, because the question the library asks is about the
+   * *file*: one reference per row would answer "does this owner hold it" — which is true of every
+   * row it was asked about — and the fact that matters is whether anybody else does.
+   */
+  const stmtCountReferences = db.prepare(
+    `SELECT resource_id, COUNT(*) AS n
+       FROM work_resources
+      WHERE user_id = @userId AND deleted_at IS NULL
+        AND resource_type = @resourceType
+        AND resource_id IN (SELECT value FROM json_each(@resourceIds))
+      GROUP BY resource_id`
+  );
+
+  /*
+   * The reference relation's statements. Small on purpose: a reference is the fact that a
+   * conversation is about a work resource, so there is nothing to update and nothing to
+   * soft-delete — the row is either there or it is not. See `session_references` in the schema.
+   *
+   * **There is no delete-sweep among them, and its absence is the v5 rule.** v4 swept this table
+   * when a file's bytes went; a link now survives that, because what it names is a *reference* —
+   * one that may itself be revived — and because a conversation's record of having been about
+   * something is not the delete's to rewrite. Every reader reports a dangling link instead: the
+   * panel and the whitelist omit it, and the chip in a message says the object is gone.
+   */
+  const stmtUpsertSessionReference = db.prepare(
+    `INSERT INTO session_references (id, session_id, work_resource_id, created_at)
+     VALUES (@id, @sessionId, @workResourceId, @createdAt)
+     ON CONFLICT(session_id, work_resource_id) DO NOTHING`
+  );
+  const stmtListSessionReferences = db.prepare(
+    `SELECT work_resource_id FROM session_references WHERE session_id = ?`
+  );
+  /**
+   * The reference half of `countReferencesForEntities` — see there for why both are counted.
+   *
+   * Through the entity rather than by it: a link names a work resource, so the link belongs to
+   * entity E when the row it names *is* a reference to E. That join is what makes this count the
+   * same number it counted in v4 — every holder, plus every conversation pointing at any of them.
+   */
+  const stmtCountSessionReferences = db.prepare(
+    `SELECT wr.resource_id AS resource_id, COUNT(*) AS n
+       FROM session_references sr
+       JOIN work_resources wr ON wr.id = sr.work_resource_id
+      WHERE wr.user_id = @userId
+        AND wr.resource_type = @resourceType
+        AND wr.resource_id IN (SELECT value FROM json_each(@resourceIds))
+      GROUP BY wr.resource_id`
+  );
+
+  /** Every live reference to one entity — what answers "is this file still referenced". */
+  const stmtListWorkResourcesForResource = db.prepare(
+    `${WR_SELECT} WHERE wr.user_id = @userId AND wr.resource_type = @resourceType
+        AND wr.resource_id = @resourceId AND wr.deleted_at IS NULL`
+  );
+  /*
+   * The library's list, filtered.
+   *
+   * Filtered **in the query**, not over the result, because the reader `stat`s every row it is
+   * given — the v3 argument, unchanged: a workspace with a thousand files would otherwise make
+   * "show me my documents" cost a thousand metadata calls to then discard them all.
+   *
+   * One statement with `@x IS NULL OR …` guards rather than a statement per combination: each
+   * filter is independent, and eight of them is a combinatorial number of statements. The
+   * `resource_type`/`owner_type` pair rides `idx_wr_resource` and `idx_wr_owner`; the `user_id`
+   * index carries the query.
+   *
+   * **A reference whose entity is gone is hidden**, not returned with a null entity: the entity
+   * is what the row is *about*, and a row about nothing is not a row the library can draw. That
+   * is the `f.id IS NOT NULL OR p.id IS NOT NULL` arm, and it is why the joins are LEFT in the
+   * shared prefix — an INNER JOIN would silently do the same thing for a different reason and
+   * make `entityOf`'s undefined branch look dead.
+   *
+   * The two scope filters read wider than ownership, and both directions are the v3 ones:
+   *
+   * - **A workspace** holds what it owns *and* what its conversations own, because a file
+   *   uploaded into a conversation is readable from the whole workspace.
+   * - **A conversation** holds what it owns, plus **the references it points at** — see below.
+   *
+   * Neither looks at whether the owning conversation is soft-deleted: deleting a conversation
+   * hides the conversation, not the files it produced.
+   *
+   * **A session-scoped listing is "what this conversation holds or points at", one row per
+   * relation.** The second half is a `session_references` lookup by *reference id*, which is what
+   * makes the panel's answer exactly the rows the user's `@` chose: it used to store the entity,
+   * so this arm matched every holder of anything the conversation had referred to — a file held
+   * by three owners arrived in a fourth conversation's panel as three identical rows. It is one
+   * row per link now, and no dedupe is needed to get there: the link is the row.
+   *
+   * The link is followed *through* `work_resources` rather than being trusted: a link whose row
+   * was deleted (or whose entity was) resolves to nothing here, which is how a dangling reference
+   * reports itself. See `session_references` in the schema.
+   */
+  const stmtListWorkResourcesFiltered = db.prepare(
+    `${WR_SELECT}
+      WHERE wr.user_id = @userId AND wr.deleted_at IS NULL
+        AND (f.id IS NOT NULL OR p.id IS NOT NULL)
+        AND (@resourceType IS NULL OR wr.resource_type = @resourceType)
+        AND (@category IS NULL OR f.category = @category)
+        AND (@ownerType IS NULL OR wr.owner_type = @ownerType)
+        AND (@mime IS NULL OR f.mime_type = @mime)
+        AND (@name IS NULL OR wr.title LIKE @name ESCAPE '\\')
+        AND (@workspaceId IS NULL OR (
+              (wr.owner_type = 'workspace' AND wr.owner_id = @workspaceId)
+              OR (wr.owner_type = 'session' AND wr.owner_id IN (
+                    SELECT s.id FROM sessions s WHERE s.workspace_id = @workspaceId))
+            ))
+        AND (@sessionId IS NULL OR (
+              (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
+              OR wr.id IN (
+                SELECT sr.work_resource_id FROM session_references sr
+                 WHERE sr.session_id = @sessionId)))
+      ORDER BY wr.created_at ASC, wr.id ASC`
+  );
+  const stmtSoftDeleteWorkResourceForUser = db.prepare(
+    "UPDATE work_resources SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+  );
+  const stmtUpdateWorkResourceParse = db.prepare(
+    `UPDATE work_resources
         SET parse_status = @status, parse_error = @error, parse_error_code = @code,
             parser_id = @parserId, parsed_chars = @parsedChars, page_count = @pageCount,
+            parsed_file_id = COALESCE(@parsedFileId, parsed_file_id),
             parse_updated_at = @updatedAt
       WHERE id = @id AND user_id = @userId AND deleted_at IS NULL`
   );
   /*
-   * Both links assert their two owners in one statement. `INSERT OR IGNORE` because
-   * re-uploading the same bytes into the same conversation is normal, and the link it would
-   * duplicate is already exactly right.
+   * The read whitelist, and the three arms are the v3 ones over a single table.
+   *
+   * - **Arm 1** is the conversation's own material.
+   * - **Arm 2** is the current workspace's own, plus any granted one.
+   * - **Arm 3** is what the workspace's *conversations* hold — and it covers the current
+   *   workspace as well as the granted ones.
+   *
+   * That last clause is the v4 replacement for a mechanism v3 had in the *writer*: an upload
+   * wrote a `session_sources` row and a `workspace_sources` row, and arm 2 read the second, which
+   * is what made a document uploaded in one conversation readable from a sibling. Here the
+   * reference is one row owned by the conversation, so the *reader* is what has to widen — and
+   * there is one row rather than two, which is also why the library lists an upload once.
+   *
+   * **The arms are ranked, and it is the *entity* they must not repeat.** Several references can
+   * point at one file — a conversation's own upload and the reference a sibling holds to the same
+   * bytes are two rows — so "what may the model read" has to answer once per file or the same
+   * document reaches the prompt twice. Arm 1 wins, then the workspace's, then a sibling's, and
+   * each arm skips an entity a nearer arm already answered for. Arm 3 also excludes `@sessionId`
+   * outright: arm 1 is that arm.
+   *
+   * The v3 statement got the same answer out of a `UNION ALL` under `MIN(linked_at)` and a
+   * `GROUP BY`. This is the same ranking expressed as an exclusion, which needs no aggregate and
+   * no bare-column-with-`MIN` trick.
+   *
+   * Without arm 3's conversations-of-a-granted-workspace clause, `ila_explore`'s `messages` would
+   * name ids that resolve to nothing, which reads as a broken tool.
+   *
+   * **Both arms check that the workspace is live, and arm 2 only needs to under `all`.** A named
+   * grant is live by construction — `resolveWorkspaceScope` re-derives the ids from the account's
+   * workspaces every turn, so a deleted one never reaches `@scopeIds`. But `all` is a *flag*, and
+   * arm 2's disjunction short-circuits on it, so "every workspace" admitted one that had been
+   * deleted: deletion is soft and dismantles nothing, so the material stayed readable by
+   * `read_document`, `ila_query kind "resource"` and the chips route — with nothing on screen
+   * naming the workspace it came from. v3's own arm 2 joined `workspaces` and checked
+   * `deleted_at`; the v4 rewrite reads `work_resources` directly and the predicate was dropped
+   * with the join. The `EXISTS` carries `user_id` for arm 3's reason: the owner is an id from a
+   * settings blob, and this is what says it names *this* account's workspace.
+   *
+   * **Arm 1 is the conversation's *reach*, not only its holdings.** Its second half is a
+   * `session_references` lookup by **reference id**: the rows this conversation *pointed at*,
+   * which is the relation a `@` writes and a holding row is not. That half is what makes pointing
+   * at something sticky — a file in a granted workspace stays readable after the grant is
+   * withdrawn, because the conversation was pointed at it once. The row that comes back is the
+   * one the user chose, so the id the model reads through is exactly the one `messages.refs`
+   * replays and the chip names. (v4 looked this up by *entity*, which made "referred to" mean
+   * "any holder of", and handed the model whichever holder the join reached first.)
+   *
+   * `linked_at` is `wr.created_at`, and there is no `MIN(...)`/`GROUP BY` any more. That
+   * machinery existed because an upload wrote a row in *two* link tables with two `now()` calls,
+   * so the same file could come back twice. The four-part unique index makes one row per
+   * owner+entity, so a duplicate is not merely unlikely — it is unrepresentable.
+   *
+   * The ids reach `json_each` as a JSON array built by `scopeIdsJson`, the only place that value
+   * is built: `json_each('')` raises, and a raise here is a 500 on every turn.
    */
-  const stmtLinkSourceToSession = db.prepare(
-    `INSERT OR IGNORE INTO session_sources (session_id, source_id, created_at)
-     SELECT s.id, src.id, @createdAt
-       FROM sessions s
-       JOIN workspaces w ON w.id = s.workspace_id
-       JOIN sources src ON src.id = @sourceId
-      WHERE s.id = @sessionId AND w.user_id = @userId AND src.user_id = @userId
-        AND src.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
-  );
-  const stmtLinkSourceToWorkspace = db.prepare(
-    `INSERT OR IGNORE INTO workspace_sources (workspace_id, source_id, created_at)
-     SELECT w.id, src.id, @createdAt
-       FROM workspaces w
-       JOIN sources src ON src.id = @sourceId
-      WHERE w.id = @workspaceId AND w.user_id = @userId AND src.user_id = @userId
-        AND src.deleted_at IS NULL AND w.deleted_at IS NULL`
-  );
-  /*
-   * The read whitelist: the conversation's own sources unioned with its workspace's. Reached
-   * through the session so the owner check happens once, on the join that every arm shares.
-   */
-  const stmtListSessionSources = db.prepare(
-    `SELECT src.* FROM session_sources ss
-       JOIN sources src ON src.id = ss.source_id
-       JOIN sessions s ON s.id = ss.session_id
-       JOIN workspaces w ON w.id = s.workspace_id
-      WHERE ss.session_id = ? AND w.user_id = ?
-        AND src.deleted_at IS NULL AND s.deleted_at IS NULL AND w.deleted_at IS NULL
-      ORDER BY ss.created_at ASC, src.id ASC`
-  );
-  /*
-   * `UNION ALL` under an explicit `MIN(linked_at)`, not a bare `UNION`.
-   *
-   * An upload links a source to the conversation *and* to its workspace, as two rows written
-   * by two separate `now()` calls. A `UNION` dedupes whole rows, so it collapsed these two
-   * arms only while the timestamps happened to agree to the millisecond — and the moment they
-   * did not, the same file came back twice, which is one file rendering as two chips. The
-   * union was never what made a source appear once; the id was. Collapsing on it and keeping
-   * the earliest link is what the ordering always meant, and it is the only version of this
-   * that cannot return one file twice.
-   *
-   * **Arm 2 and arm 3 are what a workspace grant opens**, and they are two arms rather than one
-   * because a workspace holds two kinds of material that only the link tables know about:
-   *
-   * - Arm 2 is the workspace's *own* material — its uploads and the pages kept into it, which
-   *   the upload route and `webCapture` link to `workspace_sources`. Arm 1 covers the current
-   *   workspace only, so a granted one needs its own clause.
-   * - Arm 3 is the material its *conversations* hold, which lives in `session_sources` and
-   *   nowhere else. `registerFileSource` writes a `sources` row and **no link row at all**, so
-   *   without this arm the sources a conversation inside a granted workspace merely pointed at
-   *   with `@` would be invisible — and `ila_explore`'s `messages` would return messages whose
-   *   `sources[]` snapshots name ids that resolve to nothing, which reads as a broken tool.
-   *
-   * Arm 3 deliberately has **no `@workspaceId` clause**. Adding one would quietly widen the
-   * *ungranted* case to a conversation's siblings, which is a behaviour change nobody asked
-   * for; with `@scopeAll = 0` and an empty id list, this statement returns exactly what it
-   * returned before the grant existed. `apps/server/test/readable-sources.test.ts` pins that.
-   *
-   * The ids reach `json_each` as a JSON array built by `scopeIdsJson`, which is the only place
-   * that value is built — `json_each('')` raises, and a raise here is a 500 on every turn.
-   * `w2.deleted_at IS NULL` is new on arm 2: it was implicit while the caller resolved a live
-   * workspace, and it stops being implicit once the ids come out of a settings blob.
-   */
-  const stmtListReadableSources = db.prepare(
-    `SELECT src.*, arm.linked_at FROM (
-       SELECT source_id, MIN(linked_at) AS linked_at FROM (
-         SELECT ss.source_id AS source_id, ss.created_at AS linked_at FROM session_sources ss
-           JOIN sessions s ON s.id = ss.session_id
-           JOIN workspaces w ON w.id = s.workspace_id
-          WHERE ss.session_id = @sessionId AND w.user_id = @userId
-         UNION ALL
-         SELECT ws.source_id AS source_id, ws.created_at AS linked_at FROM workspace_sources ws
-           JOIN workspaces w2 ON w2.id = ws.workspace_id
-          WHERE w2.user_id = @userId AND w2.deleted_at IS NULL
-            AND (@scopeAll = 1 OR ws.workspace_id = @workspaceId
-                 OR ws.workspace_id IN (SELECT value FROM json_each(@scopeIds)))
-         UNION ALL
-         SELECT ss2.source_id AS source_id, ss2.created_at AS linked_at FROM session_sources ss2
-           JOIN sessions s2 ON s2.id = ss2.session_id
-           JOIN workspaces w3 ON w3.id = s2.workspace_id
-          WHERE w3.user_id = @userId AND s2.deleted_at IS NULL AND w3.deleted_at IS NULL
-            AND (@scopeAll = 1
-                 OR s2.workspace_id IN (SELECT value FROM json_each(@scopeIds)))
-       ) GROUP BY source_id
-     ) arm
-     JOIN sources src ON src.id = arm.source_id
-     WHERE src.deleted_at IS NULL
-     ORDER BY arm.linked_at ASC, src.id ASC`
+  const stmtListReadableWorkResources = db.prepare(
+    `${WR_SELECT}
+      WHERE wr.user_id = @userId AND wr.deleted_at IS NULL
+        AND (f.id IS NOT NULL OR p.id IS NOT NULL)
+        AND (
+          (wr.owner_type = 'session' AND wr.owner_id = @sessionId)
+          OR wr.id IN (
+            SELECT sr.work_resource_id FROM session_references sr
+             WHERE sr.session_id = @sessionId)
+          OR (wr.owner_type = 'workspace'
+              AND EXISTS (
+                SELECT 1 FROM workspaces w
+                 WHERE w.id = wr.owner_id AND w.user_id = @userId AND w.deleted_at IS NULL)
+              AND (
+                @scopeAll = 1 OR wr.owner_id = @workspaceId
+                OR wr.owner_id IN (SELECT value FROM json_each(@scopeIds)))
+              AND NOT EXISTS (
+                SELECT 1 FROM work_resources mine
+                 WHERE mine.user_id = @userId AND mine.deleted_at IS NULL
+                   AND mine.owner_type = 'session' AND mine.owner_id = @sessionId
+                   AND mine.resource_type = wr.resource_type
+                   AND mine.resource_id = wr.resource_id))
+          OR (wr.owner_type = 'session' AND wr.owner_id <> @sessionId AND wr.owner_id IN (
+                SELECT s.id FROM sessions s
+                 JOIN workspaces w ON w.id = s.workspace_id
+                WHERE w.user_id = @userId AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+                  AND (@scopeAll = 1 OR s.workspace_id = @workspaceId
+                       OR s.workspace_id IN (SELECT value FROM json_each(@scopeIds))))
+              AND NOT EXISTS (
+                SELECT 1 FROM work_resources mine
+                 WHERE mine.user_id = @userId AND mine.deleted_at IS NULL
+                   AND mine.resource_type = wr.resource_type
+                   AND mine.resource_id = wr.resource_id
+                   AND (mine.owner_id = @sessionId
+                        OR (mine.owner_type = 'workspace' AND (
+                              @scopeAll = 1 OR mine.owner_id = @workspaceId
+                              OR mine.owner_id IN (SELECT value FROM json_each(@scopeIds)))))))
+        )
+      ORDER BY wr.created_at ASC, wr.id ASC`
   );
 
   /* ------------------------------ workspaces ------------------------------ */
@@ -3116,6 +3465,20 @@ export function createDb(dbPath: string): AppDb {
    */
   const stmtSetAutoTitleForUser = db.prepare(
     `UPDATE sessions SET title = ?, title_state = ?, updated_at = ?
+      WHERE id = ? AND deleted_at IS NULL AND title_source = 'auto'
+        AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
+  );
+  /*
+   * The auto-titler's *other* write: it looked, and there was nothing to name.
+   *
+   * Same guard as the statement above, and the title column is not in the `SET` at all — the
+   * placeholder stays, which is what "still unnamed" means. `updated_at` is absent for the reason
+   * the pin toggle gives below: it is not activity. Nothing about the conversation changed, and a
+   * decline bumping it would reorder the sidebar to say a conversation had moved when all that
+   * happened is that a question was answered with "not yet".
+   */
+  const stmtSetTitleStateForUser = db.prepare(
+    `UPDATE sessions SET title_state = ?
       WHERE id = ? AND deleted_at IS NULL AND title_source = 'auto'
         AND workspace_id IN (SELECT id FROM workspaces WHERE user_id = ? AND deleted_at IS NULL)`
   );
@@ -3284,9 +3647,9 @@ export function createDb(dbPath: string): AppDb {
   /** `createMessage`'s read-back, by primary key on a row this same call just inserted. */
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, sources, refs, usage,
+    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, refs, usage,
                               provider_id, provider_name, model_id, model_name, stopped, created_at)
-     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @sources, @refs, @usage,
+     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @refs, @usage,
              @providerId, @providerName, @modelId, @modelName, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
@@ -3583,12 +3946,32 @@ export function createDb(dbPath: string): AppDb {
    * removed — so absence is absence. The `target_kind` guard on each half is what keeps a table
    * note from being reported missing because no *diagram* has that name.
    */
+  /*
+   * `target_missing`, and the **third arm is scoped differently from the first two** — which is
+   * the thing to read before changing any of it.
+   *
+   * A diagram and a table are found inside this conversation, so `n.session_id` is the right
+   * scope for both. A **resource** may legitimately be held by another workspace: the `@` picker
+   * offers exactly that, and the read whitelist admits it through a grant. Scoping the arm by
+   * conversation would make a cross-workspace reference read `targetMissing: true` and lose its
+   * 定位 control while the note is perfectly intact — a silent failure, since a missing target
+   * renders as an ordinary state.
+   *
+   * The owner is reached through the note's own conversation (`notes → sessions → workspaces`),
+   * because that is the only path from a note to an account. Dropping the `user_id` comparison
+   * would make another account's live reference un-missing for a dead id.
+   */
   const NOTE_VIEW_SELECT = `SELECT n.*,
       (n.message_id IS NOT NULL AND m.id IS NULL) AS message_missing,
       ((n.target_kind = 'diagram' AND NOT EXISTS (
          SELECT 1 FROM session_diagrams d WHERE d.session_id = n.session_id AND d.name = n.target_ref
        )) OR (n.target_kind = 'table' AND NOT EXISTS (
          SELECT 1 FROM session_tables t WHERE t.session_id = n.session_id AND t.name = n.target_ref
+       )) OR (n.target_kind = 'resource' AND NOT EXISTS (
+         SELECT 1 FROM work_resources wr
+           JOIN sessions ns ON ns.id = n.session_id
+           JOIN workspaces nw ON nw.id = ns.workspace_id
+          WHERE wr.id = n.target_ref AND wr.user_id = nw.user_id AND wr.deleted_at IS NULL
        ))) AS target_missing
      FROM notes n
      LEFT JOIN messages m ON m.id = n.message_id AND m.deleted_at IS NULL`;
@@ -3624,31 +4007,6 @@ export function createDb(dbPath: string): AppDb {
   const stmtSoftDeleteNote = db.prepare(
     "UPDATE notes SET deleted_at = ? WHERE id = ? AND session_id = ? AND deleted_at IS NULL"
   );
-
-  /* ---------------------------- notes → the library --------------------------- */
-  const stmtGetNoteSyncState = db.prepare(
-    "SELECT * FROM session_note_syncs WHERE session_id = ?"
-  );
-  /*
-   * Every column is overwritten on every write, and that is right here where it would be wrong
-   * for a source: a run's state is not patched, it is *replaced* — "running" carries no counts
-   * and no error, and a settled run carries all of them. A COALESCE fallback would let a failed
-   * run inherit the previous run's `added`, which is a number about work that never happened.
-   */
-  const stmtUpsertNoteSyncState = db.prepare(
-    `INSERT INTO session_note_syncs
-       (session_id, status, started_at, finished_at, added, updated, removed, error)
-     VALUES (@sessionId, @status, @startedAt, @finishedAt, @added, @updated, @removed, @error)
-     ON CONFLICT(session_id) DO UPDATE SET
-       status = @status,
-       started_at = @startedAt,
-       finished_at = @finishedAt,
-       added = @added,
-       updated = @updated,
-       removed = @removed,
-       error = @error`
-  );
-  const stmtSetSessionSummary = db.prepare("UPDATE sessions SET summary = ? WHERE id = ?");
 
   /* ------------------------------ session diagrams --------------------------- */
   /*
@@ -3737,8 +4095,8 @@ export function createDb(dbPath: string): AppDb {
    * the id and created_at and clears thread_id, because the new shape has to be judged again.
    */
   const stmtUpsertDiagram = db.prepare(
-    `INSERT INTO session_diagrams (id, session_id, thread_id, name, summary, tool_call_id, created_at, updated_at)
-     VALUES (@id, @sessionId, NULL, @name, @summary, @toolCallId, @now, @now)
+    `INSERT INTO session_diagrams (id, session_id, thread_id, file_id, name, summary, tool_call_id, created_at, updated_at)
+     VALUES (@id, @sessionId, NULL, @fileId, @name, @summary, @toolCallId, @now, @now)
      ON CONFLICT(session_id, name) DO UPDATE SET
        summary = @summary,
        tool_call_id = @toolCallId,
@@ -4010,86 +4368,76 @@ export function createDb(dbPath: string): AppDb {
       return stmtPruneAuthTokens.run(before, before).changes;
     },
 
-    findSourceByHash(userId, sha256) {
-      const r = stmtFindSourceByHash.get(userId, sha256) as SourceRow | undefined;
-      return r ? mapSource(r) : undefined;
-    },
-    findDeletedSourceByHash(userId, sha256) {
-      const r = stmtFindDeletedSourceByHash.get(userId, sha256) as SourceRow | undefined;
-      return r ? mapSource(r) : undefined;
-    },
-    getSourceForUser(id, userId) {
-      const r = stmtGetSourceForUser.get(id, userId) as SourceRow | undefined;
-      return r ? mapSource(r) : undefined;
-    },
-    listSourcesForUser(userId, filter) {
-      // The unfiltered case keeps its own statement: it is the one the account's library asks
-      // first, and `LIKE`-free full scans of a small table are not worth unifying at the cost
-      // of a query plan that no longer uses the index.
-      if (!filter || Object.values(filter).every((v) => v === undefined)) {
-        return (stmtListSourcesForUser.all(userId) as SourceRow[]).map(mapSource);
-      }
-      const name = filter.name?.trim();
-      return (
-        stmtListSourcesFiltered.all({
-          userId,
-          storage: filter.storage ?? null,
-          category: filter.category ?? null,
-          origin: filter.origin ?? null,
-          mime: filter.mime ?? null,
-          // A search box is not a pattern language: `%` and `_` typed into it are characters
-          // the user is looking for, not wildcards, so they are escaped and the escape
-          // character is declared.
-          name: name ? `%${name.replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null,
-          workspaceId: filter.workspaceId ?? null,
-          sessionId: filter.sessionId ?? null,
-        }) as SourceRow[]
-      ).map(mapSource);
-    },
-    createSource(input) {
-      stmtCreateSource.run({
-        ...input,
-        relPath: input.relPath ?? null,
-        url: input.url ?? null,
-        summary: input.summary ?? null,
-        sha256: input.sha256 ?? null,
-        createdAt: input.now ?? now(),
-      });
-      const r = stmtGetSourceForUser.get(input.id, input.userId) as SourceRow;
-      return mapSource(r);
-    },
+
+
     listSessionLabels(userId) {
       return stmtListSessionLabels.all(userId) as SessionLabelRow[];
     },
     listSessionOverviews(userId) {
       return stmtListSessionOverviews.all(userId) as SessionOverviewRow[];
     },
-    getSourceByPlace(userId, owner, relPath) {
-      const r = stmtGetSourceByPlace.get({
+    searchMessages(userId, workspaceIds, query) {
+      // An empty grant has no rows to match, and `json_each('[]')` already says so — returned
+      // here rather than by the statement only because the note above promises it regardless.
+      if (workspaceIds.length === 0) return [];
+      return stmtSearchMessages.all({
         userId,
-        ownerKind: owner.kind,
-        ownerId: owner.id,
-        relPath,
-      }) as SourceRow | undefined;
-      return r ? mapSource(r) : undefined;
+        workspaceIds: JSON.stringify(workspaceIds),
+        query: likePattern(query),
+      }) as MessageSearchRow[];
     },
-    listSourcesForOwner(userId, owner) {
-      return (
-        stmtListSourcesForOwner.all({
-          userId,
-          ownerKind: owner.kind,
-          ownerId: owner.id,
-        }) as SourceRow[]
-      ).map(mapSource);
+
+    /*
+     * Every work-resource read goes through `withEntity`, and that is the one place a reference
+     * with no entity is handled: the shared join leaves the entity's columns NULL when the row
+     * it points at has been soft-deleted, and this drops the row rather than handing back a
+     * reference to nothing. A row about nothing is not a row the library can draw, and a caller
+     * that had to check for it at every site would eventually forget once.
+     */
+    getFileForUser(userId, id) {
+      const r = stmtGetFileForUser.get(id, userId) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
     },
-    updateSourcePlace(id, userId, patch) {
-      return (
-        stmtUpdateSourcePlace.run({
+    getFileByPath(userId, path) {
+      const r = stmtGetFileByPath.get(userId, path) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+    listFilesForUser(userId) {
+      return (stmtListFilesForUser.all(userId) as FileRow[]).map(mapFile);
+    },
+    findFileByHash(userId, sha256) {
+      const r = stmtFindFileByHash.get(userId, sha256) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+    findDeletedFileByHash(userId, sha256) {
+      const r = stmtFindDeletedFileByHash.get(userId, sha256) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+    createFile(input) {
+      stmtCreateFile.run({
+        id: input.id,
+        userId: input.userId,
+        sourceType: input.sourceType,
+        title: input.title,
+        path: input.path,
+        mimeType: input.mimeType,
+        category: input.category,
+        size: input.size,
+        summary: input.summary ?? null,
+        sha256: input.sha256 ?? null,
+        createdAt: input.now ?? now(),
+      });
+      const r = stmtGetFileForUser.get(input.id, input.userId) as FileRow;
+      return mapFile(r);
+    },
+    updateFilePath(id, userId, patch) {
+      const updatedAt = patch.now ?? now();
+      const changed =
+        stmtUpdateFilePath.run({
           id,
           userId,
-          relPath: patch.relPath ?? null,
-          storage: patch.storage ?? null,
-          name: patch.name ?? null,
+          path: patch.path ?? null,
+          title: patch.title ?? null,
           mimeType: patch.mimeType ?? null,
           category: patch.category ?? null,
           size: patch.size ?? null,
@@ -4097,57 +4445,194 @@ export function createDb(dbPath: string): AppDb {
           // summary" are different intentions and a lone null cannot express both.
           summarySet: patch.summary === undefined ? 0 : 1,
           summary: patch.summary ?? null,
+          updatedAt,
+        }).changes > 0;
+
+      // A rename carries the name to every reference, so the library does not keep showing the
+      // old one. Only when the caller actually named it — a reconcile passes no title and must
+      // not overwrite what a reference says.
+      if (changed && patch.title !== undefined) {
+        stmtRetitleWorkResourcesForFile.run({
+          userId,
+          fileId: id,
+          title: patch.title,
+          updatedAt,
+        });
+      }
+      return changed;
+    },
+    softDeleteFileForUser(id, userId) {
+      return stmtSoftDeleteFileForUser.run(now(), id, userId).changes > 0;
+    },
+    reviveFileForUser(id, userId) {
+      const r = stmtReviveFileForUser.get(id, userId) as FileRow | undefined;
+      return r ? mapFile(r) : undefined;
+    },
+
+    getWebPageForUser(userId, id) {
+      const r = stmtGetWebPageForUser.get(id, userId) as WebPageRow | undefined;
+      return r ? mapWebPage(r) : undefined;
+    },
+    softDeleteWebPageForUser(id, userId) {
+      return stmtSoftDeleteWebPageForUser.run(now(), id, userId).changes > 0;
+    },
+    findWebPageByHash(userId, sha256) {
+      const r = stmtFindWebPageByHash.get(userId, sha256) as WebPageRow | undefined;
+      return r ? mapWebPage(r) : undefined;
+    },
+    createWebPage(input) {
+      stmtCreateWebPage.run({
+        id: input.id,
+        userId: input.userId,
+        sourceType: input.sourceType,
+        url: input.url,
+        title: input.title,
+        summary: input.summary ?? null,
+        sha256: input.sha256,
+        createdAt: input.now ?? now(),
+      });
+      const r = stmtGetWebPageForUser.get(input.id, input.userId) as WebPageRow;
+      return mapWebPage(r);
+    },
+    updateWebPage(id, userId, patch) {
+      return (
+        stmtUpdateWebPage.run({
+          id,
+          userId,
+          url: patch.url ?? null,
+          title: patch.title ?? null,
+          summarySet: patch.summary === undefined ? 0 : 1,
+          summary: patch.summary ?? null,
           updatedAt: patch.now ?? now(),
         }).changes > 0
       );
     },
-    softDeleteSourceForUser(id, userId) {
-      return stmtSoftDeleteSourceForUser.run(now(), id, userId).changes > 0;
+
+    upsertWorkResource(input) {
+      /*
+       * The statement's `RETURNING *` gives the reference row without its entity, so the entity
+       * is read back through the same owner-scoped accessor the callers use. Two statements
+       * rather than a second join, because the value being returned is the *reference* — the
+       * entity is fetched by whoever needs it, and doing it here would mean this method had to
+       * know which of the two tables to read.
+       */
+      const inserted = stmtUpsertWorkResource.get({
+        id: input.id,
+        userId: input.userId,
+        resourceType: input.resourceType,
+        resourceId: input.resourceId,
+        ownerType: input.ownerType,
+        ownerId: input.ownerId,
+        title: input.title,
+        summary: input.summary ?? null,
+        createdAt: input.now ?? now(),
+      }) as { id: string } | undefined;
+      if (!inserted) return undefined;
+      return this.getWorkResourceForUser(input.userId, inserted.id);
     },
-    reviveSourceForUser(id, userId) {
-      const r = stmtReviveSourceForUser.get(id, userId) as SourceRow | undefined;
-      return r ? mapSource(r) : undefined;
+    getWorkResourceForUser(userId, id) {
+      const r = stmtGetWorkResourceForUser.get(id, userId) as WorkResourceRow | undefined;
+      if (!r) return undefined;
+      const entity = entityOf(r);
+      return entity ? mapWorkResource(r, entity) : undefined;
     },
-    updateSourceParse(id, userId, patch) {
-      stmtUpdateSourceParse.run({
-        id,
+    listWorkResourcesForResource(userId, resourceType, resourceId) {
+      const rows = stmtListWorkResourcesForResource.all({
         userId,
-        status: patch.status,
-        error: patch.error ?? null,
-        code: patch.code ?? null,
-        parserId: patch.parserId ?? null,
-        parsedChars: patch.parsedChars ?? null,
-        pageCount: patch.pageCount ?? null,
-        updatedAt: now(),
+        resourceType,
+        resourceId,
+      }) as WorkResourceRow[];
+      return rows.flatMap((r) => {
+        const entity = entityOf(r);
+        return entity ? [mapWorkResource(r, entity)] : [];
       });
     },
-    linkSourceToSession(userId, sessionId, sourceId) {
+    addSessionReference(input) {
+      stmtUpsertSessionReference.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        workResourceId: input.workResourceId,
+        createdAt: input.now ?? now(),
+      });
+    },
+    listSessionReferences(sessionId) {
+      const rows = stmtListSessionReferences.all(sessionId) as { work_resource_id: string }[];
+      return rows.map((r) => r.work_resource_id);
+    },
+    countReferencesForEntities(userId, resourceType, resourceIds) {
+      // An empty page of ids returns an empty map rather than asking the statement to parse
+      // `json_each('[]')` — which would work, but a query that provably cannot match is worth
+      // not making.
+      if (resourceIds.length === 0) return new Map();
+      const bound = {
+        userId,
+        resourceType,
+        resourceIds: JSON.stringify([...new Set(resourceIds)]),
+      };
+      const counts = new Map<string, number>();
+      for (const row of stmtCountReferences.all(bound) as { resource_id: string; n: number }[]) {
+        counts.set(row.resource_id, row.n);
+      }
+      for (const row of stmtCountSessionReferences.all(bound) as {
+        resource_id: string;
+        n: number;
+      }[]) {
+        counts.set(row.resource_id, (counts.get(row.resource_id) ?? 0) + row.n);
+      }
+      return counts;
+    },
+    listWorkResourcesFiltered(userId, filter) {
+      const rows = stmtListWorkResourcesFiltered.all({
+        userId,
+        resourceType: filter.resourceType ?? null,
+        ownerType: filter.ownerType ?? null,
+        category: filter.category ?? null,
+        mime: filter.mime ?? null,
+        // `likePattern` is what makes a `%` in a filename a character rather than a wildcard;
+        // `ESCAPE '\'` in the statement is the other half of it.
+        name: filter.name ? likePattern(filter.name) : null,
+        workspaceId: filter.workspaceId ?? null,
+        sessionId: filter.sessionId ?? null,
+      }) as WorkResourceRow[];
+      return rows.flatMap((r) => {
+        const entity = entityOf(r);
+        return entity ? [mapWorkResource(r, entity)] : [];
+      });
+    },
+    listReadableWorkResources(userId, sessionId, workspaceId, scope) {
+      const rows = stmtListReadableWorkResources.all({
+        userId,
+        sessionId,
+        workspaceId,
+        // `1`/`0` and never a boolean: SQLite has no boolean type, and the statement tests it
+        // with `= 1`. `idsJson` is the JSON array `scopeIdsJson` builds — see that function
+        // for why nothing else may be bound here.
+        scopeAll: scope.all ? 1 : 0,
+        scopeIds: scope.idsJson,
+      }) as WorkResourceRow[];
+      return rows.flatMap((r) => {
+        const entity = entityOf(r);
+        return entity ? [mapWorkResource(r, entity)] : [];
+      });
+    },
+    softDeleteWorkResourceForUser(id, userId) {
+      return stmtSoftDeleteWorkResourceForUser.run(now(), id, userId).changes > 0;
+    },
+    updateWorkResourceParse(input) {
       return (
-        stmtLinkSourceToSession.run({ userId, sessionId, sourceId, createdAt: now() }).changes > 0
+        stmtUpdateWorkResourceParse.run({
+          id: input.id,
+          userId: input.userId,
+          status: input.status,
+          error: input.error ?? null,
+          code: input.code ?? null,
+          parserId: input.parserId ?? null,
+          parsedChars: input.parsedChars ?? null,
+          pageCount: input.pageCount ?? null,
+          parsedFileId: input.parsedFileId ?? null,
+          updatedAt: input.now ?? now(),
+        }).changes > 0
       );
-    },
-    linkSourceToWorkspace(userId, workspaceId, sourceId) {
-      return (
-        stmtLinkSourceToWorkspace.run({ userId, workspaceId, sourceId, createdAt: now() })
-          .changes > 0
-      );
-    },
-    listSessionSources(userId, sessionId) {
-      return (stmtListSessionSources.all(sessionId, userId) as SourceRow[]).map(mapSource);
-    },
-    listReadableSources(userId, sessionId, workspaceId, scope) {
-      return (
-        stmtListReadableSources.all({
-          userId,
-          sessionId,
-          workspaceId,
-          // `1`/`0` and never a boolean: SQLite has no boolean type, and the statement tests it
-          // with `= 1`. `idsJson` is the JSON array `scopeIdsJson` builds — see that function
-          // for why nothing else may be bound here.
-          scopeAll: scope.all ? 1 : 0,
-          scopeIds: scope.idsJson,
-        }) as SourceRow[]
-      ).map(mapSource);
     },
 
     listWorkspaces(userId) {
@@ -4302,6 +4787,9 @@ export function createDb(dbPath: string): AppDb {
       const r = stmtGetSession.get(id) as SessionRow;
       return mapSession(r);
     },
+    setTitleStateForUser(id, userId, titleState) {
+      return stmtSetTitleStateForUser.run(titleState, id, userId).changes > 0;
+    },
     softDeleteSessionForUser(id, userId) {
       return stmtSoftDeleteSessionForUser.run(now(), id, userId).changes > 0;
     },
@@ -4378,7 +4866,6 @@ export function createDb(dbPath: string): AppDb {
         attachments: input.attachments?.length ? JSON.stringify(input.attachments) : null,
         // Stored only when there is something to store, like the column beside it: a JSON
         // `[]` would make "referenced nothing" a value rather than an absence.
-        sources: input.sources?.length ? JSON.stringify(input.sources) : null,
         refs: input.refs?.length ? JSON.stringify(input.refs) : null,
         usage: input.usage ? JSON.stringify(input.usage) : null,
         providerId: input.model?.providerId ?? null,
@@ -4810,29 +5297,6 @@ export function createDb(dbPath: string): AppDb {
       return stmtSoftDeleteNote.run(now(), noteId, sessionId).changes > 0;
     },
 
-    getNoteSyncState(sessionId) {
-      const row = stmtGetNoteSyncState.get(sessionId) as NoteSyncRow | undefined;
-      return row ? mapNoteSync(row) : undefined;
-    },
-
-    saveNoteSyncState(input) {
-      stmtUpsertNoteSyncState.run({
-        sessionId: input.sessionId,
-        status: input.status,
-        startedAt: input.startedAt,
-        finishedAt: input.finishedAt ?? null,
-        added: input.added ?? 0,
-        updated: input.updated ?? 0,
-        removed: input.removed ?? 0,
-        error: input.error ?? null,
-      });
-      return mapNoteSync(stmtGetNoteSyncState.get(input.sessionId) as NoteSyncRow);
-    },
-
-    setSessionSummary(sessionId, summary) {
-      stmtSetSessionSummary.run(summary, sessionId);
-    },
-
     listDiagramsBySession(sessionId) {
       return (stmtListDiagramsBySession.all(sessionId) as DiagramRow[]).map(mapDiagram);
     },
@@ -4904,6 +5368,7 @@ export function createDb(dbPath: string): AppDb {
         id: input.id,
         sessionId: input.sessionId,
         name: input.name,
+        fileId: input.fileId,
         summary: input.summary,
         toolCallId: input.toolCallId,
         now: now(),

@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, fileToBase64 } from "../../api/client";
 import { useAppStore } from "../../stores/app";
+import FolderPickerDialog from "./FolderPickerDialog.vue";
 import Icon from "../Icon.vue";
 
 /**
@@ -36,8 +37,6 @@ const props = defineProps<{
    * the list moves this with it.
    */
   lockedWorkspaceId?: string;
-  /** The directories this workspace is known to have, for the file tab's suggestion list. */
-  directories?: readonly string[];
 }>();
 
 const emit = defineEmits<{ close: []; added: [] }>();
@@ -54,6 +53,27 @@ const workspaceId = ref(props.lockedWorkspaceId ?? store.workspaces[0]?.id ?? ""
 const dir = ref("");
 const url = ref("");
 const files = ref<File[]>([]);
+/** Whether the directory picker is open — see `FolderPickerDialog`. */
+const pickingDir = ref(false);
+/**
+ * The optional field both tabs carry: what to call it.
+ *
+ * It lands on the **reference** rather than on the bytes (see `work_resources.title`), and the
+ * hint states the default rather than the field being pre-filled: a file is called by its own name
+ * and a page by the title the fetch found, so an empty field *means* "use that" instead of being a
+ * title somebody has to delete first.
+ */
+const title = ref("");
+/**
+ * Whether the title applies to what is picked.
+ *
+ * It names **one** piece of material, and the file tab takes several files — one request each. So
+ * it is shown where it can mean something (the link tab always, the file tab with exactly one file
+ * chosen) and absent rather than disabled where it cannot: a control that provably cannot do
+ * anything is the failure this repo names most often, and the server's per-file default is the
+ * right answer then.
+ */
+const fieldsApply = computed(() => tab.value === "link" || files.value.length === 1);
 const busy = ref(false);
 const error = ref<string | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -67,8 +87,17 @@ const canSubmit = computed(() => {
   return tab.value === "file" ? files.value.length > 0 : url.value.trim().length > 0;
 });
 
+/** The title, trimmed, with empty meaning "use the default". */
+function named(): { title?: string } {
+  const trimmed = title.value.trim();
+  return trimmed ? { title: trimmed } : {};
+}
+
 watch(tab, async () => {
   error.value = null;
+  // One material, one title: it describes *what is being added*, so a value typed for a file must
+  // not arrive attached to the link the reader switched to.
+  title.value = "";
   await nextTick();
   if (tab.value === "link") urlInput.value?.focus();
 });
@@ -80,6 +109,18 @@ watch(
   },
   { immediate: true }
 );
+
+/**
+ * A directory belongs to the workspace it was picked in.
+ *
+ * The path is relative, so carrying `notes/2026` into another workspace would not error — the
+ * upload would *create* that folder there, which is the wrong thing done quietly. So changing the
+ * workspace clears the choice back to the root, which is the only destination that means the same
+ * thing in both.
+ */
+watch(workspaceId, () => {
+  dir.value = "";
+});
 
 function onPick(event: Event): void {
   const input = event.target as HTMLInputElement;
@@ -107,7 +148,11 @@ async function submit(): Promise<void> {
 
   try {
     if (tab.value === "link") {
-      await api.addWebSource({ url: url.value.trim(), workspaceId: workspaceId.value });
+      await api.addResourcePage({
+        url: url.value.trim(),
+        workspaceId: workspaceId.value,
+        ...named(),
+      });
     } else {
       const pending = [...files.value];
       for (const file of pending) {
@@ -131,6 +176,9 @@ async function submit(): Promise<void> {
             name: file.name,
             mimeType: file.type || undefined,
             data: await fileToBase64(file),
+            // Only when the title describes *this* file: with two picked, one title for both
+            // would be a claim about neither. See `titleApplies`.
+            ...(fieldsApply.value ? named() : {}),
           });
           removeFile(files.value.indexOf(file));
         } catch (e) {
@@ -198,20 +246,45 @@ async function submit(): Promise<void> {
             </select>
           </label>
 
-          <template v-if="tab === 'file'">
+          <!--
+            The two optional fields, after *where it goes* and before the kind's own fields: they
+            describe what is being added rather than where it lands, and both kinds have them.
+          -->
+          <template v-if="fieldsApply">
             <label class="field">
-              <span>{{ t("sources.addDir") }}</span>
+              <span>{{ t("sources.addTitle") }}</span>
               <input
-                v-model="dir"
+                v-model="title"
                 class="input"
-                list="add-source-dirs"
-                data-testid="add-source-dir"
-                :placeholder="t('sources.addDirHint')"
+                data-testid="add-source-title"
+                :placeholder="
+                  tab === 'link' ? t('sources.addTitleLinkHint') : t('sources.addTitleFileHint')
+                "
               />
-              <datalist id="add-source-dirs">
-                <option v-for="d in props.directories ?? []" :key="d" :value="d"></option>
-              </datalist>
             </label>
+
+          </template>
+
+          <template v-if="tab === 'file'">
+            <!--
+              Where it goes, as a *choice* rather than a path to type: the picker browses this
+              workspace's tree one level at a time and can make a folder. It used to be a text
+              field with a datalist of directories that happened to be listed already, which asked
+              a person to spell a path to do what a file manager lets them point at.
+            -->
+            <div class="field">
+              <span>{{ t("sources.addDir") }}</span>
+              <button
+                class="btn dir-choice"
+                type="button"
+                data-testid="add-source-dir"
+                :title="dir || t('sources.dirRoot')"
+                @click="pickingDir = true"
+              >
+                <Icon name="folder" />
+                <span class="truncate">{{ dir || t("sources.dirRoot") }}</span>
+              </button>
+            </div>
 
             <div class="field">
               <span>{{ t("sources.addFiles") }}</span>
@@ -279,6 +352,19 @@ async function submit(): Promise<void> {
         </div>
       </div>
     </div>
+
+    <FolderPickerDialog
+      v-if="pickingDir"
+      :workspace-id="workspaceId"
+      :initial="dir"
+      @close="pickingDir = false"
+      @pick="
+        (path) => {
+          dir = path;
+          pickingDir = false;
+        }
+      "
+    />
   </Teleport>
 </template>
 
@@ -288,6 +374,18 @@ async function submit(): Promise<void> {
 }
 .add-tabs {
   align-self: flex-start;
+}
+/* The chosen directory, on a button: it reads as the field's value (a bordered box that fills the
+   column, left-aligned text) and behaves as the control that changes it. */
+.dir-choice {
+  justify-content: flex-start;
+  gap: var(--space-3);
+  font-weight: 400;
+  color: var(--text);
+}
+.dir-choice .icon {
+  flex: none;
+  color: var(--text-3);
 }
 .field {
   display: flex;

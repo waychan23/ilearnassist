@@ -1,17 +1,20 @@
 /**
- * The code block's copy control, click side.
+ * The copy controls inside rendered markdown, click side — a code block's and a table's.
  *
- * `utils/markdown.ts` writes the button into the HTML; this is what happens when it is pressed.
- * The two are apart because they have to be: the markup is produced by a pure `string → string`
- * function, and a button inside `v-html` cannot be a component — Vue does not know about the
- * elements it did not create, and the container's HTML is reassigned on every streamed token, so
- * anything mounted inside it would be destroyed continuously.
+ * `utils/markdown.ts` writes the buttons into the HTML; this is what happens when they are
+ * pressed. The two are apart because they have to be: the markup is produced by a pure
+ * `string → string` function, and a button inside `v-html` cannot be a component — Vue does not
+ * know about the elements it did not create, and the container's HTML is reassigned on every
+ * streamed token, so anything mounted inside it would be destroyed continuously.
  *
  * So one delegated listener per rendered surface, on the container, and the state lives in the
- * DOM: `data-copy-state` on the button, which the stylesheet paints. That is also why the button
- * carries **no text nodes** — `utils/noteAnchor.ts` counts a note's quote over a message's
- * *visible* text, so a label here would shift every anchor in the message.
+ * DOM: `data-copy-state` on the button, which the stylesheet paints. That is also why the buttons
+ * carry **no text nodes** — `utils/noteAnchor.ts` counts a note's quote over a message's
+ * *visible* text, so a label here would shift every anchor in the message. (The table's *bar* does
+ * carry text, and that is what `data-note-skip` on it is for.)
  */
+
+import { tableHtmlForClipboard } from "../utils/tableClipboard";
 
 /** How long the control says "copied" before going back. Matches `CopyButton.vue`'s beat. */
 const RESET_MS = 2_000;
@@ -35,8 +38,12 @@ export function codeCopyClick(event: MouseEvent): boolean {
   event.stopPropagation();
   event.preventDefault();
 
-  const code = button.parentElement?.querySelector("code");
-  const text = code?.textContent ?? "";
+  // `closest("pre")` rather than the parent: the button sits in the block's header strip, so its
+  // parent *is* that strip and the code is a sibling of the strip rather than of the button.
+  // Reading the parent was right while the control was positioned directly in the `<pre>`, and it
+  // silently copied `""` the moment it moved into the header — which is what the test above the
+  // markup is for.
+  const text = button.closest("pre")?.querySelector("code")?.textContent ?? "";
 
   void navigator.clipboard
     .writeText(text)
@@ -44,6 +51,51 @@ export function codeCopyClick(event: MouseEvent): boolean {
     .catch(() => flash(button, "failed"));
 
   return true;
+}
+
+/**
+ * The same, for a table's copy control.
+ *
+ * Two things differ from the code block's, and both are why this is not a branch inside it. The
+ * text is the table's own cells rather than a `<code>` element's content — and it is read off the
+ * **wrapper**, because a bar and its table are siblings inside one `data-table-block` while a
+ * code control's `<code>` is its parent's child. And the HTML flavour is written alongside the
+ * text, with the inline styles `utils/tableClipboard.ts` adds: a table pasted into a document
+ * without them arrives as a heap of words in a grid nobody can see.
+ *
+ * `write` with a `ClipboardItem` needs a secure context and a browser that has `ClipboardItem` at
+ * all; where either is missing the text alone is written, the fallback `CopyButton.vue` makes and
+ * for the same reason — a copy that half-worked is worse than one that took the plainer of the two.
+ */
+export function tableCopyClick(event: MouseEvent): boolean {
+  const button = (event.target as Element | null)?.closest<HTMLElement>("[data-copy-table]");
+  if (!button) return false;
+
+  event.stopPropagation();
+  event.preventDefault();
+
+  const block = button.closest<HTMLElement>("[data-table-block]");
+  const text = block?.querySelector("table")?.textContent ?? "";
+  const html = block ? tableHtmlForClipboard(block.innerHTML) : null;
+
+  void copyRich(text, html)
+    .then(() => flash(button, "copied"))
+    .catch(() => flash(button, "failed"));
+
+  return true;
+}
+
+async function copyRich(text: string, html: string | null): Promise<void> {
+  if (html && typeof ClipboardItem !== "undefined" && navigator.clipboard.write) {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": new Blob([html], { type: "text/html" }),
+        "text/plain": new Blob([text], { type: "text/plain" }),
+      }),
+    ]);
+    return;
+  }
+  await navigator.clipboard.writeText(text);
 }
 
 /**

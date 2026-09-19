@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Session, TitleRetryResult } from "@ilearnassist/shared";
 import type { ProviderDef } from "../src/config.js";
+import { DEFAULT_SESSION_TITLE } from "../src/db.js";
 import { startFakeLlm, type FakeLlm } from "./helpers/fakeLlm.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
@@ -111,23 +112,45 @@ describe("POST /api/sessions/:id/leave", () => {
     });
   });
 
-  it("retries a conversation whose first turn never reached the titler", async () => {
+  it("does not ask again when the last turn already found nothing to name", async () => {
     /*
-     * The never-attempted case, and it takes two turns to build: the titler runs on the first turn
-     * only, and a first turn that emits no text never reaches it — so the conversation keeps the
-     * create-time placeholder. The exchange is rebuilt by this route from the messages that exist
-     * *now*, which is exactly why a later leave can succeed where the first turn could not.
+     * The decline, end to end, and the reason it is a recorded state rather than a missing one:
+     * `unnamed` says the titler **read this conversation** and there was nothing in it to name, so
+     * leaving is not an occasion to ask the same question again — the answer would be the same and
+     * the call would be paid for twice. A later turn asks again on its own.
      */
     const session = await freshSession();
-    await turn(session.id, "什么是递归", "");
-    expect((await readSession(session.id))?.titleState).toBeUndefined();
+    llm.setTitle("NO_TITLE");
+    await turn(session.id, "你好");
 
-    // A second turn, with text — so there is an assistant message for the retry to read.
-    await turn(session.id, "再说一次");
-    expect((await readSession(session.id))?.titleState).toBeUndefined();
+    const declined = await readSession(session.id);
+    expect(declined).toMatchObject({
+      // No title was written: the placeholder the client sent at creation is still there, which is
+      // what "keeps the untitled state" means in the row.
+      title: DEFAULT_SESSION_TITLE,
+      titleSource: "auto",
+      titleState: "unnamed",
+    });
 
     llm.setTitle("递归入门");
-    expect((await leave(session.id)).body).toEqual({ status: "titled", title: "递归入门" });
+    const before = llm.requests().length;
+    expect((await leave(session.id)).body).toEqual({ status: "skipped" });
+    expect(llm.requests().length).toBe(before);
+    expect((await readSession(session.id))?.title).toBe(DEFAULT_SESSION_TITLE);
+  });
+
+  it("records a decline on the leave path too, without touching the title", async () => {
+    // The same answer arriving at the other end: a conversation the titler failed on, and a model
+    // that now reads it and says there is nothing to name.
+    const session = await failedTitling();
+    const before = await readSession(session.id);
+
+    llm.setTitle("NO_TITLE");
+    expect((await leave(session.id)).body).toEqual({ status: "skipped" });
+    expect(await readSession(session.id)).toMatchObject({
+      title: before!.title,
+      titleState: "unnamed",
+    });
   });
 
   it("leaves the row exactly as it was when the model will not answer", async () => {

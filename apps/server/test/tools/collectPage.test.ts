@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type AppDb } from "../../src/db.js";
 import { buildCollectPageTool, type PageCache } from "../../src/tools/collectPage.js";
-import { listSourceViewsForUser } from "../../src/sources.js";
+import { listResourceViewsForUser } from "../../src/resources.js";
 import { dataLayout, userLayout, type UserLayout } from "../../src/paths.js";
 
 /**
@@ -73,11 +73,24 @@ describe("ila_collect_page", () => {
     // The model is told what it kept and, more usefully, what it can now do with it — the id is
     // in the sentence because `read_document` takes one.
     expect(result).toContain("递归入门");
-    const row = (await listSourceViewsForUser(db, user, "u1"))[0]!;
-    expect(result).toContain(row.id);
-    expect(row.summary).toBe("递归的基础讲解");
-    expect(row.ownerKind).toBe("session");
-    expect(row.ownerId).toBe("s1");
+    /*
+     * What the turn holds is a **reference** to the page, and the sentence names its id —
+     * because `read_document` takes one.
+     *
+     * **One reference, and it is the conversation's.** There used to be a second, owned by the
+     * workspace, on the reading that a page should be readable from every conversation in it —
+     * and the second row is what the library showed twice. Readability from a sibling was never
+     * what it bought: `listReadableWorkResources` admits any reference owned by a sibling
+     * conversation, so the workspace's row only duplicated the entry.
+     */
+    const rows = await listResourceViewsForUser(db, user, "u1");
+    expect(rows).toHaveLength(1);
+    const mine = rows[0]!;
+    expect(result).toContain(mine.id);
+    expect(mine.summary).toBe("递归的基础讲解");
+    expect(mine.ownerType).toBe("session");
+    expect(mine.ownerId).toBe("s1");
+    expect(mine.resourceType).toBe("web_page");
   });
 
   it("refuses a page with nothing to store, as a tool error the model can act on", async () => {

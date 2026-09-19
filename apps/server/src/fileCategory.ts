@@ -1,12 +1,12 @@
 import { extname } from "node:path";
 import { DIAGRAM_FILE_EXTENSIONS } from "@ilearnassist/shared";
-import type { SourceCategory } from "@ilearnassist/shared";
+import type { FileCategory } from "@ilearnassist/shared";
 import { isDocumentMime } from "./documents/formats.js";
 
 /**
  * What a file *is*: one MIME type and one coarse category, from a name.
  *
- * A registry needs this and a browser needs it twice — once to filter a list of sources, once
+ * A registry needs this and a browser needs it twice — once to filter a list of files, once
  * to decide whether anything has to be *parsed* before a model can read it. Doing it here,
  * once, is the whole reason the module exists: this codebase has already paid for a second
  * extension table once, when a `.mmd` compiled cleanly and rendered as highlighted source in
@@ -118,7 +118,7 @@ export function mimeForName(name: string, mimeType?: string): string {
  * workspace is code rather than a page; and the document arm is asked before the binary
  * catch-all so a `.pdf` is a document rather than "other".
  */
-export function categoryFor(name: string, mimeType?: string): SourceCategory {
+export function categoryFor(name: string, mimeType?: string): FileCategory {
   const mime = mimeForName(name, mimeType);
   const ext = extensionOf(name);
 
@@ -139,10 +139,10 @@ export function categoryFor(name: string, mimeType?: string): SourceCategory {
  * The MIME comes back resolved rather than as it arrived, so a caller that only had a filename
  * stores a real type instead of an empty string it would then have to remember to fill in.
  */
-export function classifySource(
+export function classifyFile(
   name: string,
   mimeType?: string
-): { category: SourceCategory; mimeType: string } {
+): { category: FileCategory; mimeType: string } {
   const mime = mimeForName(name, mimeType);
   return { category: categoryFor(name, mime), mimeType: mime };
 }

@@ -74,6 +74,7 @@ describe("the catalog", () => {
       "clock",
       "workspace",
       "codeFence",
+      "fileWrite",
       "plan",
       "quiz",
       "collectPage",
@@ -190,7 +191,6 @@ describe("the fake LLM's out-of-band markers", () => {
   const MARKERS: [key: Parameters<typeof promptText>[0], marker: string][] = [
     ["thread.system", "topic-classification function"],
     ["insight.system", "reflective study coach"],
-    ["notesSummary.system", "short summary of a study conversation"],
     ["title.system", "titling function"],
   ];
 
@@ -199,7 +199,7 @@ describe("the fake LLM's out-of-band markers", () => {
   });
 
   it("keeps the subtitle above the marker in the fake LLM's list in step", async () => {
-    // Cheap structural guard: four markers, four quoted strings in the harness.
+    // Cheap structural guard: three markers, three quoted strings in the harness.
     const source = await import("node:fs/promises").then((fs) =>
       fs.readFile(new URL("./helpers/fakeLlm.ts", import.meta.url), "utf8")
     );

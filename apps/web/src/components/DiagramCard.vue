@@ -2,6 +2,8 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ToolCall } from "../api/types";
+import { canAnnotate, objectNoteRequest } from "../composables/notes";
+import { requestNoteEditor } from "../composables/messageNotes";
 import { useAppStore } from "../stores/app";
 import MermaidDiagram from "./MermaidDiagram.vue";
 import DiagramDialog from "./dialogs/DiagramDialog.vue";
@@ -84,6 +86,28 @@ function askAbout(): void {
   // ("ila_diagram"), which is not what the chip should say the question is about.
   store.stageReference({ kind: "diagram", ref: fileName.value, label: fileName.value });
 }
+
+/**
+ * Write a note about the diagram this call drew.
+ *
+ * Nothing is fetched and nothing is closed, which is the difference from the same button in
+ * `DiagramDialog`: the card is *in* the conversation, so the note window floats over a page it is
+ * annotating rather than behind an overlay. Everything it needs — the name and the model's own
+ * summary — is in the call's arguments, which is why the card renders with no request at all.
+ *
+ * Passed raw like the reference above, and for the same reason: the server normalises the name
+ * with `diagramFileName`, so the model's spelling and the canonical one are one target.
+ */
+function noteAbout(): void {
+  if (!fileName.value) return;
+  const request = objectNoteRequest({
+    kind: "diagram",
+    ref: fileName.value,
+    label: fileName.value,
+    summary: summary.value,
+  });
+  if (request) requestNoteEditor(request);
+}
 </script>
 
 <template>
@@ -120,6 +144,19 @@ function askAbout(): void {
         @click.stop="askAbout"
       >
         <Icon name="link" />
+      </button>
+      <!-- Beside the ask control, under the same rule the dialog's twin follows: absent rather
+           than disabled where no widget would render the window, since a control that does
+           nothing reads as broken. -->
+      <button
+        v-if="!failed && canAnnotate"
+        class="icon-btn note"
+        data-testid="diagram-note"
+        :title="t('notes.annotate')"
+        :aria-label="t('notes.annotate')"
+        @click.stop="noteAbout"
+      >
+        <Icon name="marker" />
       </button>
       <Icon class="toggle" :name="open ? 'caret-down' : 'caret-right'" />
     </div>

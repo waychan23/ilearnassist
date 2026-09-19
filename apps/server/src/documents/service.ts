@@ -1,8 +1,10 @@
 import { promises as fs } from "node:fs";
-import type { Attachment, Source } from "@ilearnassist/shared";
-import { resolveSourceBytes } from "../sourcePaths.js";
+import type { Attachment, StoredFile } from "@ilearnassist/shared";
+import { newId } from "../db.js";
+import { parsedFilePath, resolveFilePath, storePath } from "../resourcePaths.js";
+import { registerFile } from "../resources.js";
 import type { AppConfig } from "../config.js";
-import { readDocumentParsing, type AppDb, type SourceRecord } from "../db.js";
+import { readDocumentParsing, type AppDb, type WorkResourceRecord } from "../db.js";
 import type { UserLayout } from "../paths.js";
 import {
   driverFor,
@@ -19,25 +21,39 @@ import { removeParsedText, writeParsedText } from "./store.js";
 /**
  * Owns everything that happens to a document *after* its bytes are stored: deciding whether
  * to parse it, running the work off the request path, and recording the outcome in the
- * source's row — which is where the prompt builder and the UI both read it from.
+ * **reference's** row — which is where the prompt builder and the UI both read it from.
  *
  * Parsing is deliberately asynchronous. A cloud job routinely takes tens of seconds — five
  * minutes is the configured ceiling — and the upload endpoint has to answer immediately or
  * the composer hangs on every PDF. The trade is a small state machine the client polls.
  *
- * **Keyed by source, not by attachment.** A source belongs to the account, so the work
- * cannot be described by a conversation: two conversations can reference the same file, and
- * the parse is one job whose result both of them read. The user layout therefore arrives per
- * call rather than in the constructor — which user's tree the bytes live in is a fact about
- * the request that started the parse, not about this object.
+ * **Keyed by the work resource, and that is a change from v3.** A v3 source belonged to the
+ * account, so one parse served every conversation that referenced it and a reparse was visible
+ * everywhere at once. A reference is per owner, so two owners of one file each parse it and each
+ * get their own text — the cost the v4 model takes deliberately, stated in `schema.ts`.
+ *
+ * The user layout therefore arrives per call rather than in the constructor — which user's tree
+ * the bytes live in is a fact about the request that started the parse, not about this object.
  */
+
+/**
+ * The MIME a reference's entity presents to the parse pipeline.
+ *
+ * A page is never a parse candidate — it arrives already extracted, and its reference is written
+ * `ready` at capture — so the page arm is a value nothing acts on rather than a second code path.
+ */
+function entityMime(resource: WorkResourceRecord): string {
+  return resource.resourceType === "file"
+    ? (resource.resource as StoredFile).mimeType
+    : "text/html";
+}
 
 /** Bound on how many parses run at once; extraction is CPU-heavy and cloud calls bill. */
 export class DocumentService {
   readonly #db: AppDb;
   readonly #config: AppConfig;
 
-  /** Aborters for in-flight runs, keyed by source id. */
+  /** Aborters for in-flight runs, keyed by reference id. */
   readonly #inFlight = new Map<string, AbortController>();
   readonly #queue: { key: string; run: () => Promise<void> }[] = [];
   #running = 0;
@@ -82,12 +98,12 @@ export class DocumentService {
   }
 
   /** Whether this is a document we would parse at all. */
-  handles(file: Pick<Attachment, "mimeType">): boolean {
-    return isDocumentMime(file.mimeType);
+  handles(mimeType: string): boolean {
+    return isDocumentMime(mimeType);
   }
 
   /**
-   * Queue extraction for a source that has just been created.
+   * Queue extraction for a reference that has just been created.
    *
    * Writes `pending` before returning so a status poll issued immediately after the upload
    * response sees a real state rather than a gap between the two.
@@ -95,46 +111,47 @@ export class DocumentService {
   async schedule(
     user: UserLayout,
     userId: string,
-    source: SourceRecord,
-    workspaceRoot: string
+    resource: WorkResourceRecord
   ): Promise<void> {
-    if (!this.handles(source)) return;
-    this.#db.updateSourceParse(source.id, userId, { status: "pending" });
-    this.#enqueue(source.id, () => this.#execute(user, userId, source, workspaceRoot));
+    if (!this.handles(entityMime(resource))) return;
+    this.#db.updateWorkResourceParse({ id: resource.id, userId, status: "pending" });
+    this.#enqueue(resource.id, () => this.#execute(user, userId, resource));
   }
 
   /**
    * Re-run extraction, for a file that failed or was parsed before the settings changed.
    *
-   * Cancels any run already in flight for the same source: two writers racing for the same
+   * Cancels any run already in flight for the same reference: two writers racing for the same
    * text file is how a stale result overwrites a fresh one.
    */
   async reparse(
     user: UserLayout,
     userId: string,
-    source: SourceRecord,
-    workspaceRoot: string
+    resource: WorkResourceRecord
   ): Promise<void> {
-    if (!this.handles(source)) {
-      throw new ParseError("unsupported_type", `${source.name} 不是可解析的文档类型。`);
+    if (!this.handles(entityMime(resource))) {
+      throw new ParseError("unsupported_type", `${resource.title} 不是可解析的文档类型。`);
     }
-    this.#cancel(source.id);
-    await removeParsedText(user, source.id).catch(() => undefined);
-    this.#db.updateSourceParse(source.id, userId, { status: "pending" });
-    this.#enqueue(source.id, () => this.#execute(user, userId, source, workspaceRoot));
+    this.#cancel(resource.id);
+    // The old text is dropped first so a reparse starts from nothing rather than from a stale
+    // read — and it is keyed by the *file* that holds it, not by this reference.
+    const prior = resource.parsedFileId;
+    if (prior) await removeParsedText(user, prior).catch(() => undefined);
+    this.#db.updateWorkResourceParse({ id: resource.id, userId, status: "pending" });
+    this.#enqueue(resource.id, () => this.#execute(user, userId, resource));
   }
 
   /**
-   * Stop whatever is running or queued for one source.
+   * Stop whatever is running or queued for one reference.
    *
    * There used to be a `cancelSession`, called when a conversation was deleted because the
    * parse would have written a sidecar back into the directory being removed. That reason is
-   * gone — a source outlives the conversation — and the method went with it rather than being
+   * gone — a reference outlives the conversation — and the method went with it rather than being
    * renamed: cancelling by *session* would now abort a parse that another conversation is
    * waiting on, for a file that conversation still has.
    */
-  cancelSource(sourceId: string): void {
-    this.#cancel(sourceId);
+  cancelResource(resourceId: string): void {
+    this.#cancel(resourceId);
   }
 
   /** Probe a parser's endpoint and credential. Throws `ParseError` when it does not work. */
@@ -206,29 +223,33 @@ export class DocumentService {
    * One extraction run, from bytes to extracted text.
    *
    * Failures are recorded rather than thrown: this runs detached from any request, so the
-   * only place a user can learn what happened is the source's row.
+   * only place a user can learn what happened is the reference's row.
    */
   async #execute(
     user: UserLayout,
     userId: string,
-    source: SourceRecord,
-    workspaceRoot: string
+    resource: WorkResourceRecord
   ): Promise<void> {
     const controller = new AbortController();
-    this.#inFlight.set(source.id, controller);
+    this.#inFlight.set(resource.id, controller);
 
     // The stored path is ours, but read it back through the same containment check every
     // other reader uses: a row is not a trust boundary, and this one holds a filesystem path.
-    const path = resolveSourceBytes(user, source, workspaceRoot);
+    const path =
+      resource.resourceType === "file"
+        ? resolveFilePath(user, resource.resource as StoredFile)
+        : undefined;
     if (!path) {
-      this.#db.updateSourceParse(source.id, userId, {
+      this.#db.updateWorkResourceParse({
+        id: resource.id,
+        userId,
         status: "failed",
         error: "附件路径无效。",
       });
       return;
     }
 
-    this.#db.updateSourceParse(source.id, userId, { status: "parsing" });
+    this.#db.updateWorkResourceParse({ id: resource.id, userId, status: "parsing" });
 
     try {
       const stat = await fs.stat(path).catch(() => undefined);
@@ -236,8 +257,8 @@ export class DocumentService {
 
       const outcome = await parseDocument({
         path,
-        name: source.name,
-        mimeType: source.mimeType,
+        name: resource.resource.title,
+        mimeType: entityMime(resource),
         size: stat.size,
         policy: this.policy,
         parsers: this.parsers,
@@ -247,19 +268,39 @@ export class DocumentService {
         signal: controller.signal,
       });
 
-      await writeParsedText(user, source.id, outcome.text);
-      this.#db.updateSourceParse(source.id, userId, {
+      /*
+       * The text is written to a **file of its own**, whose id goes on the reference. A parse
+       * result is a file like any other — registered, addressed by path, resolvable — and the
+       * reference points at it rather than the text living beside the row that describes it.
+       */
+      const textFileId = newId();
+      await writeParsedText(user, textFileId, outcome.text);
+      registerFile(this.#db, {
+        id: textFileId,
+        userId,
+        path: storePath(user, parsedFilePath(user, textFileId)),
+        sourceType: "agent_create",
+        size: Buffer.byteLength(outcome.text, "utf8"),
+        title: `${resource.title} (text)`,
+        mimeType: "text/plain",
+      });
+      this.#db.updateWorkResourceParse({
+        id: resource.id,
+        userId,
         status: "ready",
         parserId: outcome.parserId,
         parsedChars: outcome.text.length,
         pageCount: outcome.pageCount,
+        parsedFileId: textFileId,
       });
     } catch (err) {
       const error = asParseError(err);
       // A cancelled run is one a reparse has already superseded — recording a failure here
       // would flash "failed" over the status the newer run is about to set.
       if (error.code === "cancelled") return;
-      this.#db.updateSourceParse(source.id, userId, {
+      this.#db.updateWorkResourceParse({
+        id: resource.id,
+        userId,
         status: "failed",
         error: describeParseError(error),
         code: error.code,

@@ -43,7 +43,6 @@ catalogs' rule, never keyed by the module that happens to read them.
 | `thread.system` | `threads.ts` — the turn classifier |
 | `insight.system` | `insights.ts` — the insight pass |
 | `mediaSummary.system` | `agent/mediaSummary.ts` — the image describer |
-| `notesSummary.system` | `notesExport.ts` — the note-export summariser |
 
 **Scope is deliberate.** Tool descriptions and schema `describe()` strings stay in code: they are
 bound to zod schemas rather than being free-standing prompt text. The out-of-band *user*-prompt
@@ -139,9 +138,9 @@ as prompt context on every turn of every conversation.
 
 `apps/server/test/helpers/fakeLlm.ts` decides whether a request is an out-of-band call by looking for
 a **substring of that call's system prompt** — `"topic-classification function"`,
-`"reflective study coach"`, `"short summary of a study conversation"`, `"titling function"`.
+`"reflective study coach"`, `"titling function"`.
 
-That is prose, not a stable identifier, so **reflowing one of those four prompts breaks the test
+That is prose, not a stable identifier, so **reflowing one of those three prompts breaks the test
 harness rather than the app**: the fake LLM stops recognising the call and the failure lands
 somewhere unrelated. `test/prompts.test.ts` asserts each marker is still present in its catalog
 entry, which turns a reflow into one named failing line. If you change one of those sentences,

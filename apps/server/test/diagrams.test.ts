@@ -106,6 +106,7 @@ describe("registerDiagram", () => {
   it("creates one row with the canonical name, unjudged", () => {
     const row = registerDiagram(db, SESSION, {
       name: diagramFileName("Auth Flow"),
+      fileId: "f-1",
       summary: "登录流程",
       toolCallId: "c1",
     });
@@ -124,11 +125,13 @@ describe("registerDiagram", () => {
   it("revises one row in place: new summary and anchor, id and birth kept", () => {
     const first = registerDiagram(db, SESSION, {
       name: "flow.mmd",
+      fileId: "f-1",
       summary: "一版",
       toolCallId: "c1",
     });
     const second = registerDiagram(db, SESSION, {
       name: "flow.mmd",
+      fileId: "f-1",
       summary: "二版",
       toolCallId: "c2",
     });
@@ -152,19 +155,19 @@ describe("registerDiagram", () => {
      * keeping the old thread files the new drawing under the old chapter. The new shape
      * must be judged again; the upsert clears it and the next thread sync reassigns it.
      */
-    registerDiagram(db, SESSION, { name: "flow.mmd", summary: "一版", toolCallId: "c1" });
+    registerDiagram(db, SESSION, { name: "flow.mmd", fileId: `f-flow.mmd`, summary: "一版", toolCallId: "c1" });
     db.raw
       .prepare("UPDATE session_diagrams SET thread_id = ? WHERE session_id = ?")
       .run("t-old", SESSION);
     expect(db.listDiagramsBySession(SESSION)[0]?.threadId).toBe("t-old");
 
-    registerDiagram(db, SESSION, { name: "flow.mmd", summary: "二版", toolCallId: "c2" });
+    registerDiagram(db, SESSION, { name: "flow.mmd", fileId: `f-flow.mmd`, summary: "二版", toolCallId: "c2" });
     expect(db.listDiagramsBySession(SESSION)[0]?.threadId).toBeNull();
   });
 
   it("keeps distinct names as distinct rows", () => {
-    registerDiagram(db, SESSION, { name: "one.mmd", summary: "一", toolCallId: "c1" });
-    registerDiagram(db, SESSION, { name: "two.mmd", summary: "二", toolCallId: "c2" });
+    registerDiagram(db, SESSION, { name: "one.mmd", fileId: `f-one.mmd`, summary: "一", toolCallId: "c1" });
+    registerDiagram(db, SESSION, { name: "two.mmd", fileId: `f-two.mmd`, summary: "二", toolCallId: "c2" });
     expect(db.listDiagramsBySession(SESSION).map((d) => d.name).sort()).toEqual([
       "one.mmd",
       "two.mmd",

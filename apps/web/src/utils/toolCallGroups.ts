@@ -1,6 +1,7 @@
 import {
   DIAGRAM_TOOL_NAME,
   TABLE_TOOL_NAME,
+  WRITE_FILE_TOOL_NAME,
   isInteractiveTool,
   type ToolCall,
 } from "../api/types";
@@ -33,6 +34,10 @@ export type ToolCallRun =
  *     function, and saying so here keeps that true if a call site changes.
  *   - `ila_diagram` renders a drawing. Folding it into a count hides the artifact behind a
  *     number, which is the opposite of what that card is for.
+ *   - `write_file` renders the **file**. Same reason as the drawing, and it is the same word: a
+ *     write is not a step the model took on the way to an answer, it is a thing the conversation
+ *     now holds — so a turn that writes a file and then reads two others must not file the file
+ *     under "3 个工具调用".
  *   - `ila_table` renders nothing at all, so the reason is not "its card deserves to be seen"
  *     but the count: a group's line says "3 个工具调用", and folding one in that has no card to
  *     show on expand would be a number with nothing behind it.
@@ -44,7 +49,8 @@ export function isGroupableToolCall(call: ToolCall): boolean {
   return (
     !isInteractiveTool(call.name) &&
     call.name !== DIAGRAM_TOOL_NAME &&
-    call.name !== TABLE_TOOL_NAME
+    call.name !== TABLE_TOOL_NAME &&
+    call.name !== WRITE_FILE_TOOL_NAME
   );
 }
 

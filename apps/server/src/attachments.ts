@@ -4,20 +4,18 @@ import { join, extname } from "node:path";
 import type { Attachment } from "@ilearnassist/shared";
 import { isDocumentMime } from "./documents/formats.js";
 import { readParsedTextHead } from "./documents/store.js";
-import { sourceRawPath } from "./sourcePaths.js";
 import { renderReferenceBlock, type ResolvedReference } from "./turnReferences.js";
 import type { UserLayout } from "./paths.js";
 
 /**
- * Uploaded files. Bytes live at `<userRoot>/sources/raw/<sourceId>.<ext>`, extracted text
+ * Uploaded files. Bytes live at `<userRoot>/sources/raw/<fileId>.<ext>`, extracted text
  * beside them in `parsed/` — under the account that uploaded them rather than under the
  * conversation they arrived in, because a file can be referenced by several conversations and
  * is stored once.
  *
- * The extension is derived deterministically from the MIME type, so the `sources` row's
- * `raw_path` and this module compute the same location from the same two facts. The row is
- * the authority for *which* file a message referred to; this module is the authority for
- * where that file is.
+ * Where a file's bytes are is the **row's** answer now, not this module's: `files.path` is
+ * stored, relative to this tree, and `resourcePaths.ts` resolves it. An attachment carries the
+ * id, and the caller hands over the resolution — see `BuildContentOptions.sourcePaths`.
  *
  * There is no root constant here, and that is the point: the tree belongs to a user under a
  * data directory the process chose at launch, so every function takes the layout. A
@@ -70,22 +68,20 @@ export type UserContentBlock =
 export const PREVIEW_CHARS = 4_000;
 
 export interface BuildContentOptions {
-  /** Whose sources tree to read from. Derived per request, never held. */
+  /** Whose tree to read from. Derived per request, never held. */
   user: UserLayout;
   /**
-   * Where each attachment's bytes actually are, by id — for the ones that are not uploads.
+   * Every file this run might read, by **file id** — `filePathsFor`'s answer, resolved once per
+   * run rather than looked up per message.
    *
-   * An attachment is a snapshot, and the snapshot was enough while a source was always an
-   * upload: its bytes are at `<id>.<ext>`, an expression this module can compute from the id
-   * and the MIME type alone. A file the agent wrote into a sandbox has no such path — its
-   * location is `storage` + `relPath` on a row — so the caller resolves those and hands them
-   * over. Absent, the derivation below is exactly what this module has always done.
-   *
-   * Paths rather than rows, because resolving one needs the workspace it lives in, and a turn
-   * may reference sources held by several: the caller is the side that knows, per row, and this
-   * module stays the side that knows what to *do* with a file once it has a path.
+   * Required rather than optional, which is the change v4 forces: a blob's path used to be
+   * *derivable* from its id and MIME type, so an id missing from the map had a fallback. It is
+   * now a stored fact on the file row, so an id the caller did not resolve means the file is not
+   * there — not that this module should invent a path for it. A second derivation could only
+   * disagree with the stored one, and the disagreement would be a file that reads in one place
+   * and 404s in another.
    */
-  sourcePaths?: ReadonlyMap<string, string>;
+  sourcePaths: ReadonlyMap<string, string>;
   /** When false, images are replaced by a text placeholder instead of being sent. */
   vision: boolean;
   /**
@@ -141,23 +137,15 @@ export async function buildUserContent(
 
   for (const att of attachments) {
     /*
-     * Where the bytes are, asked of the row when the caller has one and derived from the id
-     * and the MIME type when it does not.
+     * Where the bytes are, asked of the map and nowhere else.
      *
-     * The derivation is the upload case and stays first only in the sense of being the
-     * fallback: a source whose row is in the map may live in either sandbox, and asking the
-     * row is the only way to know. Both answers are re-checked against a root before use —
-     * `resolveSourceBytes` for a row, and `sourceRawPath`'s own table for a derivation — so
-     * neither is a path this module trusts from the wire.
+     * There used to be a fallback that derived a blob's path from its id and MIME type. That is
+     * gone, and its absence is the point: the path is stored on the row, so an id the caller did
+     * not resolve means the file is not there. A second derivation could only disagree with the
+     * stored one, and the disagreement would be a file that reads in one place and 404s in
+     * another.
      */
-    let path = opts.sourcePaths?.get(att.id);
-    if (path === undefined) {
-      try {
-        path = sourceRawPath(opts.user, att.id, att.mimeType);
-      } catch {
-        path = undefined;
-      }
-    }
+    const path = opts.sourcePaths.get(att.id);
 
     if (att.kind === "image") {
       if (!opts.vision || !path) {
@@ -198,11 +186,80 @@ export async function buildUserContent(
       continue;
     }
 
+    /*
+     * Text-like, and its bytes are not where the row says they are — a **web page**, whose
+     * `web_pages` id is not a `files` id, so `filePathsFor` has no entry for it. It is still the
+     * one thing the model should be told it can *read*: the reference carries the extracted text
+     * (`parsed_file_id`), and `read_document` is the way in. Named as a pointer rather than as a
+     * copy, which is the design — a page reaches the prompt as something to follow, the way a
+     * document past its cap does.
+     *
+     * What stood here was the binary fallback below, which called a parsed page "未解析内容" —
+     * a sentence that was false, and false in the one direction that matters: a model told a
+     * document is unparsed does not try to read it.
+     */
+    if (isTextLike(att.mimeType)) {
+      blocks.push({ type: "text", text: pointerBlock(att, opts) });
+      continue;
+    }
+
     // A binary we have no extractor for: name it so the model knows it exists.
     blocks.push({ type: "text", text: `[附件：${att.name}（${att.mimeType}，未解析内容）]` });
   }
 
   return blocks;
+}
+
+/**
+ * One attachment's **parse state**, as the sentence a model reads.
+ *
+ * Shared by `documentBlock` and `pointerBlock` so the two cannot drift: a reference that is
+ * still being parsed, one that failed and one nothing ever extracted are three different facts,
+ * and each asks the model for something different — wait, report, or give up. `undefined` is the
+ * fourth case: there *is* text, and the caller decides how to hand it over.
+ *
+ * **The status decides, not the pointer**, and that ordering is the whole helper. A failed parse
+ * keeps its `parsed_file_id` — the row records what it was attempting — so keying on the pointer
+ * first would answer "there is text" for a parse that produced none, which is the one thing a
+ * model must not be told.
+ */
+function parseStateBlock(att: Attachment): string | undefined {
+  if (att.parseStatus === "failed") {
+    return `[附件：${att.name}（解析失败：${att.parseError ?? "未知原因"}）]`;
+  }
+  if (att.parseStatus === "pending" || att.parseStatus === "parsing") {
+    return `[附件：${att.name}（正在解析，内容暂不可用）]`;
+  }
+  /*
+   * `ready` **with** a pointer is the one state that means "there is text" — and it is the whole
+   * reason this returns `undefined` rather than a sentence. Everything else has nothing to hand
+   * over, including a `none` that somehow kept a pointer: the two are written together, so a row
+   * that disagrees with itself is one to describe by its status rather than to trust.
+   */
+  if (att.parseStatus === "ready" && att.parsedFileId) return undefined;
+  return `[附件：${att.name}（${att.mimeType}，未解析内容）]`;
+}
+
+/**
+ * An attachment the model can **read but not see**: its text exists, and the only way to it is
+ * `read_document`.
+ *
+ * A web page is the case, and it is the one attachment whose bytes are genuinely unaddressable —
+ * its id is a `web_pages` id, so the path map that inlines a `.md` has nothing for it. The
+ * pointer names the resource id, which is what the tool takes; `documentBlock` prints the same
+ * sentence when a document is too long to inline.
+ *
+ * `toolUse` gates it for the reason it gates that one: without the tool assembled, telling the
+ * model to call `read_document` is telling it about a capability it does not have.
+ */
+function pointerBlock(att: Attachment, opts: BuildContentOptions): string {
+  const state = parseStateBlock(att);
+  if (state !== undefined) return state;
+  if (!opts.toolUse) return `[附件：${att.name}（内容过长，已省略）]`;
+  return (
+    `[附件：${att.name}（网页）—— 用 read_document 工具读取，` +
+    `resourceId 为 "${att.resourceId}"。]`
+  );
 }
 
 /**
@@ -223,15 +280,19 @@ async function documentBlock(att: Attachment, opts: BuildContentOptions): Promis
 
   // Read one character past the threshold: the extra character is what distinguishes "this
   // is the whole document" from "there is more", which a cap-sized read could never tell.
-  const head = await readParsedTextHead(opts.user, att.id, MAX_INLINE_CHARS + 1);
+  //
+  // By the **parsed file's** id, not the attachment's: the extracted text is a file of its own,
+  // and an attachment is a file of bytes that may have no relationship to it at all.
+  const head = att.parsedFileId
+    ? await readParsedTextHead(opts.user, att.parsedFileId, MAX_INLINE_CHARS + 1)
+    : undefined;
   if (head === undefined) {
-    if (att.parseStatus === "failed") {
-      return `[附件：${att.name}（解析失败：${att.parseError ?? "未知原因"}）]`;
-    }
-    if (att.parseStatus === "pending" || att.parseStatus === "parsing") {
-      return `[附件：${att.name}（正在解析，内容暂不可用）]`;
-    }
-    return `[附件：${att.name}（${att.mimeType}，未解析内容）]`;
+    return (
+      parseStateBlock(att) ??
+      // A `parsed_file_id` whose file cannot be read: the row says there is text and the tree
+      // disagrees, which is the one case neither sentence covers.
+      `[附件：${att.name}（解析结果不可读）]`
+    );
   }
 
   if (head.length <= MAX_INLINE_CHARS) {
@@ -241,7 +302,7 @@ async function documentBlock(att: Attachment, opts: BuildContentOptions): Promis
   const preview = head.slice(0, PREVIEW_CHARS);
   const pointer = opts.toolUse
     ? `[... 内容过长，此处仅为前 ${PREVIEW_CHARS} 字符。` +
-      `请调用 read_document 工具读取剩余内容 —— sourceId 为 "${att.id}"，` +
+      `请调用 read_document 工具读取剩余内容 —— resourceId 为 "${att.resourceId}"，` +
       `用 offset 参数分段读取。]`
     : `[... 内容过长，剩余部分已省略。]`;
 

@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { fallbackTitle, generateTitle, sanitizeTitle } from "../../src/agent/title.js";
+import {
+  fallbackTitle,
+  generateTitle,
+  conversationExcerpt,
+  isDeclined,
+  sanitizeTitle,
+  type TitleMessage,
+} from "../../src/agent/title.js";
 import type { ProviderRecord } from "../../src/db.js";
 import { startFakeLlm, type FakeLlm } from "../helpers/fakeLlm.js";
 
@@ -72,6 +79,73 @@ describe("fallbackTitle", () => {
   });
 });
 
+describe("isDeclined", () => {
+  it("recognises the titler's nothing-to-name answer, however it is spelled", () => {
+    // Loose on purpose, and one-directionally: a *title* read as a decline costs one more turn,
+    // while a decline read as a title would be written down and marked done — see `NO_TITLE`.
+    expect(isDeclined("NO_TITLE")).toBe(true);
+    expect(isDeclined("no title")).toBe(true);
+    expect(isDeclined("No-Title")).toBe(true);
+    expect(isDeclined("NO_TITLES_YET")).toBe(false);
+  });
+
+  it("is handed a cleaned title, so punctuation around the sentinel never reaches it", () => {
+    expect(sanitizeTitle("NO_TITLE.")).toBe("NO_TITLE");
+    expect(isDeclined(sanitizeTitle('  "NO_TITLE."  '))).toBe(true);
+  });
+
+  it("does not mistake a real title for it", () => {
+    // What the loose match is bought with: a conversation *about* the word is still nameable.
+    expect(isDeclined("None 的用法")).toBe(false);
+    expect(isDeclined("Untitled Session")).toBe(false);
+    expect(isDeclined("")).toBe(false);
+  });
+});
+
+describe("conversationExcerpt", () => {
+  const said = (role: string, content: string): TitleMessage => ({ role, content });
+
+  it("fences what was said, oldest first, so the text is data rather than a request", () => {
+    expect(
+      conversationExcerpt([said("user", "什么是递归"), said("assistant", "递归是…")])
+    ).toBe("<conversation>\n<user>什么是递归</user>\n<assistant>递归是…</assistant>\n</conversation>");
+  });
+
+  it("keeps the opening question and the latest messages, and drops the middle", () => {
+    /*
+     * The whole reason the excerpt is not a window: the two things that name a conversation are the
+     * question it opened with and what was last said about it, and a long conversation has a lot of
+     * messages in between that say neither.
+     */
+    const middle = Array.from({ length: 12 }, (_, i) => said("user", `filler ${i}`));
+    const excerpt = conversationExcerpt([
+      said("user", "opening question"),
+      ...middle,
+      said("assistant", "the latest answer"),
+    ]);
+
+    expect(excerpt).toContain("<user>opening question</user>");
+    expect(excerpt).toContain("the latest answer");
+    // The oldest filler went first: the ones nearest the end are the better evidence.
+    expect(excerpt).not.toContain("filler 0");
+    expect(excerpt).toContain("filler 11");
+    expect(excerpt.split("\n").length).toBeLessThanOrEqual(11);
+  });
+
+  it("says nothing rather than something empty", () => {
+    expect(conversationExcerpt([])).toBe("");
+    // A tool-only turn leaves an assistant message with no content, and an empty tag would read
+    // as a thing that was said.
+    expect(conversationExcerpt([said("assistant", "  \n ")])).toBe("");
+  });
+
+  it("clips one enormous message so one turn cannot crowd out the rest", () => {
+    const excerpt = conversationExcerpt([said("user", "x".repeat(5_000)), said("assistant", "end")]);
+    expect(excerpt).toContain("end");
+    expect(excerpt.length).toBeLessThan(2_000);
+  });
+});
+
 describe("generateTitle", () => {
   let llm: FakeLlm;
 
@@ -92,11 +166,27 @@ describe("generateTitle", () => {
     ...overrides,
   });
 
-  const input = { modelId: "fake-model", userMessage: "hello", assistantMessage: "hi there" };
+  const input = {
+    modelId: "fake-model",
+    messages: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi there" },
+    ],
+  };
 
   it("returns the model's title, cleaned up", async () => {
     llm.setTitle('"Model Written Title"');
     await expect(generateTitle({ provider: provider(), ...input })).resolves.toBe("Model Written Title");
+  });
+
+  it("answers null when the model says there is nothing to name yet", async () => {
+    /*
+     * The distinct third answer, and the whole of the new behaviour: this is not a failure, so the
+     * caller writes no title and leaves the conversation on its placeholder. `rejects` would be the
+     * wrong shape for it and a title would be wrong in the other direction.
+     */
+    llm.setTitle("NO_TITLE");
+    await expect(generateTitle({ provider: provider(), ...input })).resolves.toBeNull();
   });
 
   it("sends the exchange fenced as data, not as a request to answer", async () => {
@@ -113,15 +203,27 @@ describe("generateTitle", () => {
 
   it("truncates a very long exchange before sending it", async () => {
     llm.reset();
-    await generateTitle({ provider: provider(), ...input, userMessage: "x".repeat(5_000) });
+    await generateTitle({
+      provider: provider(),
+      ...input,
+      messages: [{ role: "user", content: "x".repeat(5_000) }, ...input.messages.slice(1)],
+    });
 
     const sent = llm.requests()[0] as { messages: { content: string }[] };
     expect(sent.messages[1]!.content.length).toBeLessThan(3_000);
   });
 
   it("throws when the model returns nothing usable", async () => {
+    // An *empty* answer is a failure rather than a decline — `fallbackTitle` is what stands in for
+    // it, and a model that said nothing at all is not a model that judged the conversation empty.
     llm.setTitle("");
     await expect(generateTitle({ provider: provider(), ...input })).rejects.toThrow(/returned no title/);
+  });
+
+  it("throws when there is nothing to send", async () => {
+    await expect(
+      generateTitle({ provider: provider(), modelId: "fake-model", messages: [] })
+    ).rejects.toThrow(/Nothing to title/);
   });
 
   it("throws when there is no provider", async () => {

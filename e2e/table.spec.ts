@@ -119,15 +119,72 @@ test("a recorded table renders in the reply, not in a tool container", async ({ 
   // is the fallback a call with no branch of its own silently lands in.
   await expect(message.locator("[data-tool-call-id]")).toHaveCount(0);
   await expect(message.getByTestId("tool-call")).toHaveCount(0);
-  // The name the model gave it is not on screen at all — it lives in the panel, which is where a
-  // table is found again.
-  await expect(message).not.toContainText("季度对比");
 
   /*
    * The **anchor** the panel's 定位 needs, since the card that used to carry it is gone. It is on
    * the message, which is the block the table is actually in.
    */
   await expect(message).toHaveAttribute("data-tool-call-anchor", "call_t1");
+});
+
+test("every table carries a title bar with actions", async ({ page, request }) => {
+  /*
+   * The title the reply never had. It comes from the `ila_table` **call** rather than from the
+   * model's prose, which is what makes it certain: the row is the name the 图表 panel lists the
+   * same table under, so the two cannot disagree. `apps/web/test/utils/markdown.test.ts` pins the
+   * markup and the count guard; what only a browser can show is that the app renders it over the
+   * table a reader is looking at.
+   */
+  const workspace = await figureSession(page, unique("表格标题"));
+  await scriptTable(request, { name: "季度对比", summary: "三项指标的对比" });
+  await send(page, "帮我做一个对比表");
+
+  const body = page.getByTestId("message-content").last();
+  const bar = body.locator("[data-table-block] .table-head").first();
+  await expect(bar).toBeVisible();
+  await expect(bar.locator(".table-name")).toHaveText("季度对比");
+
+  // Both actions, and the note one is the feature: a table can now be annotated from the place it
+  // is read, without going to the panel first.
+  await expect(bar.locator("[data-table-note]")).toBeVisible();
+  await expect(bar.locator("[data-copy-table]")).toBeVisible();
+
+  /*
+   * And the bar is chrome rather than the message's text. A note anchors to a quote counted over
+   * the message's *visible* text, so a title counted as message text would shift every note
+   * anchored below it — the same claim `code-block.spec.ts` makes for the code header.
+   */
+  await expect(bar).toHaveAttribute("data-note-skip", "");
+
+  // It survives a reload, like the table itself: it is rendered from the persisted tool call.
+  await page.reload();
+  await enterWorkspace(page, workspace);
+  await page.getByTestId("session-item").first().click();
+  await expect(
+    page.getByTestId("message-content").last().locator(".table-head .table-name")
+  ).toHaveText("季度对比");
+});
+
+test("a table with no ila_table call still gets a bar, with no note control", async ({
+  page,
+  request,
+}) => {
+  /*
+   * A reply that writes a table without recording one. The bar is still drawn — "every inline
+   * table has a title" is the requirement — but it says the generic word rather than inventing a
+   * name, and the 标注/笔记 control is **absent**, because a note is anchored to a canonical name
+   * and there is none to anchor to.
+   */
+  await figureSession(page, unique("表格无名"));
+  await scriptLlm(request, { turns: [{ content: `随手一张表：\n\n${TABLE}` }] });
+  await send(page, "随便看看");
+
+  const body = page.getByTestId("message-content").last();
+  const bar = body.locator("[data-table-block] .table-head").first();
+  await expect(bar).toBeVisible();
+  await expect(bar.locator(".table-name")).toHaveText("表格");
+  await expect(bar.locator("[data-table-note]")).toHaveCount(0);
+  await expect(bar.locator("[data-copy-table]")).toBeVisible();
 });
 
 test("the panel lists it, opens it in the viewer, and copies it as HTML", async ({

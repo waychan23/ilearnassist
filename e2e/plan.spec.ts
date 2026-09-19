@@ -181,9 +181,14 @@ test.describe("the plan widget", () => {
      * simply found no element and the handler had nothing to move.
      *
      * The turn below is the ordinary shape rather than a contrived one. The plan guidance asks
-     * for the bookkeeping call before the teaching prose, so "mark the node, then write the
-     * chapter file" is what most chapter turns look like — which makes this the common case, and
-     * the reason the earlier lifecycle test misses it is only that its turn has a single call.
+     * for the bookkeeping call before the teaching prose, so "mark the node, then read what the
+     * chapter is about" is an ordinary chapter turn — which makes this the common case, and the
+     * reason the earlier lifecycle test misses it is only that its turn has a single call.
+     *
+     * The second call is deliberately a **groupable** one. `write_file` used to serve here and
+     * cannot any more: its own card renders the file, so it breaks a run (see
+     * `toolCallGroups.ts`), and a run of one renders its card — leaving nothing folded for the
+     * jump to have to open.
      */
     const name = unique("Plan jump fold");
     await planSession(page, name);
@@ -205,7 +210,7 @@ test.describe("the plan widget", () => {
               name: "ila_update_plan_progress",
               args: { nodes: [{ id: chapter1, status: "in_progress" }] },
             },
-            { id: "call_write", name: "write_file", args: { path: "notes.md", content: "# 第一章" } },
+            { id: "call_read", name: "read_file", args: { path: "notes.md" } },
           ],
         },
         { content: "第一章开始了。" },

@@ -1,26 +1,44 @@
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import type { SourceOwner } from "@ilearnassist/shared";
-import { newId, type AppDb, type SourceRecord } from "./db.js";
+import type { ResourceOwner, WebPage } from "@ilearnassist/shared";
+import { newId } from "./db.js";
+import type { AppDb, WorkResourceRecord } from "./db.js";
 import { fetchGuarded, htmlToText } from "./tools/webFetch.js";
-import { sourceWebPath } from "./sourcePaths.js";
-import { registerPageSource } from "./sources.js";
+import { parsedFilePath, storePath, webFilePath } from "./resourcePaths.js";
+import { ensureWorkResource, registerFile } from "./resources.js";
 import { writeParsedText } from "./documents/store.js";
 import type { UserLayout } from "./paths.js";
 
 /**
- * A page becomes a source, whoever asked for it.
+ * A page becomes a reference, whoever asked for it.
  *
  * Two callers want exactly this and neither owns it: `ila_collect_page`, when the **model**
- * decides a page it read is worth keeping, and the source browser's "add a link", when the
- * **user** pastes a URL in. What they share is the whole of the operation — fetch through the
- * guard, extract the text, store both halves, write the row — and what differs is one field:
- * the summary, which only a model can write. So the difference is a parameter rather than a
- * second implementation, and the SSRF guard in particular has one call site for pages, not two.
+ * decides a page it read is worth keeping, and the library's "add a link", when the **user**
+ * pastes a URL in. What they share is the whole of the operation — fetch through the guard,
+ * extract the text, store both halves, write the rows — and what differs is one field: the
+ * summary, which only a model can write. So the difference is a parameter rather than a second
+ * implementation, and the SSRF guard in particular has one call site for pages, not two.
  *
- * The bytes are the *fetched body*; the text is the derived half, in the one `parsed/` tree
- * every other source's text goes to. That split is what lets `read_document` and the prompt
- * builder treat a page like any other document, with no branch for "it came off the network".
+ * Three records, and each holds what the others cannot:
+ *
+ * - a **`web_pages` row**, whose identity is the *reading* — URL plus extracted text — rather
+ *   than the bytes, so a masthead that changed since yesterday is the same page and an article
+ *   that changed is a new one;
+ * - two **`files` rows**: the fetched body, and the extracted text. The body's is registered and
+ *   never referenced — the honest case the file/reference split exists for — while the text's id
+ *   goes on the reference as `parsed_file_id`, which is how `read_document` finds it;
+ * - exactly one **`work_resources` row**, held by whoever asked for the page: the conversation
+ *   when the model kept it, the workspace when the user added a link.
+ *
+ * **One reference, and there used to be two — and the second bought nothing.** A page kept by a
+ * turn also wrote the *workspace's* reference, on the reading that a page is like an uploaded
+ * document and should be readable from every conversation in the workspace. That reading was
+ * already served by `listReadableWorkResources`, whose third arm admits any reference owned by a
+ * *sibling* conversation in the same workspace; the extra row changed nothing about what could be
+ * read and only put a second, identical entry in the library under a different owner — the
+ * duplication reported from use. Removing it is a subtraction with no loss, which is worth stating
+ * plainly because the opposite is the natural assumption.
  */
 
 /** What a turn remembers about the pages it fetched, so keeping one does not refetch it. */
@@ -32,11 +50,24 @@ const MAX_PAGE_TEXT_CHARS = 400_000;
 export interface CapturePageInput {
   user: UserLayout;
   userId: string;
-  /** Who holds the page: a conversation when the model kept it, a workspace when a user added it. */
-  owner: SourceOwner;
-  /** The workspace it belongs to, so it is readable from every conversation in it. */
-  workspaceId: string;
+  /**
+   * Who holds the page: a conversation when the model kept it, a workspace when a user added it.
+   *
+   * The only owner, since the fan-out to the workspace was removed — see the module docblock. What
+   * makes a kept page readable from a sibling conversation is the readable set's own sibling arm,
+   * not a second row here.
+   */
+  owner: ResourceOwner;
   url: string;
+  /**
+   * What the *user* called it, when they added it from the library.
+   *
+   * Optional, and it lands on the **reference** rather than on the page: the page's own title is
+   * what the fetched document says it is called, while this is what one owner calls it — the same
+   * split `title` has everywhere else. Absent means the page's title (or its URL, when the
+   * document has no title at all).
+   */
+  title?: string;
   /**
    * The model's one line about the page.
    *
@@ -50,7 +81,10 @@ export interface CapturePageInput {
   now?: string;
 }
 
-export async function captureWebPage(db: AppDb, input: CapturePageInput): Promise<SourceRecord> {
+export async function captureWebPage(
+  db: AppDb,
+  input: CapturePageInput
+): Promise<WorkResourceRecord> {
   const cached = input.cache?.get(input.url);
   let finalUrl = input.url;
   let body: string;
@@ -76,50 +110,127 @@ export async function captureWebPage(db: AppDb, input: CapturePageInput): Promis
 
   const text = extracted.text.slice(0, MAX_PAGE_TEXT_CHARS);
   if (text.trim().length === 0) {
-    // A page with no readable text is not worth keeping, and an empty source would read as
+    // A page with no readable text is not worth keeping, and an empty one would read as
     // "unparsed" for ever. The model can still quote what `web_fetch` returned; it simply
-    // cannot make it a source — and a user who pasted such a URL is told why.
+    // cannot make it a kept page — and a user who pasted such a URL is told why.
     throw new Error(
       `"${finalUrl}" has no readable text to store — it may be a script-only page or a binary file.`
     );
   }
 
+  const hash = createHash("sha256").update(`${finalUrl}\n${text}`).digest("hex");
+  const title = extracted.title || finalUrl;
+  const now = input.now;
+
   /*
-   * The stored file is HTML when the page was HTML and plain text otherwise, because
-   * `storage: "web"` derives the extension from the MIME type — and a page stored as something
-   * the table does not know would be a source nothing could resolve.
+   * The page's identity is the reading, so keeping it again is a no-op for the *bytes*: the row
+   * is refreshed (a title or a summary may have been revised) and the files are left where they
+   * are, because they are the bytes of the reading that is already recorded.
+   *
+   * The text file is found through an existing reference rather than derived: the id belongs to
+   * the parse, and a second keep must not orphan the first one's file.
+   */
+  const known = db.findWebPageByHash(input.userId, hash);
+  let page: WebPage;
+  if (known) {
+    db.updateWebPage(known.id, input.userId, {
+      title,
+      ...(input.summary ? { summary: input.summary } : {}),
+      now,
+    });
+    page = db.getWebPageForUser(input.userId, known.id) ?? known;
+  } else {
+    page = db.createWebPage({
+      id: newId(),
+      userId: input.userId,
+      sourceType: input.owner.kind === "session" ? "agent_fetch" : "upload",
+      url: finalUrl,
+      title,
+      summary: input.summary,
+      sha256: hash,
+      now,
+    });
+  }
+
+  /*
+   * The stored body is HTML when the page was HTML and plain text otherwise, because the path's
+   * extension comes from the MIME type — and a page stored as something the table does not know
+   * would be a file nothing could resolve.
    */
   const mimeType = isHtml ? "text/html" : "text/plain";
-  const id = newId();
-  const path = sourceWebPath(input.user, id, mimeType);
+  const priorTextFileId = known
+    ? db.listWorkResourcesForResource(input.userId, "web_page", page.id)[0]?.parsedFileId
+    : undefined;
+  const textFileId = priorTextFileId ?? newId();
 
-  await fs.mkdir(dirname(path), { recursive: true });
-  await fs.writeFile(path, body, "utf8");
-  await writeParsedText(input.user, id, text);
+  if (!known) {
+    const bodyFileId = newId();
+    const bodyPath = webFilePath(input.user, bodyFileId, mimeType);
 
-  const row = registerPageSource(db, {
+    await fs.mkdir(dirname(bodyPath), { recursive: true });
+    await fs.writeFile(bodyPath, body, "utf8");
+
+    // The body is stored and *not* referenced — the file/reference split doing its job, and the
+    // one place it is not a workaround for the diagram's case but the ordinary one.
+    registerFile(db, {
+      userId: input.userId,
+      path: storePath(input.user, bodyPath),
+      sourceType: "agent_create",
+      size: Buffer.byteLength(body, "utf8"),
+      title: `${title} (raw)`,
+      mimeType,
+      now,
+    });
+  }
+
+  // Written (or rewritten) either way: a re-keep whose extraction came out differently should
+  // not leave the old text on disk under a row that says otherwise.
+  await writeParsedText(input.user, textFileId, text);
+  // The text is a registered file like any other — `parsed_file_id` is a link to a row, and a
+  // link to nothing would make the reference's own parse state unresolvable.
+  const textFile = registerFile(db, {
+    id: textFileId,
     userId: input.userId,
-    owner: input.owner,
-    id,
-    url: finalUrl,
-    title: extracted.title,
-    summary: input.summary ?? "",
-    mimeType,
-    size: Buffer.byteLength(body, "utf8"),
-    text,
-    now: input.now,
+    path: storePath(input.user, parsedFilePath(input.user, textFileId)),
+    sourceType: "agent_create",
+    size: Buffer.byteLength(text, "utf8"),
+    title: `${title} (text)`,
+    mimeType: "text/plain",
+    now,
   });
 
-  /*
-   * Linked, like an upload — and this is the half that makes the row *usable*.
-   *
-   * `read_document` is bound to a whitelist built from these two link tables, so a page with a
-   * row and no link is material the browser lists and the model cannot open. The workspace link
-   * is what makes a page kept in one conversation readable from another in the same workspace,
-   * which is the same widening an uploaded document already has.
-   */
-  db.linkSourceToWorkspace(input.userId, input.workspaceId, row.id);
-  if (input.owner.kind === "session") db.linkSourceToSession(input.userId, input.owner.id, row.id);
+  const resource = ensureWorkResource(db, {
+    userId: input.userId,
+    owner: input.owner,
+    resourceType: "web_page",
+    resourceId: page.id,
+    title: input.title?.trim() || page.title,
+    summary: input.summary,
+    now,
+  });
+  if (!resource) {
+    // Unreachable through either caller — both pass an owner they have already resolved — and
+    // a throw rather than a silent return: a page with no reference is a page nobody can read.
+    throw new Error("Could not attach the page to anything.");
+  }
 
-  return row;
+  /*
+   * `ready`, not `none`: a page arrives already extracted — the text is the point of keeping it
+   * — and `none` would tell every reader nothing had been done. The parsed file is linked so
+   * `read_document` finds the text through the ordinary path.
+   *
+   * The text file is *shared* by every reference to the same reading: the parse is per reference,
+   * but a page arrives already extracted, so there is nothing to redo when a second conversation
+   * is pointed at it.
+   */
+  db.updateWorkResourceParse({
+    id: resource.id,
+    userId: input.userId,
+    status: "ready",
+    parsedChars: text.length,
+    parsedFileId: textFile.id,
+    now,
+  });
+
+  return db.getWorkResourceForUser(input.userId, resource.id) ?? resource;
 }

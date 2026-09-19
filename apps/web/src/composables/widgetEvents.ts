@@ -63,15 +63,6 @@ export type WidgetEvent =
    */
   | { type: "table.changed"; sessionId: string }
   /**
-   * The note export finished and changed something in the library, so the sources panel
-   * refetches.
-   *
-   * `diagram.changed`'s argument exactly: the *server* wrote rows and files, and nothing local
-   * knows how many or which. Emitted only when the run settled having actually changed something,
-   * because a sync that rewrote nothing changed nothing to look at.
-   */
-  | { type: "library.changed"; sessionId: string }
-  /**
    * A widget asked to scroll the conversation to a tool-call card — a plan node's start
    * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
    * event. Scrolling to the card (rather than the message top) lands on the node's start.

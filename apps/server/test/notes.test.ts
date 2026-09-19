@@ -145,6 +145,7 @@ describe("a note about a figure", () => {
       id: `d-${name}`,
       sessionId,
       name,
+      fileId: `f-${name}`,
       summary: "A flow",
       toolCallId: null,
     });
@@ -197,17 +198,25 @@ describe("a note about a figure", () => {
     expect(noKind.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
   });
 
-  it("refuses a note that carries both a figure and a passage", async () => {
-    // One note names one thing. Either reading of a request carrying both would throw away half
-    // of what was sent, so it is refused rather than resolved.
-    const withQuote = await createNote({
+  it("records a figure's own title as its 标注原文, and still refuses a passage", async () => {
+    /*
+     * One note names one thing, and the test of "a passage" is the `messageId` and the
+     * `occurrence` — not the quote. An object note has a 标注原文 with nothing quoted in it,
+     * holding the object's title, so a bare `quote` is a title rather than a second anchor.
+     * Refusing it was refusing the only thing an object note can put in the field the reader
+     * sees, which is why this half flipped from 400 to 201.
+     */
+    const withTitle = await createNote({
       targetKind: "diagram",
       targetRef: "auth-flow.mmd",
-      quote: "some words",
+      quote: "登录与刷新的时序",
     });
-    expect(withQuote.statusCode).toBe(400);
-    expect(withQuote.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+    expect(withTitle.statusCode).toBe(201);
+    expect(withTitle.json<Note>().quote).toBe("登录与刷新的时序");
+    expect(withTitle.json<Note>().messageId).toBeNull();
 
+    // A message is an anchor, and two anchors in one request is still a client that assembled
+    // two different notes — either reading would throw away half of what was sent.
     const withMessage = await createNote({
       targetKind: "diagram",
       targetRef: "auth-flow.mmd",
@@ -216,6 +225,17 @@ describe("a note about a figure", () => {
     });
     expect(withMessage.statusCode).toBe(400);
     expect(withMessage.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
+
+    // And an occurrence without a message is an offset into nothing, so it is refused on the
+    // same grounds rather than silently counted over the object's title.
+    const withOccurrence = await createNote({
+      targetKind: "diagram",
+      targetRef: "auth-flow.mmd",
+      quote: "登录与刷新的时序",
+      occurrence: 1,
+    });
+    expect(withOccurrence.statusCode).toBe(400);
+    expect(withOccurrence.json<ApiErrorBody>().error.code).toBe("INVALID_FIELD");
   });
 
   it("refuses a figure this conversation does not hold, under its own code", async () => {
@@ -408,5 +428,119 @@ describe("a note whose message is gone", () => {
     // is no message left to read it out of, and a row that showed nothing would be a note that
     // lost its whole point.
     expect(after).toMatchObject({ messageMissing: true, quote: "energy currency" });
+  });
+});
+
+/**
+ * A note about the material the conversation is working from.
+ *
+ * The third kind of target, and the one whose validation is scoped differently from the other
+ * two: a diagram and a table are found inside this conversation, while a resource may
+ * legitimately be held by another workspace — which is exactly what the `@` picker offers and
+ * what the read whitelist admits through a grant. So the checks below are about *whose* material
+ * it may be, and about what the panel says when that material goes away.
+ */
+describe("a note about a resource", () => {
+  /** A file row and this conversation's reference to it. */
+  function seedResource(id: string, userId = env.user.id): string {
+    const file = env.server.db.createFile({
+      id: `file-${id}`,
+      userId,
+      sourceType: "agent_create",
+      title: `${id}.md`,
+      path: `workspaces/test-workspace/workdir/${id}.md`,
+      mimeType: "text/markdown",
+      category: "markdown",
+      size: 3,
+    });
+    env.server.db.upsertWorkResource({
+      id,
+      userId,
+      resourceType: "file",
+      resourceId: file.id,
+      ownerType: "session",
+      ownerId: sessionId,
+      title: file.title,
+    });
+    return id;
+  }
+
+  it("stores the reference id as the target", async () => {
+    const id = seedResource("wr-note-1");
+    const res = await createNote({ targetKind: "resource", targetRef: id });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<Note>()).toMatchObject({ targetKind: "resource", targetRef: id });
+  });
+
+  it("refuses an id that is nobody's", async () => {
+    // The owner check is the whole validation, and a reference from another account is simply
+    // not found — the "not yours and does not exist answer alike" rule the routes follow.
+    const mine = seedResource("wr-note-2");
+    const other = env.server.db.createUser({
+      id: "someone-else",
+      username: "other",
+      slug: "other",
+    });
+    void other;
+    const theirs = seedResource("wr-note-theirs", "someone-else");
+
+    expect((await createNote({ targetKind: "resource", targetRef: mine })).statusCode).toBe(201);
+    expect((await createNote({ targetKind: "resource", targetRef: theirs })).statusCode).toBe(404);
+    expect((await createNote({ targetKind: "resource", targetRef: "nope" })).statusCode).toBe(404);
+  });
+
+  it("reports the target missing once the reference is gone", async () => {
+    const id = seedResource("wr-note-3");
+    const created = (await createNote({ targetKind: "resource", targetRef: id })).json<Note>();
+    expect(created.targetMissing).toBe(false);
+
+    env.server.db.softDeleteWorkResourceForUser(id, env.user.id);
+
+    const after = (await listNotes()).find((n) => n.id === created.id);
+    // Reported rather than refused, on the note rule: a note outlives what it points at, and
+    // what the reader needs is to be told — the same answer `messageMissing` gives.
+    expect(after).toMatchObject({ targetMissing: true, targetRef: id });
+  });
+
+  it("does not call a cross-workspace reference missing", async () => {
+    /*
+     * The arm's scope, pinned. A reference held by another workspace is a legitimate target —
+     * the `@` picker offers them — so scoping `target_missing` by the note's conversation would
+     * report a perfectly live reference as gone, and the chip would quietly lose its 定位
+     * control. Asserted through a second workspace because that is the only way to build the
+     * case at all.
+     */
+    const other = env.server.db.createWorkspace({
+      userId: env.user.id,
+      id: "w-elsewhere",
+      name: "Elsewhere",
+      slug: "elsewhere",
+      dirPath: "/tmp/elsewhere",
+    });
+    void other;
+    const file = env.server.db.createFile({
+      id: "file-elsewhere",
+      userId: env.user.id,
+      sourceType: "agent_create",
+      title: "elsewhere.md",
+      path: "workspaces/elsewhere/workdir/elsewhere.md",
+      mimeType: "text/markdown",
+      category: "markdown",
+      size: 3,
+    });
+    env.server.db.upsertWorkResource({
+      id: "wr-elsewhere",
+      userId: env.user.id,
+      resourceType: "file",
+      resourceId: file.id,
+      ownerType: "workspace",
+      ownerId: "w-elsewhere",
+      title: file.title,
+    });
+
+    const created = (
+      await createNote({ targetKind: "resource", targetRef: "wr-elsewhere" })
+    ).json<Note>();
+    expect(created).toMatchObject({ targetMissing: false, targetRef: "wr-elsewhere" });
   });
 });

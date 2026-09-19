@@ -4,6 +4,8 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import { isNarrow } from "../../composables/breakpoints";
 import { codeCopyClick } from "../../composables/codeCopy";
+import { canAnnotate, objectNoteRequest } from "../../composables/notes";
+import { requestNoteEditor } from "../../composables/messageNotes";
 import { isOpenableUrl, openExternal } from "../../utils/externalLink";
 import { formatBytes } from "../../utils/format";
 import { highlightFile, renderMarkdown } from "../../utils/markdown";
@@ -140,6 +142,38 @@ function openPage(): void {
 }
 
 /**
+ * Write a note about the file on screen.
+ *
+ * Anchored to the file's **reference**, which is the one handle the notes API accepts for a
+ * piece of material — the file's own id is a different thing and the create refuses it. The route
+ * resolves the path to that reference and puts its title and summary on the reply, which is what
+ * the note's 标注原文 is built from; without it a note about `main.rs` would quote a uuid.
+ *
+ * **It closes the preview first**, which this used to argue against and was wrong about. The note
+ * window is a floating card rendered by `ChatView`, so it lives at `--z-window` — *below*
+ * `--z-preview`, the layer this dialog deliberately sits at because it is the one opened *from*
+ * things. The card was therefore painted underneath the dialog that had just opened it, with its
+ * own controls unreachable — the same failure `--z-confirm` was added for, one layer down.
+ *
+ * Closing loses nothing that matters: the file is one press away, because the note window now
+ * draws its 标注对象 as a control that opens exactly this. That is `DiagramDialog`'s answer to the
+ * same problem, and the two arrived at it from the same place.
+ */
+function noteAboutFile(): void {
+  const reference = content.value?.reference;
+  if (!reference) return;
+  const request = objectNoteRequest({
+    kind: "resource",
+    ref: reference.id,
+    label: reference.title,
+    summary: reference.summary ?? reference.title,
+  });
+  if (!request) return;
+  store.closeFile();
+  requestNoteEditor(request);
+}
+
+/**
  * Whether the dialog is filling the viewport.
  *
  * Local state rather than a store field or a persisted preference: it is a property of *this*
@@ -180,13 +214,25 @@ const rendered = computed(() =>
 const highlighted = computed(() => {
   const loaded = content.value;
   if (!loaded || loaded.text === null) return "";
-  return highlightFile(loaded.text, loaded.name);
+  return highlightFile(loaded.text, fileFullName.value);
 });
 
 /** `"notes/a.md"` → `"a.md"`. The server sends the name too; this covers the loading state. */
 function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
+
+/**
+ * The file's **own** name — what a viewer, a highlighter or a download needs.
+ *
+ * `name` is what to *call* it, which is the owner's title when there is one, and a title is prose:
+ * it can have no extension at all, and then the viewer's gate says "unsupported" and the
+ * highlighter has no grammar. So every *decision* about the bytes goes by this — the reply's
+ * `fileName` when it has arrived, and the path's last segment while it is still loading.
+ */
+const fileFullName = computed(
+  () => content.value?.fileName ?? basename(store.filePreviewPath ?? "")
+);
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
@@ -313,6 +359,21 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             >
               <Icon name="link" />
             </button>
+
+            <!-- Beside the other conversation-scoped actions, and absent rather than disabled
+                 when either half of the capability is missing: no notes widget is installed, or
+                 this file is held by no reference for the note to anchor to. A control that
+                 renders and does nothing is the failure this repository names most often. -->
+            <button
+              v-if="canAnnotate && content?.reference"
+              class="icon-btn"
+              data-testid="file-preview-note"
+              :title="t('notes.annotate')"
+              :aria-label="t('notes.annotate')"
+              @click="noteAboutFile"
+            >
+              <Icon name="marker" />
+            </button>
           </div>
 
           <!-- The window's own two: growing the box, and closing it. Maximise first, close
@@ -367,7 +428,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           <FileViewer
             v-else-if="view === 'binary'"
             :file="store.filePreviewFile"
-            :name="content?.name ?? name"
+            :name="fileFullName"
           />
 
           <div

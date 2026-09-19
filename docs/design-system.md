@@ -161,7 +161,7 @@ an audit of every `transition` in the app.
 | `--z-drawer` | 80 | The drawer itself |
 | `--z-window` | 90 | A floating window the reader is working in (the note window). Its difference from `--z-popover` is what it is *about*: a menu belongs to the control it hangs off, so a drawer covering it is right, while a window opened **from** a drawer must be reachable over it |
 | `--z-overlay` | 100 | Modal overlays |
-| `--z-preview` | 105 | The file preview, which is opened from things (the file tree, the source browser, a figure row) |
+| `--z-preview` | 105 | The file preview, which is opened from things (the file tree, the library browser, a figure row) |
 | `--z-confirm` | 110 | The confirmation prompt. Above every other overlay rather than level with them, because two at the same index stack by DOM order and `ConfirmDialog` is mounted first |
 | `--z-toast` | 200 | The error toast |
 
@@ -225,7 +225,7 @@ invisible to whoever is not in the affected audience. A `.active` class would be
 of it.
 
 **`.segment` is one choice among a few, and that is not the same control as a row of toggles.**
-`SourceMentionPicker`'s type filter is multi-valued — each pill is its own on/off, and clicking
+`ResourceMentionPicker`'s type filter is multi-valued — each pill is its own on/off, and clicking
 the active one clears it — so it is a scoped `.mention-pill` rather than a `.segment`, and drawn
 lighter and rounder so the two controls sitting side by side in one strip are not mistaken for
 each other. What it *keeps* from `.segment` is the part that is not a preference: the state rides

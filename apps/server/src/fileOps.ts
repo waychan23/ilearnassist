@@ -16,7 +16,7 @@ import { FileAccessError, resolveReal } from "./files.js";
  * overwrites it. Two copies of that check is how one of them ends up the weaker one, so there
  * is one, and it is the one the reads already use.
  *
- * Nothing here knows about the database. Recording that a file moved is `sources.ts`'s job, and
+ * Nothing here knows about the database. Recording that a file moved is `resources.ts`'s job, and
  * it happens after the bytes do — a row written first would name a file that might not exist.
  */
 
@@ -137,7 +137,7 @@ export async function movePath(
 /**
  * Delete a file, or an empty directory.
  *
- * **The bytes are not destroyed.** They move to `trash/<sourceId>/<rel>`, a sibling of the
+ * **The bytes are not destroyed.** They move to `trash/<fileId>/<rel>`, a sibling of the
  * workspace's sandbox rather than a corner of it — so the agent cannot read a file the user
  * deleted, which is what makes the delete true in the one place it matters, while the bytes
  * survive for a restore. Namespacing by source id is what lets the original path be kept
@@ -151,7 +151,7 @@ export async function deletePath(
   root: string,
   trashRoot: string,
   relPath: string,
-  sourceId: string
+  fileId: string
 ): Promise<{ rel: string; wasDirectory: boolean }> {
   const target = await safePath(root, relPath);
   if (!target.rel) {
@@ -176,7 +176,7 @@ export async function deletePath(
     return { rel: target.rel, wasDirectory: true };
   }
 
-  const destination = join(trashRoot, sourceId, target.rel);
+  const destination = join(trashRoot, fileId, target.rel);
   await mkdir(dirname(destination), { recursive: true });
   await rename(target.abs, destination).catch((err: unknown) => {
     throw asFileOpError(err, relPath);

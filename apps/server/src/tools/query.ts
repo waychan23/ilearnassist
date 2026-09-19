@@ -136,7 +136,7 @@ const DESCRIPTION = [
   "",
   "Use it whenever the answer depends on what has already happened here rather than on general knowledge — what the learner has already covered, what they got wrong, what they wrote down, what they pushed back on, or what they asked for a picture of. The learner's questions often refer back to material you cannot see from the last few messages, and this is how you look it up instead of guessing or asking them to repeat it.",
   "",
-  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table` or `source`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
+  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table` or `resource`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
   "",
   "If an answer comes back with \"truncated\": true, you are seeing part of the set: call again with a larger offset or a narrower filter rather than assuming you have seen it all.",
 ].join("\n");
@@ -195,8 +195,8 @@ const inputSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'kind: "note" or "source". For notes, only those whose text or quoted passage ' +
-        "contains this, case-insensitively; for sources, only those whose name does."
+      'kind: "note" or "resource". For notes, only those whose text or quoted passage ' +
+        "contains this, case-insensitively; for material, only those whose name does."
     ),
   name: z
     .string()
@@ -239,7 +239,7 @@ export const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = 
   note: ["id", "query", "limit", "offset"],
   diagram: ["name", "limit"],
   table: ["name", "limit"],
-  source: ["query", "limit", "offset"],
+  resource: ["query", "limit", "offset"],
 };
 
 /**
@@ -554,43 +554,44 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
    * them, and folding a `node_modules` into this list would make the answer useless.
    *
    * The read whitelist already carries the conversation's workspace — that is what
-   * `listReadableSources` unions — so this passes the same workspace the turn's tools were built
-   * for. The context does not carry it, and deriving it here would be a second definition.
+   * `listReadableWorkResources` unions — so this passes the same workspace the turn's tools were
+   * built for. The context does not carry it, and deriving it here would be a second definition.
    *
    * Summaries and parse state only — never contents. Reading a file is `read_document`'s job,
    * and a list that inlined one would spend the context of every turn that asked.
    */
-  const source = async (input: QueryInput): Promise<string> => {
+  const resource = async (input: QueryInput): Promise<string> => {
     const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
     const offset = input.offset ?? 0;
     const needle = input.query?.trim().toLowerCase();
 
     const all = ctx.db
-      .listReadableSources(ctx.userId, ctx.sessionId, ctx.workspaceId, ctx.scope)
-      .filter((s) => !needle || s.name.toLowerCase().includes(needle));
+      .listReadableWorkResources(ctx.userId, ctx.sessionId, ctx.workspaceId, ctx.scope)
+      .filter((r) => !needle || r.title.toLowerCase().includes(needle));
 
-    const items = all.slice(offset, offset + limit).map((s) => ({
-      id: s.id,
-      name: s.name,
-      mimeType: s.mimeType,
-      category: s.category,
-      size: s.size,
-      origin: s.origin,
-      summary: s.summary ? clip(s.summary) : null,
-      parseStatus: s.parseStatus,
-      /** How to read it: the id `read_document` takes. */
-      readable: s.parseStatus === "ready" || s.parseStatus === "none",
+    const items = all.slice(offset, offset + limit).map((r) => ({
+      /** The id `read_document` takes: a reference, not the file behind it. */
+      id: r.id,
+      name: r.title,
+      resourceType: r.resourceType,
+      mimeType: r.resourceType === "file" ? (r.resource as { mimeType: string }).mimeType : null,
+      category: r.resourceType === "file" ? (r.resource as { category: string }).category : null,
+      url: r.resourceType === "web_page" ? (r.resource as { url: string }).url : null,
+      summary: r.summary ? clip(r.summary) : null,
+      parseStatus: r.parseStatus,
+      /** How to read it: `read_document` takes the id above. */
+      readable: r.parseStatus === "ready" || r.parseStatus === "none",
     }));
 
     return page({
-      kind: "source",
+      kind: "resource",
       items,
       total: all.length,
       offset,
       note:
         "These are the documents this conversation can read, by id. Call read_document with " +
-        "one `sourceId` to read its text a page at a time. `readable: false` means its text is " +
-        "not available yet or could not be extracted.",
+        "one `resourceId` to read its text a page at a time. `readable: false` means its text " +
+        "is not available yet or could not be extracted.",
     });
   };
 
@@ -678,7 +679,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     note: async (input) => note(input),
     diagram: (input) => diagram(input),
     table: (input) => table(input),
-    source,
+    resource,
   };
 
   return tool(

@@ -13,9 +13,8 @@ const reportSessionLeave = vi.fn();
 
 vi.mock("../../src/api/client", () => ({ api: { reportSessionLeave: (...a: unknown[]) => reportSessionLeave(...a) } }));
 
-const { forgetSession, needsTitleRetry, noteSession, onRetitled, reportLeave } = await import(
-  "../../src/composables/sessionLeave"
-);
+const { forgetSession, needsTitleRetry, noteSession, onRetitled, onSessionLookup, reportLeave } =
+  await import("../../src/composables/sessionLeave");
 
 function session(id: string, titleSource: Session["titleSource"] = "auto", titleState?: Session["titleState"]): Session {
   return {
@@ -37,15 +36,31 @@ function session(id: string, titleSource: Session["titleSource"] = "auto", title
   };
 }
 
+/**
+ * The live rows, as `stores/app.ts` holds them — keyed by id, and *replaceable*.
+ *
+ * `set` is the point rather than a convenience: `loadSessions` swaps the whole list at the end of
+ * every turn, so a case can hand over a session object and then hand over a different one with the
+ * same id, which is exactly what the store does and exactly what the module used to get wrong.
+ */
+const rows = new Map<string, Session>();
+
+function note(session: Session): void {
+  rows.set(session.id, session);
+  noteSession(session);
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   reportSessionLeave.mockReset();
   reportSessionLeave.mockResolvedValue({ status: "skipped" });
-  // The module keeps the conversation on screen, its timers and its handler — all three carry
+  // The module keeps the conversation on screen, its timers and its handlers — all of them carry
   // between cases, and a leftover handler would collect titles from the next case's reports.
   forgetSession();
   vi.clearAllTimers();
+  rows.clear();
   onRetitled(() => {});
+  onSessionLookup((id) => rows.get(id));
 });
 
 afterEach(() => {
@@ -66,18 +81,26 @@ describe("needsTitleRetry", () => {
     expect(needsTitleRetry({ titleSource: "user", titleState: undefined })).toBe(false);
     expect(needsTitleRetry({ titleSource: "user", titleState: "fallback" })).toBe(false);
   });
+
+  it("is false for a conversation the last turn asked about and found empty", () => {
+    /*
+     * Not symmetry with `"model"` — the point is that the answer is already known. `"unnamed"` means
+     * the turn that just ended put *this* conversation to the titler and was told there was nothing
+     * to name yet; nothing has happened since, so leaving would buy the same answer twice.
+     */
+    expect(needsTitleRetry({ titleSource: "auto", titleState: "unnamed" })).toBe(false);
+  });
 });
 
 describe("leaving a conversation", () => {
   it("reports the one being left, and not before the debounce", async () => {
-    const first = session("s1");
-    noteSession(first);
+    note(session("s1"));
 
     // Nothing yet: this is the conversation being *entered*, and no leave has happened.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(reportSessionLeave).not.toHaveBeenCalled();
 
-    noteSession(session("s2"));
+    note(session("s2"));
     // Still nothing — the debounce is what stops a reader flicking between conversations from
     // producing a model call per click.
     expect(reportSessionLeave).not.toHaveBeenCalled();
@@ -90,15 +113,15 @@ describe("leaving a conversation", () => {
   it("says nothing for a conversation the model already named", async () => {
     // The gate that makes this feature free in the common case: no request at all, which is what
     // the same predicate on the wire is a second opinion about.
-    noteSession(session("s1", "auto", "model"));
-    noteSession(session("s2"));
+    note(session("s1", "auto", "model"));
+    note(session("s2"));
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(reportSessionLeave).not.toHaveBeenCalled();
   });
 
   it("says nothing for a conversation a person named", async () => {
-    noteSession(session("s1", "user"));
+    note(session("s1", "user"));
     noteSession(null);
 
     await vi.advanceTimersByTimeAsync(10_000);
@@ -113,10 +136,10 @@ describe("leaving a conversation", () => {
      * a per-conversation debounce buys is that the second departure of s1 replaces the first
      * rather than queueing another model call behind it.
      */
-    noteSession(session("s1"));
-    noteSession(session("s2"));
-    noteSession(session("s1"));
-    noteSession(session("s2"));
+    note(session("s1"));
+    note(session("s2"));
+    note(session("s1"));
+    note(session("s2"));
 
     await vi.advanceTimersByTimeAsync(3_000);
     const ids = reportSessionLeave.mock.calls.map((c) => c[0]);
@@ -128,7 +151,7 @@ describe("leaving a conversation", () => {
     // The transition `activeSessionId` deliberately does not move for: going back to the workspace
     // home leaves the id in place, so nothing about the session *changed* and only an explicit
     // report can say the reader went.
-    noteSession(session("s1"));
+    note(session("s1"));
     reportLeave();
 
     await vi.advanceTimersByTimeAsync(3_000);
@@ -139,8 +162,8 @@ describe("leaving a conversation", () => {
     reportSessionLeave.mockResolvedValue({ status: "titled", title: "递归入门" });
     const seen: [string, string][] = [];
     onRetitled((id, title) => seen.push([id, title]));
-    noteSession(session("s1"));
-    noteSession(session("s2"));
+    note(session("s1"));
+    note(session("s2"));
 
     await vi.advanceTimersByTimeAsync(3_000);
     expect(seen).toEqual([["s1", "递归入门"]]);
@@ -151,8 +174,8 @@ describe("leaving a conversation", () => {
     onRetitled((id, title) => seen.push([id, title]));
     for (const status of ["failed", "skipped"] as const) {
       reportSessionLeave.mockResolvedValue({ status });
-      noteSession(session("s1"));
-      noteSession(session("s2"));
+      note(session("s1"));
+      note(session("s2"));
       await vi.advanceTimersByTimeAsync(3_000);
     }
     expect(seen).toEqual([]);
@@ -163,16 +186,47 @@ describe("leaving a conversation", () => {
     // the next leave tries again. An unhandled rejection here would be a console error about a
     // title nobody is looking at.
     reportSessionLeave.mockRejectedValue(new Error("offline"));
-    noteSession(session("s1"));
-    noteSession(session("s2"));
+    note(session("s1"));
+    note(session("s2"));
 
     await vi.advanceTimersByTimeAsync(3_000);
     expect(reportSessionLeave).toHaveBeenCalledTimes(1);
   });
 
+  it("reads the conversation when the debounce fires, not when it was entered", async () => {
+    /*
+     * The regression this module was fixed for. `loadSessions` replaces the whole list at the end
+     * of every turn, so the object handed over on the way *into* a conversation keeps the
+     * `titleState` it had then — and since that is normally `undefined`, the gate said "worth a
+     * retry" for every conversation the reader ever left. The request went out, the server answered
+     * `skipped` and no model was called, so nothing was ever mistitled; the gate simply did nothing.
+     *
+     * The store's live row is what the gate has to read, and by the time it fires the turn has
+     * usually settled it.
+     */
+    note(session("s1"));
+    // The turn finished after the reader arrived, and the server named the conversation.
+    rows.set("s1", session("s1", "auto", "model"));
+
+    note(session("s2"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reportSessionLeave).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about a conversation that is no longer in the list", async () => {
+    // Deleted in another tab, or the account changed. Either way there is nothing there to rename,
+    // and the question would be asked of a row nobody has.
+    note(session("s1"));
+    rows.delete("s1");
+
+    note(session("s2"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reportSessionLeave).not.toHaveBeenCalled();
+  });
+
   it("says nothing about a conversation that was forgotten rather than left", async () => {
     // A deleted conversation, or a signed-out one: there is nowhere to keep a new title.
-    noteSession(session("s1"));
+    note(session("s1"));
     forgetSession();
     noteSession(null);
 

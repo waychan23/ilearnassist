@@ -205,7 +205,7 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
       all.push(buildCollectPageTool({ ...input.collectPage, cache: pageCache }));
     }
   }
-  if (input.documents && input.documents.sources.length > 0) {
+  if (input.documents && input.documents.resources.length > 0) {
     all.push(buildDocumentTool(input.documents));
   }
   // `required`-mode tools: assembled only when their widget is installed, which is exactly when
