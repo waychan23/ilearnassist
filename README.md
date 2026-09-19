@@ -134,7 +134,7 @@ pnpm dev
 | --- | --- |
 | DeepSeek | `api.deepseek.com/v1` |
 | 智谱 GLM | `open.bigmodel.cn/api/paas/v4`（国际：`api.z.ai/api/paas/v4`） |
-| 通义千问 | `dashscope.aliyuncs.com/compatible-mode/v1`（国际：`dashscope-intl.aliyuncs.com/…`） |
+| 通义千问 | `dashscope.aliyuncs.com/compatible-mode/v1`（国际：`dashscope-intl.aliyuncs.com/compatible-mode/v1`） |
 | Kimi | `api.moonshot.cn/v1`（国际：`api.moonshot.ai/v1`） |
 | MiniMax | `api.minimaxi.com/v1`（国际：`api.minimax.io/v1`） |
 | OpenAI | `api.openai.com/v1` |

@@ -154,7 +154,7 @@ whichever suits your network and paste one key.
 | --- | --- |
 | DeepSeek | `api.deepseek.com/v1` |
 | Zhipu GLM | `open.bigmodel.cn/api/paas/v4` (intl: `api.z.ai/api/paas/v4`) |
-| Qwen | `dashscope.aliyuncs.com/compatible-mode/v1` (intl: `dashscope-intl.aliyuncs.com/…`) |
+| Qwen | `dashscope.aliyuncs.com/compatible-mode/v1` (intl: `dashscope-intl.aliyuncs.com/compatible-mode/v1`) |
 | Kimi | `api.moonshot.cn/v1` (intl: `api.moonshot.ai/v1`) |
 | MiniMax | `api.minimaxi.com/v1` (intl: `api.minimax.io/v1`) |
 | OpenAI | `api.openai.com/v1` |
