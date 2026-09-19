@@ -2,8 +2,15 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { isEnabledSuperadmin } from "@ilearnassist/shared";
 import type { AppConfig } from "./config.js";
-import { createDb, seedDocumentParsersFromConfig, seedFromConfig, type AppDb } from "./db.js";
+import {
+  createDb,
+  seedBuiltInCopilots,
+  seedDocumentParsersFromConfig,
+  seedFromConfig,
+  type AppDb,
+} from "./db.js";
 import { DocumentService } from "./documents/service.js";
 import { dataLayout, type DataLayout } from "./paths.js";
 import { registerWebApp } from "./webApp.js";
@@ -58,8 +65,9 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
    * No account is created here, and none can be. There used to be one — a well-known
    * "default" the server ran as while ownership was real but signing in was not — and now an
    * account needs a password, which only a person choosing one can supply. So a fresh data
-   * root has nobody in it, and the first-run screen is what makes the first administrator:
-   * see `POST /api/auth/setup`, which works exactly once.
+   * root has nobody in it, and the first administrator is made with the server *stopped*:
+   * `cli create-admin`, or the desktop control panel driving it. `assertHasAdministrator`
+   * below is what refuses to listen until one exists.
    */
 
   /*
@@ -94,6 +102,18 @@ export async function buildServer(input: BuildServerInput): Promise<BuiltServer>
       defaultParserId: config.documentParsing.defaultParserId ?? null,
     },
   });
+
+  /*
+   * The built-in assistants, for a data root that already has an administrator.
+   *
+   * `createAdmin` seeds them inside its own transaction, so this only ever fires on an
+   * installation that predates the catalog — a checkout somebody has been using, or the e2e
+   * root after `ensure-admin`. It cannot fire twice: the seeder is marker-gated, and it does
+   * nothing at all when no enabled superadmin exists (which is also the state the check below
+   * refuses to listen in).
+   */
+  const administrator = db.listUsers().find(isEnabledSuperadmin);
+  if (administrator) seedBuiltInCopilots(db, administrator.id);
 
   const documents = new DocumentService({ db, config });
 

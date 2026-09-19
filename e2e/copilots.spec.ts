@@ -190,3 +190,67 @@ test("both entry points reach the Copilot list", async ({ page }) => {
   await expect(page.locator("body > .modal-overlay")).toBeVisible();
   await expect(page.getByTestId("new-copilot")).toBeVisible();
 });
+
+/**
+ * The assistant a new installation ships with.
+ *
+ * The product claim is not "a row exists" — that is a server test — it is that an account which
+ * did not create it can **find it and start a conversation with it**, with the seven study
+ * widgets already installed. That is the whole of what `public` buys, and it is the part no unit
+ * test can check: the row belongs to the administrator, so the owner's own view would show it
+ * whether or not the visibility arm worked.
+ */
+test("the built-in assistant is usable by an account that does not own it", async ({
+  page,
+  request,
+}) => {
+  const NAME = "引导学习";
+  const WIDGETS = ["plan", "quiz", "thread", "notes", "diagram", "insight", "sources"];
+
+  // The owner's view first: the administrator owns it, so it is an ordinary editable row of
+  // their own rather than something to copy.
+  await page.goto("/");
+  await page.getByTestId("open-copilots").click();
+  const owned = page.getByTestId(`copilot-row-${NAME}`);
+  await expect(owned).toBeVisible();
+  await expect(owned.getByTestId("edit-copilot")).toHaveCount(1);
+  await expect(page.getByTestId(`copy-copilot-${NAME}`)).toHaveCount(0);
+  await page.getByTestId("close-copilots").click();
+
+  // A second account. `ensureUser` is idempotent, and the name is this spec's own so the
+  // result does not depend on which other test ran first.
+  const password = await ensureUser(request, "guided-learner");
+  await forgetSession(page);
+  await signIn(page, "guided-learner", password);
+
+  await page.getByTestId("open-copilots").click();
+  const published = page.getByTestId(`copilot-row-${NAME}`);
+  // Visible at all is the assertion: the read predicate is
+  // `user_id = ? OR visibility = 'public'`, and a private built-in would simply not be here.
+  await expect(published).toBeVisible();
+  // Attributed, because choosing someone else's wording is when whose it is matters.
+  await expect(published).toContainText("tester");
+  await page.getByTestId("close-copilots").click();
+
+  // And usable: a conversation started from it comes with the study widgets installed.
+  await enterWorkspace(page);
+  await page.getByTestId("new-session").click();
+  await page
+    .getByTestId("copilot-option")
+    .filter({ hasText: NAME })
+    .locator("input")
+    .check();
+  await page.getByTestId("create-session").click();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
+
+  await page.getByTestId("chat-session-settings").click();
+  for (const id of WIDGETS) {
+    // `aria-pressed`, not visibility: the list renders every widget at this scope, so an
+    // "installed" claim that only checked presence would pass for an assistant that installs
+    // nothing. A widget listed but off is a panel the tutor asks you to read and never draws.
+    await expect(page.getByTestId(`session-widget-toggle-${id}`)).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+  }
+});

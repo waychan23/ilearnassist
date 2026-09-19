@@ -344,8 +344,9 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   const bare = await startBareServer(options);
 
   // A fresh data root has nobody in it, so the harness creates the first administrator before
-  // any test runs — through the real first-run route, which means the token in `inject` is one
-  // the server actually issued.
+  // any test runs — through the same `createAdmin` the control panel spawns, which means the
+  // token in `inject` is one the server actually issued, and that the built-in assistants exist
+  // in every environment this harness builds (see `builtin.test.ts`).
   const signedIn = await bootstrapAdmin(bare.server, options.username ?? "tester");
   const userLayout_ = userLayout(bare.server.layout, signedIn.user.slug);
 

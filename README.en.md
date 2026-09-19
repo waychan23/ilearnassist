@@ -184,8 +184,11 @@ has all seven widgets above enabled, and it works like this:
 It teaches at a depth-first, practical, best-practice level rather than as an introduction, and
 it puts the English term in brackets after technical jargon.
 
-To change how it behaves, open **Assistants**, copy it and edit the copy — the built-in entry is
-public, so editing it affects everyone (and only its owner can).
+It belongs to the administrator account that created it, but it is **visible to and usable by
+every account**. To teach your own way, open **Assistants** and **copy** it before editing:
+changing the built-in itself (administrator only) affects every conversation started from then
+on, while conversations already under way are untouched — a conversation copies the assistant's
+definition when it is created, and the two go their separate ways after that.
 
 ---
 

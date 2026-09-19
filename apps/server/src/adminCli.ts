@@ -18,7 +18,7 @@ import {
   revokeAllTokens,
   usernameProblem,
 } from "./auth.js";
-import { createDb, parseStoredRoles, type AppDb } from "./db.js";
+import { createDb, parseStoredRoles, seedBuiltInCopilots, type AppDb } from "./db.js";
 import { dataLayout, ensureUserLayout, userLayout } from "./paths.js";
 import { applySchema, SchemaUnreadableError } from "./schema.js";
 import { openRefusal } from "./migrations.js";
@@ -354,6 +354,14 @@ export async function createAdmin(input: CreateAdminInput): Promise<AdminCliOutc
           });
           newSlug = user.slug;
         }
+
+        /*
+         * Inside the transaction, and after the account exists — the built-in assistants need
+         * an owner, and "an administrator exists" and "the assistants a new installation ships"
+         * should land together or not at all. A half-bootstrap whose Copilots are missing is a
+         * state no later boot repairs, because the marker is written here.
+         */
+        seedBuiltInCopilots(db, user.id);
 
         outcome = {
           ok: true,
