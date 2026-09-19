@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
+import { api } from "../api/client";
 import { useAppStore } from "../stores/app";
 import PasswordChangeForm from "./PasswordChangeForm.vue";
 import ProfileForm from "./ProfileForm.vue";
@@ -24,6 +25,38 @@ const { t } = useI18n();
 const router = useRouter();
 
 const changed = ref(false);
+
+/**
+ * Which build is answering, and which schema it writes.
+ *
+ * Asked here rather than kept in the store. `/api/health` is the one call a client already makes
+ * before it has a session — `syncInstallation` uses it to tell a stale origin from an expired
+ * token — and the answer is about the *installation* rather than about the account, which is why
+ * it belongs on this page and not in the state every view shares.
+ *
+ * Two facts rather than one, because they move independently: a build can be replaced with the
+ * schema unchanged, and a database can be upgraded by a build that is not newer. Somebody
+ * self-hosting needs both to know what they are running — and this is the page where "about my
+ * setup" belongs, since the console is an administrator's and this one is everybody's.
+ *
+ * A failure is silent: the version is a courtesy, and an error about not being able to read it
+ * would be a sentence about a request nobody made.
+ */
+const version = ref<string | null>(null);
+
+onMounted(async () => {
+  try {
+    const health = await api.health();
+    if (health.appVersion) {
+      version.value = t("account.version", {
+        version: health.appVersion,
+        schema: health.schemaVersion ?? "?",
+      });
+    }
+  } catch {
+    // Nothing to say, and nothing to fix: the rest of the page works without it.
+  }
+});
 
 function onChanged(): void {
   changed.value = true;
@@ -94,6 +127,12 @@ function onChanged(): void {
           <h2 class="home-title">{{ t("account.about.title") }}</h2>
           <ProfileForm />
         </section>
+
+        <!--
+          The line a self-hoster is asked for when they report something. Silent until `/api/health`
+          answers, rather than showing a placeholder that would read as "unknown version".
+        -->
+        <p v-if="version" class="account-lead" data-testid="account-version">{{ version }}</p>
 
         <section class="account-card">
           <h2 class="home-title">{{ t("password.title") }}</h2>

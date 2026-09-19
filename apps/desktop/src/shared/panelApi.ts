@@ -74,6 +74,16 @@ export const PANEL_CHANNELS = {
    * chrome change together on the same fact.
    */
   setLocale: "panel:set-locale",
+  /** Ask GitHub again, now. The automatic check runs once a launch. */
+  checkForUpdates: "panel:check-for-updates",
+  /**
+   * Open the release page in the browser.
+   *
+   * Takes no argument on purpose: the URL comes from the main process's own state, so the renderer
+   * cannot ask the shell to open an address of its choosing. A `shell.openExternal(url)` reachable
+   * from a page is a phishing primitive, and this is the one place the panel opens anything.
+   */
+  openUpdatePage: "panel:open-update-page",
   quit: "panel:quit",
   /** main → renderer, pushed on every change so the panel never has to poll. */
   stateChanged: "panel:state",
@@ -105,6 +115,15 @@ export interface ServerStatus {
   dataDir: string;
   /** Newest last, capped. Diagnostics for a start that never reached `running`. */
   logs: string[];
+  /**
+   * What this boot migrated, or null when the database was already current.
+   *
+   * The server prints one line when a boot upgrades the database; this is that line, parsed. It is
+   * on the status rather than only in `logs` because the panel *says* something about it: an
+   * upgrade rewrites the user's only copy of their work, and the path of the copy taken first is
+   * the thing they would need if it went wrong.
+   */
+  migrated: { from: number; to: number; backup: string | null } | null;
 }
 
 /**
@@ -168,6 +187,25 @@ export interface PanelState {
    * answer to a question only one process can answer.
    */
   locale: PanelLocale;
+  /**
+   * The version of the app bundle, from `app.getVersion()`.
+   *
+   * Shown to the user, which is new: until this, the only place somebody with the app installed
+   * could read their version was the operating system's own About box. It is also what the update
+   * notice compares against, so it has to be visible for the notice to mean anything.
+   */
+  appVersion: string;
+  /** What the last completed look at GitHub found, and whether a look is happening now. */
+  update: {
+    /** The published version, or null when no check has ever answered. */
+    latestVersion: string | null;
+    /** Where to download it. Null when there is nothing to report. */
+    url: string | null;
+    /** A strictly newer release exists. */
+    available: boolean;
+    /** A check is in flight — the manual item says so rather than appearing to do nothing. */
+    checking: boolean;
+  };
 }
 
 /**
@@ -284,6 +322,10 @@ export interface PanelApi {
    * menu bar was still catching up.
    */
   setLocale(choice: PanelLocaleChoice): Promise<PanelState>;
+  /** Check for a newer release now. Resolves when the check has finished, one way or another. */
+  checkForUpdates(): Promise<PanelState>;
+  /** Open the release page. A no-op when there is nothing to report. */
+  openUpdatePage(): Promise<void>;
   quit(): Promise<void>;
   onStateChange(listener: (state: PanelState) => void): () => void;
 }

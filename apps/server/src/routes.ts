@@ -200,6 +200,8 @@ import {
   trashFilePath,
 } from "./resources.js";
 import { createDirectory, deletePath, movePath, writeFileAt } from "./fileOps.js";
+import { SCHEMA_VERSION } from "./schema.js";
+import { APP_VERSION } from "./version.js";
 import { resolveWriteLocation } from "./writeLocation.js";
 import {
   normalizeWorkspaceScope,
@@ -1355,7 +1357,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   app.get(
     "/api/health",
     { config: { public: true } },
-    async (): Promise<HealthResponse> => ({ ok: true, instance: instanceId(db) })
+    async (): Promise<HealthResponse> => ({
+      ok: true,
+      instance: instanceId(db),
+      // The pair a deployment asks about itself: which build is running, and which schema it
+      // writes. Reported, never asserted — a client that ignores them is unaffected.
+      appVersion: APP_VERSION,
+      schemaVersion: SCHEMA_VERSION,
+    })
   );
 
   app.get("/api/config", async (request) => publicConfig(actor(request)));

@@ -70,6 +70,11 @@ const lanUrlCode = element<HTMLElement>('[data-role="lan-url"]');
 const logsLabel = element<HTMLElement>('[data-role="logs-label"]');
 const logOutput = element<HTMLPreElement>('[data-role="logs"]');
 const logsToggle = element<HTMLButtonElement>('[data-action="logs"]');
+const migratedSection = element<HTMLElement>('[data-role="migrated"]');
+const migratedNote = element<HTMLElement>('[data-role="migrated-note"]');
+const migratedBackup = element<HTMLElement>('[data-role="migrated-backup"]');
+const versionCode = element<HTMLElement>('[data-role="version"]');
+const updateAvailable = element<HTMLElement>('[data-role="update-available"]');
 
 const qrOverlay = element<HTMLElement>('[data-role="qr-overlay"]');
 const qrContainer = element<HTMLElement>('[data-role="qr"]');
@@ -116,6 +121,8 @@ const buttons = {
   resetSubmit: action("reset-submit"),
   adminCreate: action("admin-create"),
   adminSubmit: action("admin-submit"),
+  checkUpdates: action("check-updates"),
+  update: action("update"),
 };
 
 /** macOS draws its traffic lights inside the window because of `titleBarStyle: hiddenInset`. */
@@ -151,6 +158,8 @@ function applyStaticLabels(): void {
   buttons.resetSubmit.textContent = t("reset.submit");
   buttons.adminCreate.textContent = t("action.createAdmin");
   buttons.adminSubmit.textContent = t("create.submit");
+  buttons.checkUpdates.textContent = t("action.checkUpdates");
+  buttons.update.textContent = t("update.download");
   localeSelect.title = t("label.language");
   localeSelect.setAttribute("aria-label", t("label.language"));
   document.title = t("window.title");
@@ -332,6 +341,55 @@ function render(next: PanelState): void {
   renderQrSheet();
   renderResetAdmin();
   renderCreateAdmin();
+  renderVersion(next);
+  renderMigrated(server);
+}
+
+/**
+ * The version, and whether a newer release exists.
+ *
+ * Three states in one row, and the *checking* one is why this is a function: a manual check takes
+ * a second or two, and a control that looks live and does nothing is the failure the panel's own
+ * docblock names. While it runs the row says so; afterwards it shows the version again, whether or
+ * not anything was found.
+ */
+function renderVersion(next: PanelState): void {
+  const { update } = next;
+  versionCode.textContent = update.checking
+    ? t("update.checking")
+    : t("update.version", { version: next.appVersion });
+
+  // The manual item is disabled while one is running, so a double-press cannot start two.
+  buttons.checkUpdates.disabled = update.checking;
+
+  /*
+   * Only when there is something to say. An up-to-date app shows its version and nothing else —
+   * "you are up to date" on every launch is a sentence people learn to stop reading, and the
+   * version row is already the confirmation that a manual check finished.
+   */
+  updateAvailable.textContent = update.available
+    ? t("update.available", { version: update.latestVersion ?? "" })
+    : "";
+  updateAvailable.hidden = !update.available;
+  buttons.update.hidden = !update.available;
+}
+
+/**
+ * The line about a migration this boot performed.
+ *
+ * Drawn from the *server's* status rather than from anything stored, so it describes the launch
+ * that is on screen: a restart that migrates nothing clears it, which is right — the note is about
+ * what just happened to this database, not a permanent record. The backup path is shown when one
+ * was taken, because that is the file somebody would need if the upgrade turns out to be wrong.
+ */
+function renderMigrated(server: PanelState["server"]): void {
+  const migrated = server.migrated;
+  migratedSection.hidden = migrated === null;
+  if (!migrated) return;
+
+  migratedNote.textContent = t("migrated.note", { from: migrated.from, to: migrated.to });
+  migratedBackup.textContent = migrated.backup ? t("migrated.backup", { path: migrated.backup }) : "";
+  migratedBackup.hidden = !migrated.backup;
 }
 
 /* ---- creating the first administrator ------------------------------------ */
@@ -436,6 +494,8 @@ async function submitCreateAdmin(): Promise<void> {
   } finally {
     creating = false;
     buttons.adminSubmit.textContent = t("create.submit");
+  buttons.checkUpdates.textContent = t("action.checkUpdates");
+  buttons.update.textContent = t("update.download");
   }
 }
 
@@ -713,6 +773,12 @@ buttons.stop.addEventListener("click", () => void window.panel.stop().then(rende
 buttons.open.addEventListener("click", () => void window.panel.openApp());
 buttons.browser.addEventListener("click", () => void window.panel.openInBrowser());
 buttons.reveal.addEventListener("click", () => void window.panel.revealDataDir());
+// The check resolves with the state it produced, so there is nothing to poll: `render` draws the
+// result, including the "checking" phase, which arrives through the broadcast.
+buttons.checkUpdates.addEventListener("click", () =>
+  void window.panel.checkForUpdates().then(render)
+);
+buttons.update.addEventListener("click", () => void window.panel.openUpdatePage());
 buttons.chooseDataDir.addEventListener("click", () =>
   void window.panel.chooseDataDir().then(render)
 );

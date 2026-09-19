@@ -196,6 +196,18 @@ test("the account page writes the introduction the agent is given", async ({ pag
   await page.getByTestId("open-account").click();
   await expect(page.getByTestId("account-page")).toBeVisible();
 
+  /*
+   * The version line, which lives on this page because it is about the *installation* rather
+   * than about the account — and because this is the one page every account has, while the
+   * console is an administrator's. It is the only place a self-hoster can read what they are
+   * running without a terminal.
+   *
+   * Both numbers, and the schema one is not decoration: a build can be replaced with the schema
+   * unchanged, and a database can be upgraded by a build that is not newer.
+   */
+  await expect(page.getByTestId("account-version")).toContainText(/版本 v\d+\.\d+\.\d+/);
+  await expect(page.getByTestId("account-version")).toContainText(/数据库 v\d+/);
+
   // Nothing to save on arrival, so the button says so rather than offering a write that would
   // send the same text back.
   await expect(page.getByTestId("profile-save")).toBeDisabled();

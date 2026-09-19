@@ -92,6 +92,30 @@ export interface PanelMessages {
   "action.copied": string;
   "action.reveal": string;
   "action.quit": string;
+  "action.checkUpdates": string;
+  /**
+   * The version row, and the notice that appears when a newer release exists.
+   *
+   * The version is always shown rather than only when there is news: it is the number a user is
+   * asked for when they report a problem, and until this row existed the only place to read it was
+   * the operating system's About box. `checking` replaces it for the two seconds a check takes, so
+   * a manual check is visibly doing something.
+   */
+  "update.version": string;
+  /** The label on the version row — "Version", with the number drawn beside it. */
+  "label.version": string;
+  "update.checking": string;
+  "update.available": string;
+  "update.download": string;
+  /**
+   * The line shown after a boot that upgraded the database.
+   *
+   * Both halves matter: that it happened (an upgrade of the user's only copy of their data should
+   * not be silent) and where the copy taken first is, because that is the file they would need if
+   * the upgrade turns out to have been wrong.
+   */
+  "migrated.note": string;
+  "migrated.backup": string;
   "action.showLogs": string;
   "action.hideLogs": string;
   "action.share": string;
@@ -157,6 +181,17 @@ export interface PanelMessages {
   "cli.fault.SCHEMA_UNREADABLE": string;
   "cli.fault.NOT_A_DATABASE": string;
   "cli.fault.UNREADABLE": string;
+  /**
+   * The two codes only `migrate-up` can return, and the panel does not call it yet.
+   *
+   * Here anyway, because this interface enumerates every code the CLI can produce — an exception
+   * would be the first, and the next person to add a command would have to work out whether the
+   * gap was a decision. The fallback in `panel.ts` means a missing key renders the child's own
+   * sentence rather than a raw code, so nothing breaks either way; this is about the list staying
+   * a list.
+   */
+  "cli.fault.MIGRATION_FAILED": string;
+  "cli.fault.MIGRATION_BACKUP_FAILED": string;
   "cli.fault.USAGE": string;
   "cli.fault.INTERNAL": string;
   "hint.needAdmin": string;
@@ -287,10 +322,21 @@ const zhCN: PanelMessages = {
   "cli.fault.SCHEMA_UNREADABLE": "这个数据库是旧版本（v{found}），当前版本无法读取（需要 v{needed}）。",
   "cli.fault.NOT_A_DATABASE": "那个文件不是交互式学习助理的数据库。",
   "cli.fault.UNREADABLE": "数据库无法读取。",
+  "cli.fault.MIGRATION_FAILED": "数据库升级失败，已保持原样。服务器日志里写明了是哪一步失败。",
+  "cli.fault.MIGRATION_BACKUP_FAILED":
+    "升级前没能备份数据库，所以没有进行升级。请先清理磁盘空间后重试。",
   "cli.fault.USAGE": "创建程序的参数不正确。",
   "cli.fault.INTERNAL": "创建时发生了内部错误。",
   "hint.needAdmin": "这个数据文件夹还没有超级管理员，先创建管理员，服务才能启动。",
   "action.quit": "停止服务器并退出",
+  "action.checkUpdates": "检查更新",
+  "label.version": "版本",
+  "update.version": "v{version}",
+  "update.checking": "正在检查更新…",
+  "update.available": "有新版本 v{version}",
+  "update.download": "下载新版本",
+  "migrated.note": "数据库已从 v{from} 升级到 v{to}。",
+  "migrated.backup": "升级前的副本：{path}",
   "action.showLogs": "查看日志",
   "action.hideLogs": "收起日志",
   "action.share": "在手机/平板打开",
@@ -397,10 +443,22 @@ const en: PanelMessages = {
     "That database is from an older schema (v{found}); this build needs v{needed}.",
   "cli.fault.NOT_A_DATABASE": "That file is not an Interactive Learning Assistant database.",
   "cli.fault.UNREADABLE": "The database could not be read.",
+  "cli.fault.MIGRATION_FAILED":
+    "The database could not be upgraded, and was left as it was. The server's log names the step that failed.",
+  "cli.fault.MIGRATION_BACKUP_FAILED":
+    "A copy of the database could not be saved before upgrading, so nothing was upgraded. Free some disk space and try again.",
   "cli.fault.USAGE": "The administrator tool was called incorrectly.",
   "cli.fault.INTERNAL": "An internal error occurred while creating the account.",
   "hint.needAdmin": "This data folder has no superadmin yet — create one before the server can start.",
   "action.quit": "Stop server and quit",
+  "action.checkUpdates": "Check for updates",
+  "label.version": "Version",
+  "update.version": "v{version}",
+  "update.checking": "Checking for updates…",
+  "update.available": "Version v{version} is available",
+  "update.download": "Download it",
+  "migrated.note": "The database was upgraded from v{from} to v{to}.",
+  "migrated.backup": "A copy from before the upgrade: {path}",
   "action.showLogs": "Show logs",
   "action.hideLogs": "Hide logs",
   "action.share": "Open on your phone",

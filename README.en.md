@@ -49,6 +49,12 @@ data on first launch → create an administrator → paste a key → start study
   reusable assistant, private to you or published to every account. A conversation copies it at
   creation, so editing the assistant later leaves existing conversations alone.
 
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/quiz-and-notes.en.gif).
+  What to record: docs/demo-gifs.md, case 4.
+![Answering a quiz, and a note that jumps back to the passage it quotes](docs/assets/quiz-and-notes.en.gif)
+-->
+
 ### Material
 
 - **Library** — upload PDF / Word / Excel / PowerPoint / plain text, or keep a web page, all in
@@ -63,6 +69,12 @@ data on first launch → create an administrator → paste a key → start study
   assistant can keep a page it found useful as a reference.
 - **File preview** — highlighted code, Markdown, Mermaid diagrams, tables, images and PDFs, all
   in the app.
+
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/library-and-mention.en.gif).
+  What to record: docs/demo-gifs.md, case 5.
+![The library and @: upload a PDF, then ask about it](docs/assets/library-and-mention.en.gif)
+-->
 
 ### Accounts and deployment
 
@@ -112,6 +124,12 @@ Then walk through this once:
    empty** — the assistant needs a model to work at all.
 6. **Start learning**: go back to the home page, create a workspace, open a conversation, choose
    the **引导学习 · Guided Learning** assistant, and tell it what you want to learn.
+
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/first-run.en.gif).
+  What to record: docs/demo-gifs.md, case 1.
+![First run: pick a data folder, create the administrator, open the app](docs/assets/first-run.en.gif)
+-->
 
 > If your firewall asks, allow the app to communicate on this machine (127.0.0.1). Nothing is
 > exposed to the network by default — that only changes if you turn on LAN sharing yourself.
@@ -165,6 +183,12 @@ conversation's model picker — better to offer nothing than to offer something 
 nothing. Any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, your own gateway…) can be added
 by hand in the console.
 
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/configure-provider.en.gif).
+  What to record: docs/demo-gifs.md, case 2.
+![Configuring a provider: once a key is saved, the model appears in the picker](docs/assets/configure-provider.en.gif)
+-->
+
 ## The built-in assistant
 
 **引导学习 · Guided Learning** is a public assistant, visible to and usable by every account. It
@@ -195,6 +219,12 @@ changing the built-in itself (administrator only) affects every conversation sta
 on, while conversations already under way are untouched — a conversation copies the assistant's
 definition when it is created, and the two go their separate ways after that.
 
+<!--
+  Demo GIF to be recorded — uncomment the line below to show it (drop the file at docs/assets/first-lesson.en.gif).
+  What to record: docs/demo-gifs.md, case 3.
+![Guided Learning: from a topic to a plan, the first lesson, and a quiz](docs/assets/first-lesson.en.gif)
+-->
+
 ---
 
 ## FAQ
@@ -207,6 +237,10 @@ files) and `users/<name>/sources/` (your uploads).
 
 **How do I back it up?**
 Copy that folder. That is the whole backup; the application itself can be reinstalled freely.
+
+Inside it, `<data folder>/backups/` holds the snapshots taken **automatically before a database
+upgrade** (the most recent five). When the schema has to change, the app copies the database first,
+because an upgrade that succeeds and turns out to be wrong has no other way back.
 
 **I forgot my password.**
 Use **Reset administrator password** in the desktop control panel. It works **with the server
@@ -229,6 +263,19 @@ default.
 **Does uninstalling delete my data?**
 No. The program and your data are in different places, and uninstalling the app leaves the data
 folder untouched. Delete that folder by hand to remove everything.
+
+**How do I upgrade?**
+**The database upgrades itself — there is nothing to do.** A newer build walks the schema forward
+the first time it starts, and takes a snapshot into `<data folder>/backups/` (above) before it
+touches anything. The panel says so: *"the database was upgraded from vX to vY"*, with the path of
+the copy.
+
+**The app itself is a download you install over the old one.** The panel tells you when a newer
+release exists and takes you to the download page; installing over the top leaves your data alone,
+because your data is not in the app. There is deliberately no one-click self-update: on macOS that
+requires a paid code-signing certificate, which this project does not have (hence the install
+warning above). Doing it this way on all three platforms is more honest than a button that works on
+two of them.
 
 **Which systems are supported?**
 macOS (Apple silicon and Intel), Windows and Linux all have installers, and the source runs
@@ -287,6 +334,7 @@ whole application can be released under MIT.
 
 ## Documentation
 
+- [Migrations](docs/migrations.md) — the three ways a schema change lands, immutable steps, and the snapshot taken before an upgrade
 - [Architecture](docs/architecture.md) — system overview, agent loop, sandboxing, data model, SSE protocol
 - [Configuration](docs/configuration.md) — full `config.yaml` reference, providers and search setup
 - [Desktop app](docs/desktop.md) — the control panel, packaging, signing and cross-platform notes

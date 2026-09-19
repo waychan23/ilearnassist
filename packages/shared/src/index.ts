@@ -2356,6 +2356,21 @@ export interface HealthResponse {
   ok: boolean;
   /** Absent only in a reply from a build older than this field. */
   instance?: string;
+  /**
+   * The product version, as the release tag and the installer filename carry it.
+   *
+   * On the health route because it is the one call a client already makes to identify what it is
+   * talking to, and because "which version am I running" is a question every deployment eventually
+   * asks — a self-hosted one more than most, since it is the operator who does the upgrading.
+   */
+  appVersion?: string;
+  /**
+   * The database schema version this build writes, i.e. `SCHEMA_VERSION`.
+   *
+   * Distinct from `appVersion` on purpose: they move independently, and the pair is what explains
+   * a data root that a newer build has already walked.
+   */
+  schemaVersion?: number;
 }
 
 /** The shortest password the server will accept from a person choosing one. */
@@ -2464,6 +2479,17 @@ export const ADMIN_CLI_ERROR_CODES = [
   "NOT_A_DATABASE",
   /** It opened, and a read failed — busy, permissions, an unrecovered write-ahead log. */
   "UNREADABLE",
+  /**
+   * The snapshot that must precede a migration could not be taken, so the migration did not run.
+   *
+   * Its own code rather than `MIGRATION_FAILED`, because the two need opposite advice: a failed
+   * step is "report this", and a failed backup is "make room, or say this deployment has its own
+   * backups" — and the database is untouched in one case and possibly half-walked in the other,
+   * which an operator has to be able to tell apart.
+   */
+  "MIGRATION_BACKUP_FAILED",
+  /** A step ran and raised, or a step that had already run is no longer what it was. */
+  "MIGRATION_FAILED",
   /** The command line itself was wrong. */
   "USAGE",
   /** A bug. The message is what the caller has. */
@@ -2505,6 +2531,23 @@ export interface AdminStatusResult {
   hasAdmin: boolean;
   /** Who the administrator is, so the panel can say which account it found. */
   adminUsername: string | null;
+  /**
+   * What the database file is, and what it would have to become — present only when there is a
+   * database to describe, and `null` for a folder that has none.
+   *
+   * Reported rather than acted on, because `status` is read-only: it can answer about a file it
+   * must not write to. **There is no `walkable` here, and its absence is the point** — a file this
+   * build cannot carry is refused outright as `SCHEMA_UNREADABLE`, so in a successful reply there
+   * is always a path to the current version. A flag that cannot be false is a claim about the
+   * world that no caller could act on. `AdminMigrateStatusResult` has one, because that command
+   * *describes* a file rather than refusing it.
+   */
+  schema: {
+    found: number;
+    needed: number;
+    /** How many steps the next start would run. */
+    pending: number;
+  } | null;
 }
 
 /**
@@ -2547,7 +2590,58 @@ export interface AdminResetResult {
   password?: string;
 }
 
-export type AdminCliResult = AdminStatusResult | AdminCreateResult | AdminResetResult;
+/**
+ * What the database is, and what a walk would do to it. Read-only, so it answers about a file it
+ * must not write to.
+ *
+ * `applied` is the history rather than a count of it: the question is "which migrations has this
+ * database been through", and a number is not an answer to that. `blocker` is present only when
+ * this build cannot carry the file at all — a database from a newer build, or one older than the
+ * steps reach — and it is what tells "nothing to do" apart from "nothing that can be done".
+ */
+export interface AdminMigrateStatusResult {
+  ok: true;
+  command: "migrate-status";
+  dataRoot: string;
+  found: number;
+  needed: number;
+  walkable: boolean;
+  pending: { id: string; from: number; to: number }[];
+  applied: { version: number; id: string; checksum: string; appliedAt: string; durationMs: number }[];
+  blocker: { found: number; needed: number } | null;
+  /**
+   * A recorded step that no longer matches this build's code, or null.
+   *
+   * A separate field from `blocker` because it is a separate cause: the version is right and the
+   * file still cannot be opened. `walkable` is false for either.
+   */
+  historyProblem: string | null;
+}
+
+/**
+ * The result of walking a database up to this build's schema.
+ *
+ * `backup` is the path of the snapshot taken **before** the walk, and it is optional in the type
+ * only because a deployment can opt out (`ILA_SKIP_MIGRATION_BACKUP`) — a caller that sees `null`
+ * here is looking at a walk that ran without a way back, which is worth saying out loud.
+ */
+export interface AdminMigrateUpResult {
+  ok: true;
+  command: "migrate-up";
+  dataRoot: string;
+  from: number;
+  to: number;
+  /** The steps that ran, by id. Empty when the file was already current. */
+  applied: string[];
+  backup: string | null;
+}
+
+export type AdminCliResult =
+  | AdminStatusResult
+  | AdminCreateResult
+  | AdminResetResult
+  | AdminMigrateStatusResult
+  | AdminMigrateUpResult;
 
 /** Creating an account from the console. The password is the server's to invent. */
 export interface CreateUserInput {

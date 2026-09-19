@@ -529,6 +529,43 @@ unsigned; both are documented for the user in the README, because for a non-tech
 that warning is the first thing they meet. Signing them is a release-process decision, not a
 code change — see [Signing](#signing) for the macOS half.
 
+## Version and upgrade
+
+The panel shows the version it is running, and says so when a newer release exists. Both are new:
+before this, the only place a packaged user could read their version was the operating system's
+About box, and nothing ever told them a release had happened.
+
+**The check belongs to the panel rather than to the server**, because the thing being upgraded is
+the *application*. It also keeps the server free of a new outbound call — this codebase is
+deliberate about those (see `web_fetch`'s SSRF guard) — so there is one place to reason about
+instead of two. `update.ts` asks GitHub for the latest release, compares it against
+`app.getVersion()` as **numbers rather than strings** (`0.10.0` is newer than `0.9.0`, and a string
+comparison gets that exactly backwards), and **never throws**: every failure is "we do not know",
+which the panel treats as "nothing to report". The answer is cached in `desktop.json`, so an
+offline launch shows what the last successful check found rather than looking broken; a *failed*
+check leaves the cache alone rather than overwriting it with "you are up to date".
+
+**There is deliberately no self-update, and it is a signing decision rather than a feature that
+was not written.** On macOS an update can only be *installed* by a code-signed app, and this one is
+ad-hoc signed (see [Signing](#signing)) — `electron-updater` would download the release and then
+have Squirrel.Mac refuse it at the install step. So the notice opens the download page and the user
+replaces the app the way they installed it. That works identically on all three platforms, which is
+worth more than a button that works on two of them.
+
+**The database upgrade is the part that needs nothing from the user.** Any open of the database
+walks it forward and takes a snapshot first (see [migrations.md](migrations.md)), so somebody who
+installs a new version and launches it has already been upgraded by the time the window appears.
+The server prints one line when that happens:
+
+```text
+[ilearnassist] migrated schema v5 -> v6 (backup: <dataRoot>/backups/ilearnassist-v5-….sqlite)
+```
+
+The panel parses it — beside `parseListeningLine`, with `parseMigratedLine` — and shows the note
+with the path of the copy. A printed line rather than a new IPC path, for the same reason the
+listening line is one: the server is the only side that knows, and a launcher already reads its
+stdout. The migration does **not** touch the state machine: `running` still has exactly one cause.
+
 ## Signing
 
 **Ad-hoc, and that is the minimum, not a nicety.**

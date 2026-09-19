@@ -42,6 +42,9 @@ const RUNNING: PanelState = {
     fault: null,
     dataDir: DATA_DIR,
     logs: ["seeding providers", `[ilearnassist] listening on ${LOOPBACK}`],
+    // Null for an ordinary launch: the note is about a boot that upgraded the database, and
+    // drawing it when nothing happened would be the panel inventing news.
+    migrated: null,
   },
   sharedOnLan: false,
   lanUrl: null,
@@ -54,9 +57,31 @@ const RUNNING: PanelState = {
   // the suite already relies on.
   localeChoice: "",
   locale: "zh-CN",
+  appVersion: "0.1.0",
+  update: { latestVersion: null, url: null, available: false, checking: false },
 };
 
 const SHARED: PanelState = { ...RUNNING, sharedOnLan: true, lanUrl: LAN_URL };
+
+/** A launch that has heard about a newer release. */
+const UPDATE_AVAILABLE: PanelState = {
+  ...RUNNING,
+  update: {
+    latestVersion: "0.2.0",
+    url: "https://github.com/waychan23/ilearnassist/releases/tag/v0.2.0",
+    available: true,
+    checking: false,
+  },
+};
+
+/** A launch that upgraded the database on the way up. */
+const MIGRATED: PanelState = {
+  ...RUNNING,
+  server: {
+    ...RUNNING.server,
+    migrated: { from: 5, to: 6, backup: "/Users/someone/ilearnassist/backups/v5.sqlite" },
+  },
+};
 
 /**
  * A data folder with no administrator yet. The server cannot be started in this state — it
@@ -64,7 +89,7 @@ const SHARED: PanelState = { ...RUNNING, sharedOnLan: true, lanUrl: LAN_URL };
  */
 const NEEDS_ADMIN: PanelState = {
   ...RUNNING,
-  server: { state: "stopped", url: null, fault: null, dataDir: DATA_DIR, logs: [] },
+  server: { state: "stopped", url: null, fault: null, dataDir: DATA_DIR, logs: [], migrated: null },
   needsAdmin: true,
 };
 
@@ -82,11 +107,11 @@ const NEEDS_ADMIN: PanelState = {
  */
 const STOPPED_WITH_ADMIN: PanelState = {
   ...RUNNING,
-  server: { state: "stopped", url: null, fault: null, dataDir: DATA_DIR, logs: [] },
+  server: { state: "stopped", url: null, fault: null, dataDir: DATA_DIR, logs: [], migrated: null },
 };
 
 const NEEDS_DATA_DIR: PanelState = {
-  server: { state: "stopped", url: null, fault: null, dataDir: "", logs: [] },
+  server: { state: "stopped", url: null, fault: null, dataDir: "", logs: [], migrated: null },
   sharedOnLan: false,
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
@@ -95,6 +120,8 @@ const NEEDS_DATA_DIR: PanelState = {
   needsAdmin: undefined,
   localeChoice: "",
   locale: "zh-CN",
+  appVersion: "0.1.0",
+  update: { latestVersion: null, url: null, available: false, checking: false },
 };
 
 const FAILED: PanelState = {
@@ -410,6 +437,9 @@ test.describe("the control panel", () => {
       '[data-action="share"]',
       '[data-action="reveal"]',
       '[data-action="logs"]',
+      // The two the update row added, which is exactly the kind of row this assertion exists for:
+      // a control past the bottom edge of a window that does not scroll is one nobody can press.
+      '[data-action="check-updates"]',
       ".note",
     ]) {
       const box = await page.locator(selector).boundingBox();
@@ -802,5 +832,88 @@ test.describe("the panel's language", () => {
 
     expect(panel.calls).toContain("setLocale:");
     await expect(page.locator('[data-role="state"]')).toHaveText("运行中");
+  });
+});
+
+test.describe("the version row", () => {
+  /*
+   * The first place the app tells a packaged user which version they are running — until this row
+   * existed the only way to find out was the operating system's About box. It is also what makes
+   * the update notice meaningful, since the notice is a comparison against it.
+   */
+  test("always shows the version, and offers a check", async ({ page }) => {
+    await openPanel(page, RUNNING);
+
+    await expect(page.locator('[data-role="version"]')).toHaveText("v0.1.0");
+    await expect(page.locator('[data-action="check-updates"]')).toBeVisible();
+    // Nothing to report: no notice, and no button that would lead nowhere.
+    await expect(page.locator('[data-role="update-available"]')).toBeHidden();
+    await expect(page.locator('[data-action="update"]')).toBeHidden();
+  });
+
+  test("says which version is available, and offers the download rather than installing it", async ({
+    page,
+  }) => {
+    await openPanel(page, UPDATE_AVAILABLE);
+
+    await expect(page.locator('[data-role="update-available"]')).toContainText("0.2.0");
+    const download = page.locator('[data-action="update"]');
+    await expect(download).toBeVisible();
+
+    /*
+     * It opens the release page and installs nothing — see `docs/desktop.md` for why there is no
+     * self-update: our macOS packages are ad-hoc signed, so Squirrel.Mac would download the release
+     * and then refuse to apply it. The assertion is on the command rather than on a browser opening
+     * during the test.
+     */
+    await download.click();
+    expect(await page.evaluate(() => (window as never as { opened: string[] }).opened ?? [])).toEqual(
+      []
+    );
+  });
+
+  test("shows the notice while a check is running, so the control is not dead", async ({ page }) => {
+    // A manual check takes a second or two. A button that looks live and does nothing for that long
+    // is the failure this panel's own docblock names, so the row says what it is doing.
+    await openPanel(page, { ...RUNNING, update: { ...RUNNING.update, checking: true } });
+
+    await expect(page.locator('[data-role="version"]')).toContainText("检查");
+    await expect(page.locator('[data-action="check-updates"]')).toBeDisabled();
+  });
+});
+
+test.describe("the migration note", () => {
+  test("is absent on an ordinary launch", async ({ page }) => {
+    // The note is about a boot that upgraded the database. Drawing it always would make it noise,
+    // and the sentence is one that should stop somebody scrolling.
+    await openPanel(page, RUNNING);
+    await expect(page.locator('[data-role="migrated"]')).toBeHidden();
+  });
+
+  test("names both versions and the copy taken beforehand", async ({ page }) => {
+    /*
+     * Both halves matter. That it happened, because an upgrade rewrites the user's only copy of
+     * their data and should not be silent; and where the copy is, because that is the file they
+     * would need if the upgrade turns out to have been wrong.
+     */
+    await openPanel(page, MIGRATED);
+
+    const note = page.locator('[data-role="migrated"]');
+    await expect(note).toBeVisible();
+    await expect(page.locator('[data-role="migrated-note"]')).toContainText("v5");
+    await expect(page.locator('[data-role="migrated-note"]')).toContainText("v6");
+    await expect(page.locator('[data-role="migrated-backup"]')).toContainText("v5.sqlite");
+  });
+
+  test("says so when no copy was taken", async ({ page }) => {
+    // A deployment can opt out (`ILA_SKIP_MIGRATION_BACKUP`), and pointing at a file that is not
+    // there would be worse than saying nothing was kept.
+    await openPanel(page, {
+      ...MIGRATED,
+      server: { ...MIGRATED.server, migrated: { from: 5, to: 6, backup: null } },
+    });
+
+    await expect(page.locator('[data-role="migrated-note"]')).toContainText("v6");
+    await expect(page.locator('[data-role="migrated-backup"]')).toBeHidden();
   });
 });

@@ -32,8 +32,18 @@ describe("readSettings", () => {
   });
 
   it("round-trips what was written, creating the directory", () => {
-    writeSettings(file, { sharedOnLan: true, dataDir: "/Users/someone/My Notes", locale: "" });
-    expect(readSettings(file)).toEqual({ sharedOnLan: true, dataDir: "/Users/someone/My Notes", locale: "" });
+    writeSettings(file, {
+      sharedOnLan: true,
+      dataDir: "/Users/someone/My Notes",
+      locale: "",
+      updateCheck: null,
+    });
+    expect(readSettings(file)).toEqual({
+      sharedOnLan: true,
+      dataDir: "/Users/someone/My Notes",
+      locale: "",
+      updateCheck: null,
+    });
     // The file is the user's too, so it is written to be read.
     expect(readFileSync(file, "utf8")).toContain('"sharedOnLan": true');
   });
@@ -41,7 +51,12 @@ describe("readSettings", () => {
   it("keeps a chosen data folder verbatim, spaces and all", () => {
     // Not trimmed on the way out: a path may legitimately end in a space, and resolving it is
     // the launcher's job rather than this file's.
-    writeSettings(file, { sharedOnLan: false, dataDir: "/Users/someone/My Notes", locale: "" });
+    writeSettings(file, {
+      sharedOnLan: false,
+      dataDir: "/Users/someone/My Notes",
+      locale: "",
+      updateCheck: null,
+    });
     expect(readSettings(file).dataDir).toBe("/Users/someone/My Notes");
   });
 
@@ -90,5 +105,41 @@ describe("readSettings", () => {
     mkdirSync(join(dir, "nested"), { recursive: true });
     writeFileSync(file, '{"sharedOnLan": true, "somethingNew": 1}', "utf8");
     expect(readSettings(file).sharedOnLan).toBe(true);
+  });
+});
+
+describe("the cached update check", () => {
+  /*
+   * One cached fact, and the rule that matters is which failures *replace* it: a check that could
+   * not answer must leave the previous answer alone, or a flaky network would look like a
+   * confirmed up-to-date app and the notice would vanish without a release having happened.
+   */
+  it("keeps a complete one", () => {
+    const cache = {
+      latestVersion: "0.2.0",
+      url: "https://example.invalid/r",
+      checkedAt: "2026-09-19T00:00:00.000Z",
+    };
+    writeSettings(file, { ...DEFAULT_SETTINGS, updateCheck: cache });
+    expect(readSettings(file).updateCheck).toEqual(cache);
+  });
+
+  it("throws away a partial one rather than half-reading it", () => {
+    // A cache with no version is not half-usable: the panel would show a notice with nothing to
+    // name. Field-by-field narrowing would keep `url` and lose `latestVersion`, which is the state
+    // that renders as a broken row.
+    writeSettings(file, DEFAULT_SETTINGS);
+    writeFileSync(file, JSON.stringify({ updateCheck: { latestVersion: "0.2.0", url: "x" } }), "utf8");
+    expect(readSettings(file).updateCheck).toBeNull();
+  });
+
+  it("reads anything that is not an object as never checked", () => {
+    // Through `writeSettings` once, so the directory exists: the writes below are hand-edited
+    // JSON, which is the thing being tested, and a missing directory would be a different failure.
+    writeSettings(file, DEFAULT_SETTINGS);
+    for (const junk of ["nope", 42, [], true]) {
+      writeFileSync(file, JSON.stringify({ updateCheck: junk }), "utf8");
+      expect(readSettings(file).updateCheck, JSON.stringify(junk)).toBeNull();
+    }
   });
 });

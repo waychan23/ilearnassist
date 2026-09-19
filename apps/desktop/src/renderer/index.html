@@ -104,6 +104,39 @@
       </section>
 
       <!--
+        The migration line, drawn only after a boot that upgraded the database.
+
+        Above the version row rather than below it, because it is news: it says the user's data was
+        rewritten by this launch, and it names the copy taken first — the file they would need if
+        the upgrade turns out to have been wrong. Nothing is shown for an ordinary launch.
+      -->
+      <section class="migrated" data-role="migrated" hidden>
+        <p class="migrated__note" data-role="migrated-note"></p>
+        <code class="field__value" data-role="migrated-backup" hidden></code>
+      </section>
+
+      <!--
+        The version, and the update notice when there is one.
+
+        The version is always here: it is what somebody is asked for when they report a problem,
+        and until this row existed the only place to read it was the operating system's About box.
+        The notice replaces it only when a newer release exists — and the button opens the download
+        page rather than installing anything, which is what `docs/desktop.md` explains is the
+        honest answer on a platform where our packages are not signed for it.
+      -->
+      <section class="field version" data-role="version-row">
+        <div class="field__head">
+          <span class="field__label" data-i18n="label.version"></span>
+          <span class="field__actions">
+            <button type="button" class="button button--link" data-action="check-updates"></button>
+            <button type="button" class="button button--link" data-action="update" hidden></button>
+          </span>
+        </div>
+        <code class="field__value" data-role="version"></code>
+        <p class="field__hint" data-role="update-available" hidden></p>
+      </section>
+
+      <!--
         The one account-level action that has to be available with the server stopped: a
         fresh data folder has no administrator, and the server refuses to listen until one
         exists. Shown only in that state, so on an installation already set up this is never

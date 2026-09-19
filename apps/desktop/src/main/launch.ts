@@ -44,6 +44,32 @@ export function parseListeningLine(line: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * The line the server prints when a boot migrated the database.
+ *
+ * The second thing the panel reads off stdout, and it is there for the same reason as the first:
+ * the server is the only side that knows, and a printed line needs no new IPC path. Whether a
+ * backup was taken is part of the line rather than assumed, because a deployment can opt out —
+ * the panel says which of the two happened instead of pointing at a file that is not there.
+ */
+const MIGRATED_LINE = /^\[ilearnassist\] migrated schema v(\d+) -> v(\d+) \((.*)\)$/;
+
+export interface MigrationReport {
+  from: number;
+  to: number;
+  /** Where the pre-migration copy is, or null when the deployment opted out of taking one. */
+  backup: string | null;
+}
+
+/** Read a completed migration out of a server log line, or null for any other line. */
+export function parseMigratedLine(line: string): MigrationReport | null {
+  const match = MIGRATED_LINE.exec(line.trim());
+  if (!match) return null;
+  const detail = match[3] ?? "";
+  const backup = detail.startsWith("backup: ") ? detail.slice("backup: ".length) : null;
+  return { from: Number(match[1]), to: Number(match[2]), backup };
+}
+
 /** Loopback: reachable only from this machine. The default, and the safe one. */
 export const LOOPBACK_HOST = "127.0.0.1";
 /** Every interface: reachable from anything on the same network. */

@@ -435,6 +435,32 @@ body.is-mac {
  * suite selects it that way, so a second element wearing the same class would make that
  * locator ambiguous. They share the look, not the name.
  */
+/*
+ * The migration line, drawn only after a boot that upgraded the database.
+ *
+ * Tinted rather than plain, and that is the one place this sheet uses colour for emphasis: the
+ * sentence says the user's data was rewritten by this launch, which is worth noticing rather than
+ * skimming past like the two rows around it.
+ */
+.migrated {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* `--panel` rather than a surface token of its own: this sheet has two surface values, and a
+     third invented here would be one nobody else knows about. */
+  background: var(--panel);
+}
+
+.migrated__note {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+}
+
 .note,
 .field__hint {
   margin: 0;

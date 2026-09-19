@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import builtinCatalog from "./builtin.json";
 import type {
   Attachment,
@@ -64,6 +64,8 @@ import {
 import { workspaceWorkdir } from "./paths.js";
 import type { ScopeQuery } from "./workspaceScope.js";
 import { applySchema } from "./schema.js";
+import { MigrationBackupError, SKIP_BACKUP_ENV, snapshotForMigration } from "./backup.js";
+import { runMigrations, type MigrationOutcome } from "./migrations.js";
 import { resolveWidgetStates } from "./widgets.js";
 
 /**
@@ -2570,7 +2572,37 @@ export interface AppDb {
   transaction<T>(fn: () => T): T;
 }
 
-export function createDb(dbPath: string): AppDb {
+export interface CreateDbOptions {
+  /**
+   * Where a pre-migration snapshot goes, or `undefined` to take none.
+   *
+   * Omitted by every test that is not about migrating, and derived from the conventional layout
+   * when the path is the real one — see `defaultBackupsDir`. A walk **refuses to run** without
+   * somewhere to put the snapshot, which is why this is worth thinking about rather than
+   * defaulting to "no backup": the whole point of the snapshot is that it exists on the day it is
+   * needed, and a default of "none" is a safety net that is only there in the tests.
+   */
+  backupsDir?: string;
+  /** Reports a completed walk, so the caller can say so. The server prints it; tests assert it. */
+  onMigrated?: (outcome: MigrationOutcome) => void;
+}
+
+/**
+ * The `backups/` directory for a path in the conventional layout, or `undefined`.
+ *
+ * `<dataRoot>/db/sqlite/<file>` is the only shape this recognises, because "beside `db/`" is the
+ * only place with a documented meaning. Anything else — a bare temp file in a test, a path a
+ * caller assembled itself — gets `undefined` and therefore no snapshot, and the walk says so
+ * rather than writing a backup to a directory nobody chose.
+ */
+export function defaultBackupsDir(dbPath: string): string | undefined {
+  const sqliteDir = dirname(dbPath);
+  const dbDir = dirname(sqliteDir);
+  if (basename(sqliteDir) !== "sqlite" || basename(dbDir) !== "db") return undefined;
+  return join(dirname(dbDir), "backups");
+}
+
+export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
 
@@ -2595,6 +2627,35 @@ export function createDb(dbPath: string): AppDb {
     // See above: the other process has already put the file in the mode we wanted.
   }
   db.pragma("foreign_keys = ON");
+
+  /*
+   * Walk an older file up to this build's schema — and do it **before** the DDL below.
+   *
+   * The order is not a preference. `DDL` declares indexes, and a table that an older file already
+   * has will not gain a column from `CREATE TABLE IF NOT EXISTS`, so a `CREATE INDEX` over a
+   * column a step is about to add would fail on exactly the files the step exists for. This
+   * repository has already met that hazard once: `idx_messages_thread` is created after this
+   * transaction, outside the DDL, because `messages.thread_id` arrives through `ensureColumn`.
+   * Walking first means the DDL afterwards is a no-op for existing tables and only creates ones
+   * that are genuinely new.
+   *
+   * The snapshot is taken inside `runMigrations`, before it writes anything, and a snapshot that
+   * cannot be taken aborts the walk — see `backup.ts` for why that is the right way round.
+   */
+  const backupsDir = options.backupsDir ?? defaultBackupsDir(dbPath);
+  const migrated = runMigrations(db, {
+    snapshot: (from) => {
+      if (!backupsDir) {
+        throw new MigrationBackupError(
+          `No backup directory was given for ${dbPath}, and this build does not migrate without ` +
+            `taking a snapshot first. Pass one, or set ${SKIP_BACKUP_ENV}=1 to opt out.`,
+          dbPath
+        );
+      }
+      return snapshotForMigration(db, backupsDir, from);
+    },
+  });
+  if (migrated.applied.length > 0) options.onMigrated?.(migrated);
 
   /*
    * Everything that changes the file's *shape* is one write, with the lock taken up front.

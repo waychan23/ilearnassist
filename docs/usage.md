@@ -25,6 +25,7 @@ columns is what four groupings and a date range need.
 ## The table
 
 `usage_events` is a pure DDL addition, so **no `SCHEMA_VERSION` bump** — the rule every new table
+gets, and the first of the three in [migrations.md](migrations.md) —
 follows. Four things about its shape are load-bearing:
 
 - **A row is attributed, not joined.** `user_id`, `workspace_id` and `session_id` are columns rather
