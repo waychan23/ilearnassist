@@ -1821,6 +1821,17 @@ Fuller map in `docs/reference.md`.
   a user's machine, so the child is spawned from `process.execPath` with
   `ELECTRON_RUN_AS_NODE=1`. That is also what makes `better-sqlite3`'s prebuilt N-API
   binary the right one. Do not "simplify" it to a plain `node` invocation.
+- **The panel's title bar is the header, and it must reach the window's top edge and never
+  scroll.** The window has no title bar of its own on macOS (`titleBarStyle: hiddenInset`), so
+  `.header` is the only drag region — and a drag region is a *box*, so where the padding lives
+  decides whether the window can be moved at all. It was on `.panel`: the header's box therefore
+  began 50px down the window, `ELECTRON_DEBUG_DRAGGABLE_REGIONS=1` reported the draggable area as
+  a 440×47 strip at y=50, and grabbing the window where its title bar appears to be did nothing.
+  The padding is the header's now, and the rows are in `.panel__body` — a scroller of their own —
+  because with one scroller the title bar slid off the top of a short window and took the only
+  drag region with it. Both halves are pinned in `e2e/panel.spec.ts`, against computed
+  `-webkit-app-region` and the header's position after a scroll. A control inside the region
+  needs `no-drag` or pressing it moves the window (`.locale` is the one there).
 - **The panel enters `running` on exactly one signal**: the server printing
   `[ilearnassist] listening on <url>`. Not a fixed port, not a timer, and not
   Fastify's own "Server listening at …" banner, which is logged from inside `listen`

@@ -134,27 +134,53 @@ body.is-mac {
 .panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-7);
   height: 100%;
-  padding: calc(var(--space-8) + var(--titlebar-pad)) var(--space-8) var(--space-8);
-  /*
-   * Scrolls rather than clips. The window has a minimum size and the panel has a fixed set
-   * of rows, so on a short window — or after the next row is added — `hidden` would put the
-   * log disclosure below the edge with no way to reach it. A scrollbar is a smaller
-   * admission than a control that has quietly stopped existing.
-   */
-  overflow-y: auto;
 }
 
-/* The drag region for the hidden title bar. Buttons below opt back out. */
+/*
+ * The title bar: the drag region for the hidden title bar, and the one element that must not
+ * scroll.
+ *
+ * Its top padding *is* the drag region's top edge. That is the whole point of the split: the
+ * window has no title bar of its own (`titleBarStyle: hiddenInset`), so this header is the only
+ * thing that can move it — and the band the user grabs is the padded space the traffic lights
+ * sit in, which belongs to whatever element carries the padding. While that padding was on
+ * `.panel` the header's box began 50px down the window — `ELECTRON_DEBUG_DRAGGABLE_REGIONS=1`
+ * reported the draggable area as a 440×47 strip at y=50 — so grabbing the window by the part
+ * that looks like its title bar did nothing at all.
+ *
+ * A control inside it has to say `no-drag`, or a press moves the window instead of reaching the
+ * control: `.locale` is the one in here, and its own rule below says why.
+ */
 .header {
   -webkit-app-region: drag;
-}
-
-.header {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  padding: calc(var(--space-8) + var(--titlebar-pad)) var(--space-8) var(--space-7);
+}
+
+/*
+ * The panel's rows, and its scroller — the title bar above is deliberately outside it.
+ *
+ * Scrolls rather than clips. The window has a minimum size and the panel has a fixed set of
+ * rows, so on a short window — or after the next row is added — `hidden` would put the log
+ * disclosure below the edge with no way to reach it. A scrollbar is a smaller admission than a
+ * control that has quietly stopped existing.
+ *
+ * It is a body of its own rather than `overflow-y` on `.panel` because the two things have to
+ * be able to disagree: content that scrolls, and a title bar that cannot. With one scroller the
+ * header slid out of the top of the window on any panel taller than the window, taking the only
+ * drag region with it — a window that cannot be moved, which is the bug this shape fixes.
+ */
+.panel__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-7);
+  min-height: 0;
+  padding: 0 var(--space-8) var(--space-8);
+  overflow-y: auto;
 }
 
 /* The wordmark and the language control share the top line, the one pushed left and the other

@@ -447,6 +447,61 @@ test.describe("the control panel", () => {
       expect(box!.y + box!.height, selector).toBeLessThanOrEqual(viewport!.height);
     }
   });
+
+  test("moves when dragged by its title bar, from the window's top edge onward", async ({ page }) => {
+    /*
+     * The window has no title bar of its own — `titleBarStyle: hiddenInset` puts the traffic
+     * lights inside it — so this header is the only thing that can move it, and the bug was
+     * that it could not: the drag region was a 440×47 strip whose top edge was 50px down the
+     * window, because the padding above the rows belonged to `.panel`. Grabbing the window
+     * where its title bar appears to be therefore did nothing at all.
+     *
+     * Two things are asserted, and both are load-bearing. The region has to reach the window's
+     * top edge, which is what putting that padding on the header buys; and it has to survive
+     * the rows scrolling, which is what the separate scroller buys — with one scroller the
+     * whole title bar slid off the top of a short window and took the drag region with it.
+     *
+     * `-webkit-app-region` is a Blink property, so computed style is where the page's half of
+     * this is observable at all. What Electron does with it is `main.ts`'s `titleBarStyle`.
+     */
+    // Short enough that the rows overflow, since the scrolled half of the bug needs a scroller.
+    await page.setViewportSize({ width: 480, height: 420 });
+    await openPanel(page, RUNNING);
+
+    const titleBar = () =>
+      page.evaluate(() => {
+        const header = document.querySelector(".header")!;
+        const rect = header.getBoundingClientRect();
+        return {
+          region: getComputedStyle(header).getPropertyValue("-webkit-app-region"),
+          insideRegion: getComputedStyle(document.querySelector(".locale")!).getPropertyValue(
+            "-webkit-app-region"
+          ),
+          top: Math.round(rect.top),
+          left: Math.round(rect.left),
+          width: Math.round(rect.width),
+          windowWidth: window.innerWidth,
+        };
+      });
+
+    const before = await titleBar();
+    expect(before.region).toBe("drag");
+    expect({ top: before.top, left: before.left }).toEqual({ top: 0, left: 0 });
+    expect(before.width).toBe(before.windowWidth);
+    // The one control in the region opts out — otherwise pressing it moves the window instead.
+    expect(before.insideRegion).toBe("no-drag");
+
+    const scrolled = await page.evaluate(() => {
+      const rows = document.querySelector(".panel__body")!;
+      rows.scrollTop = rows.scrollHeight;
+      return rows.scrollTop;
+    });
+    expect(scrolled).toBeGreaterThan(0);
+
+    const after = await titleBar();
+    expect(after.top).toBe(0);
+    expect(after.region).toBe("drag");
+  });
 });
 
 test.describe("opening the app on a phone", () => {

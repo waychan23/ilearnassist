@@ -31,146 +31,153 @@
         <p class="subtitle" data-i18n="app.tagline"></p>
       </header>
 
-      <section class="status" data-state="stopped" aria-live="polite">
-        <div class="status__head">
-          <span class="status__dot" aria-hidden="true"></span>
-          <span class="status__label" data-role="state"></span>
-        </div>
-        <p class="status__detail" data-role="detail" hidden></p>
-        <div class="status__url" data-role="url-row" hidden>
-          <code class="status__code" data-role="url"></code>
-          <button type="button" class="button button--ghost button--small" data-action="copy"></button>
-        </div>
-      </section>
-
-      <section class="actions">
-        <button type="button" class="button button--primary" data-action="open" disabled></button>
-        <div class="actions__row">
-          <button type="button" class="button" data-action="start"></button>
-          <button type="button" class="button" data-action="stop" disabled></button>
-        </div>
-        <button type="button" class="button button--link" data-action="browser" disabled></button>
-        <!--
-          The way back in for a forgotten administrator password, and the only control in this
-          panel that reaches into the *accounts* rather than the server process. It lives here
-          rather than in the app because the app is exactly what a forgotten password locks
-          you out of.
-        -->
-        <button type="button" class="button button--link" data-action="reset-admin" disabled></button>
-      </section>
-
-      <section class="field">
-        <div class="field__head">
-          <span class="field__label" data-i18n="label.dataDir"></span>
-          <span class="field__actions">
-            <button type="button" class="button button--link" data-action="reveal"></button>
-            <button type="button" class="button button--link" data-action="choose-data-dir"></button>
-          </span>
-        </div>
-        <code class="field__value" data-role="data-dir"></code>
-        <!--
-          Only until someone has chosen. The server cannot start without a data root, so this
-          is the answer to "why is nothing happening" — and it is the only place the reason is
-          stated, because the failure it prevents would otherwise be a sentence about an
-          environment variable.
-        -->
-        <p class="field__hint" data-role="data-dir-hint" hidden></p>
-        <!--
-          The one-click answer, and only while nothing has been chosen: it creates the folder
-          named in the hint above. `button--primary` because in this state it is *the* action —
-          every other control is waiting on a data root, including Start.
-
-          "Choose folder…" stays in the head rather than moving down here, because it is the
-          control for both states: the first-run prompt and the later "move my data". A second
-          copy beside this one would be two controls meaning one thing.
-        -->
-        <p class="field__answer" data-role="default-data-dir" hidden>
-          <button type="button" class="button button--primary" data-action="use-default-data-dir"></button>
-        </p>
-      </section>
-
-      <section class="field">
-        <div class="field__head">
-          <span class="field__label" data-i18n="label.lanAccess"></span>
-          <span class="field__actions">
-            <!-- Only while sharing is on: a switch that is off needs no "turn it off". -->
-            <button type="button" class="button button--link" data-action="unshare" hidden></button>
-            <button type="button" class="button button--link" data-action="share"></button>
-          </span>
-        </div>
-        <!-- The address stays on screen while sharing is on, so it can be read out to someone
-             whose camera will not cooperate. -->
-        <code class="field__value" data-role="lan-url" hidden></code>
-      </section>
-
       <!--
-        The migration line, drawn only after a boot that upgraded the database.
-
-        Above the version row rather than below it, because it is news: it says the user's data was
-        rewritten by this launch, and it names the copy taken first — the file they would need if
-        the upgrade turns out to have been wrong. Nothing is shown for an ordinary launch.
+        The panel's rows, in a scroller of their own so that the title bar above is not part of
+        the scrolling content — `panel.css` explains what that buys. The sheets below sit
+        deliberately outside it: they are overlays on the window, not rows of the panel.
       -->
-      <section class="migrated" data-role="migrated" hidden>
-        <p class="migrated__note" data-role="migrated-note"></p>
-        <code class="field__value" data-role="migrated-backup" hidden></code>
-      </section>
+      <div class="panel__body">
+        <section class="status" data-state="stopped" aria-live="polite">
+          <div class="status__head">
+            <span class="status__dot" aria-hidden="true"></span>
+            <span class="status__label" data-role="state"></span>
+          </div>
+          <p class="status__detail" data-role="detail" hidden></p>
+          <div class="status__url" data-role="url-row" hidden>
+            <code class="status__code" data-role="url"></code>
+            <button type="button" class="button button--ghost button--small" data-action="copy"></button>
+          </div>
+        </section>
 
-      <!--
-        The version, and the update notice when there is one.
-
-        The version is always here: it is what somebody is asked for when they report a problem,
-        and until this row existed the only place to read it was the operating system's About box.
-        The notice replaces it only when a newer release exists — and the button opens the download
-        page rather than installing anything, which is what `docs/desktop.md` explains is the
-        honest answer on a platform where our packages are not signed for it.
-      -->
-      <section class="field version" data-role="version-row">
-        <div class="field__head">
-          <span class="field__label" data-i18n="label.version"></span>
-          <span class="field__actions">
-            <button type="button" class="button button--link" data-action="check-updates"></button>
-            <button type="button" class="button button--link" data-action="update" hidden></button>
-          </span>
-        </div>
-        <code class="field__value" data-role="version"></code>
-        <p class="field__hint" data-role="update-available" hidden></p>
-      </section>
-
-      <!--
-        The one account-level action that has to be available with the server stopped: a
-        fresh data folder has no administrator, and the server refuses to listen until one
-        exists. Shown only in that state, so on an installation already set up this is never
-        drawn. The sheet it opens, not an inline expansion: the form is taller than the panel
-        can give it, and an overlay keeps it from shoving the rest of the controls off the
-        bottom of a window that does not scroll.
-      -->
-      <section class="admin" data-role="admin" hidden>
-        <p class="admin__hint" data-i18n="hint.needAdmin"></p>
-        <button type="button" class="button button--primary" data-action="admin-create"></button>
-      </section>
-
-      <p class="note" data-i18n="hint.closeToTray"></p>
-
-      <section class="logs">
-        <button
-          type="button"
-          class="logs__toggle"
-          data-action="logs"
-          aria-expanded="false"
-          aria-controls="log-output"
-        >
+        <section class="actions">
+          <button type="button" class="button button--primary" data-action="open" disabled></button>
+          <div class="actions__row">
+            <button type="button" class="button" data-action="start"></button>
+            <button type="button" class="button" data-action="stop" disabled></button>
+          </div>
+          <button type="button" class="button button--link" data-action="browser" disabled></button>
           <!--
-            A stroked chevron, not a "▸". The interface's marks are drawn rather than typed
-            so they inherit `currentColor` and rotate with transform; a character glyph
-            would be painted by the font and sit off-baseline at this size.
+            The way back in for a forgotten administrator password, and the only control in this
+            panel that reaches into the *accounts* rather than the server process. It lives here
+            rather than in the app because the app is exactly what a forgotten password locks
+            you out of.
           -->
-          <svg class="logs__chevron" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span data-role="logs-label"></span>
-        </button>
-        <pre class="logs__output" id="log-output" data-role="logs" hidden></pre>
-      </section>
+          <button type="button" class="button button--link" data-action="reset-admin" disabled></button>
+        </section>
+
+        <section class="field">
+          <div class="field__head">
+            <span class="field__label" data-i18n="label.dataDir"></span>
+            <span class="field__actions">
+              <button type="button" class="button button--link" data-action="reveal"></button>
+              <button type="button" class="button button--link" data-action="choose-data-dir"></button>
+            </span>
+          </div>
+          <code class="field__value" data-role="data-dir"></code>
+          <!--
+            Only until someone has chosen. The server cannot start without a data root, so this
+            is the answer to "why is nothing happening" — and it is the only place the reason is
+            stated, because the failure it prevents would otherwise be a sentence about an
+            environment variable.
+          -->
+          <p class="field__hint" data-role="data-dir-hint" hidden></p>
+          <!--
+            The one-click answer, and only while nothing has been chosen: it creates the folder
+            named in the hint above. `button--primary` because in this state it is *the* action —
+            every other control is waiting on a data root, including Start.
+
+            "Choose folder…" stays in the head rather than moving down here, because it is the
+            control for both states: the first-run prompt and the later "move my data". A second
+            copy beside this one would be two controls meaning one thing.
+          -->
+          <p class="field__answer" data-role="default-data-dir" hidden>
+            <button type="button" class="button button--primary" data-action="use-default-data-dir"></button>
+          </p>
+        </section>
+
+        <section class="field">
+          <div class="field__head">
+            <span class="field__label" data-i18n="label.lanAccess"></span>
+            <span class="field__actions">
+              <!-- Only while sharing is on: a switch that is off needs no "turn it off". -->
+              <button type="button" class="button button--link" data-action="unshare" hidden></button>
+              <button type="button" class="button button--link" data-action="share"></button>
+            </span>
+          </div>
+          <!-- The address stays on screen while sharing is on, so it can be read out to someone
+               whose camera will not cooperate. -->
+          <code class="field__value" data-role="lan-url" hidden></code>
+        </section>
+
+        <!--
+          The migration line, drawn only after a boot that upgraded the database.
+
+          Above the version row rather than below it, because it is news: it says the user's data was
+          rewritten by this launch, and it names the copy taken first — the file they would need if
+          the upgrade turns out to have been wrong. Nothing is shown for an ordinary launch.
+        -->
+        <section class="migrated" data-role="migrated" hidden>
+          <p class="migrated__note" data-role="migrated-note"></p>
+          <code class="field__value" data-role="migrated-backup" hidden></code>
+        </section>
+
+        <!--
+          The version, and the update notice when there is one.
+
+          The version is always here: it is what somebody is asked for when they report a problem,
+          and until this row existed the only place to read it was the operating system's About box.
+          The notice replaces it only when a newer release exists — and the button opens the download
+          page rather than installing anything, which is what `docs/desktop.md` explains is the
+          honest answer on a platform where our packages are not signed for it.
+        -->
+        <section class="field version" data-role="version-row">
+          <div class="field__head">
+            <span class="field__label" data-i18n="label.version"></span>
+            <span class="field__actions">
+              <button type="button" class="button button--link" data-action="check-updates"></button>
+              <button type="button" class="button button--link" data-action="update" hidden></button>
+            </span>
+          </div>
+          <code class="field__value" data-role="version"></code>
+          <p class="field__hint" data-role="update-available" hidden></p>
+        </section>
+
+        <!--
+          The one account-level action that has to be available with the server stopped: a
+          fresh data folder has no administrator, and the server refuses to listen until one
+          exists. Shown only in that state, so on an installation already set up this is never
+          drawn. The sheet it opens, not an inline expansion: the form is taller than the panel
+          can give it, and an overlay keeps it from shoving the rest of the controls off the
+          bottom of a window that does not scroll.
+        -->
+        <section class="admin" data-role="admin" hidden>
+          <p class="admin__hint" data-i18n="hint.needAdmin"></p>
+          <button type="button" class="button button--primary" data-action="admin-create"></button>
+        </section>
+
+        <p class="note" data-i18n="hint.closeToTray"></p>
+
+        <section class="logs">
+          <button
+            type="button"
+            class="logs__toggle"
+            data-action="logs"
+            aria-expanded="false"
+            aria-controls="log-output"
+          >
+            <!--
+              A stroked chevron, not a "▸". The interface's marks are drawn rather than typed
+              so they inherit `currentColor` and rotate with transform; a character glyph
+              would be painted by the font and sit off-baseline at this size.
+            -->
+            <svg class="logs__chevron" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span data-role="logs-label"></span>
+          </button>
+          <pre class="logs__output" id="log-output" data-role="logs" hidden></pre>
+        </section>
+      </div>
 
       <!--
         A real overlay rather than a section that expands in place: the QR needs a square of
