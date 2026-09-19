@@ -157,11 +157,43 @@ apps/server/src/builtin.json     the assistants a new installation gets, bundled
 apps/server/src/db.ts            seedBuiltInCopilots — create-once, marker-gated
 ```
 
-**引导学习** is the entry there: a persona, the tools it may use, and the seven widgets it installs.
-It is created when the first administrator is — inside `createAdmin`'s transaction, or at server
-start for a data root that already has one — and it is **`public`**, because the row belongs to the
-administrator and the read predicate is `user_id = ? OR visibility = 'public'`. A private built-in
-would be invisible to every other account on the installation.
+**引导学习 · Guided Learning** is the entry there: a persona, the tools it may use, and the seven
+widgets it installs. It is created when the first administrator is — inside `createAdmin`'s
+transaction, or at server start for a data root that already has one — and it is **`public`**,
+because the row belongs to the administrator and the read predicate is
+`user_id = ? OR visibility = 'public'`. A private built-in would be invisible to every other
+account on the installation.
+
+**There is one prompt, not one per language, and the language rule inside it is what makes that
+work.** The obvious alternative — a Chinese entry and an English one — was rejected, and the
+reasoning is worth keeping because it applies to any future built-in:
+
+- **Sixteen of the seventeen numbered rules are about pedagogy turn by turn**: plan first, teach
+  one item, quiz at the end of a topic, wait for the answer, keep the TODO list current. None of
+  them changes with the learner's language, so a second entry would duplicate all of them to vary
+  one. Two copies of a *teaching method* is the pair that drifts, and the one that drifts is the
+  one somebody is relying on to be taught consistently.
+- **The mechanism is already the whole app's.** Every prompt in `prompts.json` is English — the
+  default persona, `chat.guidance.*`, the titler, the classifier — and this app is used in Chinese
+  daily. Nothing on the wire carries a locale, and the server has never known the UI language.
+  Models mirroring the learner is what the product already depends on.
+- **The one rule that *was* language-bound needed rewriting rather than translating.** It said to
+  put the English term in brackets after Chinese jargon — an instruction whose *substance* is
+  "explain English terms to a Chinese reader", which is not what an English learner wants. It is
+  now about a term's **original** language: honest for both audiences, and it simply never fires
+  for somebody reading in the language the material was written in.
+- **The language rule is not decoration.** An instruction-dense prompt in one language biases the
+  *output* language, and the assistant generates structure as well as prose — the TODO list, the
+  questions, the options, the summary. Those follow the prompt's language far more readily than
+  the teaching does, so the rule names them explicitly.
+- **The name and description are bilingual** (`引导学习 · Guided Learning`), because they are the
+  one part of the row a reader sees before choosing it and the picker shows them in both
+  languages. They are *not* translated client-side by id the way `widgetLabel` translates widgets:
+  an assistant can be renamed by its owner, so a client-side override would hide their rename.
+
+The shape to reach for if a future built-in genuinely needs two languages is a `locale` field on
+the entry with the seeder writing one public row per locale — and the cost to weigh is that every
+account then sees two entries for one assistant.
 
 Three consequences worth knowing before editing it:
 

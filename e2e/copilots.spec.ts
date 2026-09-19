@@ -204,7 +204,7 @@ test("the built-in assistant is usable by an account that does not own it", asyn
   page,
   request,
 }) => {
-  const NAME = "引导学习";
+  const NAME = "引导学习 · Guided Learning";
   const WIDGETS = ["plan", "quiz", "thread", "notes", "diagram", "insight", "sources"];
 
   // The owner's view first: the administrator owns it, so it is an ordinary editable row of

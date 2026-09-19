@@ -11,7 +11,7 @@ a time, checks whether you actually understood with multiple-choice questions, k
 your questions and notes, and lays all of that out in panels you can see. Everything lives in a
 folder you choose and is uploaded nowhere — except to the model provider you configure yourself.
 
-It ships with a built-in **引导学习** ("Guided Learning") assistant and a set of study widgets,
+It ships with a built-in **引导学习 · Guided Learning** assistant and a set of study widgets,
 so after installing it and pasting one model API key you can start learning. It is aimed at
 people who would rather not live in a terminal: download an installer → pick a folder for your
 data on first launch → create an administrator → paste a key → start studying.
@@ -111,7 +111,7 @@ Then walk through this once:
    you have an account with, paste its API key and save. **Until you do this the model list is
    empty** — the assistant needs a model to work at all.
 6. **Start learning**: go back to the home page, create a workspace, open a conversation, choose
-   the **引导学习** assistant, and tell it what you want to learn.
+   the **引导学习 · Guided Learning** assistant, and tell it what you want to learn.
 
 > If your firewall asks, allow the app to communicate on this machine (127.0.0.1). Nothing is
 > exposed to the network by default — that only changes if you turn on LAN sharing yourself.
@@ -167,7 +167,7 @@ by hand in the console.
 
 ## The built-in assistant
 
-**引导学习** ("Guided Learning") is a public assistant, visible to and usable by every account. It
+**引导学习 · Guided Learning** is a public assistant, visible to and usable by every account. It
 has all seven widgets above enabled, and it works like this:
 
 1. You name a topic, or it helps you settle on one;
@@ -181,8 +181,13 @@ has all seven widgets above enabled, and it works like this:
    the main line;
 6. At the end it summarises, listing both the material covered and what you should revisit.
 
-It teaches at a depth-first, practical, best-practice level rather than as an introduction, and
-it puts the English term in brackets after technical jargon.
+It teaches at a depth-first, practical, best-practice level rather than as an introduction.
+**The language is yours to choose**: write in Chinese and it teaches in Chinese, write in English
+and it teaches in English, and it follows you if you switch mid-conversation — plan, TODO list,
+questions and summary included.
+
+When a technical term's original wording is in another language, it gives that original in
+brackets the first time, so a translation cannot leave you guessing.
 
 It belongs to the administrator account that created it, but it is **visible to and usable by
 every account**. To teach your own way, open **Assistants** and **copy** it before editing:

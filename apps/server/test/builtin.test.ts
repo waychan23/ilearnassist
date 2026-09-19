@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WIDGET_IDS } from "@ilearnassist/shared";
+import { ALL_TOOL_NAMES, WIDGET_IDS } from "@ilearnassist/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAdmin } from "../src/adminCli.js";
 import builtinCatalog from "../src/builtin.json";
@@ -102,6 +102,24 @@ describe("builtin.json", () => {
       // The prompt is the reason the entry exists; an empty one would still create a row.
       expect(entry.systemPrompt.length, `${entry.id} systemPrompt`).toBeGreaterThan(200);
       expect(entry.allTools, `${entry.id} allTools`).toBe(true);
+    }
+  });
+
+  it("names only tools that exist", () => {
+    /*
+     * The prompt names the tools it expects — `ila_quiz` for the check questions, `ila_read_plan`
+     * to read the plan back, `ask_user` to put a choice to the learner. A prompt that names a
+     * tool this build does not have is worse than one that names none: the model tries to call
+     * it, the call fails, and the failure reads as the app being broken rather than the prompt
+     * carrying a stale name. The check is on the identifier shape, so prose about teaching is not
+     * scanned, and it is against `ALL_TOOL_NAMES` — the same list the wire schema test uses.
+     */
+    for (const entry of entries) {
+      const named = entry.systemPrompt.match(/\b(?:ila_[a-z_]+|ask_user|web_search|web_fetch)\b/g) ?? [];
+      expect(named.length, `${entry.id} names no tools at all`).toBeGreaterThan(0);
+      for (const name of new Set(named)) {
+        expect(ALL_TOOL_NAMES as readonly string[], `${entry.id} names ${name}`).toContain(name);
+      }
     }
   });
 
