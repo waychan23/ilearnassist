@@ -1341,3 +1341,100 @@ describe("POST /api/sessions/:id/chat", () => {
     expect((llm.requests()[0] as { model: string }).model).toBe("fake-model");
   });
 });
+
+describe("a turn's message is what the client rendered", () => {
+  /*
+   * The route's half of the loop's invariant: the persisted row equals the concatenation of the
+   * `text` frames the browser received. It is stated over the raw SSE transcript, because that
+   * transcript *is* what the client accumulates into `streaming.content` — and the row is what
+   * replaces it at `message_done`, which is the moment text used to vanish: the message was
+   * trimmed to the model's last utterance, so a chapter's lecture streamed and then disappeared.
+   *
+   * Exactly two things a row may carry that never travelled as `text`, and both are named here
+   * rather than allowed by a loose comparison: the budget notice, and the unseen-image warning
+   * `finishTurn` appends when a turn attached an image to a model that cannot see one. A third
+   * tolerance would be the wrong answer — `redactQuizInput`, for instance, rewrites tool inputs
+   * and never the text channel, so tolerating it would blind this to an answer key leaking into
+   * prose.
+   */
+  const OUT_OF_STEPS_NOTICE =
+    "The assistant ran out of steps while working on this task. Please ask a follow-up to continue.";
+
+  const QUESTIONS = [
+    { header: "核心", question: "最本质的突破是什么？", options: [{ label: "A" }, { label: "B" }] },
+  ];
+
+  const textDeltas = (events: ChatStreamEvent[]): string[] =>
+    events.filter((e) => e.type === "text").map((e) => (e as { delta: string }).delta);
+
+  /**
+   * Every `data:` frame in the transcript parsed.
+   *
+   * `parseSse` skips a frame it cannot parse, exactly as the client does — which means a broken
+   * transcript would satisfy "the deltas join to the content" by agreeing about a *smaller*
+   * string. Comparing the two counts is what closes that door.
+   */
+  function expectNoFrameWasDropped(transcript: string): void {
+    const frames = transcript.split("\n\n").filter((block) => block.includes("data:"));
+    expect(parseSse(transcript)).toHaveLength(frames.length);
+  }
+
+  it("persists a multi-step turn as the deltas that streamed", async () => {
+    const { session } = await freshSession();
+    llm.setTurns([
+      {
+        content: "我先把这一节的重点写成一个文件。",
+        toolCalls: [{ name: "write_file", args: { path: "notes.md", content: "# 重点" } }],
+      },
+      { content: "写好了。下面是我对第一章的讲解：\n\n第一点是……" },
+    ]);
+
+    const { res, events } = await chat(session.id, { message: "开始讲第一章" });
+
+    expectNoFrameWasDropped(res.body);
+    const streamed = textDeltas(events).join("");
+    // Two steps, so two paragraphs — and the narration before the tool call is part of the
+    // reply rather than something a later step replaced.
+    expect(streamed).toBe("我先把这一节的重点写成一个文件。\n\n写好了。下面是我对第一章的讲解：\n\n第一点是……");
+
+    const done = events.find((e) => e.type === "message_done") as { message: Message };
+    expect(done.message.content).toBe(streamed);
+    // And the row a reload reads is the same one — the assertion the reported bug failed.
+    const persisted = await messagesOf(session.id);
+    expect(persisted.at(-1)!.content).toBe(streamed);
+  });
+
+  it("persists a lecture the asking step followed, not just the question's introduction", async () => {
+    // The reported shape end to end: the model explains a chapter, draws on it, then asks a
+    // question. Only the asking step's one-line introduction used to survive.
+    const { session } = await freshSession();
+    const lecture = `# 1.1 背景与动机\n\n${"LangGraph 把 Agent 的流程建模成一张图。".repeat(20)}`;
+    const closer = "讲完了第一项的背景与动机。在进入第 2 项之前，用两道题检验一下你是否抓住了核心：";
+    llm.setTurns([
+      { content: lecture, toolCalls: [{ name: "write_file", args: { path: "ch1.md", content: "x" } }] },
+      {
+        content: "这一章的循环结构可以画成这样。",
+        toolCalls: [{ name: "write_file", args: { path: "loop.md", content: "y" } }],
+      },
+      { content: closer, toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
+    ]);
+
+    const { res, events } = await chat(session.id, { message: "开始讲第一章" });
+
+    expectNoFrameWasDropped(res.body);
+    const done = events.find((e) => e.type === "message_done") as { message: Message };
+    const streamed = textDeltas(events).join("");
+
+    expect(streamed.startsWith(lecture)).toBe(true);
+    expect(streamed.endsWith(closer)).toBe(true);
+    expect(streamed).toContain("这一章的循环结构可以画成这样。");
+    expect(streamed).not.toContain(OUT_OF_STEPS_NOTICE);
+
+    expect(done.message.content).toBe(streamed);
+    const persisted = await messagesOf(session.id);
+    expect(persisted.at(-1)!.content).toBe(streamed);
+    // The turn is still suspended on the question, so the lecture is at rest in a row with a
+    // pending call — the state the reported conversation was in when its text was gone.
+    expect(persisted.at(-1)!.toolCalls?.some((c) => c.status === "awaiting")).toBe(true);
+  });
+});
