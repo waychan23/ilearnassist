@@ -339,4 +339,3 @@ whole application can be released under MIT.
 - [Prompts](docs/prompts.md) — the system-prompt catalog and how to override an entry
 - [Usage](docs/usage.md) — the token ledger and the statistics pages
 - [Session locks](docs/session-locks.md) — the rules when several clients open one conversation
-- [Reference](docs/reference.md) — chatbox, the upstream project this one is modeled on

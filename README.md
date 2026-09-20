@@ -295,4 +295,3 @@ Agent 行为。
 - [提示词](docs/prompts.md) —— 系统提示词目录与覆盖方式
 - [用量统计](docs/usage.md) —— token 账本与统计页
 - [会话写锁](docs/session-locks.md) —— 多客户端同时打开一个对话时的规则
-- [参考资料](docs/reference.md) —— 本项目参考的上游项目 chatbox

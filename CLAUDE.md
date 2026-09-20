@@ -353,10 +353,10 @@ packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolC
 ## Reference project: chatbox
 
 This app is modeled on [chatbox](https://github.com/chatboxai/chatbox) (Electron
-+ React). A clone kept for reference lives at
-`/Users/waychan23/Documents/work/spaces/trae/chatbox` — treat it as a
-behavioral/UX reference only (chatbox is React/Electron; ilearnassist is
-Vue/Fastify), so port ideas rather than copy code. Quick map:
++ React), and is developed against a local clone of it — the clone's path is recorded in
+`CLAUDE.local.md` rather than here. Treat that clone as a behavioral/UX reference only
+(chatbox is React/Electron; ilearnassist is Vue/Fastify), so port ideas rather than copy
+code. Quick map:
 
 - `src/renderer/` — chat UI, settings, Copilot/agent config screens
 - `src/renderer/packages/web-search/` — keyless Bing + DuckDuckGo scraping
@@ -364,7 +364,11 @@ Vue/Fastify), so port ideas rather than copy code. Quick map:
 - `packages/chatbox-core/src/generation/` — agent/tool (ReAct) loop
 - `features/*.feature` — higher-level feature specs
 
-Fuller map in `docs/reference.md`.
+A fuller map on the upstream project is kept in `docs/local/reference.md`. That file is
+gitignored and deliberately **not** part of this repository — it also names the local
+clone's path, which is why it lives outside the published tree. It carries no
+information a contributor needs; the bullets above and the upstream repo are the
+public half.
 
 ## Invariants worth respecting
 
@@ -2148,6 +2152,6 @@ references rather than background: `docs/design-system.md` for anything visual, 
 before changing any system prompt or adding one, `docs/usage.md` before touching the token ledger or
 the statistics pages, `docs/widgets.md` before adding a widget to the right sidebar, and
 `docs/session-locks.md` before touching anything that writes to a conversation from more than one
-client. `docs/demo-gifs.md` is the recording brief for the READMEs' animated demos — the slots are
-in both READMEs as commented-out image lines, so the naming and the content are specified in one
-place rather than agreed per take.
+client. `docs/local/demo-gifs.md` — gitignored, not part of this repository — is the recording
+brief for the READMEs' animated demos; the slots are in both READMEs as commented-out image
+lines, so the naming and the content are specified in one place rather than agreed per take.

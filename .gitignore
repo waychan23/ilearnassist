@@ -47,3 +47,12 @@ config/config.local.yaml
 .claude/worktrees/
 .claude/skills/
 skills-lock.json
+
+# The same idea for prose: the guidance that describes this machine rather than this software.
+# `CLAUDE.local.md` holds the local paths and points at the notes under `docs/local/`. Neither is
+# auto-ignored — Claude Code only auto-excludes `.claude/settings.local.json`, and only in your
+# *global* git excludes — so these two lines are what keep it out of the published tree.
+# `apps/server/test/no-local-paths.test.ts` is what keeps a real path from reappearing in a
+# tracked file; it cannot see these two, which are ignored and therefore never scanned.
+CLAUDE.local.md
+docs/local/
