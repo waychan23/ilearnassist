@@ -80,15 +80,26 @@ test("moves a file into a folder by typing its path", async ({ page, request }) 
   await enterWorkspace(page, "移动文件");
   await openFilesTab(page);
 
-  await page.getByTestId("file-new-folder").click();
-  await fillDialog(page, "archive");
-
+  /*
+   * The file is uploaded **before** the folder is created, and that order is load-bearing.
+   *
+   * The toolbar acts on the active row (`FileTree`'s `targetDir`), and the tree selects row 0
+   * the moment it has one — so creating the first folder in an empty workspace silently makes
+   * that folder the upload's destination. This file is meant to land at the **root**, and the
+   * old order put it inside `archive/` whenever the tree's re-read won the race against the
+   * file input's change event. That race is why it passed on macOS and failed on the first
+   * Linux CI run: same code, different winner. With no directory row to select, the target is
+   * the root whatever the timing.
+   */
   await page.getByTestId("file-upload-input").setInputFiles({
     name: "loose.txt",
     mimeType: "text/plain",
     buffer: Buffer.from("x"),
   });
   await expect(row(page, "loose.txt")).toBeVisible();
+
+  await page.getByTestId("file-new-folder").click();
+  await fillDialog(page, "archive");
 
   await row(page, "loose.txt").getByTestId("file-rename").click();
   await fillDialog(page, "archive/loose.txt");
@@ -185,14 +196,18 @@ test("moves a file by dragging it onto a folder", async ({ page, request }) => {
   await enterWorkspace(page, "拖拽移动");
   await openFilesTab(page);
 
-  await page.getByTestId("file-new-folder").click();
-  await fillDialog(page, "target");
+  // Uploaded at the root *before* the folder exists, for the reason spelled out in the
+  // "by typing its path" case above: a folder created first becomes the tree's active row and
+  // therefore the upload's destination, and whether it has become it yet is a race.
   await page.getByTestId("file-upload-input").setInputFiles({
     name: "dragged.txt",
     mimeType: "text/plain",
     buffer: Buffer.from("moved by pointer"),
   });
   await expect(row(page, "dragged.txt")).toBeVisible();
+
+  await page.getByTestId("file-new-folder").click();
+  await fillDialog(page, "target");
 
   await row(page, "dragged.txt").dragTo(row(page, "target"));
 
