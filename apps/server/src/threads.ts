@@ -221,6 +221,29 @@ function clip(text: string, max: number): string {
   return flat.length > max ? flat.slice(0, max).trimEnd() + "…" : flat;
 }
 
+/**
+ * A message as the classifier or the panel reads it, clipped from whichever end holds its point.
+ *
+ * **An assistant message is clipped from its end**, and that is a consequence of the agent loop
+ * keeping everything the model said: the message is now every step of the turn, so its *head* is
+ * whatever the model said before it started working ("我先看一下这个文件") and its answer is at
+ * the end. These clips are tight — 80 characters for a panel leaf, 350 for a turn passed to the
+ * classifier — so a head clip would label a turn by its preamble and nothing else.
+ *
+ * A user message is the other way round: the question opens it. The direction follows the role
+ * rather than the call site, so a new consumer gets the right one by asking for it.
+ *
+ * `agent/title.ts` and `tools/explore.ts` clip a message too and are deliberately left with the
+ * head rule: at 1,200 and 800 characters they are loose enough that a long message was already
+ * clipped well before this change, so the head/tail question barely moves them.
+ */
+function clipMessage(role: string, content: string, max: number): string {
+  if (role !== "assistant") return clip(content, max);
+  /** The same one-line form `clip` produces, so both directions read alike. */
+  const flat = content.replace(/\s+/g, " ").trim();
+  return flat.length > max ? "…" + flat.slice(-max).trimStart() : flat;
+}
+
 /** A model-given title, cleaned the same way conversation titles are. */
 export function sanitizeThreadTitle(raw: string): string {
   let title = raw.trim();
@@ -253,7 +276,8 @@ function renderTurn(
   diagrams?: ReadonlyMap<string, DiagramPromptItem>,
   tables?: ReadonlyMap<string, TablePromptItem>
 ): string {
-  const head = `${index + 1}. ${message.role}: ${clip(
+  const head = `${index + 1}. ${message.role}: ${clipMessage(
+    message.role,
     message.content || "(no text)",
     MAX_MESSAGE_CHARS
   )}${toolNames(message)}`;
@@ -305,7 +329,9 @@ export function buildThreadPrompt(input: PromptInput): string {
   }
 
   if (input.recent.length > 0) {
-    const lines = input.recent.map((m) => `- ${m.role}: ${clip(m.content || "(no text)", MAX_MESSAGE_CHARS)}`);
+    const lines = input.recent.map(
+      (m) => `- ${m.role}: ${clipMessage(m.role, m.content || "(no text)", MAX_MESSAGE_CHARS)}`
+    );
     const note = input.currentThreadRef
       ? ` ("continue" means thread ${input.currentThreadRef})`
       : "";
@@ -694,7 +720,7 @@ async function runSync(
     if (recent.length > 0) {
       lines.push(`最近已分类的消息（continue 指向 ${currentThreadRef ?? "—"}）：`);
       for (const m of recent) {
-        lines.push(`  ${m.role}: ${clip(m.content || "(无文字)", MAX_MESSAGE_CHARS)}`);
+        lines.push(`  ${m.role}: ${clipMessage(m.role, m.content || "(无文字)", MAX_MESSAGE_CHARS)}`);
       }
     }
     lines.push("本次轮次：");
@@ -705,7 +731,9 @@ async function runSync(
         : "";
       lines.push(`  ${turnLabel(turn, i)}${mark}`);
       for (const m of turn.messages) {
-        lines.push(`    ${m.role}: ${clip(m.content || "(无文字)", MAX_MESSAGE_CHARS)}${toolNames(m)}`);
+        lines.push(
+          `    ${m.role}: ${clipMessage(m.role, m.content || "(无文字)", MAX_MESSAGE_CHARS)}${toolNames(m)}`
+        );
       }
       // What the model was shown about this turn's diagrams: name and the one-line summary.
       for (const diagram of diagramsOfTurn(turn)) {
@@ -988,10 +1016,10 @@ function createOtherThread(db: AppDb, sessionId: string, title: string): ThreadR
 
 /* ---------------------------------- views ---------------------------------- */
 
-function previewOf(message: { content: string }): string {
-  const flat = message.content.replace(/\s+/g, " ").trim();
-  if (!flat) return "";
-  return flat.length > PREVIEW_CHARS ? flat.slice(0, PREVIEW_CHARS).trimEnd() + "…" : flat;
+function previewOf(message: { role: string; content: string }): string {
+  // From the end for the assistant's leaves, so the panel's one-line label is the turn's point
+  // rather than its preamble — see `clipMessage`. An empty message still previews as nothing.
+  return clipMessage(message.role, message.content, PREVIEW_CHARS);
 }
 
 /** The panel's read model: threads with their one-line message leaves, plus the backlog count. */

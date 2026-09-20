@@ -945,42 +945,57 @@ public half.
   only for the content-block shape the tap cannot see. (Token usage is read from the
   step's *chunks* rather than the reduced message — `concat` does carry `usage_metadata`
   now, but the chunk scan does not depend on that staying true.)
-- **Streamed text can exceed what is persisted.** On a step that emits preamble text *and*
-  a tool call, the preamble is streamed as `text` deltas; when the final step produces
-  content, `finalContent` is *replaced* by just that step's text. So the live view shows
-  narration + answer while `messages.content` holds only the answer, and a reload drops the
-  narration. Pinned by a test in `apps/server/test/agent/loop.test.ts` — changing it is a
-  product decision, not a bug fix. **The exception is a call whose artifact *is* that text**,
-  and `ANSWER_BEARING_TOOLS` names both: text streamed beside `ila_review_quiz` is the
-  per-question verdict walkthrough, and text streamed beside `ila_table` is the table itself —
-  `ila_table` renders nothing, so the prose beside the call is the whole of what the reader
-  sees. `answerUtterances` keeps those and `composeWithAnswerUtterances` rejoins them ahead of
-  the last utterance at every normal ending (final answer, suspension, exhausted budget); an
-  utterance the last step repeats verbatim is dropped rather than doubled. The reason it
-  exists is the same failure twice: a grading turn typically runs grading →
-  `ila_update_plan_progress` → a final "shall we move to the next chapter?" step, and a table
-  turn is the table → "需要展开哪一项？", so in both the last-utterance rule made the artifact
-  vanish from the persisted message at `message_done` after streaming it live. A diagram is
-  deliberately **not** in the set: its artifact is the drawing, rendered from the tool call, so
-  its prose really is narration. The prompts push the model toward the safe shape too (all
-  bookkeeping tool calls before the prose; the full rundown in the final message), but the loop
-  rule is the deterministic backstop — do not delete one believing the other makes it redundant.
-- **A message holds the model's most recent utterance, never every step's run together.**
-  `finalContent` *accumulates* each step's text as it streams, and it is the `lastUtterance`
-  tracked per step that every ending actually reads from — the final answer, the suspension,
-  and the exhausted budget alike. The rule matters because of how it used to fail: only the
-  final-answer branch replaced the pile, so any ending that did *not* go through it
-  persisted every step's narration joined with **no separator**
-  (`"Let me look at the workspace.我先确认几件事："`), which reads as one broken sentence
-  whatever language it is in. `ask_user` is what made that reachable in normal use, being
-  the first way to end a turn by asking rather than answering. Fallbacks are always the last
-  *utterance*, never the accumulation, so a step that said nothing cannot resurrect the pile.
-  The live stream still shows everything as it arrives; only what is persisted is trimmed.
+- **The message is exactly what streamed, and nothing trims it.** A turn is several utterances —
+  "我先把要点写成一个文件", then the answer — and `messages.content` is all of them, in step
+  order, one paragraph each, joined by `STEP_SEPARATOR` (`"\n\n"`). The rule is stated as an
+  identity rather than a policy: **`content` is the concatenation of the `text` deltas the client
+  received.** That is what makes a reload show what the reader watched, and it is why nothing
+  replaces the content — only the exhausted-budget ending *appends* `OUT_OF_STEPS`. Four things
+  are load-bearing:
+  - **The swap at `message_done` is where text used to vanish.** The client retires the
+    streaming bubble and renders the persisted row (`stores/app.ts`), so a row shorter than the
+    stream *is* a reader watching what they read disappear — reported as a chapter's lecture
+    going blank the moment the model drew a diagram and asked a quiz question, with 41 characters
+    left in the row against ~1800 non-reasoning output tokens.
+  - **The rule that preceded it was a trim, and it was retired rather than patched twice more.**
+    Every ending used to replace the accumulation with the model's *last utterance*, on the
+    argument that a message should hold one utterance. `ANSWER_BEARING_TOOLS` was the exception
+    bolted onto it — `ila_review_quiz`'s verdict walkthrough and `ila_table`'s table *are* the
+    text beside the call — and a third exception was due for every teaching tool. The trim was
+    never the real requirement: what it was avoiding was two steps' text run together **with no
+    separator** (`"Let me look at the workspace.我先确认几件事："`), which a paragraph break
+    answers. The separator rides the text channel, folded into a step's first delta, so the live
+    view and the stored string are the same one; `sawText` is set from *finished* steps, so a
+    step that says nothing opens no blank paragraph. Do not reintroduce a per-ending trim, and do
+    not add an allowlist of tools whose prose "counts" — the message holds what was said.
+  - **A repeat is kept, and that is deliberate.** A model that re-emits a rundown verbatim
+    streamed it twice, so the message holds it twice. Suppressing the duplicate is a message
+    *shorter* than what streamed, which is the failure this rule exists to remove.
+  - **The cost is the model's replayed history, and it is real.** `buildHistoryMessages` replays
+    `content`, and `maxContextMessages` is a *message count* (`null` by default) — there is no
+    token cap, so every turn's narration now rides into every later request. The follow-up is to
+    replay only the last utterance, and it needs the step boundaries recorded as data on the row:
+    once flattened, `"\n\n"` is indistinguishable from a paragraph break the model wrote itself,
+    so the last utterance is not recoverable from `content`.
+  Also unchanged but no longer load-bearing, so a later reader does not preserve them by mistake:
+  the quiz guidance's "walk each question through in your **FINAL** message" and `ila_table`'s
+  result asking for the inline copy "if you have not already" were written to defeat the trim.
+  They remain good shape and are left alone.
+- **A head clip of a message shows its first step; a tail clip shows its answer.** Everything
+  above means a *consumer* that clips an assistant message has to pick the end: its head is
+  whatever the model said before it started working. `threads.ts`'s `clipMessage` picks the
+  direction from the role (assistant → tail, user → head) and is used by the classifier's turn
+  text, the 脉络 panel's leaves and the observation log — the clips there are 80 and 350
+  characters, tight enough that the direction is the whole question. `agent/title.ts` (1,200)
+  and `tools/explore.ts` (800) still clip from the head on purpose: loose enough that a long
+  message was already clipped before this rule, so the question barely moves them. A new consumer
+  should ask which end holds its point rather than copying either.
 - **A turn that was cut short says so, and it is persisted.** When the step budget runs out
-  the message keeps the model's last utterance *and* appends `OUT_OF_STEPS`. The sentence
-  used to appear only when the model had said nothing at all, which meant every truncated
-  turn that had narrated anything — the common case — read as a finished answer. Like the
-  `⚠️ ` prefix it is untranslated on purpose: it is content, replayed to the model next turn.
+  the message keeps everything the model said — the whole accumulation, as every other ending
+  now does — *and* appends `OUT_OF_STEPS`. The sentence used to appear only when the model had
+  said nothing at all, which meant every truncated turn that had narrated anything — the common
+  case — read as a finished answer. Like the `⚠️ ` prefix it is untranslated on purpose: it is
+  content, replayed to the model next turn.
 - **A user's title is permanent, and an automatic one is not until it means something.**
   `session.titleSource` is `auto` until a human supplies a title via `PATCH /api/sessions/:id`,
   which flips it to `user`; the auto-titler must then never touch it. Otherwise the titler runs

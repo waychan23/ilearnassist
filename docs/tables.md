@@ -27,16 +27,16 @@ model passed as an argument — so the drift is *reported rather than prevented*
 pass silently: the tool's result says what was **saved** and asks for the inline copy separately,
 rather than claiming the reply already shows it.
 
-**And the reply half needed a change in the agent loop, because by default it did not survive the
-turn.** Text a model streams beside a tool call is narration and is replaced by the final step's
-utterance when the message is persisted — which is right for "I will write that file now" and
-wrong here, because `ila_table` renders nothing: the prose beside the call *is* the table. In the
-shape a real model produces (the table in the step that records it, then a closing question) the
-table streamed live and then vanished at `message_done`, so the panel listed a table the
-conversation no longer showed. `ANSWER_BEARING_TOOLS` in `agent/loop.ts` is the fix, and it
-generalises the exception the quiz's verdict walkthrough already had; `ila_diagram` is deliberately
-not in it, since a diagram's artifact is the drawing rather than its prose. Pinned in
-`test/agent/loop.test.ts` and, end to end, in `e2e/table.spec.ts` — which asserts the table both
+**And the reply half is the reason the agent loop stopped trimming a turn's text at all.** This
+feature was the first casualty: a table renders no card, so the prose beside the `ila_table` call
+*is* the table, and in the shape a real model produces (the table in the step that records it,
+then a closing question) it streamed live and then vanished at `message_done`, so the panel listed
+a table the conversation no longer showed. It was patched with `ANSWER_BEARING_TOOLS`, an
+allowlist of tools whose prose counted as an answer — and a third entry was due for every teaching
+tool, the lecture-a-chapter case included. The rule is now general and has no allowlist: **the
+message is exactly what streamed** (see `CLAUDE.md`), so the table is kept because the model wrote
+it, not because of which tool was beside it. Pinned in `test/agent/loop.test.ts`,
+`test/chat-sse.test.ts` and, end to end, in `e2e/table.spec.ts` — which asserts the table both
 live and *after a reload*.
 
 ## The shape

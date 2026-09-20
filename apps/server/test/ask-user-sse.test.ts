@@ -157,8 +157,8 @@ describe("ask_user over the wire", () => {
     await chat(session.id, "帮我加个登录");
 
     const { message } = await pendingOf(session.id);
-    // The live view showed the narration, and unlike a tool-calling step it survives a
-    // reload here — the turn ended on the question, so nothing replaced the text.
+    // What the reader watched is what the row holds, on this road as on every other: a turn
+    // that ends on a question used to keep only the sentence introducing it.
     expect(message.content).toBe("有两件事需要你定。");
   });
 

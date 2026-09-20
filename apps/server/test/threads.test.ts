@@ -217,6 +217,39 @@ describe("buildThreadPrompt", () => {
     expect(prompt).toContain("<new_turns>");
   });
 
+  it("clips an assistant message from its end and a user message from its start", () => {
+    /*
+     * Where a turn's words are. The agent loop persists every step of a turn, so an assistant
+     * message's *answer* is at its end and its head is whatever the model said before it started
+     * working; a user message's question is at its front. The clip is 350 characters, so the
+     * direction is the whole question — a preamble is all the classifier would otherwise see.
+     */
+    const filler = "填".repeat(400);
+    const prompt = buildThreadPrompt({
+      plan: undefined,
+      existing: [],
+      recent: [],
+      currentThreadRef: undefined,
+      turns: [
+        {
+          messages: [
+            { role: "user", content: `开头标记${filler}结尾标记` },
+            { role: "assistant", content: `开头标记${filler}结尾标记` },
+          ] as Message[],
+        },
+      ],
+    });
+
+    const [userLine, assistantLine] = prompt
+      .split("\n")
+      .filter((line) => /^\d+\. (user|assistant):/.test(line));
+
+    expect(userLine).toContain("开头标记");
+    expect(userLine).not.toContain("结尾标记");
+    expect(assistantLine).toContain("结尾标记");
+    expect(assistantLine).not.toContain("开头标记");
+  });
+
   it("renders a diagram under the message whose call drew it", () => {
     const prompt = buildThreadPrompt({
       plan: undefined,
@@ -341,6 +374,24 @@ describe("syncThreads", () => {
     const leaf = view.threads[1]!.messages[0]!;
     expect(leaf.preview).toBe("什么是可数集？");
     expect(leaf.content).toBe("什么是可数集？");
+  });
+
+  it("previews an assistant leaf from the end of its turn", async () => {
+    /*
+     * The panel's one-line label for a turn. An assistant message is now every step of the
+     * turn, so at 80 characters a head clip would label it with the model's preamble — the
+     * label has to come from the end, where the answer is.
+     */
+    userMessage("讲讲可数集");
+    assistantMessage(`我先看一下工作区里有没有相关资料。${"填".repeat(200)}这一章的目标是把可数集讲清楚。`);
+    await syncThreads(db, SESSION, async () => newOther("可数集"));
+
+    const leaf = buildThreadViews(db, OWNER, SESSION).threads[0]!.messages[1]!;
+    expect(leaf.preview.startsWith("…")).toBe(true);
+    expect(leaf.preview).toContain("这一章的目标是把可数集讲清楚。");
+    expect(leaf.preview).not.toContain("我先看一下工作区里有没有相关资料");
+    // The full text still rides along, so the tooltip and the panel's own reading are intact.
+    expect(leaf.content).toContain("我先看一下工作区里有没有相关资料。");
   });
 
   it("appends a returning topic to its existing thread instead of duplicating", async () => {

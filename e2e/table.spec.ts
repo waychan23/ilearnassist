@@ -43,9 +43,11 @@ async function figureSession(page: Page, name: string): Promise<string> {
  *
  * That shape matters — it is the shape that was broken. Scripting the table into the *final* step
  * instead is what this spec used to do, and it passed while the feature was broken in the app: the
- * loop persists the last step's utterance, so a table written beside the call streamed live and
- * then vanished at `message_done`. `apps/server/test/agent/loop.test.ts` is where that rule is
- * pinned now, and this is the conversation that has to hold up in a browser because of it.
+ * loop persisted only the last step's utterance, so a table written beside the call streamed live
+ * and then vanished at `message_done`. The rule that caused it is gone — a message is now
+ * everything the model said, so the shape no longer decides anything — and the loop's own tests
+ * (`apps/server/test/agent/loop.test.ts`, `chat-sse.test.ts`) are where that is pinned. This
+ * conversation still has to hold up in a browser, which is what the reload half checks.
  */
 function scriptTable(
   request: APIRequestContext,

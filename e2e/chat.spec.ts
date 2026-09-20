@@ -66,6 +66,19 @@ test("a conversation round trip survives a reload", async ({ page, request }) =>
   // The final answer is the persisted assistant message.
   await expect(page.getByTestId("message-assistant").last()).toContainText("文件已保存。");
 
+  /*
+   * And the step *before* the tool call is part of it, which is the reported bug's browser-level
+   * guard. The message is everything the model said — every step, one paragraph each — because
+   * the row is what replaces the streaming bubble at `message_done`. It used to be trimmed to
+   * the model's last utterance, so a reader watched a chapter's lecture stream and then watched
+   * it disappear the moment the model drew a diagram and asked a question about it.
+   */
+  const reply = page.getByTestId("message-assistant").last();
+  await expect(reply).toContainText("我先把这个文件写下来。");
+  // A paragraph break separates the steps, rather than the two running together as one sentence
+  // — the "我先把这个文件写下来。文件已保存。" that made the old trim look necessary.
+  await expect(page.getByText("我先把这个文件写下来。文件已保存。")).toHaveCount(0);
+
   // The server named the conversation from its first exchange.
   await expect(page.getByTestId("session-title")).toHaveText("写一个文件");
 
@@ -85,6 +98,9 @@ test("a conversation round trip survives a reload", async ({ page, request }) =>
   await page.getByTestId("session-item").first().click();
   await expect(page.getByTestId("message-user")).toContainText("帮我写一个文件");
   await expect(page.getByTestId("message-assistant").last()).toContainText("文件已保存。");
+  // The step before the tool call comes back too — this assertion is the one the report failed:
+  // the row held the answer alone, so the reload showed less than the turn had streamed.
+  await expect(page.getByTestId("message-assistant").last()).toContainText("我先把这个文件写下来。");
   await expect(page.getByTestId("file-card").first()).toContainText("notes.txt");
   await expect(page.getByTestId("session-title")).toHaveText("写一个文件");
 

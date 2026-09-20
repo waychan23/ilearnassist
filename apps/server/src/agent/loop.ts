@@ -8,8 +8,6 @@ import {
 } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
-  QUIZ_REVIEW_TOOL_NAME,
-  TABLE_TOOL_NAME,
   QUIZ_TOOL_NAME,
   type Attachment,
   type ChatStreamEvent,
@@ -42,7 +40,27 @@ const DEFAULT_MAX_STEPS = 15;
 const OUT_OF_STEPS =
   "The assistant ran out of steps while working on this task. Please ask a follow-up to continue.";
 
+/**
+ * What separates one step's text from the next step's in a message.
+ *
+ * A ReAct turn is several utterances — "I will read that file now", then the answer — and a
+ * message carries all of them, because it carries exactly what streamed (see below). Run
+ * together with nothing between them they read as one broken sentence whatever language they
+ * are in, which is the defect this separator answers: `"Let me look at the workspace.我先确认几件事："`
+ * used to be a real persisted message. A paragraph break is what the two utterances actually
+ * are, and it is emitted *on the text channel* — see the delta loop — so the live view and the
+ * stored content stay the same string.
+ */
+const STEP_SEPARATOR = "\n\n";
+
 export interface RunAgentResult {
+  /**
+   * The message's text: **everything the model said this turn, in step order**, one paragraph
+   * per step — the concatenation of the `text` events this run emitted, which is what the
+   * client rendered live. The two are the same string on purpose: a message shorter than what
+   * the reader watched is text vanishing at `message_done`, which is the bug this rule exists
+   * to prevent. The only addition is `OUT_OF_STEPS`, appended when the budget ran out.
+   */
   content: string;
   /** Chain of thought, when the provider exposed one. Display-only. */
   reasoning: string;
@@ -537,46 +555,6 @@ function trimHistory(history: Message[], settings: SessionSettings): Message[] {
 }
 
 /**
- * The tools whose artifact **is the text the model streams beside the call**.
- *
- * The distinction the persistence rule turns on. Text beside an ordinary tool call is narration —
- * "I will write that file now" — and replacing it with the final step's answer is what keeps a
- * message to one utterance. These two are the other case, and each is the other case for its own
- * reason that lands in the same place:
- *
- * - `ila_review_quiz` streams the per-question verdict walkthrough, which *is* the turn's answer.
- * - `ila_table` renders nothing at all. Its whole contract is that the table is written into the
- *   reply as ordinary Markdown, so the prose beside the call is the artifact — and the step after
- *   it is typically a closing question ("需要展开哪一项？"), which used to replace the table
- *   wholesale. The table streamed live and then vanished at `message_done`, which is the one
- *   thing the feature exists to prevent.
- *
- * Deliberately **not** `ila_diagram`, and the difference is the same one: a diagram's artifact is
- * the drawing, rendered from the tool call itself, so its prose really is narration.
- *
- * The exception is the utterance *beside* the call, and that is as far as it goes: a table written
- * in an earlier step that made no call is narration by the general rule and is dropped with it.
- * That ordering is the one the guidance rules out — it tells the model to record the table it is
- * writing — and `ila_table`'s own result covers the remainder by asking for the inline copy "if you
- * have not already", so the model is told rather than the loop guessing. The second layer is not a
- * substitute for the first: this rule is what makes the shape a real model produces deterministic.
- */
-const ANSWER_BEARING_TOOLS: ReadonlySet<string> = new Set([QUIZ_REVIEW_TOOL_NAME, TABLE_TOOL_NAME]);
-
-/**
- * Put the utterances that carried an answer back in front of the turn's last utterance.
- *
- * An utterance the last step already repeats verbatim is dropped rather than shown twice; with
- * nothing preserved this is the identity function, so every other turn keeps the last-utterance
- * rule exactly.
- */
-function composeWithAnswerUtterances(answerUtterances: string[], last: string): string {
-  const prior = answerUtterances.filter((u) => u.trim() && !last.includes(u));
-  if (prior.length === 0) return last;
-  return last.trim() ? `${prior.join("\n\n")}\n\n${last}` : prior.join("\n\n");
-}
-
-/**
  * A basic, bounded ReAct agent loop over LangChain primitives:
  *   model/stream (token streaming) -> tool calls -> tool execution -> repeat.
  * Emits `text`, `tool_start` and `tool_end` events as it runs, then a final `usage` event.
@@ -643,23 +621,29 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
   const toolByName = new Map<string, StructuredToolInterface>(input.tools.map((t) => [t.name, t]));
   const toolCalls: ToolCall[] = [];
+  /**
+   * The message's content: **everything the model said this turn, in step order**.
+   *
+   * Built by the delta loop below and never replaced — so it is the concatenation of the `text`
+   * deltas the client received, which is what makes a reload show what the reader watched. That
+   * identity is the whole rule, and it is why nothing here trims: a turn is several utterances
+   * separated by `STEP_SEPARATOR`, and the ones before the tool call are as much part of the
+   * reply as the last one. It used to be replaced by the last utterance at every ending, which
+   * deleted text the reader had already read — a chapter's lecture, when the model explained it
+   * and then called a bookkeeping tool.
+   *
+   * One ending adds rather than assigns — the budget one appends `OUT_OF_STEPS` — and nothing
+   * else touches it. A stopped turn therefore keeps exactly what streamed.
+   */
   let finalContent = "";
   /**
-   * The model's most recent utterance — the text of the last step that said anything.
+   * Whether a *finished* step has put non-blank text into `finalContent`.
    *
-   * `finalContent` is an *accumulation*: every step's text is appended to it as it streams.
-   * A turn that ends on a plain answer never keeps that pile, because the branch below
-   * replaces it with the final step's text. A turn that ends on a tool call does not reach
-   * that branch, so without this it would persist every step's narration run together with
-   * no separator — which is what `ask_user` made reachable, being the first way a turn can
-   * legitimately end by asking rather than answering.
+   * This is what decides a step break, so it is set at the end of a step rather than as text
+   * streams: the break belongs between two steps that both spoke, and keying it on the live
+   * step would open a blank paragraph in front of the first one.
    */
-  let lastUtterance = "";
-  /**
-   * Text streamed beside `ila_review_quiz` calls, in step order. Unlike ordinary tool
-   * narration it survives the last-utterance replacement — see `composeWithAnswerUtterances`.
-   */
-  const answerUtterances: string[] = [];
+  let sawText = false;
   /** Set when a step asked the user something; the turn ends once the step finishes. */
   let awaiting = false;
   /**
@@ -688,6 +672,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     for (let step = 0; step < maxSteps; step++) {
       const chunks: AIMessageChunk[] = [];
       let stepText = "";
+      /** Has *this* step emitted text? Per step, unlike `sawText` below. */
+      let stepSaid = false;
       const stream = await modelWithTools.stream(messages, { signal: input.signal });
 
       for await (const chunk of stream) {
@@ -701,9 +687,17 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
         const text = chunkText(chunk);
         if (text) {
+          // The step break rides the text channel, folded into this delta rather than emitted
+          // as an event of its own: the client's buffer is then the same string this builds,
+          // and the event sequence is unchanged. It is decided from `sawText` — steps that
+          // have *finished* saying something — so a step that says nothing never opens a blank
+          // paragraph; and it is applied in the same iteration as the text, which is what
+          // keeps an abort mid-step from leaving the two out of step.
+          const brk = !stepSaid && sawText ? STEP_SEPARATOR : "";
+          stepSaid = true;
           stepText += text;
-          finalContent += text;
-          input.onEvent({ type: "text", delta: text });
+          finalContent += brk + text;
+          input.onEvent({ type: "text", delta: brk + text });
         }
       }
 
@@ -734,27 +728,13 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         contextTokens = (stepUsage.inputTokens ?? 0) + (stepUsage.outputTokens ?? 0);
       }
 
-      if (stepText) lastUtterance = stepText;
+      if (stepText.trim()) sawText = true;
 
       const calls = aiMessage.tool_calls ?? [];
 
-      // Text streamed alongside a call whose artifact *is* that text is answer content, not
-      // narration: keep it even when a later step only moves the plan or asks what is next.
-      // See `ANSWER_BEARING_TOOLS`.
-      if (
-        calls.some((c) => ANSWER_BEARING_TOOLS.has(c.name)) &&
-        stepText.trim() &&
-        !answerUtterances.includes(stepText)
-      ) {
-        answerUtterances.push(stepText);
-      }
-
       if (calls.length === 0) {
-        // No tool calls: the model's final answer is this message's content.
-        finalContent = composeWithAnswerUtterances(
-          answerUtterances,
-          chunkText(aiMessage) || lastUtterance
-        );
+        // No tool calls: this step's text is the end of the answer, and the answer is the whole
+        // message — nothing to replace, nothing to compose. `finalContent` already holds it.
         ended = true;
         break;
       }
@@ -860,14 +840,10 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       }
 
       if (suspendedHere) {
-        // The same rule the final answer gets: the message holds the model's most recent
-        // words, not every step's. A question is introduced by the sentence just before it,
-        // and the narration from earlier steps — which the live stream already showed — is
-        // not part of it. Falling back to the utterance rather than to the accumulation is
-        // what keeps a silent suspending step from re-joining everything after all. A
-        // verdict walkthrough from an earlier grading call is answer content, so it survives.
-        finalContent =
-          composeWithAnswerUtterances(answerUtterances, lastUtterance) || finalContent;
+        // Asking is the other way a turn can end, and it ends on the same content rule: what
+        // the model said is what the message holds, the introducing sentence included. It used
+        // to keep only the last utterance — so a question that came after a lecture left the
+        // lecture behind, which is the bug this rule replaced.
         ended = true;
         break;
       }
@@ -880,19 +856,22 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     stopped = true;
   }
 
-  // The budget ran out with the model still working. Its last utterance is kept — it is the
-  // most recent thing it said — and the truncation is stated after it, because a turn that
-  // stops mid-work and reads as a finished answer is worse than one that admits it. The
-  // sentence is always present, not only when the model said nothing: that used to be the
-  // rule, and it meant every truncated turn that had narrated anything looked complete.
+  // The budget ran out with the model still working. Everything it said is kept, and the
+  // truncation is stated after it, because a turn that stops mid-work and reads as a finished
+  // answer is worse than one that admits it. The sentence is always present, not only when the
+  // model said nothing: that used to be the rule, and it meant every truncated turn that had
+  // narrated anything looked complete. The test is `trim()` rather than truthiness, or an
+  // accumulation of whitespace would be given a paragraph of its own.
+  //
+  // This is the one ending that *adds* to the content instead of deciding it, and the only
+  // reason it may assign at all: it appends to what is already there.
   //
   // A stopped turn never gets the note: an empty reply there is legitimate, because the
   // user asked for the turn to end there.
   if (!ended && !stopped) {
-    const kept = lastUtterance
-      ? composeWithAnswerUtterances(answerUtterances, lastUtterance)
-      : "";
-    finalContent = kept ? `${kept}\n\n${OUT_OF_STEPS}` : OUT_OF_STEPS;
+    finalContent = finalContent.trim()
+      ? `${finalContent}\n\n${OUT_OF_STEPS}`
+      : OUT_OF_STEPS;
   }
 
   // Empty (rather than all-zeros) when the provider reported nothing, so callers can tell
