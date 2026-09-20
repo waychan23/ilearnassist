@@ -205,12 +205,9 @@ has all seven widgets above enabled, and it works like this:
 6. At the end it summarises, listing both the material covered and what you should revisit.
 
 It teaches at a depth-first, practical, best-practice level rather than as an introduction.
-**The language is yours to choose**: write in Chinese and it teaches in Chinese, write in English
-and it teaches in English, and it follows you if you switch mid-conversation — plan, TODO list,
-questions and summary included.
 
-When a technical term's original wording is in another language, it gives that original in
-brackets the first time, so a translation cannot leave you guessing.
+When a technical term is one the Chinese translation makes harder to follow, it gives the English
+original in brackets the first time.
 
 It belongs to the administrator account that created it, but it is **visible to and usable by
 every account**. To teach your own way, open **Assistants** and **copy** it before editing:

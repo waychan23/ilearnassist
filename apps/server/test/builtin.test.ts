@@ -107,12 +107,13 @@ describe("builtin.json", () => {
 
   it("names only tools that exist", () => {
     /*
-     * The prompt names the tools it expects — `ila_quiz` for the check questions, `ila_read_plan`
-     * to read the plan back, `ask_user` to put a choice to the learner. A prompt that names a
-     * tool this build does not have is worse than one that names none: the model tries to call
-     * it, the call fails, and the failure reads as the app being broken rather than the prompt
-     * carrying a stale name. The check is on the identifier shape, so prose about teaching is not
-     * scanned, and it is against `ALL_TOOL_NAMES` — the same list the wire schema test uses.
+     * The prompt names the tools it expects — today that is `ask_user` alone, to put a choice to
+     * the learner, because the rules about the plan and the check questions are written as prose
+     * the model satisfies with whatever is available. A prompt that names a tool this build does
+     * not have is worse than one that names none: the model tries to call it, the call fails, and
+     * the failure reads as the app being broken rather than the prompt carrying a stale name. The
+     * check is on the identifier shape, so prose about teaching is not scanned, and it is against
+     * `ALL_TOOL_NAMES` — the same list the wire schema test uses.
      */
     for (const entry of entries) {
       const named = entry.systemPrompt.match(/\b(?:ila_[a-z_]+|ask_user|web_search|web_fetch)\b/g) ?? [];

@@ -164,32 +164,25 @@ because the row belongs to the administrator and the read predicate is
 `user_id = ? OR visibility = 'public'`. A private built-in would be invisible to every other
 account on the installation.
 
-**There is one prompt, not one per language, and the language rule inside it is what makes that
-work.** The obvious alternative — a Chinese entry and an English one — was rejected, and the
-reasoning is worth keeping because it applies to any future built-in:
+**There is one prompt, and it is its author's own writing.** It is Chinese, it carries no language
+rule, and it names exactly one tool (`ask_user`) — the plan, the check questions and the TODO list
+are prose the model satisfies with whatever the turn has, which is why `allTools` is `true` and the
+entry installs all seven study widgets: the capabilities are there, the rules simply do not point
+at them by name.
 
-- **Sixteen of the seventeen numbered rules are about pedagogy turn by turn**: plan first, teach
-  one item, quiz at the end of a topic, wait for the answer, keep the TODO list current. None of
-  them changes with the learner's language, so a second entry would duplicate all of them to vary
-  one. Two copies of a *teaching method* is the pair that drifts, and the one that drifts is the
-  one somebody is relying on to be taught consistently.
-- **The mechanism is already the whole app's.** Every prompt in `prompts.json` is English — the
-  default persona, `chat.guidance.*`, the titler, the classifier — and this app is used in Chinese
-  daily. Nothing on the wire carries a locale, and the server has never known the UI language.
-  Models mirroring the learner is what the product already depends on.
-- **The one rule that *was* language-bound needed rewriting rather than translating.** It said to
-  put the English term in brackets after Chinese jargon — an instruction whose *substance* is
-  "explain English terms to a Chinese reader", which is not what an English learner wants. It is
-  now about a term's **original** language: honest for both audiences, and it simply never fires
-  for somebody reading in the language the material was written in.
-- **The language rule is not decoration.** An instruction-dense prompt in one language biases the
-  *output* language, and the assistant generates structure as well as prose — the TODO list, the
-  questions, the options, the summary. Those follow the prompt's language far more readily than
-  the teaching does, so the rule names them explicitly.
-- **The name and description are bilingual** (`引导学习 · Guided Learning`), because they are the
-  one part of the row a reader sees before choosing it and the picker shows them in both
-  languages. They are *not* translated client-side by id the way `widgetLabel` translates widgets:
-  an assistant can be renamed by its owner, so a client-side override would hide their rename.
+**Do not "improve" it as a side effect of another change.** It was rewritten once — a language rule
+added at the top, the check questions pointed at `ila_quiz`, the TODO list pointed at
+`ila_make_plan` / `ila_read_plan`, the compaction rule replaced, the thinking/output meta-rule
+trimmed to its instruction, rules 11 and 14 merged, two typos fixed. Each edit was defensible on
+its own and together they taught noticeably worse than the text they replaced, which is why the
+file holds the original again. A change to this prompt is a product change to *how the tutor
+teaches*, so it belongs in its own commit with a reason — not in a pass over wording.
+
+**The name and description are bilingual** (`引导学习 · Guided Learning`), because they are the one
+part of the row a reader sees before choosing it and the picker shows them in both languages. They
+are *not* translated client-side by id the way `widgetLabel` translates widgets: an assistant can
+be renamed by its owner, so a client-side override would hide their rename. That the prompt itself
+is Chinese-only is a deliberate asymmetry, not an oversight — see the reversion above.
 
 The shape to reach for if a future built-in genuinely needs two languages is a `locale` field on
 the entry with the seeder writing one public row per locale — and the cost to weigh is that every
@@ -206,8 +199,10 @@ Three consequences worth knowing before editing it:
   rather than "is the table empty" precisely so that purging the rows does not resurrect one
   somebody removed. `apps/server/test/builtin.test.ts` holds both halves up.
 - **Its prompt is long, and it is a person's own writing.** It is stored as a JSON string with `\n`
-  escapes, the way this repository's other catalog does it; a reformat that "tidies" it would change
-  how the tutor teaches, which is why a test compares it byte for byte.
+  escapes, the way this repository's other catalog does it. **Nothing pins the text itself** —
+  `test/builtin.test.ts` compares the *seeded row* to the file, so a reformat or a rewording of the
+  file passes and reaches the next fresh install. The paragraph above is the only thing standing
+  between this prompt and a well-meaning pass over it.
 
 > **Do not verify this by grepping the built server.** `scripts/build.mjs` leaves esbuild's default
 > `charset: "ascii"`, so a packaged `dist/server/index.mjs` contains `深入…` where the source
