@@ -182,6 +182,18 @@ function buildWeb() {
   execFileSync("pnpm", ["--filter", "@ilearnassist/web", "build"], {
     cwd: repoRoot,
     stdio: "inherit",
+    /*
+     * Windows cannot launch `pnpm` without a shell. There it is a `.cmd` shim, and Node's
+     * `execFile` deliberately refuses to run a `.cmd`/`.bat` — the shim needs cmd.exe, which
+     * only a shell provides — so this call fails with ENOENT. On macOS and Linux `pnpm` is a
+     * real executable and the same call is fine, which is why `node scripts/build.mjs`
+     * succeeded on two of the three release runners and failed on the third.
+     *
+     * `shell` is set for Windows alone rather than everywhere: it is the platform that needs
+     * it, and passing every path through a shell on the others would only add quoting to get
+     * wrong.
+     */
+    shell: process.platform === "win32",
   });
   const webDist = join(repoRoot, "apps/web/dist");
   if (!existsSync(join(webDist, "index.html"))) {

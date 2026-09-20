@@ -8,6 +8,19 @@
 appId: com.ilearnassist.desktop
 productName: ilearnassist
 
+# Spelled out because the default is the package *name*, and this package is scoped:
+# `@ilearnassist/desktop` sanitises to `@ilearnassistdesktop`, whose `@` AppImage refuses
+# outright —
+#
+#   failed to build AppImage  error=executableName contains characters that cannot be safely
+#   used in file paths: @ilearnassistdesktop. Please use only letters, digits, hyphens,
+#   underscores, dots, and spaces.
+#
+# — so a Linux package could not be built at all. Top level rather than under `linux:`
+# because the same default feeds the Windows executable name, and `productName` is not a
+# substitute for it. The macOS `.app` takes its name from `productName` and ignores this.
+executableName: ilearnassist
+
 directories:
   # Not the conventional `build/`: that name is ignored by the repo-wide `.gitignore`, and
   # this directory holds the committed icon, not build output.
