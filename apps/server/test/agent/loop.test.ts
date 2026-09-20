@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import {
+  DIAGRAM_TOOL_NAME,
   PLAN_PROGRESS_TOOL_NAME,
   QUIZ_REVIEW_TOOL_NAME,
   TABLE_TOOL_NAME,
@@ -149,6 +150,20 @@ async function run(options: RunOptions) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Everything the client received on the text channel, joined — the live view, exactly as the
+ * browser's `streaming.content` accumulates it (`stores/app.ts`'s `text` arm).
+ *
+ * The loop's content invariant is stated against this function, so it is the one transcription
+ * of the client's rule and every ending is checked with the same one.
+ */
+function streamedOf(events: readonly ChatStreamEvent[]): string {
+  return events
+    .filter((e) => e.type === "text")
+    .map((e) => (e as { delta: string }).delta)
+    .join("");
 }
 
 function message(overrides: Partial<Message> & Pick<Message, "role" | "content">): Message {
@@ -389,12 +404,6 @@ describe("runAgentStream — tool calling", () => {
 });
 
 describe("runAgentStream — step breaks", () => {
-  const streamedOf = (events: readonly ChatStreamEvent[]): string =>
-    events
-      .filter((e) => e.type === "text")
-      .map((e) => (e as { delta: string }).delta)
-      .join("");
-
   it("separates two speaking steps with a paragraph break", async () => {
     const { events } = await run({
       turns: [
@@ -651,6 +660,9 @@ describe("runAgentStream — stopped mid-turn", () => {
     expect(result.stopped).toBe(true);
     expect(result.content).toBe("half an answer");
     expect(events.some((e) => e.type === "text")).toBe(true);
+    // The partial reply is what streamed — the ending that never trimmed, and the shape the
+    // others now follow.
+    expect(result.content).toBe(streamedOf(events));
     // The abort reached the provider rather than merely leaving it generating. Polled: the
     // fake server learns of the hang-up from its own socket event, a moment after the loop
     // has already unwound.
@@ -741,13 +753,21 @@ describe("runAgentStream — stopped mid-turn", () => {
   });
 });
 
-describe("runAgentStream — known inconsistencies (pinned)", () => {
+describe("runAgentStream — the message is what streamed", () => {
   /*
-   * Documents behaviour we are deliberately NOT changing here. If either of these
-   * starts failing, the semantics changed and the UI/UX consequences need a decision.
+   * The invariant every ending owes the reader: `result.content` is the concatenation of the
+   * `text` deltas the client received, so a reload shows exactly what was watched. It is stated
+   * against `streamedOf`, the client's own accumulation rule.
+   *
+   * What it replaced: the message used to be *replaced* at the end of every turn by the model's
+   * last utterance, which deleted text the reader had already read — a chapter's lecture, when
+   * the model explained it and then called a bookkeeping tool, and a table or a quiz walkthrough
+   * written in a step a later closing question followed. Each ending decided the content for
+   * itself and each got it wrong in its own way, which is why every one of them is checked here
+   * rather than the rule being asserted once.
    */
 
-  it("streams tool-step narration but persists only the final answer", async () => {
+  it("persists the narration a tool step streamed, not only the final answer", async () => {
     const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
     const { events, result } = await run({
       tools: [files.writeFile],
@@ -757,26 +777,84 @@ describe("runAgentStream — known inconsistencies (pinned)", () => {
       ],
     });
 
-    const streamed = events
-      .filter((e) => e.type === "text")
-      .map((e) => (e as { delta: string }).delta)
-      .join("");
+    // Two steps, so two paragraphs: not "I will write that file now.All done.".
+    expect(streamedOf(events)).toBe("I will write that file now.\n\nAll done.");
+    expect(result.content).toBe(streamedOf(events));
+  });
 
-    // The live stream shows the narration plus the answer, and the two steps are separated by
-    // a paragraph break rather than run together as one sentence.
-    expect(streamed).toBe("I will write that file now.\n\nAll done.");
-    // ...but only the final step's text is persisted, so a reload loses the narration.
-    expect(result.content).toBe("All done.");
+  it("persists a lecture a later bookkeeping call followed", async () => {
+    /*
+     * The reported shape, at loop level: the model explains a chapter, then records progress and
+     * draws a diagram, then asks a question and suspends. The lecture *is* the turn — it used to
+     * be dropped in favour of the asking step's one-line introduction, so the reader watched a
+     * lesson stream and then watched it vanish at `message_done`.
+     *
+     * Stand-ins that speak the names the bug was observed with; the loop keys on the call, so
+     * what they return is immaterial.
+     */
+    const progress = (): StructuredToolInterface =>
+      tool(async () => "ok", {
+        name: PLAN_PROGRESS_TOOL_NAME,
+        description: "record plan progress",
+        schema: z.object({ nodes: z.array(z.unknown()).optional() }),
+      });
+    const diagram = (): StructuredToolInterface =>
+      tool(async () => "ok", {
+        name: DIAGRAM_TOOL_NAME,
+        description: "draw a diagram",
+        schema: z.object({ name: z.string(), source: z.string(), summary: z.string() }),
+      });
+
+    const lecture = "# 1.1 背景与动机\n\nLangGraph 把 Agent 的流程建模成一张图……".repeat(3);
+    const closer = "讲完了第一项的背景与动机。在进入第 2 项之前，用两道题检验一下你是否抓住了核心：";
+    const { events, result } = await run({
+      tools: [progress(), diagram(), buildAskUserTool()],
+      turns: [
+        { content: lecture, toolCalls: [{ name: PLAN_PROGRESS_TOOL_NAME, args: { nodes: [] } }] },
+        {
+          content: "这一章的循环结构可以画成这样。",
+          toolCalls: [
+            {
+              name: DIAGRAM_TOOL_NAME,
+              args: { name: "loop", source: "flowchart TD\n A-->B", summary: "循环结构" },
+            },
+          ],
+        },
+        {
+          content: closer,
+          toolCalls: [
+            {
+              name: "ask_user",
+              args: {
+                questions: [
+                  { header: "核心", question: "最本质的突破是什么？", options: [{ label: "A" }, { label: "B" }] },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.awaiting).toBe(true);
+    expect(result.content.startsWith(lecture)).toBe(true);
+    expect(result.content).toContain("这一章的循环结构可以画成这样。");
+    expect(result.content.endsWith(closer)).toBe(true);
+    expect(result.content).toBe(streamedOf(events));
   });
 });
 
 describe("runAgentStream — quiz grading rundown survives later steps", () => {
   /*
-   * The general rule above (persist only the last step's utterance) has one exception:
-   * text streamed beside `ila_review_quiz` is the per-question verdict walkthrough — the
-   * turn's actual answer — whereas a following step that only moves the plan and asks
-   * whether to continue used to replace it, so the verdicts shown live vanished at
-   * `message_done`. These stand-ins speak the tool names the loop keys on; no database.
+   * The first shape that made the old rule's cost visible: text streamed beside
+   * `ila_review_quiz` is the per-question verdict walkthrough — the turn's actual answer —
+   * and a following step that only moves the plan and asks whether to continue used to
+   * replace it, so the verdicts shown live vanished at `message_done`.
+   *
+   * That was once an exception carved into the rule (an allowlist of tools whose text counted
+   * as an answer). There is no exception now: the message is what streamed, so the verdicts are
+   * kept because they were said, not because of which tool was beside them. These stand-ins
+   * speak the tool names the shape was observed with; no database.
    */
   const RUNDOWN = "Q1：回答正确。滑动窗口按步长触发。\nQ2：也答对了，RocksDB 是状态后端。";
 
@@ -819,8 +897,14 @@ describe("runAgentStream — quiz grading rundown survives later steps", () => {
     expect(result.content).toBe(`${RUNDOWN}\n\n本章进度已更新，要进入下一章节吗？`);
   });
 
-  it("does not duplicate a walkthrough the final step repeats verbatim", async () => {
-    const { result } = await run({
+  it("keeps a rundown the final step repeated verbatim, as it streamed", async () => {
+    /*
+     * A model that re-answers with the whole rundown streams it twice, so the message holds it
+     * twice. The composer this replaced suppressed the repeat, and the price of that was a
+     * message shorter than what the reader watched — the trade this whole change is about. A
+     * message is never *less* than what streamed; a repeat is therefore kept rather than tidied.
+     */
+    const { events, result } = await run({
       tools: [gradingTool()],
       turns: [
         {
@@ -832,8 +916,9 @@ describe("runAgentStream — quiz grading rundown survives later steps", () => {
       ],
     });
 
-    expect(result.content).toBe(`${RUNDOWN}\n\n继续吗？`);
-    expect(result.content.split("滑动窗口按步长触发")).toHaveLength(2);
+    expect(result.content).toBe(`${RUNDOWN}\n\n${RUNDOWN}\n\n继续吗？`);
+    expect(result.content.split("滑动窗口按步长触发")).toHaveLength(3);
+    expect(result.content).toBe(streamedOf(events));
   });
 
   it("joins an earlier walkthrough with the preamble of a step that suspends", async () => {
@@ -886,13 +971,14 @@ describe("runAgentStream — quiz grading rundown survives later steps", () => {
 
 describe("runAgentStream — a recorded table survives later steps", () => {
   /*
-   * The same exception as the grading rundown above, for the other tool that has it, and this
-   * one is the whole feature rather than a nicety: `ila_table` renders **nothing**. Its contract
-   * is that the table is written into the reply as ordinary Markdown, so the prose beside the
-   * call is the artifact — and the shape a real model produces is the table in the step that
-   * records it, followed by a closing question. Under the last-utterance rule the table streamed
-   * live and then vanished at `message_done`, so the panel listed a table the conversation no
-   * longer showed. See `ANSWER_BEARING_TOOLS`.
+   * The other shape the old rule broke, and the one where it was the whole feature rather than a
+   * nicety: `ila_table` renders **nothing**. Its contract is that the table is written into the
+   * reply as ordinary Markdown, so the prose beside the call is the artifact — and the shape a
+   * real model produces is the table in the step that records it, followed by a closing question.
+   * Under the last-utterance rule the table streamed live and then vanished at `message_done`, so
+   * the panel listed a table the conversation no longer showed.
+   *
+   * Kept for the same reason as the rundown above: it was said, so the message holds it.
    */
   const TABLE = "| 项目 | 数值 |\n| --- | --- |\n| 速度 | 3 |";
 
@@ -918,10 +1004,10 @@ describe("runAgentStream — a recorded table survives later steps", () => {
     expect(result.content).toBe(`好的，对比表如下：\n\n${TABLE}\n\n已记录，需要展开哪一项？`);
   });
 
-  it("does not duplicate a table the final step repeats verbatim", async () => {
-    // The other half of the rule: a model that re-writes the table in its final answer must not
-    // produce it twice.
-    const { result } = await run({
+  it("keeps a table the final step repeated verbatim, as it streamed", async () => {
+    // The other half of the rule, for the same reason: the table was written out twice on the
+    // wire, so the message holds it twice rather than dropping a copy the reader watched arrive.
+    const { events, result } = await run({
       tools: [tableTool()],
       turns: [
         {
@@ -932,15 +1018,17 @@ describe("runAgentStream — a recorded table survives later steps", () => {
       ],
     });
 
-    expect(result.content).toBe(`${TABLE}\n\n需要展开哪一项？`);
-    expect(result.content.split("| 速度 | 3 |")).toHaveLength(2);
+    expect(result.content).toBe(`${TABLE}\n\n${TABLE}\n\n需要展开哪一项？`);
+    expect(result.content.split("| 速度 | 3 |")).toHaveLength(3);
+    expect(result.content).toBe(streamedOf(events));
   });
 
-  it("still drops narration beside an ordinary tool call", async () => {
-    // The general rule is untouched, and the control is a call that is *not* answer-bearing: a
-    // write's preamble is still narration, which is what keeps a message to one utterance.
+  it("keeps the preamble beside an ordinary tool call", async () => {
+    // The control for the two tests above, and the case the old rule was written for: the
+    // preamble is ordinary narration, not an artifact — and it is kept anyway, because the
+    // reader watched it arrive. "写好了。" used to be the whole message.
     const files = fileToolsFor(join(scratch, "ws2"), { defaultLocation: "workspace" }).tools;
-    const { result } = await run({
+    const { events, result } = await run({
       tools: [files.writeFile, tableTool()],
       turns: [
         { content: "我先把这份说明写进文件。", toolCalls: [{ name: "write_file", args: { path: "n.md", content: "x" } }] },
@@ -948,7 +1036,8 @@ describe("runAgentStream — a recorded table survives later steps", () => {
       ],
     });
 
-    expect(result.content).toBe("写好了。");
+    expect(result.content).toBe("我先把这份说明写进文件。\n\n写好了。");
+    expect(result.content).toBe(streamedOf(events));
   });
 });
 
@@ -1298,35 +1387,24 @@ describe("what a suspended turn persists", () => {
     },
   ];
 
-  it("holds the last step's text, not every step's narration run together", async () => {
-    // The bug this pins: a turn that ends on a tool call never reaches the branch that
-    // *replaces* the accumulated text, so both steps were saved concatenated with no
-    // separator — "Let me look at the workspace.我先确认几件事：".
-    const { result } = await run({ tools: [buildAskUserTool()], turns: narrateThenAsk() });
+  it("holds every step's text, one paragraph each", async () => {
+    /*
+     * What a turn ending on a question persists. It used to hold only the last step's words,
+     * on the argument that "a question is introduced by the sentence just before it" — which
+     * is true, and which is how a lecture the model had just delivered in an earlier step got
+     * deleted. Both are kept, and the step break between them is a paragraph.
+     */
+    const { events, result } = await run({ tools: [buildAskUserTool()], turns: narrateThenAsk() });
 
     expect(result.awaiting).toBe(true);
-    expect(result.content).toBe("我先确认几件事：");
+    expect(result.content).toBe("Let me look at the workspace.\n\n我先确认几件事：");
+    expect(result.content).toBe(streamedOf(events));
   });
 
-  it("still streams the narration, which is the accepted asymmetry", async () => {
-    // The live view shows everything as it arrives; only what is *persisted* is trimmed.
-    // That is the same trade the final-answer path already makes, and changing it would
-    // be a product decision rather than a fix.
-    const { events } = await run({ tools: [buildAskUserTool()], turns: narrateThenAsk() });
-
-    const streamed = events
-      .filter((e) => e.type === "text")
-      .map((e) => (e as { delta: string }).delta)
-      .join("");
-    // Two steps, so two paragraphs: the English narration no longer runs straight into the
-    // Chinese question it introduces.
-    expect(streamed).toBe("Let me look at the workspace.\n\n我先确认几件事：");
-  });
-
-  it("falls back to the previous utterance when the asking step says nothing", async () => {
-    // A silent suspending step must not resurrect the pile either — the most recent words
-    // are still the most recent words.
-    const { result } = await run({
+  it("keeps an earlier step's words when the asking step says nothing", async () => {
+    // A silent suspending step adds no paragraph of its own, and the step before it keeps its
+    // own text — the message is what streamed, whichever step did the talking.
+    const { events, result } = await run({
       tools: [buildAskUserTool()],
       turns: [
         { content: "Let me look at the workspace.", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
@@ -1336,6 +1414,7 @@ describe("what a suspended turn persists", () => {
 
     expect(result.awaiting).toBe(true);
     expect(result.content).toBe("Let me look at the workspace.");
+    expect(result.content).toBe(streamedOf(events));
   });
 
   it("leaves a turn with no narration at all alone", async () => {
@@ -1354,10 +1433,14 @@ describe("running out of steps", () => {
     { toolCalls: [{ id: "c2", name: "no_such_tool", args: {} }] },
   ];
 
-  it("keeps the last utterance and says it was cut short", async () => {
-    // Both halves matter. The last utterance is the most recent thing the model said; the
-    // notice is what stops a turn that stopped mid-work from reading as a finished answer.
-    const { result } = await run({
+  it("keeps everything it said, and says it was cut short", async () => {
+    /*
+     * Both halves matter. Everything the model said is kept — this ending used to drop all but
+     * its last utterance, the same loss the other endings had, which is why the reported bug's
+     * lecture was gone. The notice is what stops a turn that stopped mid-work from reading as a
+     * finished answer, and it is the one thing appended to the content rather than streamed.
+     */
+    const { events, result } = await run({
       turns: [
         { content: "Let me look around.", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
         { content: "我先看看工作区。", toolCalls: [{ id: "c2", name: "no_such_tool", args: {} }] },
@@ -1365,9 +1448,10 @@ describe("running out of steps", () => {
       settings: { maxSteps: 2 },
     });
 
-    // Not the two utterances run together.
+    const streamed = streamedOf(events);
+    expect(streamed).toBe("Let me look around.\n\n我先看看工作区。");
     expect(result.content).toBe(
-      "我先看看工作区。\n\nThe assistant ran out of steps while working on this task. Please ask a follow-up to continue."
+      `${streamed}\n\nThe assistant ran out of steps while working on this task. Please ask a follow-up to continue.`
     );
   });
 
@@ -1380,7 +1464,7 @@ describe("running out of steps", () => {
   });
 
   it("does not add the notice when the model answered", async () => {
-    const { result } = await run({
+    const { events, result } = await run({
       turns: [
         { content: "查一下。", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
         { content: "答案是 42。" },
@@ -1388,11 +1472,12 @@ describe("running out of steps", () => {
       settings: { maxSteps: 2 },
     });
 
-    expect(result.content).toBe("答案是 42。");
+    expect(result.content).toBe("查一下。\n\n答案是 42。");
+    expect(result.content).toBe(streamedOf(events));
   });
 
   it("does not add the notice when the turn suspended on a question", async () => {
-    const { result } = await run({
+    const { events, result } = await run({
       tools: [buildAskUserTool()],
       settings: { maxSteps: 2 },
       turns: [
@@ -1411,7 +1496,8 @@ describe("running out of steps", () => {
     });
 
     expect(result.awaiting).toBe(true);
-    expect(result.content).toBe("需要你定一下：");
+    expect(result.content).toBe("先看一眼。\n\n需要你定一下：");
+    expect(result.content).toBe(streamedOf(events));
     expect(result.content).not.toContain("ran out of steps");
   });
 });
