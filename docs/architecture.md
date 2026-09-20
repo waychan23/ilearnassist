@@ -636,14 +636,16 @@ A suspension is recorded, not answered:
 - The route persists the assistant message and closes the stream normally. Nothing about
   the pending state lives in the process, which is what lets a question be answered after
   a page reload or a server restart.
-- **The message holds the last step's text, not every step's.** `finalContent` accumulates
-  as it streams, and the branch that trims it belongs to the final-answer path — which a
-  turn ending on a tool call never reaches. Left alone, the narration from one step and the
-  sentence introducing the questions from the next were joined with no separator
-  (`"Let me look at the workspace.我先确认几件事："`), so a Chinese question appeared to open
-  with an English fragment. This is not about language: two utterances run together like
-  that read as one broken sentence whatever they say. The live stream still shows both —
-  that asymmetry is the one the final-answer path already makes.
+- **The message holds every step's text, one paragraph each.** A suspension is one ending
+  among several and it decides nothing about the content: `finalContent` is what the deltas
+  built, and this route persists it as it stands. Asking after explaining is the shape that
+  made the old rule expensive — the content used to be trimmed to the last utterance here,
+  which argued that a question is introduced by the sentence just before it. It is, and that
+  is how a chapter's lecture delivered in an earlier step was deleted the moment the model
+  asked a question about it. What the trim was really avoiding was two steps' text joined
+  with no separator (`"Let me look at the workspace.我先确认几件事："`, where a Chinese
+  question appeared to open with an English fragment); the step break answers that for every
+  ending at once, which is why there is no longer a per-ending rule here to get wrong.
 
 The turn resumes on `POST /api/sessions/:id/answers`, which writes the answers onto the
 tool call (`output` for the model, `answer` for the card) and then runs a **fresh agent
@@ -686,13 +688,14 @@ control over the streaming shape:
 2. `chatModel.bindTools(tools)`.
 3. Loop up to `settings.maxSteps` (default **15**). Each step:
    - `modelWithTools.stream(messages)` and emit `text` deltas as they arrive,
-     accumulating `AIMessageChunk`s. **Each step's text is also kept on its own**, because
-     what gets persisted is the model's *most recent utterance* and never the pile of every
-     step run together: the final answer, a suspension and an exhausted budget all read from
-     `lastUtterance`, and each of their fallbacks is that same utterance rather than the
-     accumulation. Any ending that skipped this joined two utterances with no separator
-     (`"Let me look at the workspace.我先确认几件事："`) — see
-     [`ask_user`](#ask_user-and-the-suspended-turn).
+     accumulating `AIMessageChunk`s. The message's text is built *here and only here*:
+     `finalContent` is the concatenation of every delta emitted, so **what is persisted is
+     exactly what the client rendered**. A step boundary is a paragraph break
+     (`STEP_SEPARATOR`), folded into the step's first delta rather than sent as an event of
+     its own, which is what keeps the two strings identical and an abort mid-step safe. Two
+     steps' utterances run together with nothing between them read as one broken sentence
+     (`"Let me look at the workspace.我先确认几件事："`) — the break is the answer to that,
+     and no ending trims — see [`ask_user`](#ask_user-and-the-suspended-turn).
    - Reduce chunks into a full `AIMessage`; read its `tool_calls`.
    - Accumulate `usage_metadata` (input/output/total/cached). The summed figures
      are what was billed; `contextTokens` records the *final* step's input+output
