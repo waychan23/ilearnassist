@@ -42,6 +42,19 @@ const DEFAULT_MAX_STEPS = 15;
 const OUT_OF_STEPS =
   "The assistant ran out of steps while working on this task. Please ask a follow-up to continue.";
 
+/**
+ * What separates one step's text from the next step's in a message.
+ *
+ * A ReAct turn is several utterances — "I will read that file now", then the answer — and a
+ * message carries all of them, because it carries exactly what streamed (see below). Run
+ * together with nothing between them they read as one broken sentence whatever language they
+ * are in, which is the defect this separator answers: `"Let me look at the workspace.我先确认几件事："`
+ * used to be a real persisted message. A paragraph break is what the two utterances actually
+ * are, and it is emitted *on the text channel* — see the delta loop — so the live view and the
+ * stored content stay the same string.
+ */
+const STEP_SEPARATOR = "\n\n";
+
 export interface RunAgentResult {
   content: string;
   /** Chain of thought, when the provider exposed one. Display-only. */
@@ -645,6 +658,14 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
   const toolCalls: ToolCall[] = [];
   let finalContent = "";
   /**
+   * Whether a *finished* step has put non-blank text into `finalContent`.
+   *
+   * This is what decides a step break, so it is set at the end of a step rather than as text
+   * streams: the break belongs between two steps that both spoke, and keying it on the live
+   * step would open a blank paragraph in front of the first one.
+   */
+  let sawText = false;
+  /**
    * The model's most recent utterance — the text of the last step that said anything.
    *
    * `finalContent` is an *accumulation*: every step's text is appended to it as it streams.
@@ -688,6 +709,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     for (let step = 0; step < maxSteps; step++) {
       const chunks: AIMessageChunk[] = [];
       let stepText = "";
+      /** Has *this* step emitted text? Per step, unlike `sawText` below. */
+      let stepSaid = false;
       const stream = await modelWithTools.stream(messages, { signal: input.signal });
 
       for await (const chunk of stream) {
@@ -701,9 +724,17 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
         const text = chunkText(chunk);
         if (text) {
+          // The step break rides the text channel, folded into this delta rather than emitted
+          // as an event of its own: the client's buffer is then the same string this builds,
+          // and the event sequence is unchanged. It is decided from `sawText` — steps that
+          // have *finished* saying something — so a step that says nothing never opens a blank
+          // paragraph; and it is applied in the same iteration as the text, which is what
+          // keeps an abort mid-step from leaving the two out of step.
+          const brk = !stepSaid && sawText ? STEP_SEPARATOR : "";
+          stepSaid = true;
           stepText += text;
-          finalContent += text;
-          input.onEvent({ type: "text", delta: text });
+          finalContent += brk + text;
+          input.onEvent({ type: "text", delta: brk + text });
         }
       }
 
@@ -735,6 +766,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
       }
 
       if (stepText) lastUtterance = stepText;
+      if (stepText.trim()) sawText = true;
 
       const calls = aiMessage.tool_calls ?? [];
 

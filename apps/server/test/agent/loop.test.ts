@@ -388,6 +388,47 @@ describe("runAgentStream — tool calling", () => {
   });
 });
 
+describe("runAgentStream — step breaks", () => {
+  const streamedOf = (events: readonly ChatStreamEvent[]): string =>
+    events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+
+  it("separates two speaking steps with a paragraph break", async () => {
+    const { events } = await run({
+      turns: [
+        { content: "我先读一下这个文件。", toolCalls: [{ name: "no_such_tool", args: {} }] },
+        { content: "读完了，这里是答案。" },
+      ],
+    });
+
+    // Not "我先读一下这个文件。读完了，这里是答案。" — two utterances run together read as one
+    // broken sentence whatever language they are in.
+    expect(streamedOf(events)).toBe("我先读一下这个文件。\n\n读完了，这里是答案。");
+  });
+
+  it("opens no break in front of the first step", async () => {
+    const { events } = await run({ turns: [{ content: "只有一步。" }] });
+
+    expect(streamedOf(events)).toBe("只有一步。");
+  });
+
+  it("adds no break for a step that said nothing", async () => {
+    // The break belongs between steps that both spoke: a bare tool call in the middle must
+    // not leave a blank paragraph behind it.
+    const { events } = await run({
+      turns: [
+        { content: "先查一下。", toolCalls: [{ name: "no_such_tool", args: {} }] },
+        { toolCalls: [{ name: "no_such_tool", args: {} }] },
+        { content: "答案是 42。" },
+      ],
+    });
+
+    expect(streamedOf(events)).toBe("先查一下。\n\n答案是 42。");
+  });
+});
+
 describe("runAgentStream — step budget", () => {
   it("stops at maxSteps and explains itself", async () => {
     const calls = Array.from({ length: 5 }, () => ({
@@ -721,8 +762,9 @@ describe("runAgentStream — known inconsistencies (pinned)", () => {
       .map((e) => (e as { delta: string }).delta)
       .join("");
 
-    // The live stream shows the narration plus the answer...
-    expect(streamed).toBe("I will write that file now.All done.");
+    // The live stream shows the narration plus the answer, and the two steps are separated by
+    // a paragraph break rather than run together as one sentence.
+    expect(streamed).toBe("I will write that file now.\n\nAll done.");
     // ...but only the final step's text is persisted, so a reload loses the narration.
     expect(result.content).toBe("All done.");
   });
@@ -771,8 +813,9 @@ describe("runAgentStream — quiz grading rundown survives later steps", () => {
     });
 
     // What streamed live is what survives: the verdicts no longer vanish when the final
-    // step replaces them.
-    expect(textOf(events)).toBe(`${RUNDOWN}本章进度已更新，要进入下一章节吗？`);
+    // step replaces them. Both halves now read the same string — the walkthrough, a paragraph
+    // break, then the question — which is the point of the break being streamed.
+    expect(textOf(events)).toBe(`${RUNDOWN}\n\n本章进度已更新，要进入下一章节吗？`);
     expect(result.content).toBe(`${RUNDOWN}\n\n本章进度已更新，要进入下一章节吗？`);
   });
 
@@ -1275,7 +1318,9 @@ describe("what a suspended turn persists", () => {
       .filter((e) => e.type === "text")
       .map((e) => (e as { delta: string }).delta)
       .join("");
-    expect(streamed).toBe("Let me look at the workspace.我先确认几件事：");
+    // Two steps, so two paragraphs: the English narration no longer runs straight into the
+    // Chinese question it introduces.
+    expect(streamed).toBe("Let me look at the workspace.\n\n我先确认几件事：");
   });
 
   it("falls back to the previous utterance when the asking step says nothing", async () => {
