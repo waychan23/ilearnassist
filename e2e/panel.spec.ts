@@ -47,6 +47,7 @@ const RUNNING: PanelState = {
     migrated: null,
   },
   sharedOnLan: false,
+  port: 10471,
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
   needsDataDir: false,
@@ -113,6 +114,7 @@ const STOPPED_WITH_ADMIN: PanelState = {
 const NEEDS_DATA_DIR: PanelState = {
   server: { state: "stopped", url: null, fault: null, dataDir: "", logs: [], migrated: null },
   sharedOnLan: false,
+  port: 10471,
   lanUrl: null,
   lanAddress: LAN_ADDRESS,
   needsDataDir: true,
@@ -229,6 +231,12 @@ async function openPanel(
         w["__status"] = next;
         return next;
       },
+      setPort: async (port: number) => {
+        await record(`setPort:${port}`);
+        const next = { ...(w["__status"] as PanelState), port } as PanelState;
+        w["__status"] = next;
+        return next;
+      },
       quit: async () => undefined,
       onStateChange: (listener: (state: PanelState) => void) => {
         w["__push"] = listener;
@@ -261,7 +269,8 @@ const status = (page: Page) => page.locator(".status");
 const qrSheet = (page: Page) => page.locator('[data-role="qr-overlay"]');
 
 test.describe("the control panel", () => {
-  test.use({ viewport: { width: 480, height: 660 } });
+  // Mirrors the real default window (720; the port row added the extra height).
+  test.use({ viewport: { width: 480, height: 720 } });
 
   test("shows a running server with the address it came up on", async ({ page }) => {
     await openPanel(page, RUNNING);
@@ -583,6 +592,66 @@ test.describe("opening the app on a phone", () => {
 
     await expect.poll(() => panel.calls).toContain("shareOnLan:false");
     await expect(qrSheet(page)).toBeHidden();
+  });
+});
+
+/**
+ * The fixed listen port.
+ *
+ * The address the app is reached at must not move, so this is where the panel shows it and
+ * changes it; an invalid typed value is answered in place rather than handed to main, which
+ * would refuse it anyway.
+ */
+test.describe("the fixed server port", () => {
+  test.use({ viewport: { width: 480, height: 660 } });
+
+  const PORT_INPUT = '[data-role="port-input"]';
+
+  test("shows the port from the state", async ({ page }) => {
+    await openPanel(page, RUNNING);
+    await expect(page.locator(PORT_INPUT)).toHaveValue("10471");
+  });
+
+  test("applies a typed valid port, handing the number to main", async ({ page }) => {
+    const panel = await openPanel(page, RUNNING);
+
+    await page.locator(PORT_INPUT).fill("4567");
+    await page.getByRole("button", { name: "应用" }).click();
+
+    await expect.poll(() => panel.calls).toContain("setPort:4567");
+    await expect(page.locator('[data-role="port-hint"]')).toBeHidden();
+  });
+
+  test("applies on Enter as well", async ({ page }) => {
+    const panel = await openPanel(page, RUNNING);
+    await page.locator(PORT_INPUT).fill("4567");
+    await page.locator(PORT_INPUT).press("Enter");
+    await expect.poll(() => panel.calls).toContain("setPort:4567");
+  });
+
+  test("refuses a blank or out-of-range value without calling main", async ({ page }) => {
+    const panel = await openPanel(page, RUNNING);
+
+    for (const bad of ["", "0", "70000", "3.5"]) {
+      await page.locator(PORT_INPUT).fill(bad);
+      await page.getByRole("button", { name: "应用" }).click();
+      await expect(page.locator('[data-role="port-hint"]')).toBeVisible();
+    }
+
+    expect(panel.calls.some((c) => c.startsWith("setPort"))).toBe(false);
+  });
+
+  test("renders the port-in-use fault naming the port", async ({ page }) => {
+    await openPanel(page, {
+      ...RUNNING,
+      server: {
+        ...RUNNING.server,
+        state: "failed",
+        url: null,
+        fault: { code: "port_in_use", port: 10471 },
+      },
+    });
+    await expect(page.locator('[data-role="detail"]')).toContainText("10471");
   });
 });
 

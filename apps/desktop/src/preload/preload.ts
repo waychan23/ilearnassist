@@ -27,6 +27,8 @@ const api: PanelApi = {
   // boundary, and `contextIsolation` is worth nothing if what crosses it is taken at face
   // value.
   shareOnLan: (on) => ipcRenderer.invoke(PANEL_CHANNELS.shareOnLan, on) as Promise<PanelState>,
+  // Validated on the other side like the LAN switch: main decides whether the port is usable.
+  setPort: (port) => ipcRenderer.invoke(PANEL_CHANNELS.setPort, port) as Promise<PanelState>,
   // No argument: the folder is chosen in a native dialog the page cannot see or steer, so
   // there is no path for page script to propose and nothing to validate.
   chooseDataDir: () => ipcRenderer.invoke(PANEL_CHANNELS.chooseDataDir) as Promise<PanelState>,

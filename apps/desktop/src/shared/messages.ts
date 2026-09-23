@@ -241,6 +241,15 @@ export interface PanelMessages {
   "language.zh-CN": string;
   "language.en": string;
   "label.dataDir": string;
+  /**
+   * The fixed listen port, and the control that applies it.
+   *
+   * `port.invalid` is the inline answer to a value outside 1–65535 (or not an integer): a
+   * sentence rather than a silent ignore.
+   */
+  "label.port": string;
+  "port.apply": string;
+  "port.invalid": string;
   "label.lanAccess": string;
   "label.logs": string;
   "label.logsEmpty": string;
@@ -257,6 +266,7 @@ export interface PanelMessages {
   "tray.openPanel": string;
   "tray.stopAndQuit": string;
   "fault.spawn_failed": string;
+  "fault.portInUse": string;
   "fault.exited": string;
   "fault.exitedWithSignal": string;
   "fault.exitedUnknown": string;
@@ -361,6 +371,9 @@ const zhCN: PanelMessages = {
   "language.zh-CN": "简体中文",
   "language.en": "English",
   "label.dataDir": "数据目录",
+  "label.port": "服务端口",
+  "port.apply": "应用",
+  "port.invalid": "请输入 1–65535 之间的整数端口。",
   "label.lanAccess": "手机 / 平板访问",
   "label.logs": "运行日志",
   "label.logsEmpty": "暂无输出",
@@ -377,6 +390,7 @@ const zhCN: PanelMessages = {
   "tray.openPanel": "打开控制面板",
   "tray.stopAndQuit": "停止服务器并退出",
   "fault.spawn_failed": "无法启动服务进程：{message}",
+  "fault.portInUse": "端口 {port} 已被占用，可能应用已在运行或其他程序正在使用。请关闭占用程序，或更换端口。",
   "fault.exited": "服务意外退出（退出码 {exitCode}）。",
   "fault.exitedWithSignal": "服务被信号 {signal} 终止。",
   "fault.exitedUnknown": "服务意外退出，原因未知。",
@@ -481,6 +495,9 @@ const en: PanelMessages = {
   "language.zh-CN": "简体中文",
   "language.en": "English",
   "label.dataDir": "Data folder",
+  "label.port": "Server port",
+  "port.apply": "Apply",
+  "port.invalid": "Enter an integer port between 1 and 65535.",
   "label.lanAccess": "Phone or tablet",
   "label.logs": "Server output",
   "label.logsEmpty": "Nothing yet",
@@ -497,6 +514,7 @@ const en: PanelMessages = {
   "tray.openPanel": "Open control panel",
   "tray.stopAndQuit": "Stop server and quit",
   "fault.spawn_failed": "Could not start the server process: {message}",
+  "fault.portInUse": "Port {port} is already in use — the app may already be running, or another program holds it. Free the port or choose a different one.",
   "fault.exited": "The server exited unexpectedly (exit code {exitCode}).",
   "fault.exitedWithSignal": "The server was terminated by signal {signal}.",
   "fault.exitedUnknown": "The server exited unexpectedly for an unknown reason.",
@@ -541,6 +559,8 @@ export function describeFault(messages: PanelMessages, fault: ServerFault): stri
       return translate(messages, "fault.spawn_failed", { message: fault.message });
     case "timeout":
       return translate(messages, "fault.timeout", { seconds: fault.seconds });
+    case "port_in_use":
+      return translate(messages, "fault.portInUse", { port: fault.port });
     case "exited":
       if (fault.signal) return translate(messages, "fault.exitedWithSignal", { signal: fault.signal });
       if (fault.exitCode === null) return translate(messages, "fault.exitedUnknown");

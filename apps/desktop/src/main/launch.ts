@@ -70,10 +70,49 @@ export function parseMigratedLine(line: string): MigrationReport | null {
   return { from: Number(match[1]), to: Number(match[2]), backup };
 }
 
+/**
+ * The line the server prints when its fixed port is already held.
+ *
+ * The third stdout line the panel reads, for the same reason as the other two: the server is
+ * the side that knows the bind failed and which port it was, and a printed line is how it
+ * says so without a new IPC channel.
+ */
+const PORT_BUSY_LINE = /^\[ilearnassist\] port in use: (\d+)$/;
+
+/** Read a failed port bind out of a server log line, or null for any other line. */
+export function parsePortBusyLine(line: string): number | null {
+  const match = PORT_BUSY_LINE.exec(line.trim());
+  if (!match) return null;
+  const port = Number(match[1]);
+  return Number.isInteger(port) ? port : null;
+}
+
 /** Loopback: reachable only from this machine. The default, and the safe one. */
 export const LOOPBACK_HOST = "127.0.0.1";
 /** Every interface: reachable from anything on the same network. */
 export const ANY_INTERFACE_HOST = "0.0.0.0";
+
+/**
+ * The port a launch uses unless the user chose one.
+ *
+ * Fixed deliberately, matching `config/config.yaml`'s default: the address the app is
+ * reached at must not move between launches, or the browser's bookmarks and saved passwords
+ * stop working.
+ */
+export const DEFAULT_PORT = 10471;
+/** The smallest and largest port the panel accepts. */
+export const MIN_PORT = 1;
+export const MAX_PORT = 65535;
+
+/** Whether a value off disk, over IPC, or out of an input is a usable listen port. */
+export function isUserPort(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= MIN_PORT &&
+    value <= MAX_PORT
+  );
+}
 
 export interface BuildLaunchSpecInput {
   /** `process.execPath` — the Electron binary, run as Node. */
@@ -92,6 +131,14 @@ export interface BuildLaunchSpecInput {
    * and the file it was seeded from describes everything else.
    */
   host: string;
+  /**
+   * The listen port, always set from the panel's own setting.
+   *
+   * Passed per launch for the same reason the bind address is: the panel owns the port and
+   * changes it at runtime without rewriting the overlay it seeded, which the user may have
+   * edited by hand. A fixed value is the whole point — it must not be 0.
+   */
+  port: number;
   /**
    * The chosen data root — `ILA_DATA_DIR`, and required by the server.
    *
@@ -132,6 +179,7 @@ export function buildLaunchSpec(input: BuildLaunchSpecInput): LaunchSpec {
       // not get it — it never serves a page.
       ILA_WEB_DIR: input.paths.webDir,
       ILA_HOST: input.host,
+      ILA_PORT: String(input.port),
     },
   };
 }

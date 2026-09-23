@@ -67,7 +67,7 @@ exists to prevent it; see [Signing](#signing).
 
   app state   ~/Library/Application Support/ilearnassist/
                 ├── config/config.yaml         (seeded once)
-                ├── config/config.local.yaml   (port: 0)
+                ├── config/config.local.yaml   (fixed port: 10471)
                 └── desktop.json               (this app's preferences)
 
   your data   wherever you chose on first launch
@@ -226,11 +226,23 @@ so the stale path is suppressed on that one navigation rather than merely erased
 request). A request that cannot be made concludes nothing: a dropped connection is not an
 installation change, and signing somebody out of one that is fine would be the worse mistake.
 
+#### The port is fixed, and the panel owns it
+
 The app also writes a `config.local.yaml` overlay (via the existing `ILA_CONFIG_PATH`
-mechanism, not a fork of the config format) setting `port: 0`, so the OS assigns a free port
-on every launch. A fixed port is the wrong default for a desktop app: it turns "another copy
-is already running" or "something else likes 3720" into a failed launch whose error a
-non-technical user cannot act on. Edit that file to pin one.
+mechanism, not a fork of the config format), now pinning a **fixed port** (10471): the
+address the app is reached at must not move between launches, or the browser's bookmarks and
+saved passwords stop working — exactly what an earlier `port: 0` overlay caused, where the
+OS assigned a new ephemeral port on every launch.
+
+The panel passes its port per launch as `ILA_PORT`, like the bind address, and the panel
+setting overrides the overlay without rewriting it. An overlay still holding byte-for-byte
+the old `port: 0` template is upgraded on the next launch; anything the user changed in it
+is left alone.
+
+If the fixed port is already held — another panel copy, or another program — the server
+**refuses and names the port**, in the panel and on stderr. It never silently picks another,
+because that one launch would be back at a moving address. The panel validates typed values
+(an integer 1–65535) before they leave the page.
 
 ### Creating the first administrator
 
@@ -325,7 +337,8 @@ switch is off and the address is loopback. Leaving the loopback case to `config.
 mean a user who had hand-edited `server.host` there could have the panel report "not shared"
 while the port was open to the network they were sitting on, and a control whose stated state
 and actual state can disagree is worse than no control. That is what `ILA_HOST` is for, and
-why `buildLaunchSpec` always sets it.
+why `buildLaunchSpec` always sets it. The fixed **port** follows the same ownership rule —
+`ILA_PORT`, set always, panel truth rather than file truth (see above).
 
 Rebinding needs a restart, because a bind address is chosen once at `listen` and there is no
 way to widen a socket that is already accepting. The panel performs one and waits for it, so

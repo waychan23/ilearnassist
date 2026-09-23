@@ -34,12 +34,14 @@ describe("readSettings", () => {
   it("round-trips what was written, creating the directory", () => {
     writeSettings(file, {
       sharedOnLan: true,
+      port: 4567,
       dataDir: "/Users/someone/My Notes",
       locale: "",
       updateCheck: null,
     });
     expect(readSettings(file)).toEqual({
       sharedOnLan: true,
+      port: 4567,
       dataDir: "/Users/someone/My Notes",
       locale: "",
       updateCheck: null,
@@ -53,6 +55,7 @@ describe("readSettings", () => {
     // the launcher's job rather than this file's.
     writeSettings(file, {
       sharedOnLan: false,
+      port: DEFAULT_SETTINGS.port,
       dataDir: "/Users/someone/My Notes",
       locale: "",
       updateCheck: null,
@@ -98,6 +101,29 @@ describe("readSettings", () => {
     mkdirSync(join(dir, "nested"), { recursive: true });
     writeFileSync(file, '{"sharedOnLan": "false"}', "utf8");
     expect(readSettings(file).sharedOnLan).toBe(false);
+  });
+
+  it("keeps a chosen port verbatim", () => {
+    mkdirSync(join(dir, "nested"), { recursive: true });
+    writeFileSync(file, '{"port": 4567}', "utf8");
+    expect(readSettings(file).port).toBe(4567);
+  });
+
+  it("falls back to the fixed default for a missing, bad or out-of-range port", () => {
+    // Never coerced, and never 0: an unusable stored port becomes the fixed default rather
+    // than an OS-assigned port on the next launch.
+    mkdirSync(join(dir, "nested"), { recursive: true });
+    for (const content of [
+      '{"sharedOnLan":false}',
+      '{"port":"4567"}',
+      '{"port":3.5}',
+      '{"port":0}',
+      '{"port":70000}',
+      '{"port":null}',
+    ]) {
+      writeFileSync(file, content, "utf8");
+      expect(readSettings(file).port, content).toBe(DEFAULT_SETTINGS.port);
+    }
   });
 
   it("keeps what it understands when a later key is unknown", () => {

@@ -336,7 +336,7 @@ const CLIENT_ID_STORAGE_KEY = "gl-client-id";
  * A fresh id, from a source that works where this app is actually used.
  *
  * **Not `crypto.randomUUID`**, which is available only in a *secure context* — and the address a
- * phone reaches this app at over LAN sharing is `http://192.168.x.x:3720`, which is not one. It
+ * phone reaches this app at over LAN sharing is `http://192.168.x.x:10471`, which is not one. It
  * would be `undefined` on exactly the client the lock exists for, taking the app's writes with it.
  * `crypto.getRandomValues` carries no such restriction.
  *

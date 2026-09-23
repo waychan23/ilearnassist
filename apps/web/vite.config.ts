@@ -32,7 +32,7 @@ export default defineConfig({
       // `ILA_SERVER_PORT` lets the e2e run point at its own server instance instead of a
       // stray `pnpm dev` one.
       "/api": {
-        target: `http://127.0.0.1:${process.env.ILA_SERVER_PORT ?? 3720}`,
+        target: `http://127.0.0.1:${process.env.ILA_SERVER_PORT ?? 10471}`,
         changeOrigin: true,
       },
     },

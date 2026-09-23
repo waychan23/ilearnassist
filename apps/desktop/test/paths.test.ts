@@ -90,10 +90,43 @@ describe("seedFirstRun", () => {
     expect(existsSync(paths.defaultDataDir)).toBe(false);
   });
 
-  it("picks an OS-assigned port, so a busy port cannot stop the app from starting", () => {
+  it("seeds a fixed port, so the address stays the same on every launch", () => {
     const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     seedFirstRun(paths);
-    expect(readFileSync(paths.overlayFile, "utf8")).toMatch(/^\s*port:\s*0\s*$/m);
+    expect(readFileSync(paths.overlayFile, "utf8")).toMatch(/^\s*port:\s*10471\s*$/m);
+  });
+
+  it("upgrades an overlay that is still exactly the old OS-assigned-port template", () => {
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
+    seedFirstRun(paths);
+    // Put the old template back, byte for byte — the state an older build left behind.
+    const oldTemplate = `# Written by the ilearnassist desktop app.
+#
+# Everything here overrides config.yaml. Delete this file to fall back to the defaults.
+#
+# port: 0 lets the operating system choose a free port on every launch, so the app can
+# never fail to start because something else is already using the configured one. Set a
+# fixed port here if you would rather always reach the app at the same address.
+server:
+  port: 0
+`;
+    writeFileSync(paths.overlayFile, oldTemplate, "utf8");
+
+    seedFirstRun(paths);
+
+    expect(readFileSync(paths.overlayFile, "utf8")).toMatch(/^\s*port:\s*10471\s*$/m);
+  });
+
+  it("does not upgrade an old overlay the user has changed at all", () => {
+    // Even an added comment: anything other than the exact template is the user's decision.
+    const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
+    seedFirstRun(paths);
+    const edited = readFileSync(paths.overlayFile, "utf8").replace("port: 10471", "port: 4567");
+
+    writeFileSync(paths.overlayFile, edited, "utf8");
+    seedFirstRun(paths);
+
+    expect(readFileSync(paths.overlayFile, "utf8")).toBe(edited);
   });
 
   it("never overwrites an existing config", () => {
@@ -109,11 +142,11 @@ describe("seedFirstRun", () => {
   it("never overwrites an overlay the user has edited", () => {
     const paths = resolveAppPaths({ userDataDir: root, homeDir: home, resourcesDir });
     seedFirstRun(paths);
-    writeFileSync(paths.overlayFile, "server:\n  port: 3720\n", "utf8");
+    writeFileSync(paths.overlayFile, "server:\n  port: 10471\n", "utf8");
 
     seedFirstRun(paths);
 
-    expect(readFileSync(paths.overlayFile, "utf8")).toBe("server:\n  port: 3720\n");
+    expect(readFileSync(paths.overlayFile, "utf8")).toBe("server:\n  port: 10471\n");
   });
 
   it("names the missing template rather than starting a server with no providers", () => {

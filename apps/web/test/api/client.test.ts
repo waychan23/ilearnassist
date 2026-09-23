@@ -949,7 +949,7 @@ describe("the client id", () => {
     /*
      * The regression this is here for, and it is not hypothetical: `randomUUID` is available only
      * in a *secure context*, and the address a phone reaches this app at over LAN sharing is
-     * `http://192.168.x.x:3720` — not one. Taking the app's client id from it would have made
+     * `http://192.168.x.x:10471` — not one. Taking the app's client id from it would have made
      * every write from the second client (the one the lock exists for) impossible, with a
      * `TypeError` in a header builder as the only trace.
      */

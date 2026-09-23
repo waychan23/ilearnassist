@@ -116,7 +116,7 @@ describe("lanUrlFor", () => {
   it("returns null rather than a code that cannot work", () => {
     // Encoding 127.0.0.1 would make the phone load its *own* loopback — a page that either
     // fails or, worse, succeeds against something else entirely.
-    expect(lanUrlFor("http://127.0.0.1:3720", null)).toBe(null);
+    expect(lanUrlFor("http://127.0.0.1:10471", null)).toBe(null);
     expect(lanUrlFor(null, "192.168.1.42")).toBe(null);
   });
 

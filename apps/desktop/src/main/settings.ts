@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { isPanelLocaleChoice, type PanelLocaleChoice } from "../shared/messages.js";
+import { DEFAULT_PORT, isUserPort } from "./launch.js";
 
 /**
  * The control panel's own preferences.
@@ -26,6 +27,15 @@ export interface DesktopSettings {
    * on a home network and a bad thing to have happen by accident on a café's.
    */
   sharedOnLan: boolean;
+  /**
+   * The fixed port the server listens on.
+   *
+   * A panel decision passed to the server per launch, like the bind address, and for the same
+   * reason: the port has to be changeable at runtime without rewriting the overlay the panel
+   * seeded and the user may have edited. It is a fixed value rather than 0 — the address the
+   * app is reached at must stay put, or bookmarks and saved passwords stop working.
+   */
+  port: number;
   /**
    * The chosen data root: the sqlite database, every account's workspaces, and the files
    * they upload. Empty until someone has chosen one.
@@ -75,6 +85,7 @@ export interface UpdateCheckCache {
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
   sharedOnLan: false,
+  port: DEFAULT_PORT,
   dataDir: "",
   locale: "",
   updateCheck: null,
@@ -103,6 +114,9 @@ export function readSettings(file: string): DesktopSettings {
     return {
       sharedOnLan:
         typeof value["sharedOnLan"] === "boolean" ? value["sharedOnLan"] : DEFAULT_SETTINGS.sharedOnLan,
+      // Narrowed to a usable listen port; anything else (a hand-typed string, 70000) falls
+      // back to the fixed default rather than being passed to the server as-is.
+      port: isUserPort(value["port"]) ? value["port"] : DEFAULT_SETTINGS.port,
       // A non-string (or a blank one) is treated as "not chosen yet" rather than as a path,
       // so the panel asks. Falling back to some other directory would be the one kind of
       // tolerance this file must not have: it would point the app at data that is not the

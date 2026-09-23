@@ -110,6 +110,19 @@ describe("ServerProcess — failing to come up", () => {
     expect(status.logs.join("\n")).toContain("No providers configured.");
   });
 
+  it("reports a fixed port already in use, naming the port", async () => {
+    // The server prints the busy line and exits; the later exit must keep this fault rather
+    // than replace it with a bare exit code.
+    const server = start(
+      fixture(`console.log("[ilearnassist] port in use: 10471"); process.exit(1);`)
+    );
+
+    await server.start();
+    await waitFor(() => server.status().state === "failed");
+
+    expect(server.status().fault).toEqual({ code: "port_in_use", port: 10471 });
+  });
+
   it("reports a binary that cannot be executed", async () => {
     const server = start({ command: "/nonexistent/definitely-not-here", args: [], env: {} });
 

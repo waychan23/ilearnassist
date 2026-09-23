@@ -21,7 +21,7 @@ to supply a key through `${ENV_VAR}` rather than typing it into the browser.
 ```yaml
 server:
   host: 127.0.0.1        # bind address
-  port: 3720             # backend port (Vite proxies /api here)
+  port: 10471            # backend port (Vite proxies /api here)
 
 defaultProvider: deepseek   # seed value; change it in the UI afterwards
 defaultModel: deepseek-flash # seed value; change it in the UI afterwards
@@ -141,7 +141,7 @@ database and the workspaces, and surviving an update for the same reason they do
 
 ```json
 {
-  "server": { "port": 3720 },
+  "server": { "port": 10471 },
   "tools": { "webFetch": { "maxChars": 12000 } },
   "prompts": { "chat.system.persona": "You are a patient physics tutor. …" }
 }

@@ -50,7 +50,7 @@ describe("resolveEnv", () => {
 describe("deepMerge", () => {
   it("merges nested objects, with the override winning", () => {
     const merged = deepMerge(
-      { server: { host: "127.0.0.1", port: 3720 }, keep: true },
+      { server: { host: "127.0.0.1", port: 10471 }, keep: true },
       { server: { port: 4000 } }
     );
     expect(merged).toEqual({ server: { host: "127.0.0.1", port: 4000 }, keep: true });
@@ -79,7 +79,7 @@ describe("deepMerge", () => {
 describe("withDefaults", () => {
   it("fills in every default for an empty config", () => {
     const config = withDefaults({});
-    expect(config.server).toEqual({ host: "127.0.0.1", port: 3720 });
+    expect(config.server).toEqual({ host: "127.0.0.1", port: 10471 });
     expect(config.defaultProvider).toBe("openai");
     expect(config.defaultModel).toBe("");
     expect(config.providers).toEqual([]);
@@ -99,17 +99,17 @@ describe("withDefaults", () => {
 
   it("parses a numeric field written as an ${ENV} placeholder", () => {
     // Placeholders are substituted after YAML parsing, so `port: ${PORT}` reaches here as
-    // a string. Rejecting it silently fell back to 3720 — a config that is quietly ignored.
+    // a string. Rejecting it silently fell back to 10471 — a config that is quietly ignored.
     expect(withDefaults({ server: { port: "9999" } }).server.port).toBe(9999);
     expect(withDefaults({ tools: { webFetch: { maxChars: "512" } } }).tools.webFetch.maxChars).toBe(512);
   });
 
   it("falls back for a numeric field that is empty or not a number", () => {
     // A missing env var resolves to "" — the field must not become NaN.
-    expect(withDefaults({ server: { port: "" } }).server.port).toBe(3720);
-    expect(withDefaults({ server: { port: "not a port" } }).server.port).toBe(3720);
-    expect(withDefaults({ server: { port: null } }).server.port).toBe(3720);
-    expect(withDefaults({ server: { port: Number.NaN } }).server.port).toBe(3720);
+    expect(withDefaults({ server: { port: "" } }).server.port).toBe(10471);
+    expect(withDefaults({ server: { port: "not a port" } }).server.port).toBe(10471);
+    expect(withDefaults({ server: { port: null } }).server.port).toBe(10471);
+    expect(withDefaults({ server: { port: Number.NaN } }).server.port).toBe(10471);
   });
 
   it("maps providers and their models", () => {
@@ -299,7 +299,7 @@ providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
     // user once seeded — so the override has to come from the environment.
     vi.stubEnv("ILA_HOST", "0.0.0.0");
     const config = await load(`
-server: { host: 127.0.0.1, port: 3720 }
+server: { host: 127.0.0.1, port: 10471 }
 defaultProvider: p
 defaultModel: m
 providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
@@ -309,7 +309,7 @@ providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
 
   it("leaves the configured host alone when ILA_HOST is unset", async () => {
     const config = await load(`
-server: { host: 127.0.0.1, port: 3720 }
+server: { host: 127.0.0.1, port: 10471 }
 defaultProvider: p
 defaultModel: m
 providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
@@ -317,12 +317,41 @@ providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
     expect(config.server.host).toBe("127.0.0.1");
   });
 
+  it("lets ILA_PORT override the configured port", async () => {
+    // The panel owns the fixed port and changes it at runtime, like the bind address.
+    vi.stubEnv("ILA_PORT", "4567");
+    const config = await load(`
+server: { host: 127.0.0.1, port: 10471 }
+defaultProvider: p
+defaultModel: m
+providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
+`);
+    expect(config.server.port).toBe(4567);
+  });
+
+  it("ignores a blank or unusable ILA_PORT rather than coercing it", async () => {
+    // 0, 70000, "x", "3.5", and whitespace all leave the configured port alone — never an
+    // OS-assigned port from a coerced value. Modules reset between cases because
+    // `loadConfig` caches for the life of the module.
+    for (const bad of ["   ", "0", "70000", "x", "3.5"]) {
+      vi.resetModules();
+      vi.stubEnv("ILA_PORT", bad);
+      const config = await load(`
+server: { host: 127.0.0.1, port: 10471 }
+defaultProvider: p
+defaultModel: m
+providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]
+`);
+      expect(config.server.port, bad).toBe(10471);
+    }
+  });
+
   it("ignores a blank ILA_HOST rather than binding to nothing", async () => {
     // An empty string would be passed straight to `listen`, which rejects it — turning an
     // unset-but-present variable into a boot failure.
     vi.stubEnv("ILA_HOST", "   ");
     const config = await load(`
-server: { host: 127.0.0.1, port: 3720 }
+server: { host: 127.0.0.1, port: 10471 }
 defaultProvider: p
 defaultModel: m
 providers: [{ id: p, name: P, baseURL: http://x, models: [{ id: m, name: M }] }]

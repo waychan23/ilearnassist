@@ -294,7 +294,7 @@ export function withDefaults(raw: Record<string, unknown>): AppConfig {
   return {
     server: {
       host: asStr(server["host"], "127.0.0.1"),
-      port: asNum(server["port"], 3720),
+      port: asNum(server["port"], 10471),
     },
     defaultProvider: asStr(raw["defaultProvider"], "openai"),
     defaultModel: asStr(raw["defaultModel"], ""),
@@ -423,6 +423,14 @@ let cached: AppConfig | undefined;
  * is what makes the patch a general mechanism rather than a prompt feature with a config-shaped
  * wrapper.
  */
+/** A listen port from the environment: digits only, 1–65535. Null when unset or unusable. */
+export function parseEnvPort(value: string | undefined): number | null {
+  const text = value?.trim();
+  if (!text || !/^\d+$/.test(text)) return null;
+  const port = Number(text);
+  return port >= 1 && port <= 65535 ? port : null;
+}
+
 export function loadConfig(patch: Record<string, unknown> = {}): AppConfig {
   if (cached) return cached;
 
@@ -446,6 +454,13 @@ export function loadConfig(patch: Record<string, unknown> = {}): AppConfig {
   // rewriting something the user owns.
   const host = process.env.ILA_HOST?.trim();
   if (host) config.server.host = host;
+
+  // `ILA_PORT` overrides the listen port, for the same reason `ILA_HOST` overrides the bind
+  // address: the desktop panel owns the port and changes it at runtime, and a value passed
+  // per launch keeps the panel's truth from rewriting the user's overlay file. A value that
+  // is not a usable port is ignored rather than coerced — same rule as a blank `ILA_HOST`.
+  const port = parseEnvPort(process.env.ILA_PORT);
+  if (port !== null) config.server.port = port;
 
   validateConfig(config);
   cached = config;

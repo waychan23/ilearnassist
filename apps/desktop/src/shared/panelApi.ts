@@ -19,6 +19,11 @@ export const PANEL_CHANNELS = {
    * running process.
    */
   shareOnLan: "panel:share-on-lan",
+  /**
+   * Change the fixed listen port. Restarts the server — a port is chosen at `listen`, so
+   * like the bind address there is nothing to change under a running process.
+   */
+  setPort: "panel:set-port",
   openApp: "panel:open-app",
   openInBrowser: "panel:open-in-browser",
   /**
@@ -103,7 +108,9 @@ export type ServerState = "stopped" | "starting" | "running" | "stopping" | "fai
 export type ServerFault =
   | { code: "spawn_failed"; message: string }
   | { code: "exited"; exitCode: number | null; signal: string | null }
-  | { code: "timeout"; seconds: number };
+  | { code: "timeout"; seconds: number }
+  /** The fixed port is already held — the server refused rather than choosing another. */
+  | { code: "port_in_use"; port: number };
 
 export interface ServerStatus {
   state: ServerState;
@@ -138,6 +145,8 @@ export interface PanelState {
   server: ServerStatus;
   /** Whether the server is bound so other devices on the network can reach it. */
   sharedOnLan: boolean;
+  /** The fixed port the server listens on; stable across launches. */
+  port: number;
   /**
    * The URL to open from a phone or tablet. Null when there is nothing to open — sharing is
    * off, the server is not up, or this machine has no address another device could use.
@@ -264,6 +273,8 @@ export interface PanelApi {
   stop(): Promise<PanelState>;
   /** Turn LAN sharing on or off. Restarts the server, so it resolves when that settles. */
   shareOnLan(on: boolean): Promise<PanelState>;
+  /** Change the fixed listen port. Restarts the server, and resolves when that settles. */
+  setPort(port: number): Promise<PanelState>;
   /**
    * Open a folder picker, record the choice, and start the server there.
    *
