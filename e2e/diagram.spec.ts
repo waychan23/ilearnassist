@@ -33,6 +33,27 @@ const WIDE =
 /** Mermaid cannot parse this: the arrow points at nothing. */
 const BROKEN = "flowchart TD\n  A --> ";
 
+/**
+ * A flowchart whose nodes carry hardcoded light fills in inline `style` statements — those
+ * paint the nodes directly and bypass `themeVariables`, so without a render-time rewrite they
+ * stay light boxes under the dark theme's light labels.
+ */
+const STYLED =
+  "flowchart TD\n" +
+  " A[开始] --> B[结束]\n" +
+  " style A fill:#e8f5e9\n" +
+  " style B fill:#e3f2fd";
+
+/**
+ * An ER diagram with attribute rows, which are the part whose fill is *derived* rather than
+ * mapped: the base theme lightens `mainBkg` for them, to near white on a light page.
+ */
+const ER =
+  "erDiagram\n" +
+  " CUSTOMER ||--o{ ORDER : places\n" +
+  " CUSTOMER {\n  string name\n  int age\n }\n" +
+  " ORDER {\n  string id\n }";
+
 /** A fresh workspace and conversation, with the diagram widget installed and its tab open. */
 async function diagramSession(page: Page, name: string): Promise<string> {
   await page.goto("/");
@@ -433,6 +454,95 @@ test("a .mmd in the workspace previews as a diagram, with no model involved", as
     timeout: 20_000,
   });
   await expect(stage.locator("svg")).toContainText("开始");
+});
+
+test("hardcoded style fills are translated to dark fills of the same hue", async ({
+  page,
+  request,
+}) => {
+  /*
+   * Unlike the ER case this is an explicit `style fill` in the source, which mermaid applies
+   * verbatim. The render-time rewrite has to darken it while keeping the two nodes tellable
+   * apart — the green and blue must not collapse to one grey.
+   */
+  await diagramSession(page, unique("图表样式"));
+  await scriptDiagram(request, { name: "styled", source: STYLED });
+  await send(page, "画一个带颜色的流程图");
+  await waitForDiagram(page);
+
+  const nodeFill = (at: number): (() => Promise<string>) => () =>
+    card(page)
+      .locator("svg .node rect")
+      .nth(at)
+      .evaluate((el) => getComputedStyle(el).fill);
+
+  const lightA = await nodeFill(0)();
+
+  await page.getByTestId("theme-toggle").click();
+  await page.getByTestId("theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await expect
+    .poll(nodeFill(0), { timeout: 20_000, message: "the style fill should be darkened" })
+    .not.toBe(lightA);
+
+  const luminance = (rgb: string): number => {
+    const [r, g, b] = rgb.match(/\d+/g)!.map(Number);
+    return (0.2126 * r! + 0.7152 * g! + 0.0722 * b!) / 255;
+  };
+  const darkA = await nodeFill(0)();
+  const darkB = await nodeFill(1)();
+  // Dark fills for light text. The helper is a gamma-less approximation, so the bound is
+  // loose; the green node's true relative luminance is ~0.09 (white text ≈ 7:1).
+  expect(luminance(darkA)).toBeLessThan(0.35);
+  expect(luminance(darkB)).toBeLessThan(0.35);
+  // …and the hue distinction the source chose survives the rewrite.
+  expect(darkA).not.toBe(darkB);
+});
+
+test("an ER diagram's attribute rows stay dark under the dark theme", async ({
+  page,
+  request,
+}) => {
+  /*
+   * Renders a non-flowchart type on purpose: the flowchart mapping was always right, and the
+   * dark-theme defect lived in the base theme's *derived* fields — ER rows lightened to near
+   * white under light attribute labels. The diagram rides the ordinary tool like any other
+   * source; the chat view is also where the theme toggle is reachable.
+   */
+  await diagramSession(page, unique("图表ER"));
+  await scriptDiagram(request, { name: "er", source: ER });
+  await send(page, "画一个 ER 图");
+  await waitForDiagram(page);
+
+  // The first path inside a `row-rect` group is the attribute row's fill.
+  const rowFill = (): Promise<string> =>
+    card(page)
+      .locator("svg [class*='row-rect'] path")
+      .first()
+      .evaluate((el) => getComputedStyle(el).fill);
+
+  const light = await rowFill();
+
+  // Same two-click cycle as the other theme spec: auto → light → resolved dark.
+  await page.getByTestId("theme-toggle").click();
+  await page.getByTestId("theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  /*
+   * The redraw is async, so poll. On the old code the rows stayed near white in dark — this
+   * kept the light fill instead of moving it.
+   */
+  await expect
+    .poll(rowFill, { timeout: 20_000, message: "the attribute rows should be redrawn dark" })
+    .not.toBe(light);
+  const dark = await rowFill();
+  // The dark row fill must sit close to the dark panel, not be a near-white light fill.
+  const luminance = (rgb: string): number => {
+    const [r, g, b] = rgb.match(/\d+/g)!.map(Number);
+    return (0.2126 * r! + 0.7152 * g! + 0.0722 * b!) / 255;
+  };
+  expect(luminance(dark)).toBeLessThan(0.25);
 });
 
 test("a theme change redraws the diagram", async ({ page, request }) => {

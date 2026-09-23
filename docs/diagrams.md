@@ -191,18 +191,32 @@ and N diagrams on screen share one fetch. `apps/web/vite.config.ts` lists `merma
 
 ### Colours
 
-`diagramThemeVariables(read)` takes a *reader* rather than reaching for `getComputedStyle`, and
-that seam is what makes it testable — jsdom does not apply `style.css`, so a real read returns
-`""` there. It maps a short list of palette tokens onto mermaid's variables and lets everything
-else fall back to mermaid's own `base` theme.
+`diagramThemeVariables(theme, read)` takes the resolved theme and a *reader* rather than reaching
+for `getComputedStyle`, and that seam is what makes it testable — jsdom does not apply
+`style.css`, so a real read returns `""` there. It maps a short list of palette tokens onto
+mermaid's variables and lets everything else fall back to mermaid's own `base` theme.
 
-Two things are load-bearing:
+Three things are load-bearing:
 
 - **Values are concrete colours, never `var(--token)`.** Mermaid computes with them in
   JavaScript — derived borders, the pie and git-graph palettes — and a `var()` is not a colour to
   a colour function, it is a string.
 - **`edgeLabelBackground` is set.** Mermaid's default is hard white, which on a dark theme is a
   white box sitting on top of every edge label.
+- **The `base` theme is built for a light page, and its derived light-page fills are restated
+  under dark.** Some fields are fixed, or derived from fields we cannot change, rather than read
+  from the mapping: ER attribute rows (`rowOdd`/`rowEven`) are lightened to near white, a
+  completed gantt task (`doneTaskBkgColor`/`doneTaskBorderColor`) is hard `lightgrey`, and the
+  xychart palette is cream (`xyChart.plotColorPalette`). On a dark page those are light fills
+  under light labels. The nested `xyChart` override *replaces* the whole object instead of
+  merging, so every sub-field is named in `xyChartThemeVariables`.
+- **Hardcoded colours in the source's own `style`/`classDef` statements bypass the mapping
+  entirely** — mermaid applies them verbatim. `darkenDiagramStyles`, applied inside
+  `renderMermaid` on a dark page, rewrites light `fill:` hexes to dark fills of the same hue
+  (HSL lightness from [0.5,1] onto [0.13,0.29]) and inverts hardcoded dark `color:` text, so a
+  model-written `style A fill:#e8f5e9` stays a green node rather than a light box. It rides the
+  render, never changing the stored source, which is why existing diagrams fix themselves on
+  the next open; named/rgb colours, `linkStyle`, and fills outside style lines are left alone.
 
 The theme follows `composables/theme.ts`; a flip re-initializes and redraws, because mermaid's
 configuration is module-global and a diagram drawn for the light palette is wrong the moment it
