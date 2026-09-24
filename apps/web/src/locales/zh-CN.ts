@@ -751,6 +751,7 @@ export default {
       ask_user: "询问用户",
       ila_quiz: "小测",
       ila_review_quiz: "批改小测",
+      ila_makeup_quiz: "补答题目",
       ila_make_plan: "制定/编辑计划",
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
@@ -810,6 +811,11 @@ export default {
   },
   quiz: {
     title: "小测",
+    /*
+     * The card a make-up is answered in is the quiz card — same tabs, same options, same submit —
+     * so it carries one word of its own, the one that says why it is here.
+     */
+    makeupTitle: "补答",
     /** One per `ToolCallStatus`, plus the moment before the turn has finished persisting. */
     preparing: "准备题目中",
     awaiting: "等待你的作答",

@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_TOOL_NAME,
   type QuizAnswer,
   type QuizAnswers,
@@ -196,7 +197,16 @@ const panelId = `${uid.value}-panel`;
   >
     <div class="quiz-head">
       <Icon name="bulb" class="mark" />
-      <span class="title">{{ t("quiz.title") }}</span>
+      <!--
+        Two whole `t()` calls rather than one with the key chosen inside it, because
+        `catalog.test.ts` scans the source for `t("…")` literals: a key reached through an
+        expression is invisible to it, and would be reported as a dead key. The same reason
+        `DiagramDialog` spells its two labels out.
+      -->
+      <span v-if="toolCall.name === QUIZ_MAKEUP_TOOL_NAME" class="title">{{
+        t("quiz.makeupTitle")
+      }}</span>
+      <span v-else class="title">{{ t("quiz.title") }}</span>
       <span class="status" :class="status ?? 'preparing'" data-testid="quiz-status">
         {{
           status === "answered"

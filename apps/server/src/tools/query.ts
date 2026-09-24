@@ -195,8 +195,10 @@ const inputSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'kind: "note" or "resource". For notes, only those whose text or quoted passage ' +
-        "contains this, case-insensitively; for material, only those whose name does."
+      'kind: "note", "resource" or "quiz". For notes, only those whose text or quoted passage ' +
+        'contains this, case-insensitively; for material, only those whose name does; for quiz ' +
+        'questions, only those whose header or question text does. Use it to check whether a ' +
+        "question has already been asked before writing a new one."
     ),
   name: z
     .string()
@@ -234,7 +236,7 @@ type QueryInput = z.infer<typeof inputSchema>;
  */
 export const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = {
   plan: [],
-  quiz: ["id", "status", "limit", "offset"],
+  quiz: ["id", "status", "query", "limit", "offset"],
   thread: ["limit"],
   note: ["id", "query", "limit", "offset"],
   diagram: ["name", "limit"],
@@ -298,6 +300,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
   const quiz = async (input: {
     id?: string;
     status?: "pending" | "answered" | "skipped" | "dismissed";
+    query?: string;
     limit?: number;
     offset?: number;
   }): Promise<string> => {
@@ -329,7 +332,22 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
 
     const offset = input.offset ?? 0;
     const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
-    const filtered = all.filter((q) => !input.status || q.status === input.status);
+    /*
+     * A **substring** of the header or the question text, which is the honest strength of this
+     * filter: it finds a question by the words in it, and it cannot see that two questions mean
+     * the same thing in different words. It is here because the model reading the *list* is what
+     * catches a paraphrase — this narrows the list to the ones worth reading — and because a
+     * lexical check that never claims more than it does is better than a similarity score that
+     * would need embeddings, a dependency and a threshold, and would still be wrong sometimes.
+     */
+    const needle = input.query?.trim().toLowerCase();
+    const filtered = all.filter((q) => {
+      if (input.status && q.status !== input.status) return false;
+      if (!needle) return true;
+      return (
+        q.header.toLowerCase().includes(needle) || q.question.toLowerCase().includes(needle)
+      );
+    });
     const items = filtered.slice(offset, offset + limit).map(quizItem);
     return page({
       kind: "quiz",
@@ -339,7 +357,9 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
       note:
         "`verdict` is the model's grading of the learner's answer: correct, incorrect, or " +
         "unsure (no claim either way). `feedback` is what was explained at the time. `id` is the " +
-        "global id `ila_review_quiz` takes, and what a message referring to a question carries.",
+        "global id `ila_review_quiz` takes, and what a message referring to a question carries. " +
+        "Check this list before asking a new question: a question already here and still " +
+        "unanswered is one to bring back with ila_makeup_quiz, not to reword.",
     });
   };
 

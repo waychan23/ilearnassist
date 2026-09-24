@@ -575,3 +575,165 @@ describe("plan node binding", () => {
     expect(await quizRows(session.id)).toEqual([]);
   });
 });
+
+describe("the make-up card (ila_makeup_quiz)", () => {
+  const SECRET = "只有补答判分时才该出现的解析。";
+  const KEYED = [
+    {
+      header: "窗口",
+      question: "Flink 里按时间切分的窗口是哪一种？",
+      options: [{ label: "滚动窗口" }, { label: "状态后端" }],
+      referenceAnswer: ["滚动窗口"],
+      explanation: SECRET,
+    },
+    {
+      header: "状态",
+      question: "下面哪一个是状态后端？",
+      options: [{ label: "RocksDB" }, { label: "Kafka" }],
+    },
+  ];
+
+  /** The agent-loop requests only; the auto-titler also calls the model, non-streaming. */
+  function loopRequests(): Record<string, unknown>[] {
+    return llm.requests().filter((r) => r.stream === true);
+  }
+
+  /** A quiz posed and then walked away from: both rows skipped, no card left on screen. */
+  async function skippedQuiz(): Promise<Session> {
+    const session = await quizSession();
+    llm.setTurns([{ content: "先测一下。", toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: KEYED } }] }]);
+    await chat(session.id, "开始");
+    llm.reset();
+    llm.setTurns([{ content: "先讲别的。" }]);
+    await chat(session.id, "先讲别的");
+    expect((await quizRows(session.id)).map((r) => r.status)).toEqual(["skipped", "skipped"]);
+    return session;
+  }
+
+  it("suspends on the questions nobody answered, and writes nothing at all", async () => {
+    const session = await skippedQuiz();
+    llm.reset();
+    llm.setTurns([{ content: "那把上次跳过的题补一下吧。", toolCalls: [{ id: "call_makeup", name: "ila_makeup_quiz", args: {} }] }]);
+
+    const { events } = await chat(session.id, "补一下上次跳过的题");
+
+    const done = events.find((e) => e.type === "message_done");
+    expect(done?.type === "message_done" && done.message.toolCalls?.[0]).toMatchObject({
+      name: "ila_makeup_quiz",
+      status: "awaiting",
+    });
+    /*
+     * The two absences that are the suspension's whole mechanism, asserted because "fixing" either
+     * one silently turns a card into a result: no `output` on the call, and no `tool_end` frame.
+     */
+    const call = done?.type === "message_done" ? done.message.toolCalls![0]! : undefined;
+    expect(call?.output).toBeUndefined();
+    expect(events.some((e) => e.type === "tool_end")).toBe(false);
+    // The card is the call's input, and the answer key is not part of it.
+    expect(call!.input).toContain("questions");
+    expect(call!.input).not.toContain(SECRET);
+    // Nothing was written: the questions are the learner's to answer, not yet answered.
+    expect((await quizRows(session.id)).map((r) => r.status)).toEqual(["skipped", "skipped"]);
+  });
+
+  it("records a partial answer and hands the model the key for what was answered", async () => {
+    const session = await skippedQuiz();
+    const rows = await quizRows(session.id);
+    llm.reset();
+    llm.setTurns([{ toolCalls: [{ id: "call_makeup", name: "ila_makeup_quiz", args: {} }] }]);
+    const { events } = await chat(session.id, "补一下");
+    const toolCallId = callIdFrom(events);
+
+    // The learner answers Q1 and leaves Q2 alone — the partial answer the requirement asks for.
+    llm.reset();
+    llm.setTurns([
+      {
+        toolCalls: [
+          {
+            id: "call_grade",
+            name: "ila_review_quiz",
+            args: { reviews: [{ quizId: rows[0]!.id, verdict: "correct", explanation: "补答正确。" }] },
+          },
+        ],
+      },
+      { content: "这次对了，第二题还留着。" },
+    ]);
+    const { res } = await answer(session.id, {
+      toolCallId,
+      action: "submit",
+      answers: { Q1: { selected: ["滚动窗口"] } },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Exactly the answered row moved; the skipped one is still the learner's to answer later.
+    const after = await quizRows(session.id);
+    expect(after.map((r) => [r.qid, r.status])).toEqual([
+      ["Q1", "answered"],
+      ["Q2", "skipped"],
+    ]);
+    expect(after[0]!.verdict).toBe("correct");
+
+    /*
+     * And what the model was told: the answers it may grade, with the key that was never shown to
+     * the learner — plus the questions they passed over, which is what makes "do not grade those"
+     * something it can act on rather than infer.
+     */
+    const sent = loopRequests().at(-1) as { messages: { role: string; content: unknown }[] };
+    const toolText = sent.messages
+      .filter((m) => m.role === "tool")
+      .map((m) => String(m.content))
+      .join("\n");
+    expect(toolText).toContain("reference_answer");
+    expect(toolText).toContain(SECRET);
+    expect(toolText).toContain("left_unanswered");
+    // The visible conversation never carries the key.
+    expect(JSON.stringify(await quizRows(session.id))).not.toContain(SECRET);
+  });
+
+  it("records nothing when the card is cancelled, so the questions stay open", async () => {
+    const session = await skippedQuiz();
+    llm.reset();
+    llm.setTurns([{ content: "不补了？", toolCalls: [{ id: "call_makeup", name: "ila_makeup_quiz", args: {} }] }]);
+    const { events } = await chat(session.id, "补一下");
+    const toolCallId = callIdFrom(events);
+
+    llm.reset();
+    llm.setTurns([{ content: "好，那就以后再补。" }]);
+    const { res } = await answer(session.id, { toolCallId, action: "cancel" });
+    expect(res.statusCode).toBe(200);
+
+    // "Not now" is not "never": the rows are exactly where they were, and the tool result says so.
+    expect((await quizRows(session.id)).map((r) => r.status)).toEqual(["skipped", "skipped"]);
+    const sent = loopRequests().at(-1) as { messages: { role: string; content: unknown }[] };
+    const toolText = sent.messages
+      .filter((m) => m.role === "tool")
+      .map((m) => String(m.content))
+      .join("\n");
+    expect(toolText).toMatch(/dismissed the quiz/);
+    // No key on a cancel — nothing was answered, so there is nothing to grade against.
+    expect(toolText).not.toContain(SECRET);
+  });
+
+  it("answers with a result rather than an empty card when nothing is unanswered", async () => {
+    const session = await quizSession();
+    llm.setTurns([{ toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: KEYED } }] }]);
+    const { events } = await chat(session.id, "开始");
+    // Answer the whole quiz, so there is nothing left to bring back.
+    llm.setTurns([{ content: "好。" }]);
+    await answer(session.id, {
+      toolCallId: callIdFrom(events),
+      action: "submit",
+      answers: { Q1: { selected: ["滚动窗口"] }, Q2: { selected: ["RocksDB"] } },
+    });
+
+    llm.reset();
+    llm.setTurns([{ toolCalls: [{ id: "call_makeup", name: "ila_makeup_quiz", args: {} }] }, { content: "没有要补的。" }]);
+    const { events: after } = await chat(session.id, "还有没答的吗");
+
+    // A result the model can read, not a card with nothing in it: a control that renders and does
+    // nothing is the failure this refuses to be.
+    const end = after.find((e) => e.type === "tool_end");
+    expect(end?.type === "tool_end" && end.toolCall.output).toContain("nothing_to_make_up");
+    expect(after.some((e) => e.type === "message_done")).toBe(true);
+  });
+});

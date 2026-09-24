@@ -80,6 +80,7 @@ import {
   PLAN_TOOL_NAMES,
   PLATFORM_ADMIN_ROLES,
   QUIZ_TOOL_NAME,
+  QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_TOOL_NAMES,
   SESSION_LOCK_TTL_SECONDS,
   SUPERADMIN_ROLE,
@@ -144,6 +145,7 @@ import {
   dismissQuizQuestions,
   listQuizQuestionViews,
   makeupAnswer,
+  makeupQuestions,
   recordQuizAnswers,
   registerQuizQuestions,
   renderMakeupKeyNote,
@@ -168,6 +170,7 @@ import { fileWriteGuidance } from "./tools/fileTools.js";
 import { exploreGuidance } from "./tools/explore.js";
 import { planGuidance } from "./tools/planTools.js";
 import { quizGuidance } from "./tools/quizReview.js";
+import { makeupGuidance } from "./tools/quizMakeup.js";
 import { SUSPENDING_TOOLS } from "./tools/suspending.js";
 import {
   readAsDataUrl,
@@ -4261,6 +4264,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     planGuidance?: string;
     /** Present when the quiz widget is installed; appended to the turn's system prompt. */
     quizGuidance?: string;
+    /** Present when `ila_makeup_quiz` survived assembly; the positive half of its contract. */
+    makeupGuidance?: string;
     /**
      * A tool call the model made resolved without throwing, handed the tool's name.
      *
@@ -4492,6 +4497,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           }
         : undefined,
       quizReview: quizInstalled ? { db, sessionId: session.id } : undefined,
+      // The third of the same switch, and read-only: the make-up tool writes nothing until the
+      // learner answers it, so its context is a selection from the conversation's own rows.
+      quizMakeup: quizInstalled
+        ? { selectQuestions: (ids) => makeupQuestions(db, session.id, ids) }
+        : undefined,
       // The plan tools are `auto-install`, so this context is not an assembly switch — the
       // allow-list is. Passing it in every conversation is what lets the model make a plan where
       // no panel was ever installed, and `installWidgetForToolUse` below is what puts the panel
@@ -4609,6 +4619,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * no otherwise, which is the same answer by a longer route.
        */
       quizGuidance: quizInstalled ? quizGuidance() : undefined,
+      /*
+       * The make-up card's positive half, asked of the assembled array — the quiz block above is
+       * gated on the install instead because the *tool* is; this asks whether it is really there,
+       * which is a question the array answers and the install can only approximate.
+       */
+      makeupGuidance: tools.some((t) => t.name === QUIZ_MAKEUP_TOOL_NAME)
+        ? makeupGuidance()
+        : undefined,
       /*
        * Read off the assembled set rather than off the config, and that is the whole of the
        * condition: a Copilot whose allow-list excludes `ila_collect_page` gets no guidance for a
@@ -5211,6 +5229,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         about: ctx.about,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
+        makeupGuidance: ctx.makeupGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
@@ -5373,6 +5392,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         about: ctx.about,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
+        makeupGuidance: ctx.makeupGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
@@ -5518,6 +5538,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         about: ctx.about,
         planGuidance: ctx.planGuidance,
         quizGuidance: ctx.quizGuidance,
+        makeupGuidance: ctx.makeupGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,

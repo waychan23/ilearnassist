@@ -10,7 +10,9 @@ import {
   gradeQuizAnswers,
   listQuizQuestionViews,
   makeupAnswer,
+  makeupQuestions,
   quizAnswerKeysForCall,
+  recordMakeupAnswers,
   recordQuizAnswers,
   registerQuizQuestions,
   renderMakeupKeyNote,
@@ -505,5 +507,213 @@ describe("makeupAnswer", () => {
     const id = skipped();
     const result = makeupAnswer(db, OWNER, SESSION, id, { answer: { nope: true } });
     expect(result).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+/* ------------------------------- batch make-up (the card) ------------------------------- */
+
+/**
+ * The two functions the make-up card is built on: what it asks, and what answering it writes.
+ *
+ * The card itself is asserted in `quiz-widget-sse.test.ts`, over a real turn; what is here is the
+ * domain layer's own contract — which questions are eligible, what happens when one of them moved
+ * under the card, and that a batch is all or nothing.
+ */
+describe("makeupQuestions", () => {
+  it("offers the questions the learner never submitted, in the panel's order", () => {
+    /*
+     * Two calls, because that is the only way to get a mixed set: a submission answers *every*
+     * pending question of its own call (the validator will not accept a partial one), so "answered
+     * and skipped" is two quizzes — one the learner did, one they walked away from.
+     */
+    registerQuiz([["Q1", 1]], "call-1");
+    recordQuizAnswers(db, SESSION, "call-1", { Q1: { selected: ["滚动"] } });
+    registerQuiz([["Q2", 2], ["Q3", 3]], "call-2");
+    skipQuizQuestions(db, SESSION, ["call-2"]);
+    const rows = listQuizQuestionViews(db, OWNER, SESSION);
+
+    const offered = makeupQuestions(db, SESSION);
+
+    expect(offered.map((q) => q.id)).toEqual(["Q2", "Q3"]);
+    // Both ids travel: the Qn the answer is keyed by, and the UUID the row is written by.
+    expect(offered[0]).toMatchObject({ id: "Q2", uid: rows[1]!.id });
+    expect(offered[0]!.options.map((o) => o.label)).toEqual(["滚动", "滑动"]);
+    // The recorded shape is `QuizQuestion`, which has no key field — asserted rather than assumed,
+    // because the key's secrecy is the rule the whole quiz family shares.
+    expect(JSON.stringify(offered)).not.toMatch(/referenceAnswer|explanation/);
+  });
+
+  it("narrows to the ids the model named, in the order it named them", () => {
+    registerQuiz([["Q1", 1], ["Q2", 2], ["Q3", 3]]);
+    skipQuizQuestions(db, SESSION, ["call-1"]);
+    const rows = listQuizQuestionViews(db, OWNER, SESSION);
+
+    const offered = makeupQuestions(db, SESSION, [rows[2]!.id, rows[0]!.id]);
+
+    expect(offered.map((q) => q.id)).toEqual(["Q3", "Q1"]);
+  });
+
+  it("refuses a named id that is not an unanswered question here", () => {
+    // A named id is a claim the model made. Dropping it silently would answer a different question
+    // than the one it asked for.
+    registerQuiz([["Q1", 1], ["Q2", 2]]);
+    recordQuizAnswers(db, SESSION, "call-1", { Q1: { selected: ["滚动"] }, Q2: { selected: ["滑动"] } });
+    const answered = listQuizQuestionViews(db, OWNER, SESSION)[0]!.id;
+
+    expect(() => makeupQuestions(db, SESSION, [answered])).toThrow(/not a question this conversation/);
+    expect(() => makeupQuestions(db, SESSION, ["nope"])).toThrow(/not a question this conversation/);
+  });
+
+  it("ignores another conversation's questions", () => {
+    registerQuizQuestions(db, OTHER_SESSION, {
+      toolCallId: "call-other",
+      items: [item("Q1", 1)],
+    });
+    skipQuizQuestions(db, OTHER_SESSION, ["call-other"]);
+
+    expect(makeupQuestions(db, SESSION)).toEqual([]);
+    expect(makeupQuestions(db, OTHER_SESSION)).toHaveLength(1);
+  });
+});
+
+describe("recordMakeupAnswers", () => {
+  function skippedPair() {
+    registerQuiz([["Q1", 1], ["Q2", 2]]);
+    skipQuizQuestions(db, SESSION, ["call-1"]);
+    return {
+      questions: makeupQuestions(db, SESSION),
+      rows: listQuizQuestionViews(db, OWNER, SESSION),
+    };
+  }
+
+  it("writes every answered row and returns the keys for grading", () => {
+    registerQuizQuestions(db, SESSION, {
+      toolCallId: "call-1",
+      items: [
+        { ...item("Q1", 1), referenceAnswer: ["滚动"], explanation: "它是按时间切的。" },
+        item("Q2", 2),
+      ],
+    });
+    skipQuizQuestions(db, SESSION, ["call-1"]);
+    const questions = makeupQuestions(db, SESSION);
+
+    const written = recordMakeupAnswers(db, OWNER, SESSION, questions, {
+      Q1: { selected: ["滚动"] },
+      Q2: { selected: ["滑动"] },
+    });
+
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error("expected ok");
+    expect([...written.written].sort()).toEqual(["Q1", "Q2"]);
+    // Only the question posed with a key has one: a keyless question grades without one, exactly
+    // as it does on a first answer.
+    expect(written.keys.get("Q1")).toEqual({
+      referenceAnswer: ["滚动"],
+      explanation: "它是按时间切的。",
+    });
+    expect(written.keys.has("Q2")).toBe(false);
+
+    const rows = listQuizQuestionViews(db, OWNER, SESSION);
+    expect(rows.map((r) => [r.qid, r.status, r.answer?.selected])).toEqual([
+      ["Q1", "answered", ["滚动"]],
+      ["Q2", "answered", ["滑动"]],
+    ]);
+  });
+
+  it("does not answer a question the submission left out, and does not fail over it", () => {
+    // The partial answer is a requirement, not a hole: whatever the learner skipped stays skipped,
+    // so it can be brought back again.
+    const { questions } = skippedPair();
+
+    const written = recordMakeupAnswers(db, OWNER, SESSION, [questions[0]!], {
+      Q1: { selected: ["滚动"] },
+    });
+
+    expect(written.ok).toBe(true);
+    expect(listQuizQuestionViews(db, OWNER, SESSION).map((r) => [r.qid, r.status])).toEqual([
+      ["Q1", "answered"],
+      ["Q2", "skipped"],
+    ]);
+  });
+
+  it("refuses the whole batch when one question moved since the card opened", () => {
+    /*
+     * All or nothing, and the reason is legibility: a partly-written batch leaves the card's own
+     * record of what was answered disagreeing with the rows, with nothing on screen able to say
+     * which half landed.
+     */
+    const { questions, rows } = skippedPair();
+    // Another tab answers Q2 through the ordinary flow while this card is open.
+    db.transitionQuizQuestion({
+      sessionId: SESSION,
+      id: rows[1]!.id,
+      expectedStatus: "skipped",
+      status: "answered",
+      answerJson: JSON.stringify({ selected: ["滑动"] }),
+      answeredAt: new Date().toISOString(),
+    });
+
+    const written = recordMakeupAnswers(db, OWNER, SESSION, questions, {
+      Q1: { selected: ["滚动"] },
+      Q2: { selected: ["滑动"] },
+    });
+
+    expect(written).toMatchObject({ ok: false, status: 409, code: "QUIZ_NOT_ANSWERABLE" });
+    // Nothing at all: the first row is still open for a retry.
+    expect(listQuizQuestionViews(db, OWNER, SESSION)[0]!.status).toBe("skipped");
+  });
+
+  it("refuses every row when one belongs to another account", () => {
+    const { questions } = skippedPair();
+
+    const written = recordMakeupAnswers(db, OTHER, SESSION, questions, {
+      Q1: { selected: ["滚动"] },
+      Q2: { selected: ["滑动"] },
+    });
+
+    expect(written).toMatchObject({ ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" });
+    expect(listQuizQuestionViews(db, OWNER, SESSION).every((r) => r.status === "skipped")).toBe(true);
+  });
+
+  it("refuses a submission that answered none of the questions", () => {
+    // Not a partial answer but an empty one: the card's submit is disabled in this state, and the
+    // rule is enforced here as well so the function is safe on its own.
+    const { questions } = skippedPair();
+
+    const written = recordMakeupAnswers(db, OWNER, SESSION, questions, {});
+
+    expect(written).toMatchObject({ ok: false, status: 400, code: "INVALID_ANSWER" });
+    expect(listQuizQuestionViews(db, OWNER, SESSION).every((r) => r.status === "skipped")).toBe(true);
+  });
+
+  it("refuses a legacy question with no row behind it", () => {
+    const written = recordMakeupAnswers(
+      db,
+      OWNER,
+      SESSION,
+      [{ id: "Q1", header: "窗口", question: "哪几种？", options: options() }],
+      { Q1: { selected: ["滚动"] } }
+    );
+
+    expect(written).toMatchObject({ ok: false, status: 404 });
+  });
+
+  it("writes the answer with no verdict, so the row is awaiting a grade", () => {
+    /*
+     * A make-up never carries a grade of its own — it is the learner's answer, and the verdict
+     * comes from `ila_review_quiz` in the resumed turn. Asserted because the panel renders exactly
+     * this state, and because it is what the guarded UPDATE's grade-clearing columns are for: a row
+     * that arrives here from anywhere else must not show a stale verdict beside a new answer.
+     */
+    const { questions } = skippedPair();
+
+    recordMakeupAnswers(db, OWNER, SESSION, [questions[0]!], { Q1: { selected: ["滑动"] } });
+
+    const row = listQuizQuestionViews(db, OWNER, SESSION).find((r) => r.qid === "Q1")!;
+    expect(row.status).toBe("answered");
+    expect(row.answer?.selected).toEqual(["滑动"]);
+    expect(row.verdict).toBeNull();
+    expect(row.feedback).toBeNull();
+    expect(row.gradedAt).toBeNull();
   });
 });

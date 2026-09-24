@@ -566,6 +566,7 @@ const en: typeof MessageSchema = {
       ask_user: "Ask the user",
       ila_quiz: "Quiz",
       ila_review_quiz: "Grade quiz",
+      ila_makeup_quiz: "Make-up questions",
       ila_make_plan: "Make / edit plan",
       ila_read_plan: "Read plan",
       ila_update_plan_progress: "Update plan progress",
@@ -609,6 +610,7 @@ const en: typeof MessageSchema = {
   },
   quiz: {
     title: "Quiz",
+    makeupTitle: "Make-up",
     preparing: "Preparing questions",
     awaiting: "Waiting for your answers",
     answered: "Submitted",

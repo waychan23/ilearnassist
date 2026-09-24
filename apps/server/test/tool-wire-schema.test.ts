@@ -68,9 +68,12 @@ beforeEach(() => {
  * way `ila_explore` is assembled at all, so without it the tool would get *no* wire coverage —
  * which is precisely the hole this file exists to close.
  */
-async function sendOneTurn(workspaceScope?: unknown): Promise<Record<string, unknown>> {
+async function sendOneTurn(
+  workspaceScope?: unknown,
+  widgets?: string[]
+): Promise<Record<string, unknown>> {
   const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
-  const session = await newSession(env, workspace.id);
+  const session = await newSession(env, workspace.id, widgets ? { widgets } : {});
 
   if (workspaceScope !== undefined) {
     const patched = await env.inject({
@@ -193,6 +196,28 @@ describe("the tools a provider is sent", () => {
      */
     const names = sentTools(await sendOneTurn()).map((t) => t.function?.name);
     expect(names).toEqual(expect.arrayContaining([...PLAN_TOOL_NAMES]));
+  });
+
+  it("offers the make-up tool's flat object schema once the quiz widget is installed", async () => {
+    /*
+     * The tool is `required`-mode, so it is assembled only in a conversation that has the quiz
+     * widget — which is also why the generic case at the top of this file never sees it. Without
+     * this, the make-up tool would have **zero** wire coverage: the exact hole the note on
+     * `sendOneTurn`'s `workspaceScope` describes for `ila_explore`.
+     *
+     * Its shape is one flat object with a single optional array field, and that is the property
+     * worth pinning: `quiz_ids` as a union or a bare array would convert to no top-level type and
+     * the endpoint would refuse the function on every turn in every quiz conversation.
+     */
+    const makeup = sentTools(await sendOneTurn(undefined, ["quiz"])).find(
+      (t) => t.function?.name === "ila_makeup_quiz"
+    );
+    expect(makeup, "ila_makeup_quiz should be offered where the quiz widget is installed").toBeDefined();
+
+    const parameters = makeup!.function!.parameters!;
+    expect(parameters.type).toBe("object");
+    expect(parameters).not.toHaveProperty("anyOf");
+    expect(Object.keys(parameters.properties as Record<string, unknown>)).toEqual(["quiz_ids"]);
   });
 
   it("offers ila_table, whose schema is a flat object like the rest", async () => {

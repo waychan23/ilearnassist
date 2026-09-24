@@ -1,6 +1,7 @@
 import {
   ASK_USER_TOOL_NAME,
   PLAN_MAKE_TOOL_NAME,
+  QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_TOOL_NAME,
   type AnswerToolCallInput,
   type InteractiveAnswer,
@@ -9,7 +10,12 @@ import {
   type Workspace,
 } from "@ilearnassist/shared";
 import { readAskUserQuestions, renderAskUserResult, validateAnswers } from "./askUser.js";
-import { readQuizQuestions, renderQuizResult, validateQuizAnswers } from "./quiz.js";
+import {
+  readQuizQuestions,
+  renderQuizResult,
+  validateMakeupAnswers,
+  validateQuizAnswers,
+} from "./quiz.js";
 import { newId, type AppDb } from "../db.js";
 import {
   forceMakePlan,
@@ -17,7 +23,8 @@ import {
   readPlanConflictTree,
   renderMakeResult,
 } from "../plans.js";
-import { quizAnswerKeysForCall } from "../quizzes.js";
+import { quizAnswerKeysForCall, recordMakeupAnswers } from "../quizzes.js";
+import { renderMakeupResult } from "./quizMakeup.js";
 
 /**
  * What the answers route needs from a suspending tool.
@@ -229,6 +236,57 @@ const planMakeSpec: SuspendingTool = {
 };
 
 /**
+ * The make-up card. A `commit` spec, because answering it writes — and what it writes is the
+ * learner's answer, not a plan: N existing rows move from `skipped`/`dismissed` to `answered` in
+ * one transaction.
+ *
+ * It reuses `ila_quiz`'s reader, validator and result renderer wholesale, which is the design
+ * rather than a shortcut: the questions were recorded in the quiz shape, so the boundary that
+ * judges an answer and the sentence that reports it are the same ones a live quiz goes through,
+ * and a make-up cannot come to mean something slightly different from a first answer.
+ *
+ * A cancel writes nothing at all. The rows stay where they are, so the questions remain
+ * make-up-eligible — "not now" is not "never" — and the result tells the model that nothing was
+ * recorded, so it does not go looking for answers that are not there.
+ */
+const makeupQuizSpec: SuspendingTool = {
+  commit(call, submission, ctx) {
+    const questions = readQuizQuestions(call);
+    if (!questions) return undefined;
+
+    if (submission.action === "cancel") {
+      return { ok: true, answer: {}, output: renderQuizResult(questions, {}, "cancel") };
+    }
+
+    // The subset-aware validator: a make-up may leave questions unanswered, and that is what the
+    // learner asked for when they answered two of the five they skipped.
+    const validated = validateMakeupAnswers(questions, submission);
+    if (!validated.ok) return { ok: false, reason: validated.reason };
+
+    const written = recordMakeupAnswers(
+      ctx.db,
+      ctx.userId,
+      ctx.session.id,
+      questions,
+      validated.answers
+    );
+    if (!written.ok) {
+      return { ok: false, reason: written.reason ?? "the make-up answer could not be recorded" };
+    }
+
+    return {
+      ok: true,
+      answer: validated.answers,
+      // The keys come off the rows just written — the same place `ila_quiz`'s spec reads them
+      // from, and the only moment they may be shown: the question now has an answer. The rendered
+      // result is `ila_quiz`'s shape over the answered ones, plus the questions this learner
+      // passed over: see `renderMakeupResult`.
+      output: renderMakeupResult(questions, validated.answers, written.keys),
+    };
+  },
+};
+
+/**
  * Every tool whose calls can be answered, keyed by the name recorded on the call.
  *
  * The lookup is by the *stored call's* name rather than by anything the client sent, so a
@@ -239,5 +297,6 @@ const planMakeSpec: SuspendingTool = {
 export const SUSPENDING_TOOLS: Record<string, SuspendingTool> = {
   [ASK_USER_TOOL_NAME]: askUserSpec,
   [QUIZ_TOOL_NAME]: quizSpec,
+  [QUIZ_MAKEUP_TOOL_NAME]: makeupQuizSpec,
   [PLAN_MAKE_TOOL_NAME]: planMakeSpec,
 };

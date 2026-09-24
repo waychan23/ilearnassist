@@ -116,6 +116,11 @@ export interface RunAgentInput {
   /** The same mechanism for the quiz widget: judge/record answers and recognise make-ups. */
   quizGuidance?: string;
   /**
+   * The make-up card's positive half, on turns where `ila_makeup_quiz` survived assembly — see
+   * `SystemPromptInput.makeupGuidance`.
+   */
+  makeupGuidance?: string;
+  /**
    * The same mechanism again for keeping a web page, on turns where `ila_collect_page` is
    * assembled — the tool exists in every conversation with web fetching on, and this is what
    * says when to reach for it.
@@ -331,6 +336,13 @@ export interface SystemPromptInput {
   about?: string;
   planGuidance?: string;
   quizGuidance?: string;
+  /**
+   * The make-up card's positive half.
+   *
+   * Its **presence** is the switch, the `collectPageGuidance` rule: the route asks the assembled
+   * array, so a Copilot whose allow-list excludes the tool is never taught a call it cannot make.
+   */
+  makeupGuidance?: string;
   collectPageGuidance?: string;
   /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
@@ -425,6 +437,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   // is what "an installation with web fetching off" looks like from here.
   const plan = block(input.planGuidance);
   const quiz = block(input.quizGuidance);
+  const makeupCard = block(input.makeupGuidance);
   const collectPage = block(input.collectPageGuidance);
   const table = block(input.tableGuidance);
   const fileWrite = block(input.fileWriteGuidance);
@@ -442,6 +455,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     fileWrite,
     plan,
     quiz,
+    makeupCard,
     collectPage,
     table,
     explore,
@@ -596,6 +610,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         about: input.about,
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
+        makeupGuidance: input.makeupGuidance,
         collectPageGuidance: input.collectPageGuidance,
         tableGuidance: input.tableGuidance,
         fileWriteGuidance: input.fileWriteGuidance,
