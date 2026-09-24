@@ -5,6 +5,7 @@ import type { QuizAnswer, QuizQuestionView, QuizVerdict } from "../api/types";
 import { useAppStore } from "../stores/app";
 import { quizReference } from "../utils/turnRefs";
 import { codeCopyClick } from "../composables/codeCopy";
+import { useDraggableWindow } from "../composables/draggableWindow";
 import { renderMarkdown } from "../utils/markdown";
 import Icon from "../components/Icon.vue";
 import type { IconName } from "../utils/icons";
@@ -40,6 +41,16 @@ const emit = defineEmits<{ (e: "close"): void; (e: "select", question: QuizQuest
 
 const { t } = useI18n();
 const store = useAppStore();
+
+/*
+ * A question window is exactly the case the drag exists for: it is opened from the panel *beside*
+ * the conversation, and the passage it asks about is often under it.
+ */
+const panel = ref<HTMLElement | null>(null);
+const { placed, dragging, movable, onDragStart, onDragKeydown, onDragReset } = useDraggableWindow({
+  id: "quiz-detail",
+  panel,
+});
 
 const emptyDraft = (): QuizDraft => ({ selected: [], unsure: false, unsureReason: "", notes: "" });
 const draft = reactive<QuizDraft>(emptyDraft());
@@ -260,8 +271,23 @@ function askFollowup(): void {
 <template>
   <Teleport to="body">
     <div v-if="question" class="modal-overlay" @click.self="close" data-testid="quiz-detail-overlay">
-      <div class="modal md quiz-detail" role="dialog" :aria-label="t('quiz.detail.title')">
-        <div class="modal-head">
+      <div
+        ref="panel"
+        class="modal md quiz-detail"
+        :class="{ draggable: movable, 'is-moved': placed, dragging }"
+        :style="placed ? { left: `${placed.left}px`, top: `${placed.top}px` } : undefined"
+        role="dialog"
+        :aria-label="t('quiz.detail.title')"
+      >
+        <div
+          class="modal-head"
+          :tabindex="movable ? 0 : undefined"
+          :title="movable ? t('common.dragWindow') : undefined"
+          :aria-label="movable ? t('common.dragWindow') : undefined"
+          @pointerdown="onDragStart"
+          @keydown="onDragKeydown"
+          @dblclick="onDragReset"
+        >
           <div class="head-id">
             <span class="qid">{{ question.qid }}</span>
             <span class="head-header">{{ question.header }}</span>

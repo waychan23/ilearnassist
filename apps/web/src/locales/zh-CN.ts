@@ -51,6 +51,13 @@ export default {
     loading: "加载中…",
     retry: "重试",
     copyFailed: "复制失败，请手动选中复制",
+    /*
+     * Said by every window that can be moved — the question panel, the file preview, the diagram
+     * viewer, the library — which is why it is here rather than under any one of them. It is the
+     * head's accessible name as well as its tooltip, so it has to describe the gesture rather than
+     * just name the box.
+     */
+    dragWindow: "拖动标题栏可移动窗口，双击复位",
   },
 
   /**

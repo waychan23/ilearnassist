@@ -34,6 +34,7 @@ const en: typeof MessageSchema = {
     loading: "Loading…",
     retry: "Try again",
     copyFailed: "Copy failed — select the text and copy it yourself",
+    dragWindow: "Drag the title bar to move this window; double-click to put it back",
   },
 
   /**

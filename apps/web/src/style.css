@@ -2765,6 +2765,38 @@ pre.code-block {
   width: var(--modal-lg);
 }
 
+/*
+ * A window the reader can move, by its header.
+ *
+ * Only the chrome lives here: the coordinates are inline (they are a pointer's, recomputed sixty
+ * times a second) and the clamp is `utils/windowDrag.ts`. Three rules, and each is load bearing.
+ *
+ * `position: fixed` applies **only once the window has moved** (`.is-moved`), so a dialog nobody
+ * drags keeps the overlay's flex centring and its behaviour at every width. A window that *has*
+ * been moved takes inline `left`/`top` in viewport coordinates, which is the same place the flex
+ * row had put it — see the composable's `onPointerDown` for why that means no jump.
+ *
+ * `touch-action: none` on the header, because a touch drag that pans the page underneath instead
+ * is not a drag. And `user-select: none`, because a press-and-move over a title is a drag here and
+ * a text selection everywhere else: the header is a title bar, not content, and the reader's hand
+ * passing over the file's name should not smear blue across it.
+ *
+ * Below the narrow breakpoint the modal is a bottom sheet pinned to the bottom edge, and while a
+ * dialog is maximised it fills the viewport — neither is a floating window, so `movable` is false
+ * there and no class or coordinate of this block applies.
+ */
+.modal.draggable > .modal-head {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.modal.draggable.dragging > .modal-head {
+  cursor: grabbing;
+}
+.modal.draggable.is-moved {
+  position: fixed;
+}
+
 .modal .modal-head {
   display: flex;
   align-items: center;

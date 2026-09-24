@@ -14,6 +14,7 @@ import {
 } from "../../utils/resourceView";
 import { useAppStore } from "../../stores/app";
 import { uiState } from "../../composables/ui";
+import { useDraggableWindow } from "../../composables/draggableWindow";
 import { confirm } from "../../composables/confirm";
 import { translateParseError } from "../../utils/apiError";
 import { isOpenableUrl, openExternal } from "../../utils/externalLink";
@@ -70,6 +71,18 @@ const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
 const store = useAppStore();
+
+/*
+ * The browser is opened *over* the thing being looked for — a reply that cites a file, a chat the
+ * reader is mid-sentence in — so being able to shove it aside is the same requirement the question
+ * panel and the previews have. It is the one dialog here that is always mounted, which is why the
+ * remembered position is worth having: reopening it lands where the reader left it.
+ */
+const panel = ref<HTMLElement | null>(null);
+const { placed, dragging, movable, onDragStart, onDragKeydown, onDragReset } = useDraggableWindow({
+  id: "library-browser",
+  panel,
+});
 
 /**
  * A filter object with every key present, as the empty string where there is no filter.
@@ -539,12 +552,23 @@ function expandAll(): void {
   <Teleport v-if="uiState.sourcesOpen" to="body">
     <div class="modal-overlay" @click.self="emit('close')">
       <div
+        ref="panel"
         class="modal resource-browser"
+        :class="{ draggable: movable, 'is-moved': placed, dragging }"
+        :style="placed ? { left: `${placed.left}px`, top: `${placed.top}px` } : undefined"
         role="dialog"
         aria-modal="true"
         data-testid="library-dialog"
       >
-        <div class="modal-head">
+        <div
+          class="modal-head"
+          :tabindex="movable ? 0 : undefined"
+          :title="movable ? t('common.dragWindow') : undefined"
+          :aria-label="movable ? t('common.dragWindow') : undefined"
+          @pointerdown="onDragStart"
+          @keydown="onDragKeydown"
+          @dblclick="onDragReset"
+        >
           <h3>{{ t("sources.title") }}</h3>
 
           <!--
