@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import Icon from "./Icon.vue";
+import { copyRich } from "../utils/clipboard";
 
 /**
  * Copy a string to the clipboard, and say so.
@@ -12,8 +13,9 @@ import Icon from "./Icon.vue";
  * moment either way — to "copied" or to "copy failed" — because "nothing happened" is the one
  * outcome the user cannot act on.
  *
- * `navigator.clipboard` is absent outside a secure context (and in jsdom), so the failure
- * branch is reachable in normal use rather than theoretical.
+ * The write itself is `utils/clipboard.ts`'s, including the fallback for an origin with no
+ * `navigator.clipboard` — the LAN address is one, and it is reachable in normal use rather than
+ * theoretical.
  */
 
 const props = defineProps<{
@@ -39,7 +41,8 @@ const props = defineProps<{
    *
    * `write()` with a `ClipboardItem` needs a secure context and a browser that has `ClipboardItem`
    * at all; where it is missing, the text is what gets written, because a copy that half-worked is
-   * worse than one that took the plainer of the two.
+   * worse than one that took the plainer of the two. `utils/clipboard.ts` is where that choice is
+   * made, and where the origin with no clipboard API at all is answered.
    */
   html?: string;
 }>();
@@ -51,17 +54,7 @@ let reset: ReturnType<typeof setTimeout> | null = null;
 
 async function copy(): Promise<void> {
   try {
-    const { html } = props;
-    if (html && typeof ClipboardItem !== "undefined" && navigator.clipboard.write) {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          "text/html": new Blob([html], { type: "text/html" }),
-          "text/plain": new Blob([props.value], { type: "text/plain" }),
-        }),
-      ]);
-    } else {
-      await navigator.clipboard.writeText(props.value);
-    }
+    await copyRich(props.value, props.html ?? null);
     state.value = "copied";
   } catch {
     state.value = "failed";

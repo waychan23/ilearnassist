@@ -119,6 +119,33 @@ describe("codeCopyClick", () => {
     expect(button().dataset.copyState).toBe("failed");
   });
 
+  it("copies on an origin with no clipboard API at all", async () => {
+    /*
+     * The reported crash. `navigator.clipboard` is `undefined` on the http LAN address this app is
+     * served at, and the handler used to dereference `.writeText` straight through — a synchronous
+     * `TypeError` that escaped into `MessageItem`'s click handler, so the control did nothing and
+     * said nothing. It now takes the fallback and reports "copied", and the assertion that matters
+     * is that the press does not throw.
+     */
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    const exec = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: exec, configurable: true, writable: true });
+
+    try {
+      expect(() => codeCopyClick(press())).not.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(exec).toHaveBeenCalledWith("copy");
+      expect(button().dataset.copyState).toBe("copied");
+    } finally {
+      Object.defineProperty(document, "execCommand", {
+        value: undefined,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
   /** The real wiring: the handler on the container, the press on the button inside it. */
   function wire(handler: (event: MouseEvent) => boolean): { ancestor: ReturnType<typeof vi.fn> } {
     const ancestor = vi.fn();

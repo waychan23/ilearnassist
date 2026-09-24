@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import Icon from "./Icon.vue";
+import { copyText } from "../utils/clipboard";
 
 /**
  * The model's chain of thought, following chatbox's reasoning row (which in turn mirrors
@@ -50,7 +51,7 @@ const summary = computed(() => {
 
 async function copy() {
   try {
-    await navigator.clipboard.writeText(props.content);
+    await copyText(props.content);
     copied.value = true;
     setTimeout(() => (copied.value = false), 1500);
   } catch {

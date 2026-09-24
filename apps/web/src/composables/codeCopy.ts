@@ -14,6 +14,7 @@
  * carry text, and that is what `data-note-skip` on it is for.)
  */
 
+import { copyRich, copyText } from "../utils/clipboard";
 import { tableHtmlForClipboard } from "../utils/tableClipboard";
 
 /** How long the control says "copied" before going back. Matches `CopyButton.vue`'s beat. */
@@ -25,9 +26,12 @@ const RESET_MS = 2_000;
  * Returns whether it handled the event, so a caller with its own click behaviour — the message
  * list opens a note when a highlight is pressed — can tell the two apart rather than guessing.
  *
- * `navigator.clipboard` is absent outside a secure context and in jsdom, so the failure branch is
- * reachable in ordinary use rather than theoretical; the control says so rather than appearing to
- * have worked, which is `CopyButton.vue`'s reasoning and the one outcome the user cannot act on.
+ * The write itself goes through `utils/clipboard.ts`, which is where the non-secure-origin
+ * fallback lives — and that is not a detail of this file: the reported failure was a **synchronous
+ * throw** out of `navigator.clipboard.writeText` on an `http://192.168.x.x` address, straight
+ * through the `.catch` below and into the container's handler. The control says "failed" rather
+ * than appearing to have worked, which is `CopyButton.vue`'s reasoning and the one outcome the
+ * user cannot act on.
  */
 export function codeCopyClick(event: MouseEvent): boolean {
   const button = (event.target as Element | null)?.closest<HTMLElement>("[data-copy-code]");
@@ -45,8 +49,7 @@ export function codeCopyClick(event: MouseEvent): boolean {
   // markup is for.
   const text = button.closest("pre")?.querySelector("code")?.textContent ?? "";
 
-  void navigator.clipboard
-    .writeText(text)
+  void copyText(text)
     .then(() => flash(button, "copied"))
     .catch(() => flash(button, "failed"));
 
@@ -64,8 +67,9 @@ export function codeCopyClick(event: MouseEvent): boolean {
  * without them arrives as a heap of words in a grid nobody can see.
  *
  * `write` with a `ClipboardItem` needs a secure context and a browser that has `ClipboardItem` at
- * all; where either is missing the text alone is written, the fallback `CopyButton.vue` makes and
- * for the same reason — a copy that half-worked is worse than one that took the plainer of the two.
+ * all; where either is missing the text alone is written — `utils/clipboard.ts`'s rule, and
+ * `CopyButton.vue`'s before it: a copy that half-worked is worse than one that took the plainer of
+ * the two.
  */
 export function tableCopyClick(event: MouseEvent): boolean {
   const button = (event.target as Element | null)?.closest<HTMLElement>("[data-copy-table]");
@@ -83,19 +87,6 @@ export function tableCopyClick(event: MouseEvent): boolean {
     .catch(() => flash(button, "failed"));
 
   return true;
-}
-
-async function copyRich(text: string, html: string | null): Promise<void> {
-  if (html && typeof ClipboardItem !== "undefined" && navigator.clipboard.write) {
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        "text/html": new Blob([html], { type: "text/html" }),
-        "text/plain": new Blob([text], { type: "text/plain" }),
-      }),
-    ]);
-    return;
-  }
-  await navigator.clipboard.writeText(text);
 }
 
 /**
