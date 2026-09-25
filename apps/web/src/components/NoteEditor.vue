@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useDraggableWindow } from "../composables/draggableWindow";
 import type { NoteType } from "@ilearnassist/shared";
 import { NOTE_TYPES } from "@ilearnassist/shared";
 import { confirm } from "../composables/confirm";
@@ -74,6 +75,7 @@ const type = ref<NoteType>(props.draft.type);
 const content = ref(props.draft.content);
 const card = ref<HTMLElement | null>(null);
 
+
 /** Whether the note exists yet. A create has nothing to delete until it is saved. */
 const existing = computed(() => !!props.draft.noteId);
 
@@ -128,6 +130,10 @@ const position = ref<{ left: number; top: number } | null>(null);
 /**
  * Whether the window has been grown to fill the screen.
  *
+ * Declared above the drag rather than with the rest of the size logic below it: the composable's
+ * watcher runs immediately and reads the value, and a `const` read before its initializer is a
+ * ReferenceError rather than a stale `false`.
+ *
  * The card is a floating popover by default, and that is the right default — the annotated text is
  * the context for what is being written, so it stays readable behind the card. But a note can be
  * long, and the floating size is a deliberate compromise rather than a place to write several
@@ -141,6 +147,23 @@ const position = ref<{ left: number; top: number } | null>(null);
  */
 const maximized = ref(false);
 
+/*
+ * Movable, like the other windows — the note floats *beside* the passage it is about, and a long
+ * quote can put it over the very text being annotated.
+ *
+ * `fallback` is what makes this window different from the dialogs: it places itself (`place()`,
+ * measured against the selection), so where it sits when nobody has dragged it is a value the
+ * composable has to be handed rather than one the layout supplies. Off while maximised, like every
+ * other window that can fill the viewport.
+ */
+const { placed, dragging, movable, moved, onDragStart, onDragKeydown, onDragReset } =
+  useDraggableWindow({
+    id: "note-editor",
+    panel: card,
+    enabled: computed(() => !maximized.value),
+    fallback: position,
+  });
+
 /**
  * Float near the anchor, or dock to the corner.
  *
@@ -152,6 +175,11 @@ const maximized = ref(false);
 function place(): void {
   const el = card.value;
   if (!el) return;
+  /*
+   * A window the reader has moved is theirs, not the layout's: re-placing it against the anchor on
+   * a resize — or when the body grows — would take the gesture back a second after it was made.
+   */
+  if (moved.value) return;
   const gap = 12;
   const { offsetWidth: width, offsetHeight: height } = el;
   const anchor = props.anchor;
@@ -326,19 +354,27 @@ function typeLabel(candidate: NoteType): string {
     <div
       ref="card"
       class="note-editor"
-      :class="{ maximized }"
+      :class="{ maximized, draggable: movable, 'is-moved': placed && moved, dragging }"
       data-testid="note-editor"
       role="group"
       :aria-label="t('notes.editor.title')"
       :aria-modal="maximized || undefined"
       :style="
-        !maximized && position
-          ? { left: `${position.left}px`, top: `${position.top}px` }
+        !maximized && placed
+          ? { left: `${placed.left}px`, top: `${placed.top}px` }
           : undefined
       "
       @keydown="onKeydown"
     >
-      <div class="note-editor-head">
+      <div
+        class="note-editor-head"
+        :tabindex="movable ? 0 : undefined"
+        :title="movable ? t('common.dragWindow') : undefined"
+        :aria-label="movable ? t('common.dragWindow') : undefined"
+        @pointerdown="onDragStart"
+        @keydown="onDragKeydown"
+        @dblclick="onDragReset"
+      >
         <span class="note-editor-title" data-testid="note-editor-title">
           {{ existing ? t("notes.editor.editTitle") : t("notes.editor.newTitle") }}
         </span>

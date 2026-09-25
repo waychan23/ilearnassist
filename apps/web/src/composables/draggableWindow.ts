@@ -50,6 +50,15 @@ export interface DraggableWindowOptions {
    * bottom sheet at this width. Absent means always movable.
    */
   enabled?: Ref<boolean>;
+  /**
+   * Where the window sits when nobody has moved it, for a window that places *itself*.
+   *
+   * A centred dialog needs none: the overlay's layout puts it somewhere good, and an absent
+   * fallback means exactly that. The note window does need one — it floats beside the passage it is
+   * about, measured against a selection that moves — so its own placement is handed in here. A
+   * dragged position still wins over it, which is what the name is for.
+   */
+  fallback?: Ref<WindowBox | null>;
 }
 
 export interface DraggableWindow {
@@ -58,6 +67,14 @@ export interface DraggableWindow {
   dragging: Ref<boolean>;
   /** Whether this window may be moved at all — which is also the class and the `tabindex`. */
   movable: ComputedRef<boolean>;
+  /**
+   * Whether the reader has moved it.
+   *
+   * A window that places itself has to stop doing that once somebody has: a card that snapped back
+   * to its anchor on the next resize would undo the gesture. Its owner asks this rather than
+   * inferring it, because the fallback makes "has a position" true either way.
+   */
+  moved: ComputedRef<boolean>;
   onDragStart(event: PointerEvent): void;
   onDragKeydown(event: KeyboardEvent): void;
   onDragReset(): void;
@@ -77,10 +94,16 @@ export function useDraggableWindow(options: DraggableWindowOptions): DraggableWi
   const dragging = ref(false);
 
   const movable = computed(() => !isNarrow.value && (options.enabled?.value ?? true));
+  const moved = computed(() => position.value !== null);
   // The inline position is withheld rather than merely ignored where the window may not move: a
   // stale `left`/`top` on a maximised dialog positions it against the viewport and puts it off
   // the screen, which is the one way this feature can lose a window.
-  const placed = computed(() => (movable.value ? position.value : null));
+  const placed = computed(() => {
+    if (!movable.value) return null;
+    // Where the reader put it, else where its own layout puts it — and for a dialog that is neither,
+    // the overlay's centring, which needs no inline style at all.
+    return position.value ?? options.fallback?.value ?? null;
+  });
 
   function viewport(): WindowSize {
     return { width: window.innerWidth, height: window.innerHeight };
@@ -233,6 +256,7 @@ export function useDraggableWindow(options: DraggableWindowOptions): DraggableWi
     placed,
     dragging,
     movable,
+    moved,
     onDragStart,
     onDragKeydown,
     onDragReset,

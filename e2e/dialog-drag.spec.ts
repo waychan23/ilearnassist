@@ -1,6 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "./fixtures";
+import { scriptLlm } from "./llm";
+import { annotate } from "./notes";
 import { enterWorkspace } from "./workspaces";
 
 /**
@@ -196,4 +198,73 @@ test.describe("on a narrow viewport", () => {
     expect(after.y).toBeCloseTo(before.y, 0);
     await expect(box).not.toHaveClass(/is-moved/);
   });
+});
+
+/**
+ * The note window is the one that places itself, so it is dragged on its own terms.
+ *
+ * It floats beside the passage it is about, measured against a selection that moves — which is why
+ * the composable takes a *fallback* position for it rather than leaving it to the overlay. Two
+ * things follow and neither is true of a dialog: a dragged window must stop following its anchor
+ * (a resize would otherwise snap it back), and closing and reopening it is the same window.
+ */
+test("the note window is dragged by its header, and stops following its anchor", async ({
+  page,
+  request,
+}) => {
+  const phrase = "光反应阶段";
+  await scriptLlm(request, {
+    title: "光合作用",
+    turns: [{ content: `讲讲光合作用：${phrase}把光能变成化学能。` }],
+  });
+
+  const name = `拖动笔记 ${Date.now()}`;
+  await page.goto("/");
+  await page.getByTestId("workspace-new").click();
+  await page.getByTestId("workspace-name-input").fill(name);
+  await page.getByTestId("workspace-create-submit").click();
+  await enterWorkspace(page, name);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("new-session-widget-check-notes").check();
+  await page.getByTestId("create-session").click();
+  await page.getByTestId("widget-tab-notes").click();
+
+  await page.getByTestId("composer-input").fill("讲讲光合作用");
+  await page.getByTestId("composer-send").click();
+  const reply = page.locator('[data-testid="message-assistant"]').last();
+  await expect(reply).toContainText(phrase);
+
+  // One click marks the passage; the row is what opens the window.
+  await annotate(page, reply, phrase);
+  await page.getByTestId("notes-list").locator("li").first().click();
+
+  const editor = page.getByTestId("note-editor");
+  await expect(editor).toBeVisible();
+  const before = (await editor.boundingBox())!;
+
+  await dragBy(page, editor.locator(".note-editor-head"), 140, 90);
+
+  const after = (await editor.boundingBox())!;
+  expect(after.x).toBeCloseTo(before.x + 140, 0);
+  expect(after.y).toBeCloseTo(before.y + 90, 0);
+
+  /*
+   * And it stays there. A window that places itself would otherwise re-place on the next resize —
+   * `place()` runs on one — which is the gesture being taken back a second after it is made.
+   */
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await page.waitForTimeout(100);
+  const resized = (await editor.boundingBox())!;
+  expect(resized.x).toBeCloseTo(after.x, 0);
+  expect(resized.y).toBeCloseTo(after.y, 0);
+
+  // Closing and reopening is the same window, where the reader left it.
+  await editor.getByTestId("note-editor-close").click();
+  await expect(page.getByTestId("note-editor")).toHaveCount(0);
+  await page.getByTestId("notes-list").locator("li").first().click();
+  const reopened = page.getByTestId("note-editor");
+  await expect(reopened).toBeVisible();
+  const again = (await reopened.boundingBox())!;
+  expect(again.x).toBeCloseTo(after.x, 0);
+  expect(again.y).toBeCloseTo(after.y, 0);
 });
