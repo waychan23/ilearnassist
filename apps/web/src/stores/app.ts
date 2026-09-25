@@ -4,6 +4,7 @@ import {
   api,
   setUnauthenticatedHandler,
   streamAnswers,
+  streamQuizMakeup,
   streamChat,
   streamRegenerate,
   fileToBase64,
@@ -57,6 +58,7 @@ import type {
   MessageUsage,
   ProviderConfig,
   PublicConfig,
+  QuizAnswers,
   Session,
   SessionLockView,
   SessionSettings,
@@ -2620,6 +2622,15 @@ export const useAppStore = defineStore("app", () => {
         messages.value = messages.value.map((m) => (m.id === localId ? ev.message : m));
         break;
       }
+      case "message_added":
+        /*
+         * A message the **server** wrote: a make-up's record of the answers it was given. No model
+         * produced it and no optimistic bubble was drawn for it, so it cannot arrive as
+         * `message_saved` — and it is pushed here, before the grading turn's reply streams in under
+         * it, because the reader should see what they answered while the model works.
+         */
+        messages.value = [...messages.value, ev.message];
+        break;
       case "message_removed":
         /*
          * A regenerate dropped this reply server-side before the replacement streams. The
@@ -3008,6 +3019,50 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * The make-up card's own submit: the answers the learner gave in the card that asked the
+   * question.
+   *
+   * Not `answerQuestion`, and the difference is structural rather than stylistic: there is no
+   * pending call to answer. The call was retired the moment the learner walked away, and the
+   * server records the answers as a **completed** make-up call at the tail of the conversation —
+   * which is where the grading has to start from, since an old turn cannot be resumed. So this
+   * action sends the answers and nothing else; the prompt text, the question wording and the
+   * answer key never pass through the client at all.
+   *
+   * It shares the local flip with `answerQuestion`: the card shows what was answered before the
+   * server has said anything, and is put back if the submission is refused.
+   */
+  async function submitQuizMakeup(toolCallId: string, answers: QuizAnswers): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    const toolCall = findToolCall(toolCallId);
+    if (streaming.value.active) return false;
+    if (!sessionId || !toolCall) {
+      setError(translateApiError("QUESTION_NOT_PENDING", undefined, undefined));
+      return false;
+    }
+
+    const previous: { status: ToolCall["status"]; answer: ToolCall["answer"] } = {
+      status: toolCall.status,
+      answer: toolCall.answer,
+    };
+    toolCall.status = "answered";
+    // Merged, because a card over five questions may have had two made up: the rest stay
+    // unanswered in its record, which is what its settled view renders.
+    toolCall.answer = { ...((toolCall.answer as QuizAnswers | undefined) ?? {}), ...answers };
+
+    streaming.value = { ...EMPTY_STREAMING(), active: true };
+    // A resumed turn moves the message counts and the token totals just as a fresh one does.
+    emitWidgetEvent({ type: "turn.started", sessionId });
+
+    const accepted = await consume(streamQuizMakeup(sessionId, answers), sessionId);
+    if (!accepted) {
+      toolCall.status = previous.status;
+      toolCall.answer = previous.answer;
+    }
+    return accepted;
+  }
+
+  /**
    * Cut the streaming turn short.
    *
    * It asks the server and then does nothing else, deliberately. The chat request is
@@ -3161,6 +3216,7 @@ export const useAppStore = defineStore("app", () => {
     clearPendingAttachments,
     sendMessage,
     answerQuestion,
+    submitQuizMakeup,
     sendPanelMessage,
     planJumpToNode,
     makeupQuizAnswer,

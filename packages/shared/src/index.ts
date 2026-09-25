@@ -1510,6 +1510,18 @@ export interface AnswerToolCallInput extends TurnRequestMeta {
   answers?: InteractiveAnswer;
 }
 
+/**
+ * One make-up card's submission, from the client's own surface rather than from a tool call.
+ *
+ * `answers` is keyed by the question's **`Qn`** — the same map `QuizAnswers` always is, which is
+ * what lets the card that was skipped submit through the same shape it would have used the first
+ * time. The route resolves those ids against the conversation's own rows, so the payload names
+ * questions rather than carrying them.
+ */
+export interface QuizMakeupSubmitBody extends TurnRequestMeta {
+  answers: QuizAnswers;
+}
+
 /** A single tool invocation recorded on an assistant message (for rendering + history). */
 export interface ToolCall {
   id: string;
@@ -3800,6 +3812,17 @@ export type ChatStreamEvent =
    * stream. `id` names the row; nothing else about it travels.
    */
   | { type: "message_removed"; id: string }
+  /**
+   * A message the **server** wrote, which no model produced. Sent by the make-up route right
+   * after `meta`, carrying the whole persisted row.
+   *
+   * `message_saved` cannot serve here: it swaps the optimistic bubble a *user* message was drawn
+   * under, keyed by the id this client made up, so it is a no-op for a row that arrived from
+   * nowhere. That is what this frame is — a make-up records the answers it was given as a
+   * completed `ila_makeup_quiz` call, because the model has to read them as a tool result, and
+   * the conversation has to show the record they left behind.
+   */
+  | { type: "message_added"; message: Message }
   /**
    * A turn named the conversation. Sent whenever the titler produces a title — which is any turn
    * up to the one where it lands, not only the first — and never for a decline, since nothing on

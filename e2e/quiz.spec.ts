@@ -384,3 +384,61 @@ test("option explanations stay hidden while answering and appear in the settled 
   await page.getByTestId("quiz-disclosure").click();
   await expect(page.getByTestId("quiz-details")).toContainText(SECRET);
 });
+
+test("a skipped quiz is made up where it was asked, without going to the panel", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The requirement's shape, in one flow: a question the learner walked away from is answered **on
+   * the card that asked it** — the same control, the same options — and the grading is a turn that
+   * starts from the newest position in the conversation, because the server cannot resume the old
+   * one. What that costs is a second card at the tail: the record of what was answered, which is
+   * what the model reads the answers from.
+   */
+  await scriptLlm(request, {
+    title: "Flink 入门",
+    turns: [
+      {
+        content: "先测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: QUESTIONS.slice(0, 1) } }],
+      },
+      { content: "好，那我先讲别的。" },
+      { content: "这次答对了。" },
+    ],
+  });
+
+  await startQuiz(page);
+
+  // Walk away from it, which is the state the make-up control exists for.
+  await page.getByTestId("composer-input").fill("算了，先讲别的");
+  await page.getByTestId("composer-send").click();
+  await expect(page.getByTestId("quiz-status")).toHaveText("已跳过");
+  await expect(page.getByTestId("quiz-makeup-open")).toBeVisible();
+
+  // Answer it where it is: the card becomes the form it was the first time.
+  await page.getByTestId("quiz-makeup-open").click();
+  await expect(page.getByTestId("quiz-option-0-0")).toBeVisible();
+  await choice(page, 0, 0).check();
+  await page.getByTestId("quiz-submit").click();
+
+  // The reply the grading runs after, and the record the model was given the answers in.
+  await expect(page.getByTestId("message-assistant").last()).toContainText("这次答对了。");
+  const record = page.getByTestId("quiz-card").last();
+  await expect(record).toContainText("补答");
+  await expect(record.getByTestId("quiz-status")).toHaveText("已提交");
+  await expect(record.getByTestId("quiz-answer-0")).toHaveText("滚动窗口");
+
+  // And the card that asked it stops claiming it was skipped: the answer is written back onto it.
+  const original = page.getByTestId("quiz-card").first();
+  await expect(original.getByTestId("quiz-status")).toHaveText("已提交");
+  await expect(original.getByTestId("quiz-answer-0")).toHaveText("滚动窗口");
+  // No control left that would send a second answer for the same question.
+  await expect(page.getByTestId("quiz-makeup-open")).toHaveCount(0);
+
+  // A reload agrees, which is the half a local flip cannot fake.
+  await page.reload();
+  await expect(page.getByTestId("quiz-card").last().getByTestId("quiz-answer-0")).toHaveText(
+    "滚动窗口"
+  );
+});

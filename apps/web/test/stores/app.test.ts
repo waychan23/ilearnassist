@@ -115,6 +115,7 @@ const mocks = vi.hoisted(() => ({
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
   streamRegenerate: vi.fn(),
+  streamQuizMakeup: vi.fn(),
   fileToBase64: vi.fn(),
   /**
    * The client's 401 callback, captured rather than stubbed.
@@ -132,6 +133,7 @@ vi.mock("../../src/api/client", () => ({
   streamChat: mocks.streamChat,
   streamAnswers: mocks.streamAnswers,
   streamRegenerate: mocks.streamRegenerate,
+  streamQuizMakeup: mocks.streamQuizMakeup,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
   fileImageUrl: (fileId: string) => Promise.resolve(`blob:files/${fileId}`),
@@ -295,6 +297,13 @@ function copilotFixture(id: string, userId: string): Copilot {
 
 function streamOf(...events: ChatStreamEvent[]) {
   mocks.streamChat.mockImplementation(async function* () {
+    for (const event of events) yield event;
+  });
+}
+
+/** The same, for the make-up route — the third stream a turn can arrive on. */
+function makeupStreamOf(...events: ChatStreamEvent[]) {
+  mocks.streamQuizMakeup.mockImplementation(async function* () {
     for (const event of events) yield event;
   });
 }
@@ -2400,6 +2409,123 @@ describe("quiz widgets", () => {
     );
     expect(ok).toBe(false);
     expect(mocks.api.answerQuizQuestion).not.toHaveBeenCalled();
+  });
+});
+
+describe("the make-up card's own submit", () => {
+  /** A conversation with a skipped quiz card in it, which is the state the control appears in. */
+  async function storeWithSkippedCard() {
+    streamOf(
+      {
+        type: "message_done",
+        message: {
+          id: "m1",
+          sessionId: "s1",
+          role: "assistant",
+          content: "先测一下。",
+          createdAt: new Date().toISOString(),
+          toolCalls: [
+            {
+              id: "c1",
+              name: "ila_quiz",
+              input: JSON.stringify({
+                questions: [
+                  { id: "Q1", header: "窗口", question: "哪一种？", options: [{ label: "滚动" }] },
+                  { id: "Q2", header: "状态", question: "哪一个？", options: [{ label: "RocksDB" }] },
+                ],
+              }),
+              status: "skipped",
+            },
+          ],
+        },
+      },
+      { type: "done" }
+    );
+    const store = await readyStore();
+    await store.sendMessage("先讲别的");
+    return store;
+  }
+
+  it("sends the answers to the make-up route and shows them on the card at once", async () => {
+    const store = await storeWithSkippedCard();
+    makeupStreamOf({ type: "done" });
+
+    const ok = await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never);
+
+    expect(ok).toBe(true);
+    // Nothing to cancel and nothing to quote: the answers go to the route that records them, and
+    // no prompt text is built anywhere on the client.
+    expect(mocks.streamQuizMakeup).toHaveBeenCalledWith("s1", { Q1: { selected: ["滚动"] } });
+    // One `/chat` and no more, and that one is the setup's: the submission itself composes no user
+    // message at all, which is the whole point of the answers travelling as a tool call.
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
+    expect(call.status).toBe("answered");
+    expect(call.answer).toEqual({ Q1: { selected: ["滚动"] } });
+  });
+
+  it("merges into whatever the card already recorded, so the untouched questions stay unanswered", async () => {
+    // A second submission on the same card — the panel's batch writes onto the same record.
+    const store = await storeWithSkippedCard();
+    const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
+    call.answer = { Q2: { selected: ["RocksDB"] } } as never;
+    makeupStreamOf({ type: "done" });
+
+    await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never);
+
+    expect(call.answer).toEqual({
+      Q2: { selected: ["RocksDB"] },
+      Q1: { selected: ["滚动"] },
+    });
+  });
+
+  it("puts the card back when the server refuses the submission", async () => {
+    const store = await storeWithSkippedCard();
+    mocks.streamQuizMakeup.mockReturnValue(
+      (async function* () {
+        throw new Error("这道题已经答过了");
+      })()
+    );
+
+    const ok = await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never);
+
+    expect(ok).toBe(false);
+    const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
+    // Back to skipped: a refusal is not an answer, and a card that kept the local flip would
+    // claim something the server never recorded.
+    expect(call.status).toBe("skipped");
+    expect(call.answer).toBeUndefined();
+  });
+
+  it("does nothing while a turn is streaming", async () => {
+    const store = await storeWithSkippedCard();
+    store.streaming.active = true;
+
+    expect(await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never)).toBe(false);
+    expect(mocks.streamQuizMakeup).not.toHaveBeenCalled();
+  });
+
+  it("adds the message the server wrote, so the record is on screen before the reply", async () => {
+    // `message_added` is the one frame carrying a row no model produced: a make-up's record.
+    streamOf(
+      {
+        type: "message_added",
+        message: {
+          id: "rec1",
+          sessionId: "s1",
+          role: "assistant",
+          content: "",
+          createdAt: new Date().toISOString(),
+          toolCalls: [{ id: "c9", name: "ila_makeup_quiz", input: "{}", status: "answered" }],
+        },
+      },
+      { type: "done" }
+    );
+    const store = await readyStore();
+    await store.sendMessage("把上次跳过的题补一下");
+
+    const added = store.messages.find((m) => m.id === "rec1");
+    expect(added?.toolCalls?.[0]).toMatchObject({ name: "ila_makeup_quiz", status: "answered" });
   });
 });
 

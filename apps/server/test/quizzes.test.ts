@@ -604,7 +604,9 @@ describe("recordMakeupAnswers", () => {
 
     expect(written.ok).toBe(true);
     if (!written.ok) throw new Error("expected ok");
-    expect([...written.written].sort()).toEqual(["Q1", "Q2"]);
+    expect(written.applied.map((w) => w.qid).sort()).toEqual(["Q1", "Q2"]);
+    // Each entry names the call that asked it, which is where the answer is written back.
+    expect(written.applied.every((w) => w.toolCallId === "call-1")).toBe(true);
     // Only the question posed with a key has one: a keyless question grades without one, exactly
     // as it does on a first answer.
     expect(written.keys.get("Q1")).toEqual({

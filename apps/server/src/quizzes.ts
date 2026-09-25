@@ -436,8 +436,102 @@ export function makeupQuestions(
   });
 }
 
+/**
+ * The same selection, addressed by the **`Qn`** the card shows rather than by the global id.
+ *
+ * That is the difference between the two doors: the model names questions the way `ila_query`
+ * reports them (global ids, which it read), while a card that was skipped holds the questions it
+ * asked — `Q1`, `Q2` — and the learner answers the one in front of them. Neither id is derived
+ * from the other, so each door resolves the one it was given against the same rows.
+ *
+ * A qid that is not an unanswered question here throws, like its sibling: a stale card is a
+ * refusal the reader can be told about, not a silent write of something else.
+ */
+export function makeupQuestionsByQid(
+  db: AppDb,
+  sessionId: string,
+  qids: string[]
+): QuizQuestion[] {
+  const rows = db
+    .listQuizQuestionsBySession(sessionId)
+    .filter((row) => MAKEUP_ELIGIBLE.has(row.status))
+    .sort((a, b) => a.position - b.position);
+
+  const byQid = new Map(rows.map((row) => [row.qid, row]));
+  return [...new Set(qids)].map((qid) => {
+    const row = byQid.get(qid);
+    if (!row) {
+      throw new Error(
+        `the make-up card named ${qid}, which is not a question this conversation left unanswered`
+      );
+    }
+    return toMakeupQuestion(row);
+  });
+}
+
+/**
+ * Write the make-up back onto the **calls that asked the questions**, so the card a reader
+ * scrolled past shows what they answered.
+ *
+ * Without this the conversation keeps saying "skipped" about a question that has an answer: the
+ * rows are right, the panel is right, and the card in the reply the learner is looking at offers
+ * a 补答 button that the server would refuse. The row's `tool_call_id` names the call, so each
+ * written answer is merged into its own call's record — one call per question, because a
+ * make-up may span several quizzes — and the call's `answer` becomes the partial map the settled
+ * card renders against.
+ *
+ * **No `output` is written**, deliberately: `buildHistoryMessages` replays a call only when it has
+ * one, so the original turn stays exactly as it was for the model, while the row's own answer
+ * travels to the grading turn through the new make-up call instead. And the status becomes
+ * `answered` rather than staying `skipped`, which is what takes the 补答 control off a card whose
+ * questions have been dealt with.
+ */
+export function markMakeupOnCalls(
+  db: AppDb,
+  sessionId: string,
+  entries: { toolCallId: string; qid: string; answer: QuizAnswer }[]
+): void {
+  const byCall = new Map<string, QuizAnswers>();
+  for (const entry of entries) {
+    const merged = byCall.get(entry.toolCallId) ?? {};
+    merged[entry.qid] = entry.answer;
+    byCall.set(entry.toolCallId, merged);
+  }
+
+  for (const [toolCallId, answers] of byCall) {
+    const found = db.findMessageWithToolCall(sessionId, toolCallId);
+    // A legacy call registered before the widget has no row, so nothing names it and there is
+    // nothing to write back.
+    if (!found) continue;
+    const calls = (found.message.toolCalls ?? []).map((tc) =>
+      tc.id === toolCallId
+        ? {
+            ...tc,
+            status: "answered" as const,
+            // Merged rather than replaced: a card over five questions that had two made up keeps
+            // the three it never asked, which is what its settled view renders as 未回答.
+            answer: {
+              ...((tc.answer as QuizAnswers | undefined) ?? {}),
+              ...answers,
+            },
+          }
+        : tc
+    );
+    db.updateMessageToolCalls(found.message.id, calls);
+  }
+}
+
 export type MakeupWrite =
-  | { ok: true; keys: Map<string, QuizAnswerKey>; written: string[] }
+  | {
+      ok: true;
+      keys: Map<string, QuizAnswerKey>;
+      /**
+       * What was actually written, one entry per answered question. Carries the call that asked it
+       * as well as the Qn, because the caller writes the answer back onto that call's record — the
+       * card a reader scrolls past has to stop saying "skipped" about a question that has an answer.
+       */
+      applied: { qid: string; toolCallId: string; answer: QuizAnswer }[];
+    }
   | { ok: false; status: 400 | 404 | 409; code: ApiErrorCode; reason?: string };
 
 /**
@@ -532,14 +626,18 @@ export function recordMakeupAnswers(
   }
 
   const keys = new Map<string, QuizAnswerKey>();
-  const written: string[] = [];
-  for (const { row } of pending) {
-    written.push(row.qid);
+  const applied: { qid: string; toolCallId: string; answer: QuizAnswer }[] = [];
+  for (const { row, answerJson } of pending) {
+    applied.push({
+      qid: row.qid,
+      toolCallId: row.toolCallId,
+      answer: JSON.parse(answerJson) as QuizAnswer,
+    });
     if ((row.referenceAnswer && row.referenceAnswer.length > 0) || row.explanation) {
       keys.set(row.qid, { referenceAnswer: row.referenceAnswer, explanation: row.explanation });
     }
   }
-  return { ok: true, keys, written };
+  return { ok: true, keys, applied };
 }
 
 /* ------------------------------------- grading ------------------------------------- */

@@ -34,6 +34,7 @@ import type {
   PlanView,
   ProviderConfig,
   QuizAnswer,
+  QuizAnswers,
   QuizQuestionView,
   PublicConfig,
   Session,
@@ -1276,6 +1277,24 @@ export function streamAnswers(
   // The zone goes on a resumed turn for the same reason it goes on a fresh one: it is a turn,
   // and its system prompt states the time too.
   return streamPost(`/sessions/${sessionId}/answers`, { ...input, timezone: browserTimeZone() });
+}
+
+/**
+ * Submit a make-up the learner answered in the card that asked the question.
+ *
+ * The body is the same `QuizAnswers` map the card would have submitted while the question was
+ * live — keyed by the `Qn` the card shows — and no message text at all: the questions come from
+ * the conversation's own rows on the server, so nothing here can reword one. It streams, like the
+ * other two, because the submission starts the grading turn.
+ */
+export function streamQuizMakeup(
+  sessionId: string,
+  answers: QuizAnswers
+): AsyncGenerator<ChatStreamEvent> {
+  return streamPost(`/sessions/${sessionId}/quizzes/makeup`, {
+    answers,
+    timezone: browserTimeZone(),
+  });
 }
 
 /**

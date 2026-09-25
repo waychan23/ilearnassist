@@ -2132,6 +2132,18 @@ export interface AppDb {
     toolCallId: string
   ): { messageId: string; call: ToolCall } | undefined;
 
+  /**
+   * The message holding a given tool call, whatever its status.
+   *
+   * `findAwaitingToolCall`'s sibling for the one caller that reaches a call which is *not*
+   * awaiting: a make-up writes its answer back onto the call that asked the question, and that
+   * call was retired (`skipped`/`dismissed`) precisely because the user had walked away from it.
+   */
+  findMessageWithToolCall(
+    sessionId: string,
+    toolCallId: string
+  ): { message: Message; call: ToolCall } | undefined;
+
   /** Write a message's whole `toolCalls` array back, after an answer was filled in. */
   updateMessageToolCalls(messageId: string, toolCalls: ToolCall[]): void;
 
@@ -4925,6 +4937,16 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
           (tc) => tc.id === toolCallId && tc.status === "awaiting"
         );
         if (call) return { messageId: message.id, call };
+      }
+      return undefined;
+    },
+
+    findMessageWithToolCall(sessionId, toolCallId) {
+      for (const message of listMessagesOf(sessionId)) {
+        const call = (message.toolCalls ?? []).find((tc) => tc.id === toolCallId);
+        // The whole message rather than its id: the one caller writes the array back, and a
+        // second read for it would be a second chance to read it after something else wrote.
+        if (call) return { message, call };
       }
       return undefined;
     },

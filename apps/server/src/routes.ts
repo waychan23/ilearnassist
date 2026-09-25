@@ -79,14 +79,16 @@ import {
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   PLATFORM_ADMIN_ROLES,
-  QUIZ_TOOL_NAME,
   QUIZ_MAKEUP_TOOL_NAME,
+  QUIZ_TOOL_NAME,
   QUIZ_TOOL_NAMES,
   SESSION_LOCK_TTL_SECONDS,
   SUPERADMIN_ROLE,
   TABLE_TOOL_NAME,
   USERNAME_MAX_LENGTH,
   WRITE_FILE_TOOL_NAME,
+  type QuizMakeupSubmitBody,
+  type QuizQuestion,
 } from "@ilearnassist/shared";
 import {
   insightReasoningSetting,
@@ -146,6 +148,9 @@ import {
   listQuizQuestionViews,
   makeupAnswer,
   makeupQuestions,
+  makeupQuestionsByQid,
+  markMakeupOnCalls,
+  recordMakeupAnswers,
   recordQuizAnswers,
   registerQuizQuestions,
   renderMakeupKeyNote,
@@ -170,7 +175,8 @@ import { fileWriteGuidance } from "./tools/fileTools.js";
 import { exploreGuidance } from "./tools/explore.js";
 import { planGuidance } from "./tools/planTools.js";
 import { quizGuidance } from "./tools/quizReview.js";
-import { makeupGuidance } from "./tools/quizMakeup.js";
+import { makeupGuidance, renderMakeupResult } from "./tools/quizMakeup.js";
+import { validateMakeupAnswers } from "./tools/quiz.js";
 import { SUSPENDING_TOOLS } from "./tools/suspending.js";
 import {
   readAsDataUrl,
@@ -4966,6 +4972,105 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     });
   }
 
+
+  /**
+   * Run the turn that follows a write the route has already made.
+   *
+   * `/answers`, `/regenerate` and the make-up submit all end the same way: something was written,
+   * the history is read **after** that write, and the model continues from a history that ends on
+   * a tool result rather than on a new user message — `userMessage: null` is what keeps the user's
+   * own message from arriving twice. They differ only in the frame they emit before the run
+   * starts: the plan fork's navigation, the removed reply, the recorded make-up.
+   *
+   * One implementation rather than three, and not for tidiness: these routes have to agree about
+   * the turn's clock, its guidance, its tools and what a provider failure leaves behind, and three
+   * copies of that agreement is how they stop having it.
+   */
+  async function streamResumedTurn(input: {
+    request: FastifyRequest;
+    reply: FastifyReply;
+    userId: string;
+    session: Session;
+    workspace: Workspace;
+    /** Emitted right after `meta`, before the model streams. */
+    before?: (sse: ReturnType<typeof createSseWriter>) => void;
+  }): Promise<void> {
+    const { request, reply, userId, session, workspace } = input;
+    const id = session.id;
+
+    const ctx = turnContext(session, workspace, {
+      userId,
+      user: treeFor(actor(request)),
+      about: actor(request).about,
+      // A resumed turn is a turn like any other and gets the clock like any other; the client
+      // posts a body for this one field alone.
+      timezone: (request.body as TurnRequestMeta | undefined)?.timezone,
+    });
+
+    await reply.hijack();
+    const sse = createSseWriter(reply);
+    sse.send({ type: "meta", sessionId: id });
+    input.before?.(sse);
+
+    const turn = beginTurn(request, id);
+    try {
+      // Read history *after* the route's write, so the resumed run sees it.
+      const history = db.listMessagesForUser(id, userId);
+      // Wall-clock time for the call, which is the ledger's one non-token figure. Measured around
+      // the whole run rather than around the provider request: a turn that spends four seconds in
+      // tools and one in the model is a turn that took five.
+      const turnStartedAt = Date.now();
+      const result = await runAgentStream({
+        provider: ctx.provider,
+        modelId: ctx.modelId,
+        workspace,
+        // Read from the session, exactly as `/chat` does: a resumed turn must not rebuild the
+        // persona differently from the one that asked the question it is resuming.
+        systemPrompt: session.systemPrompt,
+        settings: session.settings,
+        user: treeFor(actor(request)),
+        sessionId: id,
+        vision: ctx.vision,
+        toolUse: ctx.toolUse,
+        history,
+        userMessage: null,
+        // No turn of its own, but the history it replays may reference files whose paths are
+        // not derivable from their ids — see `filePathsFor`.
+        sourcePaths: filePathsFor(db, treeFor(actor(request)), userId, fileIdsOf(history, [])),
+        // And what those replayed turns pointed at. This is the shape where it matters most: an
+        // answer rebuilt from history would otherwise leave the model asked about nothing.
+        historicalReferences: referencesForHistory(db, userId, id, history),
+        tools: ctx.tools,
+        sessionDirPath: ctx.sessionDirPath,
+        writeLocation: ctx.writeLocation,
+        about: ctx.about,
+        planGuidance: ctx.planGuidance,
+        quizGuidance: ctx.quizGuidance,
+        makeupGuidance: ctx.makeupGuidance,
+        collectPageGuidance: ctx.collectPageGuidance,
+        tableGuidance: ctx.tableGuidance,
+        fileWriteGuidance: ctx.fileWriteGuidance,
+        exploreGuidance: ctx.exploreGuidance,
+        onToolUsed: ctx.onToolUsed,
+        clock: ctx.clock,
+        signal: turn.signal,
+        onEvent: (event: ChatStreamEvent) => sse.send(event),
+      });
+
+      await finishTurn(id, userId, session, ctx, result, sse, {
+        durationMs: Date.now() - turnStartedAt,
+        userMessage: null,
+        user: treeFor(actor(request)),
+      });
+    } catch (err) {
+      failTurn(id, ctx, err, sse);
+    } finally {
+      turn.finish();
+      sse.send({ type: "done" });
+      sse.end();
+    }
+  }
+
   app.post("/api/sessions/:id/chat", { config: { requiresSessionLock: true } }, async (request, reply) => {
     const userId = actor(request).id;
     const { id } = request.params as { id: string };
@@ -5339,82 +5444,127 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       }
     }
 
-    const ctx = turnContext(session, workspace, {
+    await streamResumedTurn({
+      request,
+      reply,
       userId,
-      user: treeFor(actor(request)),
-      about: actor(request).about,
-      timezone: body.timezone,
+      session,
+      workspace,
+      // The plan fork created another conversation and committed V1 into it; tell the client
+      // to switch before the (short) resumed turn in THIS conversation streams its reply.
+      before: (sse) => {
+        if (resolved.navigateToSessionId) {
+          sse.send({ type: "plan_session_created", sessionId: resolved.navigateToSessionId });
+        }
+      },
+    });
+  });
+
+  /**
+   * Record a make-up the learner answered **in the card that asked the question**.
+   *
+   * The client's door to the mechanism `ila_makeup_quiz` opens from the other side. A make-up
+   * cannot be a turn of its own — there is no pending call to answer, and the grading has to start
+   * from the newest position in the conversation — so the answers are recorded twice over: on the
+   * rows (which is what the panel reads) and on a **completed** make-up call written just before
+   * the grading turn, which is what the model reads as a tool result. Nothing here constructs a
+   * user message, at any size.
+   *
+   * The card the learner actually answered is left exactly as it was and its answer is written back
+   * onto it, so the reply they scrolled past stops saying "skipped" about a question they have now
+   * answered.
+   */
+  app.post("/api/sessions/:id/quizzes/makeup", { config: { requiresSessionLock: true } }, async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    const { session, workspace } = found;
+
+    // A route that starts a turn refuses while one streams — `/regenerate`'s guard, and the reason
+    // `/chat` lacking it is a hole rather than a pattern.
+    if (activeTurns.has(id)) {
+      return reply.code(409).send(apiError("TURN_IN_PROGRESS", "a reply is still being generated"));
+    }
+
+    const body = request.body as QuizMakeupSubmitBody | undefined;
+    const answers = (body?.answers ?? {}) as QuizAnswers;
+    const qids = Object.keys(answers);
+    if (qids.length === 0) {
+      return reply.code(400).send(apiError("INVALID_ANSWER", "no question was answered"));
+    }
+
+    /*
+     * The questions come from the conversation's own rows, addressed by the Qn the card displays:
+     * the card names questions, it never carries them, so a stale tab cannot have its wording
+     * written into the record. A card whose question has since been answered is refused rather
+     * than written over.
+     */
+    let questions: QuizQuestion[];
+    try {
+      questions = makeupQuestionsByQid(db, id, qids);
+    } catch (err) {
+      return reply
+        .code(409)
+        .send(
+          apiError(
+            "QUIZ_NOT_ANSWERABLE",
+            err instanceof Error ? err.message : "that question is not open to a make-up answer"
+          )
+        );
+    }
+
+    const validated = validateMakeupAnswers(questions, {
+      toolCallId: "",
+      action: "submit",
+      answers,
+    });
+    if (!validated.ok) {
+      return reply.code(400).send(apiError("INVALID_ANSWER", validated.reason));
+    }
+
+    const written = recordMakeupAnswers(db, userId, id, questions, validated.answers);
+    if (!written.ok) {
+      return reply
+        .code(written.status)
+        .send(apiError(written.code, written.reason ?? "the make-up answer could not be recorded"));
+    }
+    markMakeupOnCalls(db, id, written.applied);
+
+    /*
+     * The record, as the call the tool would have made — same input shape, same result, so the
+     * model grades from the identical sentence whichever door was used, and the conversation shows
+     * the identical card. `content` is empty on purpose: a turn that only calls a tool has no text,
+     * and the card is the thing to read.
+     */
+    const record = db.createMessage({
+      id: newId(),
+      sessionId: id,
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: newId(),
+          name: QUIZ_MAKEUP_TOOL_NAME,
+          input: JSON.stringify({ questions }),
+          status: "answered",
+          answer: validated.answers,
+          output: renderMakeupResult(questions, validated.answers, written.keys),
+        },
+      ],
     });
 
-    await reply.hijack();
-    const sse = createSseWriter(reply);
-    sse.send({ type: "meta", sessionId: id });
-
-    // The plan fork created another conversation and committed V1 into it; tell the client
-    // to switch before the (short) resumed turn in THIS conversation streams its reply.
-    if (resolved.navigateToSessionId) {
-      sse.send({ type: "plan_session_created", sessionId: resolved.navigateToSessionId });
-    }
-
-    const turn = beginTurn(request, id);
-
-    try {
-      // Read history *after* the answer was written, so the resumed run sees it.
-      const history = db.listMessagesForUser(id, userId);
-      // Wall-clock time for the call, which is the ledger's one non-token figure. Measured
-      // around the whole run rather than around the provider request: a turn that spends four
-      // seconds in tools and one in the model is a turn that took five.
-      const turnStartedAt = Date.now();
-      const result = await runAgentStream({
-        provider: ctx.provider,
-        modelId: ctx.modelId,
-        workspace,
-        // Read from the session, exactly as `/chat` does: a resumed turn must not rebuild the
-        // persona differently from the one that asked the question it is resuming.
-        systemPrompt: session.systemPrompt,
-        settings: session.settings,
-        user: treeFor(actor(request)),
-        sessionId: id,
-        vision: ctx.vision,
-        toolUse: ctx.toolUse,
-        history,
-        userMessage: null,
-        // No turn of its own, but the history it replays may reference files whose paths are
-        // not derivable from their ids — see `filePathsFor`.
-        sourcePaths: filePathsFor(db, treeFor(actor(request)), userId, fileIdsOf(history, [])),
-        // And what those replayed turns pointed at. This is the route where it matters most:
-        // a regenerated answer is rebuilt entirely from history, so a reference that lived only
-        // in the original turn's prompt would leave the model asked about nothing.
-        historicalReferences: referencesForHistory(db, userId, id, history),
-        tools: ctx.tools,
-        sessionDirPath: ctx.sessionDirPath,
-        writeLocation: ctx.writeLocation,
-        about: ctx.about,
-        planGuidance: ctx.planGuidance,
-        quizGuidance: ctx.quizGuidance,
-        makeupGuidance: ctx.makeupGuidance,
-        collectPageGuidance: ctx.collectPageGuidance,
-        tableGuidance: ctx.tableGuidance,
-        fileWriteGuidance: ctx.fileWriteGuidance,
-        exploreGuidance: ctx.exploreGuidance,
-        onToolUsed: ctx.onToolUsed,
-        clock: ctx.clock,
-        signal: turn.signal,
-        onEvent: (event: ChatStreamEvent) => sse.send(event),
-      });
-
-      await finishTurn(id, userId, session, ctx, result, sse, {
-        durationMs: Date.now() - turnStartedAt,
-        userMessage: null,
-        user: treeFor(actor(request)),
-      });
-    } catch (err) {
-      failTurn(id, ctx, err, sse);
-    } finally {
-      turn.finish();
-      sse.send({ type: "done" });
-      sse.end();
-    }
+    await streamResumedTurn({
+      request,
+      reply,
+      userId,
+      session,
+      workspace,
+      // Emitted before the run: the record is on screen while the model grades, rather than
+      // appearing under the reply it produced.
+      before: (sse) => sse.send({ type: "message_added", message: record }),
+    });
   });
 
   /**
@@ -5487,80 +5637,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         .send(apiError("NO_REPLY_TO_REGENERATE", "there is no reply to regenerate"));
     }
 
-    const ctx = turnContext(session, workspace, {
+    await streamResumedTurn({
+      request,
+      reply,
       userId,
-      user: treeFor(actor(request)),
-      about: actor(request).about,
-      // A regenerate is a turn like any other and gets the clock like any other: the client
-      // posts a body for this one field alone.
-      timezone: (request.body as TurnRequestMeta | undefined)?.timezone,
+      session,
+      workspace,
+      // The row is already gone server-side; say so before the replacement streams, or the client
+      // renders the old reply and the new one at the same time for the whole turn.
+      before: (sse) => sse.send({ type: "message_removed", id: last.id }),
     });
-
-    // After the delete: the reply being replaced is not part of what the model is shown.
-    const history = db.listMessagesForUser(id, userId);
-
-    await reply.hijack();
-    const sse = createSseWriter(reply);
-    sse.send({ type: "meta", sessionId: id });
-    // The row is already gone server-side; say so before the replacement streams, or the
-    // client renders the old reply and the new one at the same time for the whole turn.
-    sse.send({ type: "message_removed", id: last.id });
-
-    const turn = beginTurn(request, id);
-
-    try {
-      // Wall-clock time for the call, which is the ledger's one non-token figure. Measured
-      // around the whole run rather than around the provider request: a turn that spends four
-      // seconds in tools and one in the model is a turn that took five.
-      const turnStartedAt = Date.now();
-      const result = await runAgentStream({
-        provider: ctx.provider,
-        modelId: ctx.modelId,
-        workspace,
-        systemPrompt: session.systemPrompt,
-        settings: session.settings,
-        user: treeFor(actor(request)),
-        sessionId: id,
-        vision: ctx.vision,
-        toolUse: ctx.toolUse,
-        history,
-        userMessage: null,
-        // No turn of its own, but the history it replays may reference files whose paths are
-        // not derivable from their ids — see `filePathsFor`.
-        sourcePaths: filePathsFor(db, treeFor(actor(request)), userId, fileIdsOf(history, [])),
-        // And what those replayed turns pointed at. This is the route where it matters most:
-        // a regenerated answer is rebuilt entirely from history, so a reference that lived only
-        // in the original turn's prompt would leave the model asked about nothing.
-        historicalReferences: referencesForHistory(db, userId, id, history),
-        tools: ctx.tools,
-        sessionDirPath: ctx.sessionDirPath,
-        writeLocation: ctx.writeLocation,
-        about: ctx.about,
-        planGuidance: ctx.planGuidance,
-        quizGuidance: ctx.quizGuidance,
-        makeupGuidance: ctx.makeupGuidance,
-        collectPageGuidance: ctx.collectPageGuidance,
-        tableGuidance: ctx.tableGuidance,
-        fileWriteGuidance: ctx.fileWriteGuidance,
-        exploreGuidance: ctx.exploreGuidance,
-        onToolUsed: ctx.onToolUsed,
-        clock: ctx.clock,
-        signal: turn.signal,
-        onEvent: (event: ChatStreamEvent) => sse.send(event),
-      });
-
-      await finishTurn(id, userId, session, ctx, result, sse, {
-        durationMs: Date.now() - turnStartedAt,
-        userMessage: null,
-        user: treeFor(actor(request)),
-      });
-    } catch (err) {
-      failTurn(id, ctx, err, sse);
-    } finally {
-      turn.finish();
-      sse.send({ type: "done" });
-      sse.end();
-    }
   });
 
   /**

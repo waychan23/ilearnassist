@@ -816,6 +816,15 @@ export default {
      * so it carries one word of its own, the one that says why it is here.
      */
     makeupTitle: "补答",
+    /**
+     * The make-up control on a card the learner skipped, and the way back out of it. `open` is the
+     * button that re-opens the question where it was asked; the panel's own door has its own words
+     * (`quiz.detail.*`), because that one is a dialog about the question rather than the card.
+     */
+    makeup: {
+      open: "补答这道题",
+      close: "退出补答",
+    },
     /** One per `ToolCallStatus`, plus the moment before the turn has finished persisting. */
     preparing: "准备题目中",
     awaiting: "等待你的作答",

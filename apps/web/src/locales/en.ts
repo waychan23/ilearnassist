@@ -611,6 +611,10 @@ const en: typeof MessageSchema = {
   quiz: {
     title: "Quiz",
     makeupTitle: "Make-up",
+    makeup: {
+      open: "Answer this one now",
+      close: "Leave the make-up",
+    },
     preparing: "Preparing questions",
     awaiting: "Waiting for your answers",
     answered: "Submitted",

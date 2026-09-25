@@ -737,3 +737,160 @@ describe("the make-up card (ila_makeup_quiz)", () => {
     expect(after.some((e) => e.type === "message_done")).toBe(true);
   });
 });
+
+describe("the make-up submit route (the card's own door)", () => {
+  const KEY = "补答判分时才出现的解析。";
+  const KEYED = [
+    {
+      header: "窗口",
+      question: "Flink 里按时间切分的窗口是哪一种？",
+      options: [{ label: "滚动窗口" }, { label: "状态后端" }],
+      referenceAnswer: ["滚动窗口"],
+      explanation: KEY,
+    },
+    {
+      header: "状态",
+      question: "下面哪一个是状态后端？",
+      options: [{ label: "RocksDB" }, { label: "Kafka" }],
+    },
+  ];
+
+  /** The conversation's messages, as the client would read them back. */
+  async function messages(sessionId: string): Promise<
+    { role: string; content: string; toolCalls?: { id: string; name: string; status?: string; answer?: unknown }[] }[]
+  > {
+    const res = await env.inject({ method: "GET", url: `/api/sessions/${sessionId}/messages` });
+    expect(res.statusCode).toBe(200);
+    // The route answers with the array itself, not an envelope.
+    return res.json<never[]>();
+  }
+
+  async function skippedQuiz(): Promise<Session> {
+    const session = await quizSession();
+    llm.setTurns([
+      {
+        content: "先测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: KEYED } }],
+      },
+    ]);
+    await chat(session.id, "开始");
+    llm.reset();
+    llm.setTurns([{ content: "先讲别的。" }]);
+    await chat(session.id, "先讲别的");
+    expect((await quizRows(session.id)).map((r) => r.status)).toEqual(["skipped", "skipped"]);
+    return session;
+  }
+
+  function submit(sessionId: string, answers: Record<string, unknown>) {
+    return env.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/quizzes/makeup`,
+      payload: { answers },
+    });
+  }
+
+  it("records the answers, adds the make-up message, and grades from its tool result", async () => {
+    const session = await skippedQuiz();
+
+    llm.reset();
+    llm.setTurns([
+      {
+        toolCalls: [
+          {
+            id: "call_grade",
+            name: "ila_review_quiz",
+            args: { reviews: [{ quizId: (await quizRows(session.id))[0]!.id, verdict: "correct", explanation: "补答正确。" }] },
+          },
+        ],
+      },
+      { content: "这次对了。" },
+    ]);
+
+    const res = await submit(session.id, { Q1: { selected: ["滚动窗口"] } });
+    expect(res.statusCode).toBe(200);
+    const events = parseSse(res.body) as ChatStreamEvent[];
+
+    /*
+     * The record, as a completed call — the same shape a tool-answered make-up produces, which is
+     * what lets the model grade from one instruction rather than two. It arrives **before** the
+     * reply, so the reader sees what they answered while the model works.
+     */
+    const added = events.find((e) => e.type === "message_added");
+    expect(added, "the route should record the make-up as a message").toBeDefined();
+    const call =
+      added?.type === "message_added" ? added.message.toolCalls?.[0] : undefined;
+    expect(call).toMatchObject({ name: "ila_makeup_quiz", status: "answered" });
+    // No key in the client-facing input, ever — it lives on the rows and returns in the result.
+    expect(String(call!.input)).not.toContain(KEY);
+    expect(String(call!.output)).toContain("reference_answer");
+
+    // The answered row moved; the one the learner passed over did not.
+    expect((await quizRows(session.id)).map((r) => [r.qid, r.status])).toEqual([
+      ["Q1", "answered"],
+      ["Q2", "skipped"],
+    ]);
+
+    /*
+     * The model graded it from the tool result in the new message — which is the whole reason a
+     * make-up is recorded this way, since the turn it is about ended long ago.
+     */
+    const sent = llm.requests().filter((r) => r.stream === true).at(-1) as {
+      messages: { role: string; content: unknown }[];
+    };
+    const toolText = sent.messages
+      .filter((m) => m.role === "tool")
+      .map((m) => String(m.content))
+      .join("\n");
+    expect(toolText).toContain("reference_answer");
+    expect(toolText).toContain(KEY);
+    expect((await quizRows(session.id))[0]).toMatchObject({ status: "answered", verdict: "correct" });
+
+    // And the card that was skipped stops saying so: the answer is written back onto its call.
+    const listed = await messages(session.id);
+    const original = listed
+      .flatMap((m) => m.toolCalls ?? [])
+      .find((tc) => tc.name === "ila_quiz");
+    expect(original).toMatchObject({ status: "answered" });
+    expect(original!.answer).toMatchObject({ Q1: { selected: ["滚动窗口"] } });
+  });
+
+  it("refuses a question that has been answered since the card was opened", async () => {
+    const session = await skippedQuiz();
+    llm.reset();
+    llm.setTurns([{ content: "好。" }]);
+    expect((await submit(session.id, { Q1: { selected: ["滚动窗口"] } })).statusCode).toBe(200);
+
+    // The same card submitted twice: the second is a stale reader, and the answer it carries must
+    // not overwrite what was recorded.
+    const again = await submit(session.id, { Q1: { selected: ["状态后端"] } });
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ error: { code: "QUIZ_NOT_ANSWERABLE" } });
+    expect((await quizRows(session.id))[0]!.answer?.selected).toEqual(["滚动窗口"]);
+  });
+
+  it("refuses an empty submission and an answer that was never offered", async () => {
+    const session = await skippedQuiz();
+
+    expect((await submit(session.id, {})).statusCode).toBe(400);
+    const bogus = await submit(session.id, { Q1: { selected: ["瞎选"] } });
+    expect(bogus.statusCode).toBe(400);
+    expect(bogus.json()).toMatchObject({ error: { code: "INVALID_ANSWER" } });
+    // Nothing was written by either refusal.
+    expect((await quizRows(session.id)).map((r) => r.status)).toEqual(["skipped", "skipped"]);
+  });
+
+  it("409s a qid this conversation never asked, or one still waiting on a live card", async () => {
+    const session = await skippedQuiz();
+    expect((await submit(session.id, { Q9: { selected: ["滚动窗口"] } })).statusCode).toBe(409);
+
+    // A pending question is answered through its live card, not through the make-up route.
+    const pending = await quizSession();
+    llm.setTurns([
+      { toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: KEYED } }] },
+    ]);
+    await chat(pending.id, "开始");
+    const res = await submit(pending.id, { Q1: { selected: ["滚动窗口"] } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: { code: "QUIZ_NOT_ANSWERABLE" } });
+  });
+});
