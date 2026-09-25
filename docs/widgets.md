@@ -336,8 +336,9 @@ write files" — `ila_query` only reads, and a diagram is half a feature without
 
 ### A `required` suspending tool with persisted rows: the quiz widget
 
-The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and the normal
-`ila_review_quiz` — and is the template for a widget whose panel shows data the tools produce:
+The quiz widget (`id: "quiz"`) binds THREE tools — the suspending `ila_quiz` and
+`ila_makeup_quiz` and the normal `ila_review_quiz` — and is the template for a widget whose
+panel shows data the tools produce:
 
 - **Two ids per question.** The tool assigns the session-scoped `Qn` (the `quiz_question`
   counter, unique within the conversation); its `registerQuestions` context callback creates
