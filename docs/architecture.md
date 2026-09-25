@@ -776,6 +776,17 @@ fight on the way **in**. So:
   DeepSeek sends itself. It also drops the now-stale `content-length`.
 - All of it is gated on the model record declaring the `reasoning` capability, so a
   provider that never used the field is never sent it.
+- **The refusal itself is the net under that gate.** The gate is right in principle and wrong
+  about particular providers: DeepSeek V4 turns thinking on by default, and its model id contains
+  none of the words `guessCapabilities` looks for — so a V4 entry added by hand got `["tool_use"]`
+  and failed every turn that replayed a tool call. `createReasoningFetch` therefore watches for a
+  400 whose body carries this sentence, echoes the field on a single retry of that request, and
+  remembers for the rest of the turn. A refusal that says something else is passed through
+  untouched: retrying an error the message did not describe is a second request sent for no
+  reason. `guessCapabilities` stays as it is, and deliberately: guessing `reasoning` for the
+  `deepseek-v4` family would guess wrong for a gateway serving the same id that rejects an unknown
+  field — a failure the app cannot recover from — so the record declares it and the refusal is the
+  net for everything a guess would have to get right twice.
 
 Reasoning is persisted for display but **never replayed into history** — see
 `buildHistoryMessages()`, which only reads `content` and `toolCalls`.

@@ -4,7 +4,7 @@ import { join } from "node:path";
 // From `fastify`, which re-exports both, rather than from `light-my-request` directly: that
 // package is a transitive dependency and is not something this one may name.
 import type { InjectOptions, LightMyRequestResponse } from "fastify";
-import { CLIENT_ID_HEADER } from "@ilearnassist/shared";
+import { CLIENT_ID_HEADER, type ModelCapability } from "@ilearnassist/shared";
 import type {
   Attachment,
   AuthResult,
@@ -233,7 +233,14 @@ async function bootstrapAdmin(
 /** A provider record pointing at a fake LLM. `apiKey` is required by `buildModel`. */
 export function providerFor(
   llm: FakeLlm,
-  overrides: { id?: string; name?: string; modelId?: string; apiKey?: string } = {}
+  overrides: {
+    id?: string;
+    name?: string;
+    modelId?: string;
+    apiKey?: string;
+    /** The declared capabilities, for the specs that need a behaviour they switch — reasoning. */
+    capabilities?: ModelCapability[];
+  } = {}
 ): ProviderDef {
   const modelId = overrides.modelId ?? "fake-model";
   return {
@@ -241,7 +248,13 @@ export function providerFor(
     name: overrides.name ?? "Fake Provider",
     baseURL: llm.baseURL,
     apiKey: overrides.apiKey ?? "test-key",
-    models: [{ id: modelId, name: modelId }],
+    models: [
+      {
+        id: modelId,
+        name: modelId,
+        ...(overrides.capabilities ? { capabilities: overrides.capabilities } : {}),
+      },
+    ],
   };
 }
 

@@ -53,6 +53,15 @@ export interface FakeTurn {
    * moment at which anything can be interrupted.
    */
   holdMs?: number;
+  /**
+   * Answer this request with an HTTP error instead of a stream.
+   *
+   * The caller is the thinking-mode passback rule: a provider refuses a request whose `messages`
+   * carry an assistant tool-call message without `reasoning_content`, and the app is expected to
+   * recover by echoing the field. Only a *refusal* can test that, and no other turn shape
+   * produces one.
+   */
+  fail?: { status: number; message: string };
 }
 
 /**
@@ -111,6 +120,14 @@ export interface FakeLlm {
   setMatches(matches: FakeNonStreamingMatch[]): void;
   /** Bodies of every `/chat/completions` request received, oldest first. */
   requests(): Record<string, unknown>[];
+  /**
+   * The subset of `requests()` that was answered with an HTTP error.
+   *
+   * The same objects, by identity, so a caller can skip them: a test about what a *provider*
+   * accepts has to exclude the request the provider refused — that one is the subject, not the
+   * evidence.
+   */
+  refusedRequests(): Record<string, unknown>[];
   /**
    * How many streaming requests were disconnected before their turn finished writing —
    * i.e. how many times a caller really did cancel, rather than just stop reading.
@@ -223,6 +240,8 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
   let title = options.title ?? "Fake Conversation Title";
   let matches: FakeNonStreamingMatch[] = options.matches ?? [];
   const seen: Record<string, unknown>[] = [];
+  /** The same objects as in `seen`, for the requests a scripted `fail` answered with an error. */
+  const refused: Record<string, unknown>[] = [];
   /** Streaming requests disconnected before their turn finished writing. */
   let aborted = 0;
 
@@ -312,6 +331,14 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
 
       // A matched streamed reply consumes nothing from the agent-turn queue.
       const turn = classifierHit ? { content: classifierHit.content } : (queue.shift() ?? DEFAULT_TURN);
+      if (turn.fail) {
+        // Refused before any frame: the status and the body are the whole point, and a client
+        // that recovers has to see them as a provider error rather than as a broken stream.
+        refused.push(body);
+        res.writeHead(turn.fail.status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: turn.fail.message, type: "invalid_request_error" } }));
+        return;
+      }
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -378,12 +405,16 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
     requests() {
       return seen;
     },
+    refusedRequests() {
+      return refused;
+    },
     abortedRequests() {
       return aborted;
     },
     reset() {
       queue = [];
       seen.length = 0;
+      refused.length = 0;
       aborted = 0;
       matches = [];
     },

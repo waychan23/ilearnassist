@@ -936,6 +936,17 @@ public half.
   a provider that never used the field never sees it. This is why `createReasoningFetch`
   touches the **request** as well as the response — do not "simplify" it back to a
   read-only tap, and do not delete the side map as an unused return value.
+  **The gate is right and still not enough, so the refusal is also handled.** A thinking-on
+  provider whose model record does not declare `reasoning` — DeepSeek V4's id matched none of
+  `guessCapabilities`' patterns until it was added, and a hand-written entry still may not — fails
+  on every request that replays a tool call, which is most of a working conversation. So a 400
+  whose body carries that sentence is retried **once** with the field echoed on every tool-call
+  message (`""` where nothing was recorded), and this wrapper remembers the answer for the rest of
+  the turn. A 400 saying anything else is passed straight through: retrying an error the message
+  did not describe is a second request sent for no reason. `guessCapabilities` is deliberately
+  unchanged — the same test file records why `deepseek-v4-pro` is *not* guessed — because guessing
+  the family would guess wrong for a gateway that rejects an unknown field, which is the one
+  direction this recovery cannot rescue.
 - **Reasoning comes off the raw SSE stream, and only from there.** `createReasoningFetch()`
 - **Reasoning comes off the raw SSE stream, and only from there.** `createReasoningFetch()`
   taps the fetch response and is the **single** source of chain-of-thought — do not

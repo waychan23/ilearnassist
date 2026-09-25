@@ -12,6 +12,15 @@ export interface BuiltModel {
 const REASONING_KEYS = ["reasoning_content", "reasoning", "reasoning_text"] as const;
 
 /**
+ * The refusal that means "you did not pass the chain of thought back".
+ *
+ * Matched on the provider's own words, which are stable in a way its status code is not: the
+ * condition is a property of the message it just received. `providerErrors.ts` recognises the
+ * same sentence for the user-facing side.
+ */
+const REASONING_REQUIRED = /reasoning_content[\s\S]{0,80}?must be passed back/i;
+
+/**
  * Wrap `fetch` so we can read chain-of-thought straight off the wire.
  *
  * LangChain's `ChatOpenAI` **silently drops** `reasoning_content`: it appears in neither
@@ -86,21 +95,52 @@ export interface ReasoningFetchOptions {
 export function createReasoningFetch(options: ReasoningFetchOptions): typeof fetch {
   const { onReasoning, replayReasoning, baseFetch = fetch } = options;
 
+  /*
+   * Set the first time a provider refuses a request for this reason. The replay itself is gated on
+   * the model record declaring the `reasoning` capability, and that gate is right — a provider
+   * without the field rejects an unknown argument. But the gate can be *wrong about a particular
+   * provider*: thinking-on-by-default models exist (DeepSeek V4) whose ids `guessCapabilities`
+   * does not recognise, and the cost of that misconfiguration is every turn that replays a tool
+   * call, not a missing nicety. So a refusal teaches this wrapper what the record did not say, and
+   * the rest of the turn stops paying for the failed request.
+   */
+  let passbackRequired = false;
+
   return async (input, init) => {
     let outgoing = init as RequestInit;
 
-    if (replayReasoning) {
-      const body = withReplayedReasoning(outgoing?.body, replayReasoning);
-      if (body !== outgoing?.body) {
-        // The body grew, so any length the SDK computed is now wrong. Dropping the header
-        // lets the runtime measure the new one instead of sending a mismatched request.
-        const headers = new Headers(outgoing.headers);
-        headers.delete("content-length");
-        outgoing = { ...outgoing, body: body as BodyInit, headers };
-      }
+    const replay = (map: Map<string, string>): RequestInit => {
+      const body = withReplayedReasoning(outgoing?.body, map);
+      if (body === outgoing?.body) return outgoing;
+      // The body grew, so any length the SDK computed is now wrong. Dropping the header
+      // lets the runtime measure the new one instead of sending a mismatched request.
+      const headers = new Headers(outgoing.headers);
+      headers.delete("content-length");
+      return { ...outgoing, body: body as BodyInit, headers };
+    };
+
+    if (replayReasoning || passbackRequired) {
+      // An empty map is the recovery's shape: every tool-call message gets the field, with `""`
+      // where nothing was recorded — which is a value the provider itself sends.
+      outgoing = replay(replayReasoning ?? new Map());
     }
 
-    const response = await baseFetch(input as RequestInfo | URL, outgoing);
+    let response = await baseFetch(input as RequestInfo | URL, outgoing);
+
+    if (response.status === 400 && !passbackRequired && !replayReasoning) {
+      const refusal = await response.clone().text();
+      if (REASONING_REQUIRED.test(refusal)) {
+        /*
+         * One retry, and only of this request. The refusal names a property of the body rather
+         * than of the moment, so the same request with the field echoed is the request that
+         * should have gone out — and the failed one cost no tokens, because a 400 is answered
+         * before the model runs.
+         */
+        passbackRequired = true;
+        const retried = replay(new Map());
+        if (retried !== outgoing) response = await baseFetch(input as RequestInfo | URL, retried);
+      }
+    }
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.body || !contentType.includes("text/event-stream")) return response;
 
