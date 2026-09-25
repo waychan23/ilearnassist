@@ -213,7 +213,7 @@ async function submit(): Promise<void> {
      * second attempt can be made. A form that closed on a refusal would look exactly like one that
      * had been accepted.
      */
-    const accepted = await store.submitQuizMakeup(props.toolCall.id, answers);
+    const accepted = await store.submitQuizMakeup(answers, props.toolCall.id);
     if (accepted) reopened.value = false;
     return;
   }

@@ -614,6 +614,22 @@ const en: typeof MessageSchema = {
     makeup: {
       open: "Answer this one now",
       close: "Leave the make-up",
+      submit: "Answer it",
+      step: "Unanswered {current} of {total}",
+      filled: "{count} answered",
+      submitAll: "Submit the make-up",
+      exit: "Leave the make-up",
+      batchTitle: "Answer them together",
+      batchAsk: "There are {count} other questions you have not answered — answer them together?",
+      batchDetail:
+        "In that mode you can move between the unanswered questions, and submit only the ones you have answered.",
+      batchYes: "Answer them together",
+      batchNo: "Just this one",
+      partialTitle: "Submit these now",
+      partialAsk: "{remaining} questions are still unanswered — submit the {filled} you have answered?",
+      partialDetail: "The ones you leave keep their unanswered state and can be answered later.",
+      partialYes: "Submit these",
+      partialNo: "Keep answering",
     },
     preparing: "Preparing questions",
     awaiting: "Waiting for your answers",
@@ -665,16 +681,8 @@ const en: typeof MessageSchema = {
       waitingGrade: "Waiting for the assistant to grade it…",
       makeupHint:
         "You did not answer this question earlier (skipped or cancelled the quiz). Answer it here and the assistant will grade it.",
-      makeupSubmit: "Submit make-up answer",
       close: "Close",
     },
-    makeupMessage:
-      "[MAKE-UP ANSWER] This is a late answer to a question I did not answer before (I skipped or cancelled the quiz). It is the SAME question — do not call ila_quiz to create a new one.\n" +
-      "Question ID: {id} ({qid})\n" +
-      "Question: {question}\n" +
-      "Options: {options}\n" +
-      "My make-up answer: {answer}\n" +
-      "Please grade this make-up answer: call ila_review_quiz with the exact question ID, a verdict, and an explanation.",
   },
 
   /** What a message can point at. See `zh-CN` for why this is a namespace of its own. */

@@ -136,12 +136,6 @@ export interface RunAgentInput {
    * see `SystemPromptInput.exploreGuidance`.
    */
   exploreGuidance?: string;
-  /**
-   * The quiz make-up turn's grading key, appended to THIS turn's system prompt only: the
-   * question's reference answer and explanation, which never travel to the client. Absent
-   * on every ordinary turn.
-   */
-  quizMakeupNote?: string;
   /** The account's own description of itself — see `SystemPromptInput.about`. */
   about?: string;
   /**
@@ -358,7 +352,6 @@ export interface SystemPromptInput {
    * two instructions and will follow the louder one.
    */
   exploreGuidance?: string;
-  quizMakeupNote?: string;
 }
 
 /**
@@ -443,9 +436,6 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   const fileWrite = block(input.fileWriteGuidance);
   // The `@` grant, which qualifies the workspace block above it.
   const explore = block(input.exploreGuidance);
-  // One make-up turn's answer key, last: the most specific instruction in the prompt.
-  const makeup = block(input.quizMakeupNote);
-
   return renderPrompt("chat.system", {
     persona,
     about,
@@ -459,7 +449,6 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     collectPage,
     table,
     explore,
-    makeup,
   });
 }
 
@@ -615,7 +604,6 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         tableGuidance: input.tableGuidance,
         fileWriteGuidance: input.fileWriteGuidance,
         exploreGuidance: input.exploreGuidance,
-        quizMakeupNote: input.quizMakeupNote,
       })
     ),
     ...history,

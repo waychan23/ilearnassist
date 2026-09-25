@@ -623,3 +623,76 @@ test("a list of one question has no pager", async ({ page, request }) => {
   // One question in the list, so a pager over it would be three controls that cannot act.
   await expect(page.getByTestId("quiz-nav")).toHaveCount(0);
 });
+
+test("补答模式 walks the unanswered questions and submits a part of them", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The requirement's own scenario, end to end: 补答 on one question asks whether to take the rest
+   * with it, the mode then contains *only* unanswered questions — 上一题/下一题 walk that set, not
+   * the panel's filter — and a submit that leaves questions behind says how many and keeps them
+   * unanswered rather than grading a blank.
+   */
+  await sessionWithWidgets(page, unique("Quiz batch makeup"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "小测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: TWO_QUESTIONS } }],
+      },
+    ],
+  });
+  await send(page, "开始");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+
+  // Walk away from the whole set: both questions become unanswered.
+  await scriptLlm(request as APIRequestContext, { turns: [{ content: "先讲别的。" }] });
+  await send(page, "先讲别的吧");
+  await expect(page.getByTestId("quiz-status")).toContainText("已跳过");
+
+  // One of them is answered properly, so the mode has something to exclude.
+  await scriptLlm(request as APIRequestContext, { turns: [{ content: "好。" }] });
+  await send(page, "算了，随便聊聊");
+  await selectFilter(page, "skipped");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+
+  /*
+   * Open the first one and press 补答: with a second unanswered question in the conversation, the
+   * press asks rather than grading straight away.
+   */
+  await page.locator('[data-testid^="quiz-row-"]').first().click();
+  await expect(page.getByTestId("quiz-makeup")).toBeVisible();
+  await page.locator('[data-testid="quiz-makeup-option-0-0"]').click();
+  await page.getByTestId("quiz-makeup-submit").click();
+  // The prompt names the count, so the reader knows what they are agreeing to.
+  await expect(page.locator(".confirm-message")).toContainText("还有 1 道未作答的题目");
+  await page.getByTestId("confirm-accept").click();
+
+  // The mode: the pager walks the unanswered queue, and the counter says where we are.
+  await expect(page.getByTestId("quiz-makeup-step")).toHaveText("第 1/2 道未答题");
+  await expect(page.getByTestId("quiz-makeup-filled")).toHaveText("已补答 1 道");
+  // The answer already typed came with it: the press that opened the mode did not throw it away.
+  await expect(page.locator('[data-testid="quiz-makeup-option-0-0"] input')).toBeChecked();
+
+  // Submit with the second question untouched: it asks first, and says how many are left.
+  await page.getByTestId("quiz-makeup-submit-all").click();
+  await expect(page.locator(".confirm-message")).toContainText("还有 1 道题没有补答");
+  await page.getByTestId("confirm-accept").click();
+  await expect(page.getByTestId("quiz-detail-overlay")).toHaveCount(0);
+
+  // One question is answered and awaiting a grade; the other is exactly where it was.
+  await selectFilter(page, "all");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(2);
+  await selectFilter(page, "skipped");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(1);
+  await selectFilter(page, "answered");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(1);
+
+  /*
+   * And the record is in the conversation as a make-up card: the answers left as a tool call, which
+   * is what the model grades from — no user message was composed for it.
+   */
+  await expect(page.getByTestId("quiz-card").last()).toContainText("补答");
+});

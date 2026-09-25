@@ -77,10 +77,10 @@ describe("the catalog", () => {
       "fileWrite",
       "plan",
       "quiz",
+      "makeupCard",
       "collectPage",
       "table",
       "explore",
-      "makeup",
     ]);
   });
 });
@@ -91,25 +91,6 @@ describe("renderPrompt", () => {
     expect(renderPrompt("chat.system.clock", { local: "14:03", zone: "Asia/Shanghai" })).toContain(
       "Right now it is 14:03 for the user (Asia/Shanghai)."
     );
-  });
-
-  it("renders an empty value as nothing, which is how a block is dropped", () => {
-    // The make-up key is the one variable-shaped hole whose "" is meaningful. A question posed
-    // without a key must leave no blank line behind.
-    const withKey = renderPrompt("chat.guidance.quizMakeup", {
-      qid: "Q1",
-      id: "abc",
-      question: "What is 2+2?",
-      key: "\nReference answer: 4",
-    });
-    const withoutKey = renderPrompt("chat.guidance.quizMakeup", {
-      qid: "Q1",
-      id: "abc",
-      question: "What is 2+2?",
-      key: "",
-    });
-    expect(withKey.endsWith("Question: What is 2+2?\nReference answer: 4")).toBe(true);
-    expect(withoutKey.endsWith("Question: What is 2+2?")).toBe(true);
   });
 
   it("throws when a placeholder has no value, naming the key and the placeholder", () => {
@@ -269,20 +250,20 @@ describe("buildSystemPrompt", () => {
         collectPageGuidance: "COLLECT-MARKER",
         tableGuidance: "TABLE-MARKER",
         exploreGuidance: "EXPLORE-MARKER",
-        quizMakeupNote: "MAKEUP-MARKER",
+        makeupGuidance: "MAKEUP-CARD-MARKER",
       })
     );
     const order = [
       "PLAN-MARKER",
       "QUIZ-MARKER",
+      "MAKEUP-CARD-MARKER",
       "COLLECT-MARKER",
       "TABLE-MARKER",
       "EXPLORE-MARKER",
-      "MAKEUP-MARKER",
     ].map((marker) => prompt.indexOf(marker));
     expect(order.every((at) => at > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    for (const marker of ["PLAN-MARKER", "QUIZ-MARKER", "MAKEUP-MARKER"]) {
+    for (const marker of ["PLAN-MARKER", "QUIZ-MARKER", "MAKEUP-CARD-MARKER"]) {
       expect(prompt.split(marker).length - 1, `${marker} appears twice`).toBe(1);
     }
     expect(prompt).not.toContain("\n\n\n");

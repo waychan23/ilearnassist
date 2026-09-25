@@ -9,13 +9,11 @@ import {
   dismissQuizQuestions,
   gradeQuizAnswers,
   listQuizQuestionViews,
-  makeupAnswer,
   makeupQuestions,
   quizAnswerKeysForCall,
   recordMakeupAnswers,
   recordQuizAnswers,
   registerQuizQuestions,
-  renderMakeupKeyNote,
   skipQuizQuestions,
 } from "../src/quizzes.js";
 
@@ -385,129 +383,6 @@ describe("quiz answer key", () => {
     expect(quizAnswerKeysForCall(db, SESSION, "other-call").size).toBe(0);
   });
 
-  it("builds the make-up grading note from a keyed row, and nothing for a keyless one", () => {
-    registerKeyed();
-    skipQuizQuestions(db, SESSION, ["call-1"]);
-    const skipped = db
-      .listQuizQuestionsBySession(SESSION)
-      .find((q) => q.qid === "Q1")!;
-    const note = renderMakeupKeyNote(skipped);
-    expect(note).toMatch(/make-up answer/);
-    expect(note).toMatch(/quiz_id: /);
-    expect(note).toMatch(/Reference answer: 滑动/);
-    expect(note).toMatch(/Explanation: 滑动窗口按步长触发。/);
-
-    const keyless = db
-      .listQuizQuestionsBySession(SESSION)
-      .find((q) => q.qid === "Q2")!;
-    expect(renderMakeupKeyNote(keyless)).toBeNull();
-  });
-
-  it("explanation-only rows still get a note", () => {
-    registerQuizQuestions(db, SESSION, {
-      toolCallId: "call-9",
-      items: [{ ...item("Q9", 9), explanation: "只有解析没有答案键。" }],
-    });
-    const row = db.listQuizQuestionsBySession(SESSION)[0]!;
-    const note = renderMakeupKeyNote(row);
-    expect(note).toMatch(/Explanation: 只有解析没有答案键。/);
-    expect(note).not.toMatch(/Reference answer/);
-  });
-});
-
-/* --------------------------------- make-up answer --------------------------------- */
-
-describe("makeupAnswer", () => {
-  function skipped(): string {
-    registerQuiz([["Q1", 1]]);
-    skipQuizQuestions(db, SESSION, ["call-1"]);
-    return listQuizQuestionViews(db, OWNER, SESSION)[0]!.id;
-  }
-
-  it("re-answers a skipped question on the same row, which is then gradable", () => {
-    const id = skipped();
-    const result = makeupAnswer(db, OWNER, SESSION, id, {
-      answer: { selected: ["滚动"] },
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected ok");
-    expect(result.view.id).toBe(id);
-    expect(result.view.status).toBe("answered");
-    expect(result.view.answer).toEqual({ selected: ["滚动"] });
-
-    // Exactly one row — the make-up never duplicates the question.
-    expect(db.listQuizQuestionsBySession(SESSION)).toHaveLength(1);
-
-    gradeQuizAnswers(db, SESSION, "grade-call", {
-      reviews: [{ quizId: id, verdict: "correct", explanation: "补答正确。" }],
-    });
-    expect(listQuizQuestionViews(db, OWNER, SESSION)[0]!.verdict).toBe("correct");
-  });
-
-  it("validates the make-up against the options the row recorded", () => {
-    const id = skipped();
-    const result = makeupAnswer(db, OWNER, SESSION, id, {
-      answer: { selected: ["从未提供的选项"] },
-    });
-    expect(result).toMatchObject({ ok: false, status: 400, code: "INVALID_ANSWER" });
-  });
-
-  it("refuses a question that is answered or pending", () => {
-    // Answered: submit normally, then a make-up must not overwrite it.
-    registerQuiz([["Q1", 1]], "call-a");
-    recordQuizAnswers(db, SESSION, "call-a", { Q1: { selected: ["滚动"] } });
-    const answeredId = db.listQuizQuestionsBySession(SESSION).find((q) => q.qid === "Q1")!.id;
-    expect(makeupAnswer(db, OWNER, SESSION, answeredId, { answer: { selected: ["滑动"] } }))
-      .toMatchObject({ ok: false, status: 409, code: "QUIZ_NOT_ANSWERABLE" });
-
-    // Pending: a live card, answered through the ordinary flow rather than the make-up POST.
-    registerQuiz([["Q2", 2]], "call-b");
-    awaitingMessage("m-b", "call-b");
-    const pendingId = db.listQuizQuestionsBySession(SESSION).find((q) => q.qid === "Q2")!.id;
-    expect(makeupAnswer(db, OWNER, SESSION, pendingId, { answer: { selected: ["滚动"] } }))
-      .toMatchObject({ ok: false, status: 409, code: "QUIZ_NOT_ANSWERABLE" });
-  });
-
-  it("re-answers a dismissed question too, on the same row", () => {
-    // Cancelling the quiz is equivalent to skipping each question: the user never
-    // submitted, so the question stays make-up eligible.
-    registerQuiz([["Q1", 1]], "call-c");
-    dismissQuizQuestions(db, SESSION, "call-c");
-    const dismissedId = db.listQuizQuestionsBySession(SESSION).find((q) => q.qid === "Q1")!.id;
-
-    const result = makeupAnswer(db, OWNER, SESSION, dismissedId, {
-      answer: { selected: ["滚动"] },
-    });
-    expect(result.ok).toBe(true);
-    expect(db.listQuizQuestionsBySession(SESSION)).toHaveLength(1);
-    const row = db.listQuizQuestionsBySession(SESSION)[0]!;
-    expect(row).toMatchObject({ id: dismissedId, status: "answered" });
-    expect(row.answer).toEqual({ selected: ["滚动"] });
-  });
-
-  it("404s on an unknown id and on another account's question", () => {
-    const id = skipped();
-    const unknown = makeupAnswer(db, OWNER, SESSION, "no-such-uid", {
-      answer: { selected: ["滚动"] },
-    });
-    expect(unknown).toMatchObject({
-      ok: false,
-      status: 404,
-      code: "QUIZ_QUESTION_NOT_FOUND",
-    });
-    const foreign = makeupAnswer(db, OTHER, SESSION, id, { answer: { selected: ["滚动"] } });
-    expect(foreign).toMatchObject({
-      ok: false,
-      status: 404,
-      code: "QUIZ_QUESTION_NOT_FOUND",
-    });
-  });
-
-  it("rejects a malformed body", () => {
-    const id = skipped();
-    const result = makeupAnswer(db, OWNER, SESSION, id, { answer: { nope: true } });
-    expect(result).toMatchObject({ ok: false, status: 400 });
-  });
 });
 
 /* ------------------------------- batch make-up (the card) ------------------------------- */

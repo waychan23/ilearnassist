@@ -2812,9 +2812,7 @@ export const useAppStore = defineStore("app", () => {
   /**
    * Send a plan-panel message through the ordinary chat flow — the "adjust plan" composer
    * and the "jump to chapter" action both reduce to a user message after a server write.
-   * `chatExtras` carries server-only routing on that same turn: the quiz make-up passes
-   * `makeupQuizId` so the grading key is attached to the system prompt, never to the
-   * visible message.
+   * `chatExtras` carries server-only routing on that same turn.
    */
   async function sendPanelMessage(
     text: string,
@@ -2835,36 +2833,6 @@ export const useAppStore = defineStore("app", () => {
     if (!sessionId || streaming.value.active) return false;
     await api.jumpPlanNode(sessionId, nodeId);
     await sendPanelMessage(message);
-    return true;
-  }
-
-  /**
-   * The quiz widget's make-up answer for a question originally skipped/dismissed:
-   * persist the answer on the SAME row (the server refuses pending/answered), then START
-   * an ordinary chat turn whose message quotes the global id, so the model grades that
-   * question instead of posing a new quiz.
-   *
-   * Resolves (true) as soon as the answer is persisted and the turn is dispatched — the
-   * stream itself runs in the background so the detail dialog can close immediately rather
-   * than covering the chat while the model answers. False on the streaming guard or a
-   * rejected POST (whose translated error is surfaced, leaving the dialog open).
-   */
-  async function makeupQuizAnswer(
-    question: QuizQuestionView,
-    answer: QuizAnswer,
-    message: string
-  ): Promise<boolean> {
-    const sessionId = activeSessionId.value;
-    if (!sessionId || streaming.value.active) return false;
-    try {
-      await api.answerQuizQuestion(sessionId, question.id, answer);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      return false;
-    }
-    // Name the row: the server appends its (hidden) answer key to this turn's system
-    // prompt so the model grades against it instead of reconstructing one.
-    void sendPanelMessage(message, { makeupQuizId: question.id });
     return true;
   }
 
@@ -3032,30 +3000,36 @@ export const useAppStore = defineStore("app", () => {
    * It shares the local flip with `answerQuestion`: the card shows what was answered before the
    * server has said anything, and is put back if the submission is refused.
    */
-  async function submitQuizMakeup(toolCallId: string, answers: QuizAnswers): Promise<boolean> {
+  async function submitQuizMakeup(
+    answers: QuizAnswers,
+    toolCallId?: string
+  ): Promise<boolean> {
     const sessionId = activeSessionId.value;
-    const toolCall = findToolCall(toolCallId);
-    if (streaming.value.active) return false;
-    if (!sessionId || !toolCall) {
-      setError(translateApiError("QUESTION_NOT_PENDING", undefined, undefined));
-      return false;
-    }
+    if (!sessionId || streaming.value.active) return false;
+    if (Object.keys(answers).length === 0) return false;
 
-    const previous: { status: ToolCall["status"]; answer: ToolCall["answer"] } = {
-      status: toolCall.status,
-      answer: toolCall.answer,
-    };
-    toolCall.status = "answered";
-    // Merged, because a card over five questions may have had two made up: the rest stay
-    // unanswered in its record, which is what its settled view renders.
-    toolCall.answer = { ...((toolCall.answer as QuizAnswers | undefined) ?? {}), ...answers };
+    /*
+     * The card, when there is one. `toolCallId` is absent for the panel's own batch — that surface
+     * has no call of its own, and its rows are re-read when the turn ends — and present for the
+     * card the learner answered in, which has to show what they said before the server has replied.
+     */
+    const toolCall = toolCallId ? findToolCall(toolCallId) : undefined;
+    const previous = toolCall
+      ? { status: toolCall.status, answer: toolCall.answer }
+      : undefined;
+    if (toolCall) {
+      toolCall.status = "answered";
+      // Merged, because a card over five questions may have had two made up: the rest stay
+      // unanswered in its record, which is what its settled view renders.
+      toolCall.answer = { ...((toolCall.answer as QuizAnswers | undefined) ?? {}), ...answers };
+    }
 
     streaming.value = { ...EMPTY_STREAMING(), active: true };
     // A resumed turn moves the message counts and the token totals just as a fresh one does.
     emitWidgetEvent({ type: "turn.started", sessionId });
 
     const accepted = await consume(streamQuizMakeup(sessionId, answers), sessionId);
-    if (!accepted) {
+    if (!accepted && toolCall && previous) {
       toolCall.status = previous.status;
       toolCall.answer = previous.answer;
     }
@@ -3219,7 +3193,6 @@ export const useAppStore = defineStore("app", () => {
     submitQuizMakeup,
     sendPanelMessage,
     planJumpToNode,
-    makeupQuizAnswer,
     stopMessage,
     setError,
     loadDirectory,

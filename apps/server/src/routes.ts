@@ -153,7 +153,6 @@ import {
   recordMakeupAnswers,
   recordQuizAnswers,
   registerQuizQuestions,
-  renderMakeupKeyNote,
   skipQuizQuestions,
 } from "./quizzes.js";
 import type { DocumentService } from "./documents/service.js";
@@ -2545,34 +2544,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { questions: listQuizQuestionViews(db, userId, id) };
   });
 
-  /**
-   * Make-up answer for one question originally skipped. JSON rather than SSE: it only
-   * validates and persists; the client follows with an ordinary `/chat` message that
-   * drives the model's grading, so the resumed turn streams through the same path a normal
-   * message does. The row is updated in place — never duplicated.
+  /*
+   * There is one make-up route now — `POST /api/sessions/:id/quizzes/makeup`, below, beside
+   * `/answers`. The single-question `…/quizzes/:quizId/answer` that stood here took a JSON body and
+   * left the grading to a following `/chat` message the client composed; a make-up is a tool call
+   * whose answers arrive as its result, so both doors to it write the same rows and start the same
+   * turn.
    */
-  app.post("/api/sessions/:id/quizzes/:quizId/answer", { config: { requiresSessionLock: true } }, async (request, reply) => {
-    const userId = actor(request).id;
-    const { id, quizId } = request.params as { id: string; quizId: string };
-    if (!db.getSessionForUser(id, userId)) {
-      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
-    }
-    const result = makeupAnswer(db, userId, id, quizId, request.body);
-    if (!result.ok) {
-      return reply
-        .code(result.status)
-        .send(
-          apiError(
-            result.code,
-            result.reason ??
-              (result.code === "QUIZ_NOT_ANSWERABLE"
-                ? "that question is not open to a make-up answer"
-                : "quiz question not found")
-          )
-        );
-    }
-    return { question: result.view };
-  });
 
   /* ---------------------------------- threads ---------------------------------- */
 
@@ -5141,35 +5119,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       })
       .filter((a): a is Attachment => a !== undefined);
 
-    /*
-     * The quiz widget's make-up flow follows this same /chat turn with the row it just
-     * answered. The answer key lives server-side and never enters the visible message:
-     * when the row exists, is owned here and is answered, its key (if one was given) is
-     * appended to THIS turn's system prompt only. A missing id or a non-answered row is a
-     * stale client rather than a turn to grade loosely.
-     */
-    let quizMakeupNote: string | undefined;
-    const makeupQuizId = typeof body?.makeupQuizId === "string" ? body.makeupQuizId : undefined;
-    if (makeupQuizId !== undefined) {
-      const makeupRow = db.getQuizQuestionForUser(userId, id, makeupQuizId);
-      if (!makeupRow) {
-        return reply
-          .code(404)
-          .send(apiError("QUIZ_QUESTION_NOT_FOUND", "quiz question not found"));
-      }
-      if (makeupRow.status !== "answered") {
-        return reply
-          .code(409)
-          .send(
-            apiError(
-              "QUIZ_NOT_ANSWERABLE",
-              "that question is not open to a make-up answer"
-            )
-          );
-      }
-      quizMakeupNote = renderMakeupKeyNote(makeupRow) ?? undefined;
-    }
-
     // Any question still waiting for an answer belongs to a turn the user has now moved
     // on from. Retiring it here — before the new user turn is written — is what makes the
     // card read "skipped" rather than staying live on a conversation that has moved past it.
@@ -5341,7 +5290,6 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
-        quizMakeupNote,
         signal: turn.signal,
         onEvent: (event: ChatStreamEvent) => sse.send(event),
       });

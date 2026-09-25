@@ -198,36 +198,6 @@ export function quizAnswerKeysForCall(
   return map;
 }
 
-/**
- * The system-side grading note for a make-up turn: the question's answer key, which the
- * user never saw. Appended to THAT turn's system prompt only and never persisted in a
- * visible message. Null when the question was posed without a key, so a make-up against a
- * keyless quiz behaves exactly as before.
- */
-export function renderMakeupKeyNote(row: QuizQuestionRecord): string | null {
-  const reference = row.referenceAnswer && row.referenceAnswer.length > 0 ? row.referenceAnswer : null;
-  const explanation = row.explanation ?? null;
-  if (!reference && !explanation) return null;
-
-  /*
-   * The key lines carry their own leading newline, and that is what keeps the assembled note
-   * byte-identical to the hand-built version it replaces: a question posed without a key supplies
-   * "" here and leaves no blank line behind, while one with a key gets the newline it needs. The
-   * prose itself lives in the catalog — see `chat.guidance.quizMakeup`.
-   */
-  const lines: string[] = [];
-  if (reference) lines.push(`Reference answer: ${reference.join("; ")}`);
-  if (explanation) lines.push(`Explanation: ${explanation}`);
-  const key = lines.map((line) => `\n${line}`).join("");
-
-  return renderPrompt("chat.guidance.quizMakeup", {
-    qid: row.qid,
-    id: row.id,
-    question: row.question,
-    key,
-  });
-}
-
 /* ------------------------------------ reads ------------------------------------ */
 
 function toView(row: QuizQuestionRecord): QuizQuestionView {

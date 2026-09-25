@@ -466,11 +466,6 @@ export interface GetQuizQuestionsResponse {
   questions: QuizQuestionView[];
 }
 
-/** Body of the make-up answer POST; the question itself comes from the row. */
-export interface QuizMakeupAnswerBody {
-  answer: QuizAnswer;
-}
-
 /** One item of `ila_review_quiz`: the verdict for one question by its global id. */
 export interface QuizReviewItem {
   quizId: string;
@@ -3772,14 +3767,6 @@ export interface ChatInput extends TurnRequestMeta {
    * diagram*, and the agent is told which one so it can look it up — see `TurnReference`.
    */
   refs?: TurnReference[];
-  /**
-   * Set only by the quiz widget's make-up flow: the global id of a question whose answer
-   * was just posted and that this ordinary chat turn is meant to grade. The server verifies
-   * an owned, answered row and, when the question was posed with one, appends the answer
-   * key and explanation to THIS turn's system prompt only — the key never travels to the
-   * client and is not part of the visible message.
-   */
-  makeupQuizId?: string;
 }
 
 /* ---------------------------------- Chat stream events -------------------------------- */

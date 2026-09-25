@@ -824,6 +824,26 @@ export default {
     makeup: {
       open: "补答这道题",
       close: "退出补答",
+      /** The single-question submit, in the question window's footer. */
+      submit: "补答",
+      /**
+       * 补答模式: walking the unanswered questions instead of the panel's list. Every string here is
+       * about *the queue* rather than about one question — that is the difference the mode makes.
+       */
+      step: "第 {current}/{total} 道未答题",
+      filled: "已补答 {count} 道",
+      submitAll: "提交补答",
+      exit: "退出补答",
+      batchTitle: "一起补答",
+      batchAsk: "除了这道题，还有 {count} 道未作答的题目，要不要一起补答？",
+      batchDetail: "一起补答时可以在未答题目之间来回切换，也可以只提交已经补答的部分。",
+      batchYes: "一起补答",
+      batchNo: "只补这道",
+      partialTitle: "先提交这些",
+      partialAsk: "还有 {remaining} 道题没有补答，确认先提交已补答的 {filled} 道吗？",
+      partialDetail: "没有补答的题目会保留未答状态，之后还可以再补答。",
+      partialYes: "先提交这些",
+      partialNo: "继续补答",
     },
     /** One per `ToolCallStatus`, plus the moment before the turn has finished persisting. */
     preparing: "准备题目中",
@@ -886,21 +906,8 @@ export default {
       waitingGrade: "等待助手判分…",
       /** Only skipped questions can be made up. */
       makeupHint: "这道题当时没有作答（跳过或取消了小测），可以在这里补答，提交后助手会判分。",
-      makeupSubmit: "提交补答",
       close: "关闭",
     },
-    /**
-     * The user message a make-up submission drives, after the answer is persisted.
-     * Model input: quotes the GLOBAL id so grading lands on the same question and the
-     * model must not issue a new quiz. Params: id, qid, question, options, answer.
-     */
-    makeupMessage:
-      "【补答】这是我对一道之前未作答题目的补答（当时跳过或取消了小测），不是新题目，请不要重新调用 ila_quiz 出题。\n" +
-      "题目 ID：{id}（编号 {qid}）\n" +
-      "题目：{question}\n" +
-      "可选选项：{options}\n" +
-      "我的补答：{answer}\n" +
-      "请针对我的补答判分：用完全一致的题目 ID 调用 ila_review_quiz，给出 verdict 和讲解。",
   },
 
   /**

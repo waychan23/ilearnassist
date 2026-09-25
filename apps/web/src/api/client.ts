@@ -844,12 +844,6 @@ export const api = {
     request<GetQuizQuestionsResponse>(`/sessions/${sessionId}/quizzes`),
   // Make-up answer for one skipped question: validates/persists, after which the client
   // drives an ordinary chat turn that grades it.
-  answerQuizQuestion: (sessionId: string, quizId: string, answer: QuizAnswer) =>
-    request<{ question: QuizQuestionView }>(
-      `/sessions/${sessionId}/quizzes/${quizId}/answer`,
-      { method: "POST", body: JSON.stringify({ answer }) }
-    ),
-
   // Threads (the thread widget): derived topic chains plus the still-unclassified count.
   getSessionThreads: (sessionId: string) =>
     request<GetSessionThreadsResponse>(`/sessions/${sessionId}/threads`),

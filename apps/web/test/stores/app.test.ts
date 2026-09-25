@@ -64,7 +64,6 @@ const mocks = vi.hoisted(() => ({
     getPlanVersion: vi.fn(),
     jumpPlanNode: vi.fn(),
     listQuizQuestions: vi.fn().mockResolvedValue({ questions: [] }),
-    answerQuizQuestion: vi.fn(),
     getSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     syncSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     stopSession: vi.fn(),
@@ -2362,54 +2361,6 @@ describe("quiz widgets", () => {
       off();
     }
   });
-
-  it("persists a make-up answer, then sends the quoting message through the normal flow", async () => {
-    mocks.api.answerQuizQuestion.mockResolvedValue({ question: { id: "quiz-1" } });
-    streamOf({ type: "text", delta: "答对了" }, { type: "done" });
-    const store = await readyStore();
-
-    const question = { id: "quiz-1", qid: "Q1" } as never;
-    const answer = { selected: ["滚动"] } as never;
-    const ok = await store.makeupQuizAnswer(question, answer, "【补答】…");
-
-    expect(ok).toBe(true);
-    expect(mocks.api.answerQuizQuestion).toHaveBeenCalledWith("s1", "quiz-1", {
-      selected: ["滚动"],
-    });
-    expect(mocks.streamChat).toHaveBeenCalled();
-    // The follow-up turn names the row so the server appends its hidden answer key to the
-    // system prompt; the visible message carries nothing.
-    expect(mocks.streamChat).toHaveBeenCalledWith(
-      "s1",
-      expect.objectContaining({ makeupQuizId: "quiz-1" })
-    );
-  });
-
-  it("reports a rejected make-up POST without starting a turn, leaving the dialog to stay open", async () => {
-    mocks.api.answerQuizQuestion.mockRejectedValueOnce(new Error("不能补答"));
-    const store = await readyStore();
-
-    const ok = await store.makeupQuizAnswer(
-      { id: "quiz-1" } as never,
-      { selected: ["x"] } as never,
-      "msg"
-    );
-    expect(ok).toBe(false);
-    expect(mocks.streamChat).not.toHaveBeenCalled();
-    expect(store.error).toContain("不能补答");
-  });
-
-  it("does not POST a make-up answer while a turn is streaming", async () => {
-    const store = await readyStore();
-    store.streaming.active = true;
-    const ok = await store.makeupQuizAnswer(
-      { id: "quiz-1" } as never,
-      { selected: ["x"] } as never,
-      "msg"
-    );
-    expect(ok).toBe(false);
-    expect(mocks.api.answerQuizQuestion).not.toHaveBeenCalled();
-  });
 });
 
 describe("the make-up card's own submit", () => {
@@ -2450,7 +2401,7 @@ describe("the make-up card's own submit", () => {
     const store = await storeWithSkippedCard();
     makeupStreamOf({ type: "done" });
 
-    const ok = await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never);
+    const ok = await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
 
     expect(ok).toBe(true);
     // Nothing to cancel and nothing to quote: the answers go to the route that records them, and
@@ -2471,7 +2422,7 @@ describe("the make-up card's own submit", () => {
     call.answer = { Q2: { selected: ["RocksDB"] } } as never;
     makeupStreamOf({ type: "done" });
 
-    await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never);
+    await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
 
     expect(call.answer).toEqual({
       Q2: { selected: ["RocksDB"] },
@@ -2487,7 +2438,7 @@ describe("the make-up card's own submit", () => {
       })()
     );
 
-    const ok = await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never);
+    const ok = await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
 
     expect(ok).toBe(false);
     const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
@@ -2501,7 +2452,7 @@ describe("the make-up card's own submit", () => {
     const store = await storeWithSkippedCard();
     store.streaming.active = true;
 
-    expect(await store.submitQuizMakeup("c1", { Q1: { selected: ["滚动"] } } as never)).toBe(false);
+    expect(await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1")).toBe(false);
     expect(mocks.streamQuizMakeup).not.toHaveBeenCalled();
   });
 

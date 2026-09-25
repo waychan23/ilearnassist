@@ -351,12 +351,17 @@ The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and
 - **Grading is a normal `required` tool**, not a suspending one: the model calls
   `ila_review_quiz` with exact `quiz_id`s after judging (instructed by the tool description
   and `QUIZ_GUIDANCE`); its `tool_end` emits `quiz.changed` for mid-turn panel refresh.
-- **Make-up answers are POST-then-chat, never a second quiz.** An unanswered question —
-  walked-away (`skipped`) or cancelled with the card (`dismissed`), treated alike — is
-  re-answered through `POST /sessions/:id/quizzes/:quizId/answer` (status-guarded UPDATE of
-  the same row), after which the client sends an ordinary `/chat` message quoting the
-  global id; the resumed turn grades that one id. `pending` (live card) and `answered` are
-  not eligible.
+- **Make-up is a tool, and its card is the quiz card.** An unanswered question — walked-away
+  (`skipped`) or cancelled with the card (`dismissed`), treated alike — is brought back by
+  `ila_makeup_quiz`, which suspends on the questions the conversation already holds (the model
+  names ids and never text) and is answered through the ordinary `/answers` route. `pending` (a
+  live card) and `answered` are not eligible. Two other doors reach the same write path:
+  `POST /sessions/:id/quizzes/makeup`, used by a card the learner answers where it was asked and
+  by the panel's 补答模式, which records the answers as a *completed* make-up call on a new
+  assistant message (`message_added`) and starts the grading turn — the server cannot resume the
+  turned-away turn, so the grading has to begin at the newest message. A make-up allows a partial
+  answer, and the questions left behind stay eligible; the call that asked them is marked answered
+  without an `output`, so the card stops offering a make-up it would refuse.
 - **Plan binding is the tool's own concern.** An optional top-level `nodeId` names a live
   plan node (an invalid id is a tool error before any insert); without it the question binds
   to the current `in_progress` node, and without a plan it is a session-level question.
