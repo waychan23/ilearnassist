@@ -696,3 +696,82 @@ test("补答模式 walks the unanswered questions and submits a part of them", a
    */
   await expect(page.getByTestId("quiz-card").last()).toContainText("补答");
 });
+
+test("a question whose grading failed can be re-opened and answered again", async ({
+  page,
+  request,
+}) => {
+  /*
+   * The repair for a stuck row. The answers are written *before* the grading turn runs, so a
+   * provider failure leaves a question that is answered with no verdict — a state a make-up
+   * refuses and the card that asked it is gone from. Nothing else can touch it, so without the
+   * reopen control the learner's question reads "waiting for the assistant to grade it" for good.
+   */
+  await sessionWithWidgets(page, unique("Quiz reopen"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "小测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: ONE_QUESTION } }],
+      },
+      { content: "先讲别的。" },
+    ],
+  });
+  await send(page, "开始");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+  await send(page, "先讲别的吧");
+  await expect(page.getByTestId("quiz-status")).toContainText("已跳过");
+
+  // Make it up — with the grading turn failing, which is the state under test.
+  await selectFilter(page, "skipped");
+  await page.locator('[data-testid^="quiz-row-"]').click();
+  await page.locator('[data-testid="quiz-makeup-option-0-0"]').click();
+  await scriptLlm(request as APIRequestContext, {
+    turns: [{ fail: { status: 500, message: "provider exploded" } }],
+  });
+  await page.getByTestId("quiz-makeup-submit").click();
+  await expect(page.getByTestId("quiz-detail-overlay")).toHaveCount(0);
+
+  // Answered, never graded: the panel says so, and the way out is offered. The id is read here,
+  // while the row is still in the filter on screen — the reopen takes it out of that list.
+  await selectFilter(page, "answered");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(1);
+  const quizId = (await panelIds(page))[0]!;
+  await page.locator('[data-testid^="quiz-row-"]').click();
+  await expect(page.locator(".feedback.waiting")).toBeVisible();
+  await expect(page.getByTestId("quiz-reopen")).toBeVisible();
+
+  // The confirm says what it costs, and confirming takes the question back to unanswered.
+  await page.getByTestId("quiz-reopen").click();
+  await expect(page.locator(".confirm-message")).toContainText("判分没有完成");
+  await page.getByTestId("confirm-accept").click();
+  // The dialog is already open on it, now showing the make-up form — which is the point of the
+  // repair: the question is answerable the way it was the first time.
+  await expect(page.getByTestId("quiz-makeup")).toBeVisible();
+
+  // And a second attempt grades it — the same row, now judged.
+  await page.locator('[data-testid="quiz-makeup-option-0-0"]').click();
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        toolCalls: [
+          {
+            id: "call_grade_retry",
+            name: "ila_review_quiz",
+            args: { reviews: [{ quizId, verdict: "correct", explanation: "这次对了。" }] },
+          },
+        ],
+      },
+      { content: "这次判好了。" },
+    ],
+  });
+  await page.getByTestId("quiz-makeup-submit").click();
+  await expect(page.locator('[data-tool-call-id="call_grade_retry"]')).toBeVisible();
+
+  await selectFilter(page, "all");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(1);
+  await page.locator('[data-testid^="quiz-row-"]').click();
+  await expect(page.getByTestId(`quiz-detail-verdict-${quizId}`)).toContainText("正确");
+  await page.getByTestId("quiz-detail-close").click();
+});

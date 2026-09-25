@@ -906,6 +906,16 @@ export default {
       waitingGrade: "等待助手判分…",
       /** Only skipped questions can be made up. */
       makeupHint: "这道题当时没有作答（跳过或取消了小测），可以在这里补答，提交后助手会判分。",
+      /**
+       * The way out of a grading turn that failed after the answer landed. The confirm says what it
+       * costs — the answer on screen is discarded — because the row cannot be both unanswered and
+       * carrying one, and only the reader can decide a fresh attempt is worth it.
+       */
+      reopen: "重新补答",
+      reopenTitle: "重新补答",
+      reopenAsk: "这道题的作答已经记录，但判分没有完成。要清空这次作答、重新补答吗？",
+      reopenDetail: "清空后这道题会回到未作答状态，可以像跳过的题目一样重新补答。",
+      reopenConfirm: "清空并重新补答",
       close: "关闭",
     },
   },
@@ -1632,6 +1642,8 @@ export default {
     PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
     QUIZ_QUESTION_NOT_FOUND: "找不到这道测验题。",
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
+    QUIZ_NOT_REOPENABLE:
+      "这道题不能重新补答：要么已经判分结束，要么并没有作答过（未作答的题目本来就可以直接补答）。",
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
     FIGURE_NOT_FOUND: "找不到这个图表，它可能已经被修改或删除了。",

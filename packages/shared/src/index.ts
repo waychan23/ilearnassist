@@ -1884,6 +1884,9 @@ export const API_ERROR_CODES = [
   "QUIZ_QUESTION_NOT_FOUND",
   // The question exists but is not make-up-eligible: only skipped questions can be re-answered.
   "QUIZ_NOT_ANSWERABLE",
+  // Re-opening is for the one stuck state — answered, never graded. A graded question is settled
+  // history, and one that was never answered needs no re-opening.
+  "QUIZ_NOT_REOPENABLE",
   // A message id that this conversation does not hold — unknown, another account's, another
   // conversation's, or already soft-deleted. All four are the same answer on purpose, so an id
   // cannot be probed for existence.

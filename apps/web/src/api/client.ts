@@ -842,8 +842,16 @@ export const api = {
   // Quiz questions for the quiz widget. An empty list is the ordinary empty state.
   listQuizQuestions: (sessionId: string) =>
     request<GetQuizQuestionsResponse>(`/sessions/${sessionId}/quizzes`),
-  // Make-up answer for one skipped question: validates/persists, after which the client
-  // drives an ordinary chat turn that grades it.
+  /*
+   * Put an answered-but-ungraded question back among the unanswered ones — the repair for a
+   * grading turn that failed after the answers were written. It discards the answer, which is
+   * what the confirm in front of it says; the question is then make-up eligible like any other.
+   */
+  reopenQuizQuestion: (sessionId: string, quizId: string) =>
+    request<{ question: QuizQuestionView }>(
+      `/sessions/${sessionId}/quizzes/${quizId}/reopen`,
+      { method: "POST" }
+    ),
   // Threads (the thread widget): derived topic chains plus the still-unclassified count.
   getSessionThreads: (sessionId: string) =>
     request<GetSessionThreadsResponse>(`/sessions/${sessionId}/threads`),

@@ -8,6 +8,7 @@ import { applyProgress, forceMakePlan } from "../src/plans.js";
 import {
   dismissQuizQuestions,
   gradeQuizAnswers,
+  reopenQuizAnswer,
   listQuizQuestionViews,
   makeupQuestions,
   quizAnswerKeysForCall,
@@ -592,5 +593,82 @@ describe("recordMakeupAnswers", () => {
     expect(row.verdict).toBeNull();
     expect(row.feedback).toBeNull();
     expect(row.gradedAt).toBeNull();
+  });
+});
+
+/* ------------------------------------ reopening ------------------------------------ */
+
+describe("reopenQuizAnswer", () => {
+  /**
+   * The state a failed grading turn leaves: the answers are written before the turn starts, so a
+   * provider refusal or a dropped connection leaves a row that is `answered` with no verdict.
+   */
+  function answeredUngraded(): string {
+    registerQuiz([["Q1", 1]]);
+    recordQuizAnswers(db, SESSION, "call-1", { Q1: { selected: ["滚动"] } });
+    return listQuizQuestionViews(db, OWNER, SESSION)[0]!.id;
+  }
+
+  it("puts an answered-but-ungraded question back among the unanswered, without its answer", () => {
+    const id = answeredUngraded();
+
+    const result = reopenQuizAnswer(db, OWNER, SESSION, id);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.view).toMatchObject({
+      id,
+      status: "skipped",
+      answer: null,
+      verdict: null,
+      feedback: null,
+      answeredAt: null,
+    });
+    // Which is exactly what a make-up accepts — the whole point of the reopen.
+    expect(makeupQuestions(db, SESSION).map((q) => q.id)).toEqual(["Q1"]);
+    // And the same row: a reopen re-opens, it never duplicates.
+    expect(db.listQuizQuestionsBySession(SESSION)).toHaveLength(1);
+  });
+
+  it("refuses a question that was graded, which is settled history rather than a stuck row", () => {
+    const id = answeredUngraded();
+    gradeQuizAnswers(db, SESSION, "grade-1", {
+      reviews: [{ quizId: id, verdict: "correct", explanation: "对。" }],
+    });
+
+    expect(reopenQuizAnswer(db, OWNER, SESSION, id)).toMatchObject({
+      ok: false,
+      status: 409,
+      code: "QUIZ_NOT_REOPENABLE",
+    });
+    // Untouched: a refusal writes nothing.
+    expect(listQuizQuestionViews(db, OWNER, SESSION)[0]!.verdict).toBe("correct");
+  });
+
+  it("refuses a question that was never answered, which needs no reopening", () => {
+    registerQuiz([["Q1", 1]]);
+    skipQuizQuestions(db, SESSION, ["call-1"]);
+    const id = listQuizQuestionViews(db, OWNER, SESSION)[0]!.id;
+
+    expect(reopenQuizAnswer(db, OWNER, SESSION, id)).toMatchObject({
+      ok: false,
+      status: 409,
+      code: "QUIZ_NOT_REOPENABLE",
+    });
+  });
+
+  it("404s an unknown id and another account's question", () => {
+    const id = answeredUngraded();
+
+    expect(reopenQuizAnswer(db, OWNER, SESSION, "nope")).toMatchObject({
+      ok: false,
+      status: 404,
+      code: "QUIZ_QUESTION_NOT_FOUND",
+    });
+    expect(reopenQuizAnswer(db, OTHER, SESSION, id)).toMatchObject({
+      ok: false,
+      status: 404,
+      code: "QUIZ_QUESTION_NOT_FOUND",
+    });
   });
 });

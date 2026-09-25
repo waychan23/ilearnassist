@@ -717,6 +717,42 @@ describe("the make-up submit route (the card's own door)", () => {
     expect(card?.status).toBe("skipped");
   });
 
+  it("re-opens a question whose grading turn failed, and grades it on the next attempt", async () => {
+    /*
+     * The second half of the reported trap. The answers are written before the grading turn starts,
+     * so a provider that fails leaves a row that is `answered` with no verdict — which a make-up
+     * refuses and the live card is long gone, so nothing else can touch it. The reopen is the way
+     * out, and the question is then made up again like any other.
+     */
+    const session = await skippedQuiz();
+    llm.reset();
+    // A grading turn that fails outright: the answers land, the verdict never does.
+    llm.setTurns([{ fail: { status: 500, message: "provider exploded" } }]);
+    expect((await submit(session.id, { Q1: { selected: ["滚动窗口"] } })).statusCode).toBe(200);
+
+    const stuck = (await quizRows(session.id))[0]!;
+    expect(stuck).toMatchObject({ status: "answered", verdict: null });
+
+    const reopened = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/quizzes/${stuck.id}/reopen`,
+    });
+    expect(reopened.statusCode).toBe(200);
+    expect(reopened.json<{ question: QuizQuestionView }>().question).toMatchObject({
+      status: "skipped",
+      answer: null,
+    });
+
+    // Make-up eligible again, and this time the turn grades it.
+    llm.reset();
+    llm.setTurns([{ content: "这次判好了。" }]);
+    expect((await submit(session.id, { Q1: { selected: ["状态后端"] } })).statusCode).toBe(200);
+    expect((await quizRows(session.id))[0]).toMatchObject({
+      status: "answered",
+      answer: { selected: ["状态后端"] },
+    });
+  });
+
   it("refuses a question that has been answered since the card was opened", async () => {
     const session = await skippedQuiz();
     llm.reset();

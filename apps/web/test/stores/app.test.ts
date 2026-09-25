@@ -64,6 +64,7 @@ const mocks = vi.hoisted(() => ({
     getPlanVersion: vi.fn(),
     jumpPlanNode: vi.fn(),
     listQuizQuestions: vi.fn().mockResolvedValue({ questions: [] }),
+    reopenQuizQuestion: vi.fn(),
     getSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     syncSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     stopSession: vi.fn(),
@@ -4021,5 +4022,36 @@ describe("session write locks", () => {
     await store.refreshWorkspaceLocks();
 
     expect(Object.keys(store.sessionLocks)).toEqual(["s1"]);
+  });
+});
+
+describe("re-opening a stuck question", () => {
+  it("asks the server, announces the change, and hands back the fresh row", async () => {
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      const store = await readyStore();
+      mocks.api.reopenQuizQuestion.mockResolvedValue({
+        question: { id: "q1", status: "skipped", verdict: null },
+      });
+
+      const updated = await store.reopenQuizQuestion("q1");
+
+      expect(mocks.api.reopenQuizQuestion).toHaveBeenCalledWith("s1", "q1");
+      expect(updated).toMatchObject({ status: "skipped" });
+      // The panel listens for this: the row it was showing has changed underneath it.
+      expect(seen).toEqual(["quiz.changed"]);
+    } finally {
+      off();
+    }
+  });
+
+  it("reports a refusal and hands back nothing, so the dialog keeps the row it has", async () => {
+    const store = await readyStore();
+    mocks.api.reopenQuizQuestion.mockRejectedValue(new Error("已经判分了"));
+
+    expect(await store.reopenQuizQuestion("q1")).toBeNull();
+    expect(store.error).toContain("已经判分了");
   });
 });

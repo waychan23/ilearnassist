@@ -146,6 +146,7 @@ import {
 import {
   dismissQuizQuestions,
   listQuizQuestionViews,
+  reopenQuizAnswer,
   makeupAnswer,
   makeupQuestions,
   makeupQuestionsByQid,
@@ -2551,6 +2552,36 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * whose answers arrive as its result, so both doors to it write the same rows and start the same
    * turn.
    */
+
+  /**
+   * Put an answered-but-ungraded question back among the unanswered ones.
+   *
+   * JSON rather than SSE: nothing streams, and no turn starts — the reader is repairing a row the
+   * panel is showing, and the make-up that follows is a separate request they make next.
+   */
+  app.post("/api/sessions/:id/quizzes/:quizId/reopen", { config: { requiresSessionLock: true } }, async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, quizId } = request.params as { id: string; quizId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    const result = reopenQuizAnswer(db, userId, id, quizId);
+    if (!result.ok) {
+      return reply
+        .code(result.status)
+        .send(
+          apiError(
+            result.code,
+            result.reason ??
+              (result.code === "QUIZ_QUESTION_NOT_FOUND"
+                ? "quiz question not found"
+                : "that question cannot be re-opened")
+          )
+        );
+    }
+    return { question: result.view };
+  });
 
   /* ---------------------------------- threads ---------------------------------- */
 

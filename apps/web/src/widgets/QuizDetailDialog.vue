@@ -96,6 +96,17 @@ const makeupEligible = computed(
   () => props.question?.status === "skipped" || props.question?.status === "dismissed"
 );
 const busy = computed(() => store.streaming.active);
+
+/**
+ * A question that was answered and never graded — the state a failed grading turn leaves.
+ *
+ * Only this state is re-openable: a graded question is settled history, and an unanswered one needs
+ * no re-opening at all (it is already make-up eligible). See `reopenQuizAnswer` on the server for
+ * why the answer is discarded rather than kept.
+ */
+const stuckUngraded = computed(
+  () => props.question?.status === "answered" && props.question.verdict === null
+);
 // Read off whichever draft the form is showing, so the mode's own answers count too.
 const draftAnswered = computed(() => {
   const source = activeDraft();
@@ -222,6 +233,31 @@ const queueIndex = computed(() => {
  * one they made. Answering "no" submits the single question exactly as before; "yes" opens the mode
  * with the answer already typed carried into it.
  */
+/**
+ * Re-open the question so it can be answered again.
+ *
+ * The confirm is the whole of the honesty here: this **discards** the answer that is on screen —
+ * the row cannot be both unanswered and carrying one — and the reader is the only one who can
+ * decide that a fresh attempt is worth more than the record.
+ */
+async function reopen(): Promise<void> {
+  const question = props.question;
+  if (!question || busy.value) return;
+  const yes = await confirm({
+    title: t("quiz.detail.reopenTitle"),
+    message: t("quiz.detail.reopenAsk"),
+    detail: t("quiz.detail.reopenDetail"),
+    confirmText: t("quiz.detail.reopenConfirm"),
+    danger: true,
+  });
+  if (!yes) return;
+
+  const updated = await store.reopenQuizQuestion(question.id);
+  // The panel owns `active`; handing it the fresh row is what makes the dialog show the question as
+  // unanswered — and the make-up form, which is the point of doing this.
+  if (updated) emit("select", updated);
+}
+
 async function startMakeup(): Promise<void> {
   const question = props.question;
   if (!question || !makeupEligible.value || !draftAnswered.value || busy.value) return;
@@ -540,6 +576,20 @@ function askFollowup(): void {
               <div class="feedback" v-html="feedbackHtml" @click="codeCopyClick" />
             </template>
             <p v-else class="feedback waiting">{{ t("quiz.detail.waitingGrade") }}</p>
+            <!--
+              The way out of that state. Without it the question is unanswerable in both
+              directions: a make-up refuses an answered row, and the card that asked it is gone.
+            -->
+            <button
+              v-if="stuckUngraded"
+              type="button"
+              class="btn ghost small"
+              :disabled="busy"
+              data-testid="quiz-reopen"
+              @click="reopen"
+            >
+              <Icon name="retry" /> {{ t("quiz.detail.reopen") }}
+            </button>
           </div>
 
           <!-- Skipped or cancelled without answering: the make-up form. -->

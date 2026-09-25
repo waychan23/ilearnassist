@@ -625,6 +625,71 @@ const reviewSchema = z.object({
     .max(QUIZ_REVIEW_MAX_REVIEWS),
 });
 
+/* --------------------------------- reopening --------------------------------- */
+
+export type ReopenResult =
+  | { ok: true; view: QuizQuestionView }
+  | { ok: false; status: 404 | 409; code: ApiErrorCode; reason?: string };
+
+/**
+ * Put an answered-but-ungraded question back among the unanswered ones.
+ *
+ * The state this exists for is the one a **failed grading turn** leaves behind: the answers are
+ * written before the turn starts, so a provider refusal or a dropped connection leaves a row that
+ * is `answered` with no verdict. Nothing else touches it — a make-up refuses an `answered` row, and
+ * the live card is long gone — so without this the question sits in the panel reading "waiting for
+ * the assistant to grade it" for good, unanswerable in either direction.
+ *
+ * Only that state. A **graded** question is settled history, and re-opening one would be a
+ * different feature (re-answering something already judged) wearing the same button. The answer is
+ * discarded, which is what the caller asks the reader to confirm: a reopen that kept the answer
+ * would leave a row whose status and content disagree.
+ *
+ * The guarded UPDATE makes a racing grading turn harmless in both directions — this refuses a row
+ * that has just been graded, and a grade arriving afterwards finds `skipped` and writes nothing,
+ * because the grading statement guards on `answered` too.
+ */
+export function reopenQuizAnswer(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  quizId: string
+): ReopenResult {
+  const row = db.getQuizQuestionForUser(userId, sessionId, quizId);
+  if (!row) return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+  if (row.status !== "answered") {
+    return {
+      ok: false,
+      status: 409,
+      code: "QUIZ_NOT_REOPENABLE",
+      reason: "only a question that was answered and never graded can be re-opened",
+    };
+  }
+  if (row.verdict !== null) {
+    return {
+      ok: false,
+      status: 409,
+      code: "QUIZ_NOT_REOPENABLE",
+      reason: "that question has already been graded",
+    };
+  }
+
+  const changed = db.transitionQuizQuestion({
+    sessionId,
+    id: row.id,
+    expectedStatus: "answered",
+    status: "skipped",
+    answerJson: null,
+    answeredAt: null,
+  });
+  if (!changed) return { ok: false, status: 409, code: "QUIZ_NOT_REOPENABLE" };
+
+  const updated = db.getQuizQuestionForUser(userId, sessionId, quizId);
+  // The guarded UPDATE just matched this row, so its read cannot miss.
+  if (!updated) return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+  return { ok: true, view: toView(updated) };
+}
+
 /**
  * Apply one `ila_review_quiz` call: write each verdict onto its answered question row.
  *

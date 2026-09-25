@@ -681,6 +681,13 @@ const en: typeof MessageSchema = {
       waitingGrade: "Waiting for the assistant to grade it…",
       makeupHint:
         "You did not answer this question earlier (skipped or cancelled the quiz). Answer it here and the assistant will grade it.",
+      reopen: "Answer it again",
+      reopenTitle: "Answer it again",
+      reopenAsk:
+        "This answer was recorded, but it was never graded. Clear it and answer the question again?",
+      reopenDetail:
+        "The question goes back to being unanswered, and can be answered again like one you skipped.",
+      reopenConfirm: "Clear it and answer again",
       close: "Close",
     },
   },
@@ -1315,6 +1322,8 @@ const en: typeof MessageSchema = {
     QUIZ_QUESTION_NOT_FOUND: "That quiz question cannot be found.",
     QUIZ_NOT_ANSWERABLE:
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
+    QUIZ_NOT_REOPENABLE:
+      "That question cannot be re-opened: either it has already been graded, or it was never answered — an unanswered question is already make-up eligible.",
     NOTE_NOT_FOUND: "That note cannot be found — it may already have been deleted.",
     NOTE_TYPE_INVALID: "That kind of note does not exist.",
     FIGURE_NOT_FOUND: "That diagram or table cannot be found — it may have changed or been deleted.",

@@ -3048,6 +3048,30 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Re-open a question that was answered and never graded.
+   *
+   * The repair for a grading turn that failed *after* the answers landed: the row reads as answered
+   * with no verdict, which no other action accepts — a make-up wants an unanswered question — so
+   * without this the panel shows 等待助手判分 for good. The write discards the answer, and the panel
+   * is re-read by the caller (the row it was showing has changed underneath it).
+   *
+   * Returns the fresh view, or null when the server refused — the refusal's sentence is already in
+   * `error` by then, which is where a failed action reports itself.
+   */
+  async function reopenQuizQuestion(quizId: string): Promise<QuizQuestionView | null> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return null;
+    try {
+      const { question } = await api.reopenQuizQuestion(sessionId, quizId);
+      emitWidgetEvent({ type: "quiz.changed", sessionId });
+      return question;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }
+
+  /**
    * Cut the streaming turn short.
    *
    * It asks the server and then does nothing else, deliberately. The chat request is
@@ -3202,6 +3226,7 @@ export const useAppStore = defineStore("app", () => {
     sendMessage,
     answerQuestion,
     submitQuizMakeup,
+    reopenQuizQuestion,
     sendPanelMessage,
     planJumpToNode,
     stopMessage,
