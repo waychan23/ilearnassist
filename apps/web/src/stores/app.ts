@@ -3039,12 +3039,24 @@ export const useAppStore = defineStore("app", () => {
     // A resumed turn moves the message counts and the token totals just as a fresh one does.
     emitWidgetEvent({ type: "turn.started", sessionId });
 
-    const accepted = await consume(streamQuizMakeup(sessionId, answers), sessionId);
-    if (!accepted && toolCall && previous) {
+    /*
+     * **Dispatched, not awaited.** The caller is a window the reader is looking at the question
+     * through, and the reply it is asking for streams *behind* that window — so a submit that
+     * resolved when the turn finished would leave the dialog covering the answer for as long as the
+     * model takes. It resolves as soon as the request is away, which is the rule the prose make-up
+     * it replaced already followed.
+     *
+     * What the resolution costs is the honest half of it: `true` means "sent", not "accepted". A
+     * refusal therefore cannot be handed back to the caller, so the revert happens here instead —
+     * the card goes back to what it was and the failure reports itself the way any failed turn
+     * does, in the conversation rather than in a window that has already closed.
+     */
+    void consume(streamQuizMakeup(sessionId, answers), sessionId).then((accepted) => {
+      if (accepted || !toolCall || !previous) return;
       toolCall.status = previous.status;
       toolCall.answer = previous.answer;
-    }
-    return accepted;
+    });
+    return true;
   }
 
   /**

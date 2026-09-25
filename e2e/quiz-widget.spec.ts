@@ -259,12 +259,19 @@ test("a walked-away question is made up once and then graded", async ({ page, re
           },
         ],
       },
-      { content: "这次对了。" },
+      /*
+       * Held open, so "closes on submit" is a claim the test can actually make: the grading turn is
+       * still streaming while the assertions below run, and a dialog that waited for the reply
+       * would still be covering the conversation.
+       */
+      { content: "这次对了。", holdMs: 1_500 },
     ],
   });
   await page.getByTestId("quiz-makeup-submit").click();
-  // The dialog closes as soon as the make-up is sent, without waiting for the reply.
+  // Closed while the turn is still going — the reader watches the reply, not the window. The Stop
+  // control is the proof that it is: it renders only while a turn is streaming.
   await expect(page.getByTestId("quiz-detail-overlay")).toHaveCount(0);
+  await expect(page.getByTestId("composer-stop")).toBeVisible();
   await expect(page.locator('[data-tool-call-id="call_grade_late"]')).toBeVisible();
 
   // Exactly one row for the question, now graded.

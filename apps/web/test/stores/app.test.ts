@@ -2431,21 +2431,39 @@ describe("the make-up card's own submit", () => {
     });
   });
 
+  it("resolves as soon as the submission is sent, so the window can close over the reply", async () => {
+    /*
+     * The reason this one action does not await its turn while every other one does: the caller is
+     * a dialog the reader is looking at the question through, and the grading streams *behind* it.
+     * Awaiting would leave the window over the answer for as long as the model takes.
+     */
+    const store = await storeWithSkippedCard();
+    let released: () => void = () => {};
+    mocks.streamQuizMakeup.mockImplementation(async function* () {
+      // A turn that does not finish until the test says so. The submission has to resolve anyway.
+      await new Promise<void>((resolve) => (released = resolve));
+      yield { type: "done" } as never;
+    });
+
+    expect(await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1")).toBe(true);
+    // Still streaming: sent, not finished.
+    expect(store.streaming.active).toBe(true);
+
+    released();
+  });
+
   it("puts the card back when the server refuses the submission", async () => {
     const store = await storeWithSkippedCard();
-    mocks.streamQuizMakeup.mockReturnValue(
-      (async function* () {
-        throw new Error("这道题已经答过了");
-      })()
-    );
+    mocks.streamQuizMakeup.mockImplementation(async function* () {
+      throw new Error("这道题已经答过了");
+    });
 
-    const ok = await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
+    // `true` means "sent", so the refusal cannot come back through the return value — it lands on
+    // the card, which is what would otherwise keep claiming an answer nobody recorded.
+    expect(await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1")).toBe(true);
 
-    expect(ok).toBe(false);
     const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
-    // Back to skipped: a refusal is not an answer, and a card that kept the local flip would
-    // claim something the server never recorded.
-    expect(call.status).toBe("skipped");
+    await vi.waitFor(() => expect(call.status).toBe("skipped"));
     expect(call.answer).toBeUndefined();
   });
 
