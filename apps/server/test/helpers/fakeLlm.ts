@@ -152,16 +152,21 @@ export interface FakeLlm {
 const DEFAULT_TURN: FakeTurn = { content: "ok" };
 
 /**
- * The messages that break the thinking-mode rule: an assistant tool-call message whose
+ * The messages that break the thinking-mode rule: **any** assistant message whose
  * `reasoning_content` is missing or blank. See `FakeLlmOptions.requireReasoning`.
+ *
+ * Not only the ones carrying tool calls, which is the documented reading and the wrong one. It was
+ * established against the real endpoint by capturing a refused request and bisecting it: removing
+ * every assistant message *without* the field made it pass, removing only the tool-call ones did
+ * not, and adding the field to those messages turned the same request into a 200. A fake that
+ * checked only the tool-call messages would agree with a rewrite that had the same blind spot —
+ * which is exactly how the bug survived two fixes.
  */
 function reasoningOffences(body: Record<string, unknown>): Record<string, unknown>[] {
   const messages = body.messages;
   if (!Array.isArray(messages)) return [];
   return (messages as Record<string, unknown>[]).filter((message) => {
     if (!message || message.role !== "assistant") return false;
-    const calls = message.tool_calls;
-    if (!Array.isArray(calls) || calls.length === 0) return false;
     return String(message.reasoning_content ?? "").trim() === "";
   });
 }

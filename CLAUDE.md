@@ -931,11 +931,19 @@ public half.
   `function_call`/`tool_calls`/`audio` out of `additional_kwargs`, and it strips
   `reasoning`/`reasoning_content`/`thinking` content blocks deliberately
   (langchainjs#11175) — so `buildHistoryMessages()` collects the reasoning into a side
-  map and `createReasoningFetch()` puts it back on the wire, keyed by the message's first
-  tool-call id. That is gated on the model record declaring the `reasoning` capability, so
-  a provider that never used the field never sees it. This is why `createReasoningFetch`
-  touches the **request** as well as the response — do not "simplify" it back to a
-  read-only tap, and do not delete the side map as an unused return value.
+  array and `createReasoningFetch()` puts it back on the wire, matched **by position**.
+  **Every assistant message needs the field, not only the ones with tool calls.** The documented
+  reading is "the messages carrying `tool_calls`", and a request that satisfies it is still
+  refused: a plain reply, or a row the *server* wrote (a `⚠️` line, a make-up record), has no chain
+  of thought to echo and was sending none. No local check could see it — a fake provider that
+  shares the assumption agrees with the rewrite — so it took capturing a real refused request and
+  bisecting it against the endpoint (drop every assistant message without the field → 200; drop
+  only the tool-call ones → still 400; add the field to those messages → 200). Position is the
+  identity that covers a message with no tool call, which is why the side channel is an array and
+  not an id-keyed map. That is gated on the model record declaring the `reasoning` capability, so
+  a provider that never used the field never sees it. This is why `createReasoningFetch` touches
+  the **request** as well as the response — do not "simplify" it back to a read-only tap, and do
+  not delete the side channel as an unused return value.
   **The gate is right and still not enough, so the refusal is also handled.** A thinking-on
   provider whose model record does not declare `reasoning` — DeepSeek V4's id matched none of
   `guessCapabilities`' patterns until it was added, and a hand-written entry still may not — fails

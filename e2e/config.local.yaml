@@ -23,10 +23,16 @@ providers:
     baseURL: ${ILA_FAKE_LLM_URL}
     apiKey: e2e-key
     models:
+      # `reasoning` is declared so the browser suite exercises the thinking-mode passback rule:
+      # the fake provider enforces it (`FAKE_LLM_REQUIRE_REASONING`), and the field is only ever
+      # replayed for a model whose record says it uses chain of thought. Without the declaration
+      # the suite would be asserting a rule it never triggers.
       - id: fake-model
         name: fake-model
+        capabilities: [tool_use, reasoning]
       - id: fake-vision
         name: fake-vision
+        capabilities: [tool_use, vision]
 
 # A mock cloud parser, used to prove the fallback path in a browser. `local-first` stays
 # the policy, so only documents the local extractor cannot read (scanned pages, say) ever

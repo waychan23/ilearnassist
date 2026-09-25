@@ -123,7 +123,7 @@ describe("replaying reasoning_content", () => {
   /** The body the wrapper actually sends on, as parsed JSON. */
   async function sendThrough(
     body: string,
-    replayReasoning?: Map<string, string>
+    replayReasoning?: readonly string[]
   ): Promise<Record<string, unknown>> {
     const base = vi.fn(async (_url: unknown, init?: RequestInit) => {
       captured = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -137,41 +137,64 @@ describe("replaying reasoning_content", () => {
     return captured;
   }
 
+  /** A tool-call turn followed by a plain reply, which is the shape that hid the rule. */
   const request = JSON.stringify({
     messages: [
       { role: "system", content: "s" },
       { role: "user", content: "hi" },
       { role: "assistant", content: "先问一句。", tool_calls: [{ id: "call_ask", type: "function" }] },
       { role: "tool", content: "{}", tool_call_id: "call_ask" },
+      { role: "assistant", content: "先问一句的答复。" },
+      { role: "user", content: "again" },
     ],
   });
 
   it("puts the recorded chain of thought back on a tool-call message", async () => {
     // DeepSeek's thinking mode answers 400 without it. LangChain cannot send the field at
     // all, so this wrapper is the only place it can be put back.
-    const sent = await sendThrough(request, new Map([["call_ask", "the thinking"]]))
+    const sent = await sendThrough(request, ["the thinking", "the plain turn's thinking"]);
 
     const messages = sent.messages as Record<string, unknown>[];
     expect(messages[2]).toMatchObject({ reasoning_content: "the thinking" });
-    // A plain turn needs nothing, and must not be given anything.
-    expect(messages[1]).not.toHaveProperty("reasoning_content");
+    // And on the *next* assistant message too, which carries no tool call at all. That second
+    // half is what a captured-and-bisected refusal from the real endpoint established: the
+    // documented rule — "the messages with tool_calls" — is satisfied by the line above and the
+    // request is still refused.
+    expect(messages[4]).toMatchObject({ reasoning_content: "the plain turn's thinking" });
+    // Nothing else is touched: only assistant messages carry the field.
     expect(messages[0]).not.toHaveProperty("reasoning_content");
+    expect(messages[1]).not.toHaveProperty("reasoning_content");
+    expect(messages[3]).not.toHaveProperty("reasoning_content");
+    expect(messages[5]).not.toHaveProperty("reasoning_content");
+  });
+
+  it("matches each entry to its own assistant message, by order", async () => {
+    // Position is the identity: an id could key only the messages that have a tool call, and the
+    // rule covers the ones that do not.
+    const sent = await sendThrough(request, ["first", "second"]);
+
+    const messages = sent.messages as Record<string, unknown>[];
+    expect(messages[2]).toMatchObject({ reasoning_content: "first" });
+    expect(messages[4]).toMatchObject({ reasoning_content: "second" });
   });
 
   it("sends a non-empty marker when the turn recorded no reasoning", async () => {
     /*
-     * The field has to be *present and non-empty*. The first version of this sent `""`, on the
-     * belief that DeepSeek accepts the empty value it sometimes produces itself; a live refusal
-     * from a model whose capability was declared is what disproved it. So "no reasoning recorded"
-     * goes out as a sentence saying so, which is a value the provider cannot read as absent.
+     * The field has to be *present and non-empty* on every assistant message. The first version of
+     * this sent `""`, on the belief that DeepSeek accepts the empty value it sometimes produces
+     * itself; a live refusal from a model whose capability was declared is what disproved it. So
+     * "no reasoning recorded" goes out as a sentence saying so, which is a value the provider
+     * cannot read as absent.
      */
-    const sent = await sendThrough(request, new Map());
+    const sent = await sendThrough(request, []);
 
-    const assistant = (sent.messages as Record<string, unknown>[])[2] as {
-      reasoning_content?: string;
-    };
-    expect(assistant.reasoning_content).toBeTruthy();
-    expect(assistant.reasoning_content!.trim()).not.toBe("");
+    for (const at of [2, 4]) {
+      const assistant = (sent.messages as Record<string, unknown>[])[at] as {
+        reasoning_content?: string;
+      };
+      expect(assistant.reasoning_content).toBeTruthy();
+      expect(assistant.reasoning_content!.trim()).not.toBe("");
+    }
   });
 
   it("does not touch the request when the model is not a reasoning model", async () => {
@@ -190,7 +213,7 @@ describe("replaying reasoning_content", () => {
     });
     await createReasoningFetch({
       onReasoning: vi.fn(),
-      replayReasoning: new Map([["call_ask", "x".repeat(200)]]),
+      replayReasoning: ["x".repeat(200), "y"],
       baseFetch: base as unknown as typeof fetch,
     })("https://example.test/v1", { method: "POST", body: request, headers: { "content-length": "1" } });
 
@@ -204,7 +227,7 @@ describe("replaying reasoning_content", () => {
     });
     await createReasoningFetch({
       onReasoning: vi.fn(),
-      replayReasoning: new Map([["call_ask", "x"]]),
+      replayReasoning: ["x", "y"],
       baseFetch: base as unknown as typeof fetch,
     })("https://example.test/v1", { method: "POST", body: "not json" });
 
