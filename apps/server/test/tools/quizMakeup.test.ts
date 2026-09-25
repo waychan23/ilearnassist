@@ -160,6 +160,22 @@ describe("renderMakeupResult", () => {
     expect(JSON.stringify(rendered)).not.toMatch(/第 2 题[\s\S]*explanation/);
   });
 
+  it("says in the result itself what to do with it", () => {
+    /*
+     * The instruction has to be *here*, not only in the system prompt. A make-up whose result was
+     * just the answers produced a model that apologised for an "error loop", marked plan progress,
+     * drew a diagram and posed a new quiz — every call except the grading one, which never
+     * happened. A fresh quiz's result has always carried this note; this asserts it stays.
+     */
+    const rendered = JSON.parse(
+      renderMakeupResult([question(1)], { Q1: { selected: ["甲"] } }, key)
+    ) as { note: string };
+
+    expect(rendered.note).toMatch(/ila_review_quiz/);
+    expect(rendered.note).toMatch(/do not call ila_makeup_quiz again/i);
+    expect(rendered.note).toMatch(/left_unanswered/);
+  });
+
   it("leaves the field out entirely when the whole card was answered", () => {
     const rendered = JSON.parse(
       renderMakeupResult([question(1)], { Q1: { selected: ["甲"] } }, key)

@@ -181,6 +181,25 @@ export function buildMakeupQuizTool(ctx: MakeupQuizToolContext) {
  * function's output is a fact about a quiz the model asked; this is the one thing that is a fact
  * about a *make-up*, and the live path has no use for it.
  */
+/**
+ * The same instruction a fresh quiz's result carries, for the same reason: **the tool result is
+ * where the model is looking**, and the system prompt is a long way away from a conversation with
+ * a hundred messages in it.
+ *
+ * That is not a theory. A make-up whose result carried only the answers was answered by a model
+ * that apologised for an "error loop", marked plan progress, drew a diagram and posed a brand new
+ * quiz — everything except the one call the guidance in the system prompt asked for, which it
+ * never made. `renderQuizResult`'s own result has always said what to do with it; this one was
+ * relying on a paragraph the model had stopped reading.
+ */
+const MAKEUP_NOTE =
+  "The learner answered these questions on the make-up card. Grade them NOW and record the grades " +
+  "with ONE ila_review_quiz call naming each quiz_id above — this turn exists for that and nothing " +
+  "else. Then walk the questions one by one in your final message, with the verdict and a brief " +
+  "why for each. Do not call ila_makeup_quiz again for them, and do not pose a new quiz in this " +
+  "turn. Anything listed under left_unanswered was not answered: it stays open for a later " +
+  "make-up, so do not grade it and do not present it again.";
+
 export function renderMakeupResult(
   questions: QuizQuestion[],
   answers: QuizAnswers,
@@ -192,6 +211,8 @@ export function renderMakeupResult(
   const rendered = JSON.parse(
     renderQuizResult(written, answers, "submit", keys)
   ) as Record<string, unknown>;
+
+  rendered.note = MAKEUP_NOTE;
 
   if (left.length > 0) {
     rendered.left_unanswered = left.map((question) => ({
