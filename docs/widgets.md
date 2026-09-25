@@ -348,7 +348,11 @@ panel shows data the tools produce:
 - **Rows follow the call's lifecycle.** Pending when posed; answered/dismissed from the
   `/answers` route; skipped when the user walks away (`skipAwaitingToolCalls` now returns
   the retired calls so the `/chat` route can retire their rows). A GET reconciles crash
-  orphans (pending rows whose call is no longer awaiting) to skipped.
+  orphans (pending rows whose call is no longer awaiting) to skipped. **A make-up retires them
+  too**: it appends a record to the conversation exactly as a message does, so a quiz posed in an
+  earlier turn is behind the reader's attention and its card can never be answered in place — the
+  route does what `/chat` does, and the row becomes `skipped` (which is make-up eligible) rather
+  than staying `pending` (which is neither answerable nor eligible).
 - **Grading is a normal `required` tool**, not a suspending one: the model calls
   `ila_review_quiz` with exact `quiz_id`s after judging (instructed by the tool description
   and `QUIZ_GUIDANCE`); its `tool_end` emits `quiz.changed` for mid-turn panel refresh.
@@ -363,6 +367,14 @@ panel shows data the tools produce:
   turned-away turn, so the grading has to begin at the newest message. A make-up allows a partial
   answer, and the questions left behind stay eligible; the call that asked them is marked answered
   without an `output`, so the card stops offering a make-up it would refuse.
+  **A question answered but never graded is the one stuck state**, and it has its own repair:
+  the answers are written before the grading turn starts, so a provider failure leaves a row a
+  make-up refuses and a card that is gone from the conversation. `POST
+  /sessions/:id/quizzes/:quizId/reopen` puts it back among the unanswered ones, discarding the
+  answer — the panel offers it under the waiting line, and only for that state. A graded question
+  is settled history rather than a stuck row, and an unanswered one needs no repair at all.
+  There is deliberately **no timeout**: a sweep would fire on a grading turn that is merely slow
+  and silently discard a real answer, which is worse than a stuck row with a control beside it.
 - **Plan binding is the tool's own concern.** An optional top-level `nodeId` names a live
   plan node (an invalid id is a tool error before any insert); without it the question binds
   to the current `in_progress` node, and without a plan it is a session-level question.

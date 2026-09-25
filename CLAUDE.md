@@ -1627,6 +1627,26 @@ public half.
   holds the strings that reach `matchMedia`; `style.css` holds the same values as
   media queries, and both are pinned by tests. Change them together — a mismatch
   is a drawer that opens on a screen with no toggle.
+- **Five windows can be moved by their header, by one composable, and the clamp is the interesting
+  part.** The question detail, the file preview, the diagram viewer, the library and the **note
+  window** all call `useDraggableWindow`; the chrome is three rules in `style.css` (`.modal.draggable`)
+  and the arithmetic is `utils/windowDrag.ts`. Four things are load bearing:
+  - **What must stay reachable is the header**, and that is why the axes are clamped differently.
+    Horizontally a margin of the window is a margin of the header, which spans the box; vertically
+    the window's top edge is held at the viewport's own top, because "keep 64px of the window on
+    screen" is satisfied by its *bottom* — a window whose title bar has gone off the top, which is
+    the one state that cannot be dragged back. The browser spec measures exactly that failure.
+  - **The position is remembered for the session only**, in a module-level map keyed by window id.
+    Not `localStorage`: a remembered position is a fact about *this* screen, and one that persisted
+    would reopen as a window hanging off a monitor it was never dragged on.
+  - **Off below the narrow breakpoint and while a dialog is maximised**, because neither is a
+    floating window — a bottom sheet is pinned to the bottom edge and a maximised dialog fills the
+    viewport. A stale inline `left`/`top` in that state is the one way this feature can lose a
+    window off the screen, which is why `placed` withholds it rather than merely ignoring it.
+  - **A window that places itself hands in a `fallback`** — the note window does, because it floats
+    beside the passage it is about and the composable cannot know where that is. It also asks
+    `moved`, and its own `place()` stands down once the reader has dragged it: a card that
+    re-measured itself against the anchor on the next resize would take the gesture back.
 - **Every overlay is teleported to `body`.** `position: fixed` resolves against
   the nearest *transformed* ancestor, and the mobile drawer is one, so a dialog
   left inside the sidebar renders off-screen. Relatedly, do not give `.app` a
