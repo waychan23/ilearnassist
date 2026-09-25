@@ -3014,6 +3014,17 @@ export const useAppStore = defineStore("app", () => {
      * card the learner answered in, which has to show what they said before the server has replied.
      */
     const toolCall = toolCallId ? findToolCall(toolCallId) : undefined;
+
+    /*
+     * A make-up appends to the conversation like any other message, so every question still waiting
+     * for an answer is retired — the same rule `sendMessage` applies, and the server applies it in
+     * the same request. Leaving them live would show a card the reader can no longer answer: the
+     * record this submission writes now sits after it.
+     */
+    for (const pending of awaitingToolCalls()) {
+      if (pending.id !== toolCallId) pending.status = "skipped";
+    }
+
     const previous = toolCall
       ? { status: toolCall.status, answer: toolCall.answer }
       : undefined;

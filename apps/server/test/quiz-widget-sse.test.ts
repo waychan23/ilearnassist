@@ -676,6 +676,47 @@ describe("the make-up submit route (the card's own door)", () => {
     expect(original!.answer).toMatchObject({ Q1: { selected: ["滚动窗口"] } });
   });
 
+  it("retires a quiz that was still waiting, so it becomes make-up eligible", async () => {
+    /*
+     * The reported trap. A quiz is posed and left alone; the reader then makes up an *older*
+     * question, which appends a record to the conversation. The new quiz is now behind that record
+     * and its card can never be answered in place — but nothing retired it, so the row stayed
+     * `pending`: not make-up eligible, not answerable, and invisible to both surfaces. Retiring it
+     * is what `/chat` already does when a message arrives instead of an answer.
+     */
+    const session = await skippedQuiz(); // quiz A: two rows, both skipped
+    llm.reset();
+    llm.setTurns([
+      { toolCalls: [{ id: "call_quiz_b", name: "ila_quiz", args: { questions: KEYED } }] },
+    ]);
+    await chat(session.id, "再出一道");
+    expect((await quizRows(session.id)).map((r) => r.status)).toEqual([
+      "skipped",
+      "skipped",
+      "pending",
+      "pending",
+    ]);
+
+    llm.reset();
+    llm.setTurns([{ content: "判好了。" }]);
+    const res = await submit(session.id, { Q1: { selected: ["滚动窗口"] } });
+    expect(res.statusCode).toBe(200);
+
+    // The made-up question is answered, the one behind it is still open, and the new quiz — which
+    // the conversation has moved past — is now a question that can be brought back.
+    expect((await quizRows(session.id)).map((r) => [r.qid, r.status])).toEqual([
+      ["Q1", "answered"],
+      ["Q2", "skipped"],
+      ["Q3", "skipped"],
+      ["Q4", "skipped"],
+    ]);
+
+    // And its card stops being answerable, which is what the row's new state means on screen.
+    const listed = await messages(session.id);
+    const card = listed.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "call_quiz_b");
+    expect(card?.status).toBe("skipped");
+  });
+
   it("refuses a question that has been answered since the card was opened", async () => {
     const session = await skippedQuiz();
     llm.reset();

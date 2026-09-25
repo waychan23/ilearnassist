@@ -2448,6 +2448,54 @@ describe("the make-up card's own submit", () => {
     expect(call.answer).toBeUndefined();
   });
 
+  it("retires a card that was still waiting, which the record it writes now sits after", async () => {
+    /*
+     * The server retires it in the same request; this is the same rule applied locally so the card
+     * does not keep offering an answer to a question the conversation has moved past. Without it the
+     * reader sees a live card whose submit would be refused.
+     */
+    streamOf(
+      {
+        type: "message_done",
+        message: {
+          id: "m1",
+          sessionId: "s1",
+          role: "assistant",
+          content: "先测一下。",
+          createdAt: new Date().toISOString(),
+          toolCalls: [
+            {
+              id: "c1",
+              name: "ila_quiz",
+              input: JSON.stringify({
+                questions: [{ id: "Q1", header: "窗口", question: "哪一种？", options: [{ label: "滚动" }] }],
+              }),
+              status: "skipped",
+            },
+            {
+              id: "c2",
+              name: "ila_quiz",
+              input: JSON.stringify({
+                questions: [{ id: "Q2", header: "状态", question: "哪一个？", options: [{ label: "RocksDB" }] }],
+              }),
+              status: "awaiting",
+            },
+          ],
+        },
+      },
+      { type: "done" }
+    );
+    const store = await readyStore();
+    await store.sendMessage("先讲别的");
+    makeupStreamOf({ type: "done" });
+
+    await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
+
+    const calls = store.messages.flatMap((m) => m.toolCalls ?? []);
+    expect(calls.find((tc) => tc.id === "c1")!.status).toBe("answered");
+    expect(calls.find((tc) => tc.id === "c2")!.status).toBe("skipped");
+  });
+
   it("does nothing while a turn is streaming", async () => {
     const store = await storeWithSkippedCard();
     store.streaming.active = true;

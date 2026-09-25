@@ -5481,6 +5481,29 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     markMakeupOnCalls(db, id, written.applied);
 
     /*
+     * Every question still waiting for an answer is retired, exactly as `/chat` retires it when the
+     * user sends a message instead of answering.
+     *
+     * **This route appends to the conversation, and that is the whole reason it belongs here.**
+     * A card is answerable only while it is what the conversation is waiting on; a make-up writes a
+     * record *after* it, so a quiz posed in an earlier turn is now behind the reader's attention
+     * and its card can never be answered in place again — `/answers` would find the call awaiting,
+     * but nothing on screen offers it. Left alone, the row stays `pending`, which is not
+     * make-up-eligible, so the question is invisible to the panel's make-up and unreachable in the
+     * conversation: stuck between two states with no way back. Retiring it makes it `skipped`,
+     * which is what it is — the learner moved on — and that is the state the panel can bring back.
+     *
+     * Before the record is written, like `/chat`'s, so the retirement and the new message are one
+     * visible step rather than a card that flickers.
+     */
+    const retired = db.skipAwaitingToolCalls(id);
+    skipQuizQuestions(
+      db,
+      id,
+      retired.filter((c) => c.name === QUIZ_TOOL_NAME).map((c) => c.id)
+    );
+
+    /*
      * The record, as the call the tool would have made — same input shape, same result, so the
      * model grades from the identical sentence whichever door was used, and the conversation shows
      * the identical card. `content` is empty on purpose: a turn that only calls a tool has no text,
