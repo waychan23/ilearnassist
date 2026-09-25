@@ -158,12 +158,20 @@ describe("replaying reasoning_content", () => {
     expect(messages[0]).not.toHaveProperty("reasoning_content");
   });
 
-  it("sends an empty string when the turn recorded no reasoning", async () => {
-    // The field has to be *present*: an empty string is a value DeepSeek sends itself, and
-    // "no reasoning recorded" is not the same as "do not send the field".
+  it("sends a non-empty marker when the turn recorded no reasoning", async () => {
+    /*
+     * The field has to be *present and non-empty*. The first version of this sent `""`, on the
+     * belief that DeepSeek accepts the empty value it sometimes produces itself; a live refusal
+     * from a model whose capability was declared is what disproved it. So "no reasoning recorded"
+     * goes out as a sentence saying so, which is a value the provider cannot read as absent.
+     */
     const sent = await sendThrough(request, new Map());
 
-    expect((sent.messages as Record<string, unknown>[])[2]).toMatchObject({ reasoning_content: "" });
+    const assistant = (sent.messages as Record<string, unknown>[])[2] as {
+      reasoning_content?: string;
+    };
+    expect(assistant.reasoning_content).toBeTruthy();
+    expect(assistant.reasoning_content!.trim()).not.toBe("");
   });
 
   it("does not touch the request when the model is not a reasoning model", async () => {

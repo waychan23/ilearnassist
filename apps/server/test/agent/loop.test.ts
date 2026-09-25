@@ -1346,17 +1346,23 @@ describe("replaying reasoning into history", () => {
     expect(assistant).not.toHaveProperty("reasoning_content");
   });
 
-  it("still sends an empty string when the turn recorded no reasoning", async () => {
-    // The field has to be present on a tool-call message; where nothing was recorded the
-    // value is the empty string DeepSeek sends itself, not an omission.
+  it("sends a marker — never an empty string — when the turn recorded no reasoning", async () => {
+    /*
+     * The field has to be present **and non-empty** on a tool-call message. The first version sent
+     * `""` here, believing an empty string was a value the provider sends itself; a live refusal
+     * from a model whose capability *was* declared is what disproved it. A blank value is refused
+     * exactly as a missing key is, so what goes out is a sentence saying there is nothing to send.
+     */
     const noReasoning = structuredClone(history);
     delete noReasoning[1]!.reasoning;
 
     await run({ turns: [{ content: "好。" }], history: noReasoning, capabilities: ["reasoning"] });
 
-    expect(sentMessages().find((m) => m.role === "assistant")).toMatchObject({
-      reasoning_content: "",
-    });
+    const assistant = sentMessages().find((m) => m.role === "assistant") as {
+      reasoning_content?: string;
+    };
+    expect(assistant.reasoning_content).toBeTruthy();
+    expect(assistant.reasoning_content!.trim()).not.toBe("");
   });
 
   it("does not attach it to a plain assistant turn", async () => {

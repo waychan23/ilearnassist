@@ -101,6 +101,16 @@ export interface FakeNonStreamingMatch {
 
 export interface FakeLlmOptions {
   port?: number;
+  /**
+   * Enforce DeepSeek's thinking-mode rule: refuse a request whose assistant tool-call messages do
+   * not carry a **non-empty** `reasoning_content`, with the sentence the provider uses.
+   *
+   * A fake that accepts anything cannot fail the way the real provider does, so a spec about this
+   * rule could only assert what the app *meant* to send. Enforcing it here makes the assertion the
+   * provider's own answer instead — and the `""`-versus-missing distinction was learned exactly
+   * this way, from a live refusal the app's own belief said could not happen.
+   */
+  requireReasoning?: boolean;
   /** Reply used for non-streaming requests (the auto-titler). */
   title?: string;
   /** Body-keyed replies for non-streaming requests, checked before `title`. */
@@ -140,6 +150,21 @@ export interface FakeLlm {
 
 /** Turns served once the queue is exhausted. Ends the agent loop with a plain reply. */
 const DEFAULT_TURN: FakeTurn = { content: "ok" };
+
+/**
+ * The messages that break the thinking-mode rule: an assistant tool-call message whose
+ * `reasoning_content` is missing or blank. See `FakeLlmOptions.requireReasoning`.
+ */
+function reasoningOffences(body: Record<string, unknown>): Record<string, unknown>[] {
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return [];
+  return (messages as Record<string, unknown>[]).filter((message) => {
+    if (!message || message.role !== "assistant") return false;
+    const calls = message.tool_calls;
+    if (!Array.isArray(calls) || calls.length === 0) return false;
+    return String(message.reasoning_content ?? "").trim() === "";
+  });
+}
 
 function parseArgs(args: FakeToolCall["args"]): string {
   if (typeof args === "string") return args;
@@ -239,6 +264,7 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
   let queue: FakeTurn[] = [];
   let title = options.title ?? "Fake Conversation Title";
   let matches: FakeNonStreamingMatch[] = options.matches ?? [];
+  const requireReasoning = options.requireReasoning === true;
   const seen: Record<string, unknown>[] = [];
   /** The same objects as in `seen`, for the requests a scripted `fail` answered with an error. */
   const refused: Record<string, unknown>[] = [];
@@ -306,6 +332,23 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
         return;
       }
       seen.push(body);
+
+      if (requireReasoning && reasoningOffences(body).length > 0) {
+        // The provider's own words, so a test can key on the sentence rather than on a paraphrase.
+        // Recorded as refused for the same reason a scripted `fail` is: it is the request the
+        // provider rejected, which is the subject of such a test rather than its evidence.
+        refused.push(body);
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message:
+                "The `reasoning_content` in the thinking mode must be passed back to the API.",
+            },
+          })
+        );
+        return;
+      }
 
       /*
        * Body-keyed matches are for the OUT-OF-BAND calls only, and a call is recognised by a
@@ -434,8 +477,16 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
 async function main(): Promise<void> {
   const portArg = process.argv.indexOf("--port");
   const port = portArg !== -1 ? Number(process.argv[portArg + 1]) : Number(process.env.FAKE_LLM_PORT ?? 3801);
-  const llm = await startFakeLlm({ port });
-  console.log(`fake LLM listening on ${llm.baseURL}`);
+  /*
+   * `--require-reasoning` makes the browser suite enforce the thinking-mode rule too, which is where
+   * the reported bug actually lives: the whole point of the flag is that a flow which sends a blank
+   * `reasoning_content` fails loudly in a real browser instead of only in a unit test.
+   */
+  const requireReasoning =
+    process.argv.includes("--require-reasoning") ||
+    process.env.FAKE_LLM_REQUIRE_REASONING === "1";
+  const llm = await startFakeLlm({ port, requireReasoning });
+  console.log(`fake LLM listening on ${llm.baseURL}${requireReasoning ? " (reasoning enforced)" : ""}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

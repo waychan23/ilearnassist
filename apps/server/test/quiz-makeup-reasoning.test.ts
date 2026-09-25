@@ -12,14 +12,18 @@ import { newSession, newWorkspace, providerFor, startTestServer, type TestEnv } 
  *
  *     400 The `reasoning_content` in the thinking mode must be passed back to the API.
  *
- * and it stays refused — the offending message is in history, so every later turn fails too. The
- * fix is the field's **presence**, with the empty string an accepted value (several client
- * libraries hit exactly this and pass it back verbatim as `""`).
+ * and it stays refused — the offending message is in history, so every later turn fails too.
  *
- * A make-up is the flow that walks into it: the answers arrive as a call the **server** wrote,
- * whose message has no reasoning of its own to record. So this file does not assert that a
- * particular message is right — it runs each door to a make-up, then checks the rule against every
- * request the run actually sent. That is the shape that catches the next hole rather than this one.
+ * **The field must be present *and* non-empty.** The first version of the fix sent `""` for a message
+ * with no reasoning of its own, on the belief that an empty string is a value the provider sends
+ * too; a live refusal from a model that *had* the capability declared is what disproved it. The
+ * provider here enforces that rule (`requireReasoning`), so these specs assert the provider's answer
+ * rather than the app's intention.
+ *
+ * A make-up is the flow that walks into it: the answers arrive as a call the **server** wrote, whose
+ * message has no reasoning of its own to record. So this file does not assert that a particular
+ * message is right — it runs each door to a make-up, then checks the rule against every request the
+ * run actually sent. That is the shape that catches the next hole rather than this one.
  */
 
 let llm: FakeLlm;
@@ -44,7 +48,14 @@ const QUESTIONS = [
 ];
 
 beforeAll(async () => {
-  llm = await startFakeLlm();
+  /*
+   * The provider **enforces the rule**, rather than the specs asserting what the app meant to send.
+   * That distinction is the whole lesson of this file: the first version believed an empty
+   * `reasoning_content` was acceptable, and a live refusal — from a model that *had* the capability
+   * declared — is what disproved it. A fake that refuses the same bodies cannot let that belief back
+   * in.
+   */
+  llm = await startFakeLlm({ requireReasoning: true });
   /*
    * Two servers over one fake provider, because the two questions this file asks are answered by
    * *different configurations*: the rule is about a model that declares `reasoning` (the replay is
@@ -87,9 +98,9 @@ function breaches(): string[] {
       if (!message || message.role !== "assistant") continue;
       const calls = message.tool_calls;
       if (!Array.isArray(calls) || calls.length === 0) continue;
-      // The key must be there — `""` is a value the provider itself sends, an absent key is what
-      // it refuses.
-      if (!Object.prototype.hasOwnProperty.call(message, "reasoning_content")) {
+      // Present *and* non-empty: a blank value is refused exactly as a missing key is, which is
+      // what the strict provider above enforces and what the app's marker satisfies.
+      if (String(message.reasoning_content ?? "").trim() === "") {
         out.push(`message ${at} (${String(calls[0] && (calls[0] as { name?: string }).name)})`);
       }
     }
@@ -266,9 +277,14 @@ describe("recovering from the refusal", () => {
     const toolCallMessage = (second.messages ?? []).find(
       (m) => Array.isArray(m.tool_calls) && (m.tool_calls as unknown[]).length > 0
     );
-    // `""` is the value: nothing was recorded for the call the server wrote, and the provider
-    // wants the field present rather than the text.
-    expect(toolCallMessage).toMatchObject({ reasoning_content: "" });
+    /*
+     * Non-empty, which is the part that took a live refusal to learn: nothing was recorded for the
+     * call the server wrote, and the provider refuses an empty value exactly as it refuses a missing
+     * key. What goes out is the marker `FALLBACK_REASONING` puts there.
+     */
+    expect(String((toolCallMessage as { reasoning_content?: string }).reasoning_content).trim()).not.toBe(
+      ""
+    );
   });
 
   it("leaves a plain refusal alone", async () => {

@@ -21,6 +21,22 @@ const REASONING_KEYS = ["reasoning_content", "reasoning", "reasoning_text"] as c
 const REASONING_REQUIRED = /reasoning_content[\s\S]{0,80}?must be passed back/i;
 
 /**
+ * What is sent in place of a chain of thought that was never recorded.
+ *
+ * **The field has to be present *and* non-empty.** That second half was learned the hard way: the
+ * first version sent `""` for a message with no reasoning of its own, on the belief that an empty
+ * string is a value the provider sends too — and a make-up, whose answers are a call the *server*
+ * wrote and so have no reasoning behind them, kept being refused with the same
+ * `must be passed back` sentence even when the model was correctly declared as a reasoning model.
+ * The rule is enforced on the value, not merely on the key.
+ *
+ * The text is never displayed and never read back as thought — every provider treats it as opaque
+ * state from its own previous turn — so it says what it is rather than inventing a reason for a
+ * call the server made.
+ */
+const FALLBACK_REASONING = "(no reasoning was recorded for this call)";
+
+/**
  * Wrap `fetch` so we can read chain-of-thought straight off the wire.
  *
  * LangChain's `ChatOpenAI` **silently drops** `reasoning_content`: it appears in neither
@@ -46,9 +62,8 @@ const REASONING_REQUIRED = /reasoning_content[\s\S]{0,80}?must be passed back/i;
  * (langchainjs#11175) because other strict providers reject them. So the only place left
  * is the wire — which is where this wrapper already lives, for the same fight on the way in.
  *
- * The value is what the turn actually produced, or `""` when none was recorded: the field
- * has to be *present*, and an empty string is what DeepSeek itself sometimes sends. Only
- * messages that already have tool calls are touched — a plain assistant turn needs nothing,
+ * The value is what the turn actually produced, or `FALLBACK_REASONING` when none was recorded.
+ * Only messages that already have tool calls are touched — a plain assistant turn needs nothing,
  * and is proven to replay fine without it.
  */
 function withReplayedReasoning(body: unknown, reasoning: Map<string, string>): unknown {
@@ -72,7 +87,10 @@ function withReplayedReasoning(body: unknown, reasoning: Map<string, string>): u
     // without having to match on content or position.
     const first = calls[0] as { id?: unknown } | undefined;
     const id = typeof first?.id === "string" ? first.id : "";
-    message.reasoning_content = reasoning.get(id) ?? "";
+    const recorded = reasoning.get(id) ?? "";
+    // Not the empty string, which is what the field *means* and what the provider refuses. See
+    // `FALLBACK_REASONING`.
+    message.reasoning_content = recorded.trim() ? recorded : FALLBACK_REASONING;
     changed = true;
   }
 

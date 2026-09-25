@@ -114,7 +114,16 @@ export default defineConfig({
     {
       command: "pnpm --filter @ilearnassist/server fake-llm",
       port: FAKE_LLM_PORT,
-      env: { FAKE_LLM_PORT: String(FAKE_LLM_PORT) },
+      env: {
+        FAKE_LLM_PORT: String(FAKE_LLM_PORT),
+        /*
+         * The fake provider enforces DeepSeek's thinking-mode rule — an assistant tool-call message
+         * must carry a **non-empty** `reasoning_content` — so a flow that sends a blank one fails in
+         * the browser suite rather than only against the in-process fake. It is the rule the reported
+         * make-up failure came from, and a fake that accepts anything cannot fail that way.
+         */
+        FAKE_LLM_REQUIRE_REASONING: "1",
+      },
       reuseExistingServer: false,
       stdout: "pipe",
       stderr: "pipe",
