@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { isNarrow } from "../../composables/breakpoints";
+import { useDraggableWindow } from "../../composables/draggableWindow";
 import { canAnnotate, objectNoteRequest } from "../../composables/notes";
 import { requestNoteEditor } from "../../composables/messageNotes";
 import { useAppStore } from "../../stores/app";
@@ -155,6 +156,15 @@ const STEP = 1.25;
 
 const zoom = ref(1);
 const maximized = ref(false);
+
+// Movable like the file preview it is a view of, and off while maximised for the same reason:
+// a window that fills the viewport has no position, and the inline one would send it off screen.
+const panel = ref<HTMLElement | null>(null);
+const { placed, dragging, movable, onDragStart, onDragKeydown, onDragReset } = useDraggableWindow({
+  id: "diagram-viewer",
+  panel,
+  enabled: computed(() => !maximized.value),
+});
 
 const isDiagram = computed(() => props.content.kind === "diagram");
 
@@ -454,8 +464,21 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
        viewport the drawer is. See `ConfirmDialog`. -->
   <Teleport to="body">
     <div class="modal-overlay" data-testid="diagram-viewer" @click.self="emit('close')">
-      <div class="modal lg" :class="{ maximized }">
-        <div class="modal-head">
+      <div
+        ref="panel"
+        class="modal lg"
+        :class="{ maximized, draggable: movable, 'is-moved': placed, dragging }"
+        :style="placed ? { left: `${placed.left}px`, top: `${placed.top}px` } : undefined"
+      >
+        <div
+          class="modal-head"
+          :tabindex="movable ? 0 : undefined"
+          :title="movable ? t('common.dragWindow') : undefined"
+          :aria-label="movable ? t('common.dragWindow') : undefined"
+          @pointerdown="onDragStart"
+          @keydown="onDragKeydown"
+          @dblclick="onDragReset"
+        >
           <h3 class="truncate">{{ title }}</h3>
 
           <div class="viewer-controls">

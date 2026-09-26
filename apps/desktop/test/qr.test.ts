@@ -59,7 +59,7 @@ describe("qrModules", () => {
     // A 10.x address with a five-digit port is the longest shape this app produces, and the
     // one most likely to overflow into a denser symbol than the layout expects.
     for (const url of [
-      "http://10.0.0.7:3720",
+      "http://10.0.0.7:10471",
       "http://172.16.31.254:65535",
       "http://192.168.0.1:8080",
       "http://my-macbook.local:54321",
@@ -77,7 +77,7 @@ describe("qrModules", () => {
   it("is deterministic", () => {
     // The panel re-encodes on every state push; a code that changed shape between renders
     // would flicker under the camera that is trying to read it.
-    expect(qrModules("http://10.0.0.7:3720")).toEqual(qrModules("http://10.0.0.7:3720"));
+    expect(qrModules("http://10.0.0.7:10471")).toEqual(qrModules("http://10.0.0.7:10471"));
   });
 });
 

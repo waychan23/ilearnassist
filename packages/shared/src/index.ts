@@ -42,6 +42,7 @@ export const ALL_TOOL_NAMES = [
   "ask_user",
   "ila_quiz",
   "ila_review_quiz",
+  "ila_makeup_quiz",
   "ila_make_plan",
   "ila_read_plan",
   "ila_update_plan_progress",
@@ -266,7 +267,22 @@ export const QUIZ_TOOL_NAME = "ila_quiz";
  * widget as `ila_quiz`; see `QUIZ_TOOL_NAMES` and the quiz widget in `WIDGETS`.
  */
 export const QUIZ_REVIEW_TOOL_NAME = "ila_review_quiz";
-export const QUIZ_TOOL_NAMES = [QUIZ_TOOL_NAME, QUIZ_REVIEW_TOOL_NAME] as const;
+/**
+ * The make-up (补答) card: the questions this conversation asked and the learner never
+ * answered, brought back to be answered as if they had just been posed.
+ *
+ * It suspends like `ila_quiz` and its card is the same card — the answers go back through
+ * the same route, they are validated against the same recorded options, and the answer key
+ * returns in the same tool result. What differs is where the questions come from: they are
+ * already rows, chosen server-side rather than written by the model, so the tool takes ids
+ * and never text. Grading is `ila_review_quiz`'s, unchanged.
+ */
+export const QUIZ_MAKEUP_TOOL_NAME = "ila_makeup_quiz";
+export const QUIZ_TOOL_NAMES = [
+  QUIZ_TOOL_NAME,
+  QUIZ_REVIEW_TOOL_NAME,
+  QUIZ_MAKEUP_TOOL_NAME,
+] as const;
 
 /**
  * One choice the model offers.
@@ -389,6 +405,17 @@ export const QUIZ_UNSURE_REASON_MAX = 500;
 /** Cap on one question's notes, for the same reason. */
 export const QUIZ_NOTES_MAX = 2000;
 
+/**
+ * How many questions one make-up card may bring back.
+ *
+ * Larger than `QUIZ_MAX_QUESTIONS`, because a make-up spans every quiz the conversation has
+ * ever asked, not one call — the cap is a bound on the payload and the tab strip rather than
+ * a unit of teaching. It is not a silent truncation: more eligible questions than this is a
+ * tool error telling the model to name the ones it wants by id, so nothing is dropped without
+ * being said.
+ */
+export const QUIZ_MAKEUP_MAX = 20;
+
 /* ----------------------------- quiz question records ----------------------------- */
 
 /**
@@ -439,11 +466,6 @@ export interface GetQuizQuestionsResponse {
   questions: QuizQuestionView[];
 }
 
-/** Body of the make-up answer POST; the question itself comes from the row. */
-export interface QuizMakeupAnswerBody {
-  answer: QuizAnswer;
-}
-
 /** One item of `ila_review_quiz`: the verdict for one question by its global id. */
 export interface QuizReviewItem {
   quizId: string;
@@ -469,6 +491,7 @@ export const QUIZ_REVIEW_EXPLANATION_MAX = 2000;
 export const INTERACTIVE_TOOL_NAMES = [
   ASK_USER_TOOL_NAME,
   QUIZ_TOOL_NAME,
+  QUIZ_MAKEUP_TOOL_NAME,
   PLAN_MAKE_TOOL_NAME,
 ] as const;
 
@@ -1482,6 +1505,18 @@ export interface AnswerToolCallInput extends TurnRequestMeta {
   answers?: InteractiveAnswer;
 }
 
+/**
+ * One make-up card's submission, from the client's own surface rather than from a tool call.
+ *
+ * `answers` is keyed by the question's **`Qn`** — the same map `QuizAnswers` always is, which is
+ * what lets the card that was skipped submit through the same shape it would have used the first
+ * time. The route resolves those ids against the conversation's own rows, so the payload names
+ * questions rather than carrying them.
+ */
+export interface QuizMakeupSubmitBody extends TurnRequestMeta {
+  answers: QuizAnswers;
+}
+
 /** A single tool invocation recorded on an assistant message (for rendering + history). */
 export interface ToolCall {
   id: string;
@@ -1849,6 +1884,9 @@ export const API_ERROR_CODES = [
   "QUIZ_QUESTION_NOT_FOUND",
   // The question exists but is not make-up-eligible: only skipped questions can be re-answered.
   "QUIZ_NOT_ANSWERABLE",
+  // Re-opening is for the one stuck state — answered, never graded. A graded question is settled
+  // history, and one that was never answered needs no re-opening.
+  "QUIZ_NOT_REOPENABLE",
   // A message id that this conversation does not hold — unknown, another account's, another
   // conversation's, or already soft-deleted. All four are the same answer on purpose, so an id
   // cannot be probed for existence.
@@ -3732,14 +3770,6 @@ export interface ChatInput extends TurnRequestMeta {
    * diagram*, and the agent is told which one so it can look it up — see `TurnReference`.
    */
   refs?: TurnReference[];
-  /**
-   * Set only by the quiz widget's make-up flow: the global id of a question whose answer
-   * was just posted and that this ordinary chat turn is meant to grade. The server verifies
-   * an owned, answered row and, when the question was posed with one, appends the answer
-   * key and explanation to THIS turn's system prompt only — the key never travels to the
-   * client and is not part of the visible message.
-   */
-  makeupQuizId?: string;
 }
 
 /* ---------------------------------- Chat stream events -------------------------------- */
@@ -3772,6 +3802,17 @@ export type ChatStreamEvent =
    * stream. `id` names the row; nothing else about it travels.
    */
   | { type: "message_removed"; id: string }
+  /**
+   * A message the **server** wrote, which no model produced. Sent by the make-up route right
+   * after `meta`, carrying the whole persisted row.
+   *
+   * `message_saved` cannot serve here: it swaps the optimistic bubble a *user* message was drawn
+   * under, keyed by the id this client made up, so it is a no-op for a row that arrived from
+   * nowhere. That is what this frame is — a make-up records the answers it was given as a
+   * completed `ila_makeup_quiz` call, because the model has to read them as a tool result, and
+   * the conversation has to show the record they left behind.
+   */
+  | { type: "message_added"; message: Message }
   /**
    * A turn named the conversation. Sent whenever the titler produces a title — which is any turn
    * up to the one where it lands, not only the first — and never for a decline, since nothing on

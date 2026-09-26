@@ -64,7 +64,7 @@ const mocks = vi.hoisted(() => ({
     getPlanVersion: vi.fn(),
     jumpPlanNode: vi.fn(),
     listQuizQuestions: vi.fn().mockResolvedValue({ questions: [] }),
-    answerQuizQuestion: vi.fn(),
+    reopenQuizQuestion: vi.fn(),
     getSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     syncSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     stopSession: vi.fn(),
@@ -115,6 +115,7 @@ const mocks = vi.hoisted(() => ({
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
   streamRegenerate: vi.fn(),
+  streamQuizMakeup: vi.fn(),
   fileToBase64: vi.fn(),
   /**
    * The client's 401 callback, captured rather than stubbed.
@@ -132,6 +133,7 @@ vi.mock("../../src/api/client", () => ({
   streamChat: mocks.streamChat,
   streamAnswers: mocks.streamAnswers,
   streamRegenerate: mocks.streamRegenerate,
+  streamQuizMakeup: mocks.streamQuizMakeup,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
   fileImageUrl: (fileId: string) => Promise.resolve(`blob:files/${fileId}`),
@@ -295,6 +297,13 @@ function copilotFixture(id: string, userId: string): Copilot {
 
 function streamOf(...events: ChatStreamEvent[]) {
   mocks.streamChat.mockImplementation(async function* () {
+    for (const event of events) yield event;
+  });
+}
+
+/** The same, for the make-up route — the third stream a turn can arrive on. */
+function makeupStreamOf(...events: ChatStreamEvent[]) {
+  mocks.streamQuizMakeup.mockImplementation(async function* () {
     for (const event of events) yield event;
   });
 }
@@ -2353,53 +2362,188 @@ describe("quiz widgets", () => {
       off();
     }
   });
+});
 
-  it("persists a make-up answer, then sends the quoting message through the normal flow", async () => {
-    mocks.api.answerQuizQuestion.mockResolvedValue({ question: { id: "quiz-1" } });
-    streamOf({ type: "text", delta: "答对了" }, { type: "done" });
+describe("the make-up card's own submit", () => {
+  /** A conversation with a skipped quiz card in it, which is the state the control appears in. */
+  async function storeWithSkippedCard() {
+    streamOf(
+      {
+        type: "message_done",
+        message: {
+          id: "m1",
+          sessionId: "s1",
+          role: "assistant",
+          content: "先测一下。",
+          createdAt: new Date().toISOString(),
+          toolCalls: [
+            {
+              id: "c1",
+              name: "ila_quiz",
+              input: JSON.stringify({
+                questions: [
+                  { id: "Q1", header: "窗口", question: "哪一种？", options: [{ label: "滚动" }] },
+                  { id: "Q2", header: "状态", question: "哪一个？", options: [{ label: "RocksDB" }] },
+                ],
+              }),
+              status: "skipped",
+            },
+          ],
+        },
+      },
+      { type: "done" }
+    );
     const store = await readyStore();
+    await store.sendMessage("先讲别的");
+    return store;
+  }
 
-    const question = { id: "quiz-1", qid: "Q1" } as never;
-    const answer = { selected: ["滚动"] } as never;
-    const ok = await store.makeupQuizAnswer(question, answer, "【补答】…");
+  it("sends the answers to the make-up route and shows them on the card at once", async () => {
+    const store = await storeWithSkippedCard();
+    makeupStreamOf({ type: "done" });
+
+    const ok = await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
 
     expect(ok).toBe(true);
-    expect(mocks.api.answerQuizQuestion).toHaveBeenCalledWith("s1", "quiz-1", {
-      selected: ["滚动"],
+    // Nothing to cancel and nothing to quote: the answers go to the route that records them, and
+    // no prompt text is built anywhere on the client.
+    expect(mocks.streamQuizMakeup).toHaveBeenCalledWith("s1", { Q1: { selected: ["滚动"] } });
+    // One `/chat` and no more, and that one is the setup's: the submission itself composes no user
+    // message at all, which is the whole point of the answers travelling as a tool call.
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
+    expect(call.status).toBe("answered");
+    expect(call.answer).toEqual({ Q1: { selected: ["滚动"] } });
+  });
+
+  it("merges into whatever the card already recorded, so the untouched questions stay unanswered", async () => {
+    // A second submission on the same card — the panel's batch writes onto the same record.
+    const store = await storeWithSkippedCard();
+    const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
+    call.answer = { Q2: { selected: ["RocksDB"] } } as never;
+    makeupStreamOf({ type: "done" });
+
+    await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
+
+    expect(call.answer).toEqual({
+      Q2: { selected: ["RocksDB"] },
+      Q1: { selected: ["滚动"] },
     });
-    expect(mocks.streamChat).toHaveBeenCalled();
-    // The follow-up turn names the row so the server appends its hidden answer key to the
-    // system prompt; the visible message carries nothing.
-    expect(mocks.streamChat).toHaveBeenCalledWith(
-      "s1",
-      expect.objectContaining({ makeupQuizId: "quiz-1" })
-    );
   });
 
-  it("reports a rejected make-up POST without starting a turn, leaving the dialog to stay open", async () => {
-    mocks.api.answerQuizQuestion.mockRejectedValueOnce(new Error("不能补答"));
-    const store = await readyStore();
+  it("resolves as soon as the submission is sent, so the window can close over the reply", async () => {
+    /*
+     * The reason this one action does not await its turn while every other one does: the caller is
+     * a dialog the reader is looking at the question through, and the grading streams *behind* it.
+     * Awaiting would leave the window over the answer for as long as the model takes.
+     */
+    const store = await storeWithSkippedCard();
+    let released: () => void = () => {};
+    mocks.streamQuizMakeup.mockImplementation(async function* () {
+      // A turn that does not finish until the test says so. The submission has to resolve anyway.
+      await new Promise<void>((resolve) => (released = resolve));
+      yield { type: "done" } as never;
+    });
 
-    const ok = await store.makeupQuizAnswer(
-      { id: "quiz-1" } as never,
-      { selected: ["x"] } as never,
-      "msg"
-    );
-    expect(ok).toBe(false);
-    expect(mocks.streamChat).not.toHaveBeenCalled();
-    expect(store.error).toContain("不能补答");
+    expect(await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1")).toBe(true);
+    // Still streaming: sent, not finished.
+    expect(store.streaming.active).toBe(true);
+
+    released();
   });
 
-  it("does not POST a make-up answer while a turn is streaming", async () => {
+  it("puts the card back when the server refuses the submission", async () => {
+    const store = await storeWithSkippedCard();
+    mocks.streamQuizMakeup.mockImplementation(async function* () {
+      throw new Error("这道题已经答过了");
+    });
+
+    // `true` means "sent", so the refusal cannot come back through the return value — it lands on
+    // the card, which is what would otherwise keep claiming an answer nobody recorded.
+    expect(await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1")).toBe(true);
+
+    const call = store.messages.flatMap((m) => m.toolCalls ?? []).find((tc) => tc.id === "c1")!;
+    await vi.waitFor(() => expect(call.status).toBe("skipped"));
+    expect(call.answer).toBeUndefined();
+  });
+
+  it("retires a card that was still waiting, which the record it writes now sits after", async () => {
+    /*
+     * The server retires it in the same request; this is the same rule applied locally so the card
+     * does not keep offering an answer to a question the conversation has moved past. Without it the
+     * reader sees a live card whose submit would be refused.
+     */
+    streamOf(
+      {
+        type: "message_done",
+        message: {
+          id: "m1",
+          sessionId: "s1",
+          role: "assistant",
+          content: "先测一下。",
+          createdAt: new Date().toISOString(),
+          toolCalls: [
+            {
+              id: "c1",
+              name: "ila_quiz",
+              input: JSON.stringify({
+                questions: [{ id: "Q1", header: "窗口", question: "哪一种？", options: [{ label: "滚动" }] }],
+              }),
+              status: "skipped",
+            },
+            {
+              id: "c2",
+              name: "ila_quiz",
+              input: JSON.stringify({
+                questions: [{ id: "Q2", header: "状态", question: "哪一个？", options: [{ label: "RocksDB" }] }],
+              }),
+              status: "awaiting",
+            },
+          ],
+        },
+      },
+      { type: "done" }
+    );
     const store = await readyStore();
+    await store.sendMessage("先讲别的");
+    makeupStreamOf({ type: "done" });
+
+    await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1");
+
+    const calls = store.messages.flatMap((m) => m.toolCalls ?? []);
+    expect(calls.find((tc) => tc.id === "c1")!.status).toBe("answered");
+    expect(calls.find((tc) => tc.id === "c2")!.status).toBe("skipped");
+  });
+
+  it("does nothing while a turn is streaming", async () => {
+    const store = await storeWithSkippedCard();
     store.streaming.active = true;
-    const ok = await store.makeupQuizAnswer(
-      { id: "quiz-1" } as never,
-      { selected: ["x"] } as never,
-      "msg"
+
+    expect(await store.submitQuizMakeup({ Q1: { selected: ["滚动"] } } as never, "c1")).toBe(false);
+    expect(mocks.streamQuizMakeup).not.toHaveBeenCalled();
+  });
+
+  it("adds the message the server wrote, so the record is on screen before the reply", async () => {
+    // `message_added` is the one frame carrying a row no model produced: a make-up's record.
+    streamOf(
+      {
+        type: "message_added",
+        message: {
+          id: "rec1",
+          sessionId: "s1",
+          role: "assistant",
+          content: "",
+          createdAt: new Date().toISOString(),
+          toolCalls: [{ id: "c9", name: "ila_makeup_quiz", input: "{}", status: "answered" }],
+        },
+      },
+      { type: "done" }
     );
-    expect(ok).toBe(false);
-    expect(mocks.api.answerQuizQuestion).not.toHaveBeenCalled();
+    const store = await readyStore();
+    await store.sendMessage("把上次跳过的题补一下");
+
+    const added = store.messages.find((m) => m.id === "rec1");
+    expect(added?.toolCalls?.[0]).toMatchObject({ name: "ila_makeup_quiz", status: "answered" });
   });
 });
 
@@ -3896,5 +4040,36 @@ describe("session write locks", () => {
     await store.refreshWorkspaceLocks();
 
     expect(Object.keys(store.sessionLocks)).toEqual(["s1"]);
+  });
+});
+
+describe("re-opening a stuck question", () => {
+  it("asks the server, announces the change, and hands back the fresh row", async () => {
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      const store = await readyStore();
+      mocks.api.reopenQuizQuestion.mockResolvedValue({
+        question: { id: "q1", status: "skipped", verdict: null },
+      });
+
+      const updated = await store.reopenQuizQuestion("q1");
+
+      expect(mocks.api.reopenQuizQuestion).toHaveBeenCalledWith("s1", "q1");
+      expect(updated).toMatchObject({ status: "skipped" });
+      // The panel listens for this: the row it was showing has changed underneath it.
+      expect(seen).toEqual(["quiz.changed"]);
+    } finally {
+      off();
+    }
+  });
+
+  it("reports a refusal and hands back nothing, so the dialog keeps the row it has", async () => {
+    const store = await readyStore();
+    mocks.api.reopenQuizQuestion.mockRejectedValue(new Error("已经判分了"));
+
+    expect(await store.reopenQuizQuestion("q1")).toBeNull();
+    expect(store.error).toContain("已经判分了");
   });
 });

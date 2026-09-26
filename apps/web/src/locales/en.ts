@@ -34,6 +34,7 @@ const en: typeof MessageSchema = {
     loading: "Loading…",
     retry: "Try again",
     copyFailed: "Copy failed — select the text and copy it yourself",
+    dragWindow: "Drag the title bar to move this window; double-click to put it back",
   },
 
   /**
@@ -565,6 +566,7 @@ const en: typeof MessageSchema = {
       ask_user: "Ask the user",
       ila_quiz: "Quiz",
       ila_review_quiz: "Grade quiz",
+      ila_makeup_quiz: "Make-up questions",
       ila_make_plan: "Make / edit plan",
       ila_read_plan: "Read plan",
       ila_update_plan_progress: "Update plan progress",
@@ -608,6 +610,27 @@ const en: typeof MessageSchema = {
   },
   quiz: {
     title: "Quiz",
+    makeupTitle: "Make-up",
+    makeup: {
+      open: "Answer this one now",
+      close: "Leave the make-up",
+      submit: "Answer it",
+      step: "Unanswered {current} of {total}",
+      filled: "{count} answered",
+      submitAll: "Submit the make-up",
+      exit: "Leave the make-up",
+      batchTitle: "Answer them together",
+      batchAsk: "There are {count} other questions you have not answered — answer them together?",
+      batchDetail:
+        "In that mode you can move between the unanswered questions, and submit only the ones you have answered.",
+      batchYes: "Answer them together",
+      batchNo: "Just this one",
+      partialTitle: "Submit these now",
+      partialAsk: "{remaining} questions are still unanswered — submit the {filled} you have answered?",
+      partialDetail: "The ones you leave keep their unanswered state and can be answered later.",
+      partialYes: "Submit these",
+      partialNo: "Keep answering",
+    },
     preparing: "Preparing questions",
     awaiting: "Waiting for your answers",
     answered: "Submitted",
@@ -658,16 +681,15 @@ const en: typeof MessageSchema = {
       waitingGrade: "Waiting for the assistant to grade it…",
       makeupHint:
         "You did not answer this question earlier (skipped or cancelled the quiz). Answer it here and the assistant will grade it.",
-      makeupSubmit: "Submit make-up answer",
+      reopen: "Answer it again",
+      reopenTitle: "Answer it again",
+      reopenAsk:
+        "This answer was recorded, but it was never graded. Clear it and answer the question again?",
+      reopenDetail:
+        "The question goes back to being unanswered, and can be answered again like one you skipped.",
+      reopenConfirm: "Clear it and answer again",
       close: "Close",
     },
-    makeupMessage:
-      "[MAKE-UP ANSWER] This is a late answer to a question I did not answer before (I skipped or cancelled the quiz). It is the SAME question — do not call ila_quiz to create a new one.\n" +
-      "Question ID: {id} ({qid})\n" +
-      "Question: {question}\n" +
-      "Options: {options}\n" +
-      "My make-up answer: {answer}\n" +
-      "Please grade this make-up answer: call ila_review_quiz with the exact question ID, a verdict, and an explanation.",
   },
 
   /** What a message can point at. See `zh-CN` for why this is a namespace of its own. */
@@ -1280,7 +1302,8 @@ const en: typeof MessageSchema = {
     UNKNOWN_POLICY: "Unknown parsing policy: {policy}",
     UNKNOWN_PARSER: "Unknown parser.",
     UNKNOWN_PROVIDER: "Unknown provider.",
-    REASONING_NOT_DECLARED: "This model needs its reasoning passed back, but \"Reasoning model\" is not enabled for it, so the provider rejected the request. Enable it for this model under Platform console → Model services, then try again.",
+    REASONING_NOT_DECLARED:
+      "The provider wants this request to carry the model's reasoning, and refused it. If this model thinks before it answers, enable \"Reasoning model\" for it under Platform console → Model services, then try again.",
     MESSAGE_REQUIRED: "A message is required.",
     QUESTION_NOT_PENDING: "Those questions no longer need an answer — they were submitted or retired already.",
     INVALID_ANSWER: "That answer is incomplete or out of date. Refresh the page and try again.",
@@ -1300,6 +1323,8 @@ const en: typeof MessageSchema = {
     QUIZ_QUESTION_NOT_FOUND: "That quiz question cannot be found.",
     QUIZ_NOT_ANSWERABLE:
       "That question is not open to a make-up answer (only questions skipped or cancelled without answering are).",
+    QUIZ_NOT_REOPENABLE:
+      "That question cannot be re-opened: either it has already been graded, or it was never answered — an unanswered question is already make-up eligible.",
     NOTE_NOT_FOUND: "That note cannot be found — it may already have been deleted.",
     NOTE_TYPE_INVALID: "That kind of note does not exist.",
     FIGURE_NOT_FOUND: "That diagram or table cannot be found — it may have changed or been deleted.",

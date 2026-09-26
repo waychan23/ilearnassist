@@ -139,6 +139,23 @@ const treeRows = computed<QuizTreeRow[]>(
  * the second one is what an empty state may be about.
  */
 const hasMatches = computed(() => filteredQuestions.value.length > 0);
+
+/**
+ * The questions a make-up can still bring back, over the panel's **whole** set.
+ *
+ * Deliberately not `filteredQuestions`: that list is the reader's filter, and a reader looking at
+ * 答对 has no unanswered question in it at all — 补答模式 built from it would open empty. The two
+ * are different questions ("what am I reviewing" and "what is still open"), which is why this one
+ * is computed here and passed down rather than derived in the dialog.
+ *
+ * `dismissed` counts as unanswered, the same way the 跳过 filter counts it: those are questions the
+ * learner never submitted, and the server refuses a make-up only for `answered` and `pending`.
+ */
+const makeupEligible = computed(() =>
+  questions.value
+    .filter((q) => q.status === "skipped" || q.status === "dismissed")
+    .sort((a, b) => a.position - b.position)
+);
 const hasAnyQuestion = computed(() => questions.value.length > 0);
 
 /* ----------------------------------- rows ----------------------------------- */
@@ -342,6 +359,7 @@ function statusTitle(q: QuizQuestionView): string {
       <QuizDetailDialog
         :question="active"
         :questions="filteredQuestions"
+        :eligible="makeupEligible"
         @close="active = null"
         @select="openQuestion"
       />

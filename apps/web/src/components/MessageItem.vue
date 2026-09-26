@@ -10,6 +10,7 @@ import {
   type TurnReference,
 } from "../api/types";
 import { codeCopyClick, tableCopyClick } from "../composables/codeCopy";
+import { copyText } from "../utils/clipboard";
 import { confirm } from "../composables/confirm";
 import { openNoteFromHighlight, requestNoteEditor } from "../composables/messageNotes";
 import { objectNoteRequest } from "../composables/notes";
@@ -325,7 +326,7 @@ const copied = ref(false);
 async function copyMessage() {
   if (!content.value) return;
   try {
-    await navigator.clipboard.writeText(content.value);
+    await copyText(content.value);
     copied.value = true;
     setTimeout(() => (copied.value = false), 1500);
   } catch {

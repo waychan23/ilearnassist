@@ -4,6 +4,7 @@ import {
   api,
   setUnauthenticatedHandler,
   streamAnswers,
+  streamQuizMakeup,
   streamChat,
   streamRegenerate,
   fileToBase64,
@@ -57,6 +58,7 @@ import type {
   MessageUsage,
   ProviderConfig,
   PublicConfig,
+  QuizAnswers,
   Session,
   SessionLockView,
   SessionSettings,
@@ -2620,6 +2622,15 @@ export const useAppStore = defineStore("app", () => {
         messages.value = messages.value.map((m) => (m.id === localId ? ev.message : m));
         break;
       }
+      case "message_added":
+        /*
+         * A message the **server** wrote: a make-up's record of the answers it was given. No model
+         * produced it and no optimistic bubble was drawn for it, so it cannot arrive as
+         * `message_saved` — and it is pushed here, before the grading turn's reply streams in under
+         * it, because the reader should see what they answered while the model works.
+         */
+        messages.value = [...messages.value, ev.message];
+        break;
       case "message_removed":
         /*
          * A regenerate dropped this reply server-side before the replacement streams. The
@@ -2801,9 +2812,7 @@ export const useAppStore = defineStore("app", () => {
   /**
    * Send a plan-panel message through the ordinary chat flow — the "adjust plan" composer
    * and the "jump to chapter" action both reduce to a user message after a server write.
-   * `chatExtras` carries server-only routing on that same turn: the quiz make-up passes
-   * `makeupQuizId` so the grading key is attached to the system prompt, never to the
-   * visible message.
+   * `chatExtras` carries server-only routing on that same turn.
    */
   async function sendPanelMessage(
     text: string,
@@ -2824,36 +2833,6 @@ export const useAppStore = defineStore("app", () => {
     if (!sessionId || streaming.value.active) return false;
     await api.jumpPlanNode(sessionId, nodeId);
     await sendPanelMessage(message);
-    return true;
-  }
-
-  /**
-   * The quiz widget's make-up answer for a question originally skipped/dismissed:
-   * persist the answer on the SAME row (the server refuses pending/answered), then START
-   * an ordinary chat turn whose message quotes the global id, so the model grades that
-   * question instead of posing a new quiz.
-   *
-   * Resolves (true) as soon as the answer is persisted and the turn is dispatched — the
-   * stream itself runs in the background so the detail dialog can close immediately rather
-   * than covering the chat while the model answers. False on the streaming guard or a
-   * rejected POST (whose translated error is surfaced, leaving the dialog open).
-   */
-  async function makeupQuizAnswer(
-    question: QuizQuestionView,
-    answer: QuizAnswer,
-    message: string
-  ): Promise<boolean> {
-    const sessionId = activeSessionId.value;
-    if (!sessionId || streaming.value.active) return false;
-    try {
-      await api.answerQuizQuestion(sessionId, question.id, answer);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      return false;
-    }
-    // Name the row: the server appends its (hidden) answer key to this turn's system
-    // prompt so the model grades against it instead of reconstructing one.
-    void sendPanelMessage(message, { makeupQuizId: question.id });
     return true;
   }
 
@@ -3004,6 +2983,103 @@ export const useAppStore = defineStore("app", () => {
       // the card goes back to waiting rather than claiming a decision nobody recorded.
       toolCall.status = previous.status;
       toolCall.answer = previous.answer;
+    }
+  }
+
+  /**
+   * The make-up card's own submit: the answers the learner gave in the card that asked the
+   * question.
+   *
+   * Not `answerQuestion`, and the difference is structural rather than stylistic: there is no
+   * pending call to answer. The call was retired the moment the learner walked away, and the
+   * server records the answers as a **completed** make-up call at the tail of the conversation —
+   * which is where the grading has to start from, since an old turn cannot be resumed. So this
+   * action sends the answers and nothing else; the prompt text, the question wording and the
+   * answer key never pass through the client at all.
+   *
+   * It shares the local flip with `answerQuestion`: the card shows what was answered before the
+   * server has said anything, and is put back if the submission is refused.
+   */
+  async function submitQuizMakeup(
+    answers: QuizAnswers,
+    toolCallId?: string
+  ): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || streaming.value.active) return false;
+    if (Object.keys(answers).length === 0) return false;
+
+    /*
+     * The card, when there is one. `toolCallId` is absent for the panel's own batch — that surface
+     * has no call of its own, and its rows are re-read when the turn ends — and present for the
+     * card the learner answered in, which has to show what they said before the server has replied.
+     */
+    const toolCall = toolCallId ? findToolCall(toolCallId) : undefined;
+
+    /*
+     * A make-up appends to the conversation like any other message, so every question still waiting
+     * for an answer is retired — the same rule `sendMessage` applies, and the server applies it in
+     * the same request. Leaving them live would show a card the reader can no longer answer: the
+     * record this submission writes now sits after it.
+     */
+    for (const pending of awaitingToolCalls()) {
+      if (pending.id !== toolCallId) pending.status = "skipped";
+    }
+
+    const previous = toolCall
+      ? { status: toolCall.status, answer: toolCall.answer }
+      : undefined;
+    if (toolCall) {
+      toolCall.status = "answered";
+      // Merged, because a card over five questions may have had two made up: the rest stay
+      // unanswered in its record, which is what its settled view renders.
+      toolCall.answer = { ...((toolCall.answer as QuizAnswers | undefined) ?? {}), ...answers };
+    }
+
+    streaming.value = { ...EMPTY_STREAMING(), active: true };
+    // A resumed turn moves the message counts and the token totals just as a fresh one does.
+    emitWidgetEvent({ type: "turn.started", sessionId });
+
+    /*
+     * **Dispatched, not awaited.** The caller is a window the reader is looking at the question
+     * through, and the reply it is asking for streams *behind* that window — so a submit that
+     * resolved when the turn finished would leave the dialog covering the answer for as long as the
+     * model takes. It resolves as soon as the request is away, which is the rule the prose make-up
+     * it replaced already followed.
+     *
+     * What the resolution costs is the honest half of it: `true` means "sent", not "accepted". A
+     * refusal therefore cannot be handed back to the caller, so the revert happens here instead —
+     * the card goes back to what it was and the failure reports itself the way any failed turn
+     * does, in the conversation rather than in a window that has already closed.
+     */
+    void consume(streamQuizMakeup(sessionId, answers), sessionId).then((accepted) => {
+      if (accepted || !toolCall || !previous) return;
+      toolCall.status = previous.status;
+      toolCall.answer = previous.answer;
+    });
+    return true;
+  }
+
+  /**
+   * Re-open a question that was answered and never graded.
+   *
+   * The repair for a grading turn that failed *after* the answers landed: the row reads as answered
+   * with no verdict, which no other action accepts — a make-up wants an unanswered question — so
+   * without this the panel shows 等待助手判分 for good. The write discards the answer, and the panel
+   * is re-read by the caller (the row it was showing has changed underneath it).
+   *
+   * Returns the fresh view, or null when the server refused — the refusal's sentence is already in
+   * `error` by then, which is where a failed action reports itself.
+   */
+  async function reopenQuizQuestion(quizId: string): Promise<QuizQuestionView | null> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return null;
+    try {
+      const { question } = await api.reopenQuizQuestion(sessionId, quizId);
+      emitWidgetEvent({ type: "quiz.changed", sessionId });
+      return question;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
     }
   }
 
@@ -3161,9 +3237,10 @@ export const useAppStore = defineStore("app", () => {
     clearPendingAttachments,
     sendMessage,
     answerQuestion,
+    submitQuizMakeup,
+    reopenQuizQuestion,
     sendPanelMessage,
     planJumpToNode,
-    makeupQuizAnswer,
     stopMessage,
     setError,
     loadDirectory,

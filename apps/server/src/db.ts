@@ -2132,6 +2132,18 @@ export interface AppDb {
     toolCallId: string
   ): { messageId: string; call: ToolCall } | undefined;
 
+  /**
+   * The message holding a given tool call, whatever its status.
+   *
+   * `findAwaitingToolCall`'s sibling for the one caller that reaches a call which is *not*
+   * awaiting: a make-up writes its answer back onto the call that asked the question, and that
+   * call was retired (`skipped`/`dismissed`) precisely because the user had walked away from it.
+   */
+  findMessageWithToolCall(
+    sessionId: string,
+    toolCallId: string
+  ): { message: Message; call: ToolCall } | undefined;
+
   /** Write a message's whole `toolCalls` array back, after an answer was filled in. */
   updateMessageToolCalls(messageId: string, toolCalls: ToolCall[]): void;
 
@@ -4929,6 +4941,16 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       return undefined;
     },
 
+    findMessageWithToolCall(sessionId, toolCallId) {
+      for (const message of listMessagesOf(sessionId)) {
+        const call = (message.toolCalls ?? []).find((tc) => tc.id === toolCallId);
+        // The whole message rather than its id: the one caller writes the array back, and a
+        // second read for it would be a second chance to read it after something else wrote.
+        if (call) return { message, call };
+      }
+      return undefined;
+    },
+
     updateMessageToolCalls(messageId, toolCalls) {
       stmtUpdateToolCalls.run(JSON.stringify(toolCalls), messageId);
     },
@@ -5640,6 +5662,15 @@ export function guessCapabilities(modelId: string): ModelCapability[] {
   if (/(gpt-4o|gpt-4\.1|gpt-5|claude|gemini|vision|llava|-vl|vl-|omni|pixtral)/.test(id)) {
     caps.push("vision");
   }
+  /*
+   * `deepseek-v4…` is deliberately **absent** from these patterns, and the case is worth keeping in
+   * view rather than "fixing" later: its thinking mode is on by default, so a V4 model replaying a
+   * tool call must carry `reasoning_content`, and nothing in the name says so — "pro" is not a
+   * marker. Guessing it here would be guessing in the other direction too, for a gateway serving
+   * the same id that rejects an unknown field, and that failure the app cannot recover from. So the
+   * record declares it (every built-in does), and `createReasoningFetch` recovers from the refusal
+   * when it does not — one retried request per turn, versus a provider that fails outright.
+   */
   if (/(^|[-_/])o[1-9]|reason|(^|[-_/])r1|think/.test(id)) caps.push("reasoning");
   return caps;
 }

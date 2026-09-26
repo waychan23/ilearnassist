@@ -99,7 +99,7 @@ export function findLanAddress(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>):
  * Rewrite a loopback URL so another device can open it.
  *
  * Returns null rather than a guess when there is no address: a QR code encoding
- * `http://127.0.0.1:3720` scans fine and then loads the *phone's* own loopback, which is the
+ * `http://127.0.0.1:10471` scans fine and then loads the *phone's* own loopback, which is the
  * single most confusing possible outcome — so the panel shows nothing instead.
  */
 export function lanUrlFor(url: string | null, address: string | null): string | null {

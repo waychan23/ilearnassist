@@ -67,10 +67,11 @@ export function svgSize(svg: string): SvgSize | null {
 /**
  * The mermaid `themeVariables` this app's palette implies.
  *
- * Takes a *reader* rather than reaching for `getComputedStyle` itself, and that seam is what
- * makes it testable: jsdom does not apply `style.css`, so a real computed-style read returns
- * `""` in a unit test and the mapping would only ever be exercised in a browser. The caller
- * passes `(name) => getComputedStyle(document.documentElement).getPropertyValue(name)`.
+ * Takes the resolved theme and a *reader* rather than reaching for `getComputedStyle` itself,
+ * and that seam is what makes it testable: jsdom does not apply `style.css`, so a real
+ * computed-style read returns `""` in a unit test and the mapping would only ever be exercised
+ * in a browser. The caller passes
+ * `(name) => getComputedStyle(document.documentElement).getPropertyValue(name)`.
  *
  * Values are read as **concrete colours**, never as `var(--token)` strings. Mermaid computes
  * with them in JavaScript — derived borders, the pie and git-graph palettes — and a `var()` in
@@ -80,11 +81,19 @@ export function svgSize(svg: string): SvgSize | null {
  * its own `base` theme value, which is what keeps a diagram type added later (a mindmap, a
  * timeline) from rendering in colours nobody chose — and what keeps this list from having to
  * grow with mermaid's.
+ *
+ * The `base` theme is built for a *light* page, and a few of its values are fixed or derived
+ * for one rather than read from what we overrode — ER attribute rows are lightened to near
+ * white, a completed gantt task is hard lightgrey, the xychart palette is cream. Under the
+ * dark theme those are light fills under *light* labels, so they are restated below.
  */
-export function diagramThemeVariables(read: (name: string) => string): Record<string, string> {
+export function diagramThemeVariables(
+  theme: ResolvedTheme,
+  read: (name: string) => string
+): Record<string, string | Record<string, string>> {
   const value = (name: string, fallback: string): string => read(name).trim() || fallback;
 
-  return {
+  const vars: Record<string, string | Record<string, string>> = {
     // The surface the diagram lands on, which is a card or a dialog body rather than the page.
     background: value("--panel", "#ffffff"),
     primaryColor: value("--panel-2", "#f0f2f5"),
@@ -109,6 +118,72 @@ export function diagramThemeVariables(read: (name: string) => string): Record<st
      */
     errorBkgColor: value("--danger-bg", "#ffebe9"),
     errorTextColor: value("--danger-text", "#b35900"),
+  };
+
+  if (theme === "dark") {
+    Object.assign(vars, {
+      /*
+       * ER attribute rows. The base theme derives `rowOdd`/`rowEven` by *lightening*
+       * `mainBkg`, which on our palette lands at ~92% lightness — near white — while the
+       * attribute labels keep the light `textColor`. Odd rows restate one step behind the
+       * entity header (`--panel`), even rows level with it (`--panel-2`).
+       */
+      rowOdd: value("--panel", "#202327"),
+      rowEven: value("--panel-2", "#262a2f"),
+      /*
+       * Completed gantt tasks. The base value is hard `lightgrey` for a light page; the done
+       * label uses `textColor` — light on our palette — so the fill is the thing that moves:
+       * a muted grey that still reads as a *finished* bar, with the lighter border.
+       */
+      doneTaskBkgColor: value("--text-3", "#6b7280"),
+      doneTaskBorderColor: value("--text-2", "#9aa0a6"),
+      // The nested object the xychart styles read — see `xyChartThemeVariables` for why it is
+      // supplied whole.
+      xyChart: xyChartThemeVariables(read),
+    });
+  }
+
+  return vars;
+}
+
+/**
+ * The nested `xyChart` theme object, for the dark palette.
+ *
+ * A nested override *replaces* the whole object rather than merging — mermaid's `calculate`
+ * assigns it verbatim before and after its own `updateColors` — so every sub-field the base
+ * derivation would have filled is named here. The text fields all take `--text`, matching the
+ * base derivation, which routes every one of them through `primaryTextColor`.
+ */
+function xyChartThemeVariables(read: (name: string) => string): Record<string, string> {
+  const value = (name: string, fallback: string): string => read(name).trim() || fallback;
+  const text = value("--text", "#e6e8eb");
+
+  return {
+    backgroundColor: value("--panel", "#202327"),
+    titleColor: text,
+    dataLabelColor: text,
+    legendTextColor: text,
+    xAxisTitleColor: text,
+    xAxisLabelColor: text,
+    xAxisTickColor: text,
+    xAxisLineColor: text,
+    yAxisTitleColor: text,
+    yAxisLabelColor: text,
+    yAxisTickColor: text,
+    yAxisLineColor: text,
+    /*
+     * The base palette (`#FFF4DD,…`) is built for a light page. This is the app's own series
+     * colours, in the same order the statistics charts take them; it cycles past the sixth
+     * plot if a chart has more.
+     */
+    plotColorPalette: [
+      value("--accent", "#4c8bf5"),
+      value("--success", "#4cc38a"),
+      value("--warning", "#e6b33c"),
+      value("--lock-held", "#f0883e"),
+      value("--danger", "#e5534b"),
+      value("--text-2", "#9aa0a6"),
+    ].join(","),
   };
 }
 
@@ -166,10 +241,121 @@ async function prepare(theme: ResolvedTheme): Promise<typeof import("mermaid").d
     // The theme designed to take `themeVariables`. `default`/`dark` would override them.
     theme: "base",
     fontFamily: getComputedStyle(document.body).fontFamily,
-    themeVariables: diagramThemeVariables(read),
+    themeVariables: diagramThemeVariables(theme, read),
   });
   initializedFor = theme;
   return mermaid;
+}
+
+/**
+ * Translate hardcoded node-style colours to a dark page.
+ *
+ * Inline `style`/`classDef` statements paint nodes directly and **bypass** `themeVariables` —
+ * a `style A fill:#e8f5e9` written for a light page stays a light fill in dark mode, under
+ * the theme's light label, so the text becomes unreadable. The source is model-authored and
+ * only the source is persisted, so it is rewritten at render time rather than edited on disk:
+ * light `fill:` hexes move to the same hue at dark lightness, and dark `color:` hexes (the
+ * node's text colour) invert the same way. Fills already dark and named/rgb colours are left
+ * alone.
+ *
+ * Pure string work for the same reason every other helper here is: unit-testable without a
+ * browser, and applied identically to diagrams drawn years ago and ones drawn this turn.
+ */
+export function darkenDiagramStyles(source: string): string {
+  return source.replace(/^[ \t]*(?:style|classDef)\b.*$/gm, (line) =>
+    line
+      .replace(/\bfill:[ \t]*(#[0-9a-fA-F]{3,8})\b/g, (_m, hex: string) =>
+        // [0.5,1] lightness maps onto [0.13,0.29] — dark enough for light labels, spread
+        // widely enough that a green, blue, amber and purple fill stay tellable apart.
+        "fill:" +
+          mapHex(hex, (hsl) =>
+            hsl.l > 0.5
+              ? { ...hsl, s: Math.min(1, hsl.s * 1.05), l: 0.13 + (hsl.l - 0.5) * 0.32 }
+              : hsl
+          )
+      )
+      .replace(/\bcolor:[ \t]*(#[0-9a-fA-F]{3,8})\b/g, (_m, hex: string) =>
+        // The inverse range of the fill mapping: [0,0.5) → (0.63,0.95].
+        "color:" +
+          mapHex(hex, (hsl) =>
+            hsl.l < 0.5
+              ? { ...hsl, s: Math.min(1, hsl.s * 1.05), l: 0.95 - (0.5 - hsl.l) * 0.64 }
+              : hsl
+          )
+      )
+  );
+}
+
+/** RGB channels, expanded from a 3/6/8-digit hex. `null` when it is not a plain hex colour. */
+function hexChannels(hex: string): { r: number; g: number; b: number; alpha?: string } | null {
+  let h = hex.slice(1);
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (h.length !== 6 && h.length !== 8) return null;
+  const channel = (at: number): number => parseInt(h.slice(at, at + 2), 16);
+  const r = channel(0);
+  const g = channel(2);
+  const b = channel(4);
+  if ([r, g, b].some((v) => Number.isNaN(v))) return null;
+  return { r, g, b, alpha: h.length === 8 ? h.slice(6, 8) : undefined };
+}
+
+/** Hue-saturation-lightness in [0,1], the space a light-page/dark-page translation happens in. */
+interface Hsl {
+  h: number;
+  s: number;
+  l: number;
+}
+
+function rgbToHsl(r: number, g: number, b: number): Hsl {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h =
+    max === r
+      ? (g - b) / d + (g < b ? 6 : 0)
+      : max === g
+        ? (b - r) / d + 2
+        : (r - g) / d + 4;
+  return { h: h / 6, s, l };
+}
+
+function hslToRgb({ h, s, l }: Hsl): [number, number, number] {
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
+  const hue2rgb = (p: number, q: number, t: number): number => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [
+    Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1 / 3) * 255),
+  ];
+}
+
+/** Apply an HSL change to a hex literal, keeping any alpha suffix. Returns the input unchanged
+ *  when it is not a usable hex colour. */
+function mapHex(hex: string, change: (hsl: Hsl) => Hsl): string {
+  const channels = hexChannels(hex);
+  if (!channels) return hex;
+  const [r, g, b] = hslToRgb(change(rgbToHsl(channels.r, channels.g, channels.b)));
+  const byte = (v: number): string =>
+    Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0");
+  return `#${byte(r)}${byte(g)}${byte(b)}${channels.alpha ?? ""}`;
 }
 
 /** A unique id per render. See `renderMermaid` for why it cannot come from the file name. */
@@ -195,11 +381,15 @@ let seq = 0;
 export async function renderMermaid(source: string, theme: ResolvedTheme): Promise<string> {
   const mermaid = await prepare(theme);
 
-  const parsed = await mermaid.parse(source, { suppressErrors: true });
+  // Hardcoded style colours only need translating on a dark page; light renders the source as
+  // written. The rewrite rides the render, so the stored source is never modified.
+  const effective = theme === "dark" ? darkenDiagramStyles(source) : source;
+
+  const parsed = await mermaid.parse(effective, { suppressErrors: true });
   if (parsed === false) {
     throw new Error("This is not something mermaid can draw.");
   }
 
-  const { svg } = await mermaid.render(`mmd-${++seq}`, source);
+  const { svg } = await mermaid.render(`mmd-${++seq}`, effective);
   return svg;
 }

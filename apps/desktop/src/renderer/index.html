@@ -97,6 +97,26 @@
 
         <section class="field">
           <div class="field__head">
+            <span class="field__label" data-i18n="label.port"></span>
+          </div>
+          <div class="field__port">
+            <input
+              class="field__port-input"
+              data-role="port-input"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              max="65535"
+              step="1"
+              autocomplete="off"
+            />
+            <button type="button" class="button button--small" data-action="apply-port"></button>
+          </div>
+          <p class="field__hint" data-role="port-hint" hidden></p>
+        </section>
+
+        <section class="field">
+          <div class="field__head">
             <span class="field__label" data-i18n="label.lanAccess"></span>
             <span class="field__actions">
               <!-- Only while sharing is on: a switch that is off needs no "turn it off". -->

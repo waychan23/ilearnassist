@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import { join } from "node:path";
 import {
   ANY_INTERFACE_HOST,
+  DEFAULT_PORT,
   LOOPBACK_HOST,
   PANEL_LAUNCH_ENV,
   adminEntryFor,
   buildAdminSpec,
   buildLaunchSpec,
+  isUserPort,
   parseListeningLine,
   parseMigratedLine,
+  parsePortBusyLine,
   serverEntryFor,
 } from "../src/main/launch.js";
 import type { AppPaths } from "../src/main/paths.js";
@@ -38,15 +41,15 @@ describe("parseListeningLine", () => {
   });
 
   it("tolerates the carriage return a piped stream can leave behind", () => {
-    expect(parseListeningLine("[ilearnassist] listening on http://127.0.0.1:3720\r")).toBe(
-      "http://127.0.0.1:3720"
+    expect(parseListeningLine("[ilearnassist] listening on http://127.0.0.1:10471\r")).toBe(
+      "http://127.0.0.1:10471"
     );
   });
 
   it("ignores Fastify's own listening banner", () => {
     // The logger prints this from inside `listen`, before the process is necessarily ready
     // to serve. Keying on it would let a half-started server look running.
-    expect(parseListeningLine('{"level":30,"msg":"Server listening at http://127.0.0.1:3720"}')).toBe(
+    expect(parseListeningLine('{"level":30,"msg":"Server listening at http://127.0.0.1:10471"}')).toBe(
       null
     );
   });
@@ -60,13 +63,14 @@ describe("parseListeningLine", () => {
 });
 
 describe("buildLaunchSpec", () => {
-  const build = (host: string) =>
+  const build = (host: string, port = DEFAULT_PORT) =>
     buildLaunchSpec({
       electronExecPath: "/Applications/ilearnassist.app/Contents/MacOS/ilearnassist",
       serverEntry: "/Applications/ilearnassist.app/Contents/Resources/app/dist/server/index.mjs",
       paths,
       dataDir: DATA_DIR,
       host,
+      port,
       baseEnv: { PATH: "/usr/bin" },
     });
 
@@ -129,6 +133,34 @@ describe("buildLaunchSpec", () => {
     expect(build(LOOPBACK_HOST).env["ILA_HOST"]).toBe("127.0.0.1");
     expect(build(ANY_INTERFACE_HOST).env["ILA_HOST"]).toBe("0.0.0.0");
   });
+
+  it("passes the fixed port, including the default", () => {
+    // Stated per launch like the host: the panel owns the port, and the value must never be 0.
+    expect(build(LOOPBACK_HOST).env["ILA_PORT"]).toBe(String(DEFAULT_PORT));
+    expect(build(LOOPBACK_HOST, 4567).env["ILA_PORT"]).toBe("4567");
+  });
+});
+
+describe("isUserPort", () => {
+  it("accepts an integer in range and nothing else", () => {
+    expect(isUserPort(1)).toBe(true);
+    expect(isUserPort(10471)).toBe(true);
+    expect(isUserPort(65535)).toBe(true);
+    for (const bad of [0, 65536, 3.5, "10471", null, undefined, NaN]) {
+      expect(isUserPort(bad), String(bad)).toBe(false);
+    }
+  });
+});
+
+describe("parsePortBusyLine", () => {
+  it("reads the port the server could not bind", () => {
+    expect(parsePortBusyLine("[ilearnassist] port in use: 10471")).toBe(10471);
+  });
+
+  it("ignores every other line", () => {
+    expect(parsePortBusyLine("[ilearnassist] listening on http://127.0.0.1:10471")).toBeNull();
+    expect(parsePortBusyLine("")).toBeNull();
+  });
 });
 
 describe("serverEntryFor", () => {
@@ -171,7 +203,7 @@ describe("parseMigratedLine", () => {
     // The two patterns must not overlap: a listening line read as a migration would put a note on
     // screen about something that did not happen.
     expect(parseMigratedLine("[ilearnassist] listening on http://127.0.0.1:50896")).toBeNull();
-    expect(parseMigratedLine("Server listening at http://0.0.0.0:3720")).toBeNull();
+    expect(parseMigratedLine("Server listening at http://0.0.0.0:10471")).toBeNull();
     expect(parseMigratedLine("[ilearnassist] migrated schema v5 -> 6 (backup: x)")).toBeNull();
     expect(parseMigratedLine("")).toBeNull();
   });

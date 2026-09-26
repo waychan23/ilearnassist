@@ -11,7 +11,7 @@
 
 server:
   host: 127.0.0.1
-  port: 3720
+  port: 10471
 
 # NOTE: where the data lives is *not* here. There is no `data:` or `workspaces:`
 # key because the data root is a launcher decision, not a config value: the

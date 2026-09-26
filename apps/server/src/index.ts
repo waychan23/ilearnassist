@@ -1,4 +1,26 @@
 import { assertHasAdministrator, NoAdministratorError } from "./adminCli.js";
+
+/**
+ * The configured port is already held by another process.
+ *
+ * Like `NoAdministratorError`, a refusal with its own sentence rather than a stack: a fixed
+ * port that cannot bind is a state the user acts on — free it, or pick another — and naming
+ * the port is the whole of what they need.
+ */
+class PortInUseError extends Error {
+  constructor(readonly port: number) {
+    super(`Port ${port} is already in use. Free it, or choose a different port.`);
+    this.name = "PortInUseError";
+  }
+}
+
+function isEaddrInUse(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: unknown }).code === "EADDRINUSE"
+  );
+}
 import { loadConfig, PROJECT_PATHS, readConfigPatch, resolveDataRoot } from "./config.js";
 import { buildServer } from "./server.js";
 import { configPatchPath, insightLogPath, threadLogPath } from "./paths.js";
@@ -83,7 +105,17 @@ async function main(): Promise<void> {
     );
   }
 
-  const address = await app.listen({ host, port });
+  let address: string;
+  try {
+    address = await app.listen({ host, port });
+  } catch (err) {
+    // A fixed port that is already taken gets one refusal, naming the port — not a stack.
+    // The printed line is what the control panel parses to say the same thing in its own
+    // language; the server never picks a different port, because that would break the
+    // bookmarks and saved passwords the fixed port exists to keep.
+    if (isEaddrInUse(err)) throw new PortInUseError(port);
+    throw err;
+  }
 
   // The one line the desktop control panel keys on to learn where the app came up. It
   // reports the address Fastify actually bound rather than `config.server.port`, which
@@ -115,6 +147,14 @@ main().catch((err: unknown) => {
   // `assertHasAdministrator` throws already names the fix — so it is printed alone, on stderr,
   // the way `resolveDataRoot`'s is.
   if (err instanceof NoAdministratorError) {
+    console.error(err.message);
+    process.exit(1);
+    return;
+  }
+  if (err instanceof PortInUseError) {
+    // The one line the control panel parses (besides the listening line), on stdout, then
+    // the sentence on stderr for a terminal launch.
+    console.log(`[ilearnassist] port in use: ${err.port}`);
     console.error(err.message);
     process.exit(1);
     return;

@@ -67,6 +67,8 @@ const dataDirCode = element<HTMLElement>('[data-role="data-dir"]');
 const dataDirHint = element<HTMLElement>('[data-role="data-dir-hint"]');
 const defaultDataDirAnswer = element<HTMLElement>('[data-role="default-data-dir"]');
 const lanUrlCode = element<HTMLElement>('[data-role="lan-url"]');
+const portInput = element<HTMLInputElement>('[data-role="port-input"]');
+const portHint = element<HTMLElement>('[data-role="port-hint"]');
 const logsLabel = element<HTMLElement>('[data-role="logs-label"]');
 const logOutput = element<HTMLPreElement>('[data-role="logs"]');
 const logsToggle = element<HTMLButtonElement>('[data-action="logs"]');
@@ -116,6 +118,7 @@ const buttons = {
   useDefaultDataDir: action("use-default-data-dir"),
   share: action("share"),
   unshare: action("unshare"),
+  applyPort: action("apply-port"),
   qrCopy: action("qr-copy"),
   resetAdmin: action("reset-admin"),
   resetSubmit: action("reset-submit"),
@@ -154,6 +157,7 @@ function applyStaticLabels(): void {
   buttons.useDefaultDataDir.textContent = t("action.useDefaultDataDir");
   buttons.share.textContent = t("action.share");
   buttons.unshare.textContent = t("action.unshare");
+  buttons.applyPort.textContent = t("port.apply");
   buttons.resetAdmin.textContent = t("action.resetAdmin");
   buttons.resetSubmit.textContent = t("reset.submit");
   buttons.adminCreate.textContent = t("action.createAdmin");
@@ -162,6 +166,8 @@ function applyStaticLabels(): void {
   buttons.update.textContent = t("update.download");
   localeSelect.title = t("label.language");
   localeSelect.setAttribute("aria-label", t("label.language"));
+  portInput.title = t("label.port");
+  portInput.setAttribute("aria-label", t("label.port"));
   document.title = t("window.title");
   document.documentElement.lang = locale;
 }
@@ -320,6 +326,11 @@ function render(next: PanelState): void {
   buttons.chooseDataDir.disabled = busy;
   buttons.useDefaultDataDir.disabled = busy;
   buttons.open.title = running ? "" : t("hint.notRunning");
+
+  // The port field. The box follows the state only while it is not being edited, so a
+  // broadcast (including the fault detail) cannot overwrite what the user is typing.
+  if (document.activeElement !== portInput) portInput.value = String(next.port);
+  buttons.applyPort.disabled = busy;
 
   // The switch, and the address it produces. `lanUrl` is null unless sharing is on, so the
   // address appearing and the switch reading "on" cannot get out of step.
@@ -805,6 +816,33 @@ logsToggle.addEventListener("click", () => setLogsOpen(!logsOpen));
 
 buttons.share.addEventListener("click", () => void openQrOverlay());
 buttons.unshare.addEventListener("click", () => void window.panel.shareOnLan(false).then(render));
+
+/**
+ * Apply the typed port.
+ *
+ * Parsed here rather than trusted as a number: the input can be empty, "3.5", or out of
+ * range, and each of those gets the same inline answer rather than a request main will
+ * refuse. Enter in the box does the same thing as the button.
+ */
+function applyPortFlow(): void {
+  const text = portInput.value.trim();
+  const port = Number(text);
+  const usable = /^\d+$/.test(text) && Number.isInteger(port) && port >= 1 && port <= 65535;
+  if (!usable) {
+    portHint.textContent = t("port.invalid");
+    portHint.hidden = false;
+    return;
+  }
+  portHint.hidden = true;
+  void window.panel.setPort(port).then(render);
+}
+buttons.applyPort.addEventListener("click", applyPortFlow);
+portInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    applyPortFlow();
+  }
+});
 
 for (const control of document.querySelectorAll<HTMLElement>('[data-action="qr-dismiss"]')) {
   control.addEventListener("click", closeQrOverlay);

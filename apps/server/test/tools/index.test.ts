@@ -14,6 +14,7 @@ import {
 import { ALL_TOOL_NAMES, buildTools } from "../../src/tools/index.js";
 import type { QuizToolContext } from "../../src/tools/quiz.js";
 import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
+import type { MakeupQuizToolContext } from "../../src/tools/quizMakeup.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
 import type { DiagramToolContext } from "../../src/tools/diagram.js";
 import type { TableToolContext } from "../../src/tools/table.js";
@@ -97,10 +98,14 @@ const quiz: QuizToolContext = {
 // The db/session are only touched when the grading tool is invoked, so a structural stub
 // keeps these assembly tests off a database.
 const quizReview = { db: {}, sessionId: "s1" } as unknown as QuizReviewToolContext;
+// The make-up tool only ever reads the conversation's own rows through this callback, so the
+// stub is a selection with nothing in it — assembly is what these cases are about.
+const quizMakeup: MakeupQuizToolContext = { selectQuestions: () => [] };
 
 function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] {
   // No quiz context by default: the quiz tools are widget-bound, so the absence itself is
-  // under test. Cases that want them spread `{ quiz, quizReview }`. The diagram, query and
+  // under test. Cases that want them spread `{ quiz, quizReview, quizMakeup }` — the three are
+  // installed and removed by one widget, which is why they are spread together. The diagram, query and
   // page-capture contexts are present because the route always passes them (fetching being
   // enabled here) — pass `{ diagram: undefined }` and so on to test the other half. Spread
   // last, so a case can override any of them.
@@ -298,27 +303,27 @@ describe("buildTools", () => {
   });
 
   it("assembles both quiz tools with a quiz context", () => {
-    const built = names({ quiz, quizReview });
+    const built = names({ quiz, quizReview, quizMakeup });
     for (const name of QUIZ_TOOL_NAMES) expect(built).toContain(name);
   });
 
   it("lets widget-bound quiz tools bypass the allow-list in every state", () => {
     // Named list: not in it, still there.
-    expect(names({ quiz, quizReview, allowedNames: ["read_file"] }).sort()).toEqual(
+    expect(names({ quiz, quizReview, quizMakeup, allowedNames: ["read_file"] }).sort()).toEqual(
       [...QUIZ_TOOL_NAMES, "read_file"].sort()
     );
     // Empty list ("no tools"): the bound tools survive, and nothing else does.
-    expect(names({ quiz, quizReview, allowedNames: [] }).sort()).toEqual(
+    expect(names({ quiz, quizReview, quizMakeup, allowedNames: [] }).sort()).toEqual(
       [...QUIZ_TOOL_NAMES].sort()
     );
     // An allow-list that does not name quiz cannot remove it: the widget is the switch.
-    const namedOnly = names({ quiz, quizReview, allowedNames: ["read_file"] });
+    const namedOnly = names({ quiz, quizReview, quizMakeup, allowedNames: ["read_file"] });
     expect(namedOnly).not.toContain("ask_user");
     for (const name of QUIZ_TOOL_NAMES) expect(namedOnly).toContain(name);
   });
 
   it("keeps the quiz tools when file tools are disabled", () => {
-    const built = names({ quiz, quizReview, fileToolsEnabled: false });
+    const built = names({ quiz, quizReview, quizMakeup, fileToolsEnabled: false });
     for (const name of QUIZ_TOOL_NAMES) expect(built).toContain(name);
   });
 

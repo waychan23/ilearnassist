@@ -198,36 +198,6 @@ export function quizAnswerKeysForCall(
   return map;
 }
 
-/**
- * The system-side grading note for a make-up turn: the question's answer key, which the
- * user never saw. Appended to THAT turn's system prompt only and never persisted in a
- * visible message. Null when the question was posed without a key, so a make-up against a
- * keyless quiz behaves exactly as before.
- */
-export function renderMakeupKeyNote(row: QuizQuestionRecord): string | null {
-  const reference = row.referenceAnswer && row.referenceAnswer.length > 0 ? row.referenceAnswer : null;
-  const explanation = row.explanation ?? null;
-  if (!reference && !explanation) return null;
-
-  /*
-   * The key lines carry their own leading newline, and that is what keeps the assembled note
-   * byte-identical to the hand-built version it replaces: a question posed without a key supplies
-   * "" here and leaves no blank line behind, while one with a key gets the newline it needs. The
-   * prose itself lives in the catalog — see `chat.guidance.quizMakeup`.
-   */
-  const lines: string[] = [];
-  if (reference) lines.push(`Reference answer: ${reference.join("; ")}`);
-  if (explanation) lines.push(`Explanation: ${explanation}`);
-  const key = lines.map((line) => `\n${line}`).join("");
-
-  return renderPrompt("chat.guidance.quizMakeup", {
-    qid: row.qid,
-    id: row.id,
-    question: row.question,
-    key,
-  });
-}
-
 /* ------------------------------------ reads ------------------------------------ */
 
 function toView(row: QuizQuestionRecord): QuizQuestionView {
@@ -373,6 +343,273 @@ export function makeupAnswer(
   return { ok: true, view: toView(updated) };
 }
 
+/* ------------------------------- batch make-up (the card) ------------------------------- */
+
+/**
+ * One row as a make-up card asks it: the `Qn` it is answered by, and the global id it is
+ * written by.
+ *
+ * Both so that the two vocabularies stay on their own sides of the wire. `id` is the Qn,
+ * because that is what `QuizAnswers` is keyed by and what `validateQuizAnswers` validates
+ * against — the card, the validator and the live quiz all agree without a second shape.
+ * `uid` is the row's UUID, which is what the model names (`ila_query` reports it) and what
+ * `ila_review_quiz` grades by. The same split every other quiz surface has.
+ */
+function toMakeupQuestion(row: QuizQuestionRecord): QuizQuestion {
+  return {
+    id: row.qid,
+    uid: row.id,
+    header: row.header,
+    question: row.question,
+    ...(row.multiSelect ? { multiSelect: true } : {}),
+    options: row.options,
+  };
+}
+
+/**
+ * The questions a make-up may bring back: the ones the learner never submitted, which is
+ * both "walked away" (`skipped`) and "cancelled with the quiz" (`dismissed`) in the
+ * product's wording. Answered is settled history and pending is still answerable through
+ * its live card, so neither is here.
+ *
+ * `ids` narrows to the global ids the model named. A named id that is not one of these
+ * **throws** rather than being dropped: the model asked for that question, and silently
+ * substituting a different one records a decision it never made — `resolveNode`'s rule for
+ * a hallucinated plan node, and the same reason. No cap here; bounding the card is the
+ * tool's contract, and it says so out loud.
+ *
+ * Ordered by position, which is the order the panel lists them in, so a card over "all of
+ * them" reads like the quiz it came from rather than like a database.
+ */
+export function makeupQuestions(
+  db: AppDb,
+  sessionId: string,
+  ids?: string[]
+): QuizQuestion[] {
+  const rows = db
+    .listQuizQuestionsBySession(sessionId)
+    .filter((row) => MAKEUP_ELIGIBLE.has(row.status))
+    .sort((a, b) => a.position - b.position);
+
+  if (!ids || ids.length === 0) return rows.map(toMakeupQuestion);
+
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return [...new Set(ids)].map((id) => {
+    const row = byId.get(id);
+    if (!row) {
+      throw new Error(
+        `ila_makeup_quiz: ${id} is not a question this conversation asked and left unanswered` +
+          ` (use ila_query kind "quiz" for the ids)`
+      );
+    }
+    return toMakeupQuestion(row);
+  });
+}
+
+/**
+ * The same selection, addressed by the **`Qn`** the card shows rather than by the global id.
+ *
+ * That is the difference between the two doors: the model names questions the way `ila_query`
+ * reports them (global ids, which it read), while a card that was skipped holds the questions it
+ * asked — `Q1`, `Q2` — and the learner answers the one in front of them. Neither id is derived
+ * from the other, so each door resolves the one it was given against the same rows.
+ *
+ * A qid that is not an unanswered question here throws, like its sibling: a stale card is a
+ * refusal the reader can be told about, not a silent write of something else.
+ */
+export function makeupQuestionsByQid(
+  db: AppDb,
+  sessionId: string,
+  qids: string[]
+): QuizQuestion[] {
+  const rows = db
+    .listQuizQuestionsBySession(sessionId)
+    .filter((row) => MAKEUP_ELIGIBLE.has(row.status))
+    .sort((a, b) => a.position - b.position);
+
+  const byQid = new Map(rows.map((row) => [row.qid, row]));
+  return [...new Set(qids)].map((qid) => {
+    const row = byQid.get(qid);
+    if (!row) {
+      throw new Error(
+        `the make-up card named ${qid}, which is not a question this conversation left unanswered`
+      );
+    }
+    return toMakeupQuestion(row);
+  });
+}
+
+/**
+ * Write the make-up back onto the **calls that asked the questions**, so the card a reader
+ * scrolled past shows what they answered.
+ *
+ * Without this the conversation keeps saying "skipped" about a question that has an answer: the
+ * rows are right, the panel is right, and the card in the reply the learner is looking at offers
+ * a 补答 button that the server would refuse. The row's `tool_call_id` names the call, so each
+ * written answer is merged into its own call's record — one call per question, because a
+ * make-up may span several quizzes — and the call's `answer` becomes the partial map the settled
+ * card renders against.
+ *
+ * **No `output` is written**, deliberately: `buildHistoryMessages` replays a call only when it has
+ * one, so the original turn stays exactly as it was for the model, while the row's own answer
+ * travels to the grading turn through the new make-up call instead. And the status becomes
+ * `answered` rather than staying `skipped`, which is what takes the 补答 control off a card whose
+ * questions have been dealt with.
+ */
+export function markMakeupOnCalls(
+  db: AppDb,
+  sessionId: string,
+  entries: { toolCallId: string; qid: string; answer: QuizAnswer }[]
+): void {
+  const byCall = new Map<string, QuizAnswers>();
+  for (const entry of entries) {
+    const merged = byCall.get(entry.toolCallId) ?? {};
+    merged[entry.qid] = entry.answer;
+    byCall.set(entry.toolCallId, merged);
+  }
+
+  for (const [toolCallId, answers] of byCall) {
+    const found = db.findMessageWithToolCall(sessionId, toolCallId);
+    // A legacy call registered before the widget has no row, so nothing names it and there is
+    // nothing to write back.
+    if (!found) continue;
+    const calls = (found.message.toolCalls ?? []).map((tc) =>
+      tc.id === toolCallId
+        ? {
+            ...tc,
+            status: "answered" as const,
+            // Merged rather than replaced: a card over five questions that had two made up keeps
+            // the three it never asked, which is what its settled view renders as 未回答.
+            answer: {
+              ...((tc.answer as QuizAnswers | undefined) ?? {}),
+              ...answers,
+            },
+          }
+        : tc
+    );
+    db.updateMessageToolCalls(found.message.id, calls);
+  }
+}
+
+export type MakeupWrite =
+  | {
+      ok: true;
+      keys: Map<string, QuizAnswerKey>;
+      /**
+       * What was actually written, one entry per answered question. Carries the call that asked it
+       * as well as the Qn, because the caller writes the answer back onto that call's record — the
+       * card a reader scrolls past has to stop saying "skipped" about a question that has an answer.
+       */
+      applied: { qid: string; toolCallId: string; answer: QuizAnswer }[];
+    }
+  | { ok: false; status: 400 | 404 | 409; code: ApiErrorCode; reason?: string };
+
+/**
+ * Write a batch of make-up answers, one row at a time and all of it or none of it.
+ *
+ * **All or nothing**, which is not the obvious choice and is the one that can be read: a
+ * partly-written batch leaves the card's own record of what was answered disagreeing with
+ * the rows, and the learner with no way to tell which half landed. A refusal is legible
+ * ("that question was answered in another tab") and the submission can be sent again; a
+ * partial write is a state nothing on screen can represent.
+ *
+ * A question the submission left out is **skipped, not refused**: a make-up is allowed to be
+ * partial, and the questions that stay behind are still the learner's to answer later. An empty
+ * submission is different, and the validator above is what refuses it.
+ *
+ * The answers are already validated, against the options the cards offered — which is what
+ * `makeupQuestions` built them from, so the row and the card cannot disagree. What this
+ * adds is the *state* check the validator cannot make and the guard on each UPDATE: the
+ * status is re-read here and asserted in the `WHERE`, so a question answered since the card
+ * opened is refused rather than overwritten.
+ *
+ * Update-in-place only, exactly as the single make-up was: nothing here ever inserts, so a
+ * make-up can never create a duplicate question.
+ */
+export function recordMakeupAnswers(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  questions: QuizQuestion[],
+  answers: QuizAnswers
+): MakeupWrite {
+  const pending: { row: QuizQuestionRecord; answerJson: string }[] = [];
+  const answeredAt = new Date().toISOString();
+
+  for (const question of questions) {
+    // A legacy call persisted before the quiz widget has no row to write to; grading it
+    // fails the same lookup, so refusing here is the consistent answer.
+    if (!question.uid) {
+      return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+    }
+    const row = db.getQuizQuestionForUser(userId, sessionId, question.uid);
+    if (!row) return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+    if (!MAKEUP_ELIGIBLE.has(row.status)) {
+      return {
+        ok: false,
+        status: 409,
+        code: "QUIZ_NOT_ANSWERABLE",
+        reason: `question ${row.qid} is already answered`,
+      };
+    }
+    /*
+     * No answer for this one: the learner passed over it, which a make-up allows and the card
+     * reports back as `left_unanswered`. It is *not* written — the row stays `skipped`/`dismissed`
+     * and can be brought back later — and it is not an error either: the batch is partial on
+     * purpose, and refusing it would make "answer the two you remember" impossible.
+     */
+    const answer = answers[question.id];
+    if (!answer) continue;
+    pending.push({ row, answerJson: JSON.stringify(answer) });
+  }
+
+  // Nothing to write: a submission that answered none of the questions is not a partial answer,
+  // it is an empty one. The validator refuses it too; this is the same rule at the layer that
+  // actually writes, so the function is safe on its own.
+  if (pending.length === 0) {
+    return { ok: false, status: 400, code: "INVALID_ANSWER", reason: "no question was answered" };
+  }
+
+  try {
+    db.raw.transaction(() => {
+      for (const { row, answerJson } of pending) {
+        const changed = db.transitionQuizQuestion({
+          sessionId,
+          id: row.id,
+          expectedStatus: row.status,
+          status: "answered",
+          answerJson,
+          answeredAt,
+        });
+        // Unreachable while this transaction holds the write lock, and a rollback is still the
+        // right answer: the alternative is committing the half that got through.
+        if (!changed) throw new Error(`question ${row.qid} is no longer open to a make-up answer`);
+      }
+    })();
+  } catch (err) {
+    return {
+      ok: false,
+      status: 409,
+      code: "QUIZ_NOT_ANSWERABLE",
+      reason: err instanceof Error ? err.message : "the make-up could not be recorded",
+    };
+  }
+
+  const keys = new Map<string, QuizAnswerKey>();
+  const applied: { qid: string; toolCallId: string; answer: QuizAnswer }[] = [];
+  for (const { row, answerJson } of pending) {
+    applied.push({
+      qid: row.qid,
+      toolCallId: row.toolCallId,
+      answer: JSON.parse(answerJson) as QuizAnswer,
+    });
+    if ((row.referenceAnswer && row.referenceAnswer.length > 0) || row.explanation) {
+      keys.set(row.qid, { referenceAnswer: row.referenceAnswer, explanation: row.explanation });
+    }
+  }
+  return { ok: true, keys, applied };
+}
+
 /* ------------------------------------- grading ------------------------------------- */
 
 const reviewSchema = z.object({
@@ -387,6 +624,71 @@ const reviewSchema = z.object({
     .min(1)
     .max(QUIZ_REVIEW_MAX_REVIEWS),
 });
+
+/* --------------------------------- reopening --------------------------------- */
+
+export type ReopenResult =
+  | { ok: true; view: QuizQuestionView }
+  | { ok: false; status: 404 | 409; code: ApiErrorCode; reason?: string };
+
+/**
+ * Put an answered-but-ungraded question back among the unanswered ones.
+ *
+ * The state this exists for is the one a **failed grading turn** leaves behind: the answers are
+ * written before the turn starts, so a provider refusal or a dropped connection leaves a row that
+ * is `answered` with no verdict. Nothing else touches it — a make-up refuses an `answered` row, and
+ * the live card is long gone — so without this the question sits in the panel reading "waiting for
+ * the assistant to grade it" for good, unanswerable in either direction.
+ *
+ * Only that state. A **graded** question is settled history, and re-opening one would be a
+ * different feature (re-answering something already judged) wearing the same button. The answer is
+ * discarded, which is what the caller asks the reader to confirm: a reopen that kept the answer
+ * would leave a row whose status and content disagree.
+ *
+ * The guarded UPDATE makes a racing grading turn harmless in both directions — this refuses a row
+ * that has just been graded, and a grade arriving afterwards finds `skipped` and writes nothing,
+ * because the grading statement guards on `answered` too.
+ */
+export function reopenQuizAnswer(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  quizId: string
+): ReopenResult {
+  const row = db.getQuizQuestionForUser(userId, sessionId, quizId);
+  if (!row) return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+  if (row.status !== "answered") {
+    return {
+      ok: false,
+      status: 409,
+      code: "QUIZ_NOT_REOPENABLE",
+      reason: "only a question that was answered and never graded can be re-opened",
+    };
+  }
+  if (row.verdict !== null) {
+    return {
+      ok: false,
+      status: 409,
+      code: "QUIZ_NOT_REOPENABLE",
+      reason: "that question has already been graded",
+    };
+  }
+
+  const changed = db.transitionQuizQuestion({
+    sessionId,
+    id: row.id,
+    expectedStatus: "answered",
+    status: "skipped",
+    answerJson: null,
+    answeredAt: null,
+  });
+  if (!changed) return { ok: false, status: 409, code: "QUIZ_NOT_REOPENABLE" };
+
+  const updated = db.getQuizQuestionForUser(userId, sessionId, quizId);
+  // The guarded UPDATE just matched this row, so its read cannot miss.
+  if (!updated) return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+  return { ok: true, view: toView(updated) };
+}
 
 /**
  * Apply one `ila_review_quiz` call: write each verdict onto its answered question row.

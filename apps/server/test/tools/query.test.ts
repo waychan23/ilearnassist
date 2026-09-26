@@ -181,6 +181,33 @@ describe("ila_query — quizzes", () => {
     expect(await ask({ kind: "quiz", status: "answered" })).toMatchObject({ total: 0 });
     expect(await ask({ kind: "quiz", status: "skipped" })).toMatchObject({ total: 1 });
   });
+
+  it("finds a question by the words in it, which is how a repeat is checked for", async () => {
+    /*
+     * The duplicate-question mechanism, at the strength it actually has: a **substring** of the
+     * header or the question text. It is how a model asks "have I already asked something about
+     * this?" and reads what the earlier question said, which is what catches a paraphrase — the
+     * filter cannot, and does not claim to.
+     */
+    registerQuestion();
+    registerQuizQuestions(db, SESSION, {
+      toolCallId: "call-2",
+      items: [
+        { qid: "Q2", position: 2, header: "缓存", question: "LRU 淘汰的是什么？", options: [{ label: "A" }, { label: "B" }] },
+      ],
+    });
+
+    // The header and the question text are both searched, case-insensitively.
+    expect(await ask({ kind: "quiz", query: "递归" })).toMatchObject({ total: 1 });
+    expect(await ask({ kind: "quiz", query: "终止条件" })).toMatchObject({ total: 1 });
+    expect(await ask({ kind: "quiz", query: "LRU" })).toMatchObject({ total: 1 });
+    // The other one is not matched, and the entries returned are the ones matched.
+    const lru = await ask({ kind: "quiz", query: "lru" });
+    expect((lru.items as { qid: string }[]).map((i) => i.qid)).toEqual(["Q2"]);
+    // And it combines with the status filter rather than replacing it.
+    expect(await ask({ kind: "quiz", query: "LRU", status: "answered" })).toMatchObject({ total: 0 });
+    expect(await ask({ kind: "quiz", query: "nothing like this" })).toMatchObject({ total: 0 });
+  });
 });
 
 describe("ila_query — threads", () => {

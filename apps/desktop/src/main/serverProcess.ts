@@ -3,6 +3,7 @@ import type { ServerFault, ServerState, ServerStatus } from "../shared/panelApi.
 import {
   parseListeningLine,
   parseMigratedLine,
+  parsePortBusyLine,
   type LaunchSpec,
   type MigrationReport,
 } from "./launch.js";
@@ -290,6 +291,14 @@ export class ServerProcess {
       this.#url = url;
       this.#state = "running";
       this.#emit();
+      return;
+    }
+
+    // The fixed port could not bind: record that fault before the process exits, so the
+    // later `exit` keeps this explanation rather than replacing it with a bare exit code.
+    const busyPort = parsePortBusyLine(line);
+    if (busyPort !== null && this.#state === "starting") {
+      this.#fail({ code: "port_in_use", port: busyPort });
       return;
     }
 

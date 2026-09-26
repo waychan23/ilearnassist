@@ -1346,27 +1346,61 @@ describe("replaying reasoning into history", () => {
     expect(assistant).not.toHaveProperty("reasoning_content");
   });
 
-  it("still sends an empty string when the turn recorded no reasoning", async () => {
-    // The field has to be present on a tool-call message; where nothing was recorded the
-    // value is the empty string DeepSeek sends itself, not an omission.
+  it("sends a marker — never an empty string — when the turn recorded no reasoning", async () => {
+    /*
+     * The field has to be present **and non-empty** on every assistant message. The first version
+     * sent `""` here, believing an empty string was a value the provider sends itself; a live
+     * refusal from a model whose capability *was* declared is what disproved it. A blank value is
+     * refused exactly as a missing key is, so what goes out is a sentence saying there is nothing
+     * to send.
+     */
     const noReasoning = structuredClone(history);
     delete noReasoning[1]!.reasoning;
 
     await run({ turns: [{ content: "好。" }], history: noReasoning, capabilities: ["reasoning"] });
 
-    expect(sentMessages().find((m) => m.role === "assistant")).toMatchObject({
-      reasoning_content: "",
-    });
+    const assistant = sentMessages().find((m) => m.role === "assistant") as {
+      reasoning_content?: string;
+    };
+    expect(assistant.reasoning_content).toBeTruthy();
+    expect(assistant.reasoning_content!.trim()).not.toBe("");
   });
 
-  it("does not attach it to a plain assistant turn", async () => {
-    const plain = [message({ role: "user", content: "hi" }), message({ role: "assistant", content: "a", reasoning: "hidden" })];
+  it("attaches it to a plain assistant turn too, which is the half that was missed", async () => {
+    /*
+     * The documented rule is "the messages that carry tool calls", and a request built to satisfy
+     * only that is still refused — established by capturing a real refusal and bisecting it: this
+     * is the message class whose absence of the field DeepSeek objected to. A plain reply that
+     * carries no reasoning of its own gets the marker; one that does gets what was recorded.
+     */
+    const plain = [
+      message({ role: "user", content: "hi" }),
+      message({ role: "assistant", content: "a", reasoning: "hidden" }),
+    ];
 
     await run({ turns: [{ content: "好。" }], history: plain, capabilities: ["reasoning"] });
 
-    expect(sentMessages().find((m) => m.role === "assistant")).not.toHaveProperty(
-      "reasoning_content"
-    );
+    expect(sentMessages().find((m) => m.role === "assistant")).toMatchObject({
+      reasoning_content: "hidden",
+    });
+  });
+
+  it("gives a server-written assistant turn the marker", async () => {
+    // The other member of that class: a row the *server* wrote — a `⚠️` failure line — has no
+    // reasoning to record, and is refused for the same reason a plain reply is when the field is
+    // missing from it.
+    const failed = [
+      message({ role: "user", content: "hi" }),
+      message({ role: "assistant", content: "⚠️ 400 something went wrong" }),
+    ];
+
+    await run({ turns: [{ content: "好。" }], history: failed, capabilities: ["reasoning"] });
+
+    const assistant = sentMessages().find((m) => m.role === "assistant") as {
+      reasoning_content?: string;
+    };
+    expect(assistant.reasoning_content).toBeTruthy();
+    expect(assistant.reasoning_content!.trim()).not.toBe("");
   });
 });
 

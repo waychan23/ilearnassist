@@ -25,6 +25,7 @@ import {
   ANY_INTERFACE_HOST,
   LOOPBACK_HOST,
   buildLaunchSpec,
+  isUserPort,
   serverEntryFor,
 } from "./launch.js";
 import {
@@ -207,6 +208,7 @@ function currentState(): PanelState {
   return {
     server: status,
     sharedOnLan: settings.sharedOnLan,
+    port: settings.port,
     // Offered only while sharing is on. The address answers either way once the server is
     // bound to every interface, but showing it while the switch is off would invite someone
     // to open a URL that cannot work — the switch is the promise, so it gates the offer.
@@ -310,6 +312,33 @@ async function shareOnLan(on: boolean): Promise<PanelState> {
     } catch (err) {
       // Worth continuing: the switch still applies to this run, and refusing to rebind
       // because a preferences file could not be written would make the button look broken.
+      console.error("Could not save the desktop settings:", err);
+    }
+  }
+
+  const wasUp = ["running", "starting"].includes(server.status().state);
+  await server.stop();
+  if (wasUp) await server.start();
+
+  broadcast();
+  return currentState();
+}
+
+/**
+ * Change the fixed listen port, restarting the server if it was up.
+ *
+ * The same restart contract as `shareOnLan`: a port is chosen at `listen`, so nothing can
+ * change under a running process, and the restart settles before this returns. An unusable
+ * value is refused and changes nothing — it is never coerced.
+ */
+async function setPort(port: number): Promise<PanelState> {
+  if (!isUserPort(port)) return currentState();
+  if (settings.port !== port) {
+    settings = { ...settings, port };
+    try {
+      writeSettings(settingsFile, settings);
+    } catch (err) {
+      // Same continuation as the LAN switch: the new port applies to this run regardless.
       console.error("Could not save the desktop settings:", err);
     }
   }
@@ -479,8 +508,8 @@ function createPanelWindow(): BrowserWindow {
     width: 480,
     // Every row, plus room for the log view when it is opened — the disclosure takes the
     // leftover height, so the slack when it is collapsed is what the log pane gets when it
-    // is not.
-    height: 660,
+    // is not. The port row the panel gained is why this is 720 rather than 660.
+    height: 720,
     minWidth: 420,
     // Below this the panel scrolls, which works but is not how it is meant to be read.
     minHeight: 600,
@@ -722,6 +751,9 @@ function registerIpc(): void {
   ipcMain.handle(PANEL_CHANNELS.chooseDataDir, () => chooseDataDir());
   ipcMain.handle(PANEL_CHANNELS.useDefaultDataDir, () => useDefaultDataDir());
   ipcMain.handle(PANEL_CHANNELS.shareOnLan, (_event, on: unknown) => shareOnLan(on === true));
+  ipcMain.handle(PANEL_CHANNELS.setPort, (_event, port: unknown) =>
+    setPort(typeof port === "number" ? port : NaN)
+  );
   ipcMain.handle(PANEL_CHANNELS.openApp, () => openAppWindow());
   ipcMain.handle(PANEL_CHANNELS.openInBrowser, async () => {
     const url = server.status().url;
@@ -944,6 +976,7 @@ if (!app.requestSingleInstanceLock()) {
           paths,
           dataDir: resolveDataDir(),
           host: settings.sharedOnLan ? ANY_INTERFACE_HOST : LOOPBACK_HOST,
+          port: settings.port,
         }),
       // A function, like the spec above and for the same reason: the user can choose a different
       // folder while this object is alive, and the panel must show the one they chose rather

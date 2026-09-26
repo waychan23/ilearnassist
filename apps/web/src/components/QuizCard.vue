@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_TOOL_NAME,
   type QuizAnswer,
   type QuizAnswers,
@@ -66,7 +67,36 @@ watch(
 );
 
 const status = computed(() => props.toolCall.status);
-const answerable = computed(() => status.value === "awaiting");
+
+/**
+ * The reader has opened a skipped card again, to make its questions up **where they were asked**.
+ *
+ * Local state rather than a server one, and that is the whole shape of this: there is nothing to
+ * re-open on the server — the call was retired, and the make-up is recorded at the tail of the
+ * conversation. So this card becomes a form again, and what it submits goes to the make-up route
+ * rather than to the answer route.
+ */
+const reopened = ref(false);
+
+const answerable = computed(() => status.value === "awaiting" || reopened.value);
+
+/**
+ * Whether this card offers the make-up control at all.
+ *
+ * Only a skipped or dismissed `ila_quiz` call: those are the two states of "the learner never
+ * answered", which is what a make-up is for. A make-up card itself never offers it — it is
+ * already one — and an answered card has nothing to bring back.
+ */
+const canMakeUp = computed(
+  () =>
+    !reopened.value &&
+    props.toolCall.name === QUIZ_TOOL_NAME &&
+    (status.value === "skipped" || status.value === "dismissed")
+);
+
+function openMakeUp(): void {
+  reopened.value = true;
+}
 /** Answered, skipped or dismissed — the three states that leave a record to read back. */
 const settled = computed(
   () => status.value === "answered" || status.value === "skipped" || status.value === "dismissed"
@@ -86,7 +116,7 @@ const busy = computed(() => store.streaming.active);
  * this card is the one that knows which of them it renders for.
  */
 const recorded = computed<QuizAnswers | undefined>(() =>
-  props.toolCall.name === QUIZ_TOOL_NAME
+  props.toolCall.name === QUIZ_TOOL_NAME || props.toolCall.name === QUIZ_MAKEUP_TOOL_NAME
     ? (props.toolCall.answer as QuizAnswers | undefined)
     : undefined
 );
@@ -154,7 +184,7 @@ function goTo(index: number): void {
   if (index >= 0 && index < questions.value.length) current.value = index;
 }
 
-function submit(): void {
+async function submit(): Promise<void> {
   if (!allAnswered.value || busy.value) return;
   const answers: QuizAnswers = {};
   questions.value.forEach((question, index) => {
@@ -172,6 +202,21 @@ function submit(): void {
 
     answers[question.id] = answer;
   });
+  if (reopened.value) {
+    /*
+     * A make-up goes to its own route: same answers, same validation, but recorded as a completed
+     * call at the tail of the conversation — the grading has to start from the newest message, and
+     * this call was retired when the learner walked away from it.
+     *
+     * The card goes back to being a record once the server has taken the answers, and only then:
+     * a refusal leaves the form — and what was typed into it — in front of the reader, where a
+     * second attempt can be made. A form that closed on a refusal would look exactly like one that
+     * had been accepted.
+     */
+    const accepted = await store.submitQuizMakeup(answers, props.toolCall.id);
+    if (accepted) reopened.value = false;
+    return;
+  }
   void store.answerQuestion(props.toolCall.id, { action: "submit", answers });
 }
 
@@ -196,7 +241,16 @@ const panelId = `${uid.value}-panel`;
   >
     <div class="quiz-head">
       <Icon name="bulb" class="mark" />
-      <span class="title">{{ t("quiz.title") }}</span>
+      <!--
+        Two whole `t()` calls rather than one with the key chosen inside it, because
+        `catalog.test.ts` scans the source for `t("…")` literals: a key reached through an
+        expression is invisible to it, and would be reported as a dead key. The same reason
+        `DiagramDialog` spells its two labels out.
+      -->
+      <span v-if="toolCall.name === QUIZ_MAKEUP_TOOL_NAME" class="title">{{
+        t("quiz.makeupTitle")
+      }}</span>
+      <span v-else class="title">{{ t("quiz.title") }}</span>
       <span class="status" :class="status ?? 'preparing'" data-testid="quiz-status">
         {{
           status === "answered"
@@ -310,6 +364,17 @@ const panelId = `${uid.value}-panel`;
           {{ t("quiz.submit") }}
         </button>
         <button
+          v-if="reopened"
+          type="button"
+          class="btn ghost small"
+          :disabled="busy"
+          data-testid="quiz-makeup-close"
+          @click="reopened = false"
+        >
+          {{ t("quiz.makeup.close") }}
+        </button>
+        <button
+          v-else
           type="button"
           class="btn ghost small"
           :disabled="busy"
@@ -353,6 +418,22 @@ const panelId = `${uid.value}-panel`;
       </ul>
       <p v-if="status === 'skipped'" class="hint">{{ t("quiz.skippedHint") }}</p>
       <p v-else-if="status === 'dismissed'" class="hint">{{ t("quiz.dismissedHint") }}</p>
+
+      <!--
+        The make-up control, on the card that asked the question. Here rather than only in the
+        panel: the question the learner skipped is the one they are looking at, and what happens
+        when they press this is the interaction they would have had the first time.
+      -->
+      <button
+        v-if="canMakeUp"
+        type="button"
+        class="btn primary small"
+        :disabled="busy"
+        data-testid="quiz-makeup-open"
+        @click="openMakeUp"
+      >
+        {{ t("quiz.makeup.open") }}
+      </button>
 
       <button
         type="button"

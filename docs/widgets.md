@@ -336,8 +336,9 @@ write files" — `ila_query` only reads, and a diagram is half a feature without
 
 ### A `required` suspending tool with persisted rows: the quiz widget
 
-The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and the normal
-`ila_review_quiz` — and is the template for a widget whose panel shows data the tools produce:
+The quiz widget (`id: "quiz"`) binds THREE tools — the suspending `ila_quiz` and
+`ila_makeup_quiz` and the normal `ila_review_quiz` — and is the template for a widget whose
+panel shows data the tools produce:
 
 - **Two ids per question.** The tool assigns the session-scoped `Qn` (the `quiz_question`
   counter, unique within the conversation); its `registerQuestions` context callback creates
@@ -347,16 +348,33 @@ The quiz widget (`id: "quiz"`) binds TWO tools — the suspending `ila_quiz` and
 - **Rows follow the call's lifecycle.** Pending when posed; answered/dismissed from the
   `/answers` route; skipped when the user walks away (`skipAwaitingToolCalls` now returns
   the retired calls so the `/chat` route can retire their rows). A GET reconciles crash
-  orphans (pending rows whose call is no longer awaiting) to skipped.
+  orphans (pending rows whose call is no longer awaiting) to skipped. **A make-up retires them
+  too**: it appends a record to the conversation exactly as a message does, so a quiz posed in an
+  earlier turn is behind the reader's attention and its card can never be answered in place — the
+  route does what `/chat` does, and the row becomes `skipped` (which is make-up eligible) rather
+  than staying `pending` (which is neither answerable nor eligible).
 - **Grading is a normal `required` tool**, not a suspending one: the model calls
   `ila_review_quiz` with exact `quiz_id`s after judging (instructed by the tool description
   and `QUIZ_GUIDANCE`); its `tool_end` emits `quiz.changed` for mid-turn panel refresh.
-- **Make-up answers are POST-then-chat, never a second quiz.** An unanswered question —
-  walked-away (`skipped`) or cancelled with the card (`dismissed`), treated alike — is
-  re-answered through `POST /sessions/:id/quizzes/:quizId/answer` (status-guarded UPDATE of
-  the same row), after which the client sends an ordinary `/chat` message quoting the
-  global id; the resumed turn grades that one id. `pending` (live card) and `answered` are
-  not eligible.
+- **Make-up is a tool, and its card is the quiz card.** An unanswered question — walked-away
+  (`skipped`) or cancelled with the card (`dismissed`), treated alike — is brought back by
+  `ila_makeup_quiz`, which suspends on the questions the conversation already holds (the model
+  names ids and never text) and is answered through the ordinary `/answers` route. `pending` (a
+  live card) and `answered` are not eligible. Two other doors reach the same write path:
+  `POST /sessions/:id/quizzes/makeup`, used by a card the learner answers where it was asked and
+  by the panel's 补答模式, which records the answers as a *completed* make-up call on a new
+  assistant message (`message_added`) and starts the grading turn — the server cannot resume the
+  turned-away turn, so the grading has to begin at the newest message. A make-up allows a partial
+  answer, and the questions left behind stay eligible; the call that asked them is marked answered
+  without an `output`, so the card stops offering a make-up it would refuse.
+  **A question answered but never graded is the one stuck state**, and it has its own repair:
+  the answers are written before the grading turn starts, so a provider failure leaves a row a
+  make-up refuses and a card that is gone from the conversation. `POST
+  /sessions/:id/quizzes/:quizId/reopen` puts it back among the unanswered ones, discarding the
+  answer — the panel offers it under the waiting line, and only for that state. A graded question
+  is settled history rather than a stuck row, and an unanswered one needs no repair at all.
+  There is deliberately **no timeout**: a sweep would fire on a grading turn that is merely slow
+  and silently discard a real answer, which is worse than a stuck row with a control beside it.
 - **Plan binding is the tool's own concern.** An optional top-level `nodeId` names a live
   plan node (an invalid id is a tool error before any insert); without it the question binds
   to the current `in_progress` node, and without a plan it is a session-level question.

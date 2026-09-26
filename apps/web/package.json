@@ -12,7 +12,7 @@
   "homepage": "https://github.com/waychan23/ilearnassist",
   "bugs": "https://github.com/waychan23/ilearnassist/issues",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit"

@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import {
   DIAGRAM_TOOL_NAME,
   PLAN_MAKE_TOOL_NAME,
+  QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   isInteractiveTool,
@@ -33,7 +34,12 @@ const props = defineProps<{ toolCall: ToolCall }>();
 const card = computed<"ask" | "quiz" | "plan" | null>(() => {
   if (!isInteractiveTool(props.toolCall.name)) return null;
   if (props.toolCall.status === undefined && props.toolCall.output !== undefined) return null;
-  if (props.toolCall.name === QUIZ_TOOL_NAME) return "quiz";
+  // The make-up card is the quiz card, deliberately: the requirement is that answering a question
+  // you skipped feels like answering it the first time, and two cards that behave the same but
+  // are maintained apart is how they stop behaving the same.
+  if (props.toolCall.name === QUIZ_TOOL_NAME || props.toolCall.name === QUIZ_MAKEUP_TOOL_NAME) {
+    return "quiz";
+  }
   if (props.toolCall.name === PLAN_MAKE_TOOL_NAME) return "plan";
   return "ask";
 });

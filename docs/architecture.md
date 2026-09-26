@@ -768,14 +768,34 @@ strict providers reject them — so upgrading the SDK makes this worse, not bett
 place left is the wire, which is where `createReasoningFetch` already lives for the same
 fight on the way **in**. So:
 
-- `buildHistoryMessages()` records each replayed tool-call message's reasoning in a side
-  map keyed by its first tool-call id, and returns it alongside the messages.
-- `createReasoningFetch()` rewrites the outgoing body, setting `reasoning_content` on every
-  assistant message that has tool calls — the recorded value, or `""` when the turn
-  recorded none, because the field has to be *present* and an empty string is a value
-  DeepSeek sends itself. It also drops the now-stale `content-length`.
+- `buildHistoryMessages()` records each replayed assistant message's reasoning in a side
+  array, **in message order**, and returns it alongside the messages.
+- `createReasoningFetch()` rewrites the outgoing body, setting `reasoning_content` on **every**
+  assistant message — the recorded value, or a sentence saying nothing was recorded — and drops
+  the now-stale `content-length`.
+- **The rule covers every assistant message, not only the ones with tool calls**, and that second
+  half took three attempts to learn. The documented reading is "the messages that carry
+  `tool_calls`", and a request built to satisfy it is still refused: a plain reply, or a row the
+  *server* wrote (a `⚠️` failure line, a make-up record), has no chain of thought to echo and was
+  sending none. Nothing local could see it — any check that shares the wrong assumption agrees
+  with the rewrite — so it was pinned down by capturing a real refused request from a live
+  conversation and bisecting it against the endpoint: dropping every assistant message without the
+  field made it pass, dropping only the tool-call ones did not, and adding the field to those
+  messages turned the same request into a 200. An id can key only a message that has a tool call;
+  position is the identity that covers the rest, which is why the side channel is an array.
 - All of it is gated on the model record declaring the `reasoning` capability, so a
   provider that never used the field is never sent it.
+- **The refusal itself is the net under that gate.** The gate is right in principle and wrong
+  about particular providers: DeepSeek V4 turns thinking on by default, and its model id contains
+  none of the words `guessCapabilities` looks for — so a V4 entry added by hand got `["tool_use"]`
+  and failed every turn that replayed a tool call. `createReasoningFetch` therefore watches for a
+  400 whose body carries this sentence, echoes the field on a single retry of that request, and
+  remembers for the rest of the turn. A refusal that says something else is passed through
+  untouched: retrying an error the message did not describe is a second request sent for no
+  reason. `guessCapabilities` stays as it is, and deliberately: guessing `reasoning` for the
+  `deepseek-v4` family would guess wrong for a gateway serving the same id that rejects an unknown
+  field — a failure the app cannot recover from — so the record declares it and the refusal is the
+  net for everything a guess would have to get right twice.
 
 Reasoning is persisted for display but **never replayed into history** — see
 `buildHistoryMessages()`, which only reads `content` and `toolCalls`.

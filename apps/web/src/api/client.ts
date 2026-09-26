@@ -34,6 +34,7 @@ import type {
   PlanView,
   ProviderConfig,
   QuizAnswer,
+  QuizAnswers,
   QuizQuestionView,
   PublicConfig,
   Session,
@@ -336,7 +337,7 @@ const CLIENT_ID_STORAGE_KEY = "gl-client-id";
  * A fresh id, from a source that works where this app is actually used.
  *
  * **Not `crypto.randomUUID`**, which is available only in a *secure context* — and the address a
- * phone reaches this app at over LAN sharing is `http://192.168.x.x:3720`, which is not one. It
+ * phone reaches this app at over LAN sharing is `http://192.168.x.x:10471`, which is not one. It
  * would be `undefined` on exactly the client the lock exists for, taking the app's writes with it.
  * `crypto.getRandomValues` carries no such restriction.
  *
@@ -841,14 +842,16 @@ export const api = {
   // Quiz questions for the quiz widget. An empty list is the ordinary empty state.
   listQuizQuestions: (sessionId: string) =>
     request<GetQuizQuestionsResponse>(`/sessions/${sessionId}/quizzes`),
-  // Make-up answer for one skipped question: validates/persists, after which the client
-  // drives an ordinary chat turn that grades it.
-  answerQuizQuestion: (sessionId: string, quizId: string, answer: QuizAnswer) =>
+  /*
+   * Put an answered-but-ungraded question back among the unanswered ones — the repair for a
+   * grading turn that failed after the answers were written. It discards the answer, which is
+   * what the confirm in front of it says; the question is then make-up eligible like any other.
+   */
+  reopenQuizQuestion: (sessionId: string, quizId: string) =>
     request<{ question: QuizQuestionView }>(
-      `/sessions/${sessionId}/quizzes/${quizId}/answer`,
-      { method: "POST", body: JSON.stringify({ answer }) }
+      `/sessions/${sessionId}/quizzes/${quizId}/reopen`,
+      { method: "POST" }
     ),
-
   // Threads (the thread widget): derived topic chains plus the still-unclassified count.
   getSessionThreads: (sessionId: string) =>
     request<GetSessionThreadsResponse>(`/sessions/${sessionId}/threads`),
@@ -1276,6 +1279,24 @@ export function streamAnswers(
   // The zone goes on a resumed turn for the same reason it goes on a fresh one: it is a turn,
   // and its system prompt states the time too.
   return streamPost(`/sessions/${sessionId}/answers`, { ...input, timezone: browserTimeZone() });
+}
+
+/**
+ * Submit a make-up the learner answered in the card that asked the question.
+ *
+ * The body is the same `QuizAnswers` map the card would have submitted while the question was
+ * live — keyed by the `Qn` the card shows — and no message text at all: the questions come from
+ * the conversation's own rows on the server, so nothing here can reword one. It streams, like the
+ * other two, because the submission starts the grading turn.
+ */
+export function streamQuizMakeup(
+  sessionId: string,
+  answers: QuizAnswers
+): AsyncGenerator<ChatStreamEvent> {
+  return streamPost(`/sessions/${sessionId}/quizzes/makeup`, {
+    answers,
+    timezone: browserTimeZone(),
+  });
 }
 
 /**

@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
 import { isNarrow } from "../../composables/breakpoints";
 import { codeCopyClick } from "../../composables/codeCopy";
+import { useDraggableWindow } from "../../composables/draggableWindow";
 import { canAnnotate, objectNoteRequest } from "../../composables/notes";
 import { requestNoteEditor } from "../../composables/messageNotes";
 import { isOpenableUrl, openExternal } from "../../utils/externalLink";
@@ -183,6 +184,18 @@ function noteAboutFile(): void {
  */
 const maximized = ref(false);
 
+/*
+ * Movable, except while it is maximised — a window that fills the viewport has no position to
+ * have, and one dragged in that state would be positioned against the viewport and land off the
+ * screen. Off is also what the narrow breakpoint means here, and the composable owns that half.
+ */
+const panel = ref<HTMLElement | null>(null);
+const { placed, dragging, movable, onDragStart, onDragKeydown, onDragReset } = useDraggableWindow({
+  id: "file-preview",
+  panel,
+  enabled: computed(() => !maximized.value),
+});
+
 /**
  * Whether the control is offered at all.
  *
@@ -280,8 +293,21 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
       data-testid="file-preview"
       @click.self="store.closeFile()"
     >
-      <div class="modal lg" :class="{ maximized }">
-        <div class="modal-head">
+      <div
+        ref="panel"
+        class="modal lg"
+        :class="{ maximized, draggable: movable, 'is-moved': placed, dragging }"
+        :style="placed ? { left: `${placed.left}px`, top: `${placed.top}px` } : undefined"
+      >
+        <div
+          class="modal-head"
+          :tabindex="movable ? 0 : undefined"
+          :title="movable ? t('common.dragWindow') : undefined"
+          :aria-label="movable ? t('common.dragWindow') : undefined"
+          @pointerdown="onDragStart"
+          @keydown="onDragKeydown"
+          @dblclick="onDragReset"
+        >
           <div class="file-title">
             <h3 class="truncate" :title="store.filePreviewPath">{{ name }}</h3>
             <!-- The path, then the size once it is known. The `·` is the list separator the

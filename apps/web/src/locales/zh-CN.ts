@@ -51,6 +51,13 @@ export default {
     loading: "加载中…",
     retry: "重试",
     copyFailed: "复制失败，请手动选中复制",
+    /*
+     * Said by every window that can be moved — the question panel, the file preview, the diagram
+     * viewer, the library — which is why it is here rather than under any one of them. It is the
+     * head's accessible name as well as its tooltip, so it has to describe the gesture rather than
+     * just name the box.
+     */
+    dragWindow: "拖动标题栏可移动窗口，双击复位",
   },
 
   /**
@@ -744,6 +751,7 @@ export default {
       ask_user: "询问用户",
       ila_quiz: "小测",
       ila_review_quiz: "批改小测",
+      ila_makeup_quiz: "补答题目",
       ila_make_plan: "制定/编辑计划",
       ila_read_plan: "查看计划",
       ila_update_plan_progress: "更新计划进度",
@@ -803,6 +811,40 @@ export default {
   },
   quiz: {
     title: "小测",
+    /*
+     * The card a make-up is answered in is the quiz card — same tabs, same options, same submit —
+     * so it carries one word of its own, the one that says why it is here.
+     */
+    makeupTitle: "补答",
+    /**
+     * The make-up control on a card the learner skipped, and the way back out of it. `open` is the
+     * button that re-opens the question where it was asked; the panel's own door has its own words
+     * (`quiz.detail.*`), because that one is a dialog about the question rather than the card.
+     */
+    makeup: {
+      open: "补答这道题",
+      close: "退出补答",
+      /** The single-question submit, in the question window's footer. */
+      submit: "补答",
+      /**
+       * 补答模式: walking the unanswered questions instead of the panel's list. Every string here is
+       * about *the queue* rather than about one question — that is the difference the mode makes.
+       */
+      step: "第 {current}/{total} 道未答题",
+      filled: "已补答 {count} 道",
+      submitAll: "提交补答",
+      exit: "退出补答",
+      batchTitle: "一起补答",
+      batchAsk: "除了这道题，还有 {count} 道未作答的题目，要不要一起补答？",
+      batchDetail: "一起补答时可以在未答题目之间来回切换，也可以只提交已经补答的部分。",
+      batchYes: "一起补答",
+      batchNo: "只补这道",
+      partialTitle: "先提交这些",
+      partialAsk: "还有 {remaining} 道题没有补答，确认先提交已补答的 {filled} 道吗？",
+      partialDetail: "没有补答的题目会保留未答状态，之后还可以再补答。",
+      partialYes: "先提交这些",
+      partialNo: "继续补答",
+    },
     /** One per `ToolCallStatus`, plus the moment before the turn has finished persisting. */
     preparing: "准备题目中",
     awaiting: "等待你的作答",
@@ -864,21 +906,18 @@ export default {
       waitingGrade: "等待助手判分…",
       /** Only skipped questions can be made up. */
       makeupHint: "这道题当时没有作答（跳过或取消了小测），可以在这里补答，提交后助手会判分。",
-      makeupSubmit: "提交补答",
+      /**
+       * The way out of a grading turn that failed after the answer landed. The confirm says what it
+       * costs — the answer on screen is discarded — because the row cannot be both unanswered and
+       * carrying one, and only the reader can decide a fresh attempt is worth it.
+       */
+      reopen: "重新补答",
+      reopenTitle: "重新补答",
+      reopenAsk: "这道题的作答已经记录，但判分没有完成。要清空这次作答、重新补答吗？",
+      reopenDetail: "清空后这道题会回到未作答状态，可以像跳过的题目一样重新补答。",
+      reopenConfirm: "清空并重新补答",
       close: "关闭",
     },
-    /**
-     * The user message a make-up submission drives, after the answer is persisted.
-     * Model input: quotes the GLOBAL id so grading lands on the same question and the
-     * model must not issue a new quiz. Params: id, qid, question, options, answer.
-     */
-    makeupMessage:
-      "【补答】这是我对一道之前未作答题目的补答（当时跳过或取消了小测），不是新题目，请不要重新调用 ila_quiz 出题。\n" +
-      "题目 ID：{id}（编号 {qid}）\n" +
-      "题目：{question}\n" +
-      "可选选项：{options}\n" +
-      "我的补答：{answer}\n" +
-      "请针对我的补答判分：用完全一致的题目 ID 调用 ila_review_quiz，给出 verdict 和讲解。",
   },
 
   /**
@@ -1584,7 +1623,8 @@ export default {
     UNKNOWN_POLICY: "未知的解析策略：{policy}",
     UNKNOWN_PARSER: "未知的解析服务。",
     UNKNOWN_PROVIDER: "未知的 Provider。",
-    REASONING_NOT_DECLARED: "这个模型需要回传推理内容，但没有为它开启「推理模型」，服务商因此拒绝了请求。请在「平台管理 → 模型服务」中为这个模型勾选「推理模型」后重试。",
+    REASONING_NOT_DECLARED:
+      "服务商要求这个请求带上模型的推理内容，但没有接受这次请求。如果这个模型会先思考再回答，请在「平台管理 → 模型服务」中为它勾选「推理模型」后重试。",
     MESSAGE_REQUIRED: "消息内容不能为空。",
     QUESTION_NOT_PENDING: "这组问题已经不需要回答了，可能已经提交或作废。",
     INVALID_ANSWER: "提交的回答不完整或已失效，请刷新页面后重试。",
@@ -1603,6 +1643,8 @@ export default {
     PLAN_NODE_NOT_FOUND: "找不到这个计划节点，可能已被删除或已完成。",
     QUIZ_QUESTION_NOT_FOUND: "找不到这道测验题。",
     QUIZ_NOT_ANSWERABLE: "这道题当前不能补答（只有跳过或取消小测时未作答的题目可以补答）。",
+    QUIZ_NOT_REOPENABLE:
+      "这道题不能重新补答：要么已经判分结束，要么并没有作答过（未作答的题目本来就可以直接补答）。",
     NOTE_NOT_FOUND: "找不到这条笔记，可能已经被删除了。",
     NOTE_TYPE_INVALID: "这个笔记类型不存在。",
     FIGURE_NOT_FOUND: "找不到这个图表，它可能已经被修改或删除了。",

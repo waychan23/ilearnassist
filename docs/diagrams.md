@@ -191,18 +191,32 @@ and N diagrams on screen share one fetch. `apps/web/vite.config.ts` lists `merma
 
 ### Colours
 
-`diagramThemeVariables(read)` takes a *reader* rather than reaching for `getComputedStyle`, and
-that seam is what makes it testable — jsdom does not apply `style.css`, so a real read returns
-`""` there. It maps a short list of palette tokens onto mermaid's variables and lets everything
-else fall back to mermaid's own `base` theme.
+`diagramThemeVariables(theme, read)` takes the resolved theme and a *reader* rather than reaching
+for `getComputedStyle`, and that seam is what makes it testable — jsdom does not apply
+`style.css`, so a real read returns `""` there. It maps a short list of palette tokens onto
+mermaid's variables and lets everything else fall back to mermaid's own `base` theme.
 
-Two things are load-bearing:
+Three things are load-bearing:
 
 - **Values are concrete colours, never `var(--token)`.** Mermaid computes with them in
   JavaScript — derived borders, the pie and git-graph palettes — and a `var()` is not a colour to
   a colour function, it is a string.
 - **`edgeLabelBackground` is set.** Mermaid's default is hard white, which on a dark theme is a
   white box sitting on top of every edge label.
+- **The `base` theme is built for a light page, and its derived light-page fills are restated
+  under dark.** Some fields are fixed, or derived from fields we cannot change, rather than read
+  from the mapping: ER attribute rows (`rowOdd`/`rowEven`) are lightened to near white, a
+  completed gantt task (`doneTaskBkgColor`/`doneTaskBorderColor`) is hard `lightgrey`, and the
+  xychart palette is cream (`xyChart.plotColorPalette`). On a dark page those are light fills
+  under light labels. The nested `xyChart` override *replaces* the whole object instead of
+  merging, so every sub-field is named in `xyChartThemeVariables`.
+- **Hardcoded colours in the source's own `style`/`classDef` statements bypass the mapping
+  entirely** — mermaid applies them verbatim. `darkenDiagramStyles`, applied inside
+  `renderMermaid` on a dark page, rewrites light `fill:` hexes to dark fills of the same hue
+  (HSL lightness from [0.5,1] onto [0.13,0.29]) and inverts hardcoded dark `color:` text, so a
+  model-written `style A fill:#e8f5e9` stays a green node rather than a light box. It rides the
+  render, never changing the stored source, which is why existing diagrams fix themselves on
+  the next open; named/rgb colours, `linkStyle`, and fills outside style lines are left alone.
 
 The theme follows `composables/theme.ts`; a flip re-initializes and redraws, because mermaid's
 configuration is module-global and a diagram drawn for the light palette is wrong the moment it
@@ -275,6 +289,35 @@ exhaustive *because of this feature*: it used to be a `v-else-if` chain whose la
 
 A format that needs a server-side renderer (Graphviz, PlantUML) is a different shape: it needs a
 process, so it is a driver under `documents/drivers/` and not a `FileContentKind`.
+
+## Why there is no coordinate plotting
+
+Asked for and assessed once, and **deliberately not built** — recorded here so the next person does
+not re-open the question from scratch. A learner studying maths eventually wants a figure with axes:
+a function plotted, points marked, a circle, a vector. Mermaid cannot draw one.
+
+`xychart-beta` is the nearest thing it has, and it is not close: its x axis is *category positions*
+with labels rather than a value scale, so it plots an evenly sampled series and nothing else. There
+is no way to place a point at an arbitrary `(x, y)`, no segment, circle or vector, no
+negative-coordinate geometry, and no LaTeX on the axes — and no mermaid addon package changes that
+(`@mermaid-js/*` appears in the lockfile only as `parser`, a transitive dependency of mermaid
+itself).
+
+Two implementations were scoped and neither was started:
+
+- **A new `ila_plot` tool with a hand-rolled SVG figure.** A row-only entity like `session_tables`
+  (a plot spec is derived content, so the row can hold it and no file is needed), the `ila_diagram`
+  card/panel shape, and a lazy `PlotFigure.vue`: axes with nice ticks, a grid, curves sampled from a
+  small expression evaluator (pure, therefore testable), points, segments, circles and vectors, with
+  KaTeX for the labels. The most capability and by far the most work — the evaluator and the tick
+  arithmetic are the parts that would need real tests.
+- **Reusing the lazy Chart.js chunk** (`utils/charts.ts`) for curves and scatter only. Cheaper, and
+  scales, ticks, a grid and tooltips come for free — but a canvas has no KaTeX, so axis labels are
+  plain text, and there is no way to draw a circle or a vector.
+
+Deciding between them is a product question rather than a technical one, and the answer at the time
+was "not yet". Everything the diagram feature already documents — a figure is a file, a row and a
+pointer; the panel lists what the conversation drew — is what a plot would have to fit into.
 
 ## Watching it work
 

@@ -53,6 +53,15 @@ export interface FakeTurn {
    * moment at which anything can be interrupted.
    */
   holdMs?: number;
+  /**
+   * Answer this request with an HTTP error instead of a stream.
+   *
+   * The caller is the thinking-mode passback rule: a provider refuses a request whose `messages`
+   * carry an assistant tool-call message without `reasoning_content`, and the app is expected to
+   * recover by echoing the field. Only a *refusal* can test that, and no other turn shape
+   * produces one.
+   */
+  fail?: { status: number; message: string };
 }
 
 /**
@@ -92,6 +101,16 @@ export interface FakeNonStreamingMatch {
 
 export interface FakeLlmOptions {
   port?: number;
+  /**
+   * Enforce DeepSeek's thinking-mode rule: refuse a request whose assistant tool-call messages do
+   * not carry a **non-empty** `reasoning_content`, with the sentence the provider uses.
+   *
+   * A fake that accepts anything cannot fail the way the real provider does, so a spec about this
+   * rule could only assert what the app *meant* to send. Enforcing it here makes the assertion the
+   * provider's own answer instead — and the `""`-versus-missing distinction was learned exactly
+   * this way, from a live refusal the app's own belief said could not happen.
+   */
+  requireReasoning?: boolean;
   /** Reply used for non-streaming requests (the auto-titler). */
   title?: string;
   /** Body-keyed replies for non-streaming requests, checked before `title`. */
@@ -112,6 +131,14 @@ export interface FakeLlm {
   /** Bodies of every `/chat/completions` request received, oldest first. */
   requests(): Record<string, unknown>[];
   /**
+   * The subset of `requests()` that was answered with an HTTP error.
+   *
+   * The same objects, by identity, so a caller can skip them: a test about what a *provider*
+   * accepts has to exclude the request the provider refused — that one is the subject, not the
+   * evidence.
+   */
+  refusedRequests(): Record<string, unknown>[];
+  /**
    * How many streaming requests were disconnected before their turn finished writing —
    * i.e. how many times a caller really did cancel, rather than just stop reading.
    */
@@ -123,6 +150,26 @@ export interface FakeLlm {
 
 /** Turns served once the queue is exhausted. Ends the agent loop with a plain reply. */
 const DEFAULT_TURN: FakeTurn = { content: "ok" };
+
+/**
+ * The messages that break the thinking-mode rule: **any** assistant message whose
+ * `reasoning_content` is missing or blank. See `FakeLlmOptions.requireReasoning`.
+ *
+ * Not only the ones carrying tool calls, which is the documented reading and the wrong one. It was
+ * established against the real endpoint by capturing a refused request and bisecting it: removing
+ * every assistant message *without* the field made it pass, removing only the tool-call ones did
+ * not, and adding the field to those messages turned the same request into a 200. A fake that
+ * checked only the tool-call messages would agree with a rewrite that had the same blind spot —
+ * which is exactly how the bug survived two fixes.
+ */
+function reasoningOffences(body: Record<string, unknown>): Record<string, unknown>[] {
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return [];
+  return (messages as Record<string, unknown>[]).filter((message) => {
+    if (!message || message.role !== "assistant") return false;
+    return String(message.reasoning_content ?? "").trim() === "";
+  });
+}
 
 function parseArgs(args: FakeToolCall["args"]): string {
   if (typeof args === "string") return args;
@@ -222,7 +269,10 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
   let queue: FakeTurn[] = [];
   let title = options.title ?? "Fake Conversation Title";
   let matches: FakeNonStreamingMatch[] = options.matches ?? [];
+  const requireReasoning = options.requireReasoning === true;
   const seen: Record<string, unknown>[] = [];
+  /** The same objects as in `seen`, for the requests a scripted `fail` answered with an error. */
+  const refused: Record<string, unknown>[] = [];
   /** Streaming requests disconnected before their turn finished writing. */
   let aborted = 0;
 
@@ -288,6 +338,23 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
       }
       seen.push(body);
 
+      if (requireReasoning && reasoningOffences(body).length > 0) {
+        // The provider's own words, so a test can key on the sentence rather than on a paraphrase.
+        // Recorded as refused for the same reason a scripted `fail` is: it is the request the
+        // provider rejected, which is the subject of such a test rather than its evidence.
+        refused.push(body);
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message:
+                "The `reasoning_content` in the thinking mode must be passed back to the API.",
+            },
+          })
+        );
+        return;
+      }
+
       /*
        * Body-keyed matches are for the OUT-OF-BAND calls only, and a call is recognised by a
        * phrase in its own system prompt. The guard is the point: without it a needle would be
@@ -312,6 +379,14 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
 
       // A matched streamed reply consumes nothing from the agent-turn queue.
       const turn = classifierHit ? { content: classifierHit.content } : (queue.shift() ?? DEFAULT_TURN);
+      if (turn.fail) {
+        // Refused before any frame: the status and the body are the whole point, and a client
+        // that recovers has to see them as a provider error rather than as a broken stream.
+        refused.push(body);
+        res.writeHead(turn.fail.status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: turn.fail.message, type: "invalid_request_error" } }));
+        return;
+      }
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -378,12 +453,16 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
     requests() {
       return seen;
     },
+    refusedRequests() {
+      return refused;
+    },
     abortedRequests() {
       return aborted;
     },
     reset() {
       queue = [];
       seen.length = 0;
+      refused.length = 0;
       aborted = 0;
       matches = [];
     },
@@ -403,8 +482,16 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
 async function main(): Promise<void> {
   const portArg = process.argv.indexOf("--port");
   const port = portArg !== -1 ? Number(process.argv[portArg + 1]) : Number(process.env.FAKE_LLM_PORT ?? 3801);
-  const llm = await startFakeLlm({ port });
-  console.log(`fake LLM listening on ${llm.baseURL}`);
+  /*
+   * `--require-reasoning` makes the browser suite enforce the thinking-mode rule too, which is where
+   * the reported bug actually lives: the whole point of the flag is that a flow which sends a blank
+   * `reasoning_content` fails loudly in a real browser instead of only in a unit test.
+   */
+  const requireReasoning =
+    process.argv.includes("--require-reasoning") ||
+    process.env.FAKE_LLM_REQUIRE_REASONING === "1";
+  const llm = await startFakeLlm({ port, requireReasoning });
+  console.log(`fake LLM listening on ${llm.baseURL}${requireReasoning ? " (reasoning enforced)" : ""}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

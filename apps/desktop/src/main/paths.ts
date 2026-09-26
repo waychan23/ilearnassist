@@ -1,4 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
@@ -142,17 +148,33 @@ export function hasExistingData(dataRoot: string): boolean {
 /**
  * The overlay the app writes for itself.
  *
- * `port: 0` asks the operating system for a free port instead of claiming 3720. A fixed
- * port is the wrong default for a desktop app: it turns "another copy is already running"
- * or "something else likes 3720" into a failed launch with a bind error a non-technical
- * user cannot act on. With an OS-assigned port that cannot happen — and the server prints
- * the address it actually bound, which is what the panel opens.
+ * The port is **fixed** at 10471, matching `config.yaml`: the address the app is reached at
+ * must not move between launches, or the browser's bookmarks and saved passwords stop
+ * working. If that port is taken the server refuses and says so — it never picks another.
  *
  * This is a `config.local.yaml`, i.e. exactly the file `ILA_CONFIG_PATH` exists to relocate,
  * so it composes with the base config rather than forking it. It is written once: a user who
- * wants a stable port edits it (or deletes the line) and the app never overwrites it again.
+ * edits it keeps the edit. The control panel also passes its own port (`ILA_PORT`), which
+ * overrides this one.
  */
 const OVERLAY = `# Written by the ilearnassist desktop app.
+#
+# Everything here overrides config.yaml. Delete this file to fall back to the defaults.
+#
+# The port is fixed at 10471 so the address stays the same on every launch. Change it in
+# the control panel, or edit it here; the panel never overwrites a change you make.
+server:
+  port: 10471
+`;
+
+/**
+ * The overlay older builds wrote, with an OS-assigned port.
+ *
+ * Kept so an install that still holds exactly that file is upgraded to the fixed-port
+ * overlay. Anything the user changed — even a comment — means it is left alone: the exact
+ * match is the whole of the migration's safety.
+ */
+const OLD_OVERLAY = `# Written by the ilearnassist desktop app.
 #
 # Everything here overrides config.yaml. Delete this file to fall back to the defaults.
 #
@@ -192,6 +214,12 @@ export function seedFirstRun(paths: AppPaths): void {
   }
 
   if (!existsSync(paths.overlayFile)) {
+    writeFileSync(paths.overlayFile, OVERLAY, "utf8");
+    return;
+  }
+
+  // Upgrade an overlay that is still exactly the old OS-assigned-port template.
+  if (readFileSync(paths.overlayFile, "utf8") === OLD_OVERLAY) {
     writeFileSync(paths.overlayFile, OVERLAY, "utf8");
   }
 }

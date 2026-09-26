@@ -931,11 +931,30 @@ public half.
   `function_call`/`tool_calls`/`audio` out of `additional_kwargs`, and it strips
   `reasoning`/`reasoning_content`/`thinking` content blocks deliberately
   (langchainjs#11175) — so `buildHistoryMessages()` collects the reasoning into a side
-  map and `createReasoningFetch()` puts it back on the wire, keyed by the message's first
-  tool-call id. That is gated on the model record declaring the `reasoning` capability, so
-  a provider that never used the field never sees it. This is why `createReasoningFetch`
-  touches the **request** as well as the response — do not "simplify" it back to a
-  read-only tap, and do not delete the side map as an unused return value.
+  array and `createReasoningFetch()` puts it back on the wire, matched **by position**.
+  **Every assistant message needs the field, not only the ones with tool calls.** The documented
+  reading is "the messages carrying `tool_calls`", and a request that satisfies it is still
+  refused: a plain reply, or a row the *server* wrote (a `⚠️` line, a make-up record), has no chain
+  of thought to echo and was sending none. No local check could see it — a fake provider that
+  shares the assumption agrees with the rewrite — so it took capturing a real refused request and
+  bisecting it against the endpoint (drop every assistant message without the field → 200; drop
+  only the tool-call ones → still 400; add the field to those messages → 200). Position is the
+  identity that covers a message with no tool call, which is why the side channel is an array and
+  not an id-keyed map. That is gated on the model record declaring the `reasoning` capability, so
+  a provider that never used the field never sees it. This is why `createReasoningFetch` touches
+  the **request** as well as the response — do not "simplify" it back to a read-only tap, and do
+  not delete the side channel as an unused return value.
+  **The gate is right and still not enough, so the refusal is also handled.** A thinking-on
+  provider whose model record does not declare `reasoning` — DeepSeek V4's id matched none of
+  `guessCapabilities`' patterns until it was added, and a hand-written entry still may not — fails
+  on every request that replays a tool call, which is most of a working conversation. So a 400
+  whose body carries that sentence is retried **once** with the field echoed on every tool-call
+  message (`""` where nothing was recorded), and this wrapper remembers the answer for the rest of
+  the turn. A 400 saying anything else is passed straight through: retrying an error the message
+  did not describe is a second request sent for no reason. `guessCapabilities` is deliberately
+  unchanged — the same test file records why `deepseek-v4-pro` is *not* guessed — because guessing
+  the family would guess wrong for a gateway that rejects an unknown field, which is the one
+  direction this recovery cannot rescue.
 - **Reasoning comes off the raw SSE stream, and only from there.** `createReasoningFetch()`
 - **Reasoning comes off the raw SSE stream, and only from there.** `createReasoningFetch()`
   taps the fetch response and is the **single** source of chain-of-thought — do not
@@ -1616,6 +1635,26 @@ public half.
   holds the strings that reach `matchMedia`; `style.css` holds the same values as
   media queries, and both are pinned by tests. Change them together — a mismatch
   is a drawer that opens on a screen with no toggle.
+- **Five windows can be moved by their header, by one composable, and the clamp is the interesting
+  part.** The question detail, the file preview, the diagram viewer, the library and the **note
+  window** all call `useDraggableWindow`; the chrome is three rules in `style.css` (`.modal.draggable`)
+  and the arithmetic is `utils/windowDrag.ts`. Four things are load bearing:
+  - **What must stay reachable is the header**, and that is why the axes are clamped differently.
+    Horizontally a margin of the window is a margin of the header, which spans the box; vertically
+    the window's top edge is held at the viewport's own top, because "keep 64px of the window on
+    screen" is satisfied by its *bottom* — a window whose title bar has gone off the top, which is
+    the one state that cannot be dragged back. The browser spec measures exactly that failure.
+  - **The position is remembered for the session only**, in a module-level map keyed by window id.
+    Not `localStorage`: a remembered position is a fact about *this* screen, and one that persisted
+    would reopen as a window hanging off a monitor it was never dragged on.
+  - **Off below the narrow breakpoint and while a dialog is maximised**, because neither is a
+    floating window — a bottom sheet is pinned to the bottom edge and a maximised dialog fills the
+    viewport. A stale inline `left`/`top` in that state is the one way this feature can lose a
+    window off the screen, which is why `placed` withholds it rather than merely ignoring it.
+  - **A window that places itself hands in a `fallback`** — the note window does, because it floats
+    beside the passage it is about and the composable cannot know where that is. It also asks
+    `moved`, and its own `place()` stands down once the reader has dragged it: a card that
+    re-measured itself against the anchor on the next resize would take the gesture back.
 - **Every overlay is teleported to `body`.** `position: fixed` resolves against
   the nearest *transformed* ancestor, and the mobile drawer is one, so a dialog
   left inside the sidebar renders off-screen. Relatedly, do not give `.app` a
@@ -2036,7 +2075,7 @@ public half.
   out by hand. `turn.finished` is the only event it takes: a turn is what links a reference and what
   a tool writes a file through, and there is deliberately no `source.added`, since the client is
   what asked for every addition.
-- **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget, and `/sessions/:id/quizzes/:qid/answer` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: the make-up POST does a status-guarded UPDATE of the SAME row (never an insert, clearing stale grading), then the client drives an ordinary `/chat` turn quoting the UUID so the model grades it instead of posing a new quiz. An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in a system-prompt-only note (`renderMakeupKeyNote`, gated by `ChatInput.makeupQuizId` naming an owned **answered** row) for a make-up. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
+- **A quiz question has two ids, and its row exists before the answer.** `ila_quiz` (bound to the quiz widget) numbers Qn from the session counter AND registers a `quiz_questions` row with a global UUID when it suspends: the card/model use Qn; `ila_review_quiz`, the widget and `ila_makeup_quiz` use the UUID. Rows go pending → answered/dismissed on `/answers`, → skipped on walk-away (a GET reconciles crash-orphaned pending rows to skipped). Make-up is open to questions the user never submitted (`skipped` walk-away and `dismissed` explicit cancel — treated alike), but not `pending` (live card) or `answered`: `ila_makeup_quiz` suspends on the questions the conversation already holds, the answers are written as a status-guarded UPDATE of the SAME rows (never an insert, clearing stale grading), and the model grades from **that call's result** rather than from a message anyone composed. There are two doors to it and one write path — the model's call, and `POST /sessions/:id/quizzes/makeup` for a card the reader answered in place and for the panel's batch — and the client's door lands the same answers as a *completed* `ila_makeup_quiz` call on a new assistant message (`message_added`), because the server cannot resume a turned-away turn: the grading has to start from the last message. A `skipped` call is offered the make-up again, so a partial batch leaves the questions it passed over exactly as they were — and the call that asked them is written back (`markMakeupOnCalls`) once they are answered, so the card stops claiming it was skipped without ever gaining an `output` (which would replay the old turn into the model's context). An optional `nodeId` names the live plan node a quiz checks (invalid ⇒ tool error); absent it binds to the current `in_progress` node, and absent a plan it is a session-level question. A question may carry an answer key — `referenceAnswer` (offered labels) and `explanation` — but it is grading material, never question material: it is stripped from the suspending call the client re-renders and from every client-facing frame (`redactQuizInput` covers the raw `tool_start` and the schema-failure `tool_end`; the `QuizSuspension` record is stripped), stored server-side on the quiz row (`reference_answer_json`/`explanation`, omitted by `toView`), and handed to the model only once an answer exists — in the resumed tool result (`quizAnswerKeysForCall`) for a live submit, and in `renderMakeupResult`'s own result for a make-up, which names under `left_unanswered` whatever the learner passed over so that "do not grade the ones they skipped" is something the model can act on. While a question is unanswered the UI likewise hides the option descriptions that explain the choices — nothing in the make-up dialog but the form, and no descriptions in a skipped card's settled disclosure — so an unanswered, still-make-up-eligible question can never leak its solution.
 - **A note is about a passage, or about a 图、表, or the material the conversation works from.**
   `table` | `resource`, and `target_ref` holds a figure's canonical `name` — the same handle
   `ila_query` takes and the same one a 追问 reference carries — or, for a resource, a **reference

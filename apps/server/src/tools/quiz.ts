@@ -237,10 +237,11 @@ const DESCRIPTION = [
   "- Do not invent or pass ids: the tool assigns each question a session-scoped id (Q1, Q2, …) AND a global quiz_id, both returned in the result, so you can refer to a question by id later.",
   "- Make every option one a person who half-understood would plausibly pick. A filler choice makes a quiz easier without making it informative.",
   "- Do not call it more than once per step. It ends the step; any other tool calls in that step still run first.",
+  '- Check what this conversation has already asked before writing a question (ila_query kind "quiz"). A question already asked and left unanswered belongs to ila_makeup_quiz — reworded or not it is the same question, and posing it again measures nothing; one the user answered is not a make-up either, so ask something that tests a different point.',
   "",
   "The answers come back as the tool result, each with its question id and quiz_id. A question the user marked unsure — with their reason — and anything they wrote in the notes come back too: treat those as the most informative part, and respond to them rather than only to what was right or wrong.",
   "After judging the answers, call ila_review_quiz ONCE with each question's exact quiz_id, a verdict (correct / incorrect / unsure) and a short explanation in the user's language for EVERY question — a correct answer still gets one: briefly reinforce why the picked option is right, never just \"correct\". Make that call — and any ila_update_plan_progress that belongs to the turn — before writing the verdict prose; then, in your final message after the tool results, walk the questions one by one, each with its Qn label, verdict and a brief why, even when every answer is correct: an all-correct quiz is a per-question rundown, not a one-line congratulations. The quiz panel reads those verdicts.",
-  "The user may also answer, in a later message that quotes the quiz_id, a question they originally did not answer (they skipped it or cancelled the quiz): grade that one question by its exact id through ila_review_quiz, and do NOT call ila_quiz again for it.",
+  "A question the user skipped or cancelled with the quiz is one they may still answer: that is ila_makeup_quiz, whose card asks it exactly as it was posed. When they answer it, grade it by its quiz_id through ila_review_quiz — never by calling ila_quiz again for it.",
   "If they dismiss the quiz instead, the result says so. Do not present the same questions again; continue with your best judgement or ask them in chat.",
 ].join("\n");
 
@@ -337,52 +338,105 @@ export function validateQuizAnswers(
     const given = submitted[question.id];
     if (!given) return { ok: false, reason: `question ${question.id} was not answered` };
 
-    const offered = new Set(question.options.map((o) => o.label));
-    const selected = Array.isArray(given.selected) ? given.selected : [];
-    if (selected.some((label) => !offered.has(label))) {
-      return {
-        ok: false,
-        reason: `question ${question.id} chose an option that was never offered`,
-      };
-    }
-    if (!question.multiSelect && selected.length > 1) {
-      return { ok: false, reason: `question ${question.id} accepts a single choice` };
-    }
-
-    const unsure = given.unsure === true;
-    if (unsure && selected.length > 0) {
-      // Enforced here and not only in the card, because the two are different claims and an
-      // answer that makes both cannot be read as either.
-      return {
-        ok: false,
-        reason: `question ${question.id} cannot be both unsure and a choice`,
-      };
-    }
-    if (selected.length === 0 && !unsure) {
-      // Notes alone are not an answer — they are optional, so they cannot be the thing that
-      // makes a question answered. `unsure` is the escape hatch for "I have no choice to give".
-      return { ok: false, reason: `question ${question.id} has no answer` };
-    }
-
-    const unsureReason = typeof given.unsureReason === "string" ? given.unsureReason.trim() : "";
-    if (unsureReason.length > QUIZ_UNSURE_REASON_MAX) {
-      return { ok: false, reason: `the reason for question ${question.id} is too long` };
-    }
-    const notes = typeof given.notes === "string" ? given.notes.trim() : "";
-    if (notes.length > QUIZ_NOTES_MAX) {
-      return { ok: false, reason: `the notes for question ${question.id} are too long` };
-    }
-
-    const answer: QuizAnswer = { selected };
-    if (unsure) answer.unsure = true;
-    // Only ever alongside `unsure`: a reason on a question the user actually answered is
-    // free text with nothing to attach it to.
-    if (unsure && unsureReason) answer.unsureReason = unsureReason;
-    if (notes) answer.notes = notes;
-    answers[question.id] = answer;
+    const checked = checkQuizAnswer(question, given);
+    if (!checked.ok) return checked;
+    answers[question.id] = checked.answer;
   }
 
   return { ok: true, answers };
+}
+
+/**
+ * The same check, for the make-up card — where **a question may be left unanswered**.
+ *
+ * That is the one difference, and it is the requirement rather than a relaxation: the learner is
+ * being brought back to questions they skipped, and demanding all of them before any of them counts
+ * would make "answer the two you remember" impossible. What is *not* relaxed is the per-question
+ * boundary — an offered label, the mode's arity, unsure-versus-choice, the length caps — which is
+ * shared with the live validator, so a batch cannot be judged by weaker rules than a single quiz.
+ *
+ * At least one answer is still required: a submit with nothing in it is not a partial answer, it is
+ * a press with nothing behind it, and the route's contract is that a submission says something.
+ */
+export function validateMakeupAnswers(
+  questions: QuizQuestion[],
+  input: AnswerToolCallInput
+): { ok: true; answers: QuizAnswers } | { ok: false; reason: string } {
+  if (input.action === "cancel") return { ok: true, answers: {} };
+
+  const submitted = (input.answers ?? {}) as QuizAnswers;
+  const answers: QuizAnswers = {};
+
+  for (const question of questions) {
+    const given = submitted[question.id];
+    // Absent means the learner passed over this one. It is reported back to the model as
+    // `left_unanswered`, never silently dropped.
+    if (!given) continue;
+
+    const checked = checkQuizAnswer(question, given);
+    if (!checked.ok) return checked;
+    answers[question.id] = checked.answer;
+  }
+
+  if (Object.keys(answers).length === 0) {
+    return { ok: false, reason: "no question was answered" };
+  }
+  return { ok: true, answers };
+}
+
+/**
+ * One question's answer, judged against the options that question offered.
+ *
+ * The shared core of the two validators above, and the reason they cannot drift: the make-up path
+ * differs in *which* questions it requires, never in how one is judged.
+ */
+export function checkQuizAnswer(
+  question: QuizQuestion,
+  given: QuizAnswer
+): { ok: true; answer: QuizAnswer } | { ok: false; reason: string } {
+  const offered = new Set(question.options.map((o) => o.label));
+  const selected = Array.isArray(given.selected) ? given.selected : [];
+  if (selected.some((label) => !offered.has(label))) {
+    return {
+      ok: false,
+      reason: `question ${question.id} chose an option that was never offered`,
+    };
+  }
+  if (!question.multiSelect && selected.length > 1) {
+    return { ok: false, reason: `question ${question.id} accepts a single choice` };
+  }
+
+  const unsure = given.unsure === true;
+  if (unsure && selected.length > 0) {
+    // Enforced here and not only in the card, because the two are different claims and an
+    // answer that makes both cannot be read as either.
+    return {
+      ok: false,
+      reason: `question ${question.id} cannot be both unsure and a choice`,
+    };
+  }
+  if (selected.length === 0 && !unsure) {
+    // Notes alone are not an answer — they are optional, so they cannot be the thing that
+    // makes a question answered. `unsure` is the escape hatch for "I have no choice to give".
+    return { ok: false, reason: `question ${question.id} has no answer` };
+  }
+
+  const unsureReason = typeof given.unsureReason === "string" ? given.unsureReason.trim() : "";
+  if (unsureReason.length > QUIZ_UNSURE_REASON_MAX) {
+    return { ok: false, reason: `the reason for question ${question.id} is too long` };
+  }
+  const notes = typeof given.notes === "string" ? given.notes.trim() : "";
+  if (notes.length > QUIZ_NOTES_MAX) {
+    return { ok: false, reason: `the notes for question ${question.id} are too long` };
+  }
+
+  const answer: QuizAnswer = { selected };
+  if (unsure) answer.unsure = true;
+  // Only ever alongside `unsure`: a reason on a question the user actually answered is
+  // free text with nothing to attach it to.
+  if (unsure && unsureReason) answer.unsureReason = unsureReason;
+  if (notes) answer.notes = notes;
+  return { ok: true, answer };
 }
 
 /**

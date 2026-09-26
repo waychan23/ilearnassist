@@ -116,6 +116,11 @@ export interface RunAgentInput {
   /** The same mechanism for the quiz widget: judge/record answers and recognise make-ups. */
   quizGuidance?: string;
   /**
+   * The make-up card's positive half, on turns where `ila_makeup_quiz` survived assembly — see
+   * `SystemPromptInput.makeupGuidance`.
+   */
+  makeupGuidance?: string;
+  /**
    * The same mechanism again for keeping a web page, on turns where `ila_collect_page` is
    * assembled — the tool exists in every conversation with web fetching on, and this is what
    * says when to reach for it.
@@ -131,12 +136,6 @@ export interface RunAgentInput {
    * see `SystemPromptInput.exploreGuidance`.
    */
   exploreGuidance?: string;
-  /**
-   * The quiz make-up turn's grading key, appended to THIS turn's system prompt only: the
-   * question's reference answer and explanation, which never travel to the client. Absent
-   * on every ordinary turn.
-   */
-  quizMakeupNote?: string;
   /** The account's own description of itself — see `SystemPromptInput.about`. */
   about?: string;
   /**
@@ -331,6 +330,13 @@ export interface SystemPromptInput {
   about?: string;
   planGuidance?: string;
   quizGuidance?: string;
+  /**
+   * The make-up card's positive half.
+   *
+   * Its **presence** is the switch, the `collectPageGuidance` rule: the route asks the assembled
+   * array, so a Copilot whose allow-list excludes the tool is never taught a call it cannot make.
+   */
+  makeupGuidance?: string;
   collectPageGuidance?: string;
   /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
@@ -346,7 +352,6 @@ export interface SystemPromptInput {
    * two instructions and will follow the louder one.
    */
   exploreGuidance?: string;
-  quizMakeupNote?: string;
 }
 
 /**
@@ -425,14 +430,12 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   // is what "an installation with web fetching off" looks like from here.
   const plan = block(input.planGuidance);
   const quiz = block(input.quizGuidance);
+  const makeupCard = block(input.makeupGuidance);
   const collectPage = block(input.collectPageGuidance);
   const table = block(input.tableGuidance);
   const fileWrite = block(input.fileWriteGuidance);
   // The `@` grant, which qualifies the workspace block above it.
   const explore = block(input.exploreGuidance);
-  // One make-up turn's answer key, last: the most specific instruction in the prompt.
-  const makeup = block(input.quizMakeupNote);
-
   return renderPrompt("chat.system", {
     persona,
     about,
@@ -442,10 +445,10 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     fileWrite,
     plan,
     quiz,
+    makeupCard,
     collectPage,
     table,
     explore,
-    makeup,
   });
 }
 
@@ -461,14 +464,21 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
 async function buildHistoryMessages(
   input: RunAgentInput,
   history: Message[]
-): Promise<{ messages: BaseMessage[]; reasoningByToolCall: Map<string, string> }> {
+): Promise<{ messages: BaseMessage[]; assistantReasoning: string[] }> {
   const out: BaseMessage[] = [];
   /**
-   * Chain of thought for each replayed tool-call message, keyed by its first tool call's
-   * id. LangChain will not carry it (see `withReplayedReasoning`), so it leaves the run
-   * through this side channel and is put back on the wire by the fetch wrapper.
+   * Chain of thought for each replayed assistant message, **in order** — the nth entry belongs to
+   * the nth assistant message pushed below.
+   *
+   * LangChain will not carry it (see `withReplayedReasoning`), so it leaves the run through this
+   * side channel and is put back on the wire by the fetch wrapper. Position rather than the
+   * tool-call id it used to be keyed by, because the requirement is **not confined to tool calls**:
+   * a thinking-mode provider refuses a request in which *any* assistant message lacks the field,
+   * including a plain reply and a row the server wrote itself. Both sides derive their order from
+   * this one array, so an index is as stable an identity as an id here — and it is the only one a
+   * message without a tool call has.
    */
-  const reasoningByToolCall = new Map<string, string>();
+  const assistantReasoning: string[] = [];
 
   for (const m of history) {
     if (m.role === "user") {
@@ -496,17 +506,17 @@ async function buildHistoryMessages(
       continue;
     }
 
+    // Recorded for every assistant message, tool calls or not, and whether or not it has reasoning
+    // of its own: the provider wants the field present on each of them, so "none recorded" is a
+    // value to replay rather than a reason to skip it. `withReplayedReasoning` puts a marker in
+    // place of the blank entries.
+    assistantReasoning.push(m.reasoning ?? "");
+
     const completed = (m.toolCalls ?? []).filter((tc) => typeof tc.output === "string");
     if (completed.length === 0) {
       out.push(new AIMessage(m.content));
       continue;
     }
-
-    // Recorded whether or not this message has reasoning of its own: a thinking-mode
-    // provider wants the field *present* on a tool-call message, and an empty string is a
-    // value it sends itself, so "none recorded" is a value to replay rather than a reason
-    // to skip it.
-    reasoningByToolCall.set(completed[0]!.id, m.reasoning ?? "");
 
     out.push(
       new AIMessage({
@@ -524,7 +534,7 @@ async function buildHistoryMessages(
     }
   }
 
-  return { messages: out, reasoningByToolCall };
+  return { messages: out, assistantReasoning };
 }
 
 /**
@@ -564,7 +574,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
 
   // Rebuilt first: the reasoning it collects has to be in the model's hands before the
   // first request goes out, because only the fetch wrapper can put it on the wire.
-  const { messages: history, reasoningByToolCall } = await buildHistoryMessages(
+  const { messages: history, assistantReasoning } = await buildHistoryMessages(
     input,
     trimHistory(input.history, input.settings)
   );
@@ -579,7 +589,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     // Only for a model that declares chain of thought. A provider that never used
     // `reasoning_content` must never be sent it.
     ...(isReasoningModel(input.provider, input.modelId)
-      ? { replayReasoning: reasoningByToolCall }
+      ? { replayReasoning: assistantReasoning }
       : {}),
   });
   const modelWithTools = llm.bindTools(input.tools);
@@ -596,11 +606,11 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         about: input.about,
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
+        makeupGuidance: input.makeupGuidance,
         collectPageGuidance: input.collectPageGuidance,
         tableGuidance: input.tableGuidance,
         fileWriteGuidance: input.fileWriteGuidance,
         exploreGuidance: input.exploreGuidance,
-        quizMakeupNote: input.quizMakeupNote,
       })
     ),
     ...history,

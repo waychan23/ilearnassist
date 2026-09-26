@@ -21,7 +21,7 @@ to supply a key through `${ENV_VAR}` rather than typing it into the browser.
 ```yaml
 server:
   host: 127.0.0.1        # bind address
-  port: 3720             # backend port (Vite proxies /api here)
+  port: 10471            # backend port (Vite proxies /api here)
 
 defaultProvider: deepseek   # seed value; change it in the UI afterwards
 defaultModel: deepseek-flash # seed value; change it in the UI afterwards
@@ -80,7 +80,7 @@ rather than merely displaying something odd:
 | Capability | Effect |
 | --- | --- |
 | `vision` | attachments travel as real `image_url` content blocks and the model's own description of a picture is written. Without it images degrade to a text placeholder |
-| `reasoning` | chain-of-thought is **replayed** on outgoing messages that carry tool calls, and the out-of-band calls may be told to think or not to. Withholding it from a provider that requires it breaks every later turn (DeepSeek answers `400 The reasoning_content in the thinking mode must be passed back to the API`, and the offending message stays in history); declaring it for a provider that has no such field puts one on the wire |
+| `reasoning` | chain-of-thought is **replayed** on outgoing messages that carry tool calls, and the out-of-band calls may be told to think or not to. Withholding it from a provider that requires it breaks every later turn (DeepSeek answers `400 The reasoning_content in the thinking mode must be passed back to the API`, and the offending message stays in history); declaring it for a provider that has no such field puts one on the wire. A provider that refuses a request for exactly that reason is retried once with the field echoed, so a model left undeclared because its id says nothing about thinking still works — declaring it is what keeps the round trip from happening at all |
 | `tool_use` | whether tools are offered to the model at all |
 
 Chain-of-thought is *displayed* whenever the provider sends it, regardless of the
@@ -141,7 +141,7 @@ database and the workspaces, and surviving an update for the same reason they do
 
 ```json
 {
-  "server": { "port": 3720 },
+  "server": { "port": 10471 },
   "tools": { "webFetch": { "maxChars": 12000 } },
   "prompts": { "chat.system.persona": "You are a patient physics tutor. …" }
 }

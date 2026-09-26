@@ -18,6 +18,7 @@ import { buildCollectPageTool, type CollectPageContext, type PageCache } from ".
 import { buildWebSearchTool } from "./webSearch.js";
 import { buildQuizTool, type QuizToolContext } from "./quiz.js";
 import { buildQuizReviewTool, type QuizReviewToolContext } from "./quizReview.js";
+import { buildMakeupQuizTool, type MakeupQuizToolContext } from "./quizMakeup.js";
 
 /**
  * Tools that do not touch the workspace, and so survive `fileTools.enabled: false`.
@@ -65,6 +66,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "ask_user",
   "ila_quiz",
   "ila_review_quiz",
+  "ila_makeup_quiz",
   "ila_make_plan",
   "ila_read_plan",
   "ila_update_plan_progress",
@@ -122,6 +124,11 @@ export interface BuildToolsInput {
    */
   quiz?: QuizToolContext;
   quizReview?: QuizReviewToolContext;
+  /**
+   * The make-up card's context — present under exactly the same switch as the two above, since
+   * one widget installs all three. Absent assembles no tool.
+   */
+  quizMakeup?: MakeupQuizToolContext;
   /**
    * The plan tools, in every conversation whose allow-list lets them through.
    *
@@ -213,6 +220,7 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   if (input.quiz) {
     all.push(buildQuizTool(input.quiz));
     if (input.quizReview) all.push(buildQuizReviewTool(input.quizReview));
+    if (input.quizMakeup) all.push(buildMakeupQuizTool(input.quizMakeup));
   }
   // `auto-install` mode, and the difference from the pair above is the whole point of the mode:
   // these are ordinary tools the allow-list below governs, and calling one installs its widget.

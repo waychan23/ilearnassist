@@ -451,6 +451,38 @@ body.is-mac {
   gap: var(--space-6);
 }
 
+/* The port editor: a number box that fills the row, with the Apply button beside it. */
+.field__port {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-4);
+}
+
+.field__port-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-3);
+}
+
+.field__port-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Hide the number spinners: they add noise and the box already rejects non-integers. */
+.field__port-input::-webkit-outer-spin-button,
+.field__port-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /*
  * A line that answers a question the chrome cannot: why the red button did not quit, and why
  * there is no server running yet. Small and dim, because it is reassurance rather than
