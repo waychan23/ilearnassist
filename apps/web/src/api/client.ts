@@ -123,6 +123,37 @@ export function setUnauthenticatedHandler(handler: () => void): void {
 }
 
 /**
+ * Called when any request comes back `SESSION_LOCKED` — the write gate refusing because another
+ * client now holds the conversation.
+ *
+ * The lock's owner cannot be pushed the news (there is no stream event for it), so the refusal is
+ * how a client that was merely sitting on a conversation learns it lost one: a *write* it made was
+ * answered 409, and the lock state on screen has to catch up rather than stay on the stale belief.
+ * Fired for every such refusal and debounced on the receiving end, because several calls can be
+ * in flight together.
+ *
+ * A callback rather than importing the store, for `onUnauthenticated`'s reason one paragraph up:
+ * the store imports this module, and the two would circle. `stores/app.ts` sets it, once.
+ */
+let onSessionLocked: (() => void) | undefined;
+
+export function setSessionLockedHandler(handler: () => void): void {
+  onSessionLocked = handler;
+}
+
+/**
+ * The error every caller already handles, with the lock lifecycle told about a lease refusal.
+ *
+ * `toApiError` stays the pure shape converter; this is the one place that knows a code carries a
+ * side effect for the app's state.
+ */
+function responseError(body: RawErrorBody, status: number): ApiError {
+  const error = toApiError(body, status);
+  if (error.code === "SESSION_LOCKED") onSessionLocked?.();
+  return error;
+}
+
+/**
  * Whether this tab's session has been declared over.
  *
  * Set the first time a 401 survives a refresh — a revoked pair, an expired refresh token —
@@ -430,7 +461,7 @@ async function send<T>(path: string, init: RequestInit | undefined, mayRefresh: 
     // once. An unreachable one falls through to the error below with the pair still stored, so
     // the user is told the request failed rather than that they were signed out.
   }
-  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  if (!res.ok) throw responseError(await errorBody(res), res.status);
   return res.json() as Promise<T>;
 }
 
@@ -793,11 +824,27 @@ export const api = {
   acquireSessionLock: (sessionId: string) =>
     request<SessionLockResult>(`/sessions/${sessionId}/lock`, { method: "POST" }),
   /**
+   * Take it from whoever holds it.
+   *
+   * The explicit exception to acquire's refusing shape, and the reason it is a method of its own:
+   * a client looking at a read-only conversation can move the lease to itself, after which the
+   * previous holder is refused by the write gate and learns it is read-only from that refusal.
+   */
+  takeoverSessionLock: (sessionId: string) =>
+    request<SessionLockResult>(`/sessions/${sessionId}/lock/takeover`, { method: "POST" }),
+  /**
    * Give it back. Always answers 200, with `released` saying whether there was anything of this
    * client's to give back — a stale tab doing this is ordinary, and it is leaving either way.
+   *
+   * `keepalive` is for the one caller that cannot await: the page is going away, and an ordinary
+   * fetch is cancelled with it. The flag keeps the request in flight past the unload, which is
+   * what turns "the tab was closed" into a release instead of a two-minute wait.
    */
-  releaseSessionLock: (sessionId: string) =>
-    request<SessionLockRelease>(`/sessions/${sessionId}/lock`, { method: "DELETE" }),
+  releaseSessionLock: (sessionId: string, options?: { keepalive?: boolean }) =>
+    request<SessionLockRelease>(`/sessions/${sessionId}/lock`, {
+      method: "DELETE",
+      keepalive: options?.keepalive,
+    }),
   /**
    * Every live lock in the workspace, in one request.
    *
@@ -1272,7 +1319,7 @@ async function* streamPost(
     // unreachable refresh is not that, and ends as a failed turn with the token still held.
     throw toApiError(await errorBody(res), res.status);
   }
-  if (!res.ok) throw toApiError(await errorBody(res), res.status);
+  if (!res.ok) throw responseError(await errorBody(res), res.status);
   // A 200 with no body breaks the SSE contract below rather than being a server-reported
   // error, so it stays a plain Error — there is no code to translate.
   if (!res.body) throw new Error("No response body.");

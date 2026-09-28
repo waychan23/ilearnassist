@@ -139,6 +139,83 @@ test("the conversation becomes writable again when the first client leaves it", 
   }
 });
 
+test("a read-only client can take the conversation over by force", async ({ page, browser }) => {
+  const name = `Takeover ${Date.now()}`;
+  await page.goto("/");
+  await newConversation(page, name);
+  await expect(dot(page)).toHaveAttribute("data-lock", "mine");
+  await page.getByTestId("composer-input").fill("先写一句");
+  await expect(page.getByTestId("composer-send")).toBeEnabled();
+
+  const second = await openSecondClient(browser);
+  try {
+    await enterWorkspace(second.page, name);
+    await second.page.getByTestId("session-item").first().click();
+    await expect(second.page.getByTestId("readonly-banner")).toBeVisible();
+
+    /*
+     * The way out, beside the sentence that states the state. It confirms first, because the
+     * change lands on another device's screen the moment it is accepted.
+     */
+    await second.page.getByTestId("takeover-lock").click();
+    await second.page.getByTestId("confirm-accept").click();
+
+    await expect(second.page.getByTestId("readonly-banner")).toBeHidden();
+    await expect(dot(second.page)).toHaveAttribute("data-lock", "mine");
+    await second.page.getByTestId("composer-input").fill("现在轮到我");
+    await expect(second.page.getByTestId("composer-send")).toBeEnabled();
+
+    /*
+     * And the ousted client learns through the write gate, which is the contract: the refusal is
+     * what its frontend acts on. Its send is refused before the turn starts, and the refusal
+     * becomes the read-only state — banner up, composer disabled — rather than one vanishing
+     * sentence.
+     */
+    await page.getByTestId("composer-input").fill("我还能写吗");
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("readonly-banner")).toBeVisible();
+    await expect(page.getByTestId("composer-send")).toBeDisabled();
+
+    /*
+     * The refused message is not left in the transcript as a bubble only this client drew, and it
+     * is not lost either: it comes home to the box it was typed in.
+     */
+    await expect(page.getByTestId("messages")).not.toContainText("我还能写吗");
+    await expect(page.getByTestId("composer-input")).toHaveValue("我还能写吗");
+  } finally {
+    await second.close();
+  }
+});
+
+test("a page that goes away gives its conversation back immediately", async ({ page, browser }) => {
+  const name = `Unload ${Date.now()}`;
+  await page.goto("/");
+  await newConversation(page, name);
+  await expect(dot(page)).toHaveAttribute("data-lock", "mine");
+
+  const second = await openSecondClient(browser);
+  try {
+    await enterWorkspace(second.page, name);
+    await second.page.getByTestId("session-item").first().click();
+    await expect(dot(second.page)).toHaveAttribute("data-lock", "other");
+
+    /*
+     * The tab is gone — navigating away fires the same `pagehide` a close does. The release rides
+     * `keepalive` past the unload, so the conversation is free at once rather than after the
+     * two-minute expiry; the second client proves it by taking the lease on its next open.
+     */
+    await page.goto("about:blank");
+    await expect
+      .poll(async () => {
+        await second.page.getByTestId("session-item").first().click();
+        return dot(second.page).getAttribute("data-lock");
+      })
+      .toBe("mine");
+  } finally {
+    await second.close();
+  }
+});
+
 test("a client is locked out of one conversation, not of the app", async ({ page, browser }) => {
   // The lock is per conversation, not per account or per client. Without this the feature would
   // read as "only one device may use this at a time", which is a different and much worse

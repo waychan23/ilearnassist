@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   streamRegenerate: vi.fn(),
   fileToBase64: vi.fn(),
   setUnauthenticatedHandler: vi.fn(),
+  setSessionLockedHandler: vi.fn(),
 }));
 
 vi.mock("../../src/api/client", () => ({
@@ -62,6 +63,7 @@ vi.mock("../../src/api/client", () => ({
   streamRegenerate: mocks.streamRegenerate,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
+  setSessionLockedHandler: mocks.setSessionLockedHandler,
   fileImageUrl: (id: string) => Promise.resolve(`blob:files/${id}`),
   // `composables/instance.ts` destructures this at module scope, so the mock has to carry it or
   // importing that module throws before any test runs.

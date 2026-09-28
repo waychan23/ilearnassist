@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../src/api/client", () => ({
   ...mocks,
   setUnauthenticatedHandler: vi.fn(),
+  setSessionLockedHandler: vi.fn(),
   streamAnswers: vi.fn(),
   streamChat: vi.fn(),
   streamRegenerate: vi.fn(),

@@ -796,21 +796,36 @@ public half.
     conflict with. It deliberately does **not** claim a free conversation — the first shape did, and
     a second writer showed why that is wrong: any API client writing to a conversation seized its
     lock and left the reader's own tab read-only for two minutes, having no lifecycle to give it
-    back. A lease exists because a client *opened* a conversation; a write is not that act. The flag
+    back. A lease exists because a client *opened* a conversation; a write is not that act. (The one
+    route that moves a live lease is the explicit `POST /api/sessions/:id/lock/takeover` — 强制占用
+    in the banner, with a confirmation because it lands on another device — which is a route of its
+    own precisely so `/lock` keeps its refusing shape.) The flag
     is on every session-scoped write, the deliberate exceptions and the assertion that keeps the
     list honest are in `test/route-lock-coverage.test.ts`, and a client with no `X-Client-Id` is
     refused outright. The gate **never answers for a session that does not exist** — the
     owner-scoped lease lookup finds nothing, so it returns and lets the route 404, or a bad id would
     come back "somebody is editing this" and the "not yours and does not exist are one answer" rule
     would hold everywhere except the flagged routes.
-  - **Its lifetime is the view's, not the store's.** `composables/sessionLock.ts` is an effect owned
-    by `ChatView`'s setup, which is what makes 退出工作区时取消所有检测 structural rather than a flag
-    somebody remembers: the view going away stops the timers and releases the lease. The heartbeat
-    is derived as half the shared TTL so one missed beat is survivable, and the five-minute poll
-    only *asks* through the same 2s debounce every other trigger uses. A refusal from a turn route
-    re-reads the workspace's locks **and** raises the toast — unlike every other thrown-response
-    failure, because a refused turn is never persisted, so the bubble's banner unmounts and nothing
-    else would say what happened.
+  - **Its lifetime is the view's, not the store's, and every real leave releases.**
+    `composables/sessionLock.ts` is an effect owned by `ChatView`'s setup, which is what makes
+    退出工作区时取消所有检测 structural rather than a flag somebody remembers: the view going away
+    stops the timers and releases the lease. Four holes were closed around that: `pagehide` sends the
+    release with `keepalive` (closing a tab or reloading, where an ordinary fetch dies with the
+    page), `signOut` releases **before** revoking the token, `selectWorkspace` releases because
+    `ChatView` is *reused* across a workspace switch so its teardown never fires, and the mount
+    claims the conversation again for the paths that never call `selectSession` (Back from the
+    workspace list). A lease claim carries a **generation counter** and is handed back if a release,
+    teardown or sign-out intervened, so a slow claim cannot leave the client holding a conversation
+    nobody is looking at. The heartbeat is derived as half the shared TTL so one missed beat is
+    survivable, and the five-minute poll only *asks* through the same 2s debounce every other trigger
+    uses. A refusal from **any** write (`SESSION_LOCKED`, handled once in `api/client.ts` and
+    registered by the store) re-reads the workspace's locks immediately — which is how the ousted
+    holder of a takeover goes read-only — and a refused *turn* additionally raises the toast, unlike
+    every other thrown-response failure, because a refused turn is never persisted, so the bubble's
+    banner unmounts and nothing else would say what happened. A refused *send* is taken back too:
+    the optimistic bubble leaves the transcript and the reader's text and chips return to the
+    composer (`refusedDraft`), because the bubble is drawn before the server is asked and a lock
+    refusal is the one failure known not to have written anything.
   - **A widget is told whether it may write; it never looks it up.** `WidgetContext.writable` is a
     *parameter*, set by `useWidgetActivation` from the session's lock state, and the notes widget
     obeys it — its add button, the editor's save and delete, and the selection toolbar. That is

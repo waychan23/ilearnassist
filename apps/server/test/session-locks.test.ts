@@ -67,6 +67,10 @@ function unlock(id: string, client = asFirst()) {
   return client({ method: "DELETE", url: `/api/sessions/${id}/lock` });
 }
 
+function takeover(id: string, client = asSecond()) {
+  return client({ method: "POST", url: `/api/sessions/${id}/lock/takeover` });
+}
+
 function locks(client = asFirst()) {
   return client({ method: "GET", url: `/api/workspaces/${workspaceId}/locks` });
 }
@@ -172,6 +176,84 @@ describe("POST /api/sessions/:id/lock", () => {
     const res = await other.inject({ method: "POST", url: `/api/sessions/${session.id}/lock` });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("POST /api/sessions/:id/lock/takeover", () => {
+  it("moves a live lease to the asking client", async () => {
+    await lock(session.id);
+    const res = await takeover(session.id);
+
+    expect(res.statusCode).toBe(200);
+    const { lock: lease } = res.json<{ lock: SessionLockView }>();
+    expect(lease).toMatchObject({ sessionId: session.id, clientId: SECOND, mine: true });
+    // A takeover is not a beat: this holder's clock starts now, so `acquiredAt` moves.
+    expect(new Date(lease.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("makes the previous holder read-only — its next write is refused", async () => {
+    // The half the requirement names: the backend refuses the ousted client's write, which is how
+    // that client's frontend learns to go read-only. Nothing interrupts the client that was merely
+    // sitting there; the refusal is what it acts on.
+    await lock(session.id);
+    await takeover(session.id);
+
+    const res = await asFirst()({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: { message: "still mine" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: { code: string } }>().error.code).toBe("SESSION_LOCKED");
+  });
+
+  it("refuses the previous holder's heartbeat too", async () => {
+    // A client at rest learns on its beat rather than on a write, which is what stops it believing
+    // it still holds the conversation for the rest of its lease.
+    await lock(session.id);
+    await takeover(session.id);
+
+    expect((await lock(session.id)).statusCode).toBe(409);
+  });
+
+  it("is idempotent for the client already holding it", async () => {
+    await lock(session.id);
+    const res = await takeover(session.id, asFirst());
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ lock: SessionLockView }>().lock.mine).toBe(true);
+  });
+
+  it("claims a free conversation like an ordinary acquire", async () => {
+    const res = await takeover(session.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ lock: SessionLockView }>().lock.clientId).toBe(SECOND);
+  });
+
+  it("refuses a client that does not say who it is, and does not move the lease", async () => {
+    await lock(session.id);
+    const anonymous = await env.server.app.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/lock/takeover`,
+      headers: { authorization: `Bearer ${env.token}` },
+    });
+
+    expect(anonymous.statusCode).toBe(409);
+    // Still the first client's, and still live.
+    expect((await locks()).json<{ locks: SessionLockView[] }>().locks[0]?.clientId).toBe(FIRST);
+  });
+
+  it("answers 404 for another account's conversation, never 409", async () => {
+    await lock(session.id);
+    const other = await env.asUser("outsider-takeover");
+    const res = await other.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/lock/takeover`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    // And it did not move anything on the way past.
+    expect((await locks()).json<{ locks: SessionLockView[] }>().locks[0]?.clientId).toBe(FIRST);
   });
 });
 

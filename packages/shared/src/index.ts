@@ -3587,7 +3587,7 @@ export interface SessionLockView {
   expiresAt: string;
 }
 
-/** What the acquire route answers with. */
+/** What the acquire and takeover routes answer with. */
 export interface SessionLockResult {
   lock: SessionLockView;
 }

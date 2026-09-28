@@ -1309,6 +1309,13 @@ const en: typeof MessageSchema = {
     mine: "This conversation is being edited from this client — you can send messages",
     /** The other client's dot — orange, and the reason the conversation is read-only here. */
     other: "Another client is editing this conversation, so it is read-only here",
+    /** The banner's control: move the lease to this client, on purpose. */
+    takeover: "Take over",
+    /** The control's `title`, saying what it does without the confirmation. */
+    takeoverHint: "Take over editing from the other client; that device becomes read-only",
+    /** The confirmation, because the change lands on somebody else's screen. */
+    takeoverConfirm:
+      "Taking over makes the other device editing this conversation read-only immediately. Take it over?",
   },
 
   errors: {

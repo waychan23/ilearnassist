@@ -54,6 +54,9 @@ const mocks = vi.hoisted(() => ({
       lock: { sessionId: "s1", clientId: "c", mine: true, acquiredAt: "t", expiresAt: "t" },
     }),
     releaseSessionLock: vi.fn().mockResolvedValue({ released: true }),
+    takeoverSessionLock: vi.fn().mockResolvedValue({
+      lock: { sessionId: "s1", clientId: "c", mine: true, acquiredAt: "t", expiresAt: "t" },
+    }),
     listWorkspaceLocks: vi.fn().mockResolvedValue({ locks: [] }),
     listMessages: vi.fn(),
     listWorkspaceWidgets: vi.fn(),
@@ -126,6 +129,12 @@ const mocks = vi.hoisted(() => ({
    * session-expiry path is worth a test of its own, and that needs to be able to fire it.
    */
   setUnauthenticatedHandler: vi.fn(),
+  /**
+   * The client's `SESSION_LOCKED` callback, captured the same way and for the same reason: the
+   * store registers one at setup, and a test that wants to know the refusal became a re-read has
+   * to be able to fire it.
+   */
+  setSessionLockedHandler: vi.fn(),
 }));
 
 vi.mock("../../src/router", () => ({ router: mocks.router }));
@@ -138,6 +147,7 @@ vi.mock("../../src/api/client", () => ({
   streamQuizMakeup: mocks.streamQuizMakeup,
   fileToBase64: mocks.fileToBase64,
   setUnauthenticatedHandler: mocks.setUnauthenticatedHandler,
+  setSessionLockedHandler: mocks.setSessionLockedHandler,
   fileImageUrl: (fileId: string) => Promise.resolve(`blob:files/${fileId}`),
 }));
 
@@ -403,6 +413,15 @@ beforeEach(() => {
     },
   });
   mocks.api.releaseSessionLock.mockResolvedValue({ released: true });
+  mocks.api.takeoverSessionLock.mockResolvedValue({
+    lock: {
+      sessionId: "s1",
+      clientId: "this-client",
+      mine: true,
+      acquiredAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:02:00.000Z",
+    },
+  });
   mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [] });
   mocks.fileToBase64.mockResolvedValue("aGk=");
   // Re-established here for the same reason as the locks above: a navigation *resolves*, and
@@ -3926,7 +3945,7 @@ describe("session write locks", () => {
 
     await store.selectSession("s2");
 
-    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1");
+    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1", undefined);
     expect(mocks.api.acquireSessionLock).toHaveBeenCalledWith("s2");
   });
 
@@ -4025,6 +4044,61 @@ describe("session write locks", () => {
     expect(store.error).toBeTruthy();
   });
 
+  it("takes a refused send out of the transcript and returns it to the composer", async () => {
+    // The ghost this is here to kill: the optimistic bubble is drawn before the server is asked,
+    // and a lock refusal means nothing was written — so the bubble must go, and the reader's
+    // words and chips must come home rather than vanish with it.
+    const store = await readyStore();
+    store.pendingAttachments = [
+      { id: "f-a1", resourceId: "a1", name: "a.txt", mimeType: "text/plain", size: 1, kind: "file" },
+    ];
+    store.pendingResources = [
+      { id: "f-b1", resourceId: "b1", name: "b.txt", mimeType: "text/plain", size: 1, kind: "file" },
+    ];
+    store.pendingRefs = [{ kind: "diagram", ref: "auth-flow", label: "auth-flow" }];
+    mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [lease()] });
+    mocks.streamChat.mockImplementation(async function* () {
+      throw lockedError();
+    });
+
+    await store.sendMessage("让我也说一句", [...store.pendingAttachments]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // No ghost: nothing was persisted, so nothing stays in the transcript.
+    expect(store.messages).toEqual([]);
+    // And nothing is lost: the words come back to the box, and each chip to the drawer it came
+    // from — the bubble cannot rebuild that split, which is why the staged arrays are kept.
+    expect(store.refusedDraft).toBe("让我也说一句");
+    expect(store.pendingAttachments.map((a) => a.id)).toEqual(["f-a1"]);
+    expect(store.pendingResources.map((a) => a.id)).toEqual(["f-b1"]);
+    expect(store.pendingRefs).toEqual([{ kind: "diagram", ref: "auth-flow", label: "auth-flow" }]);
+    // The refusal is still the read-only state, which is the answer to the press.
+    expect(store.isActiveSessionReadOnly).toBe(true);
+  });
+
+  it("drops a refused send without restoring it once the reader has moved on", async () => {
+    // A refusal that arrives after a session switch must not put one conversation's text and
+    // chips into another's composer. The bubble is gone with the list either way.
+    const store = await readyStore({ sessions: [session(), session({ id: "s2" })] });
+    mocks.api.listMessages.mockResolvedValue([]);
+    let fail!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      fail = resolve;
+    });
+    mocks.streamChat.mockImplementation(async function* () {
+      await gate;
+      throw lockedError();
+    });
+
+    const sending = store.sendMessage("hello");
+    await store.selectSession("s2");
+    fail();
+    await sending;
+
+    expect(store.refusedDraft).toBeNull();
+    expect(store.messages).toEqual([]);
+  });
+
   it("does not re-read on an ordinary failure", async () => {
     // A provider outage is not a lock change, and a workspace-wide read on every failed turn
     // would be a request per outage for a state that did not move.
@@ -4069,6 +4143,104 @@ describe("session write locks", () => {
     await store.refreshWorkspaceLocks();
 
     expect(Object.keys(store.sessionLocks)).toEqual(["s1"]);
+  });
+
+  it("takes the conversation from the other client on a takeover", async () => {
+    // The deliberate exception to acquire's refusing shape: the reader is looking at a read-only
+    // conversation and asks for it, so the refusal state has to give way to "mine".
+    mocks.api.acquireSessionLock.mockRejectedValue(lockedError());
+    const store = await readyStore();
+    expect(store.isActiveSessionReadOnly).toBe(true);
+
+    mocks.api.takeoverSessionLock.mockResolvedValue({
+      lock: lease({ clientId: "this-client", mine: true }),
+    });
+    await store.takeoverSessionLock("s1");
+
+    expect(store.isActiveSessionReadOnly).toBe(false);
+    expect(store.holdsActiveSessionLock).toBe(true);
+    expect(store.heldSessionId).toBe("s1");
+  });
+
+  it("lets a failed takeover throw, because a button press has to be answered", async () => {
+    const store = await readyStore();
+    mocks.api.takeoverSessionLock.mockRejectedValue(new Error("offline"));
+
+    await expect(store.takeoverSessionLock("s1")).rejects.toThrow("offline");
+  });
+
+  it("re-reads the workspace's locks when any write is refused for the lock", async () => {
+    // The universal refusal path: a client taken over by force is not pushed the news, and the
+    // write gate's 409 — for a rename, an upload, a note — is how it learns. Firing the client's
+    // handler is what turns that refusal into a state change rather than one error sentence.
+    await readyStore();
+    mocks.api.listWorkspaceLocks.mockClear();
+
+    const handler = mocks.setSessionLockedHandler.mock.calls.at(-1)?.[0] as () => void;
+    handler();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.api.listWorkspaceLocks).toHaveBeenCalledWith("w1");
+  });
+
+  it("stops beating for a conversation the server says is somebody else's", async () => {
+    // Being taken over is not a matter of local belief: the next workspace-wide read carries the
+    // other holder, and the held id has to go with it — otherwise the heartbeat would keep asking
+    // for a conversation this client no longer has.
+    const store = await readyStore();
+    expect(store.heldSessionId).toBe("s1");
+
+    mocks.api.listWorkspaceLocks.mockResolvedValue({ locks: [lease()] });
+    await store.refreshWorkspaceLocks();
+
+    expect(store.heldSessionId).toBeNull();
+    expect(store.isActiveSessionReadOnly).toBe(true);
+  });
+
+  it("gives the lease back before the token is revoked, on sign-out", async () => {
+    // A release sent after `logout` would be refused by the auth gate, and the conversation would
+    // sit read-only for its full TTL.
+    const store = await readyStore();
+    mocks.api.releaseSessionLock.mockClear();
+
+    await store.signOut();
+
+    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1", undefined);
+  });
+
+  it("gives the lease back when the workspace changes", async () => {
+    // The view is *reused* across a workspace switch, so its teardown never runs and this release
+    // is the only one the transition gets.
+    const store = await readyStore();
+    mocks.api.releaseSessionLock.mockClear();
+
+    await store.selectWorkspace("w2");
+
+    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1", undefined);
+  });
+
+  it("gives back a claim that answered after the reader had already left", async () => {
+    // The race: `selectSession` fires the acquire without awaiting it, and a route change or a
+    // second click can end the generation before the reply lands. The lease was taken on the
+    // server, so it has to be handed back rather than recorded for a reader who has gone.
+    const store = await readyStore();
+    mocks.api.acquireSessionLock.mockClear();
+    let resolveClaim!: (value: unknown) => void;
+    mocks.api.acquireSessionLock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveClaim = resolve;
+        })
+    );
+
+    const claim = store.acquireSessionLock("s1");
+    store.endSessionLockLifecycle();
+    mocks.api.releaseSessionLock.mockClear();
+    resolveClaim({ lock: lease({ sessionId: "s1", clientId: "this-client", mine: true }) });
+    await claim;
+
+    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1");
+    expect(store.heldSessionId).toBeNull();
   });
 });
 

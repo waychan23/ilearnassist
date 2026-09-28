@@ -2004,10 +2004,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /* --------------------------------- sessions --------------------------------- */
 
   /*
-   * Session write locks. Three routes and one hook — see `docs/session-locks.md`.
+   * Session write locks. Four routes and one hook — see `docs/session-locks.md`.
    *
-   * None of the three declares `requiresSessionLock`: `/lock` is how the lock is taken, so gating
-   * it would be a lock that required itself, and the other two are a read and a release.
+   * None of the four declares `requiresSessionLock`: `/lock` is how the lock is taken, so gating
+   * it would be a lock that required itself, `/lock/takeover` exists precisely for the case the
+   * gate refuses, and the other two are a read and a release.
    */
 
   /**
@@ -2038,6 +2039,42 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // second is a client that can never hold a lease, so it is not a different situation to the
       // reader, and saying which would be telling a caller about a client it cannot see. The 404
       // above already ran, so this is never about a conversation the caller does not own.
+      return reply.code(409).send(apiError("SESSION_LOCKED", "this conversation is held by another client"));
+    }
+    return { lock };
+  });
+
+  /**
+   * Take the conversation from whoever holds it.
+   *
+   * The explicit exception to "acquire renews, never takes": a second device looking at a
+   * read-only conversation can move the lease to itself, and the previous holder becomes read-only
+   * on its next write — the backend refuses it there, and the client's refusal handling turns that
+   * into the read-only state. Deliberately a route of its own rather than a flag on `/lock`, so the
+   * ordinary claim keeps its refusing shape; the statement it calls says the same thing one layer
+   * down.
+   *
+   * A client with no id is refused for `/lock`'s reason: it can never be the holder, so taking the
+   * conversation would leave a row nobody can release.
+   */
+  app.post("/api/sessions/:id/lock/takeover", async (request, reply) => {
+    const user = actor(request);
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, user.id)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const clientId = clientIdOf(request);
+    const lock = clientId
+      ? db.takeoverSessionLock({
+          sessionId: id,
+          userId: user.id,
+          clientId,
+          ttlSeconds: SESSION_LOCK_TTL_SECONDS,
+        })
+      : undefined;
+    if (!lock) {
+      // Same single answer as `/lock`: "somebody else has it" and "you did not say who you are"
+      // are one situation to the reader, and the 404 above already ruled out a foreign session.
       return reply.code(409).send(apiError("SESSION_LOCKED", "this conversation is held by another client"));
     }
     return { lock };

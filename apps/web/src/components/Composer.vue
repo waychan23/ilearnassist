@@ -254,6 +254,23 @@ function autosize() {
 
 watch(text, () => nextTick(autosize));
 
+/**
+ * A send the server refused for the lock comes home here.
+ *
+ * The store cannot write into this textarea — the text is this component's, which is what keeps
+ * a widget's chip from wiping a paragraph — so a refused send is left in `refusedDraft`, adopted
+ * once, and the slot cleared. A newer draft wins: if the reader has already started the next
+ * message, their words stay and the refused text is dropped rather than concatenated into them.
+ */
+watch(
+  () => store.refusedDraft,
+  (draft) => {
+    if (draft === null) return;
+    if (!text.value.trim()) text.value = draft;
+    store.clearRefusedDraft();
+  }
+);
+
 async function addFiles(files: FileList | File[] | null) {
   if (!files) return;
   const list = Array.from(files);
