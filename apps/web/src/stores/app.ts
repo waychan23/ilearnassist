@@ -75,6 +75,7 @@ import type {
 } from "../api/types";
 import {
   DIAGRAM_TOOL_NAME,
+  PLOT_TOOL_NAME,
   TABLE_TOOL_NAME,
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
@@ -2633,6 +2634,14 @@ export const useAppStore = defineStore("app", () => {
         if (ev.toolCall.name === TABLE_TOOL_NAME) {
           emitWidgetEvent({
             type: "table.changed",
+            sessionId: activeSessionId.value ?? "",
+          });
+        }
+        // And a plot call has written its row, the table's event one kind over — its own name so
+        // the panel filters on it rather than waking for the other two's calls.
+        if (ev.toolCall.name === PLOT_TOOL_NAME) {
+          emitWidgetEvent({
+            type: "plot.changed",
             sessionId: activeSessionId.value ?? "",
           });
         }

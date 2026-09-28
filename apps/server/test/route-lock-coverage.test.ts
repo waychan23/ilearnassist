@@ -97,6 +97,7 @@ const EXEMPT = [
   "GET /api/sessions/:id/threads",
   "GET /api/sessions/:id/diagrams",
   "GET /api/sessions/:id/tables",
+  "GET /api/sessions/:id/plots",
   "GET /api/sessions/:id/notes",
   "GET /api/sessions/:id/insights",
   "GET /api/sessions/:id/files",

@@ -1,6 +1,7 @@
 import {
   DIAGRAM_TOOL_NAME,
   PLAN_PROGRESS_TOOL_NAME,
+  PLOT_TOOL_NAME,
   TABLE_TOOL_NAME,
   planNodeNumbers,
   type GetSessionThreadsResponse,
@@ -17,6 +18,7 @@ import {
   newId,
   type AppDb,
   type DiagramRecord,
+  type PlotRecord,
   type TableRecord,
   type ThreadRecord,
 } from "./db.js";
@@ -69,6 +71,16 @@ const MAX_DIAGRAMS_PER_PROMPT = 12;
  * diagram does: none are stranded.
  */
 const MAX_TABLES_PER_PROMPT = 8;
+
+/**
+ * The plot cap, separate again for the tables' own reason.
+ *
+ * A shared counter would make "12 artifacts" of a figure-heavy chunk, so a conversation that
+ * plotted a dozen figures would leave its diagrams unplaced. The number matches the table cap
+ * because the entry is the same size — a name and a one-line summary. Past the cap a plot
+ * collapses to its turn's thread, exactly as the other two do: none are stranded.
+ */
+const MAX_PLOTS_PER_PROMPT = 8;
 
 /* ---------------------------------- turns ---------------------------------- */
 
@@ -186,6 +198,18 @@ export interface TablePromptItem {
   summary: string;
 }
 
+/**
+ * One plotted figure, same shape and same place, with its own `p` ref prefix and `plots` wire
+ * key. The third interface rather than a `kind` field on a shared one, for the tables' reason:
+ * the blocks are written under different tags, and a chunk with only diagrams keeps producing
+ * the prompt it always did.
+ */
+export interface PlotPromptItem {
+  ref: string;
+  name: string;
+  summary: string;
+}
+
 export interface PromptInput {
   plan: PlanView | undefined;
   existing: ThreadRecord[];
@@ -202,6 +226,8 @@ export interface PromptInput {
   /** The tables the model is asked to place, keyed the same way. Absent produces the same
    *  prompt as before tables existed. */
   tables?: ReadonlyMap<string, TablePromptItem>;
+  /** The plotted figures the model is asked to place, keyed the same way. */
+  plots?: ReadonlyMap<string, PlotPromptItem>;
 }
 
 /**
@@ -274,7 +300,8 @@ function renderTurn(
   message: Message,
   index: number,
   diagrams?: ReadonlyMap<string, DiagramPromptItem>,
-  tables?: ReadonlyMap<string, TablePromptItem>
+  tables?: ReadonlyMap<string, TablePromptItem>,
+  plots?: ReadonlyMap<string, PlotPromptItem>
 ): string {
   const head = `${index + 1}. ${message.role}: ${clipMessage(
     message.role,
@@ -299,6 +326,14 @@ function renderTurn(
         `   <table ref="${table.ref}" name="${table.name}">\n` +
           `   ${clip(table.summary, DIAGRAM_SUMMARY_CHARS_IN_PROMPT)}\n` +
           `   </table>`
+      );
+    }
+    const plot = plots?.get(call.id);
+    if (plot) {
+      blocks.push(
+        `   <plot ref="${plot.ref}" name="${plot.name}">\n` +
+          `   ${clip(plot.summary, DIAGRAM_SUMMARY_CHARS_IN_PROMPT)}\n` +
+          `   </plot>`
       );
     }
   }
@@ -340,7 +375,7 @@ export function buildThreadPrompt(input: PromptInput): string {
 
   const numbered = input.turns
     .flatMap((turn) => turn.messages)
-    .map((m, i) => renderTurn(m, i, input.diagrams, input.tables));
+    .map((m, i) => renderTurn(m, i, input.diagrams, input.tables, input.plots));
   sections.push(
     `<new_turns>\n${numbered.join("\n")}\n</new_turns>\n\n` +
       `Classify the ${input.turns.length} turn(s). A turn is one user message with the assistant ` +
@@ -447,9 +482,23 @@ export function parseTableDecisions(
   return parseRefDecisions(raw, "tables", allowedRefs);
 }
 
+/**
+ * The same parse for plotted figures: one implementation, three wire keys.
+ *
+ * `parseTableDecisions`'s argument unchanged — the ref prefix `p1` is the discriminant, so the
+ * answer needs no model-authored `kind` field, and a malformed plot entry can never touch a
+ * diagram's placement or a table's.
+ */
+export function parsePlotDecisions(
+  raw: string,
+  allowedRefs: ReadonlySet<string>
+): Map<string, DiagramDecision> {
+  return parseRefDecisions(raw, "plots", allowedRefs);
+}
+
 function parseRefDecisions(
   raw: string,
-  field: "diagrams" | "tables",
+  field: "diagrams" | "tables" | "plots",
   allowedRefs: ReadonlySet<string>
 ): Map<string, ArtifactDecision> {
   const out = new Map<string, ArtifactDecision>();
@@ -493,6 +542,8 @@ export interface SyncResult {
   diagrams: number;
   /** Tables attached to a thread. */
   tables: number;
+  /** Plotted figures attached to a thread. */
+  plots: number;
   /** Messages still unassigned afterwards (more chunks or a failure). */
   unassigned: number;
 }
@@ -543,6 +594,7 @@ async function runSync(
       messages: 0,
       diagrams: 0,
       tables: 0,
+      plots: 0,
       unassigned: db.countPendingThreadMessages(sessionId),
     };
   }
@@ -561,7 +613,7 @@ async function runSync(
     turns.push(allTurns[i]!);
   }
   if (turns.length === 0) {
-    return { turns: 0, messages: 0, diagrams: 0, tables: 0, unassigned: totalPending };
+    return { turns: 0, messages: 0, diagrams: 0, tables: 0, plots: 0, unassigned: totalPending };
   }
 
   const plan = readCurrentPlan(db, sessionId);
@@ -636,6 +688,18 @@ async function runSync(
   const tablesOfTurn = (turn: ThreadTurn): TableRecord[] =>
     artifactsOfTurn(turn, TABLE_TOOL_NAME, tableByCallId);
 
+  // The plots, the same work list a third time. `listPlotBriefsBySession` rather than the full
+  // read for the tables' reason: the classifier is shown a name and a summary, and nothing here
+  // may pull a spec into memory once per turn.
+  const plotByCallId = new Map<string, PlotRecord>();
+  for (const plot of db.listPlotBriefsBySession(sessionId)) {
+    if (plot.toolCallId && plot.threadId === null) {
+      plotByCallId.set(plot.toolCallId, plot);
+    }
+  }
+  const plotsOfTurn = (turn: ThreadTurn): PlotRecord[] =>
+    artifactsOfTurn(turn, PLOT_TOOL_NAME, plotByCallId);
+
   // Refs d1.. for only the diagrams the model is asked about — those in turns it classifies.
   // A forced turn's diagrams never reach the prompt and ride the collapse rule instead. The
   // cap is a safety valve; diagrams past it also collapse, so none are stranded.
@@ -651,9 +715,12 @@ async function runSync(
   const refByDiagram = new Map<string, string>();
   const promptTables = new Map<string, TablePromptItem>();
   const refByTable = new Map<string, string>();
+  const promptPlots = new Map<string, PlotPromptItem>();
+  const refByPlot = new Map<string, string>();
   {
     let d = 0;
     let t = 0;
+    let p = 0;
     for (const { turn } of modelTurns) {
       for (const diagram of diagramsOfTurn(turn)) {
         if (d >= MAX_DIAGRAMS_PER_PROMPT) break;
@@ -680,6 +747,19 @@ async function runSync(
           });
         }
         refByTable.set(table.id, ref);
+      }
+      for (const plot of plotsOfTurn(turn)) {
+        if (p >= MAX_PLOTS_PER_PROMPT) break;
+        p += 1;
+        const ref = `p${p}`;
+        if (plot.toolCallId) {
+          promptPlots.set(plot.toolCallId, {
+            ref,
+            name: plot.name,
+            summary: plot.summary,
+          });
+        }
+        refByPlot.set(plot.id, ref);
       }
     }
   }
@@ -742,6 +822,13 @@ async function runSync(
           `    图${ref ? ` ${ref}` : ""}「${diagram.name}」：${clip(diagram.summary, DIAGRAM_SUMMARY_CHARS_IN_PROMPT)}`
         );
       }
+      // The plots, the same line one kind over, so the log shows what the model saw.
+      for (const plot of plotsOfTurn(turn)) {
+        const ref = plot.toolCallId ? refByPlot.get(plot.id) : undefined;
+        lines.push(
+          `    坐标图${ref ? ` ${ref}` : ""}「${plot.name}」：${clip(plot.summary, DIAGRAM_SUMMARY_CHARS_IN_PROMPT)}`
+        );
+      }
     });
     return lines;
   };
@@ -772,6 +859,7 @@ async function runSync(
       turns: modelTurns.map((m) => m.turn),
       diagrams: promptDiagrams,
       tables: promptTables,
+      plots: promptPlots,
     });
     try {
       raw = await classify(threadSystemPrompt(), prompt);
@@ -804,10 +892,16 @@ async function runSync(
     modelTurns.length > 0
       ? parseTableDecisions(raw, new Set([...promptTables.values()].map((t) => t.ref)))
       : new Map<string, ArtifactDecision>();
+  // Parsed independently, the third array on the same rule.
+  const plotDecisions =
+    modelTurns.length > 0
+      ? parsePlotDecisions(raw, new Set([...promptPlots.values()].map((p) => p.ref)))
+      : new Map<string, ArtifactDecision>();
 
   let assigned = 0;
   let diagramsAssigned = 0;
   let tablesAssigned = 0;
+  let plotsAssigned = 0;
   /** Human-readable per-turn resolution lines, collected inside the transaction. */
   const actions: string[] = [];
   const skipped: string[] = [];
@@ -909,6 +1003,18 @@ async function runSync(
       });
       tablesAssigned += placedTables.assigned;
       actions.push(...placedTables.lines);
+
+      const placedPlots = placeArtifacts({
+        items: plotsOfTurn(turn),
+        refs: refByPlot,
+        decisions: plotDecisions,
+        thread,
+        existingByRef,
+        assign: (id, threadId) => db.assignPlotToThread(sessionId, id, threadId),
+        label: "坐标图",
+      });
+      plotsAssigned += placedPlots.assigned;
+      actions.push(...placedPlots.lines);
     }
   };
   db.raw.transaction(writes)();
@@ -924,7 +1030,7 @@ async function runSync(
         "判定：",
         ...actions,
         ...skipped,
-        `结果：${assigned} 条消息、${diagramsAssigned} 张图、${tablesAssigned} 张表归入脉络，剩余未分类 ${unassigned} 条，耗时 ${
+        `结果：${assigned} 条消息、${diagramsAssigned} 张图、${tablesAssigned} 张表、${plotsAssigned} 张坐标图归入脉络，剩余未分类 ${unassigned} 条，耗时 ${
           Date.now() - startedAt
         } ms`,
       ].join("\n") + "\n"
@@ -939,7 +1045,7 @@ async function runSync(
           : ["模型调用：跳过（所有轮次均可由计划工具调用直接定位）"]),
         "判定：",
         ...actions,
-        `结果：${assigned} 条消息、${diagramsAssigned} 张图、${tablesAssigned} 张表归入脉络，剩余未分类 ${unassigned} 条，耗时 ${
+        `结果：${assigned} 条消息、${diagramsAssigned} 张图、${tablesAssigned} 张表、${plotsAssigned} 张坐标图归入脉络，剩余未分类 ${unassigned} 条，耗时 ${
           Date.now() - startedAt
         } ms`,
       ].join("\n") + "\n"
@@ -951,6 +1057,7 @@ async function runSync(
     messages: assigned,
     diagrams: diagramsAssigned,
     tables: tablesAssigned,
+    plots: plotsAssigned,
     unassigned,
   };
 }

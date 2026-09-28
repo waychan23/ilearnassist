@@ -9,6 +9,7 @@ import {
 } from "@ilearnassist/shared";
 import type { AppDb } from "./db.js";
 import { diagramFileName } from "./diagrams.js";
+import { plotName } from "./plots.js";
 import { tableName } from "./tables.js";
 
 /**
@@ -42,7 +43,7 @@ export type ResolvedReference =
   | { kind: "message"; quote: string }
   | {
       kind: "figure";
-      figureKind: "diagram" | "table";
+      figureKind: "diagram" | "table" | "plot";
       /** The canonical name, which is the handle `ila_query` takes. */
       name: string;
       summary: string;
@@ -123,6 +124,7 @@ export function resolveReferences(
   // conversation's diagrams four times.
   let diagrams: ReturnType<AppDb["listDiagramsForUser"]> | null = null;
   let tables: ReturnType<AppDb["listTablesForUser"]> | null = null;
+  let plots: ReturnType<AppDb["listPlotsForUser"]> | null = null;
   let notes: ReturnType<AppDb["listNotesForUser"]> | null = null;
 
   for (const ref of refs) {
@@ -201,11 +203,10 @@ export function resolveReferences(
      * spelling is not the question — and what is *stored* on the note and looked up by the tool is
      * the canonical one, which is why the resolved name and not `ref.ref` is what goes in the block.
      */
-    const canonical =
-      ref.kind === "diagram" ? diagramFileName(ref.ref) : tableName(ref.ref);
     if (ref.kind === "diagram") {
+      const wanted = diagramFileName(ref.ref);
       diagrams ??= db.listDiagramsForUser(userId, sessionId);
-      const found = diagrams.find((candidate) => candidate.name === canonical);
+      const found = diagrams.find((candidate) => candidate.name === wanted);
       if (!found) return { ok: false, status: 404, code: "REFERENCE_NOT_FOUND" };
       resolved.push({
         kind: "figure",
@@ -216,12 +217,27 @@ export function resolveReferences(
       });
       continue;
     }
-    tables ??= db.listTablesForUser(userId, sessionId);
-    const found = tables.find((candidate) => candidate.name === canonical);
+    if (ref.kind === "table") {
+      const wanted = tableName(ref.ref);
+      tables ??= db.listTablesForUser(userId, sessionId);
+      const found = tables.find((candidate) => candidate.name === wanted);
+      if (!found) return { ok: false, status: 404, code: "REFERENCE_NOT_FOUND" };
+      resolved.push({
+        kind: "figure",
+        figureKind: "table",
+        name: found.name,
+        summary: found.summary,
+        missing: false,
+      });
+      continue;
+    }
+    const wanted = plotName(ref.ref);
+    plots ??= db.listPlotsForUser(userId, sessionId);
+    const found = plots.find((candidate) => candidate.name === wanted);
     if (!found) return { ok: false, status: 404, code: "REFERENCE_NOT_FOUND" };
     resolved.push({
       kind: "figure",
-      figureKind: "table",
+      figureKind: "plot",
       name: found.name,
       summary: found.summary,
       missing: false,
@@ -309,7 +325,12 @@ export function renderReferenceBlock(
       );
       return;
     }
-    const noun = reference.figureKind === "diagram" ? "diagram" : "table";
+    const noun =
+      reference.figureKind === "diagram"
+        ? "diagram"
+        : reference.figureKind === "table"
+          ? "table"
+          : "plotted figure";
     lines.push(
       `${label} A ${noun} from this conversation${
         reference.missing ? ", which is no longer there" : ""
@@ -412,15 +433,21 @@ function resolveForReplay(
       continue;
     }
 
-    const canonical = ref.kind === "diagram" ? diagramFileName(ref.ref) : tableName(ref.ref);
     const found =
       ref.kind === "diagram"
-        ? db.listDiagramsForUser(userId, sessionId).find((d) => d.name === canonical)
-        : db.listTablesForUser(userId, sessionId).find((t) => t.name === canonical);
+        ? db.listDiagramsForUser(userId, sessionId).find((d) => d.name === diagramFileName(ref.ref))
+        : ref.kind === "table"
+          ? db.listTablesForUser(userId, sessionId).find((t) => t.name === tableName(ref.ref))
+          : db.listPlotsForUser(userId, sessionId).find((p) => p.name === plotName(ref.ref));
     out.push({
       kind: "figure",
       figureKind: ref.kind,
-      name: canonical,
+      name:
+        ref.kind === "diagram"
+          ? diagramFileName(ref.ref)
+          : ref.kind === "table"
+            ? tableName(ref.ref)
+            : plotName(ref.ref),
       summary: found?.summary ?? "",
       missing: found === undefined,
     });

@@ -48,6 +48,7 @@ export const ALL_TOOL_NAMES = [
   "ila_update_plan_progress",
   "ila_diagram",
   "ila_table",
+  "ila_plot",
   "ila_query",
   "ila_explore",
 ] as const;
@@ -115,6 +116,7 @@ export const QUERY_KINDS = [
   "note",
   "diagram",
   "table",
+  "plot",
   "resource",
 ] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
@@ -150,6 +152,20 @@ export const DIAGRAM_TOOL_NAME = "ila_diagram";
  * markdown and the conversation holds the rendering. See `Table`.
  */
 export const TABLE_TOOL_NAME = "ila_table";
+
+/**
+ * The plot tool's name: the model draws a math figure on a coordinate plane.
+ *
+ * Shared for the `TABLE_TOOL_NAME` reason — the client switches on it to pick the plot's own
+ * card out of an assistant message — and it is the third tool the **diagram widget** names,
+ * because 图表 is the panel for what a conversation has drawn, recorded and plotted.
+ *
+ * It is `auto-install` like its two siblings: ordinary, pickable in a Copilot, and calling it
+ * installs the panel that lists it. Like a table and unlike a diagram it is **not a file**: the
+ * spec is data, so `session_plots.spec` holds it and no sandbox is touched — which is why it
+ * belongs in `NON_FILE_TOOLS` beside `ila_table`.
+ */
+export const PLOT_TOOL_NAME = "ila_plot";
 
 /**
  * The tool the file card is drawn for.
@@ -676,7 +692,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   {
     id: "diagram",
     scopes: ["session"],
-    tools: { names: [DIAGRAM_TOOL_NAME, TABLE_TOOL_NAME], mode: "auto-install" },
+    tools: { names: [DIAGRAM_TOOL_NAME, TABLE_TOOL_NAME, PLOT_TOOL_NAME], mode: "auto-install" },
   },
   /*
    * The insight panel names no tools either, and for a stronger reason than the diagram's: the
@@ -1114,6 +1130,293 @@ export interface GetSessionTablesResponse {
   tables: Table[];
 }
 
+/* ----------------------------------- plots ----------------------------------- */
+
+/**
+ * A math figure the conversation plotted, as a row.
+ *
+ * The third sibling of `Diagram` and `Table`, and it belongs on the table's side of the split:
+ * **the row holds the artifact**, because a plot is data — a small JSON spec the client renders
+ * with its own deterministic renderer. There is no file: nothing about a plot needs the
+ * filesystem (the agent's file tools cannot draw one, and it is not material to browse), and a
+ * `.plot.json` on disk would be a second copy of the spec, which is the drift the diagram split
+ * exists to prevent.
+ *
+ * `spec` is the **canonical JSON string** the tool validated and stored, not a parsed object:
+ * the column is TEXT, a read that cannot parse it must surface as a rendering failure rather
+ * than a 500, and the client's renderer is the authority on what it can draw — the same argument
+ * `ila_diagram` makes for not validating mermaid. It is shown to the model by
+ * `ila_query(kind: "plot")` and handed to the viewer by the panel.
+ */
+export interface Plot {
+  id: string;
+  sessionId: string;
+  /** The thread the classifier put this plot in; null until its turn is classified. */
+  threadId: string | null;
+  threadTitle: string | null;
+  /**
+   * The canonical name — a slug, with no extension, like a table's.
+   *
+   * No extension because there is no file: it is the row's identity and the label the panel
+   * shows, and the join key a revise upserts on.
+   */
+  name: string;
+  /** The model's one- or two-sentence description of what the figure is about. */
+  summary: string;
+  /** The canonical JSON plot spec. The row is the only copy. */
+  spec: string;
+  /** The tool call that wrote, or last revised, it; null when none was stamped. */
+  toolCallId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/sessions/:id/plots`. */
+export interface GetSessionPlotsResponse {
+  plots: Plot[];
+}
+
+/**
+ * The figure vocabulary: what one element of a plot may be.
+ *
+ * A closed union, and it is the *whole* of what the model can express — deliberately a small,
+ * declarative set rather than a scripting surface. Each kind maps onto one construct of the
+ * renderer, and the two structural gaps are filled by construction rather than by the model:
+ * a `circle` becomes the implicit equation `(x-a)² + (y-b)² − r² = 0`, and a `segment` or
+ * `polygon` becomes a polyline through its points.
+ */
+export const PLOT_ELEMENT_KINDS = [
+  "function",
+  "implicit",
+  "parametric",
+  "points",
+  "segment",
+  "polygon",
+  "vector",
+  "circle",
+  "text",
+] as const;
+
+export type PlotElementKind = (typeof PLOT_ELEMENT_KINDS)[number];
+
+/**
+ * The named series colours a spec may ask for.
+ *
+ * Token names rather than hex values, because a figure has to be legible on both palettes: the
+ * client maps each name onto the live stylesheet's concrete colour at render time, exactly as
+ * `diagramThemeVariables` does for mermaid — a hardcoded hex would be a light-page colour the
+ * dark theme cannot correct. Omitting `color` cycles the palette in element order.
+ */
+export const PLOT_COLORS = ["accent", "success", "warning", "danger", "muted"] as const;
+export type PlotColor = (typeof PLOT_COLORS)[number];
+
+/** `[x, y]`, in data coordinates. Tuples rather than objects: a point is the pair itself. */
+export type PlotPoint = [number, number];
+
+/** A figure's axis: where it ranges, what it is called. */
+export interface PlotAxis {
+  /** The visible interval, `[min, max]`, with `min < max`. Absent means the renderer's default. */
+  domain?: PlotPoint;
+  /** The label drawn beside the axis, e.g. `x` or `t`. */
+  label?: string;
+  /** Draw the axis on a logarithmic scale. */
+  log?: boolean;
+}
+
+/** y = f(x) over an interval, optionally filled down to the x-axis. */
+export interface PlotFunctionElement {
+  kind: "function";
+  /** An expression in `x`, e.g. `sin(x)`, `x^2 - 3*x + 1`. */
+  expr: string;
+  from?: number;
+  to?: number;
+  /** Shade the region between the curve and y = 0. */
+  fill?: boolean;
+  /** Draw the curve dashed — the ordinary way to show an asymptote or a boundary. */
+  dashed?: boolean;
+  color?: PlotColor;
+}
+
+/** f(x, y) = 0 — the form a circle, ellipse or any implicit curve takes. */
+export interface PlotImplicitElement {
+  kind: "implicit";
+  /** An expression in `x` and `y`, e.g. `x^2 + y^2 - 25`. Drawn where it equals zero. */
+  expr: string;
+  dashed?: boolean;
+  color?: PlotColor;
+}
+
+/** A curve traced as `t` runs, e.g. `x: "3*cos(t)", y: "3*sin(t)"` for a circle. */
+export interface PlotParametricElement {
+  kind: "parametric";
+  /** Expressions in `t`. */
+  x: string;
+  y: string;
+  from?: number;
+  to?: number;
+  dashed?: boolean;
+  color?: PlotColor;
+}
+
+/** A set of marked points, drawn as dots or joined by straight lines. */
+export interface PlotPointsElement {
+  kind: "points";
+  points: PlotPoint[];
+  /** Join the points with straight lines rather than marking them alone. */
+  connect?: boolean;
+  color?: PlotColor;
+}
+
+/** One straight line between two points. A ray is not expressible: a figure draws what it names. */
+export interface PlotSegmentElement {
+  kind: "segment";
+  from: PlotPoint;
+  to: PlotPoint;
+  dashed?: boolean;
+  color?: PlotColor;
+}
+
+/** A closed, filled polygon. */
+export interface PlotPolygonElement {
+  kind: "polygon";
+  points: PlotPoint[];
+  /** Fill the interior; default true. */
+  fill?: boolean;
+  color?: PlotColor;
+}
+
+/** An arrow from one point to another. */
+export interface PlotVectorElement {
+  kind: "vector";
+  from: PlotPoint;
+  to: PlotPoint;
+  color?: PlotColor;
+}
+
+/** A circle by centre and radius. */
+export interface PlotCircleElement {
+  kind: "circle";
+  center: PlotPoint;
+  radius: number;
+  dashed?: boolean;
+  color?: PlotColor;
+}
+
+/** A label placed at a point, in plain text (Unicode allowed: `x²`, `π`, `θ`). */
+export interface PlotTextElement {
+  kind: "text";
+  at: PlotPoint;
+  text: string;
+  color?: PlotColor;
+}
+
+export type PlotElement =
+  | PlotFunctionElement
+  | PlotImplicitElement
+  | PlotParametricElement
+  | PlotPointsElement
+  | PlotSegmentElement
+  | PlotPolygonElement
+  | PlotVectorElement
+  | PlotCircleElement
+  | PlotTextElement;
+
+/**
+ * One figure, as the model writes it — data, never code.
+ *
+ * The model passes structure and formulas; the app renders. There is no way for a spec to name
+ * a function to call, a file to read or a value to fetch, and the formulas are evaluated by the
+ * renderer's own bounded parser.
+ */
+export interface PlotSpec {
+  title?: string;
+  x?: PlotAxis;
+  y?: PlotAxis;
+  grid?: boolean;
+  elements: PlotElement[];
+}
+
+/**
+ * The functions an expression may call.
+ *
+ * A whitelist, and the reason is a boundary rather than a preference: the renderer evaluates an
+ * expression by compiling a parsed math AST to a function, so the expression is model-authored
+ * input on a code path. Refusing every identifier that is not on this list (and every character
+ * outside a formula's own punctuation) means an expression cannot name anything the drawing
+ * language does not have, independently of how good the parser is. `random` is deliberately
+ * absent: a figure that draws differently on every render is not a figure.
+ */
+export const PLOT_EXPRESSION_FUNCTIONS = [
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cbrt",
+  "ceil",
+  "cos",
+  "cosh",
+  "exp",
+  "floor",
+  "log",
+  "log10",
+  "log2",
+  "max",
+  "min",
+  "mod",
+  "pow",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc",
+] as const;
+
+/** The constants an expression may name, besides the element's own variable. */
+export const PLOT_EXPRESSION_CONSTANTS = ["pi", "e"] as const;
+
+/**
+ * Cap on one expression. Shared because **both sides refuse it**: the tool before it writes a
+ * row, and the renderer before it hands the expression to the evaluator — the same split
+ * `MAX_DIAGRAM_CHARS` has, and for the same reason (the renderer must survive what it is given).
+ */
+export const MAX_PLOT_EXPR_CHARS = 200;
+
+/**
+ * Whether an expression is inside the drawing language.
+ *
+ * `variables` are the element's own: `x` for a function, `x`/`y` for an implicit one, `t` for a
+ * parametric pair. Anything else — a stray identifier, a call to something not on the whitelist,
+ * a character that is not part of a formula — is refused. Pure and shared so the server's
+ * refusal and the renderer's guard are one rule rather than two that can drift.
+ *
+ * It is a *syntax* check, not an evaluation: `1/0` and `sqrt(-1)` are legal expressions that
+ * produce no drawable point, which is the renderer's ordinary outcome rather than a refusal.
+ */
+export function isPlotExpression(expr: string, variables: readonly string[]): boolean {
+  const text = expr.trim();
+  if (!text || text.length > MAX_PLOT_EXPR_CHARS) return false;
+  // The formula alphabet: numbers, identifiers, the four operators plus `^`, parentheses,
+  // commas and whitespace. Deliberately tighter than the evaluator's own grammar.
+  if (!/^[0-9A-Za-z_+\-*/^().,\s]*$/.test(text)) return false;
+
+  const allowed = new Set<string>([
+    ...variables,
+    ...PLOT_EXPRESSION_CONSTANTS,
+    ...PLOT_EXPRESSION_FUNCTIONS,
+  ]);
+  for (const identifier of text.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []) {
+    if (!allowed.has(identifier)) return false;
+  }
+  return true;
+}
+
 /* ------------------------------------ notes ------------------------------------ */
 
 /**
@@ -1187,7 +1490,7 @@ export interface NoteAnchor {
  * rather than NULL because NULL would say "we do not know", which is false of those rows: they
  * are text notes, all of them.
  */
-export const NOTE_TARGET_KINDS = ["text", "diagram", "table", "resource"] as const;
+export const NOTE_TARGET_KINDS = ["text", "diagram", "table", "plot", "resource"] as const;
 
 export type NoteTargetKind = (typeof NOTE_TARGET_KINDS)[number];
 
@@ -3695,6 +3998,7 @@ export const TURN_REFERENCE_KINDS = [
   "message",
   "diagram",
   "table",
+  "plot",
   "note",
   "quiz",
   "resource",

@@ -7,6 +7,7 @@ import { isWidgetBoundTool } from "@ilearnassist/shared";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
+import { buildPlotTool, type PlotToolContext } from "./plot.js";
 import { buildTableTool, type TableToolContext } from "./table.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildExploreTool, type ExploreToolContext } from "./explore.js";
@@ -50,6 +51,10 @@ import { buildMakeupQuizTool, type MakeupQuizToolContext } from "./quizMakeup.js
  * prevent. The contrast with `ila_diagram` beside it is deliberate: a diagram *is* half a feature
  * without its file, and a table is whole without one.
  *
+ * `ila_plot` is here on `ila_table`'s argument exactly: a plot's artifact is a JSON spec in a
+ * database row, no sandbox is touched, and a file-tools switch must not remove a capability that
+ * never had a file.
+ *
  * `ila_explore` is here on `ila_query`'s argument, and it is the stronger case of the two: it
  * reads granted workspaces' shared folders, and it writes nothing — the module contains no
  * write call at all. Leaving it out would mean a `fileTools.enabled: false` installation
@@ -73,6 +78,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "ila_query",
   "ila_explore",
   "ila_table",
+  "ila_plot",
 ]);
 
 export interface BuildToolsInput {
@@ -158,6 +164,14 @@ export interface BuildToolsInput {
    */
   table?: TableToolContext;
   /**
+   * Present whenever a session context exists — always, in practice; the field is optional so a
+   * test can pin what its absence assembles (nothing).
+   *
+   * `ila_plot` is `auto-install` mode like the table tool and a member of `NON_FILE_TOOLS` for
+   * the same reason: its artifact is data in a row, and no file is written.
+   */
+  plot?: PlotToolContext;
+  /**
    * Present whenever a session context exists — always, in practice; the field is optional so
    * a test can pin what its absence assembles (nothing).
    *
@@ -232,6 +246,8 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   if (input.diagram) all.push(buildDiagramTool(input.diagram));
   // Not gated by `fileToolsEnabled`, unlike the line above: it writes a row and no file.
   if (input.table) all.push(buildTableTool(input.table));
+  // The table's line applied to the third artifact tool, with the same reason: a row and no file.
+  if (input.plot) all.push(buildPlotTool(input.plot));
   // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
   // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
   if (input.query) all.push(buildQueryTool(input.query));

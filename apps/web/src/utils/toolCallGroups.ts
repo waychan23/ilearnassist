@@ -1,5 +1,6 @@
 import {
   DIAGRAM_TOOL_NAME,
+  PLOT_TOOL_NAME,
   TABLE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   isInteractiveTool,
@@ -34,6 +35,8 @@ export type ToolCallRun =
  *     function, and saying so here keeps that true if a call site changes.
  *   - `ila_diagram` renders a drawing. Folding it into a count hides the artifact behind a
  *     number, which is the opposite of what that card is for.
+ *   - `ila_plot` renders a figure, for the diagram's reason exactly: the drawing is the result,
+ *     and a count is not a picture.
  *   - `write_file` renders the **file**. Same reason as the drawing, and it is the same word: a
  *     write is not a step the model took on the way to an answer, it is a thing the conversation
  *     now holds — so a turn that writes a file and then reads two others must not file the file
@@ -49,6 +52,7 @@ export function isGroupableToolCall(call: ToolCall): boolean {
   return (
     !isInteractiveTool(call.name) &&
     call.name !== DIAGRAM_TOOL_NAME &&
+    call.name !== PLOT_TOOL_NAME &&
     call.name !== TABLE_TOOL_NAME &&
     call.name !== WRITE_FILE_TOOL_NAME
   );

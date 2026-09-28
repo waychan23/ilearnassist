@@ -177,6 +177,7 @@ async function seedSource(): Promise<Fixture> {
       },
       { id: "call-diagram", name: "ila_diagram", input: "{}", status: "answered" },
       { id: "call-table", name: "ila_table", input: "{}", status: "answered" },
+      { id: "call-plot", name: "ila_plot", input: "{}", status: "answered" },
     ],
     refs: [{ kind: "quiz", ref: quizUid, label: "Q1" }],
   });
@@ -261,6 +262,14 @@ async function seedSource(): Promise<Fixture> {
     content: "| a |\n| - |\n| 1 |\n",
     toolCallId: "call-table",
   });
+  db.upsertSessionPlot({
+    id: newId(),
+    sessionId: session.id,
+    name: "window-plot",
+    summary: "windows over time",
+    spec: JSON.stringify({ elements: [{ kind: "function", expr: "x^2" }] }),
+    toolCallId: "call-plot",
+  });
   db.cloneInsight({
     id: newId(),
     sessionId: session.id,
@@ -329,6 +338,7 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
       "call-quiz",
       "call-diagram",
       "call-table",
+      "call-plot",
     ]);
 
     const plan = db.getPlanBySession(full.id)!;
@@ -399,6 +409,16 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
     expect(tables).toHaveLength(1);
     expect(tables[0]!.content).toBe("| a |\n| - |\n| 1 |\n");
     expect(copiedIds.has(tables[0]!.threadId ?? "missing")).toBe(false); // remapped, not the source's node
+
+    // The third artifact row, copied whole: the spec *is* the artifact, so the copy has to carry
+    // it — a row copied without one would list in the panel and render nothing.
+    const plots = db.listPlotsBySession(full.id);
+    expect(plots).toHaveLength(1);
+    expect(plots[0]!.spec).toBe(
+      JSON.stringify({ elements: [{ kind: "function", expr: "x^2" }] })
+    );
+    expect(plots[0]!.toolCallId).toBe("call-plot");
+    expect(copiedIds.has(plots[0]!.threadId ?? "missing")).toBe(false);
 
     const insights = db.listInsightsForClone(env.user.id, full.id);
     expect(insights).toHaveLength(1);

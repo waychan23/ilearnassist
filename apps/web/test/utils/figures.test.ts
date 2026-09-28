@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Diagram, Table } from "../../src/api/types";
+import type { Diagram, Plot, Table } from "../../src/api/types";
 import {
   FIGURE_FILTERS,
   filterFigures,
@@ -9,7 +9,7 @@ import {
 } from "../../src/utils/figures";
 
 /**
- * The 图表 panel's arithmetic: two lists from the server, one list on screen.
+ * The 图表 panel's arithmetic: three lists from the server, one list on screen.
  *
  * Here rather than in the component because the repo does not unit-test `.vue` files and this is
  * the part that can be wrong in a way a screenshot would not show — an order that puts an old
@@ -48,6 +48,22 @@ function table(over: Partial<Table> = {}): Table {
   };
 }
 
+function plot(over: Partial<Plot> = {}): Plot {
+  return {
+    id: "p1",
+    sessionId: "s1",
+    threadId: null,
+    threadTitle: null,
+    name: "抛物线",
+    summary: "y=x² 的顶点",
+    spec: '{"elements":[{"kind":"function","expr":"x^2"}]}',
+    toolCallId: "c3",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...over,
+  };
+}
+
 describe("figureStem", () => {
   it("drops a diagram's extension and nothing else", () => {
     expect(figureStem("auth-flow.mmd")).toBe("auth-flow");
@@ -56,7 +72,7 @@ describe("figureStem", () => {
   });
 
   it("leaves a name with no extension alone", () => {
-    // A table's name has no extension to strip, and a leading dot is not one either.
+    // A table's or plot's name has no extension to strip, and a leading dot is not one either.
     expect(figureStem("季度对比")).toBe("季度对比");
     expect(figureStem(".hidden")).toBe(".hidden");
   });
@@ -64,8 +80,7 @@ describe("figureStem", () => {
 
 describe("figureRows", () => {
   it("maps each kind onto one row shape, keeping what only that kind has", () => {
-    const rows = figureRows([diagram()], [table()]);
-    const [, t] = rows.sort((a, b) => (a.kind < b.kind ? -1 : 1));
+    const rows = figureRows([diagram()], [table()], [plot()]);
 
     const d = rows.find((r) => r.kind === "diagram")!;
     expect(d).toMatchObject({
@@ -74,9 +89,11 @@ describe("figureRows", () => {
       name: "auth-flow",
       fileName: "auth-flow.mmd",
       content: null,
+      spec: null,
       fileMissing: false,
     });
 
+    const t = rows.find((r) => r.kind === "table")!;
     expect(t).toMatchObject({
       key: "table:t1",
       name: "季度对比",
@@ -84,6 +101,19 @@ describe("figureRows", () => {
       // the open control both branch on.
       fileName: null,
       content: "| a |\n| --- |\n| 1 |",
+      spec: null,
+      fileMissing: false,
+    });
+
+    const p = rows.find((r) => r.kind === "plot")!;
+    expect(p).toMatchObject({
+      key: "plot:p1",
+      name: "抛物线",
+      // No file and no markdown: the spec is what the viewer renders, and there is nothing to
+      // miss — a plot is the row alone.
+      fileName: null,
+      content: null,
+      spec: '{"elements":[{"kind":"function","expr":"x^2"}]}',
       fileMissing: false,
     });
   });
@@ -93,9 +123,10 @@ describe("figureRows", () => {
     // conversation made", and the filter is what narrows it to a kind.
     const rows = figureRows(
       [diagram({ id: "d1", updatedAt: "2026-01-01T00:00:00.000Z" })],
-      [table({ id: "t1", updatedAt: "2026-02-01T00:00:00.000Z" })]
+      [table({ id: "t1", updatedAt: "2026-02-01T00:00:00.000Z" })],
+      [plot({ id: "p1", updatedAt: "2026-03-01T00:00:00.000Z" })]
     );
-    expect(rows.map((r) => r.kind)).toEqual(["table", "diagram"]);
+    expect(rows.map((r) => r.kind)).toEqual(["plot", "table", "diagram"]);
   });
 
   it("does not sort an invalid timestamp into the middle", () => {
@@ -104,34 +135,36 @@ describe("figureRows", () => {
     // leaves the list in whatever order the engine felt like.
     const rows = figureRows(
       [diagram({ id: "d1", updatedAt: "not a date" })],
-      [table({ id: "t1", updatedAt: "2026-02-01T00:00:00.000Z" })]
+      [table({ id: "t1", updatedAt: "2026-02-01T00:00:00.000Z" })],
+      []
     );
     expect(rows).toHaveLength(2);
     expect(rows.some((r) => r.kind === "diagram")).toBe(true);
   });
 
   it("answers an empty list for a conversation that has made nothing", () => {
-    expect(figureRows([], [])).toEqual([]);
+    expect(figureRows([], [], [])).toEqual([]);
   });
 });
 
 describe("filterFigures", () => {
-  const rows = figureRows([diagram()], [table()]);
+  const rows = figureRows([diagram()], [table()], [plot()]);
 
   it("lets everything through on the empty value, which is the select's own", () => {
-    expect(filterFigures(rows, "")).toHaveLength(2);
+    expect(filterFigures(rows, "")).toHaveLength(3);
     expect(FIGURE_FILTERS[0]).toBe("");
   });
 
   it("narrows to one kind", () => {
     expect(filterFigures(rows, "diagram").map((r) => r.kind)).toEqual(["diagram"]);
     expect(filterFigures(rows, "table").map((r) => r.kind)).toEqual(["table"]);
+    expect(filterFigures(rows, "plot").map((r) => r.kind)).toEqual(["plot"]);
   });
 
   it("hands back a copy, so a caller cannot reorder the panel's own list", () => {
     const only = filterFigures(rows, "");
     only.reverse();
-    expect(rows[0]?.kind).toBe("diagram");
+    expect(rows.some((r) => r.kind === "diagram")).toBe(true);
   });
 });
 
@@ -139,10 +172,15 @@ describe("presentKinds", () => {
   it("offers only the kinds that are there", () => {
     // `ResourcesWidget`'s rule for its category filter: an option that can only ever produce the
     // empty state is a control that does nothing.
-    expect(presentKinds(figureRows([diagram()], []))).toEqual(["diagram"]);
-    expect(presentKinds(figureRows([], [table()]))).toEqual(["table"]);
-    // In the panel's own order, which is the order the two halves of 图表 are said in.
-    expect(presentKinds(figureRows([diagram()], [table()]))).toEqual(["diagram", "table"]);
+    expect(presentKinds(figureRows([diagram()], [], []))).toEqual(["diagram"]);
+    expect(presentKinds(figureRows([], [table()], []))).toEqual(["table"]);
+    expect(presentKinds(figureRows([], [], [plot()]))).toEqual(["plot"]);
+    // In the panel's own order, which is the order the halves of 图表 are said in.
+    expect(presentKinds(figureRows([diagram()], [table()], [plot()]))).toEqual([
+      "diagram",
+      "table",
+      "plot",
+    ]);
     expect(presentKinds([])).toEqual([]);
   });
 });

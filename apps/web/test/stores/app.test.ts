@@ -2332,6 +2332,33 @@ describe("the diagram widget", () => {
       off();
     }
   });
+
+  it("emits plot.changed for ila_plot, and each event only for its own tool", async () => {
+    /*
+     * One event per tool, because the emission site is keyed on the name: sharing one would make
+     * the panel refetch on the other kind's calls, and this pair is the proof that it does not.
+     */
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      streamOf(
+        {
+          type: "tool_end",
+          toolCall: { id: "p1", name: "ila_plot", input: "{}", output: "Saved the figure" },
+        },
+        { type: "done" }
+      );
+      const store = await readyStore();
+      await store.sendMessage("plot it");
+
+      expect(seen.filter((t) => t === "plot.changed")).toHaveLength(1);
+      expect(seen.filter((t) => t === "diagram.changed")).toHaveLength(0);
+      expect(seen.filter((t) => t === "table.changed")).toHaveLength(0);
+    } finally {
+      off();
+    }
+  });
 });
 
 describe("quiz widgets", () => {

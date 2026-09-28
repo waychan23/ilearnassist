@@ -62,13 +62,15 @@ export function pillCategories(pill: ResourcePill | null): readonly FileCategory
  * a pill is added and nothing names it.
  */
 
-/** Everything a row can be. Five of the six are things to *point at*; the sixth is a workspace. */
+/** Everything a row can be. Five of the seven are things to *point at*; the rest are a workspace
+ *  and the all-workspaces row. */
 export type ReferenceOptionKind =
   | "all-workspaces"
   | "workspace"
   | "resource"
   | "diagram"
   | "table"
+  | "plot"
   | "note";
 
 /** Every group a heading can name — the option kinds minus the all-workspaces row, which has none. */
@@ -207,7 +209,7 @@ export function buildReferenceOptions(input: BuildOptionsInput): ReferenceOption
   }
 
   const categories = pillCategories(input.pill);
-  // A pill is a claim about a *file's* type, so it silences the three object groups rather than
+  // A pill is a claim about a *file's* type, so it silences the object groups rather than
   // filtering them: neither a drawing nor a note has a category to be matched against, and
   // leaving them in would be the filter appearing not to have taken.
   const objects = input.tab !== "workspace" && input.pill === null;
@@ -248,6 +250,11 @@ export function buildReferenceOptions(input: BuildOptionsInput): ReferenceOption
       groups,
       "table",
       objectRows(input.figures.filter((row) => row.kind === "table"), needle)
+    );
+    push(
+      groups,
+      "plot",
+      objectRows(input.figures.filter((row) => row.kind === "plot"), needle)
     );
     push(
       groups,

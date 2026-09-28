@@ -352,6 +352,19 @@ interface TableRow {
   thread_title?: string | null;
 }
 
+interface PlotRow {
+  id: string;
+  session_id: string;
+  thread_id: string | null;
+  name: string;
+  summary: string;
+  spec: string;
+  tool_call_id: string | null;
+  created_at: string;
+  updated_at: string;
+  thread_title?: string | null;
+}
+
 interface InsightItemRow {
   id: string;
   session_id: string;
@@ -472,6 +485,38 @@ export interface TableUpsert {
   name: string;
   summary: string;
   content: string;
+  toolCallId: string | null;
+}
+
+/**
+ * A plot as the rest of the server reads it.
+ *
+ * `TableRecord`'s twin with `spec` in place of `content`: both rows *are* their artifact, and
+ * the only difference is that a plot's is JSON the client renders rather than markdown it
+ * displays. See the `session_plots` DDL for why a plot has no file.
+ */
+export interface PlotRecord {
+  id: string;
+  sessionId: string;
+  threadId: string | null;
+  name: string;
+  summary: string;
+  spec: string;
+  toolCallId: string | null;
+  threadTitle: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Input to `upsertSessionPlot`, from the tool. The id is the caller's. */
+export interface PlotUpsert {
+  id: string;
+  sessionId: string;
+  /** The slug the row is keyed by — no extension, because there is no file. */
+  name: string;
+  summary: string;
+  /** Canonical JSON, validated by the tool before it gets here. */
+  spec: string;
   toolCallId: string | null;
 }
 
@@ -1485,6 +1530,19 @@ const mapTable = (r: TableRow): TableRecord => ({
   name: r.name,
   summary: r.summary,
   content: r.content,
+  toolCallId: r.tool_call_id,
+  threadTitle: r.thread_title ?? null,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const mapPlot = (r: PlotRow): PlotRecord => ({
+  id: r.id,
+  sessionId: r.session_id,
+  threadId: r.thread_id,
+  name: r.name,
+  summary: r.summary,
+  spec: r.spec,
   toolCallId: r.tool_call_id,
   threadTitle: r.thread_title ?? null,
   createdAt: r.created_at,
@@ -2709,6 +2767,36 @@ export interface AppDb {
    * without a read.
    */
   assignTableToThread(sessionId: string, tableId: string, threadId: string): number;
+
+  /**
+   * A conversation's plots, by session, newest first. Bare session id, the tables read's
+   * argument exactly: every caller has resolved the session through a `ForUser` read.
+   *
+   * Includes `spec`, so this is the *route's* read as well as the tool's.
+   */
+  listPlotsBySession(sessionId: string): PlotRecord[];
+  /**
+   * The same rows with `spec` blanked, for the thread classifier.
+   *
+   * The `listTableBriefsBySession` rule one kind over: a plot's spec is up to tens of
+   * kilobytes, the classifier is shown a name and a summary, and reading what it cannot be
+   * shown into memory once per turn is the cost this avoids.
+   */
+  listPlotBriefsBySession(sessionId: string): PlotRecord[];
+  /** Owner-scoped list, the API view's own read. Owner in the `WHERE`, not only in the
+   *  resolution the route performs first. */
+  listPlotsForUser(userId: string, sessionId: string): PlotRecord[];
+  /**
+   * Insert, or revise in place when the conversation already has a plot with this name.
+   *
+   * `upsertSessionTable`'s rule with `spec` in place of `content`: a revise moves the spec as
+   * well as the summary, because the row *is* the artifact, and clears `thread_id` so the new
+   * shape is judged again.
+   */
+  upsertSessionPlot(input: PlotUpsert): PlotRecord;
+  /** Place a plot in a thread, once. `assignTableToThread`'s statement against the third
+   *  table, with the same `thread_id IS NULL` guard and the same idempotence. */
+  assignPlotToThread(sessionId: string, plotId: string, threadId: string): number;
 
   /** Per-conversation message counts and summed usage for one workspace, newest first. */
 
@@ -4295,6 +4383,12 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     `UPDATE session_tables SET thread_id = ?
        WHERE id = ? AND session_id = ? AND thread_id IS NULL`
   );
+  // The third table's twin, same statement and same guard: placing a plot is idempotent by the
+  // `thread_id IS NULL` clause alone, while a revise (which clears the column) is judged again.
+  const stmtAssignPlotToThread = db.prepare(
+    `UPDATE session_plots SET thread_id = ?
+       WHERE id = ? AND session_id = ? AND thread_id IS NULL`
+  );
 
   /* --------------------------------- notes --------------------------------- */
   /*
@@ -4332,6 +4426,8 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
          SELECT 1 FROM session_diagrams d WHERE d.session_id = n.session_id AND d.name = n.target_ref
        )) OR (n.target_kind = 'table' AND NOT EXISTS (
          SELECT 1 FROM session_tables t WHERE t.session_id = n.session_id AND t.name = n.target_ref
+       )) OR (n.target_kind = 'plot' AND NOT EXISTS (
+         SELECT 1 FROM session_plots p WHERE p.session_id = n.session_id AND p.name = n.target_ref
        )) OR (n.target_kind = 'resource' AND NOT EXISTS (
          SELECT 1 FROM work_resources wr
            JOIN sessions ns ON ns.id = n.session_id
@@ -4530,6 +4626,53 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
      ON CONFLICT(session_id, name) DO UPDATE SET
        summary = @summary,
        content = @content,
+       tool_call_id = @toolCallId,
+       thread_id = NULL,
+       updated_at = @now`
+  );
+
+  /* -------------------------------- session plots ----------------------------- */
+  // The table statements with `spec` in place of `content`, and the same two reads: the route's
+  // list carries the spec, the classifier's brief blanks it (see the AppDb declarations).
+  const stmtListPlotsBySession = db.prepare(
+    `SELECT p2.*, t.title AS thread_title
+       FROM session_plots p2
+       LEFT JOIN session_threads t ON t.id = p2.thread_id
+      WHERE p2.session_id = ?
+      ORDER BY p2.updated_at DESC, p2.rowid DESC`
+  );
+  /** The classifier's read: name and summary, never the spec. */
+  const stmtListPlotBriefsBySession = db.prepare(
+    `SELECT id, session_id, thread_id, name, summary, '' AS spec, tool_call_id,
+            created_at, updated_at
+       FROM session_plots
+      WHERE session_id = ?`
+  );
+  // Read back by the conflict key, because a revise keeps the original id.
+  const stmtGetPlotBySessionName = db.prepare(
+    `SELECT p2.*, t.title AS thread_title
+       FROM session_plots p2
+       LEFT JOIN session_threads t ON t.id = p2.thread_id
+      WHERE p2.session_id = ? AND p2.name = ?`
+  );
+  const stmtListPlotsForUser = db.prepare(
+    `SELECT p2.*, t.title AS thread_title
+       FROM session_plots p2
+       JOIN sessions s   ON s.id = p2.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+       LEFT JOIN session_threads t ON t.id = p2.thread_id
+      WHERE p2.session_id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY p2.updated_at DESC, p2.rowid DESC`
+  );
+  // `session_tables`' upsert with `spec` alongside `summary`, and the same revise rule: the id
+  // and created_at are kept, and thread_id is cleared so the new shape is judged again.
+  const stmtUpsertSessionPlot = db.prepare(
+    `INSERT INTO session_plots (id, session_id, thread_id, name, summary, spec, tool_call_id, created_at, updated_at)
+     VALUES (@id, @sessionId, NULL, @name, @summary, @spec, @toolCallId, @now, @now)
+     ON CONFLICT(session_id, name) DO UPDATE SET
+       summary = @summary,
+       spec = @spec,
        tool_call_id = @toolCallId,
        thread_id = NULL,
        updated_at = @now`
@@ -5972,6 +6115,37 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
 
     assignTableToThread(sessionId, tableId, threadId) {
       return stmtAssignTableToThread.run(threadId, tableId, sessionId).changes;
+    },
+
+    listPlotsBySession(sessionId) {
+      return (stmtListPlotsBySession.all(sessionId) as PlotRow[]).map(mapPlot);
+    },
+
+    listPlotBriefsBySession(sessionId) {
+      return (stmtListPlotBriefsBySession.all(sessionId) as PlotRow[]).map(mapPlot);
+    },
+
+    listPlotsForUser(userId, sessionId) {
+      return (stmtListPlotsForUser.all({ userId, sessionId }) as PlotRow[]).map(mapPlot);
+    },
+
+    upsertSessionPlot(input) {
+      stmtUpsertSessionPlot.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        name: input.name,
+        summary: input.summary,
+        spec: input.spec,
+        toolCallId: input.toolCallId,
+        now: now(),
+      });
+      // Read back by the conflict key rather than by id — a revise preserves the original id.
+      const row = stmtGetPlotBySessionName.get(input.sessionId, input.name) as PlotRow;
+      return mapPlot(row);
+    },
+
+    assignPlotToThread(sessionId, plotId, threadId) {
+      return stmtAssignPlotToThread.run(threadId, plotId, sessionId).changes;
     },
 
     insertUsageEvent(input) {

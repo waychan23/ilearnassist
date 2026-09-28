@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { DIAGRAM_TOOL_NAME, PLAN_MAKE_TOOL_NAME } from "@ilearnassist/shared";
+import { DIAGRAM_TOOL_NAME, PLAN_MAKE_TOOL_NAME, PLOT_TOOL_NAME } from "@ilearnassist/shared";
 import { installWidgetForToolUse } from "../src/widgetInstall.js";
 import { newSession, newWorkspace, startTestServer, type TestEnv } from "./helpers/tempEnv.js";
 
@@ -84,6 +84,14 @@ describe("installWidgetForToolUse", () => {
 
   it("installs the diagram widget for ila_diagram", () => {
     expect(install(DIAGRAM_TOOL_NAME)).toBe("diagram");
+    expect(enabled("diagram")).toBe(true);
+  });
+
+  it("installs the diagram widget for ila_plot too", () => {
+    // The third tool bound to one panel: 图表 is what a conversation has drawn, recorded and
+    // plotted, so all three auto-install the same widget — and the mapping is read from the
+    // shared WIDGETS table rather than from any server-side list.
+    expect(install(PLOT_TOOL_NAME)).toBe("diagram");
     expect(enabled("diagram")).toBe(true);
   });
 

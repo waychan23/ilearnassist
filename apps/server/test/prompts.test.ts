@@ -80,6 +80,7 @@ describe("the catalog", () => {
       "makeupCard",
       "collectPage",
       "table",
+      "plot",
       "explore",
     ]);
   });

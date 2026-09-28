@@ -8,6 +8,7 @@ import {
   DIAGRAM_TOOL_NAME,
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
+  PLOT_TOOL_NAME,
   QUIZ_TOOL_NAMES,
   TABLE_TOOL_NAME,
 } from "@ilearnassist/shared";
@@ -17,6 +18,7 @@ import type { QuizReviewToolContext } from "../../src/tools/quizReview.js";
 import type { MakeupQuizToolContext } from "../../src/tools/quizMakeup.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
 import type { DiagramToolContext } from "../../src/tools/diagram.js";
+import type { PlotToolContext } from "../../src/tools/plot.js";
 import type { TableToolContext } from "../../src/tools/table.js";
 import type { CollectPageContext } from "../../src/tools/collectPage.js";
 import type { QueryToolContext } from "../../src/tools/query.js";
@@ -50,6 +52,14 @@ function diagram(): DiagramToolContext {
  * assembles survives `fileToolsEnabled: false`, because it writes no file. See `NON_FILE_TOOLS`.
  */
 function table(): TableToolContext {
+  return { save: () => undefined };
+}
+
+/**
+ * The plot context, present for the table's reason exactly: `turnContext` always supplies one,
+ * and the tool it assembles survives `fileToolsEnabled: false` because it writes no file.
+ */
+function plot(): PlotToolContext {
   return { save: () => undefined };
 }
 
@@ -116,6 +126,7 @@ function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] 
     fileToolsEnabled: true,
     diagram: diagram(),
     table: table(),
+    plot: plot(),
     query: query(),
     collectPage: collectPage(),
     ...input,
@@ -217,8 +228,11 @@ describe("buildTools", () => {
     //
     // `ila_table` is the fifth, and it is `ila_query`'s case rather than the diagram's: the
     // switch means "this agent does not write files", and a table writes a row and no file.
+    // `ila_plot` is the sixth for the table's reason verbatim: its artifact is a JSON spec in a
+    // row and no sandbox is touched.
     expect(names({ fileToolsEnabled: false }).sort()).toEqual([
       "ask_user",
+      "ila_plot",
       "ila_query",
       "ila_table",
       "web_fetch",
@@ -435,6 +449,29 @@ describe("buildTools", () => {
      * operator's file-tools switch silently removing a capability that never touched a file.
      */
     expect(names({ fileToolsEnabled: false })).toContain(TABLE_TOOL_NAME);
+  });
+
+  /* ----------------------------- plot (auto-install) ----------------------------- */
+
+  it("assembles ila_plot by default, like the table tool", () => {
+    expect(names()).toContain(PLOT_TOOL_NAME);
+  });
+
+  it("assembles no plot tool without a context", () => {
+    expect(names({ plot: undefined })).not.toContain(PLOT_TOOL_NAME);
+  });
+
+  it("treats the plot tool as allow-listable in all three states", () => {
+    // `auto-install`, like its siblings: a Copilot can turn figures off without turning the 图表
+    // panel off, and plotting one installs the panel that lists it.
+    expect(names({ allowedNames: [PLOT_TOOL_NAME] })).toEqual([PLOT_TOOL_NAME]);
+    expect(names({ allowedNames: ["read_file"] })).not.toContain(PLOT_TOOL_NAME);
+    expect(names({ allowedNames: [] })).toEqual([]);
+  });
+
+  it("keeps the plot tool when the file tools are disabled", () => {
+    // The table's case one up, verbatim: a plot is a JSON spec in a row, and no file is written.
+    expect(names({ fileToolsEnabled: false })).toContain(PLOT_TOOL_NAME);
   });
 
   it("binds the file tools to the workspace they were built for", async () => {

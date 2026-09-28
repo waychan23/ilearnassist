@@ -13,6 +13,7 @@ import {
 } from "@ilearnassist/shared";
 import type { AppDb } from "../db.js";
 import { diagramFileName, listDiagramViews } from "../diagrams.js";
+import { plotName } from "../plots.js";
 import { tableName } from "../tables.js";
 import { readCurrentPlan, renderReadResult } from "../plans.js";
 import { listQuizQuestionViews } from "../quizzes.js";
@@ -79,6 +80,16 @@ export const QUERY_DIAGRAM_SOURCE_MAX = 4_000;
  */
 export const QUERY_TABLE_SOURCE_MAX = 8_000;
 
+/**
+ * The JSON a `kind: "plot"` answer may carry, per figure.
+ *
+ * The table cap's argument, with the numbers the other way: a spec is structural JSON whose
+ * stored ceiling is `MAX_PLOT_SPEC_CHARS` (32 KB), and a read that returned several of those
+ * would spend the turn's context on one answer — so the same 8 KB is returned and the note
+ * says the read was clipped.
+ */
+export const QUERY_PLOT_SPEC_MAX = 8_000;
+
 export interface QueryToolContext {
   db: AppDb;
   /** Every read below is owner-scoped, so the context carries the owner. */
@@ -132,11 +143,11 @@ function planNodeIndex(tree: readonly PlanTreeNode[] | undefined) {
 }
 
 const DESCRIPTION = [
-  "Look up this conversation's own record: its study plan, the quiz questions it has asked (with the learner's answers and their verdicts), how the conversation was split into topics, the learner's notes, the diagrams it has drawn, the tables it has recorded, and the material it holds.",
+  "Look up this conversation's own record: its study plan, the quiz questions it has asked (with the learner's answers and their verdicts), how the conversation was split into topics, the learner's notes, the diagrams it has drawn, the tables it has recorded, the math figures it has plotted, and the material it holds.",
   "",
   "Use it whenever the answer depends on what has already happened here rather than on general knowledge — what the learner has already covered, what they got wrong, what they wrote down, what they pushed back on, or what they asked for a picture of. The learner's questions often refer back to material you cannot see from the last few messages, and this is how you look it up instead of guessing or asking them to repeat it.",
   "",
-  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table` or `resource`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
+  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table`, `plot` or `resource`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, a plotted figure, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"plot\"` with a `name` returns the figure's JSON spec, which is the same spec ila_plot accepted, so you can revise it; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
   "",
   "If an answer comes back with \"truncated\": true, you are seeing part of the set: call again with a larger offset or a narrower filter rather than assuming you have seen it all.",
 ].join("\n");
@@ -205,9 +216,10 @@ const inputSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'kind: "diagram" or "table". One figure\'s name. A diagram\'s file name with or without ' +
-        "the .mmd extension, a table's slug; either spelling resolves. Give it to get that " +
-        "figure's content — the mermaid source, or the markdown — and omit it to list them."
+      'kind: "diagram", "table" or "plot". One figure\'s name. A diagram\'s file name with or ' +
+        "without the .mmd extension, a table's or plot's slug; either spelling resolves. Give " +
+        "it to get that figure's content — the mermaid source, the markdown, or the plot spec " +
+        "— and omit it to list them."
     ),
   id: z
     .string()
@@ -241,6 +253,7 @@ export const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = 
   note: ["id", "query", "limit", "offset"],
   diagram: ["name", "limit"],
   table: ["name", "limit"],
+  plot: ["name", "limit"],
   resource: ["query", "limit", "offset"],
 };
 
@@ -692,6 +705,77 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     });
   };
 
+  /**
+   * `kind: "plot"` — a math figure's spec, read back.
+   *
+   * The table handler's twin, and it exists for the table handler's reason: a plot has no file,
+   * so this read is the *only* way to see one again once the turn that drew it is out of the
+   * history window — and a revise ("call ila_plot again with the same name and the complete
+   * corrected spec") needs the current spec to correct. The answer is the JSON the renderer
+   * consumes, so it can be edited and passed straight back.
+   */
+  const plot = async (input: { name?: string; limit?: number }): Promise<string> => {
+    const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
+    const all = ctx.db.listPlotsForUser(ctx.userId, ctx.sessionId);
+
+    if (input.name) {
+      // The same normalisation the writer applies, so the model does not have to have remembered
+      // the slug exactly — `plotName` is the one rule and this is the other side of it.
+      const wanted = plotName(input.name);
+      const found = all.find((p) => p.name === wanted);
+      if (!found) {
+        return JSON.stringify(
+          {
+            kind: "plot",
+            plot: null,
+            available: all.map((p) => p.name),
+            note:
+              all.length > 0
+                ? "No plotted figure with that name in this conversation. `available` lists the ones it has."
+                : "This conversation has not plotted a figure yet.",
+          },
+          null,
+          2
+        );
+      }
+      const truncated = found.spec.length > QUERY_PLOT_SPEC_MAX;
+      return JSON.stringify(
+        {
+          kind: "plot",
+          plot: {
+            name: found.name,
+            summary: found.summary,
+            threadTitle: found.threadTitle,
+            specTruncated: truncated,
+            spec: truncated ? found.spec.slice(0, QUERY_PLOT_SPEC_MAX) : found.spec,
+          },
+          note:
+            "This is the figure's JSON spec — the same data ila_plot accepted, in the form it " +
+            "was validated and saved. To revise the figure, call ila_plot again with the same " +
+            "name, this spec edited as needed, and a rewritten summary.",
+        },
+        null,
+        2
+      );
+    }
+
+    const items = all.slice(0, limit).map((p) => ({
+      name: p.name,
+      summary: clip(p.summary),
+      threadTitle: p.threadTitle,
+    }));
+    return page({
+      kind: "plot",
+      items,
+      total: all.length,
+      offset: 0,
+      note:
+        "These are the math figures this conversation has plotted in its 图表 panel. Only their " +
+        "names and summaries are listed here; call ila_query again with one `name` to read that " +
+        "figure's spec.",
+    });
+  };
+
   const HANDLERS: Record<QueryKind, (input: QueryInput) => Promise<string>> = {
     plan: async () => plan(),
     quiz: async (input) => quiz(input),
@@ -699,6 +783,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     note: async (input) => note(input),
     diagram: (input) => diagram(input),
     table: (input) => table(input),
+    plot: (input) => plot(input),
     resource,
   };
 

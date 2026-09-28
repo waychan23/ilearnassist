@@ -119,7 +119,7 @@ async function load(query: string): Promise<void> {
 /**
  * The conversation's own objects, read once per open.
  *
- * All three calls at once, and none of them waited on by the picker's own frame: the menu is up
+ * All four calls at once, and none of them waited on by the picker's own frame: the menu is up
  * the moment `@` is typed and these rows appear under it when they arrive. A failure leaves its
  * group empty rather than reporting — the same answer `load` gives, and for the same reason.
  */
@@ -130,15 +130,20 @@ async function loadObjects(): Promise<void> {
     notes.value = [];
     return;
   }
-  const [diagrams, tables, found] = await Promise.all([
+  const [diagrams, tables, plots, found] = await Promise.all([
     api.listSessionDiagrams(sessionId).catch(() => null),
     api.listSessionTables(sessionId).catch(() => null),
+    api.listSessionPlots(sessionId).catch(() => null),
     api.listNotes(sessionId).catch(() => null),
   ]);
   // A reply for a conversation the reader has since left is dropped, the rule the notes panel
   // makes: two conversations' objects are two lists.
   if (store.activeSessionId !== sessionId) return;
-  figures.value = figureRows(diagrams?.diagrams ?? [], tables?.tables ?? []);
+  figures.value = figureRows(
+    diagrams?.diagrams ?? [],
+    tables?.tables ?? [],
+    plots?.plots ?? []
+  );
   notes.value = found?.notes ?? [];
 }
 
@@ -280,6 +285,8 @@ function groupLabel(kind: ReferenceGroupKind): string {
       return t("composer.pickGroupDiagram");
     case "table":
       return t("composer.pickGroupTable");
+    case "plot":
+      return t("composer.pickGroupPlot");
     case "note":
       return t("composer.pickGroupNote");
   }
@@ -316,6 +323,8 @@ function iconOf(row: ReferenceOption): IconName {
       return "diagram";
     case "table":
       return "table";
+    case "plot":
+      return "plot";
     case "note":
       return "note";
     case "resource":

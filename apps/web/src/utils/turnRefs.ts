@@ -33,6 +33,8 @@ export function kindLabel(kind: TurnReferenceKind): string {
       return i18n.global.t("turnRef.kind.diagram");
     case "table":
       return i18n.global.t("turnRef.kind.table");
+    case "plot":
+      return i18n.global.t("turnRef.kind.plot");
     case "note":
       return i18n.global.t("turnRef.kind.note");
     case "quiz":
@@ -63,7 +65,7 @@ export function referenceKey(ref: TurnReference): string {
  * one — the figure panels and the enlarged viewer all need "a diagram or a table", and handing
  * them a reference that might be a note would be a check every one of them had to repeat.
  */
-export type FigureTurnReference = TurnReference & { kind: "diagram" | "table" };
+export type FigureTurnReference = TurnReference & { kind: "diagram" | "table" | "plot" };
 
 /** A passage the reader selected. The only kind whose content travels. */
 export function messageReference(selection: MessageSelection): TurnReference {
@@ -77,11 +79,11 @@ export function messageReference(selection: MessageSelection): TurnReference {
 }
 
 /**
- * A 图 or a 表, from a row of the figure panel.
+ * A 图, a 表 or a 坐标图, from a row of the figure panel.
  *
  * The handle is the **canonical file name for a diagram** (`auth-flow.mmd`) and the **slug for a
- * table**, which is what `FigureRow` already carries in `fileName`/`name`. Both are what the
- * server normalises to and what `ila_query` takes; the label is the stem the panel shows.
+ * table or a plot**, which is what `FigureRow` already carries in `fileName`/`name`. All three are
+ * what the server normalises to and what `ila_query` takes; the label is the stem the panel shows.
  */
 export function figureReference(row: FigureRow): FigureTurnReference {
   return {

@@ -21,6 +21,7 @@ import {
 } from "../../utils/figureExport";
 import type { SvgSize } from "../../utils/mermaid";
 import MermaidDiagram from "../MermaidDiagram.vue";
+import PlotFigure from "../PlotFigure.vue";
 import CopyButton from "../CopyButton.vue";
 import Icon from "../Icon.vue";
 
@@ -77,7 +78,8 @@ import Icon from "../Icon.vue";
  */
 export type FigureContent =
   | { kind: "diagram"; source: string }
-  | { kind: "table"; markdown: string };
+  | { kind: "table"; markdown: string }
+  | { kind: "plot"; spec: string };
 
 const props = defineProps<{
   content: FigureContent;
@@ -167,16 +169,20 @@ const { placed, dragging, movable, onDragStart, onDragKeydown, onDragReset } = u
 });
 
 const isDiagram = computed(() => props.content.kind === "diagram");
+const isPlot = computed(() => props.content.kind === "plot");
 
 /*
- * Two whole `t()` calls rather than one with the key chosen inside it, and that is a requirement
+ * Three whole `t()` calls rather than one with the key chosen inside it, and that is a requirement
  * rather than a style: `catalog.test.ts` finds the keys a component uses by scanning the source for
  * `t("…")` with a literal, so a key that only ever appears as the *result* of a conditional is a
  * key nothing resolves — and the guard reports it as dead, which is what happened here first.
  */
-const title = computed(() =>
-  props.name || (isDiagram.value ? t("diagram.viewTitle") : t("diagram.tableTitle"))
-);
+const title = computed(() => {
+  if (props.name) return props.name;
+  if (isDiagram.value) return t("diagram.viewTitle");
+  if (isPlot.value) return t("plot.viewTitle");
+  return t("diagram.tableTitle");
+});
 
 /**
  * What a format is called in the menu.
@@ -200,8 +206,15 @@ function formatLabel(format: FigureFormat): string {
 
 /* ---------------------------------- zoom ---------------------------------- */
 
-/** The drawn diagram, for its SVG and the size it declares. */
-const diagram = ref<InstanceType<typeof MermaidDiagram> | null>(null);
+/**
+ * The drawn figure, for its SVG and the size it declares.
+ *
+ * One ref for two components because they expose the same pair — `MermaidDiagram` and
+ * `PlotFigure` both `defineExpose({ svg, size })` — which is what lets the zoom, the fit and the
+ * download below treat the third kind as a kind of figure rather than as a special case. A table
+ * is the one that has no SVG: it is measured instead, further down.
+ */
+const figureCanvas = ref<{ svg: string; size: SvgSize | null } | null>(null);
 
 /** The element the figure is drawn in, and the one scrolled — measured, never assumed. */
 const viewport = ref<HTMLElement | null>(null);
@@ -222,27 +235,29 @@ const canvas = ref<HTMLElement | null>(null);
 /**
  * The figure's own size, whichever kind it is.
  *
- * A diagram's is read from the SVG text, so it is known before the element exists; a table's can
- * only be measured. Null means "not known yet", and every computed below is inert until it is —
- * which is also the honest answer for a drawing whose `viewBox` cannot be read, and the reason the
- * zoom controls are disabled rather than misleading in that case.
+ * A diagram's or a plot's is declared by the drawing (mermaid's `viewBox`, our own `viewBox`),
+ * so it is known before the element exists; a table's can only be measured. Null means "not known
+ * yet", and every computed below is inert until it is — which is also the honest answer for a
+ * drawing whose size cannot be read, and the reason the zoom controls are disabled rather than
+ * misleading in that case.
  */
 const natural = computed<SvgSize | null>(() =>
-  isDiagram.value ? (diagram.value?.size ?? null) : measured.value
+  isDiagram.value || isPlot.value ? (figureCanvas.value?.size ?? null) : measured.value
 );
 
 /**
  * How much of the box's width the figure is allowed to take.
  *
- * Only for a diagram, and only downwards: mermaid's own behaviour is to shrink a drawing that is
- * wider than its container, and 100 % has to keep meaning what it means in the conversation or the
- * viewer opens on a different picture from the one that was clicked. A *table* is not scaled down
- * — text at 60 % of its size is worse than a scrollbar, and a table is a thing people read — so it
- * starts at 1:1 and overflows, which is what a wide table does everywhere else too.
+ * Only for a drawing, and only downwards: mermaid's own behaviour is to shrink a drawing that is
+ * wider than its container, ours draws a plot at a fixed size and lets the same rule apply, and
+ * 100 % has to keep meaning what it means in the conversation or the viewer opens on a different
+ * picture from the one that was clicked. A *table* is not scaled down — text at 60 % of its size
+ * is worse than a scrollbar, and a table is a thing people read — so it starts at 1:1 and
+ * overflows, which is what a wide table does everywhere else too.
  */
 const fitScale = computed(() => {
   const size = natural.value;
-  if (!isDiagram.value || !size || !viewportWidth.value) return 1;
+  if ((!isDiagram.value && !isPlot.value) || !size || !viewportWidth.value) return 1;
   return Math.min(1, viewportWidth.value / size.width);
 });
 
@@ -345,9 +360,9 @@ const downloadError = ref(false);
 const busy = ref(false);
 
 /** What the download control needs to have in hand: the SVG text. */
-const svg = computed(() => diagram.value?.svg ?? "");
+const svg = computed(() => figureCanvas.value?.svg ?? "");
 
-const canDownload = computed(() => isDiagram.value && !!svg.value && !busy.value);
+const canDownload = computed(() => (isDiagram.value || isPlot.value) && !!svg.value && !busy.value);
 
 function onDocumentPointerDown(event: PointerEvent) {
   if (menuRoot.value && !menuRoot.value.contains(event.target as Node)) menuOpen.value = false;
@@ -543,9 +558,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
               <Icon name="zoom-in" />
             </button>
 
-            <!-- The drawing's own control, and only a diagram has one: a table leaves by the
+            <!-- The drawing's own control, and only a drawing has one: a table leaves by the
                  clipboard, which is the format it exists in. -->
-            <div v-if="isDiagram" ref="menuRoot" class="viewer-menu">
+            <div v-if="isDiagram || isPlot" ref="menuRoot" class="viewer-menu">
               <button
                 class="icon-btn"
                 data-testid="diagram-download"
@@ -627,7 +642,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           -->
           <div class="figure-box" :style="boxStyle" data-testid="figure-box">
             <div class="figure-inner" :style="innerStyle">
-              <MermaidDiagram v-if="content.kind === 'diagram'" ref="diagram" :source="content.source" />
+              <MermaidDiagram
+                v-if="content.kind === 'diagram'"
+                ref="figureCanvas"
+                :source="content.source"
+              />
+              <PlotFigure
+                v-else-if="content.kind === 'plot'"
+                ref="figureCanvas"
+                :spec="content.spec"
+              />
               <div v-else ref="canvas" class="markdown table-canvas" v-html="tableHtml"></div>
             </div>
           </div>

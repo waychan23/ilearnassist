@@ -960,6 +960,42 @@ export const DDL = `
     ON session_tables(session_id, name);
   CREATE INDEX IF NOT EXISTS idx_tables_call ON session_tables(tool_call_id);
 
+  -- A conversation's plots: one row per math figure the model drew on a coordinate plane, and
+  -- the second derived row here that holds the artifact itself.
+  --
+  -- session_tables' shape applied to a third kind, and the argument is the same one: a plot
+  -- is data, not a file. The spec is a small JSON document the client renders deterministically,
+  -- so there are no bytes for a file_id to point at and nothing for the library to browse.
+  -- content's counterpart here is spec, a canonical JSON string rather than a parsed object:
+  -- the column is TEXT, a read that cannot parse it must surface as a rendering failure rather
+  -- than a 500, and the renderer is the authority on what it can draw — the same division
+  -- ila_diagram documents for mermaid, one kind over.
+  --
+  -- No deleted_at, no message_id, and no FK on thread_id: session_tables' argument unchanged.
+  -- Derived data the model wrote in a turn, nothing in the product deletes a plot, and the
+  -- assistant message does not exist when the tool runs — the classifier assigns the thread
+  -- directly, in the same transaction as the turn's own.
+  --
+  -- name is a slug with NO extension, for the table's reason: there is no file name for it to
+  -- match. (session_id, name) is the revise rule — calling the tool again with the same name
+  -- corrects that figure rather than adding a second one.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS session_plots (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    thread_id TEXT,
+    name TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    spec TEXT NOT NULL,
+    tool_call_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_plots_session_name
+    ON session_plots(session_id, name);
+  CREATE INDEX IF NOT EXISTS idx_plots_call ON session_plots(tool_call_id);
+
   -- The insight panel's observations: typed things a pass over the conversation noticed.
   --
   -- Derived data, and the FIRST derived table here with a delete control — which is why the

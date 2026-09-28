@@ -307,7 +307,7 @@ describe("marking what is already granted", () => {
  * them in place looking unfiltered.
  */
 describe("the conversation's own objects", () => {
-  function figure(kind: "diagram" | "table", name: string, summary = ""): FigureRow {
+  function figure(kind: "diagram" | "table" | "plot", name: string, summary = ""): FigureRow {
     return {
       key: `${kind}:${name}`,
       kind,
@@ -318,6 +318,7 @@ describe("the conversation's own objects", () => {
       toolCallId: null,
       fileName: kind === "diagram" ? `${name}.mmd` : null,
       content: kind === "table" ? "| a |" : null,
+      spec: kind === "plot" ? '{"elements":[]}' : null,
       fileMissing: false,
     };
   }
