@@ -2236,8 +2236,21 @@ export interface AppDb {
    * `acquireSessionLock` answers `undefined` when a live lease is held by another client — the
    * route turns that into 409 — and the lease when it took or renewed it. `releaseSessionLock`
    * answers whether this client's lease was the one removed.
+   *
+   * `takeoverSessionLock` is the one statement that moves a lease away from a live holder: the
+   * deliberate exception to acquire-and-renew, exposed as its own route rather than a flag on
+   * `acquireSessionLock`, so the ordinary claim keeps its "never take what somebody else holds"
+   * contract. Its refusal case is only "a session this account does not own", which the route has
+   * already answered 404 for.
    */
   acquireSessionLock(input: {
+    sessionId: string;
+    userId: string;
+    clientId: string;
+    ttlSeconds: number;
+    now?: Date;
+  }): SessionLockView | undefined;
+  takeoverSessionLock(input: {
     sessionId: string;
     userId: string;
     clientId: string;
@@ -3947,6 +3960,27 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
      WHERE session_locks.expires_at <= @now OR session_locks.client_id = @clientId`
   );
   /*
+   * Takeover: the same insert as the acquire above with **no `WHERE` on the conflict**.
+   *
+   * That one clause is the whole difference, and it is why this is a second statement rather than
+   * a flag: a live lease held by somebody else is exactly what this writes over, where acquire
+   * refuses it. `client_id` and `acquired_at` move to the new holder on purpose — this is a
+   * different client taking the conversation, not a beat, so `acquired_at` answers when *this*
+   * holder took it. The owner check still rides the `SELECT`, so a foreign or deleted session
+   * writes nothing and `changes === 0` keeps that refusal distinguishable without a second read.
+   */
+  const stmtTakeoverSessionLock = db.prepare(
+    `INSERT INTO session_locks (session_id, client_id, acquired_at, expires_at)
+     SELECT s.id, @clientId, @now, @expiresAt
+       FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+      WHERE s.id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+     ON CONFLICT(session_id) DO UPDATE SET
+       client_id = @clientId,
+       acquired_at = @now,
+       expires_at = @expiresAt`
+  );
+  /*
    * Release. Owner-checked in the statement, and an expired row counts as releaseable: it is not
    * anybody's any more, so letting its former holder clean it up is harmless and saves a beat.
    * Note the *shape* of the owner check — a subquery rather than a join, because SQLite's DELETE
@@ -5395,6 +5429,22 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       // takeover of an expired row are three ways to succeed, and the caller wants the lease in
       // all of them. Returning the row without the guard above is how this handed a second client
       // the first one's lease while reporting success.
+      return lockFor(sessionId, userId, clientId, at_);
+    },
+
+    takeoverSessionLock({ sessionId, userId, clientId, ttlSeconds, now: at }) {
+      const at_ = at ?? new Date();
+      // Unconditional when the session is this account's: the conflict statement has no `WHERE`,
+      // so the only way to write nothing is the owner-scoped `SELECT` finding no live session —
+      // which the route has already turned into a 404.
+      const written = stmtTakeoverSessionLock.run({
+        sessionId,
+        userId,
+        clientId,
+        now: at_.toISOString(),
+        expiresAt: new Date(at_.getTime() + ttlSeconds * 1000).toISOString(),
+      });
+      if (written.changes === 0) return undefined;
       return lockFor(sessionId, userId, clientId, at_);
     },
 

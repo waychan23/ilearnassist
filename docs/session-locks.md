@@ -94,7 +94,8 @@ names its session.
 **The gate renews a lease; it never takes one.** A gated write by the holder renews it (a write is
 evidence of presence, so an active client's lease cannot lapse between beats), and a write on a
 conversation nobody holds is allowed — there is nobody to conflict with. What it does *not* do is
-claim a free conversation on the strength of the write.
+claim a free conversation on the strength of the write. (The one route that moves a live lease is
+the explicit takeover, below — not the gate, and not a write.)
 
 That was the first shape, and a second writer is what showed it was wrong: any API client writing to
 a conversation — a script, a spec seeding data — would seize its lock and leave the reader's own tab
@@ -137,6 +138,30 @@ gate's own comment does not cover.
   lock cannot require holding it, and the release plus the titler retry has to work for a client
   that holds nothing.
 
+## Taking a conversation over
+
+Read-only is not necessarily permanent. The banner that states it carries 强制占用 — a takeover —
+and it is the one deliberate exception to "acquire renews, never takes": the client asks for the
+conversation explicitly, and `POST /api/sessions/:id/lock/takeover` writes over a live holder where
+`POST /lock` refuses to.
+
+Three things are load-bearing:
+
+- **It is a route of its own, not a flag on `/lock`.** The ordinary acquire keeps its refusing
+  shape, and the statement with no `WHERE` on the conflict is the one whose name says so.
+- **It confirms first.** The effect lands on another device's screen the moment it succeeds — a
+  composer going read-only mid-sentence — so the control asks before it does.
+- **The ousted client is told by the write gate, not by a push.** There is no stream event for a
+  lock change; the previous holder's next write is answered 409 `SESSION_LOCKED`, and a refusal
+  from *any* write — a turn, a rename, an upload, a note — triggers an immediate workspace-wide
+  re-read (`setSessionLockedHandler` in `api/client.ts`, registered by the store), which is what
+  turns the error into the read-only state. The heartbeat is the second way it finds out: its next
+  beat is refused, so a client that is only reading corrects within a minute.
+
+The reason a takeover is safe to offer at all is that the lease is advisory and the account check
+is separate: taking a conversation from another client moves *who may write*, never who may read
+or which account owns the row.
+
 ## The client
 
 - **State** lives in `stores/app.ts` with everything else, so `forgetAccount()` clears it for free:
@@ -146,12 +171,27 @@ gate's own comment does not cover.
   what makes the requirement's 退出工作区时，取消所有检测逻辑 structural rather than a flag somebody
   has to remember: the view going away stops the timers and releases the lease, and *that* — not a
   reactive input — is the one transition no effect can see.
-- **A refusal from a turn route** is the fifth detection trigger the requirement names, and the one
-  no polling can prevent: the turn is refused before it starts. `consume` re-reads the workspace's
-  locks on that code, so the error becomes a state — composer read-only, dot orange — rather than a
-  sentence that leaves the buttons looking live. It also raises the toast, unlike every other
+- **A leave that no unmount can see is released anyway.** Three more paths give the lease back,
+  because each is a real way the reader is gone and each had a hole before: `pagehide` sends the
+  release with `keepalive` (a closed tab or a reload, where an ordinary fetch dies with the page);
+  `signOut` releases **before** revoking the token (a release after `logout` would be refused); and
+  `selectWorkspace` releases on the way out, because `ChatView` is *reused* across a workspace
+  switch and its teardown never fires. `pageshow` with `persisted` re-claims after a bfcache
+  restore, and coming back to a hidden tab asks for an immediate workspace read.
+- **A claim that answers after the reader left is handed back.** `acquireSessionLock` captures a
+  lease-generation counter before its request and checks it on the reply; a release, a teardown or
+  a sign-out in between marks the reply stale, and the just-taken lease is released rather than
+  recorded. Without it, a click followed quickly by a route change left this client holding a
+  conversation nobody was looking at.
+- **A refusal from any write** gets an immediate workspace-wide re-read through the client's
+  `SESSION_LOCKED` handler, and a refused *turn* additionally raises the toast — unlike every other
   failure that arrives as a thrown response, because a refused turn is never persisted: the message
-  list keeps no trace and the in-bubble banner unmounts with it.
+  list keeps no trace and the in-bubble banner unmounts with it. A refused *send* is also taken
+  back: the optimistic user bubble is dropped from the transcript and the reader's words and chips
+  return to the composer (`refusedDraft` in the store, which `Composer` adopts). The bubble is
+  drawn before the server is asked, so without the rollback a locked-out reader would leave a
+  message in the conversation that only their screen ever had — visible until a reload, and gone
+  after it.
 
 ## What this does not guarantee
 
@@ -180,7 +220,19 @@ Stated, not discovered.
    that tree, and two clients can still edit one file in it. A per-file lock is a different feature
    with a different granularity, and it is not this one.
 7. **A refused write is refused, not retried.** The client shows the state and lets the reader take
-   the conversation back by returning to it; nothing queues a write until the lease is free.
+   the conversation back by returning to it — or, when somebody else holds it, by taking it over
+   explicitly. Nothing queues a write until the lease is free.
+8. **A takeover is last-write-wins.** Two clients pressing 强制占用 at the same moment both get
+   200 and the row ends on whichever statement landed last; the loser's next write is refused, so
+   the state converges, but for a moment both may believe they hold it. This is (1) again: the lock
+   is advisory, and the takeover is a coordination gesture rather than a race-free election.
+9. **The ousted client learns asynchronously.** Nothing is pushed. It corrects on its next refused
+   write (immediate), on its next heartbeat (up to 60 s), or on the five-minute poll — whichever
+   comes first. A turn already streaming is not interrupted, which is (4): the gate is checked when
+   a turn starts, so a takeover does not stop the reply that is already arriving.
+10. **The release on `pagehide` is best effort.** A browser that drops the request, or a process
+    killed outright, leaves the lease to expire exactly as before. `keepalive` narrows the window;
+    the TTL is still the guarantee.
 
 ## Reading the UI
 
@@ -191,11 +243,21 @@ Stated, not discovered.
 | no dot | nobody holds it — the ordinary case, and the reason a single client sees nothing at all |
 | banner over the conversation | the same fact as the orange dot, in words |
 | disabled send | the third surface of the same fact, with the sentence as its title |
+| 强制占用 in the banner | this client takes the conversation from the other one, after confirming |
 
 The dot is a **status**, not a warning, which is why it has its own colour token (`--lock-held`)
 rather than borrowing `--warning` — the config banner and `.hint.warn` mean "you can do something
-about this", and a conversation somebody else is typing into is not that.
+about this", and a conversation somebody else is typing into is not that. The takeover control in
+the banner is the one thing that *is* actionable about the state, which is why it sits there rather
+than on the dot.
 
-There is deliberately **no unlock control**. 主动解锁 is the release on leaving the conversation,
-which is automatic: the reader going away is the signal, and a button would be a second way to do
-what leaving already does.
+There is deliberately **no passive unlock control**. 主动解锁 is the release on leaving the
+conversation, and it is automatic: the reader going away is the signal — a session switch, a
+workspace switch, the view unmounting, a sign-out, and `pagehide` for the tab that is closing —
+and a button for "give it back while I stay here" would be a second way to do what leaving already
+does, with the cost of leaving the conversation read-only for the person who pressed it.
+
+The one control that exists is the opposite: **take the conversation over** from whoever holds it
+(above). That is not an unlock — the other client keeps its lease until the server moves it — it is
+the explicit way out of a read-only state, which an expiry alone cannot provide while the holder is
+still alive.

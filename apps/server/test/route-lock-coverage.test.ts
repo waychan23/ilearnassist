@@ -76,6 +76,8 @@ const MUST_BE_GATED = [
 const EXEMPT = [
   // Taking the lock cannot require the lock.
   "POST /api/sessions/:id/lock",
+  // Taking it *from* another client is the whole point, so this cannot require holding it either.
+  "POST /api/sessions/:id/lock/takeover",
   "DELETE /api/sessions/:id/lock",
   // The release lands here, and the titler retry rides it, so it must always work.
   "POST /api/sessions/:id/leave",

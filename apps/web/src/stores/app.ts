@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import {
   api,
+  setSessionLockedHandler,
   setUnauthenticatedHandler,
   streamAnswers,
   streamQuizMakeup,
@@ -331,6 +332,22 @@ export const useAppStore = defineStore("app", () => {
   const pendingRefs = ref<TurnReference[]>([]);
 
   /**
+   * A send the server refused, handed back to the composer.
+   *
+   * Set only when a turn is refused with `SESSION_LOCKED` *before* anything was persisted: the
+   * optimistic bubble is dropped from the transcript, and the reader's words would go with it if
+   * nothing took them back. `Composer` watches this, adopts the text into its own textarea and
+   * clears the slot — the text is the component's state, which is what keeps "a chip must not
+   * wipe a half-written draft" true, so the store leaves it here rather than reaching in.
+   */
+  const refusedDraft = ref<string | null>(null);
+
+  /** The refused words have been adopted (or the reader moved on); the slot is empty again. */
+  function clearRefusedDraft(): void {
+    refusedDraft.value = null;
+  }
+
+  /**
    * Live parse state per **reference** id, as the server last reported it.
    *
    * Keyed by the reference, not by the file: a parse is recorded on the reference's own columns
@@ -656,6 +673,16 @@ export const useAppStore = defineStore("app", () => {
   let accountEpoch = 0;
 
   /**
+   * The lease lifecycle's own generation counter, bumped wherever this client ends one.
+   *
+   * An acquire captures it before its request goes out, so a reply that arrives after the
+   * generation moved — a release, a teardown, a sign-out, a workspace switch — is recognised as
+   * answered for a reader who has gone and is given straight back rather than recorded. Without
+   * it, a slow claim left this client holding a conversation nobody was looking at.
+   */
+  let lockEpoch = 0;
+
+  /**
    * Drop everything that belonged to the account that was signed in.
    *
    * Called on sign-out and on an expired session, and it is deliberately total: a name, a
@@ -681,6 +708,10 @@ export const useAppStore = defineStore("app", () => {
     // The bubble it pointed at is gone with the messages, so the tracker goes too: a stale id
     // here would swap the *next* account's first message out for a row that is not there.
     pendingLocalMessageId = null;
+    // And so does the send that was standing in for it, with the words it would hand back: they
+    // belong to the account that left, and the next one's composer must not receive them.
+    pendingSendRollback = null;
+    refusedDraft.value = null;
     // The installs belong to the objects, so they go with them — an uninstalled-but-still-listed
     // widget would keep the panel on screen for whoever signs in next.
     workspaceWidgets.value = [];
@@ -702,9 +733,13 @@ export const useAppStore = defineStore("app", () => {
      * hand the next account a read-only conversation that is not its own.
      *
      * `stopLockChecks` cancels the pending debounced refresh, which would otherwise land after
-     * the sign-out and write the previous account's locks into the new one's state. The lease
-     * itself is released by the lock lifecycle's `onScopeDispose`, which fires with the view.
+     * the sign-out and write the previous account's locks into the new one's state. Bumping the
+     * lease generation is the same guard for the lease itself: an acquire still in flight when
+     * the account goes is stale and will not be recorded. `signOut` gives a *held* lease back
+     * before the token is revoked, and the 401 path cannot — its token is already dead, and the
+     * two-minute expiry is the guarantee for that one.
      */
+    lockEpoch += 1;
     sessionLocks.value = {};
     heldSessionId.value = null;
     stopLockChecks();
@@ -849,6 +884,15 @@ export const useAppStore = defineStore("app", () => {
    * invariant maintained by hand.
    */
   async function signOut(): Promise<void> {
+    /*
+     * The lease goes back **before** the token is revoked: a release sent after `logout` would be
+     * refused by the auth gate, and the conversation would sit read-only for the next client
+     * until its two-minute expiry. Not awaited — the sign-out screen must not wait on a lock — so
+     * it is best effort; the TTL is still the guarantee if the two requests race.
+     */
+    const held = heldSessionId.value;
+    if (held) void releaseSessionLock(held);
+
     let failure: unknown;
     try {
       await api.logout();
@@ -873,6 +917,18 @@ export const useAppStore = defineStore("app", () => {
     // exactly this, and one sentence in the catalog is one place to keep it right.
     setError(translateApiError("UNAUTHENTICATED", undefined, undefined));
   });
+
+  /**
+   * What a `SESSION_LOCKED` refusal from anywhere means: this client's view of who may write is
+   * behind the server.
+   *
+   * The server has already refused the write; what this adds is the state change. Asking for a
+   * workspace-wide re-read — through the same debounce every trigger uses — turns "the server
+   * said no" into the read-only composer, the orange dot and the banner, whichever write it was:
+   * a turn, a rename, an upload, a note. Without it, only a refused *turn* updated the UI, and a
+   * client taken over by force kept looking writable for the rest of its lease.
+   */
+  setSessionLockedHandler(() => requestLockRefresh(0));
 
   async function refreshConfig(): Promise<void> {
     config.value = await api.getConfig();
@@ -900,6 +956,11 @@ export const useAppStore = defineStore("app", () => {
     // different one — so an open preview must go. `resetFileTree` closes it, which is why
     // there is no `closeFile()` beside this.
     resetFileTree();
+    // The conversation being left is this client's lease, and it goes with the workspace. The
+    // view is *reused* across a workspace switch, so its teardown never fires — without this the
+    // lease would be held until its expiry for a conversation nobody has on screen.
+    const held = heldSessionId.value;
+    if (held) void releaseSessionLock(held);
     // The previous workspace's locks mean nothing here, so they are dropped rather than left to
     // be re-read: a dot on a conversation from another workspace would be a mark with nothing
     // behind it. Read alongside the rest, as one of three.
@@ -1767,6 +1828,10 @@ export const useAppStore = defineStore("app", () => {
       // Forgotten rather than reported: a deleted conversation has nowhere to keep a new title,
       // and the report would be a request whose answer is a 404 by construction.
       forgetSession();
+      // The lease goes with the conversation. The server's row is unreachable now — the session
+      // is soft-deleted and every lock statement joins through live sessions — so this is local
+      // hygiene: a held id for a deleted conversation must not be beaten or released later.
+      if (heldSessionId.value === id) void releaseSessionLock(id);
       activeSessionId.value = null;
       activeCopilotId.value = null;
       messages.value = [];
@@ -2004,15 +2069,28 @@ export const useAppStore = defineStore("app", () => {
    * The lease is recorded locally on success so the heartbeat has something to beat for even
    * before the workspace list has been re-read; the list then confirms it (or corrects it, if the
    * lease had already expired and somebody else took it in the meantime).
+   *
+   * **A reply that arrives after the reader left is given straight back.** `lockEpoch` is
+   * captured before the request and checked after it: a release, a teardown or a sign-out in
+   * between means this take was for a conversation nobody is looking at, and recording it would
+   * leave a read-only conversation behind for the next client — see `endSessionLockLifecycle`.
    */
   async function acquireSessionLock(sessionId: string): Promise<boolean> {
+    const epoch = lockEpoch;
+    const stillWanted = () => epoch === lockEpoch && activeSessionId.value === sessionId;
     try {
       const { lock } = await api.acquireSessionLock(sessionId);
+      if (!stillWanted()) {
+        // Best effort, and the request may itself be refused if the session went away; either way
+        // this client must not record a lease it no longer wants.
+        void api.releaseSessionLock(sessionId).catch(() => undefined);
+        return false;
+      }
       heldSessionId.value = sessionId;
       sessionLocks.value = { ...sessionLocks.value, [sessionId]: lock };
       return true;
     } catch (e) {
-      if (isSessionLocked(e)) {
+      if (isSessionLocked(e) && stillWanted()) {
         /*
          * Somebody else has it. Recorded here rather than left to the next workspace-wide read,
          * because this is the answer to *the reader's own action*: they clicked a conversation and
@@ -2043,22 +2121,59 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Take the conversation *from* another client, on the reader's explicit instruction.
+   *
+   * The one deliberate exception to "a lease is taken by opening a conversation": the reader is
+   * looking at a read-only conversation and asks for it. Unlike `acquireSessionLock` this throws
+   * when it fails — the caller is a button press that has to say something — and on success the
+   * ousted client finds out through the write gate's 409, which its own client turns into the
+   * read-only state.
+   */
+  async function takeoverSessionLock(sessionId: string): Promise<void> {
+    const { lock } = await api.takeoverSessionLock(sessionId);
+    heldSessionId.value = sessionId;
+    sessionLocks.value = { ...sessionLocks.value, [sessionId]: lock };
+  }
+
+  /**
    * Give it back.
    *
    * Every failure is swallowed, like the leave report's: the reader has already gone, the
    * conversation is not broken, and the lease expiring in two minutes is the same outcome for
    * everybody else. What must happen either way is the local forgetting — a client that kept
    * believing it held a conversation it had released would beat for it forever.
+   *
+   * `lockEpoch` moves first, so an acquire still in flight for the conversation being left is
+   * known to be stale by the time it answers. `keepalive` rides the unload path: the page is
+   * going away and an ordinary fetch would go with it.
    */
-  async function releaseSessionLock(sessionId: string): Promise<void> {
+  async function releaseSessionLock(
+    sessionId: string,
+    options?: { keepalive?: boolean }
+  ): Promise<void> {
+    lockEpoch += 1;
     if (heldSessionId.value === sessionId) heldSessionId.value = null;
     const { [sessionId]: released, ...rest } = sessionLocks.value;
     if (released !== undefined) sessionLocks.value = rest;
     try {
-      await api.releaseSessionLock(sessionId);
+      await api.releaseSessionLock(sessionId, options);
     } catch {
       /* silent — see above */
     }
+  }
+
+  /**
+   * The reader has gone: end this lease generation and give back whatever it holds.
+   *
+   * Called by the lock lifecycle's teardown and by `pagehide` — the two ways a conversation
+   * leaves the screen with no session switch, and the ones no reactive input can observe. The
+   * generation moves **even with nothing held**, because that is exactly the case the in-flight
+   * acquire needs it for: the reader opened a conversation and left before the claim answered.
+   */
+  function endSessionLockLifecycle(options?: { keepalive?: boolean }): void {
+    const held = heldSessionId.value;
+    lockEpoch += 1;
+    if (held) void releaseSessionLock(held, options);
   }
 
   /**
@@ -2102,6 +2217,14 @@ export const useAppStore = defineStore("app", () => {
       const { locks } = await api.listWorkspaceLocks(workspaceId);
       if (seq !== lockSeq || activeWorkspaceId.value !== workspaceId) return;
       sessionLocks.value = Object.fromEntries(locks.map((l) => [l.sessionId, l]));
+      /*
+       * The server says a lease this client believed it held is somebody else's: it was taken
+       * over, or a beat was lost and the conversation claimed. The list just applied already
+       * makes the UI read-only; forgetting the held id is what stops the heartbeat asking for a
+       * conversation this client no longer has.
+       */
+      const held = heldSessionId.value;
+      if (held !== null && sessionLocks.value[held]?.mine === false) heldSessionId.value = null;
     } catch {
       // Silently keep what is on screen. A lock list that could not be fetched is not a reason to
       // strip the marks off the conversations — the dots would flicker on every hiccup, and the
@@ -2666,6 +2789,8 @@ export const useAppStore = defineStore("app", () => {
         if (pendingLocalMessageId === null) break;
         const localId = pendingLocalMessageId;
         pendingLocalMessageId = null;
+        // Accepted, so the send is the server's now and there is nothing left to take back.
+        pendingSendRollback = null;
         messages.value = messages.value.map((m) => (m.id === localId ? ev.message : m));
         break;
       }
@@ -2751,7 +2876,55 @@ export const useAppStore = defineStore("app", () => {
    */
   let pendingLocalMessageId: string | null = null;
 
-  async function consume(stream: AsyncGenerator<ChatStreamEvent>, sessionId: string): Promise<boolean> {
+  /**
+   * What the reader staged for the current optimistic send, kept until the server accepts it.
+   *
+   * A `SESSION_LOCKED` refusal is the one way a send comes back after being drawn, and it is
+   * refused *before* the server writes anything — so the bubble has to go and the chips have to
+   * return to the composer. Kept as the exact staged arrays rather than rebuilt from the refused
+   * message, because the bubble has already lost the split (a `@`-picked resource and a 追问 are
+   * one `refs` array by the time it is drawn) and only the arrays a chip was made from can restore
+   * its badge and parse state.
+   */
+  let pendingSendRollback: {
+    attachments: Attachment[];
+    resources: Attachment[];
+    refs: TurnReference[];
+  } | null = null;
+
+  /**
+   * Take back a send the server refused for the lock, and hand it to the composer.
+   *
+   * Only called for the refusal that is *known* not to have persisted: `SESSION_LOCKED` from the
+   * write gate, which refuses before a turn exists. A network failure mid-stream is not this —
+   * the POST may have reached the server and written the message, and hiding a row that exists
+   * would be worse than a bubble a refresh clears.
+   *
+   * The restore is conditioned on the reader still being in the conversation the send was for:
+   * a refusal that arrives after they moved on must not put one conversation's text and chips
+   * into another's composer. The bubble is dropped either way — `selectSession` replaces the
+   * list — and `refusedDraft` is left for `forgetAccount` to clear in the account case.
+   */
+  function rollBackRefusedSend(sessionId: string): void {
+    if (pendingLocalMessageId === null) return;
+    const localId = pendingLocalMessageId;
+    pendingLocalMessageId = null;
+    const refused = messages.value.find((m) => m.id === localId);
+    messages.value = messages.value.filter((m) => m.id !== localId);
+    const staged = pendingSendRollback;
+    pendingSendRollback = null;
+    if (!refused || !staged || activeSessionId.value !== sessionId) return;
+    pendingAttachments.value = staged.attachments;
+    pendingResources.value = staged.resources;
+    pendingRefs.value = staged.refs;
+    refusedDraft.value = refused.content;
+  }
+
+  async function consume(
+    stream: AsyncGenerator<ChatStreamEvent>,
+    sessionId: string,
+    options: { optimisticSend?: boolean } = {}
+  ): Promise<boolean> {
     // Whose turn this is. If the account goes away mid-stream the events stop being applied at
     // all, so a signed-out turn cannot write into the next account's conversation.
     const epoch = accountEpoch;
@@ -2785,9 +2958,14 @@ export const useAppStore = defineStore("app", () => {
            * vanish and have nothing told to them, which is the shape of failure the error must
            * survive. The persistent banner and the orange dot explain the state; this is the
            * answer to the press.
+           *
+           * And the send itself is taken back: a refused message must not stay in the transcript
+           * as a bubble nothing on the server knows about, and the reader's words and chips go
+           * home to the composer. See `rollBackRefusedSend`.
            */
           error.value = messageOf(e);
           requestLockRefresh(0);
+          if (options.optimisticSend) rollBackRefusedSend(sessionId);
         }
       }
     } finally {
@@ -2941,6 +3119,17 @@ export const useAppStore = defineStore("app", () => {
       createdAt: new Date().toISOString(),
     });
 
+    /*
+     * What was staged for this send, kept until the server accepts it. The chips are cleared
+     * below so the composer empties with the bubble, which means a refusal has nothing left to
+     * give back unless this snapshot exists — see `pendingSendRollback`.
+     */
+    pendingSendRollback = {
+      attachments: [...pendingAttachments.value],
+      resources: [...pendingResources.value],
+      refs: [...pendingRefs.value],
+    };
+
     clearPendingAttachments();
     clearPendingResources();
     clearPendingReferences();
@@ -2956,7 +3145,9 @@ export const useAppStore = defineStore("app", () => {
         refs: refs.length > 0 ? refs : undefined,
         ...chatExtras,
       }),
-      sessionId
+      sessionId,
+      // The one caller with an optimistic bubble: a lock refusal has to take it back.
+      { optimisticSend: true }
     );
   }
 
@@ -3200,6 +3391,8 @@ export const useAppStore = defineStore("app", () => {
     pendingAttachments,
     pendingResources,
     pendingRefs,
+    refusedDraft,
+    clearRefusedDraft,
     resourceParseStatus,
     parserKinds,
     streaming,
@@ -3225,7 +3418,9 @@ export const useAppStore = defineStore("app", () => {
     isActiveSessionReadOnly,
     holdsActiveSessionLock,
     acquireSessionLock,
+    takeoverSessionLock,
     releaseSessionLock,
+    endSessionLockLifecycle,
     refreshWorkspaceLocks,
     requestLockRefresh,
     stopLockChecks,

@@ -4,6 +4,7 @@ import type { ChatInput, ChatStreamEvent } from "@ilearnassist/shared";
 import {
   api,
   fileToBase64,
+  setSessionLockedHandler,
   setUnauthenticatedHandler,
   fileImageUrl,
   setStoredTokens,
@@ -1010,5 +1011,75 @@ describe("session locks", () => {
 
     await expect(api.listWorkspaceLocks("w1")).resolves.toEqual({ locks: [] });
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/workspaces/w1/locks");
+  });
+
+  it("takes a conversation over on a route of its own", async () => {
+    // A distinct route rather than a flag on acquire, because `/lock` must keep refusing to write
+    // over a live lease; this one exists precisely to do that.
+    const lock = {
+      sessionId: "s1",
+      clientId: "c1",
+      mine: true,
+      acquiredAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-01-01T00:02:00.000Z",
+    };
+    const fetchMock = stubFetch(() => jsonResponse({ lock }));
+
+    await expect(api.takeoverSessionLock("s1")).resolves.toEqual({ lock });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/sessions/s1/lock/takeover");
+    expect(fetchMock.mock.calls[0]![1]?.method).toBe("POST");
+  });
+
+  it("sends the release with `keepalive` when the page is going away", async () => {
+    // Without it the browser cancels the request with the page, and a closed tab holds its
+    // conversation read-only until the lease expires — the case this flag exists for.
+    const fetchMock = stubFetch(() => jsonResponse({ released: true }));
+
+    await api.releaseSessionLock("s1", { keepalive: true });
+    expect(fetchMock.mock.calls[0]![1]?.keepalive).toBe(true);
+  });
+
+  it("tells the lock lifecycle about a refusal from an ordinary write", async () => {
+    // A client that was taken over by force is not pushed the news; a write it makes is refused,
+    // and this callback is what turns that refusal into an immediate state re-read.
+    stubFetch(() =>
+      jsonResponse(
+        { error: { code: "SESSION_LOCKED", message: "held by another client" } },
+        { status: 409 }
+      )
+    );
+    const handler = vi.fn();
+    setSessionLockedHandler(handler);
+
+    await expect(api.updateSession("s1", { title: "x" })).rejects.toMatchObject({
+      code: "SESSION_LOCKED",
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells it about a refused streamed turn too", async () => {
+    stubFetch(() =>
+      jsonResponse({ error: { code: "SESSION_LOCKED", message: "held" } }, { status: 409 })
+    );
+    const handler = vi.fn();
+    setSessionLockedHandler(handler);
+
+    await expect(collect()).rejects.toMatchObject({ code: "SESSION_LOCKED" });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tell it about failures that are not the lock", async () => {
+    // A missing conversation or a provider outage is not a lock change, and re-reading on every
+    // failure would be a request per outage for a state that did not move.
+    stubFetch(() =>
+      jsonResponse({ error: { code: "SESSION_NOT_FOUND", message: "gone" } }, { status: 404 })
+    );
+    const handler = vi.fn();
+    setSessionLockedHandler(handler);
+
+    await expect(api.updateSession("s1", { title: "x" })).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+    });
+    expect(handler).not.toHaveBeenCalled();
   });
 });

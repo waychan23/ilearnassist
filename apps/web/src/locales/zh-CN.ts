@@ -1658,6 +1658,12 @@ export default {
     mine: "这个会话由当前客户端编辑，可正常发送",
     /** The other client's dot — orange, and the reason the conversation is read-only here. */
     other: "另一个客户端正在编辑这个会话，此处只读",
+    /** The banner's control: move the lease to this client, on purpose. */
+    takeover: "强制占用",
+    /** The control's `title`, saying what it does without the confirmation. */
+    takeoverHint: "强制取得这个会话的编辑权，另一台设备将变为只读",
+    /** The confirmation, because the change lands on somebody else's screen. */
+    takeoverConfirm: "强制占用后，另一台正在编辑该会话的设备会立即变为只读。确定要强制占用吗？",
   },
 
   errors: {

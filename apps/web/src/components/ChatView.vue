@@ -32,6 +32,7 @@ import { noteList, notesWritable } from "../composables/notes";
 import { useMessageSelection } from "../composables/messageSelection";
 import { useWidgetActivation } from "../composables/widgetActivation";
 import { useSessionLock } from "../composables/sessionLock";
+import { confirm } from "../composables/confirm";
 import { useFigureViewer } from "../composables/figureViewer";
 import { NOTE_ROOT_ATTR, rangeForAnchor, type NoteHighlightMark } from "../utils/noteAnchor";
 import { kindLabel, messageReference } from "../utils/turnRefs";
@@ -107,6 +108,37 @@ async function commitTitle() {
 
 function cancelTitleEdit() {
   editingTitle.value = false;
+}
+
+/* ------------------------------ session lock ------------------------------ */
+
+/**
+ * Take the conversation from the other client, on the reader's instruction.
+ *
+ * The confirmation is not decoration: the effect lands on another device's screen immediately, so
+ * a misclick there is somebody's composer going read-only mid-sentence. The store action throws
+ * when the server refuses, and the failure gets the same toast every other failed write does —
+ * success has no ceremony, because the banner disappearing and the composer waking up is the
+ * answer.
+ */
+const takeoverBusy = ref(false);
+
+async function takeoverSession(): Promise<void> {
+  const id = store.activeSessionId;
+  if (!id || takeoverBusy.value) return;
+  const accepted = await confirm({
+    message: t("lock.takeoverConfirm"),
+    confirmText: t("lock.takeover"),
+  });
+  if (!accepted) return;
+  takeoverBusy.value = true;
+  try {
+    await store.takeoverSessionLock(id);
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  } finally {
+    takeoverBusy.value = false;
+  }
 }
 
 /* ------------------------------ minimap rail ------------------------------ */
@@ -853,6 +885,20 @@ onBeforeUnmount(() => {
     <div v-if="store.isActiveSessionReadOnly" class="readonly-banner" data-testid="readonly-banner">
       <Icon name="lock" />
       {{ t("lock.other") }}
+      <!--
+        The way out of the read-only state, beside the sentence that states it. It is the one
+        control here that affects another device, which is why it confirms first; the button is
+        disabled while the request is in flight, so a second click cannot race the first.
+      -->
+      <button
+        class="btn small takeover-lock"
+        data-testid="takeover-lock"
+        :title="t('lock.takeoverHint')"
+        :disabled="takeoverBusy"
+        @click="takeoverSession"
+      >
+        {{ t("lock.takeover") }}
+      </button>
     </div>
 
     <!-- The rail is a sibling of the scroller, not a child: inside it would scroll away. -->
@@ -1042,6 +1088,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+/* Pushed to the banner's far edge: the sentence is read first, and the control follows it rather
+   than interrupting it. */
+.readonly-banner .takeover-lock {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .empty-state button {
   margin-top: var(--space-4);

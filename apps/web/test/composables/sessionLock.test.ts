@@ -35,6 +35,7 @@ vi.mock("../../src/api/client", () => ({
   api: mocks.api,
   setStoredTokens: vi.fn(),
   setUnauthenticatedHandler: vi.fn(),
+  setSessionLockedHandler: vi.fn(),
   streamChat: vi.fn(),
   streamAnswers: vi.fn(),
   streamRegenerate: vi.fn(),
@@ -218,7 +219,8 @@ describe("useSessionLock", () => {
     scope.stop();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1");
+    // `undefined` is the options slot: the release on teardown takes no options.
+    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1", undefined);
     expect(store.heldSessionId).toBeNull();
 
     // And nothing keeps running: no beat, no poll.
@@ -242,6 +244,81 @@ describe("useSessionLock", () => {
 
     await vi.advanceTimersByTimeAsync(2_000);
     expect(mocks.api.listWorkspaceLocks).toHaveBeenCalledTimes(1);
+    scope.stop();
+  });
+
+  it("claims a conversation that is already open when it mounts", async () => {
+    // `selectSession` is what usually takes the lease, but it does not run on every path that puts
+    // a conversation back on screen — the browser's Back from the workspace list, or a workspace
+    // card reopening the conversation the store still holds — so the mount has to claim it.
+    const store = await readyStore();
+    await store.selectSession("s1");
+    await vi.advanceTimersByTimeAsync(0);
+    // The state those paths leave behind: the conversation is still open, the lease is not held.
+    await store.releaseSessionLock("s1");
+    mocks.api.acquireSessionLock.mockClear();
+
+    const scope = startLock();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.api.acquireSessionLock).toHaveBeenCalledWith("s1");
+    scope.stop();
+  });
+
+  it("gives the lease back when the page goes away, with keepalive", async () => {
+    // The one leave `onScopeDispose` cannot see. `keepalive` is what keeps the request alive past
+    // the unload; without it the browser cancels the release with the page.
+    const store = await readyStore();
+    const scope = startLock();
+    await store.selectSession("s1");
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.api.releaseSessionLock.mockClear();
+
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.api.releaseSessionLock).toHaveBeenCalledWith("s1", { keepalive: true });
+    expect(store.heldSessionId).toBeNull();
+    scope.stop();
+  });
+
+  it("claims the conversation again when the page comes back from the bfcache", async () => {
+    // A `pageshow` that is not persisted is an ordinary load and has nothing to fix; the
+    // persisted one is a restore, where nothing else about the document re-runs.
+    const store = await readyStore();
+    const scope = startLock();
+    await store.selectSession("s1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.api.acquireSessionLock.mockClear();
+
+    const restored = new Event("pageshow");
+    Object.defineProperty(restored, "persisted", { value: true });
+    window.dispatchEvent(restored);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.api.acquireSessionLock).toHaveBeenCalledWith("s1");
+    scope.stop();
+  });
+
+  it("re-reads the workspace's locks when the tab comes back to the front", async () => {
+    // Another client's leaving corrects itself on this client's next look, not on the five-minute
+    // backstop: coming back to the tab is when the stale read-only state is most visible.
+    await readyStore();
+    const scope = startLock();
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.api.listWorkspaceLocks.mockClear();
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+    });
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.api.listWorkspaceLocks).toHaveBeenCalledWith("w1");
     scope.stop();
   });
 });
