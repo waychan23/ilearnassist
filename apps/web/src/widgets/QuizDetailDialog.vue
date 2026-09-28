@@ -6,6 +6,7 @@ import { useAppStore } from "../stores/app";
 import { quizReference } from "../utils/turnRefs";
 import { codeCopyClick } from "../composables/codeCopy";
 import { confirm } from "../composables/confirm";
+import { emitWidgetEvent } from "../composables/widgetEvents";
 import { useDraggableWindow } from "../composables/draggableWindow";
 import { renderMarkdown } from "../utils/markdown";
 import Icon from "../components/Icon.vue";
@@ -155,7 +156,32 @@ function statusLabel(status: QuizQuestionView["status"]): string {
       return t("quiz.skipped");
     case "dismissed":
       return t("quiz.dismissed");
+    case "deleted":
+      return t("quiz.deleted");
   }
+}
+
+/**
+ * Delete this question and close the window.
+ *
+ * Closing is not politeness: the window's own subject is gone from the panel, so leaving it
+ * open would show a row the list no longer has and offer a pager over a list it is not in.
+ * The confirm says what a delete is — the answer and verdict survive on the server — because
+ * the button is one word and that word means "erase" everywhere else.
+ */
+async function removeQuestion(): Promise<void> {
+  const question = props.question;
+  if (!question || busy.value) return;
+  const ok = await confirm({
+    title: t("quiz.detail.deleteTitle"),
+    message: t("quiz.detail.deleteAsk", { qid: question.qid }),
+    detail: t("quiz.detail.deleteDetail"),
+    confirmText: t("quiz.detail.deleteConfirm"),
+    danger: true,
+  });
+  if (!ok) return;
+  const removed = await store.deleteQuizQuestion(question.id);
+  if (removed) close();
 }
 
 /** The words `renderMarkdown` bakes into a code block's copy control. */
@@ -392,7 +418,7 @@ const navigable = computed(() => inList.value && list.value.length > 1);
  * lack an answer, and all three are things a reader reviewing a quiz wants to find again.
  */
 const nextUnanswered = computed(() =>
-  list.value.findIndex((q, at) => at > index.value && !q.answer)
+  list.value.findIndex((q, at) => at > index.value && !q.answer && q.status !== "deleted")
 );
 
 function go(to: number): void {
@@ -425,6 +451,26 @@ function askFollowup(): void {
   store.stageReference(quizReference(question));
   close();
 }
+
+/**
+ * Scroll back to the card that asked this question.
+ *
+ * The `toolCallId` is the anchor — the same id the panel's own 定位 uses for a pending row,
+ * and the same event (`chat.jump`) the plan and diagram panels emit. The dialog does not
+ * scroll anything itself: the message list is the only thing holding the scroll container,
+ * which is why this crosses the widget bus.
+ *
+ * **Closing is part of the action, not tidiness.** The window is teleported over the
+ * conversation, so a jump made underneath an open window is a scroll the reader cannot see;
+ * closing here is what makes the landing visible. `askFollowup` above closes for its own
+ * version of the same reason (the composer is behind the overlay).
+ */
+function locateInConversation(): void {
+  const question = props.question;
+  if (!question) return;
+  emitWidgetEvent({ type: "chat.jump", toolCallId: question.toolCallId });
+  close();
+}
 </script>
 
 <template>
@@ -454,15 +500,27 @@ function askFollowup(): void {
               {{ statusLabel(question.status) }}
             </span>
           </div>
-          <button
-            class="icon-btn"
-            :title="t('quiz.detail.close')"
-            :aria-label="t('quiz.detail.close')"
-            data-testid="quiz-detail-close"
-            @click="close"
-          >
-            <Icon name="close" />
-          </button>
+          <div class="head-actions">
+            <button
+              class="icon-btn danger"
+              :title="t('quiz.detail.delete')"
+              :aria-label="t('quiz.detail.delete')"
+              data-testid="quiz-detail-delete"
+              :disabled="busy"
+              @click="removeQuestion"
+            >
+              <Icon name="trash" />
+            </button>
+            <button
+              class="icon-btn"
+              :title="t('quiz.detail.close')"
+              :aria-label="t('quiz.detail.close')"
+              data-testid="quiz-detail-close"
+              @click="close"
+            >
+              <Icon name="close" />
+            </button>
+          </div>
         </div>
 
         <div class="modal-body">
@@ -617,9 +675,18 @@ function askFollowup(): void {
           </div>
 
           <!--
-            Ask about this question, in every status.
+            Two ways out of the window, in every status: back to where the question was asked,
+            and into the composer with it as a reference.
           -->
           <div class="followup" data-testid="quiz-followup">
+            <button
+              type="button"
+              class="btn ghost small"
+              data-testid="quiz-followup-locate"
+              @click="locateInConversation"
+            >
+              <Icon name="target" /> {{ t("quiz.detail.locate") }}
+            </button>
             <button
               type="button"
               class="btn ghost small"
@@ -682,6 +749,12 @@ function askFollowup(): void {
   align-items: baseline;
   gap: var(--space-3);
   min-width: 0;
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
 }
 .head-header {
   font-weight: 500;
@@ -835,10 +908,13 @@ function askFollowup(): void {
   color: var(--text-3);
 }
 
+/* The two ways out sit side by side and wrap on a narrow window, where two labelled buttons
+ * would otherwise squeeze or overflow. */
 .followup {
   border-top: 1px solid var(--border);
   padding-top: var(--space-4);
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 </style>

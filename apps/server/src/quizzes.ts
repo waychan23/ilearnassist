@@ -1,7 +1,9 @@
 import { z } from "zod";
 import {
+  QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_REVIEW_EXPLANATION_MAX,
   QUIZ_REVIEW_MAX_REVIEWS,
+  QUIZ_TOOL_NAME,
   type ApiErrorCode,
   type QuizAnswer,
   type QuizAnswers,
@@ -187,7 +189,7 @@ export function quizAnswerKeysForCall(
 ): Map<string, QuizAnswerKey> {
   const map = new Map<string, QuizAnswerKey>();
   for (const row of db.listQuizQuestionsBySession(sessionId)) {
-    if (row.toolCallId !== toolCallId) continue;
+    if (row.toolCallId !== toolCallId || row.status === "deleted") continue;
     if ((row.referenceAnswer && row.referenceAnswer.length > 0) || row.explanation) {
       map.set(row.qid, {
         referenceAnswer: row.referenceAnswer,
@@ -250,7 +252,13 @@ export function listQuizQuestionViews(
   };
   db.raw.transaction(writes)();
 
-  return db.listQuizQuestionsForUser(userId, sessionId).map(toView);
+  // A deleted question is off the panel and, because `ila_query kind "quiz"` reads this same
+  // function, off the model's list of what this conversation asked. Filtering here rather
+  // than leaving the row for each reader is what keeps the two from disagreeing.
+  return db
+    .listQuizQuestionsForUser(userId, sessionId)
+    .filter((row) => row.status !== "deleted")
+    .map(toView);
 }
 
 /* --------------------------------- make-up answer --------------------------------- */
@@ -690,6 +698,103 @@ export function reopenQuizAnswer(
   return { ok: true, view: toView(updated) };
 }
 
+/* --------------------------------- deleting --------------------------------- */
+
+export type DeleteResult =
+  | { ok: true; view: QuizQuestionView }
+  | { ok: false; status: 404; code: ApiErrorCode; reason?: string };
+
+/**
+ * Take one question off the panel, from any status — `pending` included.
+ *
+ * **The status is the whole write.** The answer, the verdict, the feedback and every timestamp
+ * stay on the row, so deleting an answered question destroys no record and the operation is a
+ * change of list membership rather than a delete of history. The card that asked it is marked
+ * separately (`deleted: true` on the persisted call's copy of the question) because the card
+ * renders from its own `input`, not from the rows.
+ *
+ * Idempotent: a question already deleted returns its view unchanged. Every transition is one
+ * transaction with the call marks, so a card can never say "deleted" about a row that is not.
+ */
+export function deleteQuizQuestion(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  quizId: string
+): DeleteResult {
+  const row = db.getQuizQuestionForUser(userId, sessionId, quizId);
+  if (!row) return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+
+  const writes = (): void => {
+    db.markQuizQuestionDeleted(sessionId, row.id);
+    markQuestionDeletedOnCalls(db, sessionId, row);
+  };
+  db.raw.transaction(writes)();
+
+  const updated = db.getQuizQuestionForUser(userId, sessionId, quizId);
+  // The guarded UPDATE just matched this row, so its read cannot miss.
+  if (!updated) return { ok: false, status: 404, code: "QUIZ_QUESTION_NOT_FOUND" };
+  return { ok: true, view: toView(updated) };
+}
+
+/**
+ * Mark the persisted calls' copies of one question as deleted.
+ *
+ * A settled card renders from its own `input` rather than from the quiz rows — that is what
+ * makes a reload show the same questions — so without this a deleted question would keep
+ * rendering as skipped and keep offering a make-up whose route refuses it. Both call shapes
+ * carry `questions`, so one writer covers the card that asked and the make-up card alike.
+ *
+ * Matching is by global `uid` first, with the legacy fallback for calls persisted before the
+ * widget assigned one: a `qid` (`Q1`) plus the call that asked it, which together are unique
+ * where the `qid` alone is only unique within the conversation.
+ */
+export function markQuestionDeletedOnCalls(
+  db: AppDb,
+  sessionId: string,
+  row: QuizQuestionRecord
+): void {
+  for (const message of db.listSessionMessages(sessionId)) {
+    let changed = false;
+    const calls = (message.toolCalls ?? []).map((tc) => {
+      if (tc.name !== QUIZ_TOOL_NAME && tc.name !== QUIZ_MAKEUP_TOOL_NAME) return tc;
+      const input = markQuestionDeletedInInput(tc.input, row, tc.id);
+      if (input === null) return tc;
+      changed = true;
+      return { ...tc, input };
+    });
+    if (changed) db.updateMessageToolCalls(message.id, calls);
+  }
+}
+
+/** The pure half: return the rewritten input, or null when this call names no such question. */
+function markQuestionDeletedInInput(
+  input: string,
+  row: QuizQuestionRecord,
+  toolCallId: string
+): string | null {
+  try {
+    const parsed = JSON.parse(input) as { questions?: unknown };
+    if (!Array.isArray(parsed.questions)) return null;
+    let changed = false;
+    parsed.questions = parsed.questions.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const question = item as QuizQuestion;
+      const matches =
+        question.uid === row.id ||
+        (question.uid === undefined &&
+          question.id === row.qid &&
+          row.toolCallId === toolCallId);
+      if (!matches || question.deleted === true) return item;
+      changed = true;
+      return { ...question, deleted: true };
+    });
+    return changed ? JSON.stringify(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Apply one `ila_review_quiz` call: write each verdict onto its answered question row.
  *
@@ -697,6 +802,11 @@ export function reopenQuizAnswer(
  * a question that is not answered — those are the model naming the wrong thing, and the
  * tool result is where it can correct itself. Update-in-place only: regrading never creates
  * a row.
+ *
+ * A **deleted** question is skipped rather than refused: the model may well be grading a
+ * batch it composed before the reader deleted one, and failing the whole call over a row the
+ * learner removed would punish the answers that are still there. The result reports only what
+ * was written, so "graded" never names a question the panel cannot show.
  */
 export function gradeQuizAnswers(
   db: AppDb,
@@ -718,7 +828,7 @@ export function gradeQuizAnswers(
   const byId = new Map(
     db.listQuizQuestionsBySession(sessionId).map((row) => [row.id, row] as const)
   );
-  for (const item of input.reviews) {
+  const reviews = input.reviews.filter((item) => {
     const row = byId.get(item.quizId);
     if (!row) {
       throw new Error(
@@ -726,6 +836,11 @@ export function gradeQuizAnswers(
           "use the exact quiz_id returned with each question"
       );
     }
+    return row.status !== "deleted";
+  });
+
+  for (const item of reviews) {
+    const row = byId.get(item.quizId)!;
     if (row.status !== "answered") {
       throw new Error(
         `ila_review_quiz: quiz_id ${item.quizId} has no answer to grade (status ${row.status})`
@@ -735,7 +850,7 @@ export function gradeQuizAnswers(
 
   const ts = new Date().toISOString();
   const writes = (): void => {
-    for (const item of input.reviews) {
+    for (const item of reviews) {
       const landed = db.gradeQuizQuestion({
         sessionId,
         id: item.quizId,
@@ -754,7 +869,7 @@ export function gradeQuizAnswers(
   db.raw.transaction(writes)();
 
   return {
-    graded: input.reviews.map((item) => ({ quiz_id: item.quizId, verdict: item.verdict })),
+    graded: reviews.map((item) => ({ quiz_id: item.quizId, verdict: item.verdict })),
   };
 }
 

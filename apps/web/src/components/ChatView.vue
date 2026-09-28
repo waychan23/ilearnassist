@@ -42,6 +42,7 @@ import NoteEditor from "./NoteEditor.vue";
 import Composer from "./Composer.vue";
 import TopbarControls from "./TopbarControls.vue";
 import DiagramDialog from "./dialogs/DiagramDialog.vue";
+import ForkSessionDialog from "./dialogs/ForkSessionDialog.vue";
 import NewSessionDialog from "./dialogs/NewSessionDialog.vue";
 import Icon from "./Icon.vue";
 
@@ -49,6 +50,24 @@ const store = useAppStore();
 const { t } = useI18n();
 const showNewSession = ref(false);
 const messagesEl = ref<HTMLElement | null>(null);
+
+/**
+ * The branch being named: which message, and what the dialog opens with.
+ *
+ * Held here rather than in `MessageItem`, because the default name needs the conversation's
+ * title and the suffix's translation — both of which this component has and the message list
+ * does not. The message component's whole part is saying which message was pressed.
+ */
+const forkDraft = ref<{ messageId: string; title: string } | null>(null);
+
+function startFork(messageId: string): void {
+  const session = store.activeSession;
+  if (!session) return;
+  forkDraft.value = {
+    messageId,
+    title: `${session.title} · ${t("session.fork.suffix")}`,
+  };
+}
 
 /**
  * The widget panel's topbar control, on a compact viewport only.
@@ -860,6 +879,7 @@ onBeforeUnmount(() => {
           :note-marks="noteMarks"
           :is-last="i === store.messages.length - 1"
           @open-ref="openReference"
+          @fork="startFork"
         />
         <!-- The streaming bubble gets no marks: an annotation needs a message row to be filed
              against, and this one has none yet. It draws none for the same reason. -->
@@ -930,6 +950,12 @@ onBeforeUnmount(() => {
     />
 
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
+    <ForkSessionDialog
+      v-if="forkDraft"
+      :message-id="forkDraft.messageId"
+      :initial-title="forkDraft.title"
+      @close="forkDraft = null"
+    />
   </main>
 </template>
 

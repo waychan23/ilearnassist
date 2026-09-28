@@ -41,6 +41,18 @@ const questions = computed<QuizQuestion[]>(() => {
   }
 });
 
+/**
+ * The questions still on the card: everything the model asked minus the ones deleted from
+ * the panel.
+ *
+ * The delete is a server-side filter first, but a **deleted question can still be in this
+ * call's `input`** — that is how the manual copy is stopped from offering an answer the route
+ * would refuse. So the live card's tabs, form, submit and "answered them all" rule all read
+ * this list, while the settled summary deliberately reads the full `questions` so the deleted
+ * row still appears, greyed, where it used to be.
+ */
+const activeQuestions = computed(() => questions.value.filter((q) => !q.deleted));
+
 const draft = reactive<QuizDraft[]>([]);
 const current = ref(0);
 const open = ref(false);
@@ -54,7 +66,7 @@ const open = ref(false);
  * only ever change because the user changed them.
  */
 watch(
-  questions,
+  activeQuestions,
   (list) => {
     while (draft.length > list.length) draft.pop();
     while (draft.length < list.length) {
@@ -85,13 +97,16 @@ const answerable = computed(() => status.value === "awaiting" || reopened.value)
  *
  * Only a skipped or dismissed `ila_quiz` call: those are the two states of "the learner never
  * answered", which is what a make-up is for. A make-up card itself never offers it — it is
- * already one — and an answered card has nothing to bring back.
+ * already one — and an answered card has nothing to bring back. A call whose every question
+ * has been deleted offers nothing either: the re-opened form would have no fields in it, and
+ * the route would refuse the make-up for a question that is gone.
  */
 const canMakeUp = computed(
   () =>
     !reopened.value &&
     props.toolCall.name === QUIZ_TOOL_NAME &&
-    (status.value === "skipped" || status.value === "dismissed")
+    (status.value === "skipped" || status.value === "dismissed") &&
+    activeQuestions.value.length > 0
 );
 
 function openMakeUp(): void {
@@ -128,8 +143,14 @@ function isAnswered(index: number): boolean {
   return d.selected.length > 0 || d.unsure;
 }
 
-const allAnswered = computed(() => questions.value.every((_, index) => isAnswered(index)));
-const isLast = computed(() => current.value === questions.value.length - 1);
+const allAnswered = computed(() => activeQuestions.value.every((_, index) => isAnswered(index)));
+const isLast = computed(() => current.value === activeQuestions.value.length - 1);
+/**
+ * Every question of a live card is gone: the card has nothing left to ask and closes down to
+ * its own cancel. Not the same as a settled card — this one is still what the conversation is
+ * waiting on, so the turn only ends when the reader says so.
+ */
+const emptiedOut = computed(() => answerable.value && activeQuestions.value.length === 0);
 
 /**
  * A question's answer for the record.
@@ -181,13 +202,13 @@ function letter(index: number): string {
 }
 
 function goTo(index: number): void {
-  if (index >= 0 && index < questions.value.length) current.value = index;
+  if (index >= 0 && index < activeQuestions.value.length) current.value = index;
 }
 
 async function submit(): Promise<void> {
   if (!allAnswered.value || busy.value) return;
   const answers: QuizAnswers = {};
-  questions.value.forEach((question, index) => {
+  activeQuestions.value.forEach((question, index) => {
     const d = draft[index];
     if (!d) return;
 
@@ -259,9 +280,11 @@ const panelId = `${uid.value}-panel`;
               ? t("quiz.skipped")
               : status === "dismissed"
                 ? t("quiz.dismissed")
-                : answerable
-                  ? t("quiz.awaiting")
-                  : t("quiz.preparing")
+                : emptiedOut
+                  ? t("quiz.deleted")
+                  : answerable
+                    ? t("quiz.awaiting")
+                    : t("quiz.preparing")
         }}
       </span>
     </div>
@@ -269,6 +292,28 @@ const panelId = `${uid.value}-panel`;
     <div v-if="preparing" class="panel" data-testid="quiz-preparing">
       <span class="hint">{{ t("quiz.preparing") }}</span>
     </div>
+
+    <!--
+      Every question deleted while the card was still live: nothing left to ask, so the card
+      closes down to the one thing that still means something — ending the turn that asked.
+      No submit and no tabs, because either would be a control over an empty set.
+    -->
+    <template v-else-if="emptiedOut">
+      <div class="panel" data-testid="quiz-emptied">
+        <span class="hint">{{ t("quiz.deletedHint") }}</span>
+      </div>
+      <div class="quiz-foot">
+        <button
+          type="button"
+          class="btn ghost small"
+          :disabled="busy"
+          data-testid="quiz-dismiss"
+          @click="dismiss"
+        >
+          {{ t("quiz.cancel") }}
+        </button>
+      </div>
+    </template>
 
     <!-- Live: one question at a time, tabs across the top, a single submit at the end. -->
     <template v-else-if="answerable">
@@ -279,7 +324,7 @@ const panelId = `${uid.value}-panel`;
       -->
       <div class="tabs" role="tablist">
         <button
-          v-for="(question, index) in questions"
+          v-for="(question, index) in activeQuestions"
           :key="question.id || index"
           :id="tabId(index)"
           type="button"
@@ -306,12 +351,16 @@ const panelId = `${uid.value}-panel`;
         tabindex="0"
       >
         <div class="panel-head">
-          <span v-if="questions[current]?.id" class="qid" :data-testid="`quiz-id-${current}`">
-            {{ questions[current]?.id }}
+          <span v-if="activeQuestions[current]?.id" class="qid" :data-testid="`quiz-id-${current}`">
+            {{ activeQuestions[current]?.id }}
           </span>
-          <p class="question" data-testid="quiz-question">{{ questions[current]?.question }}</p>
+          <p class="question" data-testid="quiz-question">
+            {{ activeQuestions[current]?.question }}
+          </p>
         </div>
-        <p v-if="questions[current]?.multiSelect" class="hint">{{ t("quiz.multiSelectHint") }}</p>
+        <p v-if="activeQuestions[current]?.multiSelect" class="hint">
+          {{ t("quiz.multiSelectHint") }}
+        </p>
 
         <!--
           Keyed by the question, so Vue rebuilds this subtree instead of reusing the
@@ -322,9 +371,9 @@ const panelId = `${uid.value}-panel`;
           answers live in `draft`, so re-creating the inputs costs nothing.
         -->
         <QuizQuestionForm
-          v-if="draft[current] && questions[current]"
+          v-if="draft[current] && activeQuestions[current]"
           :key="current"
-          :question="questions[current]!"
+          :question="activeQuestions[current]!"
           :draft="draft[current]!"
           :index="current"
           testid-prefix="quiz"
@@ -333,7 +382,7 @@ const panelId = `${uid.value}-panel`;
 
       <div class="quiz-foot">
         <span class="step" data-testid="quiz-step">{{
-          t("quiz.step", { current: current + 1, total: questions.length })
+          t("quiz.step", { current: current + 1, total: activeQuestions.length })
         }}</span>
         <button
           type="button"
@@ -393,21 +442,34 @@ const panelId = `${uid.value}-panel`;
     -->
     <template v-else>
       <ul class="summary">
-        <li v-for="(question, index) in questions" :key="question.id || index" class="summary-row">
+        <li
+          v-for="(question, index) in questions"
+          :key="question.id || index"
+          class="summary-row"
+          :class="{ deleted: question.deleted }"
+          :data-deleted="question.deleted === true ? 'true' : undefined"
+        >
           <span v-if="question.id" class="qid" :data-testid="`quiz-answer-id-${index}`">
             {{ question.id }}
           </span>
           <span class="summary-question">{{ question.header }}</span>
           <span
             class="summary-answer"
-            :class="{ empty: !recordedAnswer(index) }"
+            :class="{ empty: !recordedAnswer(index), deleted: question.deleted }"
             :data-testid="`quiz-answer-${index}`"
           >
-            {{ answerText(index) }}
-            <span v-if="answerReason(index)" class="answer-reason">{{ answerReason(index) }}</span>
+            <!-- The row is kept where it was — the transcript still shows the question was
+                 asked — and says what became of it instead of an answer nobody can act on. -->
+            <template v-if="question.deleted">{{ t("quiz.deleted") }}</template>
+            <template v-else>
+              {{ answerText(index) }}
+              <span v-if="answerReason(index)" class="answer-reason">{{
+                answerReason(index)
+              }}</span>
+            </template>
           </span>
           <div
-            v-if="recordNotes(index)"
+            v-if="!question.deleted && recordNotes(index)"
             class="summary-notes"
             :data-testid="`quiz-answer-notes-${index}`"
           >
@@ -639,6 +701,15 @@ const panelId = `${uid.value}-panel`;
 }
 .summary-answer.empty {
   color: var(--text-3);
+}
+/* A deleted question stays in the record, greyed: it was asked, and hiding it would rewrite
+   what the transcript says happened. */
+.summary-row.deleted .summary-question {
+  color: var(--text-3);
+}
+.summary-answer.deleted {
+  color: var(--text-3);
+  font-style: italic;
 }
 /* Set off from the answer by a space, so "不确定" and the reason read as two things. */
 .answer-reason {

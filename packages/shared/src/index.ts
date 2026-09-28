@@ -358,6 +358,15 @@ export interface QuizQuestion
    * name a question by. Absent only on legacy calls persisted before the quiz widget.
    */
   uid?: string;
+  /**
+   * This question was deleted from the panel after this call was recorded.
+   *
+   * Only a rendering hint on the persisted call's `input` — the authoritative state is
+   * `quiz_questions.status = "deleted"`. The server marks the call's copy so the settled
+   * card can show the question as deleted and stop offering a make-up for it; every
+   * server-side reader filters the row instead (`listQuizQuestionViews`, `readQuizQuestions`).
+   */
+  deleted?: boolean;
 }
 
 /**
@@ -423,8 +432,19 @@ export const QUIZ_MAKEUP_MAX = 20;
  * the call is "awaiting" while pending, and a quiz has its own dismissed state (the whole
  * set explicitly cancelled, unlike `skipped`, which the user walked away from and may make
  * up later).
+ *
+ * `deleted` is the panel's delete: a question removed from the list from any other state,
+ * with its answer, verdict and timestamps left in place. It is invisible to every server
+ * reader — it cannot be made up, graded or re-posed — and the card that asked it renders
+ * it as deleted rather than offering a make-up.
  */
-export const QUIZ_QUESTION_STATUSES = ["pending", "answered", "skipped", "dismissed"] as const;
+export const QUIZ_QUESTION_STATUSES = [
+  "pending",
+  "answered",
+  "skipped",
+  "dismissed",
+  "deleted",
+] as const;
 export type QuizQuestionStatus = (typeof QUIZ_QUESTION_STATUSES)[number];
 
 /**
@@ -3441,6 +3461,18 @@ export interface CreateSessionInput {
    * so this is one write rather than the create-then-edit the client used to do.
    */
   settings?: SessionSettings;
+}
+
+/**
+ * Payload for `POST /api/sessions/:id/messages/:messageId/fork`.
+ *
+ * The copy is the server's — it reads the source conversation and writes the branch in one
+ * transaction — so the only thing the caller contributes is a name. A blank or absent title
+ * keeps the source's, and the route numbers a collision against its siblings like every
+ * other title write.
+ */
+export interface ForkSessionInput {
+  title?: string;
 }
 
 export interface UpdateSessionInput {

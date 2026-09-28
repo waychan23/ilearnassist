@@ -671,6 +671,16 @@ export default {
       byAuthor: "由 {name} 公开",
       advanced: "其他参数（新建时可一并设定，之后也能在会话参数里改）",
     },
+    /**
+     * Branching: the dialog that names a new conversation copied from an old one, and the two
+     * words it needs. `suffix` is the default title's tail — `原名 · 分支` — which the reader
+     * can replace entirely.
+     */
+    fork: {
+      suffix: "分支",
+      titleLabel: "标题",
+      hint: "将复制截至该消息的全部对话内容，并继承当前会话的参数、计划、题目等记录。",
+    },
     delete: {
       title: "删除会话",
       message: "确定删除会话「{name}」吗？",
@@ -851,6 +861,10 @@ export default {
     answered: "已提交",
     skipped: "已跳过",
     dismissed: "已取消",
+    /** The panel's and a settled card's word for a question the reader deleted. */
+    deleted: "已删除",
+    /** The status line under a still-live card whose every question was deleted. */
+    deletedHint: "这次小测的题目都已删除，没有可作答的题目了。取消这次小测即可让助手继续。",
     /** The status line under a card whose questions were never answered. */
     skippedHint: "你直接发了新消息，这次小测已作废。",
     dismissedHint: "你取消了这次小测，助手会自行判断。",
@@ -904,6 +918,11 @@ export default {
       yourAnswer: "你的回答",
       feedback: "解析",
       waitingGrade: "等待助手判分…",
+      /**
+       * Scroll back to the reply the question was asked in. The window closes as part of the
+       * action, so the landing is visible.
+       */
+      locate: "定位到消息",
       /** Only skipped questions can be made up. */
       makeupHint: "这道题当时没有作答（跳过或取消了小测），可以在这里补答，提交后助手会判分。",
       /**
@@ -916,6 +935,16 @@ export default {
       reopenAsk: "这道题的作答已经记录，但判分没有完成。要清空这次作答、重新补答吗？",
       reopenDetail: "清空后这道题会回到未作答状态，可以像跳过的题目一样重新补答。",
       reopenConfirm: "清空并重新补答",
+      /**
+       * Delete one question from the panel. The confirm says what survives — the row keeps its
+       * answer and verdict — because everywhere else "删除" means the record is gone.
+       */
+      delete: "删除题目",
+      deleteTitle: "删除这道题",
+      deleteAsk: "确定删除 {qid} 吗？",
+      deleteDetail:
+        "题目会从测验面板中移除，之后不能再作答或补答；已经提交的答案与判分记录仍会保留。",
+      deleteConfirm: "删除",
       close: "关闭",
     },
   },
@@ -971,6 +1000,15 @@ export default {
       message: "确定让模型重新回答这条消息吗？",
       detail: "当前回复会被删除，模型将针对同一条消息重新作答。",
       action: "重新生成",
+    },
+    /**
+     * Branch from one message: the hover action and the dialog it opens. The dialog's own
+     * confirm is `session.fork.titleLabel`'s form — this namespace only names the gesture.
+     */
+    fork: {
+      action: "从这里分支",
+      title: "分支会话",
+      confirm: "创建分支",
     },
     usage: {
       input: "输入",

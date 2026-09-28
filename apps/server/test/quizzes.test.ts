@@ -6,10 +6,12 @@ import { type PlanTreeNode, type QuizAnswer } from "@ilearnassist/shared";
 import { createDb, DEFAULT_SESSION_TITLE, type AppDb } from "../src/db.js";
 import { applyProgress, forceMakePlan } from "../src/plans.js";
 import {
+  deleteQuizQuestion,
   dismissQuizQuestions,
   gradeQuizAnswers,
   reopenQuizAnswer,
   listQuizQuestionViews,
+  makeupQuestionsByQid,
   makeupQuestions,
   quizAnswerKeysForCall,
   recordMakeupAnswers,
@@ -669,6 +671,231 @@ describe("reopenQuizAnswer", () => {
       ok: false,
       status: 404,
       code: "QUIZ_QUESTION_NOT_FOUND",
+    });
+  });
+});
+
+/* ------------------------------------ deleting ------------------------------------ */
+
+describe("deleteQuizQuestion", () => {
+  /**
+   * Register one question behind a live awaiting card, and return its id.
+   *
+   * The awaiting message is not decoration: the panel's read reconciles a pending row whose
+   * call is not awaiting into `skipped`, so without it the tests that go through
+   * `listQuizQuestionViews` would be testing a state they never set.
+   */
+  function liveQuestion(qid: string, position: number, callId: string): string {
+    registerQuiz([[qid, position]], callId);
+    db.createMessage({
+      id: `m-${callId}`,
+      sessionId: SESSION,
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: callId,
+          name: "ila_quiz",
+          input: JSON.stringify({ questions: [] }),
+          status: "awaiting",
+        },
+      ],
+    });
+    return listQuizQuestionViews(db, OWNER, SESSION).find((q) => q.qid === qid)!.id;
+  }
+
+  it("deletes every status, pending included", () => {
+    const cases = ["pending", "answered", "skipped", "dismissed"] as const;
+    cases.forEach((reason, index) => {
+      const qid = `Q${index + 1}`;
+      const callId = `call-${index + 1}`;
+      const id = liveQuestion(qid, index + 1, callId);
+      if (reason === "answered") {
+        recordQuizAnswers(db, SESSION, callId, { [qid]: { selected: ["滚动"] } });
+      } else if (reason === "skipped") {
+        skipQuizQuestions(db, SESSION, [callId]);
+      } else if (reason === "dismissed") {
+        dismissQuizQuestions(db, SESSION, callId);
+      }
+      const result = deleteQuizQuestion(db, OWNER, SESSION, id);
+      expect(result.ok, reason).toBe(true);
+      if (!result.ok) throw new Error("expected ok");
+      expect(result.view.status, reason).toBe("deleted");
+    });
+  });
+
+  it("keeps the answer, verdict and timestamps rather than clearing the row", () => {
+    const id = liveQuestion("Q1", 1, "call-1");
+    recordQuizAnswers(db, SESSION, "call-1", { Q1: { selected: ["滚动"] } });
+    gradeQuizAnswers(db, SESSION, "grade-1", {
+      reviews: [{ quizId: id, verdict: "correct", explanation: "对。" }],
+    });
+
+    expect(deleteQuizQuestion(db, OWNER, SESSION, id)).toMatchObject({ ok: true });
+    const row = db.getQuizQuestionForUser(OWNER, SESSION, id)!;
+    expect(row.status).toBe("deleted");
+    expect(row.answer).toEqual({ selected: ["滚动"] });
+    expect(row.verdict).toBe("correct");
+    expect(row.feedback).toBe("对。");
+    expect(row.answeredAt).not.toBeNull();
+    expect(row.gradedAt).not.toBeNull();
+  });
+
+  it("is idempotent on a repeat delete", () => {
+    const id = liveQuestion("Q1", 1, "call-1");
+    skipQuizQuestions(db, SESSION, ["call-1"]);
+    const first = deleteQuizQuestion(db, OWNER, SESSION, id);
+    if (!first.ok) throw new Error("expected ok");
+
+    const again = deleteQuizQuestion(db, OWNER, SESSION, first.view.id);
+    expect(again).toMatchObject({ ok: true });
+    if (!again.ok) throw new Error("expected ok");
+    expect(again.view.status).toBe("deleted");
+  });
+
+  it("404s an unknown id and another account's question", () => {
+    const id = liveQuestion("Q1", 1, "call-1");
+
+    expect(deleteQuizQuestion(db, OWNER, SESSION, "nope")).toMatchObject({
+      ok: false,
+      status: 404,
+      code: "QUIZ_QUESTION_NOT_FOUND",
+    });
+    expect(deleteQuizQuestion(db, OTHER, SESSION, id)).toMatchObject({
+      ok: false,
+      status: 404,
+      code: "QUIZ_QUESTION_NOT_FOUND",
+    });
+    // The refused delete wrote nothing.
+    expect(db.getQuizQuestionForUser(OWNER, SESSION, id)!.status).toBe("pending");
+  });
+
+  it("marks the persisted ila_quiz call's copy of the question", () => {
+    const registered = registerQuiz([["Q1", 1]], "call-1");
+    const id = registered[0]!.uid;
+    db.createMessage({
+      id: "m-quiz",
+      sessionId: SESSION,
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "ila_quiz",
+          // What the card renders from: the question set as the suspension recorded it.
+          input: JSON.stringify({
+            questions: [{ id: "Q1", uid: id, header: "窗口", question: "哪几种？", options: options() }],
+          }),
+          status: "skipped",
+        },
+      ],
+    });
+
+    deleteQuizQuestion(db, OWNER, SESSION, id);
+
+    const call = db.findMessageWithToolCall(SESSION, "call-1")!.call;
+    const parsed = JSON.parse(call.input) as { questions: { uid: string; deleted?: boolean }[] };
+    expect(parsed.questions[0]).toMatchObject({ uid: id, deleted: true });
+  });
+
+  it("marks a make-up card's copy too, matching on the global uid", () => {
+    const registered = registerQuiz([["Q1", 1]], "call-1");
+    const id = registered[0]!.uid;
+    db.createMessage({
+      id: "m-makeup",
+      sessionId: SESSION,
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "makeup-1",
+          name: "ila_makeup_quiz",
+          input: JSON.stringify({
+            questions: [{ id: "Q1", uid: id, header: "窗口", question: "哪几种？", options: options() }],
+          }),
+          status: "answered",
+          answer: { Q1: { selected: ["滚动"] } },
+        },
+      ],
+    });
+
+    deleteQuizQuestion(db, OWNER, SESSION, id);
+
+    const call = db.findMessageWithToolCall(SESSION, "makeup-1")!.call;
+    const parsed = JSON.parse(call.input) as { questions: { uid: string; deleted?: boolean }[] };
+    expect(parsed.questions[0]).toMatchObject({ uid: id, deleted: true });
+  });
+
+  it("falls back to qid plus the asking call for a legacy copy with no uid", () => {
+    registerQuiz([["Q1", 1]], "call-1");
+    const id = listQuizQuestionViews(db, OWNER, SESSION)[0]!.id;
+    db.createMessage({
+      id: "m-legacy",
+      sessionId: SESSION,
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "ila_quiz",
+          input: JSON.stringify({
+            questions: [{ id: "Q1", header: "窗口", question: "哪几种？", options: options() }],
+          }),
+          status: "skipped",
+        },
+      ],
+    });
+
+    deleteQuizQuestion(db, OWNER, SESSION, id);
+
+    const call = db.findMessageWithToolCall(SESSION, "call-1")!.call;
+    const parsed = JSON.parse(call.input) as { questions: { deleted?: boolean }[] };
+    expect(parsed.questions[0]!.deleted).toBe(true);
+  });
+});
+
+describe("deleted questions downstream", () => {
+  /** Two skipped questions with the second deleted, returning its id and the first's. */
+  function pairWithSecondDeleted(): { kept: string; deleted: string } {
+    const registered = registerQuiz([["Q1", 1], ["Q2", 2]], "call-1");
+    skipQuizQuestions(db, SESSION, ["call-1"]);
+    const deleted = registered[1]!.uid;
+    deleteQuizQuestion(db, OWNER, SESSION, deleted);
+    return { kept: registered[0]!.uid, deleted };
+  }
+
+  it("drops out of the panel's view", () => {
+    pairWithSecondDeleted();
+    expect(listQuizQuestionViews(db, OWNER, SESSION).map((q) => q.qid)).toEqual(["Q1"]);
+  });
+
+  it("is not make-up eligible, by id or by qid", () => {
+    pairWithSecondDeleted();
+    expect(makeupQuestions(db, SESSION).map((q) => q.id)).toEqual(["Q1"]);
+    expect(() => makeupQuestionsByQid(db, SESSION, ["Q2"])).toThrow(/left unanswered/);
+  });
+
+  it("is skipped by grading rather than failing the whole batch", () => {
+    const registered = registerQuiz([["Q1", 1], ["Q2", 2]], "call-1");
+    // Both questions were answered before one was deleted; grading the stale batch must write
+    // the live one and leave the deleted one alone.
+    recordQuizAnswers(db, SESSION, "call-1", {
+      Q1: { selected: ["滚动"] },
+      Q2: { selected: ["滑动"] },
+    });
+    const deleted = registered[1]!.uid;
+    deleteQuizQuestion(db, OWNER, SESSION, deleted);
+
+    const result = gradeQuizAnswers(db, SESSION, "grade-1", {
+      reviews: [
+        { quizId: registered[0]!.uid, verdict: "correct", explanation: "对。" },
+        { quizId: deleted, verdict: "incorrect", explanation: "错。" },
+      ],
+    });
+    expect(result.graded).toEqual([{ quiz_id: registered[0]!.uid, verdict: "correct" }]);
+    expect(db.getQuizQuestionForUser(OWNER, SESSION, deleted)).toMatchObject({
+      status: "deleted",
+      verdict: null,
     });
   });
 });

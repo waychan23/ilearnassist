@@ -124,6 +124,18 @@ describe("buildQuizTree", () => {
     );
     expect(tree.other.questions.map((x) => x.qid)).toEqual(["Q1", "Q2", "Q3"]);
   });
+
+  it("keeps deleted questions out of every filter", () => {
+    // The server filters them out of the list, so this is the second line of defence against a
+    // row arriving from somewhere else. Nothing renders a deleted question, under any filter.
+    const deleted = q({ status: "deleted", verdict: null });
+    expect(buildQuizTree([deleted], null, "all").other.questions).toHaveLength(0);
+    expect(buildQuizTree([deleted], null, "answered").other.questions).toHaveLength(0);
+    expect(buildQuizTree([deleted], null, "skipped").other.questions).toHaveLength(0);
+    expect(buildQuizTree([deleted], null, "wrong").other.questions).toHaveLength(0);
+    // And a live one beside it still renders, so the filter is not dropping everything.
+    expect(buildQuizTree([deleted, q()], null, "all").other.questions).toHaveLength(1);
+  });
 });
 
 describe("flattenQuizTree", () => {

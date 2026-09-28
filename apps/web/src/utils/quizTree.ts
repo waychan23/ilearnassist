@@ -45,7 +45,9 @@ function root(id: string): QuizTreeFolder {
 function matches(question: QuizQuestionView, filter: QuizFilter): boolean {
   switch (filter) {
     case "all":
-      return true;
+      // Deleted rows are filtered server-side; this keeps a row from another source — a
+      // fixture, a stale payload — out of the tree as well.
+      return question.status !== "deleted";
     case "answered":
       return question.status === "answered";
     case "skipped":

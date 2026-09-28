@@ -65,7 +65,17 @@ const props = defineProps<{
  * window. So the kind travels unchanged, exactly as a selection's button id does, and this
  * component never learns that a diagram is a file and a quiz question is a call.
  */
-const emit = defineEmits<{ openRef: [reference: TurnReference] }>();
+const emit = defineEmits<{
+  openRef: [reference: TurnReference];
+  /**
+   * Branch the conversation from this message.
+   *
+   * The id, not a prepared title: the dialog that opens is `ChatView`'s, because the message
+   * list must not know what the conversation is called yet alone what a fork costs. The one
+   * thing this component knows is *which* message was pressed.
+   */
+  fork: [messageId: string];
+}>();
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -366,6 +376,22 @@ const canDelete = computed(
   () => !!props.message && props.isLast === true && !props.streaming && !store.streaming.active
 );
 
+/**
+ * Whether this message can be the end of a branch.
+ *
+ * Any persisted message, both roles — and deliberately **not** the tail rule `canDelete`
+ * carries. A fork copies *up to and including* its message, so every message is a possible cut
+ * point; the order of the source's own continuation is what the branch chooses to leave behind.
+ * The one refusal is a turn in flight: a reply still streaming is not a persisted message, and
+ * the server refuses with `TURN_IN_PROGRESS` for the same reason.
+ */
+const canFork = computed(() => !!props.message && !props.streaming && !store.streaming.active);
+
+function forkMessage(): void {
+  const message = props.message;
+  if (message) emit("fork", message.id);
+}
+
 async function deleteMessage(): Promise<void> {
   const message = props.message;
   if (!message) return;
@@ -475,6 +501,16 @@ const usageText = computed(() => {
           <Icon :name="copied ? 'check' : 'copy'" /> {{ copied ? t("common.copied") : t("common.copy") }}
         </button>
         <button
+          v-if="canFork"
+          class="icon-btn act"
+          data-testid="message-fork"
+          :title="t('message.fork.action')"
+          :aria-label="t('message.fork.action')"
+          @click="forkMessage"
+        >
+          <Icon name="fork" />
+        </button>
+        <button
           v-if="canDelete"
           class="icon-btn act danger"
           data-testid="message-delete"
@@ -535,6 +571,16 @@ const usageText = computed(() => {
           @click="copyMessage"
         >
           <Icon :name="copied ? 'check' : 'copy'" /> {{ copied ? t("common.copied") : t("common.copy") }}
+        </button>
+        <button
+          v-if="canFork"
+          class="icon-btn act"
+          data-testid="message-fork"
+          :title="t('message.fork.action')"
+          :aria-label="t('message.fork.action')"
+          @click="forkMessage"
+        >
+          <Icon name="fork" />
         </button>
         <button
           v-if="canRegenerate"

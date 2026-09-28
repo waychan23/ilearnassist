@@ -509,6 +509,12 @@ const en: typeof MessageSchema = {
       byAuthor: "published by {name}",
       advanced: "Other parameters (set here at creation, adjustable afterwards in session parameters)",
     },
+    /** Branching — see the Chinese catalog for what `suffix` is for. */
+    fork: {
+      suffix: "branch",
+      titleLabel: "Title",
+      hint: "Everything up to and including that message is copied, and this conversation's parameters, plan, quizzes and other records are inherited.",
+    },
     // 「」 is a Chinese quoting convention; English gets curly quotes.
     delete: {
       title: "Delete conversation",
@@ -636,6 +642,9 @@ const en: typeof MessageSchema = {
     answered: "Submitted",
     skipped: "Skipped",
     dismissed: "Dismissed",
+    deleted: "Deleted",
+    deletedHint:
+      "Every question in this quiz was deleted, so there is nothing left to answer. Dismiss it to let the assistant continue.",
     skippedHint: "You sent a new message instead, so this quiz was retired.",
     dismissedHint: "You dismissed this quiz, so the assistant will use its own judgement.",
     multiSelectHint: "Select any that apply.",
@@ -679,6 +688,7 @@ const en: typeof MessageSchema = {
       yourAnswer: "Your answer",
       feedback: "Explanation",
       waitingGrade: "Waiting for the assistant to grade it…",
+      locate: "Locate in conversation",
       makeupHint:
         "You did not answer this question earlier (skipped or cancelled the quiz). Answer it here and the assistant will grade it.",
       reopen: "Answer it again",
@@ -688,6 +698,12 @@ const en: typeof MessageSchema = {
       reopenDetail:
         "The question goes back to being unanswered, and can be answered again like one you skipped.",
       reopenConfirm: "Clear it and answer again",
+      delete: "Delete question",
+      deleteTitle: "Delete this question",
+      deleteAsk: "Delete {qid}?",
+      deleteDetail:
+        "The question leaves the quiz panel and can no longer be answered or made up. The answer and grade already recorded are kept.",
+      deleteConfirm: "Delete",
       close: "Close",
     },
   },
@@ -726,6 +742,11 @@ const en: typeof MessageSchema = {
       message: "Ask the model to answer this message again?",
       detail: "The current reply is deleted and the model answers the same message again.",
       action: "Regenerate",
+    },
+    fork: {
+      action: "Branch from here",
+      title: "Branch conversation",
+      confirm: "Create branch",
     },
     usage: {
       input: "In",
