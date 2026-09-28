@@ -18,6 +18,7 @@ import type {
   DocumentParsingConfig,
   DriverInfo,
   FileContent,
+  ForkSessionInput,
   GenerateSessionInsightsResponse,
   GetPlanResponse,
   GetQuizQuestionsResponse,
@@ -805,6 +806,20 @@ export const api = {
   deleteMessage: (sessionId: string, messageId: string) =>
     request<{ ok: boolean }>(`/sessions/${sessionId}/messages/${messageId}`, { method: "DELETE" }),
 
+  /**
+   * Branch a conversation at one message.
+   *
+   * The title is the only thing the client contributes: the copy — the messages up to and
+   * including `messageId`, the parameters and every derived thing a reader can open — is the
+   * server's to build in one transaction. The reply is the new `Session` itself, ready to be
+   * inserted into the list and opened.
+   */
+  forkSession: (sessionId: string, messageId: string, input: ForkSessionInput = {}) =>
+    request<Session>(`/sessions/${sessionId}/messages/${messageId}/fork`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
   /*
    * Widgets.
    *
@@ -850,6 +865,16 @@ export const api = {
   reopenQuizQuestion: (sessionId: string, quizId: string) =>
     request<{ question: QuizQuestionView }>(
       `/sessions/${sessionId}/quizzes/${quizId}/reopen`,
+      { method: "POST" }
+    ),
+  /*
+   * Take a question off the panel. Only its status changes on the server — the answer and the
+   * verdict stay — but the card that asked it is marked too, so the caller must re-read the
+   * messages as well as the question list.
+   */
+  deleteQuizQuestion: (sessionId: string, quizId: string) =>
+    request<{ question: QuizQuestionView }>(
+      `/sessions/${sessionId}/quizzes/${quizId}/delete`,
       { method: "POST" }
     ),
   // Threads (the thread widget): derived topic chains plus the still-unclassified count.

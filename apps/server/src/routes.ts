@@ -21,6 +21,7 @@ import type {
   DocumentParsePolicy,
   DocumentParserConfig,
   FileLocation,
+  ForkSessionInput,
   HealthResponse,
   ParseErrorCode,
   ParseStatus,
@@ -144,6 +145,7 @@ import {
   resolveReferences,
 } from "./turnReferences.js";
 import {
+  deleteQuizQuestion,
   dismissQuizQuestions,
   listQuizQuestionViews,
   reopenQuizAnswer,
@@ -156,6 +158,7 @@ import {
   registerQuizQuestions,
   skipQuizQuestions,
 } from "./quizzes.js";
+import { forkSession } from "./fork.js";
 import type { DocumentService } from "./documents/service.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { serverTimeZone, turnClock, type TurnClock } from "./agent/clock.js";
@@ -2345,6 +2348,59 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { ok: true };
   });
 
+  /**
+   * Branch this conversation at one message — the new one holds everything up to and including
+   * it, with the source's parameters and every thing its reader could open copied too.
+   *
+   * The copy itself is `forkSession`'s (see `fork.ts` for the range and the id rules); this route
+   * is the three decisions around it: *which* conversation and message (ownership, both 404s),
+   * *whether* the fork may run (an in-flight turn cannot be snapshotted halfway), and *what the
+   * branch is called* (`TITLE_EMPTY` on a blank name, the workspace's sibling numbering on a
+   * collision, and `titleSource: "user"` because a dialog asked for it).
+   *
+   * **No session lock, deliberately** — this route mutates nothing of the source's, only reads
+   * it, and `activeTurns` already refuses the one state a snapshot could not represent. Taking
+   * the source's lease would block a fork from a conversation somebody else is merely reading,
+   * which is the opposite of what the lock is for. See `docs/session-locks.md`.
+   */
+  app.post("/api/sessions/:id/messages/:messageId/fork", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, messageId } = request.params as { id: string; messageId: string };
+
+    const found = db.getSessionForUser(id, userId);
+    if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    // A message id from another conversation answers like one that does not exist.
+    const message = db.getMessageForUser(messageId, userId);
+    if (!message || message.sessionId !== id) {
+      return reply.code(404).send(apiError("MESSAGE_NOT_FOUND", "message not found"));
+    }
+    if (activeTurns.has(id)) {
+      return reply.code(409).send(apiError("TURN_IN_PROGRESS", "a reply is still being generated"));
+    }
+
+    const body = request.body as ForkSessionInput | undefined;
+    if (body?.title !== undefined && !body.title.trim()) {
+      return reply.code(400).send(apiError("TITLE_EMPTY", "title must not be empty"));
+    }
+    const title = uniqueTitleIn(
+      found.workspace.id,
+      userId,
+      body?.title?.trim() || found.session.title
+    );
+
+    const result = forkSession(db, {
+      userId,
+      source: found.session,
+      workspace: found.workspace,
+      throughMessageId: messageId,
+      title,
+    });
+    if (!result.ok) {
+      return reply.code(404).send(apiError("MESSAGE_NOT_FOUND", "message not found"));
+    }
+    return reply.code(201).send(result.session);
+  });
+
   /* --------------------------------- widgets --------------------------------- */
 
   /*
@@ -2577,6 +2633,43 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
               (result.code === "QUIZ_QUESTION_NOT_FOUND"
                 ? "quiz question not found"
                 : "that question cannot be re-opened")
+          )
+        );
+    }
+    return { question: result.view };
+  });
+
+  /**
+   * Take one question off the panel, from any status.
+   *
+   * A delete of *record membership*, not of history: the row keeps its answer, verdict and
+   * timestamps, and what leaves is the panel entry, the model's view of what this conversation
+   * asked (`GET /quizzes` and `ila_query kind "quiz"` read the same filtered list), and the
+   * make-up/grade eligibility that would otherwise still offer the question. The cards that
+   * asked it are marked too, so the transcript says "deleted" rather than lying about a skipped
+   * question that is no longer answerable.
+   *
+   * JSON rather than SSE, `reopen`'s shape and for its reason: nothing starts a turn, and the
+   * client refreshes the rows and the message list itself.
+   */
+  app.post("/api/sessions/:id/quizzes/:quizId/delete", { config: { requiresSessionLock: true } }, async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, quizId } = request.params as { id: string; quizId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    const result = deleteQuizQuestion(db, userId, id, quizId);
+    if (!result.ok) {
+      return reply
+        .code(result.status)
+        .send(
+          apiError(
+            result.code,
+            result.reason ??
+              (result.code === "QUIZ_QUESTION_NOT_FOUND"
+                ? "quiz question not found"
+                : "that question cannot be deleted")
           )
         );
     }

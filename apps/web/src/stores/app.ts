@@ -1431,6 +1431,44 @@ export const useAppStore = defineStore("app", () => {
     return created;
   }
 
+  /**
+   * Branch the open conversation at one message.
+   *
+   * The server does the copying; this is the four things that make the new conversation appear
+   * where a created one does — a place in the list, an open tab, its address, and the widget
+   * lifecycle a create also runs. The install hooks are called with the *fork's* resolved
+   * widgets, which were copied from the source rather than chosen here, so a branch behaves
+   * exactly as the conversation it came from.
+   *
+   * Returns the new session, or null when the server refused — the sentence for which is
+   * already in `error`, like every other failed action.
+   */
+  async function forkSession(messageId: string, title: string): Promise<Session | null> {
+    const sourceId = activeSessionId.value;
+    const workspaceId = activeWorkspaceId.value;
+    if (!sourceId || !workspaceId) return null;
+    try {
+      const created = await api.forkSession(sourceId, messageId, { title: title.trim() || undefined });
+      sessions.value = [created, ...sessions.value.filter((s) => s.id !== created.id)];
+      await selectSession(created.id);
+      await router.push({
+        name: "session",
+        params: { workspaceId, sessionId: created.id },
+      });
+      await runInstallHooks(
+        "session",
+        created.id,
+        sessionWidgets.value.filter((w) => w.enabled).map((w) => w.id)
+      );
+      emitWidgetEvent({ type: "session.created", workspaceId, sessionId: created.id });
+      activateFirstWidget();
+      return created;
+    } catch (e) {
+      setError(messageOf(e));
+      return null;
+    }
+  }
+
   async function renameSession(id: string, title: string): Promise<void> {
     const trimmed = title.trim();
     if (!trimmed) return;
@@ -3084,6 +3122,29 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Take a question off the panel.
+   *
+   * Two reads, and the second is not bookkeeping: the delete marks the *card* that asked the
+   * question as well as the row, and the card renders from the message's own copy — so a
+   * refresh of the panel alone would leave the transcript still offering a make-up the server
+   * would refuse. The `quiz.changed` event then re-reads the panel, which is how the widget
+   * learns about a write made from a dialog or a card.
+   */
+  async function deleteQuizQuestion(quizId: string): Promise<QuizQuestionView | null> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return null;
+    try {
+      const { question } = await api.deleteQuizQuestion(sessionId, quizId);
+      messages.value = await api.listMessages(sessionId);
+      emitWidgetEvent({ type: "quiz.changed", sessionId });
+      return question;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }
+
+  /**
    * Cut the streaming turn short.
    *
    * It asks the server and then does nothing else, deliberately. The chat request is
@@ -3195,6 +3256,7 @@ export const useAppStore = defineStore("app", () => {
     deleteWorkspace,
     selectSession,
     createSession,
+    forkSession,
     renameSession,
     setSessionPinned,
     updateSettings,
@@ -3239,6 +3301,7 @@ export const useAppStore = defineStore("app", () => {
     answerQuestion,
     submitQuizMakeup,
     reopenQuizQuestion,
+    deleteQuizQuestion,
     sendPanelMessage,
     planJumpToNode,
     stopMessage,

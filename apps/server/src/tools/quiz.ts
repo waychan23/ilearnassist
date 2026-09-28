@@ -513,12 +513,21 @@ export function renderQuizResult(
  * missing or repeated lets two questions share a single answer slot, with no error anywhere
  * to say so. Refusing the whole set turns it into the same 409 as a question that has
  * already been answered.
+ *
+ * **Deleted questions are filtered out before anything reads the set** — the live card's
+ * validation, a make-up's, the grading result and the answer-key lookup all sit behind this
+ * one function, so a question the reader removed cannot be asked, answered, re-posed or
+ * graded anywhere. The filtered array may legitimately be empty (every question of a pending
+ * card deleted) and is returned as such: `undefined` would refuse the card's own cancel, and
+ * a card whose questions are all gone still has to be closeable.
  */
 export function readQuizQuestions(call: ToolCall): QuizQuestion[] | undefined {
   try {
     const parsed = JSON.parse(call.input) as { questions?: unknown };
     if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) return undefined;
-    const questions = parsed.questions as QuizQuestion[];
+    const questions = (parsed.questions as QuizQuestion[]).filter(
+      (q) => q?.deleted !== true
+    );
     const ids = questions.filter((q) => typeof q.id === "string" && q.id !== "").map((q) => q.id);
     if (ids.length !== questions.length || new Set(ids).size !== ids.length) return undefined;
     return questions;

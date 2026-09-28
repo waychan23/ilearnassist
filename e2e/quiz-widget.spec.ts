@@ -197,7 +197,19 @@ test("quizzes the user, grades into the panel, and groups by chapter", async ({
   await expect(page.getByTestId("quiz-detail-overlay")).toBeVisible();
   await expect(page.getByTestId(`quiz-detail-verdict-${ids[1]}`)).toContainText("错误");
   await expect(page.locator(".quiz-detail .feedback")).toContainText("应选 RocksDB");
+
+  // 定位 is the window's other way out: it scrolls the conversation back to the reply that
+  // asked the question *and closes*, because the window is teleported over that reply and a
+  // jump underneath an open window is one the reader cannot see.
+  await page.getByTestId("quiz-followup-locate").click();
+  await expect(page.getByTestId("quiz-detail-overlay")).toHaveCount(0);
+  await expect(page.locator('[data-tool-call-id="call_quiz"]')).toBeInViewport();
+
+  // The close control is still its own action, and does not move the conversation.
+  await page.locator('[data-testid^="quiz-row-"]').first().click();
+  await expect(page.getByTestId("quiz-detail-overlay")).toBeVisible();
   await page.getByTestId("quiz-detail-close").click();
+  await expect(page.getByTestId("quiz-detail-overlay")).toHaveCount(0);
 });
 
 test("a walked-away question is made up once and then graded", async ({ page, request }) => {
@@ -781,4 +793,160 @@ test("a question whose grading failed can be re-opened and answered again", asyn
   await page.locator('[data-testid^="quiz-row-"]').click();
   await expect(page.getByTestId(`quiz-detail-verdict-${quizId}`)).toContainText("正确");
   await page.getByTestId("quiz-detail-close").click();
+});
+
+test("deleting one question hides it from the panel and marks its card", async ({
+  page,
+  request,
+}) => {
+  await sessionWithWidgets(page, unique("Quiz delete row"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "小测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: TWO_QUESTIONS } }],
+      },
+    ],
+  });
+  await send(page, "开始");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+  const ids = await panelIds(page);
+  expect(ids).toHaveLength(2);
+
+  // Delete one of the two pending questions from its row. The control is revealed on hover,
+  // so hover first — a click without it would be a test of `opacity: 0` and nothing else.
+  const row = page.locator(`[data-testid="quiz-row-${ids[1]}"]`);
+  await row.hover();
+  await page.getByTestId(`quiz-delete-${ids[1]}`).click();
+  await expect(page.locator(".confirm-message")).toContainText(`确定删除 Q2 吗`);
+  await expect(page.locator(".confirm-detail")).toContainText("已经提交的答案与判分记录仍会保留");
+  await page.getByTestId("confirm-accept").click();
+
+  // Off the panel, and off the live card's tab strip — the card renders from its own recorded
+  // copy, which the server marked, so the deletion lands there without a reload.
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(1);
+  await expect(page.getByTestId("quiz-tab-1")).toHaveCount(0);
+  await expect(page.getByTestId("quiz-tab-0")).toBeVisible();
+
+  // The remaining question still works: answer it, grade it by its id.
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        toolCalls: [
+          {
+            id: "call_grade_after_delete",
+            name: "ila_review_quiz",
+            args: {
+              reviews: [{ quizId: ids[0], verdict: "correct", explanation: "答对了。" }],
+            },
+          },
+        ],
+      },
+      { content: "剩下这道对了。" },
+    ],
+  });
+  await page.locator('[data-testid="quiz-option-0-0"]').click();
+  await page.getByTestId("quiz-submit").click();
+  await expect(page.locator('[data-tool-call-id="call_grade_after_delete"]')).toBeVisible();
+
+  // The settled card keeps the deleted question's row, greyed and saying what happened —
+  // the transcript still records that it was asked — and no longer offers a make-up for it.
+  const summaries = page.locator(".summary-row");
+  await expect(summaries).toHaveCount(2);
+  await expect(page.locator('.summary-row[data-deleted="true"]')).toContainText("已删除");
+  await expect(page.locator(".summary-row[data-deleted='true'] .summary-question")).toContainText(
+    "状态"
+  );
+  await expect(page.locator("body")).not.toContainText("DESC-MARKER-42");
+});
+
+test("deleting a live card's every question closes it down to its cancel", async ({
+  page,
+  request,
+}) => {
+  await sessionWithWidgets(page, unique("Quiz delete all"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "小测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: ONE_QUESTION } }],
+      },
+    ],
+  });
+  await send(page, "开始");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+  const quizId = (await panelIds(page))[0]!;
+
+  // Deleting the *last* question of a live card has to go through the row's control: a click
+  // on a pending row jumps to the card instead of opening the window, because the live card is
+  // the answer surface. The window's own delete is covered on a settled question below.
+  await page.locator(`[data-testid="quiz-row-${quizId}"]`).hover();
+  await page.getByTestId(`quiz-delete-${quizId}`).click();
+  await page.getByTestId("confirm-accept").click();
+
+  // Nothing left to answer: the card says so and offers only its cancel. The submit is gone
+  // rather than disabled, because there is no question the form could be about.
+  await expect(page.getByTestId("quiz-emptied")).toBeVisible();
+  await expect(page.getByTestId("quiz-status")).toHaveText("已删除");
+  await expect(page.getByTestId("quiz-submit")).toHaveCount(0);
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(0);
+
+  // Cancelling still ends the turn that asked — the deleted row stays deleted (nothing
+  // resurrects it), and the panel stays empty.
+  await scriptLlm(request as APIRequestContext, { turns: [{ content: "好，那我自己讲。" }] });
+  await page.getByTestId("quiz-dismiss").click();
+  await expect(page.getByTestId("quiz-status")).toContainText("已取消");
+  await selectFilter(page, "all");
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(0);
+});
+
+test("the question window deletes a settled question and closes itself", async ({
+  page,
+  request,
+}) => {
+  await sessionWithWidgets(page, unique("Quiz delete window"));
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        content: "小测一下。",
+        toolCalls: [{ id: "call_quiz", name: "ila_quiz", args: { questions: ONE_QUESTION } }],
+      },
+    ],
+  });
+  await send(page, "开始");
+  await expect(page.getByTestId("quiz-status")).toHaveText("等待你的作答");
+  const quizId = (await panelIds(page))[0]!;
+
+  await scriptLlm(request as APIRequestContext, {
+    turns: [
+      {
+        toolCalls: [
+          {
+            id: "call_grade_before_delete",
+            name: "ila_review_quiz",
+            args: { reviews: [{ quizId, verdict: "correct", explanation: "答对了。" }] },
+          },
+        ],
+      },
+      { content: "对了。" },
+    ],
+  });
+  await page.locator('[data-testid="quiz-option-0-0"]').click();
+  await page.getByTestId("quiz-submit").click();
+  await expect(page.locator('[data-tool-call-id="call_grade_before_delete"]')).toBeVisible();
+
+  // Answered, so the row opens the window rather than jumping.
+  await page.locator(`[data-testid="quiz-row-${quizId}"]`).click();
+  await expect(page.getByTestId("quiz-detail-overlay")).toBeVisible();
+  await page.getByTestId("quiz-detail-delete").click();
+  await page.getByTestId("confirm-accept").click();
+
+  // The window goes with the row it was about, and the panel keeps neither.
+  await expect(page.getByTestId("quiz-detail-overlay")).toHaveCount(0);
+  await expect(page.locator('[data-testid^="quiz-row-"]')).toHaveCount(0);
+  // The card's record keeps the row, greyed: it was asked, and the delete is a change of list.
+  await expect(page.locator('.summary-row[data-deleted="true"]')).toContainText("已删除");
 });

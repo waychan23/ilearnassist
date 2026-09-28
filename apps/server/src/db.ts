@@ -35,6 +35,7 @@ import type {
   SessionSettings,
   StoredFile,
   ThreadBranch,
+  TitleSource,
   TitleState,
   ToolCall,
   TurnReference,
@@ -240,6 +241,14 @@ export interface PlanNodeInsert {
   title: string;
   status: PlanNodeStatus;
   introducedVersion: number;
+  /**
+   * A tombstone's removal version, a completion/jump anchor and its instant. All default to
+   * NULL — an edit's node is alive with no anchor — while a fork reproduces the source's, so
+   * a deleted chapter still reads as deleted in the copy and a click still finds its call.
+   */
+  removedVersion?: number | null;
+  doneToolCallId?: string | null;
+  doneAt?: string | null;
 }
 
 interface ThreadRow {
@@ -289,7 +298,13 @@ interface NoteRow {
   target_missing: number;
 }
 
-/** Input to `createNote`. The id is the caller's, as it is for every insert here. */
+/**
+ * Input to `createNote`. The id is the caller's, as it is for every insert here.
+ *
+ * `createdAt`/`updatedAt` are optional and default to now: a note the user just wrote is
+ * written now, while a fork's copy keeps the source's timestamps so the panel's order is
+ * the order the notes were written in.
+ */
 export interface NoteInsert {
   id: string;
   sessionId: string;
@@ -300,6 +315,8 @@ export interface NoteInsert {
   content: string;
   targetKind: NoteTargetKind;
   targetRef: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /**
@@ -363,6 +380,27 @@ export interface InsightInsert {
   ordinal: number;
 }
 
+/** A reference as a fork reads it: every column `cloneWorkResource` writes, source id included. */
+export type WorkResourceCloneRow = WorkResourceCloneInsert;
+
+/**
+ * An observation copied by a session fork, `adopted` and timestamps included.
+ *
+ * `replaceUnadoptedInsights` is the pass's write and hard-codes `adopted = 0` in its statement;
+ * a fork is reproducing rows the user may have adopted, so it needs the column.
+ */
+export interface InsightCloneInsert {
+  id: string;
+  sessionId: string;
+  type: InsightType;
+  title: string;
+  body: string;
+  adopted: boolean;
+  ordinal: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
  * The row as the rest of the server reads it.
  *
@@ -394,8 +432,14 @@ export interface DiagramUpsert {
   sessionId: string;
   /** The canonical file name — `auth-flow.mmd`, not the model's "Auth Flow". */
   name: string;
-  /** The `.mmd` file's id. Written in the same transaction, which is why there is no FK. */
-  fileId: string;
+  /**
+   * The `.mmd` file's id, or null.
+   *
+   * Nullable for the fork: a diagram row whose file it could not reproduce keeps the row and
+   * loses the pointer, which is the state `fileMissing` already reports. The tool always
+   * passes one, because it writes the file in the same transaction.
+   */
+  fileId: string | null;
   summary: string;
   toolCallId: string | null;
 }
@@ -509,6 +553,37 @@ export interface QuizQuestionInsert {
   referenceAnswer?: string[];
   explanation?: string;
   createdAt: string;
+}
+
+/**
+ * A quiz row copied by a session fork, exactly as the source recorded it.
+ *
+ * The bulk `insertQuizQuestions` above is the *registration* write and always starts a row at
+ * `pending` with no grading; a fork has to reproduce the status, the answer and the verdict
+ * the source holds, so it gets a statement of its own rather than a flag on that one.
+ */
+export interface QuizQuestionCloneInsert {
+  id: string;
+  sessionId: string;
+  nodeId: string | null;
+  nodeTitle: string | null;
+  toolCallId: string;
+  qid: string;
+  position: number;
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: QuizOption[];
+  referenceAnswer: string[] | null;
+  explanation: string | null;
+  status: QuizQuestionStatus;
+  answer: QuizAnswer | null;
+  verdict: QuizVerdict | null;
+  feedback: string | null;
+  gradeToolCallId: string | null;
+  createdAt: string;
+  answeredAt: string | null;
+  gradedAt: string | null;
 }
 
 /**
@@ -1019,6 +1094,34 @@ export interface FileRecord extends StoredFile {
 export interface WorkResourceRecord extends Omit<WorkResource, "resource" | "missing"> {
   userId: string;
   resource: StoredFile | WebPage;
+}
+
+/**
+ * A reference copied by a session fork, with its parse columns as the source had them.
+ *
+ * `upsertWorkResource` is the *make a reference* write and refuses to guess at a parse; a fork
+ * is reproducing a row that already went through one, so it writes the state it reads rather
+ * than making the cloned conversation parse the same file again.
+ */
+export interface WorkResourceCloneInsert {
+  id: string;
+  userId: string;
+  resourceType: WorkResourceType;
+  resourceId: string;
+  ownerType: WorkResourceOwnerType;
+  ownerId: string;
+  title: string;
+  summary: string | null;
+  parsedFileId: string | null;
+  parseStatus: ParseStatus;
+  parseError: string | null;
+  parseErrorCode: string | null;
+  parserId: string | null;
+  parsedChars: number | null;
+  pageCount: number | null;
+  parseUpdatedAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
 }
 
 const mapFile = (r: FileRow): FileRecord => ({
@@ -1757,6 +1860,26 @@ export interface AppDb {
   ): WorkResourceRecord[];
   /** Marks the reference deleted. The entity and its bytes are untouched. */
   softDeleteWorkResourceForUser(id: string, userId: string): boolean;
+
+  /**
+   * Every live reference the conversation **holds**, raw — a fork's read.
+   *
+   * Deliberately not `listWorkResourcesFiltered` with a session id: that answers the wider
+   * question — held *or* referred to — which is the library's, and a fork must not turn an
+   * `@`-reference into a holding. No entity join either, so a reference whose entity has gone
+   * is still read and copied, which is what keeps the copy's dangling links where the source
+   * had them.
+   */
+  listWorkResourcesForClone(userId: string, sessionId: string): WorkResourceCloneRow[];
+  /**
+   * Insert one reference exactly as a fork read it, parse columns included.
+   *
+   * Not `upsertWorkResource`: that is the "make this material referenceable" write and
+   * resolves an entity, while a fork is reproducing a row the conversation already held —
+   * including the fact that it was parsed, which a cloned conversation should not pay for
+   * again.
+   */
+  cloneWorkResource(input: WorkResourceCloneInsert): void;
   /** Records what a parse did. `parsedFileId` is only ever set, never cleared. */
   /**
    * How many places each of these entities is reachable from, keyed by entity id.
@@ -1957,7 +2080,15 @@ export interface AppDb {
     allTools: boolean;
     tools: string[];
     title: string;
+    /**
+     * Who owns the title. Absent means `auto`, which is what every create path wants except
+     * a fork: a branch the user named is a name a person chose, and the auto-titler must not
+     * be able to replace it.
+     */
+    titleSource?: TitleSource;
     settings?: SessionSettings;
+    /** The user's own note about the conversation. Absent writes `''`, like the column. */
+    description?: string;
   }): Session;
   /**
    * A supplied `title` also marks the session as user-titled, which stops the
@@ -2147,6 +2278,36 @@ export interface AppDb {
   /** Write a message's whole `toolCalls` array back, after an answer was filled in. */
   updateMessageToolCalls(messageId: string, toolCalls: ToolCall[]): void;
 
+  /*
+   * The fork's two message writes. A fork copies messages verbatim first — ids and remapping
+   * can only be decided once every table it points at has its own mapping — and then rewrites
+   * the JSON columns that name things by id. The pair is separate from `createMessage` because
+   * neither is "record a message": one reproduces a row, the other patches one.
+   */
+
+  /**
+   * Copy the named live messages of one conversation into another, keeping creation order,
+   * `created_at`, reasoning, tool calls, attachments, references, usage, model and `stopped`.
+   *
+   * `thread_id` is deliberately left NULL: the threads themselves are cloned separately and
+   * the new ids are only known afterwards, so the caller backfills. Returns the id mapping,
+   * oldest first.
+   */
+  cloneSessionMessages(
+    sourceSessionId: string,
+    targetSessionId: string,
+    messageIds: readonly string[]
+  ): { oldId: string; newId: string }[];
+
+  /**
+   * Write a message's remapped JSON columns wholesale. `undefined` clears the column, which
+   * is what a source row with no attachments or references means.
+   */
+  updateMessageJson(
+    messageId: string,
+    patch: { toolCalls?: ToolCall[]; attachments?: Attachment[]; refs?: TurnReference[] }
+  ): void;
+
   /**
    * Every call still `awaiting` in a session, as `{id, name}`. The name lets callers act
    * on one tool's calls (the quiz rows are retired by the `ila_quiz` ones) without a second
@@ -2171,6 +2332,24 @@ export interface AppDb {
    * two sequences cannot collide by accident and neither needs a schema of its own.
    */
   reserveCounter(scope: string, scopeId: string, name: string, count: number): number[];
+
+  /**
+   * Set one sequence to at least `value`, without issuing anything from it.
+   *
+   * A fork's arithmetic: the copy carries the source's already-numbered rows, so its counter
+   * has to start where the source's stood or the first question it asks would be issued a
+   * `Qn` the copy already holds. `max` rather than assignment, so a re-seed can never lower a
+   * counter that has since moved.
+   */
+  seedCounter(scope: string, scopeId: string, name: string, value: number): void;
+  /**
+   * The highest number a sequence has issued, or 0 when it has issued none.
+   *
+   * 0 rather than undefined, and the callers are the reason: a fork seeds from it and an
+   * absent counter and an empty one both mean "the next number is the first", so two answers
+   * would be two spellings of one fact.
+   */
+  counterValue(scope: string, scopeId: string, name: string): number;
 
   /*
    * Widgets.
@@ -2252,12 +2431,27 @@ export interface AppDb {
     createdAt: string;
   }): void;
   listPlanVersions(planId: string): PlanVersionRecord[];
+  /**
+   * Every version's tree, for a caller that has to rewrite the node ids inside it — the fork.
+   *
+   * `listPlanVersions` deliberately omits `tree_json`: a version dropdown needs a date, not a
+   * tree. This is the same read with the payload, and it is a separate method so the common
+   * path cannot accidentally start carrying trees it does not draw.
+   */
+  listPlanVersionRows(
+    planId: string
+  ): { version: number; treeJson: string; createdAt: string }[];
   getPlanVersionForUser(
     userId: string,
     sessionId: string,
     version: number
   ): PlanVersionData | undefined;
   listPlanNodes(planId: string): PlanNodeRecord[];
+  /**
+   * Insert one node. `removedVersion`/`doneToolCallId`/`doneAt` are optional and default to
+   * NULL — a fresh node from an edit — while a fork reproduces the source's tombstones and
+   * progress anchors, and its anchor is dropped when the call it names was not copied.
+   */
   insertPlanNode(input: PlanNodeInsert): void;
   updatePlanNodeStructure(input: {
     id: string;
@@ -2282,6 +2476,11 @@ export interface AppDb {
    * already-resolved turn, over rows the turn itself created.
    */
   insertQuizQuestions(rows: QuizQuestionInsert[]): void;
+  /**
+   * Insert one row exactly as a source recorded it — a fork's copy, status and grading
+   * included. The caller supplies the new id and session; every other column is reproduced.
+   */
+  cloneQuizQuestion(input: QuizQuestionCloneInsert): void;
   listQuizQuestionsForUser(userId: string, sessionId: string): QuizQuestionRecord[];
   listQuizQuestionsBySession(sessionId: string): QuizQuestionRecord[];
   getQuizQuestionForUser(
@@ -2289,6 +2488,16 @@ export interface AppDb {
     sessionId: string,
     id: string
   ): QuizQuestionRecord | undefined;
+  /**
+   * Mark a question deleted from the panel, from any status.
+   *
+   * **Only `status` moves.** Unlike `transitionQuizQuestion` this deliberately keeps the
+   * answer, verdict, feedback and every timestamp: a delete is "take it off the list", not
+   * "forget what happened", and a row that cleared its grade columns would make the delete
+   * of an answered question destroy the only record of it. Returns whether a row changed,
+   * so a repeat delete reports false rather than rewriting.
+   */
+  markQuizQuestionDeleted(sessionId: string, id: string): boolean;
   /** Retire pending quiz rows posed by the named suspending calls. Empty list is a no-op. */
   skipQuizQuestions(sessionId: string, toolCallIds: string[]): void;
   /**
@@ -2332,6 +2541,9 @@ export interface AppDb {
     branch: ThreadBranch;
     title: string;
     planNodeId?: string | null;
+    /** Default now. A fork passes the source's timestamps so the panel's order survives. */
+    createdAt?: string;
+    updatedAt?: string;
   }): ThreadRecord;
   /** The one thread this session has for a plan node, if any — the plan branch's idempotency. */
   getThreadByPlanNode(sessionId: string, planNodeId: string): ThreadRecord | undefined;
@@ -2408,6 +2620,22 @@ export interface AppDb {
    * from clearing another's.
    */
   replaceUnadoptedInsights(sessionId: string, items: InsightInsert[]): void;
+
+  /**
+   * Every observation with its `adopted` flag, ordinal and timestamps — a fork's read.
+   *
+   * Deliberately not `listInsightsForUser`: the wire type drops `ordinal`, and order is the
+   * one thing a copy has to keep. This is the same scoped query asking for the row.
+   */
+  listInsightsForClone(userId: string, sessionId: string): InsightCloneInsert[];
+  /**
+   * Insert one observation with its `adopted` flag and timestamps — a fork's copy.
+   *
+   * `replaceUnadoptedInsights` is the pass's write and hard-codes `adopted = 0`; a fork must
+   * carry the one thing a rerun keeps, or a cloned conversation would show the panel rebuilt
+   * from scratch.
+   */
+  cloneInsight(input: InsightCloneInsert): void;
   /** Adopt or release one observation. `undefined` when the id is not this session's. */
   setInsightAdoptedForUser(
     userId: string,
@@ -3147,6 +3375,33 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
        DO UPDATE SET title = excluded.title, updated_at = @createdAt
      RETURNING *`
   );
+  /*
+   * The fork's raw read: the reference's own columns, no entity join, held rows only.
+   *
+   * `work_resources` is polymorphic and the entity is reached through it everywhere else, but a
+   * fork is copying the *row*, parse state and all — and an entity that has since been deleted
+   * must not make the reference disappear from the copy, any more than it did from the source.
+   */
+  const stmtListWorkResourcesForClone = db.prepare(
+    `SELECT id, user_id, resource_type, resource_id, owner_type, owner_id, title, summary,
+            parsed_file_id, parse_status, parse_error, parse_error_code, parser_id, parsed_chars,
+            page_count, parse_updated_at, created_at, updated_at
+       FROM work_resources
+      WHERE user_id = @userId AND owner_type = 'session' AND owner_id = @sessionId
+        AND deleted_at IS NULL
+      ORDER BY created_at ASC, id ASC`
+  );
+  // The fork's insert. No ownership `SELECT` and no conflict arm: the row being reproduced was
+  // already the account's, and the new id cannot collide with any live row by construction.
+  const stmtCloneWorkResource = db.prepare(
+    `INSERT INTO work_resources
+       (id, user_id, resource_type, resource_id, owner_type, owner_id, title, summary,
+        parsed_file_id, parse_status, parse_error, parse_error_code, parser_id, parsed_chars,
+        page_count, parse_updated_at, created_at, updated_at)
+     VALUES (@id, @userId, @resourceType, @resourceId, @ownerType, @ownerId, @title, @summary,
+             @parsedFileId, @parseStatus, @parseError, @parseErrorCode, @parserId, @parsedChars,
+             @pageCount, @parseUpdatedAt, @createdAt, @updatedAt)`
+  );
   const stmtGetWorkResourceForUser = db.prepare(
     `${WR_SELECT} WHERE wr.id = ? AND wr.user_id = ? AND wr.deleted_at IS NULL`
   );
@@ -3508,9 +3763,9 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   const stmtGetSession = db.prepare("SELECT * FROM sessions WHERE id = ?");
   const stmtCreateSession = db.prepare(
     `INSERT INTO sessions (id, workspace_id, copilot_id, copilot_name, system_prompt, all_tools,
-       tools, title, title_source, settings, created_at, updated_at)
+       tools, title, title_source, settings, description, created_at, updated_at)
      VALUES (@id, @workspaceId, @copilotId, @copilotName, @systemPrompt, @allTools,
-       @tools, @title, @titleSource, @settings, @createdAt, @updatedAt)`
+       @tools, @title, @titleSource, @settings, @description, @createdAt, @updatedAt)`
   );
   const stmtUpdateSessionForUser = db.prepare(
     `UPDATE sessions SET title = @title, title_source = @titleSource, settings = @settings,
@@ -3719,6 +3974,20 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
              @providerId, @providerName, @modelId, @modelName, @stopped, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
+  // The fork's insert. `thread_id` is absent from the column list on purpose — a copy starts
+  // unclassified and the caller backfills once the cloned threads have ids.
+  const stmtCloneMessage = db.prepare(
+    `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, refs,
+                             usage, provider_id, provider_name, model_id, model_name, stopped, created_at)
+     VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @refs,
+             @usage, @providerId, @providerName, @modelId, @modelName, @stopped, @createdAt)`
+  );
+  // The fork's second pass: after every table it points at has been copied, the JSON columns
+  // that name things by id are rewritten wholesale.
+  const stmtUpdateMessageJson = db.prepare(
+    `UPDATE messages SET tool_calls = @toolCalls, attachments = @attachments, refs = @refs
+      WHERE id = @id`
+  );
   /*
    * Mark one message deleted, scoped to its owner through the session's workspace. No
    * `IS LAST` here on purpose: the caller has just read the live tail inside the same
@@ -3836,6 +4105,9 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   const stmtListPlanVersions = db.prepare(
     "SELECT version, created_at FROM plan_versions WHERE plan_id = ? ORDER BY version ASC"
   );
+  const stmtListPlanVersionRows = db.prepare(
+    "SELECT version, tree_json, created_at FROM plan_versions WHERE plan_id = ? ORDER BY version ASC"
+  );
   const stmtGetPlanVersionForUser = db.prepare(
     `SELECT pv.version, pv.created_at, pv.tree_json FROM plan_versions pv
        JOIN plans p ON p.id = pv.plan_id
@@ -3852,6 +4124,16 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         done_tool_call_id, done_at)
      VALUES (@id, @planId, @parentId, @position, @title, @status, @introducedVersion,
              @removedVersion, @doneToolCallId, @doneAt)`
+  );
+  // One statement for a fresh node and a fork's copy: the optional fields default to NULL at
+  // `insertPlanNode`, because an edit's node is alive with no completion anchor, while a fork
+  // reproduces the source's tombstones and anchors.
+  const stmtSeedCounter = db.prepare(
+    `INSERT INTO counters (scope, scope_id, name, value) VALUES (@scope, @scopeId, @name, @value)
+     ON CONFLICT (scope, scope_id, name) DO UPDATE SET value = max(value, excluded.value)`
+  );
+  const stmtCounterValue = db.prepare(
+    "SELECT value FROM counters WHERE scope = ? AND scope_id = ? AND name = ?"
   );
   const stmtUpdatePlanNodeStructure = db.prepare(
     `UPDATE plan_nodes SET parent_id = @parentId, position = @position, title = @title
@@ -3897,6 +4179,17 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
              @question, @multiSelect, @optionsJson, @referenceAnswerJson, @explanation,
              'pending', @createdAt)`
   );
+  // The fork's insert, and the only difference from the one above is that it reproduces the
+  // status and grading the source row holds instead of starting at `pending`.
+  const stmtCloneQuizQuestion = db.prepare(
+    `INSERT INTO quiz_questions
+       (id, session_id, node_id, node_title, tool_call_id, qid, position, header, question,
+        multi_select, options_json, reference_answer_json, explanation, status, user_answer_json,
+        verdict, feedback, grade_tool_call_id, created_at, answered_at, graded_at)
+     VALUES (@id, @sessionId, @nodeId, @nodeTitle, @toolCallId, @qid, @position, @header,
+             @question, @multiSelect, @optionsJson, @referenceAnswerJson, @explanation, @status,
+             @answerJson, @verdict, @feedback, @gradeToolCallId, @createdAt, @answeredAt, @gradedAt)`
+  );
   // The named calls are always server-bound UUIDs, so the placeholder list is built from
   // length rather than interpolated values.
   const stmtSkipQuizQuestions = (toolCallIds: string[]) =>
@@ -3922,6 +4215,12 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
             grade_tool_call_id = @gradeToolCallId, graded_at = @gradedAt
       WHERE id = @id AND session_id = @sessionId AND status = 'answered'`
   );
+  // Only the status moves: `status <> 'deleted'` is what makes a repeat delete a no-op rather
+  // than a write that keeps claiming a change.
+  const stmtMarkQuizQuestionDeleted = db.prepare(
+    `UPDATE quiz_questions SET status = 'deleted'
+      WHERE id = @id AND session_id = @sessionId AND status <> 'deleted'`
+  );
 
   /* -------------------------------- threads ------------------------------- */
   const stmtListThreadsForUser = db.prepare(
@@ -3943,7 +4242,7 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   );
   const stmtInsertThread = db.prepare(
     `INSERT INTO session_threads (id, session_id, branch, title, plan_node_id, created_at, updated_at)
-     VALUES (@id, @sessionId, @branch, @title, @planNodeId, @now, @now)`
+     VALUES (@id, @sessionId, @branch, @title, @planNodeId, @createdAt, @updatedAt)`
   );
   const stmtGetThreadByPlanNode = db.prepare(
     "SELECT * FROM session_threads WHERE session_id = ? AND plan_node_id = ?"
@@ -4064,7 +4363,7 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   );
   const stmtInsertNote = db.prepare(
     `INSERT INTO notes (id, session_id, message_id, type, quote, occurrence, content, target_kind, target_ref, created_at, updated_at)
-     VALUES (@id, @sessionId, @messageId, @type, @quote, @occurrence, @content, @targetKind, @targetRef, @now, @now)`
+     VALUES (@id, @sessionId, @messageId, @type, @quote, @occurrence, @content, @targetKind, @targetRef, @createdAt, @updatedAt)`
   );
   const stmtUpdateNote = db.prepare(
     `UPDATE notes SET type = @type, content = @content, updated_at = @now
@@ -4131,6 +4430,23 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   const stmtInsertInsight = db.prepare(
     `INSERT INTO insight_items (id, session_id, type, title, body, adopted, ordinal, created_at, updated_at)
      VALUES (@id, @sessionId, @type, @title, @body, 0, @ordinal, @now, @now)`
+  );
+  // The fork's read. The wire `mapInsight` drops `ordinal` (nothing on screen reads it), so a
+  // copy that went through the shared list would lose the order the pass wrote.
+  const stmtListInsightsForClone = db.prepare(
+    `SELECT i.*
+       FROM insight_items i
+       JOIN sessions s   ON s.id = i.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE i.session_id = @sessionId AND w.user_id = @userId
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY i.adopted DESC, i.created_at ASC, i.ordinal ASC`
+  );
+  // The fork's insert: `adopted` and both timestamps come from the source row, because they are
+  // the only parts of an observation a rerun keeps and the copy must keep them too.
+  const stmtCloneInsight = db.prepare(
+    `INSERT INTO insight_items (id, session_id, type, title, body, adopted, ordinal, created_at, updated_at)
+     VALUES (@id, @sessionId, @type, @title, @body, @adopted, @ordinal, @createdAt, @updatedAt)`
   );
   /*
    * Both writes take a bare session id, like `updateNote`: the `ForUser` read above is what
@@ -4665,6 +4981,71 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     softDeleteWorkResourceForUser(id, userId) {
       return stmtSoftDeleteWorkResourceForUser.run(now(), id, userId).changes > 0;
     },
+    listWorkResourcesForClone(userId, sessionId) {
+      return (
+        stmtListWorkResourcesForClone.all({ userId, sessionId }) as Array<{
+          id: string;
+          user_id: string;
+          resource_type: string;
+          resource_id: string;
+          owner_type: string;
+          owner_id: string;
+          title: string;
+          summary: string | null;
+          parsed_file_id: string | null;
+          parse_status: string;
+          parse_error: string | null;
+          parse_error_code: string | null;
+          parser_id: string | null;
+          parsed_chars: number | null;
+          page_count: number | null;
+          parse_updated_at: string | null;
+          created_at: string;
+          updated_at: string | null;
+        }>
+      ).map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        resourceType: r.resource_type as WorkResourceType,
+        resourceId: r.resource_id,
+        ownerType: r.owner_type as WorkResourceOwnerType,
+        ownerId: r.owner_id,
+        title: r.title,
+        summary: r.summary,
+        parsedFileId: r.parsed_file_id,
+        parseStatus: r.parse_status as ParseStatus,
+        parseError: r.parse_error,
+        parseErrorCode: r.parse_error_code,
+        parserId: r.parser_id,
+        parsedChars: r.parsed_chars,
+        pageCount: r.page_count,
+        parseUpdatedAt: r.parse_updated_at,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+    },
+    cloneWorkResource(input) {
+      stmtCloneWorkResource.run({
+        id: input.id,
+        userId: input.userId,
+        resourceType: input.resourceType,
+        resourceId: input.resourceId,
+        ownerType: input.ownerType,
+        ownerId: input.ownerId,
+        title: input.title,
+        summary: input.summary,
+        parsedFileId: input.parsedFileId,
+        parseStatus: input.parseStatus,
+        parseError: input.parseError,
+        parseErrorCode: input.parseErrorCode,
+        parserId: input.parserId,
+        parsedChars: input.parsedChars,
+        pageCount: input.pageCount,
+        parseUpdatedAt: input.parseUpdatedAt,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt,
+      });
+    },
     updateWorkResourceParse(input) {
       return (
         stmtUpdateWorkResourceParse.run({
@@ -4787,7 +5168,8 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       stmtCreateSession.run({
         ...input,
         ...storeTools(input),
-        titleSource: "auto",
+        titleSource: input.titleSource ?? "auto",
+        description: input.description ?? "",
         settings: JSON.stringify(input.settings ?? {}),
         createdAt: ts,
         updatedAt: ts,
@@ -4955,6 +5337,46 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       stmtUpdateToolCalls.run(JSON.stringify(toolCalls), messageId);
     },
 
+    cloneSessionMessages(sourceSessionId, targetSessionId, messageIds) {
+      const wanted = new Set(messageIds);
+      const pairs: { oldId: string; newId: string }[] = [];
+      // `listMessagesOf` is the live, oldest-first read, so the copy keeps the source's order.
+      for (const message of listMessagesOf(sourceSessionId)) {
+        if (!wanted.has(message.id)) continue;
+        const newMessageId = newId();
+        stmtCloneMessage.run({
+          id: newMessageId,
+          sessionId: targetSessionId,
+          role: message.role,
+          content: message.content,
+          reasoning: message.reasoning ?? null,
+          toolCalls: message.toolCalls ? JSON.stringify(message.toolCalls) : null,
+          attachments: message.attachments?.length
+            ? JSON.stringify(message.attachments)
+            : null,
+          refs: message.refs?.length ? JSON.stringify(message.refs) : null,
+          usage: message.usage ? JSON.stringify(message.usage) : null,
+          providerId: message.model?.providerId ?? null,
+          providerName: message.model?.providerName ?? null,
+          modelId: message.model?.modelId ?? null,
+          modelName: message.model?.modelName ?? null,
+          stopped: message.stopped ? 1 : 0,
+          createdAt: message.createdAt,
+        });
+        pairs.push({ oldId: message.id, newId: newMessageId });
+      }
+      return pairs;
+    },
+
+    updateMessageJson(messageId, patch) {
+      stmtUpdateMessageJson.run({
+        id: messageId,
+        toolCalls: patch.toolCalls ? JSON.stringify(patch.toolCalls) : null,
+        attachments: patch.attachments?.length ? JSON.stringify(patch.attachments) : null,
+        refs: patch.refs?.length ? JSON.stringify(patch.refs) : null,
+      });
+    },
+
     listAwaitingToolCalls(sessionId) {
       const out: { id: string; name: string }[] = [];
       for (const message of listMessagesOf(sessionId)) {
@@ -4990,6 +5412,16 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       // `value` is the *last* number in the block, so the block is counted back from it.
       const end = row.value;
       return Array.from({ length: count }, (_, i) => end - count + i + 1);
+    },
+
+    seedCounter(scope, scopeId, name, value) {
+      if (value <= 0) return;
+      stmtSeedCounter.run({ scope, scopeId, name, value });
+    },
+
+    counterValue(scope, scopeId, name) {
+      const row = stmtCounterValue.get(scope, scopeId, name) as { value: number } | undefined;
+      return row?.value ?? 0;
     },
 
     listWorkspaceWidgetsForUser(userId, workspaceId) {
@@ -5087,6 +5519,15 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         createdAt: r.created_at,
       }));
     },
+    listPlanVersionRows(planId) {
+      return (
+        stmtListPlanVersionRows.all(planId) as Array<{
+          version: number;
+          tree_json: string;
+          created_at: string;
+        }>
+      ).map((r) => ({ version: r.version, treeJson: r.tree_json, createdAt: r.created_at }));
+    },
     getPlanVersionForUser(userId, sessionId, version) {
       const r = stmtGetPlanVersionForUser.get({ userId, sessionId, version }) as
         | (PlanVersionRow & { tree_json: string })
@@ -5108,10 +5549,11 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         status: input.status,
         introducedVersion: input.introducedVersion,
         // A fresh node is alive with no completion anchor; every version insert says so
-        // explicitly rather than relying on column defaults the reader cannot see here.
-        removedVersion: null,
-        doneToolCallId: null,
-        doneAt: null,
+        // explicitly rather than relying on column defaults the reader cannot see here. A
+        // fork passes the source's values so tombstones and jump anchors survive the copy.
+        removedVersion: input.removedVersion ?? null,
+        doneToolCallId: input.doneToolCallId ?? null,
+        doneAt: input.doneAt ?? null,
       });
     },
     updatePlanNodeStructure(input) {
@@ -5161,6 +5603,35 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       }
     },
 
+    cloneQuizQuestion(input) {
+      stmtCloneQuizQuestion.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        nodeId: input.nodeId,
+        nodeTitle: input.nodeTitle,
+        toolCallId: input.toolCallId,
+        qid: input.qid,
+        position: input.position,
+        header: input.header,
+        question: input.question,
+        multiSelect: input.multiSelect ? 1 : 0,
+        optionsJson: JSON.stringify(input.options),
+        referenceAnswerJson:
+          input.referenceAnswer && input.referenceAnswer.length > 0
+            ? JSON.stringify(input.referenceAnswer)
+            : null,
+        explanation: input.explanation,
+        status: input.status,
+        answerJson: input.answer ? JSON.stringify(input.answer) : null,
+        verdict: input.verdict,
+        feedback: input.feedback,
+        gradeToolCallId: input.gradeToolCallId,
+        createdAt: input.createdAt,
+        answeredAt: input.answeredAt,
+        gradedAt: input.gradedAt,
+      });
+    },
+
     listQuizQuestionsForUser(userId, sessionId) {
       return (stmtListQuizQuestionsForUser.all({ userId, sessionId }) as QuizQuestionRow[]).map(
         mapQuizQuestion
@@ -5178,6 +5649,10 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         | QuizQuestionRow
         | undefined;
       return r ? mapQuizQuestion(r) : undefined;
+    },
+
+    markQuizQuestionDeleted(sessionId, id) {
+      return stmtMarkQuizQuestionDeleted.run({ id, sessionId }).changes > 0;
     },
 
     skipQuizQuestions(sessionId, toolCallIds) {
@@ -5250,7 +5725,10 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         branch: input.branch,
         title: input.title,
         planNodeId: input.planNodeId ?? null,
-        now: ts,
+        // A classification just happened, so now; a fork copies the source's timestamps so the
+        // panel's order is the order the topics were classified in.
+        createdAt: input.createdAt ?? ts,
+        updatedAt: input.updatedAt ?? ts,
       });
       return mapThread(
         db.prepare("SELECT * FROM session_threads WHERE id = ?").get(input.id) as ThreadRow
@@ -5321,6 +5799,7 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     },
 
     createNote(input) {
+      const ts = now();
       stmtInsertNote.run({
         id: input.id,
         sessionId: input.sessionId,
@@ -5331,7 +5810,8 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         content: input.content,
         targetKind: input.targetKind,
         targetRef: input.targetRef,
-        now: now(),
+        createdAt: input.createdAt ?? ts,
+        updatedAt: input.updatedAt ?? ts,
       });
       const row = stmtGetNote.get(input.id, input.sessionId) as NoteRow;
       return mapNote(row);
@@ -5399,6 +5879,34 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         }
       };
       db.transaction(writes)();
+    },
+
+    listInsightsForClone(userId, sessionId) {
+      return (stmtListInsightsForClone.all({ userId, sessionId }) as InsightItemRow[]).map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        type: r.type as InsightType,
+        title: r.title,
+        body: r.body,
+        adopted: r.adopted !== 0,
+        ordinal: r.ordinal,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+    },
+
+    cloneInsight(input) {
+      stmtCloneInsight.run({
+        id: input.id,
+        sessionId: input.sessionId,
+        type: input.type,
+        title: input.title,
+        body: input.body,
+        adopted: input.adopted ? 1 : 0,
+        ordinal: input.ordinal,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt,
+      });
     },
 
     setInsightAdoptedForUser(userId, sessionId, insightId, adopted) {

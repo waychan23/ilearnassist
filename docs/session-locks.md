@@ -121,6 +121,22 @@ Which routes carry it, and the short list that deliberately does not, is asserte
 directions by `apps/server/test/route-lock-coverage.test.ts` — the flag is a route *config*, and a
 route added without it compiles perfectly well.
 
+### Deliberately ungated writes
+
+Two of the exempt entries are worth their reasoning here, because they are exempt for reasons the
+gate's own comment does not cover.
+
+- **A fork** — `POST /api/sessions/:id/messages/:messageId/fork` — reads the source and writes a
+  *new* conversation. Nothing of the source's changes, so there is no write of its to serialise
+  against another client's; a lease is for two writers in one conversation, and a branch is not
+  one of them. Refusing a fork because a colleague is merely reading the conversation would be
+  the opposite of what the lock is for. The one state a snapshot cannot represent — a turn
+  mid-flight — is refused by `activeTurns` (409 `TURN_IN_PROGRESS`) instead, which is the right
+  instrument: the lease deliberately does *not* stop a holder from streaming.
+- **`/leave` and the lock routes themselves**, for the reasons in their own comments: taking the
+  lock cannot require holding it, and the release plus the titler retry has to work for a client
+  that holds nothing.
+
 ## The client
 
 - **State** lives in `stores/app.ts` with everything else, so `forgetAccount()` clears it for free:

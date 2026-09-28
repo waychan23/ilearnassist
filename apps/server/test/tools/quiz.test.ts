@@ -14,6 +14,7 @@ import {
   readQuizQuestions,
   redactQuizInput,
   renderQuizResult,
+  validateMakeupAnswers,
   validateQuizAnswers,
   type QuizRegisterInput,
 } from "../../src/tools/quiz.js";
@@ -650,5 +651,51 @@ describe("readQuizQuestions", () => {
   it("refuses an empty set and a stored input that is not JSON", () => {
     expect(readQuizQuestions(call({ questions: [] }))).toBeUndefined();
     expect(readQuizQuestions(call("not json"))).toBeUndefined();
+  });
+
+  it("filters out a question marked deleted", () => {
+    const questions = [
+      { ...question(), id: "Q1" },
+      { ...question({ header: "状态" }), id: "Q2", deleted: true },
+    ];
+    expect(readQuizQuestions(call({ questions }))).toEqual([questions[0]]);
+  });
+
+  it("returns an empty set — not undefined — when every question was deleted", () => {
+    // The difference matters on the cancel path: `undefined` reads as "this call holds no
+    // question set" and the route answers 409, which would leave a card whose questions are
+    // all gone with no way to close it.
+    const questions = [{ ...question(), id: "Q1", deleted: true }];
+    expect(readQuizQuestions(call({ questions }))).toEqual([]);
+  });
+
+  it("accepts a submission for the live questions of a partly deleted card", () => {
+    const questions = [
+      { ...question(), id: "Q1" },
+      { ...question({ header: "状态" }), id: "Q2", deleted: true },
+    ];
+    const read = readQuizQuestions(call({ questions }))!;
+
+    const validated = validateQuizAnswers(read, {
+      toolCallId: "c1",
+      action: "submit",
+      answers: { Q1: { selected: ["滑动"] } },
+    });
+    expect(validated).toEqual({ ok: true, answers: { Q1: { selected: ["滑动"] } } });
+  });
+
+  it("leaves deleted questions out of a make-up's set too", () => {
+    const questions = [
+      { ...question(), id: "Q1" },
+      { ...question({ header: "状态" }), id: "Q2", deleted: true },
+    ];
+    const read = readQuizQuestions(call({ questions }))!;
+
+    const validated = validateMakeupAnswers(read, {
+      toolCallId: "c1",
+      action: "submit",
+      answers: { Q1: { selected: ["滑动"] } },
+    });
+    expect(validated).toEqual({ ok: true, answers: { Q1: { selected: ["滑动"] } } });
   });
 });

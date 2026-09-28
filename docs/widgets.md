@@ -353,6 +353,20 @@ panel shows data the tools produce:
   earlier turn is behind the reader's attention and its card can never be answered in place — the
   route does what `/chat` does, and the row becomes `skipped` (which is make-up eligible) rather
   than staying `pending` (which is neither answerable nor eligible).
+- **A question can be deleted from the panel, from any status.** `POST
+  /sessions/:id/quizzes/:quizId/delete` moves `quiz_questions.status` to `deleted` and nothing
+  else — the answer, verdict, feedback and timestamps stay, so deleting an answered question
+  destroys no record and could be undone from the row if a restore is ever wanted. A deleted
+  question is hidden from the panel (`listQuizQuestionViews` filters it, and
+  `ila_query kind "quiz"` reads the same function, so the model's view of what was asked
+  narrows with the reader's), is not make-up eligible, and is ignored by `ila_review_quiz`
+  rather than failing the batch. `readQuizQuestions` filters it out of the persisted call's own
+  set, which is the single place the live card's validation and the make-up's both read. The
+  calls that asked it are also marked (`deleted: true` on their recorded copy), because a
+  settled card renders from its `input` rather than from the rows: the question shows as
+  已删除 and greyed instead of still offering a make-up the route would refuse. Delete every
+  question of a live card and the card closes down to its own cancel. Deleting twice is
+  idempotent.
 - **Grading is a normal `required` tool**, not a suspending one: the model calls
   `ila_review_quiz` with exact `quiz_id`s after judging (instructed by the tool description
   and `QUIZ_GUIDANCE`); its `tool_end` emits `quiz.changed` for mid-turn panel refresh.

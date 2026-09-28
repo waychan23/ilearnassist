@@ -65,6 +65,8 @@ const mocks = vi.hoisted(() => ({
     jumpPlanNode: vi.fn(),
     listQuizQuestions: vi.fn().mockResolvedValue({ questions: [] }),
     reopenQuizQuestion: vi.fn(),
+    deleteQuizQuestion: vi.fn(),
+    forkSession: vi.fn(),
     getSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     syncSessionThreads: vi.fn().mockResolvedValue({ threads: [], unassigned: 0 }),
     stopSession: vi.fn(),
@@ -4071,5 +4073,92 @@ describe("re-opening a stuck question", () => {
 
     expect(await store.reopenQuizQuestion("q1")).toBeNull();
     expect(store.error).toContain("已经判分了");
+  });
+});
+
+describe("deleting a quiz question", () => {
+  it("calls the route, re-reads the messages, and announces the change", async () => {
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      const store = await readyStore({
+        messages: [message({ role: "assistant", content: "a reply" })],
+      });
+      mocks.api.deleteQuizQuestion.mockResolvedValue({
+        question: { id: "q1", status: "deleted" },
+      });
+      // The card is marked server-side, so the message list has to come back too.
+      mocks.api.listMessages.mockResolvedValue([]);
+
+      const removed = await store.deleteQuizQuestion("q1");
+
+      expect(mocks.api.deleteQuizQuestion).toHaveBeenCalledWith("s1", "q1");
+      expect(mocks.api.listMessages).toHaveBeenCalledWith("s1");
+      expect(store.messages).toEqual([]);
+      expect(removed).toMatchObject({ status: "deleted" });
+      expect(seen).toEqual(["quiz.changed"]);
+    } finally {
+      off();
+    }
+  });
+
+  it("reports a refusal and hands back nothing", async () => {
+    const store = await readyStore();
+    mocks.api.deleteQuizQuestion.mockRejectedValue(new Error("没有这道题了"));
+
+    expect(await store.deleteQuizQuestion("q1")).toBeNull();
+    expect(store.error).toContain("没有这道题了");
+  });
+});
+
+describe("forking a conversation", () => {
+  it("inserts the branch, opens it, addresses it, and announces it", async () => {
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      const store = await readyStore();
+      const branch = session({ id: "s2", title: "Source · branch", titleSource: "user" });
+      mocks.api.forkSession.mockResolvedValue(branch);
+      mocks.api.listMessages.mockResolvedValue([]);
+
+      const created = await store.forkSession("m1", "  Source · branch  ");
+
+      // Trimmed before it is sent: a title is a name, and a name with padding on it is a
+      // different string in every list that compares one.
+      expect(mocks.api.forkSession).toHaveBeenCalledWith("s1", "m1", {
+        title: "Source · branch",
+      });
+      expect(created).toEqual(branch);
+      expect(store.activeSessionId).toBe("s2");
+      expect(store.sessions[0]?.id).toBe("s2");
+      expect(mocks.router.push).toHaveBeenCalledWith({
+        name: "session",
+        params: { workspaceId: "w1", sessionId: "s2" },
+      });
+      expect(seen).toContain("session.created");
+    } finally {
+      off();
+    }
+  });
+
+  it("sends no title when the field was cleared, so the server keeps the source's", async () => {
+    const store = await readyStore();
+    mocks.api.forkSession.mockResolvedValue(session({ id: "s2" }));
+
+    await store.forkSession("m1", "   ");
+
+    expect(mocks.api.forkSession).toHaveBeenCalledWith("s1", "m1", { title: undefined });
+  });
+
+  it("reports a refusal and leaves the conversation where it was", async () => {
+    const store = await readyStore();
+    mocks.api.forkSession.mockRejectedValue(new Error("那边还有回复在生成"));
+
+    expect(await store.forkSession("m1", "Branch")).toBeNull();
+    expect(store.error).toContain("那边还有回复在生成");
+    expect(store.activeSessionId).toBe("s1");
+    expect(mocks.router.push).not.toHaveBeenCalled();
   });
 });

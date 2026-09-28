@@ -392,6 +392,42 @@ lose the table. `GET /api/sessions/:id/tables` is the panel's read model; `ila_q
 thread classifier exactly as diagrams do — the same ref-keyed array pattern under their own wire
 key — and `docs/tables.md` is the full reference.
 
+### Forking a conversation (`fork.ts`)
+
+`POST /api/sessions/:id/messages/:messageId/fork` copies a conversation up to **and including**
+one message into a new one. The new session is independent afterwards — the copy is a snapshot, not
+a link — and the source is only read, which is why the route carries no session lock (see
+`docs/session-locks.md`). One transaction writes the whole graph; the session directory is copied
+with `fs.cpSync` as a best-effort step, so a volume that refuses the copy costs the branch its files
+rather than the branch.
+
+**What travels, and against what cut point:**
+
+| data | relative to the cut |
+| --- | --- |
+| `messages` | `slice(0, index + 1)`; timestamps kept, `thread_id` backfilled after the threads are copied |
+| `plans` / `plan_nodes` / `plan_versions` | the whole current plan and every version; progress may reflect a state after the cut, and an anchor whose call was not copied becomes NULL |
+| `quiz_questions` / `session_diagrams` / `session_tables` | only rows whose `tool_call_id` is in a copied message |
+| `session_threads` | only threads a copied message, diagram or table references |
+| `notes` | unanchored ones plus ones anchored to a copied message |
+| `work_resources` (session-owned) / `session_references` / `insight_items` / `widget_instances` / `counters` / the session directory | all of it |
+| `session_locks` / `usage_events` | never — a lease is about the present and a ledger row is spend that happened once |
+
+**Tool-call ids are preserved verbatim; every other id is regenerated.** The call id is the join key
+for six relations (plan-node anchors, quiz rows and their grade call, diagram/table anchors, thread
+classification, make-up write-back), so a copy that renumbered calls would silently orphan all of
+them. Message ids, plan ids, node ids, quiz row ids, thread ids, note ids, file ids and work-resource
+ids are all new, and the JSON columns that name them — `tool_calls[].input`, `tool_calls[].output`,
+`attachments[].resourceId` and `refs[].ref` — are rewritten through one map per collection.
+Structured tool output (`quiz_id`, plan tree node ids, `resource_id`, the query tool's `id` by
+`kind`) is remapped too, because it is replayed to the model; free-text prose in a historical message
+is deliberately not, and the worst case is the model naming an id that no longer resolves, which it
+recovers from by asking again.
+
+**The question counter is seeded** from the source's, or the first quiz the branch asks would be
+issued a `Qn` the copied rows already hold. A widget decision is copied as a decision — a widget the
+source never answered for stays unanswered and keeps inheriting the level's default.
+
 ### Notes (`notes.ts`)
 
 What the learner marked and what they wrote about it, one row per note, reached at

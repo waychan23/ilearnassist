@@ -50,6 +50,9 @@ const MUST_BE_GATED = [
   "POST /api/sessions/:id/plan/nodes/:nodeId/jump",
   "POST /api/sessions/:id/quizzes/makeup",
   "POST /api/sessions/:id/quizzes/:quizId/reopen",
+  // Deleting a question is visible to the account's other clients the moment it lands — the
+  // panel loses a row and the card in the transcript changes — so it holds the same lock.
+  "POST /api/sessions/:id/quizzes/:quizId/delete",
   "POST /api/sessions/:id/notes",
   "PATCH /api/sessions/:id/notes/:noteId",
   "DELETE /api/sessions/:id/notes/:noteId",
@@ -79,6 +82,11 @@ const EXEMPT = [
   // Derived rows kept up to date idempotently: not the user's writing, and a conflict there is
   // a no-op rather than a lost edit.
   "POST /api/sessions/:id/threads/sync",
+  // A fork reads the source and writes a new conversation; nothing of the source's changes. A
+  // lease is for serialising writes to *this* conversation, and refusing a branch because
+  // somebody else is reading would be the wrong refusal. The one state a snapshot cannot
+  // represent — a turn mid-flight — is refused by `activeTurns` instead.
+  "POST /api/sessions/:id/messages/:messageId/fork",
   // Reads. A client has to be able to *see* a conversation it may not write to — that is what
   // makes the refusal a read-only conversation rather than an error.
   "GET /api/sessions/:id/messages",

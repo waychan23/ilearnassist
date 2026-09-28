@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
 import type { PlanView, QuizQuestionView } from "../api/types";
 import { useAppStore } from "../stores/app";
+import { confirm } from "../composables/confirm";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
 import {
   buildQuizTree,
@@ -108,7 +109,10 @@ onBeforeUnmount(() => {
 function matches(q: QuizQuestionView): boolean {
   switch (filter.value) {
     case "all":
-      return true;
+      // Deleted rows never reach the client — the server filters them out of the list — so this
+      // is a second line of defence rather than a rule: a status the panel must not draw stays
+      // undrawn even if a list from somewhere else carries one.
+      return q.status !== "deleted";
     case "answered":
       return q.status === "answered";
     case "skipped":
@@ -191,6 +195,8 @@ function statusIcon(q: QuizQuestionView): IconName {
     case "skipped":
     case "dismissed":
       return "skip";
+    case "deleted":
+      return "trash";
     case "answered":
       if (q.verdict === "correct") return "check";
       if (q.verdict === "incorrect") return "close";
@@ -215,7 +221,31 @@ function statusTitle(q: QuizQuestionView): string {
     // A cancelled quiz is a skipped question as far as the panel is concerned.
     case "dismissed":
       return t("quiz.skipped");
+    case "deleted":
+      return t("quiz.deleted");
   }
+}
+
+/**
+ * Delete one question, after a confirmation that says what does *not* happen.
+ *
+ * The row keeps its answer and verdict on the server — the delete is a change of list
+ * membership — so the confirm is the moment to say so; without it "delete" reads as "erase
+ * the record", which is the one thing this does not do.
+ */
+async function removeQuestion(question: QuizQuestionView): Promise<void> {
+  const ok = await confirm({
+    title: t("quiz.detail.deleteTitle"),
+    message: t("quiz.detail.deleteAsk", { qid: question.qid }),
+    detail: t("quiz.detail.deleteDetail"),
+    confirmText: t("quiz.detail.deleteConfirm"),
+    danger: true,
+  });
+  if (!ok) return;
+  // The dialog owns no delete of its own; closing it here keeps a dialog from outliving the
+  // row it is about.
+  if (active.value?.id === question.id) active.value = null;
+  await store.deleteQuizQuestion(question.id);
 }
 
 </script>
@@ -280,7 +310,7 @@ function statusTitle(q: QuizQuestionView): string {
 
       <!-- Flat list -->
       <ul v-else-if="view === 'list'" class="quiz-list" data-testid="quiz-list">
-        <li v-for="q in filteredQuestions" :key="q.id">
+        <li v-for="q in filteredQuestions" :key="q.id" class="quiz-row-wrap">
           <button
             type="button"
             class="quiz-row"
@@ -297,6 +327,16 @@ function statusTitle(q: QuizQuestionView): string {
               <span class="row-header">{{ q.header }}</span>
               <span class="row-question">{{ q.question }}</span>
             </span>
+          </button>
+          <button
+            type="button"
+            class="icon-btn quiz-row-delete"
+            :title="t('quiz.detail.delete')"
+            :aria-label="t('quiz.detail.delete')"
+            :data-testid="`quiz-delete-${q.id}`"
+            @click.stop="removeQuestion(q)"
+          >
+            <Icon name="trash" />
           </button>
         </li>
       </ul>
@@ -324,7 +364,7 @@ function statusTitle(q: QuizQuestionView): string {
               <span class="node-count">{{ row.questionCount }}</span>
             </button>
           </li>
-          <li v-else :style="{ '--quiz-depth': row.depth }">
+          <li v-else :style="{ '--quiz-depth': row.depth }" class="quiz-row-wrap">
             <button
               type="button"
               class="quiz-row quiz-leaf"
@@ -345,6 +385,16 @@ function statusTitle(q: QuizQuestionView): string {
                 <span class="row-header">{{ row.question.header }}</span>
                 <span class="row-question">{{ row.question.question }}</span>
               </span>
+            </button>
+            <button
+              type="button"
+              class="icon-btn quiz-row-delete"
+              :title="t('quiz.detail.delete')"
+              :aria-label="t('quiz.detail.delete')"
+              :data-testid="`quiz-delete-${row.question.id}`"
+              @click.stop="removeQuestion(row.question)"
+            >
+              <Icon name="trash" />
             </button>
           </li>
         </template>
@@ -415,7 +465,9 @@ function statusTitle(q: QuizQuestionView): string {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3);
+  /* The delete control sits at the row's right edge; the gap is reserved always rather than on
+     hover, so a row's text does not slide sideways under the pointer. */
+  padding: var(--space-3) calc(var(--space-3) + 1.9em) var(--space-3) var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -424,6 +476,24 @@ function statusTitle(q: QuizQuestionView): string {
 }
 .quiz-row:hover {
   background: var(--panel-2);
+}
+.quiz-row-wrap {
+  position: relative;
+}
+/* Revealed on hover, like the message actions — a list of delete buttons is noise on a panel
+   that is read far more often than it is edited. Keyboard focus reveals it too. */
+.quiz-row-delete {
+  position: absolute;
+  right: var(--space-2);
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+}
+.quiz-row-wrap:hover .quiz-row-delete,
+.quiz-row-delete:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 .quiz-leaf {
   padding-left: calc(var(--space-3) + var(--quiz-depth, 1) * var(--space-4));

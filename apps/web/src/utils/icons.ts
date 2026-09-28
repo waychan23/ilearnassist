@@ -331,6 +331,21 @@ export const ICON_PATHS = {
   /* The plan tree's "jump to this chapter" action on not-started/skipped nodes. */
   play: ["M5.5 3.5L12.5 8L5.5 12.5Z"],
 
+  /*
+   * 分支: one node becoming two — a trunk with an endpoint at each end and a second branch
+   * leaving it for a third. Drawn as three round nodes and two lines rather than as the
+   * flowchart boxes `diagram` uses, because the gesture is "start a new path from here" and
+   * not "here is the shape of a chart"; the nodes are what say the line is a route between
+   * two points rather than a stroke that happens to bend.
+   */
+  fork: [
+    "M4.5 4.5V11.5",
+    "M4.5 8C4.5 10.25 6.25 11 8.25 11H9.5",
+    "M6 3a1.5 1.5 0 1 1-3 0 1.5 1.5 0 1 1 3 0",
+    "M6 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 1 1 3 0",
+    "M12.5 11a1.5 1.5 0 1 1-3 0 1.5 1.5 0 1 1 3 0",
+  ],
+
   /* The signed-in account, and the door to its own page. */
   user: [
     "M10.5 5.75a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0",
