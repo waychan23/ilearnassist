@@ -191,6 +191,7 @@ describe("buildInsightPrompt", () => {
     notes: [],
     diagrams: [],
     tables: [],
+    plots: [],
     kept: [],
   };
 

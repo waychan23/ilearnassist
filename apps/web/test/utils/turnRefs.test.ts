@@ -35,6 +35,7 @@ const row = (overrides: Partial<FigureRow> = {}): FigureRow => ({
   toolCallId: "call-1",
   fileName: "auth-flow.mmd",
   content: null,
+  spec: null,
   fileMissing: false,
   ...overrides,
 });
@@ -125,6 +126,16 @@ describe("a figure", () => {
     expect(
       figureReference(row({ kind: "table", name: "scores", fileName: null, key: "table:t1" }))
     ).toEqual({ kind: "table", ref: "scores", label: "scores" });
+  });
+
+  it("names a plotted figure by its slug, the tables rule one kind over", () => {
+    // A plot is the row alone too: no file name, and the slug is what `plotName` canonicalises
+    // to, what the panel opens by and what `ila_query` resolves.
+    expect(
+      figureReference(
+        row({ kind: "plot", name: "抛物线", fileName: null, content: null, spec: "{}", key: "plot:p1" })
+      )
+    ).toEqual({ kind: "plot", ref: "抛物线", label: "抛物线" });
   });
 });
 

@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import {
   DIAGRAM_TOOL_NAME,
   PLAN_MAKE_TOOL_NAME,
+  PLOT_TOOL_NAME,
   QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
@@ -15,6 +16,7 @@ import AskUserCard from "./AskUserCard.vue";
 import DiagramCard from "./DiagramCard.vue";
 import FileCard from "./FileCard.vue";
 import PlanConflictCard from "./PlanConflictCard.vue";
+import PlotCard from "./PlotCard.vue";
 import QuizCard from "./QuizCard.vue";
 import Icon from "./Icon.vue";
 
@@ -57,6 +59,15 @@ const card = computed<"ask" | "quiz" | "plan" | null>(() => {
  * decides between a drawing and a failure — see `DiagramCard`, which reads the output.
  */
 const isDiagram = computed(() => props.toolCall.name === DIAGRAM_TOOL_NAME);
+
+/**
+ * A plotted figure, which is the diagram card's shape for a third artifact tool.
+ *
+ * Its own branch for the diagram's reasons unchanged: the tool does not suspend the turn, so it
+ * must not reach the `card` switch above, and the drawing is the result rather than a step on the
+ * way to one, so the generic disclosure would show the JSON spec where the figure belongs.
+ */
+const isPlot = computed(() => props.toolCall.name === PLOT_TOOL_NAME);
 
 /**
  * A file the turn wrote, which is an artifact rather than a step on the way to an answer.
@@ -126,6 +137,7 @@ const prettyInput = computed(() => {
   -->
   <template v-if="cardless"></template>
   <DiagramCard v-else-if="isDiagram" :tool-call="toolCall" />
+  <PlotCard v-else-if="isPlot" :tool-call="toolCall" />
   <FileCard v-else-if="isFileWrite" :tool-call="toolCall" />
   <AskUserCard v-else-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />

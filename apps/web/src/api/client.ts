@@ -23,6 +23,7 @@ import type {
   GetPlanResponse,
   GetQuizQuestionsResponse,
   GetSessionDiagramsResponse,
+  GetSessionPlotsResponse,
   GetSessionTablesResponse,
   HealthResponse,
   GetSessionInsightsResponse,
@@ -739,6 +740,15 @@ export const api = {
    */
   listSessionTables: (sessionId: string) =>
     request<GetSessionTablesResponse>(`/sessions/${sessionId}/tables`),
+  /**
+   * The math figures a conversation plotted, as rows carrying the JSON spec itself.
+   *
+   * The tables method's twin with one word changed: a plot's row *is* the spec, so the panel and
+   * the viewer read it with no second request — which is why it is a sibling rather than a field
+   * on either of the two above.
+   */
+  listSessionPlots: (sessionId: string) =>
+    request<GetSessionPlotsResponse>(`/sessions/${sessionId}/plots`),
 
   listSessions: (workspaceId: string) =>
     request<Session[]>(`/workspaces/${workspaceId}/sessions`),

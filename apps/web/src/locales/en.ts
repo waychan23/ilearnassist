@@ -91,6 +91,13 @@ const en: typeof MessageSchema = {
     summary: "Summary",
   },
 
+  /** The coordinate figure (`ila_plot`) and its viewer. See the Chinese catalog for the split. */
+  plot: {
+    rendering: "Drawing the figure…",
+    failed: "This figure cannot be drawn — the data below did not render.",
+    viewTitle: "Coordinate figure",
+  },
+
   app: {
     /**
      * The displayed product name. See the note in the zh-CN catalog for the boundary between it
@@ -374,6 +381,7 @@ const en: typeof MessageSchema = {
      */
     pickGroupDiagram: "Diagrams",
     pickGroupTable: "Tables",
+    pickGroupPlot: "Figures",
     pickGroupNote: "Notes",
     /** The workspace filter over the source list — one group, not the whole list. */
     sourceWorkspace: "Workspace",
@@ -578,6 +586,7 @@ const en: typeof MessageSchema = {
       ila_update_plan_progress: "Update plan progress",
       ila_diagram: "Diagram",
       ila_table: "Table",
+      ila_plot: "Coordinate figure",
       ila_query: "Query record",
       ila_explore: "Explore other workspaces",
     },
@@ -715,6 +724,7 @@ const en: typeof MessageSchema = {
       message: "Selected text",
       diagram: "Diagram",
       table: "Table",
+      plot: "Coordinate figure",
       note: "Note",
       quiz: "Quiz question",
       resource: "Material",
@@ -1062,12 +1072,13 @@ const en: typeof MessageSchema = {
       locate: "Go to the reply that drew it",
       /** Writing a note about a figure. Offered only where the notes panel has a home. */
       note: "Write a note about it",
-      empty: "This conversation has not drawn a diagram or recorded a table yet.",
+      empty: "This conversation has not drawn a diagram, recorded a table or plotted a figure yet.",
       filterKind: "Filter by kind",
       allKinds: "All",
       kinds: {
         diagram: "Diagrams",
         table: "Tables",
+        plot: "Figures",
       },
       noMatch: "Nothing matches that filter.",
       failed: "Could not read the diagrams.",
@@ -1169,6 +1180,7 @@ const en: typeof MessageSchema = {
       kinds: {
         diagram: "diagram",
         table: "table",
+        plot: "figure",
         resource: "material",
       },
       missing: "The {kind} it is about is gone",

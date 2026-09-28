@@ -12,6 +12,7 @@ import {
 } from "@ilearnassist/shared";
 import { newId, type AppDb } from "./db.js";
 import { diagramFileName } from "./diagrams.js";
+import { plotName } from "./plots.js";
 import { tableName } from "./tables.js";
 
 /**
@@ -74,7 +75,7 @@ const createNoteSchema = z
     quote: z.string().max(NOTE_QUOTE_MAX).optional(),
     occurrence: z.number().int().min(0).optional(),
     content: z.string().max(NOTE_CONTENT_MAX).optional(),
-    targetKind: z.enum(["diagram", "table", "resource"]).optional(),
+    targetKind: z.enum(["diagram", "table", "plot", "resource"]).optional(),
     targetRef: z.string().min(1).max(NOTE_TARGET_REF_MAX).optional(),
   })
   .superRefine((value, ctx) => {
@@ -163,6 +164,12 @@ function canonicalTarget(
     case "table": {
       const wanted = tableName(ref);
       return db.listTablesForUser(userId, sessionId).some((t) => t.name === wanted)
+        ? wanted
+        : null;
+    }
+    case "plot": {
+      const wanted = plotName(ref);
+      return db.listPlotsForUser(userId, sessionId).some((p) => p.name === wanted)
         ? wanted
         : null;
     }

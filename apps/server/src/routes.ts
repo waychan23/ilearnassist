@@ -80,6 +80,7 @@ import {
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   PLATFORM_ADMIN_ROLES,
+  PLOT_TOOL_NAME,
   QUIZ_MAKEUP_TOOL_NAME,
   QUIZ_TOOL_NAME,
   QUIZ_TOOL_NAMES,
@@ -138,6 +139,7 @@ import {
 } from "./usage.js";
 import { createNote, deleteNote, updateNote } from "./notes.js";
 import { listDiagramViews, registerDiagram } from "./diagrams.js";
+import { listPlotViews, registerPlot } from "./plots.js";
 import { listTableViews, registerTable } from "./tables.js";
 import {
   parseTurnReferences,
@@ -173,6 +175,7 @@ import { createSseWriter } from "./stream.js";
 import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { collectPageGuidance } from "./tools/collectPage.js";
+import { plotGuidance } from "./tools/plot.js";
 import { tableGuidance } from "./tools/table.js";
 import { fileWriteGuidance } from "./tools/fileTools.js";
 import { exploreGuidance } from "./tools/explore.js";
@@ -2907,6 +2910,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { tables: listTableViews(db, userId, id) };
   });
 
+  /*
+   * The conversation's plots.
+   *
+   * The tables route's twin, one artifact over, and the same two facts make it a route of its
+   * own: a plot is a row with its own identity (`spec`, not `content`), and a reader asking for
+   * diagrams is not asking for plots — the panel is the one caller that shows all three, and it
+   * asks in parallel. Object-not-widget like its siblings, and an empty list is a 200.
+   */
+  app.get("/api/sessions/:id/plots", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return { plots: listPlotViews(db, userId, id) };
+  });
+
   /* ----------------------------------- notes ----------------------------------- */
 
   /*
@@ -4389,6 +4409,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     collectPageGuidance?: string;
     /** See the assembly site: the positive half of `ila_table`'s contract. */
     tableGuidance?: string;
+    /** See the assembly site: the positive half of `ila_plot`'s contract. */
+    plotGuidance?: string;
     /** Present when `write_file` survived assembly — the other half of the file card. */
     fileWriteGuidance?: string;
     /**
@@ -4667,6 +4689,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           registerTable(db, session.id, saved);
         },
       },
+      /*
+       * A plot is one row and nothing else, on the table's line above and for the same reason: a
+       * JSON spec in a database column, no file, no transaction to protect two writes that do
+       * not exist.
+       */
+      plot: {
+        save: (saved) => {
+          registerPlot(db, session.id, saved);
+        },
+      },
       // Not gated on anything: the conversation's own record exists from the moment the
       // conversation does, whether or not any widget is installed to show it.
       query: {
@@ -4763,6 +4795,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * the tool is never taught a call it cannot make.
        */
       tableGuidance: tools.some((t) => t.name === TABLE_TOOL_NAME) ? tableGuidance() : undefined,
+      /*
+       * `ila_plot`'s half, the same form of the question as the line above: the tool's own
+       * description is a restriction ("graphs and geometry, not flowcharts"), and the guidance
+       * carries the positive half — when a figure is worth drawing, that the spec is data rather
+       * than code, and that the same name revises. Asked of the assembled array, so a Copilot
+       * whose allow-list excludes the tool is never taught a call it cannot make.
+       */
+      plotGuidance: tools.some((t) => t.name === PLOT_TOOL_NAME) ? plotGuidance() : undefined,
       /*
        * The file card's other half, in the same form: the renderer draws the written file over
        * the call, and this is what asks the reply not to restate it. Asked of the assembled
@@ -5151,6 +5191,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         makeupGuidance: ctx.makeupGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
+        plotGuidance: ctx.plotGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,
@@ -5410,6 +5451,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         makeupGuidance: ctx.makeupGuidance,
         collectPageGuidance: ctx.collectPageGuidance,
         tableGuidance: ctx.tableGuidance,
+        plotGuidance: ctx.plotGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
         onToolUsed: ctx.onToolUsed,

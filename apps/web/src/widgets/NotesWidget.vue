@@ -116,6 +116,8 @@ function targetKindLabel(kind: TargetKind): string {
       return t("notes.target.kinds.diagram");
     case "table":
       return t("notes.target.kinds.table");
+    case "plot":
+      return t("notes.target.kinds.plot");
     case "resource":
       return t("notes.target.kinds.resource");
     default: {

@@ -342,7 +342,14 @@ describe("syncThreads", () => {
       return "";
     });
     expect(called).toBe(0);
-    expect(result).toEqual({ turns: 0, messages: 0, diagrams: 0, tables: 0, unassigned: 0 });
+    expect(result).toEqual({
+      turns: 0,
+      messages: 0,
+      diagrams: 0,
+      tables: 0,
+      plots: 0,
+      unassigned: 0,
+    });
   });
 
   it("classifies turns into threads and assigns both messages of each", async () => {
@@ -597,6 +604,113 @@ describe("syncThreads", () => {
     );
     expect(result.tables).toBe(1);
     expect(result.diagrams).toBe(0);
+    expect(result.plots).toBe(0);
+  });
+
+  function seedPlot(toolCallId: string, name = "抛物线", summary = "y=x²"): void {
+    db.upsertSessionPlot({
+      id: newId(),
+      sessionId: SESSION,
+      name,
+      summary,
+      spec: JSON.stringify({ elements: [{ kind: "function", expr: "x^2" }] }),
+      toolCallId,
+    });
+  }
+
+  /** A pending exchange whose assistant plotted one figure. */
+  function plotTurn(callId: string): void {
+    userMessage("画个抛物线");
+    assistantMessage("画在图里了。", [
+      { id: callId, name: "ila_plot", input: JSON.stringify({ name: "抛物线" }) },
+    ]);
+    seedPlot(callId);
+  }
+
+  it("rides its turn's thread when the classifier answers continue for a plot", async () => {
+    plotTurn(newId());
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "二次函数" }],
+        plots: [{ ref: "p1", thread: "continue" }],
+      })
+    );
+
+    expect(db.listPlotsBySession(SESSION)[0]?.threadTitle).toBe("二次函数");
+  });
+
+  it("collapses a plot onto its turn's thread when the answer omits it", async () => {
+    plotTurn(newId());
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({ decisions: [{ thread: "new", branch: "other", title: "二次函数" }] })
+    );
+
+    // The invariant as one sentence: a plot's thread_id is null iff the turn owning its latest
+    // call has no thread yet. The turn has one, so the plot does.
+    expect(db.listPlotsBySession(SESSION)[0]?.threadTitle).toBe("二次函数");
+  });
+
+  it("a malformed plot entry never blocks the turn, and the plot collapses", async () => {
+    plotTurn(newId());
+
+    await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "二次函数" }],
+        plots: [{ ref: "p9", thread: "e7" }, { ref: "p1", thread: "new" }],
+      })
+    );
+
+    const view = buildThreadViews(db, OWNER, SESSION);
+    expect(view.unassigned).toBe(0);
+    expect(view.threads.map((t) => t.title)).toEqual(["二次函数"]);
+    expect(db.listPlotsBySession(SESSION)[0]?.threadTitle).toBe("二次函数");
+  });
+
+  it("places a forced turn's plot with no model call at all", async () => {
+    /*
+     * The tables case one base further down, and it is written out for the same reason: the ref
+     * allocation is one loop over the same `modelTurns`, so a forced turn's plot never reaches
+     * the prompt and can only ride the collapse. A third separate loop would break this for plots
+     * while leaving diagrams and tables intact.
+     */
+    forceMakePlan(db, SESSION, { tree: [{ title: "第一章", children: [{ title: "可数集" }] }] });
+    const plan = readCurrentPlan(db, SESSION)!;
+    const leaf = plan.tree[0]!.children![0]!;
+
+    const callId = newId();
+    userMessage("开始学 1.1 并画一个图");
+    assistantMessage("", [
+      {
+        id: newId(),
+        name: PLAN_PROGRESS_TOOL_NAME,
+        input: JSON.stringify({ nodes: [{ id: leaf.id, status: "in_progress" }] }),
+      },
+    ]);
+    assistantMessage("图在这。", [
+      { id: callId, name: "ila_plot", input: JSON.stringify({ name: "抛物线" }) },
+    ]);
+    seedPlot(callId);
+
+    await syncThreads(db, SESSION, async () => {
+      throw new Error("the model must not be called for a forced turn");
+    });
+
+    expect(db.listPlotsBySession(SESSION)[0]?.threadTitle).toBe("可数集");
+  });
+
+  it("counts the plots it placed in the result", async () => {
+    plotTurn(newId());
+    const result = await syncThreads(db, SESSION, async () =>
+      JSON.stringify({
+        decisions: [{ thread: "new", branch: "other", title: "二次函数" }],
+        plots: [{ ref: "p1", thread: "continue" }],
+      })
+    );
+    expect(result.plots).toBe(1);
+    expect(result.diagrams).toBe(0);
+    expect(result.tables).toBe(0);
   });
 
   it("places a forced turn's diagram with no model call at all", async () => {

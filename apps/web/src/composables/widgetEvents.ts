@@ -63,6 +63,13 @@ export type WidgetEvent =
    */
   | { type: "table.changed"; sessionId: string }
   /**
+   * An `ila_plot` call recorded its row, so the 图表 panel refetches mid-turn.
+   *
+   * The table's event one kind over, and its own for the same reason: the emission site is keyed
+   * on the tool's name, so sharing would make each kind of call refetch for the other two.
+   */
+  | { type: "plot.changed"; sessionId: string }
+  /**
    * A widget asked to scroll the conversation to a tool-call card — a plan node's start
    * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
    * event. Scrolling to the card (rather than the message top) lands on the node's start.

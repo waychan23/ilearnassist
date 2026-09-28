@@ -367,6 +367,17 @@ export const ICON_PATHS = {
     "M8.75 13.25V5.5",
     "M11.75 13.25V10.5",
   ],
+
+  /*
+   * The 图表 panel's third kind: axes with a parabola crossing them. A coordinate plane rather
+   * than a line between dots, because what ila_plot draws is mathematics — and the curve is what
+   * separates it from `chart`'s bars at a glance.
+   */
+  plot: [
+    "M2.75 2.25V13.25",
+    "M2.75 13.25H13.75",
+    "M3.5 12.25C6.25 12.25 6.5 4.25 9.25 4.25C11.25 4.25 12 8 13.5 12.25",
+  ],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICON_PATHS;

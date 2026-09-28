@@ -8,7 +8,7 @@ import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEve
 import { requestNoteEditor } from "../composables/messageNotes";
 import { canAnnotate, objectNoteRequest } from "../composables/notes";
 import { figureReference } from "../utils/turnRefs";
-import type { Diagram, Table } from "../api/types";
+import type { Diagram, Plot, Table } from "../api/types";
 import {
   FIGURE_FILTERS,
   filterFigures,
@@ -22,24 +22,23 @@ import DiagramDialog from "../components/dialogs/DiagramDialog.vue";
 import Icon from "../components/Icon.vue";
 
 /**
- * The conversation's 图表: the diagrams it has drawn and the tables it has recorded, as rows.
+ * The conversation's 图表: the diagrams it has drawn, the tables it has recorded and the figures
+ * it has plotted, as rows.
  *
- * A **viewer** that brings no tools. Its data is the rows the two tools write — `ila_diagram`
+ * A **viewer** that brings no tools. Its data is the rows the three tools write — `ila_diagram`
  * writes a file plus a `session_diagrams` row, `ila_table` writes a `session_tables` row that
- * *is* the table. This is deliberately NOT a folder listing: the source browser is that, and a
- * `.mmd` copied into the folder by hand has no summary and no call, so it belongs there rather
- * than on this list.
+ * *is* the table, and `ila_plot` writes a `session_plots` row that *is* the spec. This is
+ * deliberately NOT a folder listing: the source browser is that, and a `.mmd` copied into the
+ * folder by hand has no summary and no call, so it belongs there rather than on this list.
  *
- * **Two kinds, two ways in, and the difference is not an inconsistency.** A diagram's row names a
- * file, so opening it goes through the ordinary preview — which already renders a diagram, offers
- * the source and has the enlarged view — exactly as the file tree opens it. A table has no file:
- * its row holds the markdown, so opening it hands that straight to the same enlarged viewer, with
- * no request and nothing for a preview to read. What both rows carry is 定位: the call that
- * produced them, which scrolls the conversation back to it.
+ * **Three kinds, and the ways in follow from what each row holds.** A diagram's row names a
+ * file, so opening it goes through the ordinary preview — which already renders a diagram and
+ * has the enlarged view. A table's row holds markdown and a plot's holds a JSON spec, so both
+ * open straight into the same enlarged viewer with nothing to fetch elsewhere. What every row
+ * carries is 定位: the call that produced it, which scrolls the conversation back to it.
  *
  * There is deliberately no "browse the whole folder" control here. This panel is the *filtered,
- * model-made* view, and the workspace's material is one control away in the sidebar's menu — a
- * second entry point to the same files, from a panel, was a duplicate rather than a shortcut.
+ * model-made* view, and the workspace's material is one control away in the sidebar's menu.
  */
 
 const { t } = useI18n();
@@ -47,12 +46,13 @@ const store = useAppStore();
 
 const diagrams = ref<Diagram[]>([]);
 const tables = ref<Table[]>([]);
+const plots = ref<Plot[]>([]);
 const failed = ref(false);
 const filter = ref<FigureFilter>("");
-/** The table this panel is showing enlarged, if any. A diagram opens the file preview instead. */
+/** The table or plot this panel is showing enlarged, if any. A diagram opens the file preview. */
 const viewing = ref<FigureRow | null>(null);
 
-const rows = computed(() => figureRows(diagrams.value, tables.value));
+const rows = computed(() => figureRows(diagrams.value, tables.value, plots.value));
 const visible = computed(() => filterFigures(rows.value, filter.value));
 const kinds = computed(() => presentKinds(rows.value));
 
@@ -61,26 +61,29 @@ async function load(): Promise<void> {
   if (!sessionId) {
     diagrams.value = [];
     tables.value = [];
+    plots.value = [];
     failed.value = false;
     return;
   }
   try {
     /*
-     * Both reads at once, because the panel shows one list: two sequential requests would be two
-     * loading states for one screen, and the second would be waiting on nothing.
+     * All three reads at once, because the panel shows one list: sequential requests would be
+     * three loading states for one screen, and the last two would be waiting on nothing.
      *
-     * A conversation can hold one kind and not the other, so neither empty answer is an error —
-     * the panel's empty state is "this conversation has made nothing", which is the two lists
-     * being empty together.
+     * A conversation can hold one kind and not the others, so none of the empty answers is an
+     * error — the panel's empty state is "this conversation has made nothing", which is the
+     * three lists being empty together.
      */
-    const [drawn, recorded] = await Promise.all([
+    const [drawn, recorded, plotted] = await Promise.all([
       api.listSessionDiagrams(sessionId),
       api.listSessionTables(sessionId),
+      api.listSessionPlots(sessionId),
     ]);
     // A switch mid-request must not list one conversation's figures under another's.
     if (sessionId !== store.activeSessionId) return;
     diagrams.value = drawn.diagrams;
     tables.value = recorded.tables;
+    plots.value = plotted.plots;
     failed.value = false;
   } catch {
     if (sessionId !== store.activeSessionId) return;
@@ -93,6 +96,7 @@ watch(
   () => {
     diagrams.value = [];
     tables.value = [];
+    plots.value = [];
     failed.value = false;
     viewing.value = null;
     void load();
@@ -106,7 +110,12 @@ onMounted(() => {
     // The rows are written by the tools mid-turn, so their own events refresh immediately;
     // `turn.finished` catches one a later step wrote. A thread title arrives with the best-effort
     // classifier after that, and shows on the next load.
-    if (event.type === "diagram.changed" || event.type === "table.changed" || event.type === "turn.finished") {
+    if (
+      event.type === "diagram.changed" ||
+      event.type === "table.changed" ||
+      event.type === "plot.changed" ||
+      event.type === "turn.finished"
+    ) {
       if (event.sessionId === store.activeSessionId) void load();
     }
   });
@@ -131,10 +140,12 @@ function kindLabel(kind: FigureKind): string {
       return t("widgets.diagram.kinds.diagram");
     case "table":
       return t("widgets.diagram.kinds.table");
+    case "plot":
+      return t("widgets.diagram.kinds.plot");
   }
 }
 
-/** Open a row: a diagram through the file preview, a table through the viewer. */
+/** Open a row: a diagram through the file preview, a table or plot through the viewer. */
 function openRow(row: FigureRow): void {
   if (row.kind === "diagram") {
     if (row.fileName && !row.fileMissing) void store.openFile(row.fileName, "session");
@@ -231,7 +242,7 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
             @click="openRow(row)"
           >
             <span class="diagram-icon">
-              <Icon :name="row.kind === 'diagram' ? 'diagram' : 'table'" />
+              <Icon :name="row.kind" />
             </span>
             <span class="diagram-meta">
               <span class="diagram-name truncate">{{ row.name }}</span>
@@ -290,12 +301,16 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
       </ul>
     </template>
 
-    <!-- The table's own viewer, at panel level rather than per row: one dialog, and the row it
-         shows is a value rather than a position. A diagram has no equivalent here — it opens the
-         file preview, which is the same dialog the file tree uses. -->
+    <!-- The table's or plot's own viewer, at panel level rather than per row: one dialog, and
+         the row it shows is a value rather than a position. A diagram has no equivalent here —
+         it opens the file preview, which is the same dialog the file tree uses. -->
     <DiagramDialog
-      v-if="viewing?.content"
-      :content="{ kind: 'table', markdown: viewing.content }"
+      v-if="viewing && (viewing.content !== null || viewing.spec !== null)"
+      :content="
+        viewing.kind === 'plot'
+          ? { kind: 'plot', spec: viewing.spec ?? '' }
+          : { kind: 'table', markdown: viewing.content ?? '' }
+      "
       :name="viewing.name"
       :summary="viewing.summary"
       :figure="figureReference(viewing)"

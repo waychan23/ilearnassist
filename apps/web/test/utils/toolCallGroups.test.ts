@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DIAGRAM_TOOL_NAME,
+  PLOT_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   type ToolCall,
 } from "@ilearnassist/shared";
@@ -88,6 +89,11 @@ describe("isGroupableToolCall", () => {
 
   it("refuses a diagram, whose card renders the artifact", () => {
     expect(isGroupableToolCall(call("a", DIAGRAM_TOOL_NAME))).toBe(false);
+  });
+
+  it("refuses a plot, whose card renders the figure", () => {
+    // The diagram's reason exactly: folding a drawing into a count hides the artifact.
+    expect(isGroupableToolCall(call("a", PLOT_TOOL_NAME))).toBe(false);
   });
 
   it("refuses a write, whose card renders the file", () => {

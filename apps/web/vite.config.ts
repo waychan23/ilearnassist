@@ -20,8 +20,12 @@ export default defineConfig({
      * the two: one entry point over ~25 runtime dependencies, so a cold transform of it is a
      * cold transform of every one of them. It is behind a dynamic import too, and the browser
      * suite's first viewer assertion is where that would otherwise be paid.
+     *
+     * `function-plot` is the same shape at a tenth of the size: a dynamic import of a d3-based
+     * package, first reached when a plotted figure appears — which in the browser suite is that
+     * spec's first assertion.
      */
-    include: ["mermaid", "@open-file-viewer/core"],
+    include: ["mermaid", "@open-file-viewer/core", "function-plot"],
   },
   server: {
     // Pinned and strict only when the e2e asks for it: if that port is taken the run must

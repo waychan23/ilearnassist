@@ -225,6 +225,9 @@ importers:
       chart.js:
         specifier: ^4.5.1
         version: 4.5.1
+      function-plot:
+        specifier: ^1.25.4
+        version: 1.25.4
       highlight.js:
         specifier: ^11.12.0
         version: 11.12.0
@@ -1392,6 +1395,9 @@ packages:
     resolution: {integrity: sha512-q2hn7Mbo2nFNkVekPiHFx6Nfo3hURmES3tfBn+k5Pqxl2RkmP3QGqZUhH/q9Pch/4G05NRhPjDlVj1O8q4Txvw==}
     engines: {node: '>=14.0.0'}
 
+  built-in-math-eval@0.3.2:
+    resolution: {integrity: sha512-YUEswPdQJYtAP0E9pMq7va05M6iA/8U3Pthnlx+fwbej1G16hy/ZBxyLw+gZpxdijjGGqiwxm7vs3tW7IQuUnw==}
+
   but-unzip@0.1.10:
     resolution: {integrity: sha512-hLfQ9WlUimmv/okzsRl6AYG3Ew5HNWhWgUslSR93FsDdeL0MAoQvmC/BJfs35lqEAO5t/QD7Y4vCFcPJtijt3A==}
 
@@ -1800,6 +1806,9 @@ packages:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
     engines: {node: '>=12'}
 
+  double-bits@1.1.1:
+    resolution: {integrity: sha512-BCLEIBq0O/DWoA7BsCu/R+RP0ZXiowP8BhtJT3qeuuQEBpnS8LK/Wo6UTJQv6v8mK1fj8n90YziHLwGdM5whSg==}
+
   duck@0.1.12:
     resolution: {integrity: sha512-wkctla1O6VfP89gQ+J/yDesM0S7B7XLXjKGzXxMDVFg7uEn706niAtyYovKbyq1oT9YwDcly721/iUWoc8MVRg==}
 
@@ -1933,6 +1942,10 @@ packages:
   eventemitter3@5.0.4:
     resolution: {integrity: sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==}
 
+  events@3.3.0:
+    resolution: {integrity: sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q==}
+    engines: {node: '>=0.8.x'}
+
   expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
@@ -1942,6 +1955,9 @@ packages:
 
   exsolve@1.1.1:
     resolution: {integrity: sha512-9U/jZUgjnSGyntRr6y5Muu1MJcwFl6kPu7k8qLF0IMNfLqvw0NZ4nnVDq0RVoZ0RvCyumib4Ez3KYrVfilrw+g==}
+
+  extend@3.0.2:
+    resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
 
   fast-decode-uri-component@1.0.1:
     resolution: {integrity: sha512-WKgKWg5eUxvRZGwW8FvfbaH7AXSh2cL+3j5fMGzUMCxWBJ3dV3a7Wz8y2f/uQ0e3B6WmodD3oS54jTQ9HVTIIg==}
@@ -2030,6 +2046,9 @@ packages:
 
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
+
+  function-plot@1.25.4:
+    resolution: {integrity: sha512-fY8APi3mkhinoPjp5zjVRvazP8YLhsDtb0cTAksoF9HWiWYHRfT2qGHJpDMSs3Co5Zf/NF/j6ZoVzg4BmeVTTQ==}
 
   get-caller-file@2.0.5:
     resolution: {integrity: sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg==}
@@ -2165,6 +2184,12 @@ packages:
   internmap@2.0.3:
     resolution: {integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==}
     engines: {node: '>=12'}
+
+  interval-arithmetic-eval@0.5.3:
+    resolution: {integrity: sha512-8cR5Uerz+h1yDpb8Y2z3XfnI0XOnmWapI1CP/j84EKVocr6m6/rziLU558Vi7VGh4Bgfv9VeoOQAjDV4And+tg==}
+
+  interval-arithmetic@1.1.3:
+    resolution: {integrity: sha512-RdEKOQPUky8ShFdKnsOzXXO7LMaCfZtW9Z6t6LugIWgxU1pty4KEo7hpcIDcg3CYZ2iso9fPUiQPPdhsAhaLSQ==}
 
   ipaddr.js@2.5.0:
     resolution: {integrity: sha512-aq+t5NAc+cS6rZQQVWC2x98CPqGtKKTMDd4Gaodv0wShnItdKg/51djkGJ1hqH+Oy0ivDftCbSLCQob8zso01w==}
@@ -2449,6 +2474,9 @@ packages:
     resolution: {integrity: sha512-OkeDaAZ/bQCxeFAozM55PKcKU0yJMPGifLwV4Qgjitu+5MoAfSQN4lsLJeXZ1b8w0x+/Emda6MZgXS1jvsapng==}
     engines: {node: '>=10'}
 
+  math-codegen@0.4.3:
+    resolution: {integrity: sha512-wDPK9BputFrirD7dXgpeIa1nkTy08Gh+nCALwEmmHSmKoCJtTYu1PjGC6Z08FmCjkHzVkhvep2mzyJWRgtOe5A==}
+
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
@@ -2528,6 +2556,9 @@ packages:
   mlly@1.8.2:
     resolution: {integrity: sha512-d+ObxMQFmbt10sretNDytwt85VrbkhhUA/JBGm1MPaWJ65Cl4wOgLaB1NYvJSZ0Ef03MMEU/0xpPMXUIQ29UfA==}
 
+  mr-parser@0.2.2:
+    resolution: {integrity: sha512-9pMgttJp8pZtiYfoHkhBc9ncOHKmEwLMNBQpS/ZXgj4ORnPMKznYR0lZ1We3ZrD71RevQ34hKyKzDV1p/agXuw==}
+
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
@@ -2545,6 +2576,9 @@ packages:
     resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
+
+  nextafter@1.0.0:
+    resolution: {integrity: sha512-7PO+A89Tll2rSEfyrjtqO0MaI37+nnxBdnQcPypfbEYYuGaJxWGCqaOwQX4a3GHNTS08l1kazuiLEWZniZjMUQ==}
 
   node-abi@4.35.0:
     resolution: {integrity: sha512-ymk4aIzxdPopw2giv8Fs1Ec6vybGkjmyxUwVqhkI4MCy2tVfXdkOGGWieWVjL0THgH+7a8lRdevyupoYj3Js/Q==}
@@ -4678,6 +4712,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  built-in-math-eval@0.3.2:
+    dependencies:
+      math-codegen: 0.4.3
+
   but-unzip@0.1.10: {}
 
   bytestreamjs@2.0.1: {}
@@ -5129,6 +5167,8 @@ snapshots:
 
   dotenv@16.6.1: {}
 
+  double-bits@1.1.1: {}
+
   duck@0.1.12:
     dependencies:
       underscore: 1.13.8
@@ -5308,11 +5348,15 @@ snapshots:
 
   eventemitter3@5.0.4: {}
 
+  events@3.3.0: {}
+
   expect-type@1.4.0: {}
 
   exponential-backoff@3.1.3: {}
 
   exsolve@1.1.1: {}
+
+  extend@3.0.2: {}
 
   fast-decode-uri-component@1.0.1: {}
 
@@ -5430,6 +5474,20 @@ snapshots:
     optional: true
 
   function-bind@1.1.2: {}
+
+  function-plot@1.25.4:
+    dependencies:
+      built-in-math-eval: 0.3.2
+      d3-axis: 3.0.0
+      d3-color: 3.1.0
+      d3-format: 3.1.2
+      d3-interpolate: 3.0.1
+      d3-scale: 4.0.2
+      d3-selection: 3.0.0
+      d3-shape: 3.2.0
+      d3-zoom: 3.0.0
+      events: 3.3.0
+      interval-arithmetic-eval: 0.5.3
 
   get-caller-file@2.0.5: {}
 
@@ -5597,6 +5655,15 @@ snapshots:
   internmap@1.0.1: {}
 
   internmap@2.0.3: {}
+
+  interval-arithmetic-eval@0.5.3:
+    dependencies:
+      interval-arithmetic: 1.1.3
+      math-codegen: 0.4.3
+
+  interval-arithmetic@1.1.3:
+    dependencies:
+      nextafter: 1.0.0
 
   ipaddr.js@2.5.0: {}
 
@@ -5856,6 +5923,11 @@ snapshots:
       escape-string-regexp: 4.0.0
     optional: true
 
+  math-codegen@0.4.3:
+    dependencies:
+      extend: 3.0.2
+      mr-parser: 0.2.2
+
   math-intrinsics@1.1.0: {}
 
   mdn-data@2.27.1: {}
@@ -5964,6 +6036,8 @@ snapshots:
       pkg-types: 1.3.1
       ufo: 1.6.4
 
+  mr-parser@0.2.2: {}
+
   ms@2.1.3: {}
 
   mtx-decompressor@1.6.0: {}
@@ -5973,6 +6047,10 @@ snapshots:
   mustache@4.2.0: {}
 
   nanoid@3.3.18: {}
+
+  nextafter@1.0.0:
+    dependencies:
+      double-bits: 1.1.1
 
   node-abi@4.35.0:
     dependencies:

@@ -128,6 +128,8 @@ export interface RunAgentInput {
   collectPageGuidance?: string;
   /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
+  /** `ila_plot`'s positive half — see `plotGuidance`. */
+  plotGuidance?: string;
   /** `write_file`'s other half — see `fileWriteGuidance`. */
   fileWriteGuidance?: string;
   /**
@@ -340,6 +342,8 @@ export interface SystemPromptInput {
   collectPageGuidance?: string;
   /** `ila_table`'s positive half — see `tableGuidance`. */
   tableGuidance?: string;
+  /** `ila_plot`'s positive half — see `plotGuidance`. */
+  plotGuidance?: string;
   /** `write_file`'s other half — see `fileWriteGuidance`. */
   fileWriteGuidance?: string;
   /**
@@ -433,6 +437,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   const makeupCard = block(input.makeupGuidance);
   const collectPage = block(input.collectPageGuidance);
   const table = block(input.tableGuidance);
+  const plot = block(input.plotGuidance);
   const fileWrite = block(input.fileWriteGuidance);
   // The `@` grant, which qualifies the workspace block above it.
   const explore = block(input.exploreGuidance);
@@ -448,6 +453,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     makeupCard,
     collectPage,
     table,
+    plot,
     explore,
   });
 }
@@ -609,6 +615,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         makeupGuidance: input.makeupGuidance,
         collectPageGuidance: input.collectPageGuidance,
         tableGuidance: input.tableGuidance,
+        plotGuidance: input.plotGuidance,
         fileWriteGuidance: input.fileWriteGuidance,
         exploreGuidance: input.exploreGuidance,
       })

@@ -6,7 +6,9 @@ conversation**: it is written into the reply as ordinary Markdown, and what the 
 row that keeps it findable afterwards.
 
 This is the working reference. `docs/diagrams.md` is its sibling and the source of most of the
-patterns here; the invariant that governs both is in [CLAUDE.md](../CLAUDE.md).
+patterns here; `docs/plots.md` is the third kind the same panel holds (a plotted math figure,
+which is this row's shape — the artifact *is* the row — with a JSON spec in place of the
+markdown). The invariant that governs all three is in [CLAUDE.md](../CLAUDE.md).
 
 ## The requirement that shapes everything
 

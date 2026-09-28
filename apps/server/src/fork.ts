@@ -137,6 +137,9 @@ export function forkSession(db: AppDb, params: ForkSessionParams): ForkResult {
     const sourceTables = db
       .listTablesBySession(source.id)
       .filter((t) => t.toolCallId !== null && copiedCallIds.has(t.toolCallId));
+    const sourcePlots = db
+      .listPlotsBySession(source.id)
+      .filter((p) => p.toolCallId !== null && copiedCallIds.has(p.toolCallId));
     const threadMap = cloneThreads(
       db,
       source.id,
@@ -144,7 +147,8 @@ export function forkSession(db: AppDb, params: ForkSessionParams): ForkResult {
       msgMap,
       nodeMap,
       sourceDiagrams.map((d) => d.threadId),
-      sourceTables.map((t) => t.threadId)
+      sourceTables.map((t) => t.threadId),
+      sourcePlots.map((p) => p.threadId)
     );
     const noteMap = cloneNotes(db, userId, source.id, targetId, msgMap, wrMap);
     // The order matters: the files have to exist as rows before the diagram rows can point at
@@ -152,6 +156,7 @@ export function forkSession(db: AppDb, params: ForkSessionParams): ForkResult {
     const fileMap = cloneSessionFiles(db, userId, workspace.slug, source.id, targetId);
     cloneDiagrams(db, targetId, sourceDiagrams, threadMap, fileMap);
     cloneTables(db, targetId, sourceTables, threadMap);
+    clonePlots(db, targetId, sourcePlots, threadMap);
     cloneInsights(db, userId, source.id, targetId);
     cloneWidgets(db, userId, source.id, targetId);
     cloneQuestionCounter(db, source.id, targetId);
@@ -321,14 +326,15 @@ function cloneThreads(
   msgMap: ReadonlyMap<string, string>,
   nodeMap: ReadonlyMap<string, string>,
   diagramThreadIds: readonly (string | null)[],
-  tableThreadIds: readonly (string | null)[]
+  tableThreadIds: readonly (string | null)[],
+  plotThreadIds: readonly (string | null)[]
 ): Map<string, string> {
   const referenced = new Set<string>();
   const sourceMessageThreads = db.listThreadMessagesBySession(sourceSessionId);
   for (const row of sourceMessageThreads) {
     if (msgMap.has(row.id)) referenced.add(row.threadId);
   }
-  for (const id of [...diagramThreadIds, ...tableThreadIds]) {
+  for (const id of [...diagramThreadIds, ...tableThreadIds, ...plotThreadIds]) {
     if (id) referenced.add(id);
   }
 
@@ -545,6 +551,27 @@ function cloneTables(
   }
 }
 
+/** The tables' copy with the field a plot has and a table does not: the spec. */
+function clonePlots(
+  db: AppDb,
+  targetSessionId: string,
+  rows: ReturnType<AppDb["listPlotsBySession"]>,
+  threadMap: ReadonlyMap<string, string>
+): void {
+  for (const row of rows) {
+    const copied = db.upsertSessionPlot({
+      id: newId(),
+      sessionId: targetSessionId,
+      name: row.name,
+      summary: row.summary,
+      spec: row.spec,
+      toolCallId: row.toolCallId,
+    });
+    const threadId = row.threadId ? threadMap.get(row.threadId) : undefined;
+    if (threadId) db.assignPlotToThread(targetSessionId, copied.id, threadId);
+  }
+}
+
 /* ----------------------------------- insights ----------------------------------- */
 
 /**
@@ -636,6 +663,7 @@ function remapReference(
     // A figure is addressed by its canonical name, which the copy keeps.
     case "diagram":
     case "table":
+    case "plot":
       return ref;
     case "message":
       return { ...ref, ref: msgMap.get(ref.ref) ?? ref.ref };

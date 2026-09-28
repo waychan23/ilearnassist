@@ -289,11 +289,13 @@ apps/server/src/
   tools/askUser.ts        # ask_user — suspends the turn on a question; its result shape
   tools/collectPage.ts    # ila_collect_page — keeps a fetched page, as a reference
   tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
+  tools/plot.ts           # ila_plot — records a math figure's JSON spec (and its row)
   tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
   tools/explore.ts        # ila_explore — the agent reads the `@`-granted workspaces: files, messages
   tools/resultPage.ts     # the paging engine ila_query and ila_explore share: clip, renderPage
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
+  plots.ts                # plot rows: plotName, validatePlotSpec, registerPlot, listPlotViews
   widgets.ts              # the widget-selection validator (pure)
   usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
   notes.ts                # the notes widget's records: what a body may become a note (pure)
@@ -322,13 +324,15 @@ apps/web/src/
   utils/openFileViewer.ts # the lazy viewer chunk + its vendor sheet — the only importer of it
   utils/locale.ts         # browser-language detection + the alias table
   utils/mermaid.ts        # the lazy mermaid chunk: theme variables, parse, render
+  utils/plotSpec.ts       # plot spec → function-plot options: palette, mapping, serialisation (pure)
+  utils/plot.ts           # the lazy function-plot chunk + the polygon overlay + the cache release
   utils/noteAnchor.ts     # selection → quote + occurrence, and back (pure, DOM-only)
   utils/charts.ts         # the lazy Chart.js chunk + the palette read from the live stylesheet
   utils/widgetTabs.ts     # the tab strip's fit arithmetic (pure)
   components/stats/       # StatsPanel (both statistics pages) + UsageChart (the canvas)
   widgets/registry.ts     # widget id → component, catalog keys, lifecycle hooks
   widgets/NotesWidget.vue # the notes panel: the list, the toolbar, the empty state
-  widgets/DiagramWidget.vue # the diagram panel: the conversation's diagram rows, and a jump to each
+  widgets/DiagramWidget.vue # the 图表 panel: the conversation's diagram, table and plot rows
   widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/ResourcesWidget.vue # the material panel: what this conversation holds, filtered by category
   widgets/*Widget.vue     # the seven panels (plan, quiz, thread, notes, diagram, insight, sources)
@@ -337,7 +341,7 @@ apps/web/src/
   utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
   utils/resourceTree.ts   # the library's tree: group by owner, flatten by open set
   components/…            # App, LoginView, WorkspaceHome, UsageView, Sidebar, ChatView, MessageItem,
-                          #   ToolCallCard, DiagramCard, MermaidDiagram, FileViewer,
+                          #   ToolCallCard, DiagramCard, PlotCard, MermaidDiagram, PlotFigure, FileViewer,
                           #   AskUserCard, Composer, ResourceMentionPicker, WriteLocationField,
                           #   FolderPickerDialog,
                           #   FileTree, WidgetPanel, AppMenu,
@@ -504,7 +508,7 @@ public half.
   a missing/unusable answer, and any diagram in a deterministically-forced plan turn, collapses
   to the turn's thread. The invariant is one sentence and testable: a diagram's `thread_id` is
   null iff the turn owning its latest call has no thread yet.
-- **A table is a row and nothing else, and the 图表 panel shows both kinds.** The requirement is
+- **A table is a row and nothing else, and the 图表 panel shows all three kinds.** The requirement is
   explicit that a table's display is the **reply's own Markdown**, never a tool container — so the
   feature splits in two and each half holds one copy: the reply is what a person reads, and
   `session_tables.content` is what the panel, the viewer and the clipboard read. Nothing can make
@@ -544,6 +548,42 @@ public half.
     `MAX_TABLES_PER_PROMPT`**. The one thing that must not be duplicated is the ref allocation: it
     is one loop over the same `modelTurns`, which is what makes a forced turn's table collapse
     exactly as its diagram does. See `docs/tables.md`.
+- **A math figure is a spec, never code, and the app is the only thing that draws it.** `ila_plot`
+  takes `{ name, summary, spec }` where the spec is a **closed vocabulary** — nine element kinds,
+  formulas in the element's own variable, no way to name anything else — and the app renders it
+  with `function-plot` (lazy chunk, SVG). That is the feature's whole contract, and the reason it
+  can exist at all in a deployment with no code-execution tool: the model passes data, and the
+  renderer reaches nothing. Four things are load-bearing:
+  - **The expression whitelist is shared and enforced twice.** `isPlotExpression` +
+    `PLOT_EXPRESSION_FUNCTIONS`/`CONSTANTS` live in `packages/shared` because the **tool** refuses
+    an expression before the write and the **renderer** refuses it before the library's evaluator
+    sees it. The second enforcer is not redundant — a row may have been written by another build —
+    and one function for both is what keeps them from drifting. `random` is deliberately absent: a
+    figure that draws differently on every render is not a figure.
+  - **`validatePlotSpec` rebuilds rather than checks**, and every refusal throws before `save`.
+    Unknown top-level and per-element fields are refused with a sentence (the `ila_query`
+    `checkFields` argument one level down), every number must be finite, `circle` becomes the
+    implicit equation built from its own numbers, `polygon` is drawn as an overlay path because
+    the library's `closed` fills to the x-axis rather than closing the shape. The rebuild is what
+    makes "a spec that reached the row is a spec the renderer can draw" true rather than
+    aspirational; throwing first is what keeps a refused revise from wiping the row the panel
+    holds.
+  - **The row is the artifact and there is no file.** `session_plots.spec` holds the canonical
+    JSON — the `session_tables` shape with a spec where the markdown would be — so it gets no
+    `file_id`, no `.plot.json`, no `work_resources` reference, and it *is* in `NON_FILE_TOOLS`:
+    a file-tools switch must not remove a capability that never touched a sandbox. `spec` is
+    stored as text and a read that cannot parse it renders as a failure, not a 500 — the renderer
+    is the authority, the `ila_diagram` rule one kind over.
+  - **The drawing string is self-contained and is never a second render.** `PlotFigure` exposes
+    `{ svg, size }`, the same pair `MermaidDiagram` exposes, which is what lets `DiagramDialog`
+    zoom, fit, maximise and download the third kind with no new path. `serializePlotFigure` makes
+    the string stand alone (viewBox, a concrete root `color` for the library's `currentColor`
+    axes, an explicit fill on unfilled text) and strips `script`/`foreignObject`/`on*` before it
+    reaches `v-html` — labels in it are model-authored. The palette is read at render time as
+    concrete hex, never `var()`, because the same string is written to a downloaded file. Its CJS
+    interop is normalised (`pickFunctionPlot`): under Vite pre-bundling the default export can
+    arrive nested, which the browser suite found as "functionPlot is not a function". See
+    `docs/plots.md`.
 - **Mermaid renders in its own component, never through `renderMarkdown`.** `renderMarkdown` is a
   synchronous `string → string` on purpose — that is the reason KaTeX was chosen over MathJax —
   and mermaid's API is async, so a diagram cannot go through the markdown path, and making the
@@ -2045,7 +2085,8 @@ public half.
   diagram through the ordinary file preview, a table through the viewer directly, since only one of
   the two has a file. The whole folder is the source browser, which the sidebar's library row opens
   *on* this workspace — a default its own workspace picker moves, since the browser is drawn from
-  that rail with every control it has — see `docs/diagrams.md` and `docs/tables.md`.
+  that rail with every control it has — see `docs/diagrams.md`, `docs/tables.md` and
+  `docs/plots.md`.
   **The insight widget is the limiting case of the same rule: it has no tool at all.** Its data
   comes from an out-of-band model call a button triggers, so there is nothing to bind — and
   binding would be wrong anyway, because a bound tool is something the *agent* can call and the

@@ -580,16 +580,17 @@ async function openReference(reference: TurnReference): Promise<void> {
       return;
     case "diagram":
     case "table":
+    case "plot":
     case "resource":
-      // The three that have a viewer go through the one implementation of "how do I show one of
-      // these" — the notes panel's chip and the note window call the same function, so a fourth
+      // The kinds that have a viewer go through the one implementation of "how do I show one of
+      // these" — the notes panel's chip and the note window call the same function, so a fifth
       // kind is answered there and reaches this chip for free.
       await openFigure(reference.kind, reference.ref, reference.label);
       return;
     default: {
       // `reference.kind` rather than `reference`: this is one interface with a union for its
       // discriminant, not a union of interfaces, so only the field narrows to `never`. It is the
-      // same guard either way — a seventh kind is a compile error here rather than a chip that
+      // same guard either way — an eighth kind is a compile error here rather than a chip that
       // offers a control doing nothing.
       const unhandled: never = reference.kind;
       return unhandled;

@@ -91,6 +91,8 @@ export function targetKindIcon(kind: NoteTargetKindChoice): IconName {
       return "diagram";
     case "table":
       return "table";
+    case "plot":
+      return "plot";
     case "resource":
       return "file";
   }

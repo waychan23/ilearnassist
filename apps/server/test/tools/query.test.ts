@@ -10,8 +10,9 @@ import {
   type NoteInsert,
 } from "../../src/db.js";
 import { registerDiagram } from "../../src/diagrams.js";
+import { registerPlot } from "../../src/plots.js";
 import { registerTable } from "../../src/tables.js";
-import { QUERY_TABLE_SOURCE_MAX } from "../../src/tools/query.js";
+import { QUERY_PLOT_SPEC_MAX, QUERY_TABLE_SOURCE_MAX } from "../../src/tools/query.js";
 import { forceMakePlan, readCurrentPlan, renderReadResult } from "../../src/plans.js";
 import { registerQuizQuestions } from "../../src/quizzes.js";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
@@ -527,6 +528,73 @@ describe("ila_query — tables", () => {
     const table = answer.table as Record<string, unknown>;
     expect(table.contentTruncated).toBe(true);
     expect((table.content as string).length).toBe(QUERY_TABLE_SOURCE_MAX);
+  });
+});
+
+describe("ila_query — plots", () => {
+  const SPEC = JSON.stringify({ elements: [{ kind: "function", expr: "x^2" }] });
+
+  beforeEach(() => {
+    registerPlot(db, SESSION, {
+      name: "抛物线",
+      summary: "y=x² 的顶点",
+      spec: SPEC,
+      toolCallId: "call-10",
+    });
+  });
+
+  it("lists names and summaries without the spec", async () => {
+    const answer = await ask({ kind: "plot" });
+    expect(answer).toMatchObject({ total: 1 });
+    expect(answer.items).toEqual([
+      { name: "抛物线", summary: "y=x² 的顶点", threadTitle: null },
+    ]);
+    expect(JSON.stringify(answer)).not.toContain("x^2");
+  });
+
+  it("returns one figure's spec, which is the only copy there is", async () => {
+    // The tables reason verbatim: a plot has no file, so this read is the only way the model can
+    // see the figure again once the turn that drew it left the history window — and the revise
+    // instruction ("call ila_plot again with the same name") needs the current spec.
+    const answer = await ask({ kind: "plot", name: "抛物线" });
+    expect(answer).toMatchObject({
+      plot: {
+        name: "抛物线",
+        summary: "y=x² 的顶点",
+        specTruncated: false,
+        spec: SPEC,
+      },
+    });
+  });
+
+  it("normalises the name the way the writer does", async () => {
+    // The same `plotName` on both sides, so a model that remembers "抛物线 " still finds its row.
+    expect((await ask({ kind: "plot", name: " 抛物线 " })).plot).not.toBeNull();
+  });
+
+  it("says what it has instead of failing when the name is unknown", async () => {
+    const answer = await ask({ kind: "plot", name: "nope" });
+    expect(answer).toMatchObject({ plot: null, available: ["抛物线"] });
+  });
+
+  it("is scoped to the account", async () => {
+    const other = { userId: OTHER, sessionId: OTHER_SESSION };
+    expect(await ask({ kind: "plot" }, other)).toMatchObject({ total: 0 });
+  });
+
+  it("truncates a spec past the read cap, and says so", async () => {
+    registerPlot(db, SESSION, {
+      name: "long",
+      summary: "很长",
+      spec: JSON.stringify({
+        elements: [{ kind: "text", at: [0, 0], text: "x".repeat(QUERY_PLOT_SPEC_MAX) }],
+      }),
+      toolCallId: "call-11",
+    });
+    const answer = await ask({ kind: "plot", name: "long" });
+    const plot = answer.plot as Record<string, unknown>;
+    expect(plot.specTruncated).toBe(true);
+    expect((plot.spec as string).length).toBe(QUERY_PLOT_SPEC_MAX);
   });
 });
 

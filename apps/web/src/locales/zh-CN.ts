@@ -147,6 +147,22 @@ export default {
     summary: "说明",
   },
 
+  /**
+   * The coordinate figure (`ila_plot`) and its viewer.
+   *
+   * A namespace of its own rather than more `diagram.*` keys: the two drawings fail for
+   * different reasons, and a sentence about Mermaid parsing would be false for a figure. The
+   * viewer's controls are shared with `diagram.*` — it is one dialog — and only what differs is
+   * named here.
+   */
+  plot: {
+    rendering: "正在绘制坐标图…",
+    /** The spec could not be drawn. The spec's own text is shown under it. */
+    failed: "这张坐标图无法绘制，下面的数据没有通过渲染。",
+    /** The viewer's fallback title when the figure has no name of its own. */
+    viewTitle: "查看坐标图",
+  },
+
   app: {
     /**
      * The product name as the app *displays* it — on the login screen, in the workspace home's
@@ -482,12 +498,13 @@ export default {
     allWorkspaces: "{'@'}所有工作区",
     /*
      * The dividers over the conversation's own objects, and the reason 资料 is not just files: a
-     * 图, a 表 and a 笔记 are things a conversation works from exactly as a PDF is. Three separate
-     * headings rather than one, because a 图 and a 表 can share a name and a flat list would then
-     * be two identical rows.
+     * 图, a 表, a 坐标图 and a 笔记 are things a conversation works from exactly as a PDF is. Four
+     * separate headings rather than one, because a 图 and a 表 can share a name and a flat list
+     * would then be two identical rows.
      */
     pickGroupDiagram: "图",
     pickGroupTable: "表",
+    pickGroupPlot: "坐标图",
     pickGroupNote: "笔记",
     /**
      * The workspace filter over the 资料 list.
@@ -769,6 +786,9 @@ export default {
       /* 表 rather than 图表: the panel is 图表 (both halves), and this is the half that records a
          table — the word the card's own hint and the panel's filter both use. */
       ila_table: "表格",
+      /* 坐标图 rather than 图表: 图表 is the whole panel, and this is the half that draws a
+         figure on a coordinate plane — the word the card, the panel's filter and the viewer use. */
+      ila_plot: "坐标图",
       ila_query: "查询学习记录",
       ila_explore: "浏览其他工作区",
     },
@@ -962,6 +982,7 @@ export default {
       message: "选中的内容",
       diagram: "图",
       table: "表",
+      plot: "坐标图",
       note: "笔记",
       quiz: "题目",
       resource: "资料",
@@ -1354,13 +1375,14 @@ export default {
       locate: "定位到生成它的消息",
       /** Writing a note about a figure. Offered only where the notes panel has a home. */
       note: "为它记一条笔记",
-      empty: "这个会话还没有画过图表，也没有记录过表格。",
+      empty: "这个会话还没有画过图表，也没有记录过表格、绘制过坐标图。",
       /** The panel's kind filter. Its empty value is the select's own "everything". */
       filterKind: "按类型筛选",
       allKinds: "全部",
       kinds: {
         diagram: "图",
         table: "表",
+        plot: "坐标图",
       },
       noMatch: "没有符合筛选条件的图表。",
       failed: "读取图表失败。",
@@ -1467,6 +1489,7 @@ export default {
       kinds: {
         diagram: "图",
         table: "表",
+        plot: "坐标图",
         resource: "资料",
       },
       missing: "它写的{kind}已不存在",

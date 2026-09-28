@@ -7,20 +7,21 @@ import type { FigureContent } from "../components/dialogs/DiagramDialog.vue";
 import type { FigureTurnReference } from "../utils/turnRefs";
 
 /**
- * Showing one 图, 表 or 资料, from wherever the reader pointed at it.
+ * Showing one 图, 表, 坐标图 or 资料, from wherever the reader pointed at it.
  *
- * Three surfaces offer "open this figure" — the 图表 panel on its own rows, the notes panel on
- * the chip that says what a note is about, and the note **window** on the object it names — and
- * they must not answer "how do I show one" three times. The answer is genuinely different per
- * kind, which is why it is worth having once: a **diagram is a file** in the conversation's own
- * folder, so it opens through the ordinary file preview, exactly as a preview from the file tree
- * does; a **table is a row** with no file at all, so the only viewer is `DiagramDialog` and its
- * markdown has to be fetched; and a **reference** is neither — it is addressed by id, so the row
- * has to be read back before the file preview can be handed anything.
+ * Four surfaces offer "open this figure" — the 图表 panel on its own rows, the notes panel on
+ * the chip that says what a note is about, the note **window** on the object it names, and a
+ * reference chip in a sent message — and they must not answer "how do I show one" four times.
+ * The answer is genuinely different per kind, which is why it is worth having once: a **diagram
+ * is a file** in the conversation's own folder, so it opens through the ordinary file preview,
+ * exactly as a preview from the file tree does; a **table or a plot is a row** with no file at
+ * all, so the only viewer is `DiagramDialog` and its content — markdown or a JSON spec — has to
+ * be fetched; and a **reference** is neither — it is addressed by id, so the row has to be read
+ * back before the file preview can be handed anything.
  *
  * That asymmetry is not an accident of this module — it is the shape `docs/tables.md` and
  * `docs/resources.md` describe. A second implementation would be a second place for it to be
- * forgotten when a fourth kind arrives.
+ * forgotten when a fifth kind arrives.
  *
  * What the caller renders is `<DiagramDialog v-if="viewing" …>`; a diagram never sets `viewing`,
  * because it has already opened in the preview by then. That reads like a wart and is the honest
@@ -115,6 +116,21 @@ export function useFigureViewer(): FigureViewer {
     const sessionId = store.activeSessionId;
     if (!sessionId) return;
     try {
+      if (kind === "plot") {
+        const { plots } = await api.listSessionPlots(sessionId);
+        // By name, the tables rule below: the handle a note stores, a reference carries and the
+        // panel opens is already the canonical row name (`plotName` is a server-side rule), so
+        // there is no second slug rule here.
+        const found = plots.find((plot) => plot.name === ref);
+        if (!found) return;
+        viewing.value = {
+          content: { kind: "plot", spec: found.spec },
+          name: label,
+          summary: summary ?? found.summary,
+          figure: { kind: "plot", ref: found.name, label },
+        };
+        return;
+      }
       const { tables } = await api.listSessionTables(sessionId);
       // By name, which is the only handle a note stores and the same one the panel and the
       // model use. A table is upserted on `(session_id, name)`, so there is at most one.
