@@ -10,7 +10,8 @@ import type { ReferenceChoice } from "../utils/resourcePicker";
 import { resourceName } from "../utils/resourceView";
 import TokenCountPopover from "./TokenCountPopover.vue";
 import ModelSelector from "./ModelSelector.vue";
-import { closeWidgetDrawer, openSessionSettings } from "../composables/ui";
+import { closeWidgetDrawer, openContextPreview, openSessionSettings } from "../composables/ui";
+import { confirm } from "../composables/confirm";
 import { autosizeTextarea } from "../utils/autosize";
 import { kindLabel, referenceKey } from "../utils/turnRefs";
 import Icon from "./Icon.vue";
@@ -37,6 +38,12 @@ const canSend = computed(
   () =>
     !readOnly.value &&
     !store.streaming.active &&
+    /*
+     * A compaction in flight pauses sending rather than racing it: the summary the turn would
+     * carry is being decided by the call that is running, so a message sent now could go out on
+     * a context the user is one moment away from changing. The composer says so above the box.
+     */
+    !store.compacting &&
     !store.documentsParsing &&
     (!!text.value.trim() ||
       store.pendingAttachments.length > 0 ||
@@ -218,7 +225,11 @@ const stopLabel = computed(() =>
  * button keeps its own name when it is simply disabled by an empty draft.
  */
 const sendTitle = computed(() =>
-  readOnly.value ? t("lock.other") : t("composer.send")
+  readOnly.value
+    ? t("lock.other")
+    : store.compacting
+      ? t("context.compacting")
+      : t("composer.send")
 );
 
 /**
@@ -232,11 +243,51 @@ const sendTitle = computed(() =>
  */
 const placeholder = computed(() => {
   if (readOnly.value) return t("lock.other");
+  // Ahead of the streaming sentence: the box is not waiting on a reply, it is waiting on the
+  // compression, and a placeholder that said otherwise would describe the wrong wait.
+  if (store.compacting) return t("context.compacting");
   return store.streaming.active ? t("composer.thinking") : t("composer.placeholder");
 });
 
 function stop() {
   void store.stopMessage();
+}
+
+/**
+ * Compression: confirm the cost, run it, then show what it produced.
+ *
+ * The confirm is not about destruction — a compaction is reversible — but about a *model call*
+ * the user pays for and waits on, and about what changes: every later turn sends the summary.
+ * Opening the preview on success is the other half of that: the user pressed a button whose
+ * whole output is text they cannot otherwise see until the next reply.
+ */
+const compactDisabled = computed(
+  () =>
+    readOnly.value ||
+    store.streaming.active ||
+    parsingDocuments.value ||
+    store.compacting ||
+    store.messages.length === 0 ||
+    // A card is waiting on an answer, and compressing now would put the point on the message
+    // holding it — see `hasPendingQuestion`. Answering or skipping first is the way through.
+    store.hasPendingQuestion
+);
+const compactTitle = computed(() => {
+  if (readOnly.value) return t("lock.other");
+  if (store.messages.length === 0) return t("context.empty");
+  if (store.hasPendingQuestion) return t("context.pendingQuestion");
+  return t("context.compact");
+});
+
+async function compactContext(): Promise<void> {
+  const ok = await confirm({
+    title: t("context.compact"),
+    message: t("context.compactConfirm", { count: store.messages.length }),
+    detail: t("context.compactConfirmDetail"),
+    confirmText: t("context.compact"),
+  });
+  if (!ok) return;
+  if (await store.compactContext()) openContextPreview();
 }
 
 /** Documents that failed to parse and are still staged — the model will not read them. */
@@ -337,7 +388,13 @@ const quickReplies = computed(() => [
  * offer three buttons that each come back with a refusal.
  */
 const showQuickReplies = computed(
-  () => !readOnly.value && !store.streaming.active && store.messages.length > 0
+  () =>
+    !readOnly.value &&
+    !store.streaming.active &&
+    // A compaction pauses sending, and a chip *is* a send — the same reason the row hides
+    // while a reply streams.
+    !store.compacting &&
+    store.messages.length > 0
 );
 
 /**
@@ -348,7 +405,9 @@ const showQuickReplies = computed(
  * be a one-click way to lose a paragraph. The chip sends its own words and leaves the box alone.
  */
 function sendQuick(message: string) {
-  if (readOnly.value || store.streaming.active || store.documentsParsing) return;
+  if (readOnly.value || store.streaming.active || store.compacting || store.documentsParsing) {
+    return;
+  }
   void store.sendMessage(message, []);
 }
 
@@ -379,6 +438,16 @@ function onInput() {
 
       <div v-else-if="failedDocuments.length" class="vision-warning" data-testid="composer-parse-failed">
         {{ t("composer.parseFailed", { count: failedDocuments.length }, failedDocuments.length) }}
+      </div>
+
+      <!--
+        The one moment the box is not usable but nothing else says why. A compaction is a model
+        call the reader may wait several seconds on, so the wait is stated where they are looking
+        rather than left to a spinner on a small toolbar button.
+      -->
+      <div v-if="store.compacting" class="parse-notice compact-notice" data-testid="composer-compacting">
+        <Icon name="compress" class="spin" />
+        {{ t("context.compactingHint") }}
       </div>
 
       <div v-if="imageWithoutVision" class="vision-warning">
@@ -574,6 +643,23 @@ function onInput() {
             >
               <Icon name="sliders" />
             </button>
+            <!--
+              Compaction, beside the parameters rather than in the right-hand group: it is a
+              write to this conversation (it holds the session lock), and the right-hand group
+              is the usage readout and the model picker — neither of which changes anything.
+              Disabled with no messages to compress, like the settings button's own read-only
+              rule, and it says which of the reasons it is.
+            -->
+            <button
+              class="icon-btn compact-btn"
+              data-testid="context-compact"
+              :title="compactTitle"
+              :aria-label="compactTitle"
+              :disabled="compactDisabled"
+              @click="compactContext"
+            >
+              <Icon name="compress" :class="{ spin: store.compacting }" />
+            </button>
             <span
               v-if="store.activeCopilotName"
               class="pill copilot-tag truncate"
@@ -625,6 +711,14 @@ function onInput() {
   border: 1px dashed var(--border);
   border-radius: var(--radius);
   padding: var(--space-3) var(--space-5);
+}
+/* The compaction wait: the extraction notice's shape with a turning glyph, so it reads as
+   "working" rather than as a state the reader has to clear. */
+.compact-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-2);
 }
 /*
  * `min-width` is what makes the ellipsis reachable. A flex item defaults to `min-width:
@@ -776,5 +870,9 @@ function onInput() {
 .ref-remove:hover {
   color: var(--danger);
   background: var(--panel);
+}
+/* A compaction in flight: the tool cards' own `spin` keyframes, on the compress glyph. */
+.spin {
+  animation: spin 1s linear infinite;
 }
 </style>

@@ -14,6 +14,7 @@ import { buildExploreTool, type ExploreToolContext } from "./explore.js";
 import { buildFileTools, type FileToolContext } from "./fileTools.js";
 import { buildPlanTools, type PlanToolContext } from "./planTools.js";
 import { buildQueryTool, type QueryToolContext } from "./query.js";
+import { buildRecallTool, type RecallToolContext } from "./recall.js";
 import { buildWebFetchTool } from "./webFetch.js";
 import { buildCollectPageTool, type CollectPageContext, type PageCache } from "./collectPage.js";
 import { buildWebSearchTool } from "./webSearch.js";
@@ -76,6 +77,7 @@ const NON_FILE_TOOLS = new Set<string>([
   "ila_read_plan",
   "ila_update_plan_progress",
   "ila_query",
+  "ila_recall",
   "ila_explore",
   "ila_table",
   "ila_plot",
@@ -183,6 +185,17 @@ export interface BuildToolsInput {
    */
   query?: QueryToolContext;
   /**
+   * Present whenever a session context exists — always, in practice; the field is optional so
+   * a test can pin what its absence assembles (nothing).
+   *
+   * `ila_recall` is ordinary and allow-listable like `ila_query`, and assembled **in every
+   * conversation** rather than only when a compaction is in force. The tool's availability
+   * must not vary with the context it reads — a description cannot state "sometimes absent" —
+   * and the same read is what recovers messages a `maxContextMessages` window trimmed, which
+   * no summary row marks. A Copilot that does not want it simply does not tick it.
+   */
+  recall?: RecallToolContext;
+  /**
    * Present only when this conversation holds an `@` grant — the user has opened other
    * workspaces to it. The absent case is the ordinary conversation, which is most of them, and
    * it assembles no tool: `read_document`'s rule, because a tool that could only refuse is a
@@ -251,6 +264,9 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
   // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
   if (input.query) all.push(buildQueryTool(input.query));
+  // The transcript read, kept when the file tools are switched off like the line above: it
+  // reads the database and writes nothing at all. See `NON_FILE_TOOLS`.
+  if (input.recall) all.push(buildRecallTool(input.recall));
   // Kept when the file tools are switched off, like `ila_query` and for the same reason: it
   // reads and writes nothing at all. See `NON_FILE_TOOLS`.
   if (input.explore) all.push(buildExploreTool(input.explore));

@@ -11,6 +11,8 @@ import type {
   AuthResult,
   ChatInput,
   ChatStreamEvent,
+  ContextState,
+  ContextSummary,
   CreateCopilotInput,
   CreateDocumentParserInput,
   CreateProviderInput,
@@ -32,6 +34,7 @@ import type {
   QuizAnswers,
   Session,
   SessionSettings,
+  SessionUsageResponse,
   Message,
   ResourceOwner,
   SetSessionPinnedInput,
@@ -78,6 +81,7 @@ import {
   PROFILE_ABOUT_MAX,
   type UsagePurpose,
   EXPLORE_TOOL_NAME,
+  RECALL_TOOL_NAME,
   PLAN_TOOL_NAMES,
   PLATFORM_ADMIN_ROLES,
   PLOT_TOOL_NAME,
@@ -165,6 +169,7 @@ import type { DocumentService } from "./documents/service.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { serverTimeZone, turnClock, type TurnClock } from "./agent/clock.js";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
+import { applyContextSummary, summarizeContext, type CompactMessage } from "./agent/compact.js";
 import { describeModel } from "./agent/model.js";
 import { classifyProviderError } from "./agent/providerErrors.js";
 import { fallbackTitle, generateTitle, type TitleMessage } from "./agent/title.js";
@@ -179,6 +184,7 @@ import { plotGuidance } from "./tools/plot.js";
 import { tableGuidance } from "./tools/table.js";
 import { fileWriteGuidance } from "./tools/fileTools.js";
 import { exploreGuidance } from "./tools/explore.js";
+import { recallGuidance } from "./tools/recall.js";
 import { planGuidance } from "./tools/planTools.js";
 import { quizGuidance } from "./tools/quizReview.js";
 import { makeupGuidance, renderMakeupResult } from "./tools/quizMakeup.js";
@@ -2335,6 +2341,183 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return db.listMessagesForUser(id, userId);
   });
 
+  /* ----------------------------- context compaction ----------------------------- */
+  /*
+   * The conversation's context state, and the two writes that change it: compress the history so
+   * far into a summary, and go back to the full history.
+   *
+   * The state is one pointer — `sessions.active_summary_id` — plus the summary row it names. The
+   * messages themselves are never rewritten by either write, which is exactly what the
+   * requirement's restore is made of: every message is still stored, so "use the full context
+   * again" is a column update rather than a reconstruction.
+   */
+
+  /**
+   * The live messages, cut at the active summary's point when there is one.
+   *
+   * Every turn route goes through this rather than reading messages itself: `/chat`, the resumed
+   * routes and the compactor all have to agree about what "the context" currently is, and three
+   * copies of that rule is how a regenerate would replay a history the last turn did not use.
+   */
+  function effectiveContextFor(
+    sessionId: string,
+    userId: string
+  ): { summary: ContextSummary | undefined; history: Message[] } {
+    const messages = db.listMessagesForUser(sessionId, userId);
+    const summary = db.activeContextSummaryForUser(sessionId, userId);
+    const history = summary ? applyContextSummary(messages, summary) : messages;
+    return { summary, history };
+  }
+
+  /** What the preview asks for: which mode, what it covers, and how much travels verbatim. */
+  function contextStateFor(sessionId: string, userId: string): ContextState {
+    const messages = db.listMessagesForUser(sessionId, userId);
+    const summary = db.activeContextSummaryForUser(sessionId, userId);
+    return {
+      summary: summary ?? null,
+      totalMessages: messages.length,
+      tailMessages: summary ? applyContextSummary(messages, summary).length : 0,
+    };
+  }
+
+  app.get("/api/sessions/:id/context", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return contextStateFor(id, userId);
+  });
+
+  /**
+   * Compress the conversation's effective context into one summary and start sending that.
+   *
+   * The model call happens **before** anything is written, deliberately: a failure — no key, a
+   * refused request, an empty answer — leaves the previous summary (or the full context) exactly
+   * as it was, so the retry is simply the button again. What a successful call writes is one
+   * row plus the session's pointer, and the summarizer's own tokens go to the ledger under
+   * `summary.context` rather than onto any message.
+   *
+   * A second compression folds the **effective** context, not the original messages: the
+   * previous summary is handed to the model as its starting point and the messages after its
+   * point follow. That is what keeps the cost proportional to what has been said since the last
+   * press, and it makes the new row's `messageCount` the whole compacted extent.
+   */
+  app.post(
+    "/api/sessions/:id/context/compact",
+    { config: { requiresSessionLock: true } },
+    async (request, reply) => {
+      const userId = actor(request).id;
+      const { id } = request.params as { id: string };
+      const found = db.getSessionForUser(id, userId);
+      if (!found) return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      const { session, workspace } = found;
+
+      /*
+       * A conversation waiting on a card cannot be compressed, and this is the one state the
+       * feature would strand rather than merely lose detail in.
+       *
+       * The awaiting call lives on the conversation's **last live message**, so it is exactly
+       * what the compaction point would name. When the answer then arrives, the completed call
+       * and its tool result sit *before* the point and are never replayed: the model would be
+       * asked to continue from an answer it cannot see to a question it cannot see — the
+       * summarizer dropped the call too, because it only renders calls with an output.
+       *
+       * Answer or skip the card first. It is the most recent thing in the conversation, so
+       * waiting costs the reader nothing they were about to compress past anyway.
+       */
+      if (db.listAwaitingToolCalls(id).length > 0) {
+        return reply
+          .code(409)
+          .send(
+            apiError(
+              "CONTEXT_PENDING_QUESTION",
+              "answer or skip the pending question before compacting"
+            )
+          );
+      }
+
+      const { summary: previous, history } = effectiveContextFor(id, userId);
+      if (history.length === 0) {
+        return reply
+          .code(400)
+          .send(apiError("CONTEXT_EMPTY", "there is nothing to compact"));
+      }
+
+      const ctx = turnContext(session, workspace, {
+        userId,
+        user: treeFor(actor(request)),
+        about: actor(request).about,
+      });
+
+      const messages: CompactMessage[] = history.map((m) => ({
+        role: m.role,
+        content: m.content,
+        toolCalls: (m.toolCalls ?? []).map((tc) => ({ name: tc.name, output: tc.output })),
+      }));
+
+      let content: string;
+      try {
+        content = await summarizeContext({
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          messages,
+          previous: previous?.content,
+          onUsage: passRecorder({
+            userId,
+            workspaceId: workspace.id,
+            sessionId: id,
+            provider: ctx.provider,
+            modelId: ctx.modelId,
+            purpose: "summary.context",
+          }),
+        });
+      } catch (err) {
+        return reply.code(502).send(
+          apiError("COMPACT_FAILED", "context compaction failed", {
+            detail: err instanceof Error ? err.message : String(err),
+          })
+        );
+      }
+
+      // The last effective message is the new point — the messages after it will be sent
+      // verbatim until the next compression moves the point again.
+      const through = history[history.length - 1]!;
+      const created = db.createContextSummary({
+        id: newId(),
+        sessionId: id,
+        content,
+        throughMessageId: through.id,
+        throughCreatedAt: through.createdAt,
+        messageCount: (previous?.messageCount ?? 0) + history.length,
+      });
+      db.setActiveContextSummaryForUser(id, userId, created.id);
+      return contextStateFor(id, userId);
+    }
+  );
+
+  /**
+   * Go back to the full history.
+   *
+   * Idempotent on purpose: pressing restore on a conversation that is already on the full
+   * context answers with the state it has rather than a refusal. The superseded summary rows
+   * stay in the database — they are provenance for the messages that were written under them —
+   * and only the pointer moves.
+   */
+  app.post(
+    "/api/sessions/:id/context/restore",
+    { config: { requiresSessionLock: true } },
+    async (request, reply) => {
+      const userId = actor(request).id;
+      const { id } = request.params as { id: string };
+      if (!db.getSessionForUser(id, userId)) {
+        return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      }
+      db.setActiveContextSummaryForUser(id, userId, null);
+      return contextStateFor(id, userId);
+    }
+  );
+
   /**
    * Delete one message, and only ever the conversation's last live one.
    *
@@ -3169,6 +3352,26 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const user = actor(request);
     const filter = usageFilter(statsQuery(request, { userId: user.id }), serverTimeZone() ?? "UTC");
     return { sessions: buildSessionRows(db.listUsageRows(filter)) };
+  });
+
+  /**
+   * One conversation's own lifetime totals.
+   *
+   * The composer's context popover asks this while the reader is mid-conversation, so it is a
+   * separate read rather than a filtered statistics page: totals only, no day axis, and no
+   * query parameters to resolve. Scoped to the caller like every other ledger read — the
+   * session is resolved `ForUser` first, so another account's id is a 404 rather than an
+   * empty sum.
+   */
+  app.get("/api/sessions/:id/usage", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    const filter = usageFilter({ userId, sessionId: id }, serverTimeZone() ?? "UTC");
+    const stats = buildStats(db.listUsageRows(filter), filter, null);
+    return { totals: stats.totals } satisfies SessionUsageResponse;
   });
 
   /**
@@ -4455,6 +4658,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * Its presence is what flips the workspace note's read prohibition — see `buildSystemPrompt`.
      */
     exploreGuidance?: string;
+    /** Present when `ila_recall` survived assembly; the way back to a summarized history. */
+    recallGuidance?: string;
   }
 
   /**
@@ -4747,6 +4952,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         sessionDirPath: ownDir,
       },
       /*
+       * The stored transcript, on the same footing as the line above: nothing gates it, because
+       * what it reads exists from the moment the conversation does. It is the way back to what
+       * a compaction summary dropped or a `maxContextMessages` window trimmed.
+       */
+      recall: {
+        db,
+        userId: input.userId,
+        sessionId: session.id,
+      },
+      /*
        * Keeping a page is the other half of fetching one, and it is gated on the same switch:
        * an installation that has turned fetching off has no pages to keep. The `register`
        * callback writes the row through the same registry as everything else, so a captured
@@ -4819,6 +5034,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // already expressed by `scopeIsEmpty` at assembly.
       exploreGuidance: tools.some((t) => t.name === EXPLORE_TOOL_NAME)
         ? exploreGuidance(scope)
+        : undefined,
+      /*
+       * `ila_recall`'s positive half, in the same form as the two above: assembled it is, so
+       * taught it is. Nothing else in the prompt tells the model that the stored transcript is
+       * reachable — the summary block says what was compacted, and this says it can be read
+       * back — which is exactly the pairing the feature would be half of without.
+       */
+      recallGuidance: tools.some((t) => t.name === RECALL_TOOL_NAME)
+        ? recallGuidance()
         : undefined,
       /*
        * `ila_table`'s half, and it is load-bearing in a way the others are not: nothing on the
@@ -4917,6 +5141,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       attachments?: readonly Attachment[];
       /** How long the turn took, for the usage ledger. Measured by the caller. */
       durationMs?: number;
+      /**
+       * The compaction summary this turn ran under, when the conversation is on a compacted
+       * context. Written onto the assistant row as provenance; absent on a full-context turn.
+       */
+      summaryId?: string;
     }
   ): Promise<void> {
     /*
@@ -4963,6 +5192,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       usage: Object.keys(result.usage).length > 0 ? result.usage : undefined,
       model,
       stopped: result.stopped,
+      summaryId: opts.summaryId,
     });
     db.touchSession(id);
 
@@ -5131,7 +5361,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     id: string,
     ctx: TurnContext,
     err: unknown,
-    sse: ReturnType<typeof createSseWriter>
+    sse: ReturnType<typeof createSseWriter>,
+    /**
+     * The compaction summary the failed turn ran under, when there was one. The `⚠️` row is
+     * still a message written by this turn, so it carries the same provenance the turn's other
+     * messages do — the model saw the summary before it failed.
+     */
+    summaryId?: string
   ): void {
     const errorText = err instanceof Error ? err.message : String(err);
     // The code is additive and lives only on the event: `errorText` below is persisted
@@ -5148,6 +5384,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // Attributed like any other assistant message: "which model failed" is the first question
       // anybody asks about a failed turn, and a row with no model cannot answer it.
       model: describeModel(ctx.provider, ctx.modelId),
+      summaryId,
     });
   }
 
@@ -5192,9 +5429,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     input.before?.(sse);
 
     const turn = beginTurn(request, id);
+    // Read the effective history *after* the route's write, so the resumed run sees it — and
+    // cut at the compaction point, the same context `/chat` would send. Read outside the `try`
+    // so the catch can attribute its `⚠️` row to the same summary this turn ran under.
+    const { summary, history } = effectiveContextFor(id, userId);
     try {
-      // Read history *after* the route's write, so the resumed run sees it.
-      const history = db.listMessagesForUser(id, userId);
       // Wall-clock time for the call, which is the ledger's one non-token figure. Measured around
       // the whole run rather than around the provider request: a turn that spends four seconds in
       // tools and one in the model is a turn that took five.
@@ -5212,6 +5451,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         vision: ctx.vision,
         toolUse: ctx.toolUse,
         history,
+        contextSummary: summary?.content,
         userMessage: null,
         // No turn of its own, but the history it replays may reference files whose paths are
         // not derivable from their ids — see `filePathsFor`.
@@ -5231,6 +5471,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         plotGuidance: ctx.plotGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        recallGuidance: ctx.recallGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
@@ -5241,9 +5482,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         durationMs: Date.now() - turnStartedAt,
         userMessage: null,
         user: treeFor(actor(request)),
+        summaryId: summary?.id,
       });
     } catch (err) {
-      failTurn(id, ctx, err, sse);
+      failTurn(id, ctx, err, sse, summary?.id);
     } finally {
       turn.finish();
       sse.send({ type: "done" });
@@ -5419,8 +5661,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       }
     }
 
-    // Read history *before* persisting the new user turn, so it isn't replayed twice.
-    const history = db.listMessagesForUser(id, userId);
+    // Read the effective history *before* persisting the new user turn, so it isn't replayed
+    // twice — and cut at the compaction point, so a compacted conversation does not send the
+    // messages the summary already stands in for.
+    const { summary, history } = effectiveContextFor(id, userId);
 
     const userMessage = db.createMessage({
       id: newId(),
@@ -5432,6 +5676,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // that was had, so the chip keeps the label and the quote it was shown with. What the model
       // reads is re-derived on every run from these — see `referencesForHistory`.
       refs: refs.length > 0 ? refs : undefined,
+      // The turn this message opened ran on the compacted context, when there is one — the
+      // reference is provenance, so it stays even after a later restore to the full history.
+      summaryId: summary?.id,
     });
 
     // Take over the response so we can stream Server-Sent Events.
@@ -5463,6 +5710,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         vision: ctx.vision,
         toolUse: ctx.toolUse,
         history,
+        contextSummary: summary?.content,
         userMessage: message,
         // To the model, an attachment and a referenced resource are the same thing: material
         // this turn is about. A reference reaches the prompt twice on purpose — as a pointer it
@@ -5491,6 +5739,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         plotGuidance: ctx.plotGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
+        recallGuidance: ctx.recallGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
@@ -5504,9 +5753,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         // The attachments *and* the references: both were sent as material, and an image the
         // user pointed at with `@` deserves a description as much as one they dragged in.
         attachments: [...storedAttachments, ...referencedAttachments],
+        summaryId: summary?.id,
       });
     } catch (err) {
-      failTurn(id, ctx, err, sse);
+      failTurn(id, ctx, err, sse, summary?.id);
     } finally {
       // Before `sse.end()`: closing the socket is exactly the event the disconnect listener
       // is watching for, and it must not read as the client having gone away.

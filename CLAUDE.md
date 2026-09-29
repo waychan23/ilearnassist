@@ -264,11 +264,12 @@ apps/server/src/
   fileOps.ts              # the file manager's writes: create, upload, move, delete-to-trash
   backup.ts               # the VACUUM INTO snapshot a walk must take before it writes
   writeLocation.ts        # the four-level chain deciding which sandbox a write goes to
-  routes.ts               # Fastify routes (workspaces/copilots/sessions/providers/attachments/chat)
+  routes.ts               # Fastify routes (workspaces/copilots/sessions/context/providers/attachments/chat)
   stream.ts               # SSE framing helper
   agent/loop.ts           # manual ReAct loop (model.bindTools → stream → run tools)
   agent/clock.ts          # what time it is where the user is, for the turn's prompt
   agent/callUsage.ts      # the one place usage_metadata becomes a MessageUsage
+  agent/compact.ts        # context compaction: transcript, chunking, the fold call
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
   agent/mediaSummary.ts   # one line about an image, from the model that saw it
@@ -291,6 +292,7 @@ apps/server/src/
   tools/diagram.ts        # ila_diagram — writes a mermaid source (and its row) into the session
   tools/plot.ts           # ila_plot — records a math figure's JSON spec (and its row)
   tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
+  tools/recall.ts         # ila_recall — the agent reads the stored transcript back (recent/search)
   tools/explore.ts        # ila_explore — the agent reads the `@`-granted workspaces: files, messages
   tools/resultPage.ts     # the paging engine ila_query and ila_explore share: clip, renderPage
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
@@ -348,7 +350,8 @@ apps/web/src/
                           #   WidgetTabStrip, GenerationParams, NoteEditor,
                           #   MessageSelectionToolbar,
                           #   ProfileForm, dialogs (Settings, WorkspaceSettings, LibraryBrowser,
-                          #   AddResource, FilePath, FilePreview, Diagram, Confirm, WidgetToggleList)
+                          #   AddResource, FilePath, FilePreview, Diagram, Confirm, WidgetToggleList,
+                          #   ContextPreview)
 apps/server/test/         # unit + integration tests (vitest, node env)
 apps/web/test/            # unit tests (vitest, jsdom)
 packages/shared/src/index.ts  # all cross-boundary types (ChatStreamEvent, ToolCall, …)
@@ -1193,7 +1196,7 @@ public half.
   is what answers "which model wrote this". Four things are load-bearing:
   - **The ledger is not a sum over `messages`.** Only a *turn* writes a message, and five other calls
     the server makes on its own — the auto-titler, the turn classifier, the insight pass, the image
-    describer, the note-export summariser — cost real tokens no transcript holds. A purpose breakdown
+    describer, the context compactor — cost real tokens no transcript holds. A purpose breakdown
     is only expressible because all six meet in one table. It is a pure DDL addition, so no
     `SCHEMA_VERSION` bump.
   - **`agent/callUsage.ts` is the one place `usage_metadata` becomes a `MessageUsage`**, used by the
@@ -1216,6 +1219,41 @@ public half.
   stylesheet as **concrete colours, never `var()`** — a canvas has no cascading context, so a `var()`
   is a string it silently ignores, which is mermaid's `themeVariables` problem verbatim. See
   `docs/usage.md`.
+- **Context compaction is two rows pointing at each other, and no message is ever rewritten.**
+  `context_summaries` holds the summary and the point it covers through; `sessions.active_summary_id`
+  is the pointer at the row in force; `messages.summary_id` is provenance on each message written
+  under a compacted context. Five things are load-bearing:
+  - **The point travels as an id *and* a timestamp.** `applyContextSummary` cuts history by id,
+    which is exact, and falls back to `through_created_at` only when the named message has been
+    deleted since — a summary that could not find its own point would silently send the whole
+    history, the failure the feature exists to prevent.
+  - **The summary is a system-prompt block, never a message.** It is not something anybody said,
+    and a `HumanMessage` would be a question to answer. `trimHistory`'s `maxContextMessages` still
+    applies to the tail and never to the summary.
+  - **Every turn route cuts through `effectiveContextFor`.** `/chat`, the resumed routes and the
+    make-up submit must replay the same context, or a regenerate asks a different question than the
+    turn it regenerates. `/compact` itself compresses the *effective* context, so a re-press folds
+    the previous summary with the messages since its point rather than re-reading the originals.
+    **`ila_recall` is the way back**: it reads the current conversation's stored transcript
+    (`recent` / `search`, message text only, paged through `resultPage`), assembled in every
+    conversation rather than only when a summary is active, with `chat.guidance.recall` appended
+    whenever it survives the allow-list. Cross-conversation search stays `ila_explore`'s, behind
+    the `@` grant.
+  - **Nothing is written until the model answers, and the composer pauses while it does.** A
+    failure (`COMPACT_FAILED`, provider words in `params.detail`) leaves the pointer and the
+    previous row untouched, which is what makes the retry the same button. Restoring moves the
+    pointer to `NULL` and keeps the rows — `summary_id` is provenance, and a fork (whose copies
+    omit it) deliberately starts on its own full history. While the call runs, `sendMessage`
+    itself refuses (not just the button), the composer says so inline, and a failure clears that
+    state and reports through the toast without touching the draft. See
+    `docs/context-compaction.md`.
+  - **A card waiting on an answer blocks compaction** (`CONTEXT_PENDING_QUESTION`; the controls
+    are disabled by `hasPendingQuestion`). The awaiting call is the conversation's last message,
+    so it is exactly where the point would land — the answer's completed call and tool result
+    would fall before the point and never be replayed. References and 追问 chips keep rendering
+    and still work on new turns, but a compacted message's reference is no longer *replayed*;
+    `session_references` is a table, so the material is reachable again by `@` or `ila_query`.
+    Make-up is unaffected: quiz rows are a table, and its record is appended after the point.
 - **A Copilot is owned, and "platform" is not a tier — it is a published one.** `copilots` carries
   `user_id` and a `visibility` of `private` or `public`, not an admin role, so a Copilot the
   operator wants every account to have is simply one they published, and "ordinary users cannot

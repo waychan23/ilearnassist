@@ -50,6 +50,7 @@ export const ALL_TOOL_NAMES = [
   "ila_table",
   "ila_plot",
   "ila_query",
+  "ila_recall",
   "ila_explore",
 ] as const;
 
@@ -62,6 +63,27 @@ export type ToolName = (typeof ALL_TOOL_NAMES)[number];
  * so a name only the server knew would be a tool nobody could choose.
  */
 export const QUERY_TOOL_NAME = "ila_query";
+
+/**
+ * The recall tool's name: the agent's read of this conversation's own stored transcript.
+ *
+ * Shared for the `QUERY_TOOL_NAME` reason. It is the way back to what a compaction summary
+ * dropped and to messages a `maxContextMessages` window trimmed away — the messages are still
+ * rows, and this tool is how the model asks for them instead of guessing or asking the learner
+ * to repeat themselves.
+ */
+export const RECALL_TOOL_NAME = "ila_recall";
+
+/**
+ * What `ila_recall` can be asked for, and therefore its discriminator.
+ *
+ * `recent` is a page of the newest messages; `search` is a substring match over the stored
+ * text, newest first. Both page with `offset` — back in time for `recent`, through the hits
+ * for `search`.
+ */
+export const RECALL_MODES = ["recent", "search"] as const;
+
+export type RecallMode = (typeof RECALL_MODES)[number];
 
 /**
  * The explore tool's name: the agent's read of the workspaces the user granted with `@`.
@@ -1705,9 +1727,10 @@ export interface UpdateInsightInput {
  * What a model call was **for**.
  *
  * The distinction the requirement asks for, and the reason a ledger exists rather than a sum over
- * `messages`: only `chat` produces a message. The other five are calls the server makes on its
+ * `messages`: only `chat` produces a message. The other six are calls the server makes on its
  * own, and they cost real tokens that no transcript records — an auto-title, a post-turn
- * classification, a button-triggered reflection and an image description.
+ * classification, a button-triggered reflection, an image description and a manual context
+ * compaction.
  *
  * Ids rather than labels: the client renders them through the catalog, so a new purpose is an
  * entry here and a key in two catalogs — the same rule `ApiErrorCode` follows.
@@ -1718,6 +1741,7 @@ export const USAGE_PURPOSES = [
   "thread",
   "insight",
   "summary.media",
+  "summary.context",
 ] as const;
 
 export type UsagePurpose = (typeof USAGE_PURPOSES)[number];
@@ -1800,6 +1824,17 @@ export interface UsageSessionsResponse {
   sessions: UsageSessionRow[];
 }
 
+/**
+ * One conversation's own totals, for the composer's context popover.
+ *
+ * Totals only rather than a whole `UsageStats`: the popover asks "what has this conversation
+ * cost so far", which is a sum, and the breakdowns would be four more reads' worth of shape for
+ * a reader who is mid-conversation.
+ */
+export interface SessionUsageResponse {
+  totals: UsageTotals;
+}
+
 /** The query every statistics route takes. Bounds are inclusive dates, not instants. */
 export interface UsageQuery {
   from?: string;
@@ -1813,6 +1848,14 @@ export interface UsageQuery {
    * own zone rather than failing the query.
    */
   timezone?: string;
+  /**
+   * Restrict the read to one conversation's ledger.
+   *
+   * Used by the composer's per-session usage read (`GET /api/sessions/:id/usage`); the
+   * statistics pages leave it absent, which is what keeps this one filter from having to be
+   * threaded through their query builders.
+   */
+  sessionId?: string;
   /** An administrator's filter. Ignored for everybody else, whose scope is themselves. */
   userId?: string;
 }
@@ -2309,6 +2352,18 @@ export const API_ERROR_CODES = [
    * shape of the refusal is an id that can be probed.
    */
   "INSIGHT_NOT_FOUND",
+  /*
+   * Context compaction. `CONTEXT_EMPTY` is the "nothing to summarize" refusal — a conversation
+   * with no messages, or one already compressed with no new messages since. `COMPACT_FAILED`
+   * is the model call itself failing, with the provider's own words in `params.detail` (the
+   * `PAGE_FETCH_FAILED` shape): the route did nothing to the stored summary, so the retry is
+   * simply the button again. `CONTEXT_PENDING_QUESTION` is the one state compaction would
+   * strand: a card waiting on an answer lives on the conversation's last message, and that
+   * message becomes the compaction point — so the answer, when it came, would replay nothing.
+   */
+  "CONTEXT_EMPTY",
+  "COMPACT_FAILED",
+  "CONTEXT_PENDING_QUESTION",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -2500,7 +2555,64 @@ export interface Message {
    * nobody recorded.
    */
   model?: MessageModel;
+  /**
+   * The compaction summary this message was produced under, when the conversation was running
+   * on a compacted context — absent on a message written with the full history.
+   *
+   * A reference rather than a copy, because the summary is a session-level row that a later
+   * compaction supersedes: a message records *which* compacted context produced it, and the
+   * row it names stays readable afterwards. On a user message it means the turn was *sent*
+   * under that summary; on the assistant message, that the reply was generated under it.
+   * Restoring the full context does not rewrite these — they are provenance, not state.
+   */
+  summaryId?: string;
   createdAt: string;
+}
+
+/**
+ * One manual compaction of a conversation's history.
+ *
+ * The whole state of the feature is two rows pointing at each other: this row holds the
+ * summary text and the point it covers through, and `sessions.active_summary_id` names the one
+ * in force. The messages before the point are **not** touched — they stay in the transcript
+ * and in the database, which is what lets "restore the full context" be a single-column write
+ * rather than a reconstruction.
+ */
+export interface ContextSummary {
+  id: string;
+  sessionId: string;
+  /** The summary the model produced — what the next turn's prompt carries. */
+  content: string;
+  /**
+   * The message the summary covers *through*, inclusive. The turn assembled next sends this
+   * summary plus every message created after this one, verbatim.
+   */
+  throughMessageId: string;
+  /**
+   * The same point as a timestamp, and the reason it travels beside the id: a message can be
+   * deleted after it was compacted, and a point the summary can no longer find by id is still
+   * a point it can find by time.
+   */
+  throughCreatedAt: string;
+  /**
+   * How many messages the summary covers — including those an earlier, superseded summary
+   * already covered, so a re-compaction reports the conversation's whole compacted extent.
+   */
+  messageCount: number;
+  createdAt: string;
+}
+
+/**
+ * The conversation's context state, as the preview asks for it.
+ *
+ * `tailMessages` is what the next turn sends verbatim: with no summary it is the whole
+ * conversation, and with one it is the messages after the point. `totalMessages` is the live
+ * transcript's size, which is what makes the two numbers readable together.
+ */
+export interface ContextState {
+  summary: ContextSummary | null;
+  totalMessages: number;
+  tailMessages: number;
 }
 
 /**

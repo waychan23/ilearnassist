@@ -78,6 +78,15 @@ export const uiState = reactive({
    */
   sessionSettingsOpen: false,
   /**
+   * The context preview.
+   *
+   * Two doors again: the composer's compress button opens it after a successful compression
+   * (so the user sees what was produced), and the usage popover's "view context" action opens
+   * it on its own. It reads the conversation on screen, so it is a flag rather than a value —
+   * the `sessionSettingsOpen` shape.
+   */
+  contextPreviewOpen: false,
+  /**
    * Which slice the source browser opens on, when it opens.
    *
    * The browser has two front doors and one component: the workspace home opens it as the
@@ -173,6 +182,15 @@ export function openSessionSettings(): void {
 
 export function closeSessionSettings(): void {
   uiState.sessionSettingsOpen = false;
+}
+
+/** The context preview — which context the next turn will use, and the two writes that change it. */
+export function openContextPreview(): void {
+  uiState.contextPreviewOpen = true;
+}
+
+export function closeContextPreview(): void {
+  uiState.contextPreviewOpen = false;
 }
 
 /**

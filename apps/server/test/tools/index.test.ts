@@ -22,6 +22,7 @@ import type { PlotToolContext } from "../../src/tools/plot.js";
 import type { TableToolContext } from "../../src/tools/table.js";
 import type { CollectPageContext } from "../../src/tools/collectPage.js";
 import type { QueryToolContext } from "../../src/tools/query.js";
+import type { RecallToolContext } from "../../src/tools/recall.js";
 import { fileToolsFor } from "../helpers/fileTools.js";
 import { NO_SCOPE } from "../../src/workspaceScope.js";
 import type { ExploreToolContext } from "../../src/tools/explore.js";
@@ -98,6 +99,15 @@ function query(): QueryToolContext {
 }
 
 /**
+ * The transcript read, present by default like the context above: `turnContext` always supplies
+ * one, because the messages exist from the moment the conversation does. Nothing is invoked
+ * here, so the stubs suffice — pass `{ recall: undefined }` to pin the absent half.
+ */
+function recall(): RecallToolContext {
+  return { db: {} as never, userId: "u1", sessionId: "s1" };
+}
+
+/**
  * `quiz` numbers and registers its questions through callbacks the route supplies; stubs
  * keep these assembly cases off a database. Nothing here is about the numbering itself.
  */
@@ -128,6 +138,7 @@ function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] 
     table: table(),
     plot: plot(),
     query: query(),
+    recall: recall(),
     collectPage: collectPage(),
     ...input,
   }).map((t) => t.name);
@@ -211,6 +222,20 @@ describe("buildTools", () => {
     ]);
   });
 
+  it("omits ila_recall when there is no conversation to read", () => {
+    // The context carries the session and the owner, so its absence is the only thing that can
+    // switch the tool off — the `ila_query` rule. In a real turn it is always there.
+    expect(names({ recall: undefined })).not.toContain("ila_recall");
+    expect(names()).toContain("ila_recall");
+  });
+
+  it("lets a Copilot allow-list choose ila_recall like any other tool", () => {
+    expect(names({ allowedNames: ["read_file", "ila_recall"] }).sort()).toEqual([
+      "ila_recall",
+      "read_file",
+    ]);
+  });
+
   it("adds read_document even when this turn attached nothing", () => {
     // The gate is the whitelist, not the turn's attachments: a conversation with a PDF from
     // last week can still page through it on a turn that attaches nothing. Getting this
@@ -229,11 +254,13 @@ describe("buildTools", () => {
     // `ila_table` is the fifth, and it is `ila_query`'s case rather than the diagram's: the
     // switch means "this agent does not write files", and a table writes a row and no file.
     // `ila_plot` is the sixth for the table's reason verbatim: its artifact is a JSON spec in a
-    // row and no sandbox is touched.
+    // row and no sandbox is touched. `ila_recall` is the seventh, and the plainest case of all:
+    // it reads the database and writes nothing whatsoever.
     expect(names({ fileToolsEnabled: false }).sort()).toEqual([
       "ask_user",
       "ila_plot",
       "ila_query",
+      "ila_recall",
       "ila_table",
       "web_fetch",
       "web_search",

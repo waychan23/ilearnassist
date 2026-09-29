@@ -44,6 +44,7 @@ import type {
   Attachment,
   ChatInput,
   ChatStreamEvent,
+  ContextState,
   Copilot,
   CopilotDefaults,
   CopilotVisibility,
@@ -66,6 +67,7 @@ import type {
   ToolCall,
   TurnReference,
   UpdateProviderInput,
+  UsageTotals,
   User,
   WidgetId,
   WidgetScope,
@@ -402,6 +404,40 @@ export const useAppStore = defineStore("app", () => {
 
   const streaming = ref<StreamingState>(EMPTY_STREAMING());
   const error = ref<string | null>(null);
+
+  /* ------------------------------ context compaction ------------------------------ */
+
+  /**
+   * Which context the next turn will use, as the server last reported it.
+   *
+   * `null` before a conversation is opened, and on a session whose read failed — the preview
+   * and the composer read it as "not loaded yet" rather than as "full context", which is the
+   * honest state: whether a summary is in force is the server's answer, not a default.
+   */
+  const contextState = ref<ContextState | null>(null);
+  /**
+   * A compaction is running. A model call, so the button shows a spinner rather than going
+   * quiet — and a second press while one is in flight is refused here rather than by the server.
+   */
+  const compacting = ref(false);
+  /**
+   * The conversation's own lifetime token totals, for the usage popover.
+   *
+   * Loaded with the conversation and refreshed at the end of every turn, because a turn is the
+   * one thing that reliably adds to it. Null until the first read.
+   */
+  const sessionUsage = ref<UsageTotals | null>(null);
+
+  /**
+   * Whether a card is waiting on the user — a question, a quiz or a plan confirmation.
+   *
+   * Exposed for the compression controls rather than for the cards themselves: compacting now
+   * would put the point on the message holding the awaiting call, so the answer would arrive
+   * with nothing left to replay it into. The server refuses it too
+   * (`CONTEXT_PENDING_QUESTION`); disabling the controls here is what keeps a reader from
+   * pressing into a refusal.
+   */
+  const hasPendingQuestion = computed(() => awaitingToolCalls().length > 0);
 
   /* ------------------------------ file browser ------------------------------ */
 
@@ -1407,13 +1443,24 @@ export const useAppStore = defineStore("app", () => {
     const held = heldSessionId.value;
     if (held && held !== id) void releaseSessionLock(held);
     void acquireSessionLock(id);
-    const [loaded, widgets] = await Promise.all([
+    // Cleared before the reads rather than left over from the conversation being left: a
+    // secondary read that fails must leave the popover empty, not showing the last
+    // conversation's context and spend as if they were this one's.
+    contextState.value = null;
+    sessionUsage.value = null;
+    const [loaded, widgets, context, usage] = await Promise.all([
       api.listMessages(id),
       api.listSessionWidgets(id),
+      // Secondary reads, so each degrades to "not loaded" on its own: a conversation whose
+      // ledger or context could not be read is still a conversation to read and write.
+      api.getContextState(id).catch(() => null),
+      api.sessionUsage(id).catch(() => null),
     ]);
     messages.value = loaded;
     workspaceWidgets.value = widgets.workspace;
     sessionWidgets.value = widgets.session;
+    contextState.value = context;
+    sessionUsage.value = usage?.totals ?? null;
     pendingAttachments.value = [];
     streaming.value = EMPTY_STREAMING();
   }
@@ -1818,6 +1865,64 @@ export const useAppStore = defineStore("app", () => {
     }
     const updated = await api.updateSession(session.id, { settings: partial });
     replaceSession(updated);
+  }
+
+  /* ----------------------------- context compaction ----------------------------- */
+
+  /** Read the conversation's context state again — the preview's own refresh. */
+  async function loadContextState(): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return;
+    contextState.value = await api.getContextState(sessionId);
+  }
+
+  /** Read the conversation's lifetime token totals. Failures are the caller's to swallow. */
+  async function loadSessionUsage(): Promise<void> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return;
+    sessionUsage.value = (await api.sessionUsage(sessionId)).totals;
+  }
+
+  /**
+   * Compress the conversation's history into a summary, and start sending that instead.
+   *
+   * Returns whether it landed, and reports a failure through the toast rather than throwing:
+   * every caller is a button whose next move is "nothing happened" on a refusal and "open the
+   * preview" on a success, so a boolean is the whole answer they need. A failure also leaves
+   * `contextState` untouched — the server wrote nothing — which is what makes retrying safe.
+   */
+  async function compactContext(): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId || compacting.value) return false;
+    compacting.value = true;
+    try {
+      contextState.value = await api.compactContext(sessionId);
+      // The compaction spent tokens of this conversation's own, so the popover's totals move
+      // with it — one local read, awaited so the dialog cannot redraw against a stale figure.
+      await loadSessionUsage().catch(() => undefined);
+      return true;
+    } catch (e) {
+      error.value = messageOf(e);
+      return false;
+    } finally {
+      compacting.value = false;
+    }
+  }
+
+  /**
+   * Go back to the full history. The stored summary rows stay — they are provenance for the
+   * messages written under them — so this is only the pointer moving.
+   */
+  async function restoreContext(): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return false;
+    try {
+      contextState.value = await api.restoreContext(sessionId);
+      return true;
+    } catch (e) {
+      error.value = messageOf(e);
+      return false;
+    }
   }
 
   async function deleteSession(id: string): Promise<void> {
@@ -3009,6 +3114,9 @@ export const useAppStore = defineStore("app", () => {
         // callers that start one. Silent, and a no-op when the tree was never opened: this
         // is a courtesy to the panel, not part of finishing a turn.
         await refreshFileTree({ silent: true }).catch(() => undefined);
+        // And the same for the ledger: this turn is the newest row in the conversation's own
+        // totals, so the popover is refreshed where every turn ends rather than when it opens.
+        void loadSessionUsage().catch(() => undefined);
         // And the end of the turn is announced here for the same reason the two re-reads are:
         // this is the one point every turn ends at. Unconditionally, including a request that
         // failed — a failed turn still persisted a message, so a widget showing a count would
@@ -3087,8 +3195,20 @@ export const useAppStore = defineStore("app", () => {
     // knows about refs for the same reason: the two sides have to agree about what a sendable
     // message is, or a question asked by pointing is refused by a server that never looked.
     const refs = [...pendingRefs.value, ...references];
-    if ((!content && attachments.length === 0 && refs.length === 0) || streaming.value.active)
+    /*
+     * A compaction in flight refuses a send at the store too, not only at the button: the
+     * composer is not the only caller (`sendQuick`, a widget's chip), and a turn that went out
+     * while the summary was being rewritten would race the context it is supposed to carry.
+     * Nothing is reported — the composer is already showing the wait — and the caller's words
+     * are left where they are, so the send is retryable the moment the call lands.
+     */
+    if (
+      (!content && attachments.length === 0 && refs.length === 0) ||
+      streaming.value.active ||
+      compacting.value
+    ) {
       return;
+    }
 
     // Auto-create a session if the user is on a fresh workspace.
     if (!activeSessionId.value) {
@@ -3435,6 +3555,10 @@ export const useAppStore = defineStore("app", () => {
     supportsVision,
     contextWindow,
     contextTokens,
+    contextState,
+    compacting,
+    sessionUsage,
+    hasPendingQuestion,
     isConfigured,
     documentsParsing,
     workspaceWidgetIds,
@@ -3464,6 +3588,10 @@ export const useAppStore = defineStore("app", () => {
     renameSession,
     setSessionPinned,
     updateSettings,
+    loadContextState,
+    loadSessionUsage,
+    compactContext,
+    restoreContext,
     deleteSession,
     loadWorkspaceWidgets,
     setWidgetEnabled,

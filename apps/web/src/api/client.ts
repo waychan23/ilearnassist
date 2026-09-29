@@ -6,6 +6,7 @@ import type {
   AuthTokens,
   ChatInput,
   ChatStreamEvent,
+  ContextState,
   Copilot,
   CreateCopilotInput,
   CreateDocumentParserInput,
@@ -43,6 +44,7 @@ import type {
   SessionLockRelease,
   SessionLockResult,
   SessionLockView,
+  SessionUsageResponse,
   SessionWidgets,
   SetSessionPinnedInput,
   TitleRetryResult,
@@ -855,6 +857,33 @@ export const api = {
     request<{ locks: SessionLockView[] }>(`/workspaces/${workspaceId}/locks`),
 
   listMessages: (sessionId: string) => request<Message[]>(`/sessions/${sessionId}/messages`),
+
+  /**
+   * Which context the next turn will use: the full history, or a summary plus everything after
+   * its point. Read by the preview dialog and refreshed after a compaction or a restore.
+   */
+  getContextState: (sessionId: string) =>
+    request<ContextState>(`/sessions/${sessionId}/context`),
+  /**
+   * Compress the conversation's effective context into one summary. The answer is the new
+   * `ContextState`, so the caller does not have to read again to draw it.
+   *
+   * A model call, so it is slow and can fail (`COMPACT_FAILED`) — a failure leaves the previous
+   * state in force, which is what makes retrying the same button safe.
+   */
+  compactContext: (sessionId: string) =>
+    request<ContextState>(`/sessions/${sessionId}/context/compact`, { method: "POST" }),
+  /** Go back to the full history. Idempotent; the summary rows stay as provenance. */
+  restoreContext: (sessionId: string) =>
+    request<ContextState>(`/sessions/${sessionId}/context/restore`, { method: "POST" }),
+  /**
+   * One conversation's own lifetime token totals, for the composer's usage popover.
+   *
+   * Separate from `usageSessions`, which sums every conversation for a date range: this is one
+   * indexed read while the reader is mid-conversation, with no window to resolve.
+   */
+  sessionUsage: (sessionId: string) =>
+    request<SessionUsageResponse>(`/sessions/${sessionId}/usage`),
   /**
    * Delete a message. The server soft-deletes it and refuses anything but the conversation's
    * last live message (`MESSAGE_NOT_LAST`), so a caller that raced another tab gets an error
