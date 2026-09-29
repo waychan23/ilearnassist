@@ -2,7 +2,7 @@
   "name": "ilearnassist",
   "private": true,
   "type": "module",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "A self-hosted learning assistant (B/S architecture): workspaces, conversations, a widget side panel, file and document handling, and an agent loop over LangChain.js.",
   "license": "MIT",
   "repository": {
