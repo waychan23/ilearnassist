@@ -582,6 +582,28 @@ export const DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 
+  -- One row per manual compaction of a conversation's history. The messages before the point
+  -- are deliberately left alone — this row plus 'sessions.active_summary_id' is the whole state,
+  -- which is what makes restoring the full context a single-column write.
+  --
+  -- New table, so no SCHEMA_VERSION bump: 'applySchema' creates it on an existing database the
+  -- same as on a fresh one. 'through_message_id' is the point itself and 'through_created_at' is
+  -- the same point as a timestamp, because the message it names can be deleted afterwards and a
+  -- summary that cannot find its point by id must still find it by time.
+  CREATE TABLE IF NOT EXISTS context_summaries (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    through_message_id TEXT NOT NULL,
+    through_created_at TEXT NOT NULL,
+    -- Every message the summary covers, including those an earlier superseded summary already
+    -- covered: a re-compaction reports the conversation's whole compacted extent, not its tail.
+    message_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_context_summaries_session
+    ON context_summaries(session_id, created_at);
+
   CREATE TABLE IF NOT EXISTS providers (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

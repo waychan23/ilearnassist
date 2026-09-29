@@ -8,6 +8,7 @@ import type {
   Copilot,
   CopilotDefaults,
   CopilotVisibility,
+  ContextSummary,
   DocumentParsePolicy,
   DocumentParserKind,
   FileCategory,
@@ -760,6 +761,8 @@ export interface UsageEventInput {
 export interface UsageQuery {
   userId?: string;
   workspaceId?: string;
+  /** One conversation's ledger, for the composer's per-session read. */
+  sessionId?: string;
   fromIso: string | null;
   toIso: string | null;
 }
@@ -790,6 +793,28 @@ interface MessageRow {
   model_name: string | null;
   /** SQLite has no boolean: 0/1, and `null` on rows written before the column existed. */
   stopped: number | null;
+  /**
+   * The compaction summary this message was produced under, when one was active. Null on every
+   * row written with the full context — and on a fork's copies, which start from full context.
+   */
+  summary_id: string | null;
+  created_at: string;
+}
+
+/**
+ * A compaction summary row, as stored.
+ *
+ * No joined columns and no soft delete: this is derived state that a conversation owns, and
+ * every read goes through the session that holds it — a deleted session's summaries are
+ * unreachable because the session is, the `session_threads` shape.
+ */
+interface ContextSummaryRow {
+  id: string;
+  session_id: string;
+  content: string;
+  through_message_id: string;
+  through_created_at: string;
+  message_count: number;
   created_at: string;
 }
 
@@ -1432,6 +1457,17 @@ const mapMessage = (r: MessageRow): Message => ({
   usage: r.usage ? safeParseObject<MessageUsage>(r.usage) : undefined,
   model: messageModelOf(r),
   stopped: r.stopped ? true : undefined,
+  summaryId: r.summary_id ?? undefined,
+  createdAt: r.created_at,
+});
+
+const mapContextSummary = (r: ContextSummaryRow): ContextSummary => ({
+  id: r.id,
+  sessionId: r.session_id,
+  content: r.content,
+  throughMessageId: r.through_message_id,
+  throughCreatedAt: r.through_created_at,
+  messageCount: r.message_count,
   createdAt: r.created_at,
 });
 
@@ -2305,6 +2341,8 @@ export interface AppDb {
     model?: MessageModel;
     /** The user cut this turn short; `content` is whatever had streamed by then. */
     stopped?: boolean;
+    /** The compaction summary this message was written under, when one is active. */
+    summaryId?: string;
   }): Message;
 
   /**
@@ -2378,6 +2416,41 @@ export interface AppDb {
     messageId: string,
     patch: { toolCalls?: ToolCall[]; attachments?: Attachment[]; refs?: TurnReference[] }
   ): void;
+
+  /*
+   * Compaction summaries: one row per manual compaction, plus the pointer on the session that
+   * says which one is in force. The messages before the point are touched by none of these —
+   * restoring the full context is `setActiveContextSummaryForUser(id, userId, null)` and
+   * nothing else.
+   */
+
+  createContextSummary(input: {
+    id: string;
+    sessionId: string;
+    content: string;
+    throughMessageId: string;
+    throughCreatedAt: string;
+    messageCount: number;
+  }): ContextSummary;
+
+  /** The summary in force for a conversation, or `undefined` when it is on full context. */
+  activeContextSummaryForUser(sessionId: string, userId: string): ContextSummary | undefined;
+
+  /**
+   * Point a conversation at a summary, or back at the full context with `null`.
+   *
+   * Scoped to the owner like every other session write, and it deliberately leaves
+   * `updated_at` alone: compacting is housekeeping, not a message, and a sidebar that
+   * reordered on it would report a turn nobody had.
+   */
+  setActiveContextSummaryForUser(
+    sessionId: string,
+    userId: string,
+    summaryId: string | null
+  ): boolean;
+
+  /** Every summary this conversation holds, newest first — provenance, and the preview's list. */
+  listContextSummariesForUser(sessionId: string, userId: string): ContextSummary[];
 
   /**
    * Every call still `awaiting` in a session, as `{id, name}`. The name lets callers act
@@ -3209,6 +3282,15 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(session_id, thread_id, created_at)"
     );
+
+    /*
+     * Context compaction. Two additive columns, and neither needs a backfill: a session with a
+     * NULL `active_summary_id` is on the full context, which is every session until somebody
+     * presses the button, and a message with a NULL `summary_id` was written with the full
+     * context, which is every message written before this existed.
+     */
+    ensureColumn(db, "sessions", "active_summary_id", "active_summary_id TEXT");
+    ensureColumn(db, "messages", "summary_id", "summary_id TEXT");
   }).immediate();
 
   const now = () => new Date().toISOString();
@@ -4051,6 +4133,7 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
        LEFT JOIN users u ON u.id = e.user_id
       WHERE (@userId IS NULL OR e.user_id = @userId)
         AND (@workspaceId IS NULL OR e.workspace_id = @workspaceId)
+        AND (@sessionId IS NULL OR e.session_id = @sessionId)
         AND (@fromIso IS NULL OR e.created_at >= @fromIso)
         AND (@toIso IS NULL OR e.created_at < @toIso)
       ORDER BY e.created_at ASC`
@@ -4091,13 +4174,14 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   const stmtGetMessageById = db.prepare("SELECT * FROM messages WHERE id = ?");
   const stmtCreateMessage = db.prepare(
     `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, refs, usage,
-                              provider_id, provider_name, model_id, model_name, stopped, created_at)
+                              provider_id, provider_name, model_id, model_name, stopped, summary_id, created_at)
      VALUES (@id, @sessionId, @role, @content, @reasoning, @toolCalls, @attachments, @refs, @usage,
-             @providerId, @providerName, @modelId, @modelName, @stopped, @createdAt)`
+             @providerId, @providerName, @modelId, @modelName, @stopped, @summaryId, @createdAt)`
   );
   const stmtUpdateToolCalls = db.prepare("UPDATE messages SET tool_calls = ? WHERE id = ?");
-  // The fork's insert. `thread_id` is absent from the column list on purpose — a copy starts
-  // unclassified and the caller backfills once the cloned threads have ids.
+  // The fork's insert. `thread_id` and `summary_id` are absent from the column list on purpose —
+  // a copy starts unclassified, and a fork's context is its own full history: the source's
+  // compaction point is a fact about the source's past, not about a new conversation's.
   const stmtCloneMessage = db.prepare(
     `INSERT INTO messages (id, session_id, role, content, reasoning, tool_calls, attachments, refs,
                              usage, provider_id, provider_name, model_id, model_name, stopped, created_at)
@@ -4124,6 +4208,46 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         AND session_id IN (
           SELECT s.id FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
            WHERE w.user_id = @userId AND s.deleted_at IS NULL AND w.deleted_at IS NULL)`
+  );
+
+  /* --------------------------- context summaries --------------------------- */
+  /*
+   * `sessions.active_summary_id` is this conversation's pointer at one of these rows, and the
+   * owner is reached through the session's workspace as everywhere else. The `EXISTS` arm in the
+   * setter is what keeps a summary id from another conversation from becoming this one's context:
+   * the route resolves it `ForUser` first, but the write states the same rule so it holds even if
+   * someone later removes that read.
+   */
+  const stmtGetContextSummaryById = db.prepare("SELECT * FROM context_summaries WHERE id = ?");
+  const stmtCreateContextSummary = db.prepare(
+    `INSERT INTO context_summaries (id, session_id, content, through_message_id,
+                                    through_created_at, message_count, created_at)
+     VALUES (@id, @sessionId, @content, @throughMessageId, @throughCreatedAt, @messageCount, @createdAt)`
+  );
+  const stmtGetActiveContextSummaryForUser = db.prepare(
+    `SELECT cs.* FROM context_summaries cs
+       JOIN sessions s ON s.id = cs.session_id AND s.active_summary_id = cs.id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE cs.session_id = ? AND w.user_id = ?
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL`
+  );
+  const stmtListContextSummariesForUser = db.prepare(
+    `SELECT cs.* FROM context_summaries cs
+       JOIN sessions s ON s.id = cs.session_id
+       JOIN workspaces w ON w.id = s.workspace_id
+      WHERE cs.session_id = ? AND w.user_id = ?
+        AND s.deleted_at IS NULL AND w.deleted_at IS NULL
+      ORDER BY cs.created_at DESC, cs.id DESC`
+  );
+  const stmtSetActiveContextSummaryForUser = db.prepare(
+    `UPDATE sessions SET active_summary_id = @summaryId
+      WHERE id = @id
+        AND id IN (
+          SELECT s.id FROM sessions s JOIN workspaces w ON w.id = s.workspace_id
+           WHERE w.user_id = @userId AND s.deleted_at IS NULL AND w.deleted_at IS NULL)
+        AND (@summaryId IS NULL OR EXISTS (
+          SELECT 1 FROM context_summaries cs
+           WHERE cs.id = @summaryId AND cs.session_id = @id))`
   );
 
   /* ------------------------------- counters ------------------------------- */
@@ -5495,6 +5619,7 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         modelId: input.model?.modelId ?? null,
         modelName: input.model?.modelName ?? null,
         stopped: input.stopped ? 1 : 0,
+        summaryId: input.summaryId ?? null,
         createdAt: now(),
       });
       const row = stmtGetMessageById.get(input.id) as MessageRow;
@@ -5568,6 +5693,28 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         attachments: patch.attachments?.length ? JSON.stringify(patch.attachments) : null,
         refs: patch.refs?.length ? JSON.stringify(patch.refs) : null,
       });
+    },
+
+    createContextSummary(input) {
+      stmtCreateContextSummary.run({ ...input, createdAt: now() });
+      const row = stmtGetContextSummaryById.get(input.id) as ContextSummaryRow;
+      return mapContextSummary(row);
+    },
+    activeContextSummaryForUser(sessionId, userId) {
+      const row = stmtGetActiveContextSummaryForUser.get(sessionId, userId) as
+        | ContextSummaryRow
+        | undefined;
+      return row ? mapContextSummary(row) : undefined;
+    },
+    setActiveContextSummaryForUser(sessionId, userId, summaryId) {
+      return (
+        stmtSetActiveContextSummaryForUser.run({ id: sessionId, userId, summaryId }).changes > 0
+      );
+    },
+    listContextSummariesForUser(sessionId, userId) {
+      return (
+        stmtListContextSummariesForUser.all(sessionId, userId) as ContextSummaryRow[]
+      ).map(mapContextSummary);
     },
 
     listAwaitingToolCalls(sessionId) {
@@ -6205,6 +6352,7 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       return (stmtListUsageRows.all({
         userId: query.userId ?? null,
         workspaceId: query.workspaceId ?? null,
+        sessionId: query.sessionId ?? null,
         fromIso: query.fromIso,
         toIso: query.toIso,
       }) as UsageDbRow[]).map(mapUsageRow);

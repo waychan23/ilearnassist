@@ -171,6 +171,11 @@ export const ICON_PATHS = {
     "M9.5 9.5L13.5 13.5",
   ],
 
+  /* Two chevrons pressed toward a centre line: context compaction. Deliberately not `collapse`,
+   * which is a viewport control whose brackets sit in the corners — this one is about content
+   * being made smaller, and the line between the arrows is what says so. */
+  compress: ["M4.5 2.5L8 6L11.5 2.5", "M3 8H13", "M4.5 13.5L8 10L11.5 13.5"],
+
   /* The viewer's zoom pair: the same magnifier, one with a plus and one without, so the two
    * read as one control rather than as two unrelated marks. */
   "zoom-in": [

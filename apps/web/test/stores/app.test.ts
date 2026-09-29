@@ -62,6 +62,23 @@ const mocks = vi.hoisted(() => ({
     listWorkspaceWidgets: vi.fn(),
     setWorkspaceWidget: vi.fn(),
     listSessionWidgets: vi.fn(),
+    // The context popover's two reads, with resting values for the same reason the locks
+    // above have them: `selectSession` makes both on the way in.
+    getContextState: vi.fn().mockResolvedValue({ summary: null, totalMessages: 0, tailMessages: 0 }),
+    sessionUsage: vi.fn().mockResolvedValue({
+      totals: {
+        calls: 0,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        cacheMissInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 0,
+        durationMs: 0,
+      },
+    }),
+    compactContext: vi.fn(),
+    restoreContext: vi.fn(),
     setSessionWidget: vi.fn(),
     getPlan: vi.fn(),
     getPlanVersion: vi.fn(),
@@ -4359,5 +4376,158 @@ describe("forking a conversation", () => {
     expect(store.error).toContain("那边还有回复在生成");
     expect(store.activeSessionId).toBe("s1");
     expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("context compaction", () => {
+  const summary = {
+    id: "cs1",
+    sessionId: "s1",
+    content: "早前提问的总结",
+    throughMessageId: "m1",
+    throughCreatedAt: "2026-01-01T00:00:00.000Z",
+    messageCount: 4,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const compacted = { summary, totalMessages: 6, tailMessages: 2 };
+  const restoreState = { summary: null, totalMessages: 6, tailMessages: 0 };
+  const totals = (calls: number, totalTokens: number) => ({
+    calls,
+    inputTokens: totalTokens - 4,
+    cachedInputTokens: 0,
+    cacheMissInputTokens: totalTokens - 4,
+    outputTokens: 4,
+    reasoningTokens: 0,
+    totalTokens,
+    durationMs: 12,
+  });
+
+  /*
+   * Re-established per test, because `vi.clearAllMocks()` clears calls and *not*
+   * implementations: a `mockResolvedValue` from one case would otherwise be the answer for
+   * every case after it, which is exactly what the full-context assertion below caught.
+   */
+  beforeEach(() => {
+    mocks.api.getContextState.mockResolvedValue({ summary: null, totalMessages: 0, tailMessages: 0 });
+    mocks.api.sessionUsage.mockResolvedValue({ totals: totals(0, 0) });
+  });
+
+  it("reads the context state and the conversation's totals with the conversation", async () => {
+    mocks.api.getContextState.mockResolvedValue(compacted);
+    mocks.api.sessionUsage.mockResolvedValue({ totals: totals(3, 120) });
+
+    const store = await readyStore();
+
+    expect(mocks.api.getContextState).toHaveBeenCalledWith("s1");
+    expect(store.contextState).toEqual(compacted);
+    expect(store.sessionUsage?.totalTokens).toBe(120);
+  });
+
+  it("compacts, replaces the state and refreshes the totals", async () => {
+    const store = await readyStore();
+    mocks.api.compactContext.mockResolvedValue(compacted);
+    mocks.api.sessionUsage.mockResolvedValue({ totals: totals(1, 24) });
+
+    expect(await store.compactContext()).toBe(true);
+
+    expect(mocks.api.compactContext).toHaveBeenCalledWith("s1");
+    expect(store.contextState).toEqual(compacted);
+    // The compaction is itself a model call on this conversation, so the popover's figures
+    // have moved by the time the dialog redraws.
+    expect(store.sessionUsage?.totalTokens).toBe(24);
+  });
+
+  it("reports a failed compaction and leaves the state it had", async () => {
+    const store = await readyStore();
+    mocks.api.compactContext.mockRejectedValue(new Error("上下文压缩失败：no API key"));
+
+    expect(await store.compactContext()).toBe(false);
+    expect(store.error).toContain("no API key");
+    // Nothing was written server-side, so the preview keeps showing the full context.
+    expect(store.contextState).toEqual({ summary: null, totalMessages: 0, tailMessages: 0 });
+  });
+
+  it("restores the full context", async () => {
+    const store = await readyStore();
+    mocks.api.getContextState.mockResolvedValue(compacted);
+    await store.loadContextState();
+    mocks.api.restoreContext.mockResolvedValue(restoreState);
+
+    expect(await store.restoreContext()).toBe(true);
+    expect(store.contextState).toEqual(restoreState);
+  });
+
+  it("reports a failed restore", async () => {
+    const store = await readyStore();
+    mocks.api.restoreContext.mockRejectedValue(new Error("会话不存在"));
+
+    expect(await store.restoreContext()).toBe(false);
+    expect(store.error).toContain("会话不存在");
+  });
+
+  it("refuses a second compaction while one is in flight", async () => {
+    const store = await readyStore();
+    let release: (() => void) | undefined;
+    mocks.api.compactContext.mockImplementation(
+      () => new Promise((resolve) => { release = () => resolve(compacted); })
+    );
+
+    const first = store.compactContext();
+    expect(await store.compactContext()).toBe(false);
+    expect(mocks.api.compactContext).toHaveBeenCalledTimes(1);
+
+    release?.();
+    expect(await first).toBe(true);
+  });
+
+  it("refuses a send while a compaction is in flight, and takes one once it lands", async () => {
+    const store = await readyStore();
+    streamOf();
+    let release: (() => void) | undefined;
+    mocks.api.compactContext.mockImplementation(
+      () => new Promise((resolve) => { release = () => resolve(compacted); })
+    );
+
+    const inFlight = store.compactContext();
+    expect(store.compacting).toBe(true);
+
+    // The composer is not the only caller, so the refusal is the store's own — and it is
+    // silent, because the composer is already showing the wait.
+    await store.sendMessage("压缩期间的消息");
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(store.error).toBeNull();
+
+    release?.();
+    expect(await inFlight).toBe(true);
+    expect(store.compacting).toBe(false);
+
+    await store.sendMessage("压缩完成后的消息");
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("knows a card is waiting, so compression can refuse before the server does", async () => {
+    const store = await readyStore({
+      messages: [
+        message({
+          role: "assistant",
+          toolCalls: [{ id: "c1", name: "ask_user", input: "{}", status: "awaiting" }],
+        }),
+      ],
+    });
+    expect(store.hasPendingQuestion).toBe(true);
+  });
+
+  it("reports no pending question once the card is answered", async () => {
+    const store = await readyStore({
+      messages: [
+        message({
+          role: "assistant",
+          toolCalls: [
+            { id: "c1", name: "ask_user", input: "{}", status: "answered", output: "done" },
+          ],
+        }),
+      ],
+    });
+    expect(store.hasPendingQuestion).toBe(false);
   });
 });

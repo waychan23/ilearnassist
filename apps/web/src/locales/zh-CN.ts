@@ -320,6 +320,7 @@ export default {
       thread: "脉络整理",
       insight: "洞察生成",
       "summary.media": "图片摘要",
+      "summary.context": "上下文压缩",
     },
   },
 
@@ -790,6 +791,7 @@ export default {
          figure on a coordinate plane — the word the card, the panel's filter and the viewer use. */
       ila_plot: "坐标图",
       ila_query: "查询学习记录",
+      ila_recall: "查询历史消息",
       ila_explore: "浏览其他工作区",
     },
     done: "完成",
@@ -1053,7 +1055,45 @@ export default {
     limitHint: "模型未配置上下文长度，使用默认估算值",
     messages: "上下文消息",
     maxSteps: "最大工具轮数",
+    /** The conversation's lifetime spend, which the context indicator does not show. */
+    sessionUsage: "本会话累计（含所有调用）",
+    input: "输入",
+    output: "输出",
+    total: "合计",
     note: "「已用上下文」来自上一轮的 token 统计；「待发送输入」按字符数估算，仅供预览。",
+  },
+
+  /**
+   * Context compaction: the manual, session-level compression of a conversation's history.
+   *
+   * Its own namespace rather than keys under `tokens`, because it is a feature and not a
+   * readout — the popover, the composer's button and the preview dialog all speak it.
+   */
+  context: {
+    title: "上下文",
+    open: "查看上下文",
+    loading: "正在读取上下文状态…",
+    modeLabel: "当前上下文",
+    modeFull: "全量上下文",
+    modeCompacted: "压缩上下文",
+    fullNote: "发送给模型的上下文为全部 {count} 条消息原文。",
+    compactedNote: "发送给模型的上下文为压缩总结 + 压缩点之后的 {count} 条消息原文。",
+    covered: "覆盖消息",
+    coveredValue: "{count} 条",
+    through: "压缩位点",
+    compactedAt: "压缩时间",
+    summary: "总结内容",
+    empty: "本会话还没有消息",
+    compact: "压缩上下文",
+    compacting: "压缩中…",
+    compactingHint: "正在压缩上下文，完成前无法发送新消息…",
+    pendingQuestion: "有等待回答的问题，请先回答或跳过，再压缩上下文。",
+    compactConfirm: "将当前 {count} 条消息压缩为一段总结？",
+    compactConfirmDetail:
+      "压缩后会先由当前模型生成总结（消耗输入/输出 Token），之后发送给模型的是总结和压缩点之后的新消息。历史消息仍然完整保存，可随时恢复全量上下文。",
+    restore: "恢复全量上下文",
+    restoreConfirm: "恢复到全量上下文？",
+    restoreConfirmDetail: "之后发送给模型的是全部消息原文；已有的总结记录会保留。",
   },
 
   /**
@@ -1722,6 +1762,9 @@ export default {
     NO_REPLY_TO_REGENERATE: "没有可以重新生成的回复（最后一条不是助手回复，或者它正在等待你的回答）。",
     TURN_IN_PROGRESS: "上一条回复还在生成中，请先停止或等它结束。",
     SESSION_LOCKED: "这个会话正在另一个客户端上编辑，这里暂时只能看。",
+    CONTEXT_EMPTY: "当前没有可以压缩的消息。",
+    COMPACT_FAILED: "上下文压缩失败：{detail}（仍使用原有上下文，可稍后重试）",
+    CONTEXT_PENDING_QUESTION: "当前有等待回答的问题，请先回答或跳过，再压缩上下文。",
 
     INVALID_CREDENTIALS: "用户名或密码不正确。",
     ACCOUNT_DISABLED: "这个账号已被禁用，请联系管理员。",

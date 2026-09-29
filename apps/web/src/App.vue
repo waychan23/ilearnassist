@@ -11,7 +11,9 @@ import LibraryBrowser from "./components/dialogs/LibraryBrowser.vue";
 import FilePreviewDialog from "./components/dialogs/FilePreviewDialog.vue";
 import WorkspaceSettingsDialog from "./components/dialogs/WorkspaceSettingsDialog.vue";
 import SessionSettingsDialog from "./components/dialogs/SessionSettingsDialog.vue";
+import ContextPreviewDialog from "./components/dialogs/ContextPreviewDialog.vue";
 import {
+  closeContextPreview,
   closeCopilots,
   closeDrawer,
   closeSessionSettings,
@@ -263,6 +265,12 @@ watch(
       ancestor to pass an event through.
     -->
     <SessionSettingsDialog v-if="uiState.sessionSettingsOpen" @close="closeSessionSettings" />
+    <!--
+      The context preview. Hosted here for the `SessionSettingsDialog` reason: two controls in
+      different parts of the tree open it — the composer's compress button and the usage
+      popover — and neither is an ancestor of the other.
+    -->
+    <ContextPreviewDialog v-if="uiState.contextPreviewOpen" @close="closeContextPreview" />
     <!--
       The source browser, from either front door. `uiState.sourcesScope` is what the caller
       decided: the home page opens it over the whole account, and a conversation opens it *on*

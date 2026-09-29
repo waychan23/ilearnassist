@@ -43,6 +43,10 @@ const mocks = vi.hoisted(() => ({
     listMessages: vi.fn(),
     listWorkspaceWidgets: vi.fn(),
     listSessionWidgets: vi.fn(),
+    // The two secondary reads `selectSession` makes. A resting `null` is what the store
+    // handles as "not loaded", so a guard test that does not care about them pays nothing.
+    getContextState: vi.fn().mockResolvedValue(null),
+    sessionUsage: vi.fn().mockResolvedValue(null),
     listWorkspaceLocks: vi.fn(),
     acquireSessionLock: vi.fn(),
     releaseSessionLock: vi.fn(),

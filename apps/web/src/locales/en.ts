@@ -236,6 +236,7 @@ const en: typeof MessageSchema = {
       thread: "Topic classification",
       insight: "Insight pass",
       "summary.media": "Image summary",
+      "summary.context": "Context compaction",
     },
   },
 
@@ -588,6 +589,7 @@ const en: typeof MessageSchema = {
       ila_table: "Table",
       ila_plot: "Coordinate figure",
       ila_query: "Query record",
+      ila_recall: "Search history",
       ila_explore: "Explore other workspaces",
     },
     done: "Done",
@@ -780,7 +782,42 @@ const en: typeof MessageSchema = {
     limitHint: "This model has no configured context length, so a default estimate is used",
     messages: "Context messages",
     maxSteps: "Max tool steps",
+    /** The conversation's lifetime spend, which the context indicator does not show. */
+    sessionUsage: "This conversation (all calls)",
+    input: "Input",
+    output: "Output",
+    total: "Total",
     note: "“Context used” comes from last turn's token counts; “pending input” is estimated from character count and is a preview only.",
+  },
+
+  /** Context compaction — see the note in `zh-CN.ts`. */
+  context: {
+    title: "Context",
+    open: "View context",
+    loading: "Reading the context state…",
+    modeLabel: "Current context",
+    modeFull: "Full context",
+    modeCompacted: "Compacted context",
+    fullNote: "The model receives all {count} messages verbatim.",
+    compactedNote:
+      "The model receives the summary plus the {count} messages after the compaction point, verbatim.",
+    covered: "Messages covered",
+    coveredValue: "{count}",
+    through: "Compaction point",
+    compactedAt: "Compacted",
+    summary: "Summary",
+    empty: "This conversation has no messages yet",
+    compact: "Compact context",
+    compacting: "Compacting…",
+    compactingHint: "Compacting the context — new messages are paused until it finishes…",
+    pendingQuestion: "A card is waiting for an answer — answer or skip it before compacting.",
+    compactConfirm: "Compress the current {count} messages into one summary?",
+    compactConfirmDetail:
+      "The current model will generate the summary first (input/output tokens are spent). After that, turns send the summary plus the new messages after the compaction point. Every message is still stored, and you can restore the full context at any time.",
+    restore: "Restore full context",
+    restoreConfirm: "Restore the full context?",
+    restoreConfirmDetail:
+      "Turns will send every message verbatim again. The stored summary rows are kept.",
   },
 
   /** The generation parameters, named once — see the note in `zh-CN.ts`. */
@@ -1378,6 +1415,11 @@ const en: typeof MessageSchema = {
       "There is no reply to regenerate (the last message is not a reply, or it is waiting for your answer).",
     TURN_IN_PROGRESS: "The previous reply is still being generated. Stop it or wait for it to finish.",
     SESSION_LOCKED: "This conversation is being edited from another client, so it is read-only here.",
+    CONTEXT_EMPTY: "There is nothing to compact right now.",
+    COMPACT_FAILED:
+      "Context compaction failed: {detail} (the previous context is still in use — you can try again later)",
+    CONTEXT_PENDING_QUESTION:
+      "A card is waiting for an answer — answer or skip it before compacting.",
 
     INVALID_CREDENTIALS: "That username or password is not right.",
     ACCOUNT_DISABLED: "This account is disabled. Ask an administrator to re-enable it.",

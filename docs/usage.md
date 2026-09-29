@@ -13,10 +13,10 @@ apps/web/src/components/stats/        the panel both statistics pages render
 
 ## Why a ledger rather than a sum over `messages`
 
-`messages.usage` records a **turn's** tokens, and only a turn writes a message. Four other calls the
+`messages.usage` records a **turn's** tokens, and only a turn writes a message. Five other calls the
 server makes on its own cost real tokens that no transcript holds: the auto-titler, the turn
-classifier, the insight pass and the image describer. The requirement asks for spend *by purpose*,
-and a purpose only the transcript could not express is the whole point.
+classifier, the insight pass, the image describer and a manual context compaction. The requirement
+asks for spend *by purpose*, and a purpose only the transcript could not express is the whole point.
 
 A sum over `messages` also cannot group: `usage` is a JSON blob whose fields are optional, which is
 exactly why `widgets.ts`'s existing statistics do their arithmetic in JavaScript. `SUM()` over
@@ -50,6 +50,7 @@ follows. Four things about its shape are load-bearing:
 | `thread` | `agent/threads.ts`, both the post-turn hook and the panel's backfill | the factory |
 | `insight` | `agent/insights.ts` | the factory |
 | `summary.media` | `agent/mediaSummary.ts`, once per image | the factory |
+| `summary.context` | `agent/compact.ts`, once per compression (per fold call) | the factory |
 
 Every pass reports through `agent/callUsage.ts`, which is **the one place a provider's field names
 become this app's** — the main loop uses it too, so the transcript and the ledger cannot disagree
@@ -67,6 +68,9 @@ whose provider reported no usage, because an all-zero row would drag every avera
 
 - `GET /api/stats` — always scoped to the caller.
 - `GET /api/stats/sessions` — the per-conversation table.
+- `GET /api/sessions/:id/usage` — one conversation's lifetime totals, for the composer's usage
+  popover; same scope-only rule, and the `sessionId` filter the ledger query carries (`sessionId` on
+  `StatsQuery`/`LedgerQuery`).
 - `GET /api/admin/stats` — `requirePlatformAdmin`; the only one carrying `byUser`, whose *absence* on
   the other two is the permission.
 

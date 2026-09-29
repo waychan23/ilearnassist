@@ -86,6 +86,13 @@ const OUT_OF_BAND_MARKERS = [
    * returns nothing and the sticky title answers, which is what every existing case relies on.
    */
   "titling function",
+  /*
+   * `agent/compact.ts` — `summary.system`. The context compactor's answer is scripted through
+   * `matches` rather than the sticky `title`, because a spec about compaction has to say what the
+   * summary *is*: the default reply would otherwise be whatever title the spec happened to set,
+   * stored as the compacted context.
+   */
+  "context-compression function",
 ];
 
 /**

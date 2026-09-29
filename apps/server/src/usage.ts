@@ -21,7 +21,7 @@ import {
  *
  * One row per call, written where the call's outcome is known. `messages.usage` records a *turn's*
  * tokens and only a turn writes a message — the five out-of-band calls (the auto-titler, the turn
- * classifier, the insight pass, the image describer, the note-export summariser) spend real tokens
+ * classifier, the insight pass, the image describer, the context compactor) spend real tokens
  * that no transcript holds. This table is the one place all six purposes meet, which is what makes
  * "what did this cost, and for what" answerable at all.
  *
@@ -120,6 +120,8 @@ function hasFigures(usage: MessageUsage): boolean {
 export interface StatsQuery {
   userId?: string;
   workspaceId?: string;
+  /** One conversation's ledger, for the composer's per-session read. */
+  sessionId?: string;
   from?: string;
   to?: string;
   timezone?: string;
@@ -199,6 +201,7 @@ export function usageFilter(query: StatsQuery, serverZone: string): UsageFilter 
   return {
     userId: query.userId,
     workspaceId: query.workspaceId,
+    sessionId: query.sessionId,
     // The upper bound is the *end* of the named day, so `to=2026-09-18` includes that whole day
     // rather than stopping at its midnight — the only reading of an inclusive date anyone means.
     fromIso: from?.start ?? null,

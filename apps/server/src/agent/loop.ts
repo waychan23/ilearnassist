@@ -138,8 +138,19 @@ export interface RunAgentInput {
    * see `SystemPromptInput.exploreGuidance`.
    */
   exploreGuidance?: string;
+  /** `ila_recall`'s positive half — see `SystemPromptInput.recallGuidance`. */
+  recallGuidance?: string;
   /** The account's own description of itself — see `SystemPromptInput.about`. */
   about?: string;
+  /**
+   * The summary standing in for the messages before the conversation's compaction point, when
+   * one is active.
+   *
+   * The caller has already applied the point to `history` (`applyContextSummary`), so this is
+   * purely the text the system prompt carries; the loop neither reads the summary's row nor
+   * decides whether it applies. Absent on every full-context turn.
+   */
+  contextSummary?: string;
   /**
    * What this turn's own message pointed at — the 追问 chips, resolved by the caller.
    *
@@ -356,6 +367,24 @@ export interface SystemPromptInput {
    * two instructions and will follow the louder one.
    */
   exploreGuidance?: string;
+  /**
+   * The summary standing in for the messages before a compaction point, when the conversation
+   * is on a compacted context.
+   *
+   * Present exactly when `RunAgentInput.contextSummary` is: the route has already cut the
+   * history at the point, so this block and the history are together the whole context. It is
+   * rendered as a catalog block rather than pushed as another message because it is not
+   * something anybody said — a `HumanMessage` would be a question to answer.
+   */
+  contextSummary?: string;
+  /**
+   * `ila_recall`'s positive half — present when the tool survived assembly.
+   *
+   * The description states the two modes; this says when to reach for them, which is the half
+   * a description ruled by its own schema cannot carry — and it is what makes a summarized
+   * history something to look up rather than something to apologize for.
+   */
+  recallGuidance?: string;
 }
 
 /**
@@ -393,6 +422,18 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
    * wrote rather than as an instruction.
    */
   const about = block(input.about ? renderPrompt("chat.system.about", { about: input.about }) : "");
+
+  /*
+   * The compacted context, right after who is speaking and who they are speaking to. Its place
+   * in the order is the one thing about it that is a judgement rather than a mechanism: earlier
+   * conversation is context about this conversation, so it sits with the other context blocks
+   * rather than in the history that follows the whole system prompt.
+   */
+  const contextSummary = block(
+    input.contextSummary
+      ? renderPrompt("chat.contextSummary", { summary: input.contextSummary })
+      : ""
+  );
 
   const clock = block(
     renderPrompt("chat.system.clock", { local: input.clock.local, zone: input.clock.zone })
@@ -441,9 +482,12 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   const fileWrite = block(input.fileWriteGuidance);
   // The `@` grant, which qualifies the workspace block above it.
   const explore = block(input.exploreGuidance);
+  // And the way back to what a summary dropped, which is the other half of that context note.
+  const recall = block(input.recallGuidance);
   return renderPrompt("chat.system", {
     persona,
     about,
+    contextSummary,
     clock,
     workspace,
     codeFence,
@@ -455,6 +499,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     table,
     plot,
     explore,
+    recall,
   });
 }
 
@@ -610,6 +655,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         writeLocation: input.writeLocation,
         persona: input.systemPrompt,
         about: input.about,
+        contextSummary: input.contextSummary,
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
         makeupGuidance: input.makeupGuidance,
@@ -618,6 +664,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         plotGuidance: input.plotGuidance,
         fileWriteGuidance: input.fileWriteGuidance,
         exploreGuidance: input.exploreGuidance,
+        recallGuidance: input.recallGuidance,
       })
     ),
     ...history,

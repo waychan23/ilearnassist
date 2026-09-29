@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   api: {
     listMessages: vi.fn(),
     listSessionWidgets: vi.fn(),
+    // `selectSession`'s two secondary reads; `null` is what the store treats as "not loaded".
+    getContextState: vi.fn().mockResolvedValue(null),
+    sessionUsage: vi.fn().mockResolvedValue(null),
     acquireSessionLock: vi.fn(),
     releaseSessionLock: vi.fn(),
   },

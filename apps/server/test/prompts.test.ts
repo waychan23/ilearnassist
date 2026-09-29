@@ -71,6 +71,7 @@ describe("the catalog", () => {
     expect(names).toEqual([
       "persona",
       "about",
+      "contextSummary",
       "clock",
       "workspace",
       "codeFence",
@@ -82,6 +83,7 @@ describe("the catalog", () => {
       "table",
       "plot",
       "explore",
+      "recall",
     ]);
   });
 });
@@ -174,6 +176,7 @@ describe("the fake LLM's out-of-band markers", () => {
     ["thread.system", "topic-classification function"],
     ["insight.system", "reflective study coach"],
     ["title.system", "titling function"],
+    ["summary.system", "context-compression function"],
   ];
 
   it.each(MARKERS)("%s still contains its marker", (key, marker) => {
@@ -181,7 +184,7 @@ describe("the fake LLM's out-of-band markers", () => {
   });
 
   it("keeps the subtitle above the marker in the fake LLM's list in step", async () => {
-    // Cheap structural guard: three markers, three quoted strings in the harness.
+    // Cheap structural guard: one marker per out-of-band call, each quoted in the harness.
     const source = await import("node:fs/promises").then((fs) =>
       fs.readFile(new URL("./helpers/fakeLlm.ts", import.meta.url), "utf8")
     );

@@ -64,6 +64,11 @@ const MUST_BE_GATED = [
   "POST /api/sessions/:id/answers",
   "POST /api/sessions/:id/regenerate",
   "POST /api/sessions/:id/stop",
+  // Compacting rewrites what every later turn sends, and restoring rewrites it back. Both are
+  // visible to the account's other clients the moment they land — a turn started in another tab
+  // would otherwise use a context this one just changed.
+  "POST /api/sessions/:id/context/compact",
+  "POST /api/sessions/:id/context/restore",
 ];
 
 /**
@@ -106,6 +111,10 @@ const EXEMPT = [
   "GET /api/sessions/:id/files/content",
   "GET /api/sessions/:id/files/raw",
   "GET /api/sessions/:id/resources",
+  // Reads: the context state is what the preview dialog draws, and the usage read is the
+  // per-session ledger — neither writes anything for a lease to serialise.
+  "GET /api/sessions/:id/context",
+  "GET /api/sessions/:id/usage",
 ];
 
 const declared = DECLARATIONS.map((d) => `${d.method} ${d.path}`);

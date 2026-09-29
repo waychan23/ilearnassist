@@ -5,6 +5,7 @@ import { useAppStore } from "../stores/app";
 import { estimateTokens, formatTokens } from "../utils/format";
 import { DEFAULT_CONTEXT_WINDOW } from "../api/types";
 import { isCoarsePointer } from "../composables/breakpoints";
+import { openContextPreview } from "../composables/ui";
 
 const props = defineProps<{ pendingText: string }>();
 
@@ -35,8 +36,17 @@ function onDocumentPointerDown(event: PointerEvent) {
 }
 
 watch(open, (isOpen) => {
-  if (isOpen) document.addEventListener("pointerdown", onDocumentPointerDown, true);
-  else document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+  if (isOpen) {
+    document.addEventListener("pointerdown", onDocumentPointerDown, true);
+    /*
+     * The conversation's lifetime totals are read with the conversation, so this is only a
+     * fallback for the case that read failed. Deliberately not on every open: the popover
+     * opens on a hover, and a hover must not cost a request.
+     */
+    if (store.sessionUsage === null) void store.loadSessionUsage().catch(() => undefined);
+  } else {
+    document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+  }
 });
 
 onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPointerDown, true));
@@ -56,6 +66,11 @@ const ratio = computed(() => Math.min(projected.value / limit.value, 1));
 const messageLimit = computed(() => store.sessionSettings.maxContextMessages ?? null);
 const messageCount = computed(() => store.messages.length);
 
+/** What this conversation has spent so far, over every model call it caused. */
+const usage = computed(() => store.sessionUsage);
+/** Which context the next turn will use, as the last server read said. */
+const summary = computed(() => store.contextState?.summary ?? null);
+
 const level = computed(() => (ratio.value > 0.9 ? "high" : ratio.value > 0.7 ? "warn" : "ok"));
 
 /** Compact label always visible on the button. */
@@ -63,6 +78,11 @@ const label = computed(() => {
   if (used.value === 0 && pending.value === 0) return "—";
   return `${formatTokens(projected.value)} / ${formatTokens(limit.value)}`;
 });
+
+function viewContext() {
+  open.value = false;
+  openContextPreview();
+}
 </script>
 
 <template>
@@ -105,6 +125,47 @@ const label = computed(() => {
       <div class="row">
         <span>{{ t("tokens.maxSteps") }}</span>
         <span class="num">{{ store.sessionSettings.maxSteps ?? 15 }}</span>
+      </div>
+
+      <!--
+        The conversation's own lifetime spend, which the indicator above cannot show: `used`
+        is the size of one request, and a reader watching cost needs the sum over every call
+        this conversation has caused — including the out-of-band ones.
+      -->
+      <div class="section">
+        <div class="row section-head">
+          <span>{{ t("tokens.sessionUsage") }}</span>
+          <span class="num">{{ usage ? usage.calls : "—" }}</span>
+        </div>
+        <div class="row">
+          <span>{{ t("tokens.input") }}</span>
+          <span class="num">{{ usage ? formatTokens(usage.inputTokens) : "—" }}</span>
+        </div>
+        <div class="row">
+          <span>{{ t("tokens.output") }}</span>
+          <span class="num">{{ usage ? formatTokens(usage.outputTokens) : "—" }}</span>
+        </div>
+        <div class="row total">
+          <span>{{ t("tokens.total") }}</span>
+          <span class="num">{{ usage ? formatTokens(usage.totalTokens) : "—" }}</span>
+        </div>
+      </div>
+
+      <!--
+        Which context the next turn will use. A one-line answer plus a door: the full state —
+        the summary, its point, the restore control — belongs in a dialog that can show a
+        paragraph, not in a hover card.
+      -->
+      <div class="section">
+        <div class="row section-head">
+          <span>{{ t("context.modeLabel") }}</span>
+          <span class="num" data-testid="tokens-context-mode">
+            {{ summary ? t("context.modeCompacted") : t("context.modeFull") }}
+          </span>
+        </div>
+        <button class="link-btn" data-testid="context-preview-open" @click="viewContext">
+          {{ t("context.open") }}
+        </button>
       </div>
 
       <div class="note">
@@ -184,6 +245,27 @@ const label = computed(() => {
 }
 .row.total .num {
   color: var(--text);
+}
+/* A group under a divider: the context size above, what it has cost below. */
+.section {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.section-head {
+  color: var(--text-2);
+}
+.link-btn {
+  margin-top: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: var(--fs-2);
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
 }
 .bar {
   height: 4px;
