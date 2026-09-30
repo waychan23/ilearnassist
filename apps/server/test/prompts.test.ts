@@ -73,6 +73,7 @@ describe("the catalog", () => {
       "about",
       "contextSummary",
       "smartContext",
+      "preferences",
       "clock",
       "workspace",
       "codeFence",
@@ -189,6 +190,7 @@ describe("the fake LLM's out-of-band markers", () => {
     ["insight.system", "reflective study coach"],
     ["title.system", "titling function"],
     ["summary.system", "context-compression function"],
+    ["preference.system", "user-preference extraction function"],
   ];
 
   it.each(MARKERS)("%s still contains its marker", (key, marker) => {

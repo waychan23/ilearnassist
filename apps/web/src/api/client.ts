@@ -18,6 +18,8 @@ import type {
   DocumentParserConfig,
   DocumentParsingConfig,
   DriverInfo,
+  ExtractPreferenceInput,
+  ExtractPreferenceResponse,
   FileContent,
   ForkSessionInput,
   GenerateSessionInsightsResponse,
@@ -25,6 +27,7 @@ import type {
   GetQuizQuestionsResponse,
   GetSessionDiagramsResponse,
   GetSessionPlotsResponse,
+  GetSessionPreferencesResponse,
   GetSessionTablesResponse,
   HealthResponse,
   GetSessionInsightsResponse,
@@ -1026,6 +1029,27 @@ export const api = {
     }),
   deleteInsight: (sessionId: string, insightId: string) =>
     request<{ ok: boolean }>(`/sessions/${sessionId}/insights/${insightId}`, {
+      method: "DELETE",
+    }),
+
+  /*
+   * User preferences (the preferences widget). About the conversation, like notes and insights: a
+   * recorded rule stays readable through the routes whether or not the panel is installed.
+   *
+   * `extractPreference` is the selection action's manual path — a long POST on purpose, running
+   * one out-of-band model call and answering when it is done. A `status: "skipped"` arrives as a
+   * **200**: the model read the passage and found no standing requirement, which is an answer
+   * rather than an error, and the caller says so in its own words.
+   */
+  listPreferences: (sessionId: string) =>
+    request<GetSessionPreferencesResponse>(`/sessions/${sessionId}/preferences`),
+  extractPreference: (sessionId: string, input: ExtractPreferenceInput) =>
+    request<ExtractPreferenceResponse>(`/sessions/${sessionId}/preferences/extract`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  deletePreference: (sessionId: string, preferenceId: string) =>
+    request<{ ok: boolean }>(`/sessions/${sessionId}/preferences/${preferenceId}`, {
       method: "DELETE",
     }),
 

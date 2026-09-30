@@ -96,6 +96,7 @@ interface Fixture {
   workResourceId: string;
   diagramFileId: string;
   diagramPath: string;
+  preferenceId: string;
 }
 
 async function seedSource(): Promise<Fixture> {
@@ -281,6 +282,16 @@ async function seedSource(): Promise<Fixture> {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
+  const preference = db.createPreference({
+    id: newId(),
+    userId: env.user.id,
+    scope: "session",
+    scopeId: session.id,
+    type: "negative",
+    content: "不要使用表格",
+    source: "manual",
+    sourceMessageId: null,
+  });
   db.setSessionWidgetForUser(env.user.id, session.id, "quiz", true);
 
   return {
@@ -295,6 +306,7 @@ async function seedSource(): Promise<Fixture> {
     workResourceId: resource.id,
     diagramFileId: diagramFile.id,
     diagramPath: sessionFilePath(workspace.slug, session.id, diagramName),
+    preferenceId: preference.id,
   };
 }
 
@@ -423,6 +435,14 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
     const insights = db.listInsightsForClone(env.user.id, full.id);
     expect(insights).toHaveLength(1);
     expect(insights[0]!.adopted).toBe(true);
+
+    // The conversation's remembered rules travel to the branch — they are session-level
+    // memory, and a branch that forgot them would behave differently from its source.
+    const preferences = db.listPreferencesForClone(env.user.id, full.id);
+    expect(preferences).toHaveLength(1);
+    expect(preferences[0]!.content).toBe("不要使用表格");
+    expect(preferences[0]!.id).not.toBe(fix.preferenceId);
+    expect(preferences[0]!.source).toBe("manual");
 
     expect(db.getSessionWidgetDecisionForUser(env.user.id, full.id, "quiz")).toBe(true);
 

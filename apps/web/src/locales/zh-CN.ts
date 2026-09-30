@@ -321,6 +321,7 @@ export default {
       insight: "洞察生成",
       "summary.media": "图片摘要",
       "summary.context": "上下文压缩",
+      preference: "用户偏好提取",
     },
   },
 
@@ -536,6 +537,12 @@ export default {
      * rename the control every time it is pressed.
      */
     smartContext: "智能上下文（实验特性）",
+    /*
+     * The experimental user-preferences switch: whether the next turn's system prompt carries
+     * this conversation's stored preferences. One label for tooltip and accessible name, state
+     * on `aria-pressed`, like the switch beside it.
+     */
+    userPreferences: "用户偏好（实验特性）",
     /*
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — which is why they are short enough to read as one and why the
@@ -799,6 +806,7 @@ export default {
       ila_query: "查询学习记录",
       ila_recall: "查询历史消息",
       ila_explore: "浏览其他工作区",
+      ila_save_preference: "记录用户偏好",
     },
     done: "完成",
     running: "运行中",
@@ -1500,6 +1508,17 @@ export default {
       missing: "已丢失",
       failed: "读取参考资料失败。",
     },
+    preferences: {
+      name: "用户偏好",
+      hint: "这个会话记住的长期要求：当你说「我希望…」「别用…」时，助手会把它转成一条规则记录在这里。",
+      noSession: "打开一个会话后，这里会显示它的用户偏好。",
+      empty: "这个会话还没有记录用户偏好。当你明确说出对助手工作方式的要求时，它会出现在这里。",
+      /**
+       * Said once, under the list: the connection between this panel and what a turn sends is
+       * not guessable from the rows, and the experiment's switch lives in the composer.
+       */
+      note: "偏好会在调用模型时作为系统提示注入（可用输入框的「用户偏好」开关控制）；每条偏好左侧是它的类型：期望 / 不期望。",
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */
@@ -1604,6 +1623,37 @@ export default {
       title: "删除这条笔记？",
       message: "笔记删除后不会出现在列表里。",
       detail: "消息本身和它的标注原文都会保留。",
+      action: "删除",
+    },
+  },
+
+  /**
+   * The user-preferences feature's own strings. The widget's display name/hint live under
+   * `widgets.preferences`; these are the two type labels, the selection action, and what the
+   * manual extraction says when it found nothing.
+   */
+  preferences: {
+    type: {
+      positive: "期望",
+      negative: "不期望",
+    },
+    /** The action over a selected passage; the host's own button, like 追问. */
+    toolbar: {
+      asPreference: "作为用户偏好",
+    },
+    extract: {
+      /**
+       * The extraction read the passage and found no standing requirement. Not an error — the
+       * panel is working as designed — but the press has to answer, and the toast is the only
+       * global channel the app has.
+       */
+      none: "这段内容里没有可记录的长期偏好。",
+    },
+    /** The panel's delete, confirmed first like every other destructive control. */
+    remove: {
+      title: "删除这条用户偏好？",
+      message: "删除后，这条规则不再注入到之后的对话。",
+      detail: "已经发生过的对话及其记录不受影响。",
       action: "删除",
     },
   },
@@ -1785,6 +1835,8 @@ export default {
     CONTEXT_EMPTY: "当前没有可以压缩的消息。",
     COMPACT_FAILED: "上下文压缩失败：{detail}（仍使用原有上下文，可稍后重试）",
     CONTEXT_PENDING_QUESTION: "当前有等待回答的问题，请先回答或跳过，再压缩上下文。",
+    PREFERENCE_NOT_FOUND: "找不到这条用户偏好，可能已经被删除了。",
+    PREFERENCE_EXTRACT_FAILED: "偏好提取失败：{detail}（没有写入任何内容，可稍后重试）",
 
     INVALID_CREDENTIALS: "用户名或密码不正确。",
     ACCOUNT_DISABLED: "这个账号已被禁用，请联系管理员。",

@@ -79,6 +79,7 @@ import type {
 import {
   DIAGRAM_TOOL_NAME,
   PLOT_TOOL_NAME,
+  PREFERENCE_TOOL_NAME,
   TABLE_TOOL_NAME,
   MAX_ATTACHMENT_BYTES,
   isInteractiveTool,
@@ -604,6 +605,27 @@ export const useAppStore = defineStore("app", () => {
   const sessionSettings = computed<SessionSettings>(
     () => activeSession.value?.settings ?? draftSettings.value
   );
+
+  /**
+   * Whether this conversation injects the user's stored preferences.
+   *
+   * The exact server-side rule (`effectivePreferencesEnabled`): the setting's explicit answer,
+   * or — when it is `null`/absent — the context mode, on for smart context or an active
+   * summary and off for the full history. Computed here so the composer's toggle shows the
+   * state a turn will actually use; the server recomputes it per turn from the same inputs, so
+   * the two agree without the client having to be told.
+   *
+   * On the welcome screen there is no summary to consult and none can exist before the first
+   * turn, so the draft settings' `smartContext` alone decides — which is what the rule reduces
+   * to there anyway.
+   */
+  const effectiveUserPreferences = computed(() => {
+    const settings = sessionSettings.value;
+    return (
+      settings.userPreferences ??
+      (settings.smartContext === true || contextState.value?.summary != null)
+    );
+  });
 
   const currentProviderId = computed(() => {
     const candidates = [
@@ -2624,6 +2646,43 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Turn a selected passage into a stored user preference — the selection action "作为用户偏好".
+   *
+   * The extraction is the **server's** out-of-band model call; this carries the passage and
+   * reports what came back, the `keepFetchedPage` shape. `saved` announces
+   * `preference.changed` so the panel re-reads — the panel holds its list locally, and the
+   * manual path has no turn end to ride. `skipped` (the model read the passage and found no
+   * standing requirement) is reported through the toast: it is the only global channel the app
+   * has, and a press that produced nothing must say so rather than look broken.
+   */
+  async function extractPreferenceFromSelection(input: {
+    text: string;
+    messageId?: string;
+  }): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return false;
+    try {
+      const result = await api.extractPreference(sessionId, input);
+      if (result.status === "skipped") {
+        setError(i18n.global.t("preferences.extract.none"));
+        return false;
+      }
+      emitWidgetEvent({ type: "preference.changed", sessionId });
+      /*
+       * The route installs the panel on its way out (`auto-install`, the same helper the tool
+       * call goes through), but this client's copy of the installed list is now stale — a manual
+       * save has no `tool_end` to ride, and without this the tab would not appear until a reload.
+       * Deliberately not opened: a press is a request to record a rule, not for a panel.
+       */
+      syncAutoInstalledWidget(PREFERENCE_TOOL_NAME, { open: false });
+      return true;
+    } catch (e) {
+      setError(messageOf(e));
+      return false;
+    }
+  }
+
+  /**
    * Reference a source in the next turn, the way `@` names it.
    *
    * An unparsed document is extracted first, because the requirement is exact about it: a
@@ -2895,6 +2954,15 @@ export const useAppStore = defineStore("app", () => {
         if (ev.toolCall.name === PLOT_TOOL_NAME) {
           emitWidgetEvent({
             type: "plot.changed",
+            sessionId: activeSessionId.value ?? "",
+          });
+        }
+        // A preference call has written its row by now. The panel holds its list locally, so
+        // the store's knowledge that the write landed is the only thing that can tell it to
+        // re-read — the same `keepFetchedPage` shape, arriving mid-turn instead of after one.
+        if (ev.toolCall.name === PREFERENCE_TOOL_NAME) {
+          emitWidgetEvent({
+            type: "preference.changed",
             sessionId: activeSessionId.value ?? "",
           });
         }
@@ -3574,6 +3642,7 @@ export const useAppStore = defineStore("app", () => {
     myCopilots,
     publicCopilots,
     sessionSettings,
+    effectiveUserPreferences,
     currentProviderId,
     effectiveModelId,
     effectiveModel,
@@ -3599,6 +3668,7 @@ export const useAppStore = defineStore("app", () => {
     loadResources,
     deleteResource,
     keepFetchedPage,
+    extractPreferenceFromSelection,
     deleteMessage,
     regenerateLastMessage,
     refreshConfig,

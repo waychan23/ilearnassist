@@ -582,6 +582,15 @@ export const THREAD_REASONING_ENV = "ILA_THREAD_REASONING";
 export const INSIGHT_REASONING_ENV = "ILA_INSIGHT_REASONING";
 
 /**
+ * The environment variable that overrides the preference-extraction call's reasoning mode.
+ *
+ * Its own third switch on the classifier's argument: the extraction is a small classification —
+ * one passage into one rule — so an operator may reasonably want thinking off here even when the
+ * insight pass has it on. Overloading either existing switch would re-tune a different call.
+ */
+export const PREFERENCE_REASONING_ENV = "ILA_PREFERENCE_REASONING";
+
+/**
  * Whether an out-of-band model call may run chain-of-thought.
  *
  * - `auto` (unset): follow the model record — a model with the `reasoning` capability thinks
@@ -641,6 +650,13 @@ export function insightReasoningSetting(
   env: NodeJS.ProcessEnv = process.env
 ): OutOfBandReasoningSetting {
   return parseReasoning(env[INSIGHT_REASONING_ENV], INSIGHT_REASONING_ENV);
+}
+
+/** Read the preference extraction's reasoning override. Defaults to `auto`. */
+export function preferenceReasoningSetting(
+  env: NodeJS.ProcessEnv = process.env
+): OutOfBandReasoningSetting {
+  return parseReasoning(env[PREFERENCE_REASONING_ENV], PREFERENCE_REASONING_ENV);
 }
 
 /**

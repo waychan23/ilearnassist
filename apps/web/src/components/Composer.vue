@@ -278,6 +278,31 @@ async function toggleSmartContext(): Promise<void> {
 }
 
 /**
+ * The experimental user-preferences switch: whether a turn's system prompt carries the
+ * conversation's stored preferences.
+ *
+ * Tri-state in storage and two-state on screen. `store.effectiveUserPreferences` is what a turn
+ * will actually do — the setting's explicit answer, or the context mode's default (on for smart
+ * context or an active summary) — and pressing the button writes the opposite as an **explicit**
+ * answer, which from then on overrides the default. There is deliberately no "back to default"
+ * control: the default is a consequence of another switch, and a third state on a toggle is
+ * what this repo's session-lock work calls a control that lies.
+ */
+const userPreferences = computed(() => store.effectiveUserPreferences);
+const userPreferencesPending = ref(false);
+
+async function toggleUserPreferences(): Promise<void> {
+  userPreferencesPending.value = true;
+  try {
+    await store.updateSettings({ userPreferences: !userPreferences.value });
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  } finally {
+    userPreferencesPending.value = false;
+  }
+}
+
+/**
  * Compression: confirm the cost, run it, then show what it produced.
  *
  * The confirm is not about destruction — a compaction is reversible — but about a *model call*
@@ -706,6 +731,24 @@ function onInput() {
               @click="toggleSmartContext"
             >
               <Icon name="bulb" />
+            </button>
+            <!--
+              The experimental user-preferences switch, beside the context controls it follows:
+              the smart-context mode and an active summary both *default* it on, and a reader
+              flipping it is deciding what the next turn's system prompt carries. The aria-pressed
+              state is the effective answer, not the stored one — a tri-state control would have
+              to show "follow the default" somehow, which is not a state a toggle can hold.
+            -->
+            <button
+              class="icon-btn user-preferences-btn"
+              data-testid="user-preferences-toggle"
+              :title="t('composer.userPreferences')"
+              :aria-label="t('composer.userPreferences')"
+              :aria-pressed="userPreferences"
+              :disabled="readOnly || userPreferencesPending"
+              @click="toggleUserPreferences"
+            >
+              <Icon name="pin" />
             </button>
             <span
               v-if="store.activeCopilotName"

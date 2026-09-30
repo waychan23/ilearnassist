@@ -237,6 +237,7 @@ const en: typeof MessageSchema = {
       insight: "Insight pass",
       "summary.media": "Image summary",
       "summary.context": "Context compaction",
+      preference: "Preference extraction",
     },
   },
 
@@ -401,6 +402,8 @@ const en: typeof MessageSchema = {
     attach: "Add an image or file",
     /** The experimental smart-context switch — see the Chinese catalog for the label's rule. */
     smartContext: "Smart context (experimental)",
+    /** The experimental user-preferences switch — the smart-context switch's rule. */
+    userPreferences: "User preferences (experimental)",
     /*
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — so they are kept short and conversational rather than being
@@ -593,6 +596,7 @@ const en: typeof MessageSchema = {
       ila_query: "Query record",
       ila_recall: "Search history",
       ila_explore: "Explore other workspaces",
+      ila_save_preference: "Record a preference",
     },
     done: "Done",
     running: "Running",
@@ -1187,6 +1191,15 @@ const en: typeof MessageSchema = {
       missing: "Missing",
       failed: "Could not load this conversation's sources.",
     },
+    preferences: {
+      name: "Preferences",
+      hint: "Standing requirements this conversation remembers — when you say “I'd like you to…” or “don't…”, the assistant records it here as a rule.",
+      noSession: "Open a conversation and its preferences are listed here.",
+      empty:
+        "No preferences recorded yet. When you state explicitly how the assistant should work, it appears here.",
+      /** The panel's connection to what a turn sends, and to the composer's switch. */
+      note: "Preferences are injected into the system prompt when a model is called (controlled by the “User preferences” switch in the composer); each row's tag is its kind: wanted / not wanted.",
+    },
   },
 
   /** Client-side widget groups: a master row in the install list, no row of their own. */
@@ -1271,6 +1284,32 @@ const en: typeof MessageSchema = {
       title: "Delete this note?",
       message: "It will no longer appear in the list.",
       detail: "The message and the text you marked are both kept.",
+      action: "Delete",
+    },
+  },
+
+  /**
+   * The user-preferences feature's own strings — the widget's name/hint live under
+   * `widgets.preferences`. See the Chinese catalog for what each key is for.
+   */
+  preferences: {
+    type: {
+      positive: "Wanted",
+      negative: "Not wanted",
+    },
+    /** The action over a selected passage; the host's own button, like “Ask about this”. */
+    toolbar: {
+      asPreference: "Save as preference",
+    },
+    extract: {
+      /** The extraction found no standing requirement — an answer, not an error. */
+      none: "There is no standing preference to record in this passage.",
+    },
+    /** The panel's delete, confirmed first like every other destructive control. */
+    remove: {
+      title: "Delete this preference?",
+      message: "It will no longer be injected into later turns.",
+      detail: "Conversations that already happened, and their records, are unaffected.",
       action: "Delete",
     },
   },
@@ -1434,6 +1473,9 @@ const en: typeof MessageSchema = {
       "Context compaction failed: {detail} (the previous context is still in use — you can try again later)",
     CONTEXT_PENDING_QUESTION:
       "A card is waiting for an answer — answer or skip it before compacting.",
+    PREFERENCE_NOT_FOUND: "That preference cannot be found — it may already have been deleted.",
+    PREFERENCE_EXTRACT_FAILED:
+      "Preference extraction failed: {detail} (nothing was recorded — you can try again later)",
 
     INVALID_CREDENTIALS: "That username or password is not right.",
     ACCOUNT_DISABLED: "This account is disabled. Ask an administrator to re-enable it.",

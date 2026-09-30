@@ -8,6 +8,7 @@ import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
 import { buildPlotTool, type PlotToolContext } from "./plot.js";
+import { buildPreferenceTool, type PreferenceToolContext } from "./preferences.js";
 import { buildTableTool, type TableToolContext } from "./table.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildExploreTool, type ExploreToolContext } from "./explore.js";
@@ -81,6 +82,10 @@ const NON_FILE_TOOLS = new Set<string>([
   "ila_explore",
   "ila_table",
   "ila_plot",
+  // `ila_save_preference` writes one database row and no file, on `ila_table`'s argument
+  // exactly: a state the user asked the agent to remember has no sandbox, and a file-tools
+  // switch must not remove a capability that never had one.
+  "ila_save_preference",
 ]);
 
 export interface BuildToolsInput {
@@ -206,6 +211,16 @@ export interface BuildToolsInput {
    * step the model wastes discovering that.
    */
   explore?: ExploreToolContext;
+  /**
+   * Present whenever a session context exists — always, in practice; the field is optional so a
+   * test can pin what its absence assembles (nothing).
+   *
+   * `ila_save_preference` is `auto-install` mode like the table tool: ordinary and
+   * allow-listable, with a call installing the panel that lists what was recorded. Recording is
+   * deliberately not gated on the injection switch — that switch decides what the model is
+   * *told*, not what it may remember.
+   */
+  preference?: PreferenceToolContext;
 }
 
 /**
@@ -265,6 +280,9 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   if (input.table) all.push(buildTableTool(input.table));
   // The table's line applied to the third artifact tool, with the same reason: a row and no file.
   if (input.plot) all.push(buildPlotTool(input.plot));
+  // The fourth, and the same argument: a preference is a state the model records in a row, and
+  // the file-tools switch has no bearing on it. See `NON_FILE_TOOLS`.
+  if (input.preference) all.push(buildPreferenceTool(input.preference));
   // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
   // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
   if (input.query) all.push(buildQueryTool(input.query));

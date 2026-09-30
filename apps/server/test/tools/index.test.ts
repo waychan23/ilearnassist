@@ -10,6 +10,7 @@ import {
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
   PLOT_TOOL_NAME,
+  PREFERENCE_TOOL_NAME,
   QUIZ_TOOL_NAMES,
   TABLE_TOOL_NAME,
 } from "@ilearnassist/shared";
@@ -20,6 +21,7 @@ import type { MakeupQuizToolContext } from "../../src/tools/quizMakeup.js";
 import type { PlanToolContext } from "../../src/tools/planTools.js";
 import type { DiagramToolContext } from "../../src/tools/diagram.js";
 import type { PlotToolContext } from "../../src/tools/plot.js";
+import type { PreferenceToolContext } from "../../src/tools/preferences.js";
 import type { TableToolContext } from "../../src/tools/table.js";
 import type { CollectPageContext } from "../../src/tools/collectPage.js";
 import type { QueryToolContext } from "../../src/tools/query.js";
@@ -63,6 +65,15 @@ function table(): TableToolContext {
  */
 function plot(): PlotToolContext {
   return { save: () => undefined };
+}
+
+/**
+ * The preference context, present for the table's reason: `turnContext` always supplies one, so
+ * a default that omitted it would describe an installation that does not exist. Nothing here
+ * invokes the tool, so the stub's return value is never read.
+ */
+function preference(): PreferenceToolContext {
+  return { save: () => ({ preference: undefined as never, preferences: [] }) };
 }
 
 /**
@@ -138,6 +149,7 @@ function names(input: Partial<Parameters<typeof buildTools>[0]> = {}): string[] 
     diagram: diagram(),
     table: table(),
     plot: plot(),
+    preference: preference(),
     query: query(),
     recall: recall(),
     collectPage: collectPage(),
@@ -257,13 +269,15 @@ describe("buildTools", () => {
     // `ila_table` is the fifth, and it is `ila_query`'s case rather than the diagram's: the
     // switch means "this agent does not write files", and a table writes a row and no file.
     // `ila_plot` is the sixth for the table's reason verbatim: its artifact is a JSON spec in a
-    // row and no sandbox is touched. `ila_recall` is the seventh, and the plainest case of all:
-    // it reads the database and writes nothing whatsoever.
+    // row and no sandbox is touched. `ila_save_preference` is the seventh on the same argument:
+    // a preference is a row, and the switch is about files. `ila_recall` is the eighth, and the
+    // plainest case of all: it reads the database and writes nothing whatsoever.
     expect(names({ fileToolsEnabled: false }).sort()).toEqual([
       "ask_user",
       "ila_plot",
       "ila_query",
       "ila_recall",
+      "ila_save_preference",
       "ila_table",
       "web_fetch",
       "web_search",
@@ -518,6 +532,33 @@ describe("buildTools", () => {
   it("keeps the plot tool when the file tools are disabled", () => {
     // The table's case one up, verbatim: a plot is a JSON spec in a row, and no file is written.
     expect(names({ fileToolsEnabled: false })).toContain(PLOT_TOOL_NAME);
+  });
+
+  /* ------------------------- preferences (auto-install) ------------------------- */
+
+  it("assembles ila_save_preference by default, like the table tool", () => {
+    // The route always supplies the context, so a conversation can record a preference from the
+    // moment it exists — and recording is deliberately not gated on the injection switch.
+    expect(names()).toContain(PREFERENCE_TOOL_NAME);
+  });
+
+  it("assembles no preference tool without a context", () => {
+    expect(names({ preference: undefined })).not.toContain(PREFERENCE_TOOL_NAME);
+  });
+
+  it("treats the preference tool as allow-listable in all three states", () => {
+    // `auto-install`, like its siblings: a Copilot can turn recording off without turning the
+    // panel off, and recording one installs the panel that lists it.
+    expect(names({ allowedNames: [PREFERENCE_TOOL_NAME] }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, PREFERENCE_TOOL_NAME].sort()
+    );
+    expect(names({ allowedNames: ["read_file"] })).not.toContain(PREFERENCE_TOOL_NAME);
+    expect(names({ allowedNames: [] }).sort()).toEqual([...BUILTIN_TOOL_NAMES].sort());
+  });
+
+  it("keeps the preference tool when the file tools are disabled", () => {
+    // The table's case verbatim: a preference is a database row and no file is written.
+    expect(names({ fileToolsEnabled: false })).toContain(PREFERENCE_TOOL_NAME);
   });
 
   it("binds the file tools to the workspace they were built for", async () => {

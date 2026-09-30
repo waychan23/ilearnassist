@@ -26,6 +26,9 @@ import type {
   ParseStatus,
   PlanNodeStatus,
   PlanStatus,
+  PreferenceScope,
+  PreferenceSource,
+  PreferenceType,
   ProviderModel,
   QuizAnswer,
   QuizOption,
@@ -41,6 +44,7 @@ import type {
   ToolCall,
   TurnReference,
   User,
+  UserPreference,
   UserRole,
   WebPage,
   WebPageSourceType,
@@ -424,6 +428,64 @@ export interface InsightCloneInsert {
  * on the way out, unlike `Diagram`, whose route adds `fileMissing` from a `stat`.
  */
 export type InsightRecord = Insight;
+
+/**
+ * A preference as stored.
+ *
+ * `deleted_at` is deliberately absent: every read filters it out, so a mapped record that carried
+ * it would be a field no consumer may act on — the Note/Insight rule. `user_id` is on the table
+ * (a user-level row has no session to reach an owner through) but not on the record, because
+ * every read already put the owner in the WHERE.
+ */
+interface PreferenceRow {
+  id: string;
+  scope: string;
+  scope_id: string | null;
+  type: string;
+  content: string;
+  source: string;
+  source_message_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Input to `createPreference`. The id and the timestamps are the caller's, as everywhere here. */
+export interface PreferenceInsert {
+  id: string;
+  userId: string;
+  scope: PreferenceScope;
+  scopeId: string | null;
+  type: PreferenceType;
+  content: string;
+  source: PreferenceSource;
+  sourceMessageId: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * A source row as a fork reads it — session-scoped by construction (the other levels are not
+ * part of a conversation and a fork must not duplicate an account's own rows). `id` is the
+ * source's; the fork overrides it and names the target session when it writes.
+ */
+export interface PreferenceCloneRow {
+  id: string;
+  type: PreferenceType;
+  content: string;
+  source: PreferenceSource;
+  sourceMessageId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The fork's write: one copied row, with a fresh id and the branch's conversation. */
+export interface PreferenceCloneInsert extends PreferenceCloneRow {
+  userId: string;
+  targetSessionId: string;
+}
+
+/** One preference as the rest of the server reads it: the shared wire type, unchanged. */
+export type PreferenceRecord = UserPreference;
 
 /** A diagram as the rest of the server reads it. The route adds `fileMissing`. */
 export interface DiagramRecord {
@@ -1543,6 +1605,16 @@ const mapInsight = (r: InsightItemRow): InsightRecord => ({
   title: r.title,
   body: r.body,
   adopted: r.adopted !== 0,
+  createdAt: r.created_at,
+});
+
+const mapPreference = (r: PreferenceRow): PreferenceRecord => ({
+  id: r.id,
+  scope: r.scope as PreferenceScope,
+  scopeId: r.scope_id,
+  type: r.type as PreferenceType,
+  content: r.content,
+  source: r.source as PreferenceSource,
   createdAt: r.created_at,
 });
 
@@ -2792,6 +2864,51 @@ export interface AppDb {
    * `insight_items` carries the argument for why derived data is the exception.
    */
   deleteInsightForUser(userId: string, sessionId: string, insightId: string): boolean;
+
+  /*
+   * User preferences. Soft-deleted (the `user_preferences` DDL comment argues why), so every
+   * read filters `deleted_at IS NULL`, and the owner is in every WHERE — including the one
+   * level whose rows have no session to reach it through.
+   */
+  /**
+   * This conversation's own (session-level) preferences, oldest first — the widget's list.
+   *
+   * Owner-scoped and session-scoped; session-level only, because the panel is about this
+   * conversation. The multi-level read below is the model's view, not the panel's.
+   */
+  listSessionPreferencesForUser(userId: string, sessionId: string): PreferenceRecord[];
+  /**
+   * Every preference that applies to this conversation: the account's own, its workspace's, and
+   * its own, all three in one read. Owner-scoped. The injected block and `ila_query` use this.
+   */
+  listPreferencesForContext(
+    userId: string,
+    workspaceId: string,
+    sessionId: string
+  ): PreferenceRecord[];
+  createPreference(input: PreferenceInsert): PreferenceRecord;
+  /**
+   * Mark one session-level preference deleted. `false` when the id is not a live session-level
+   * row of this conversation — unknown, another account's, another conversation's, already
+   * deleted, or at a level the conversation does not own.
+   *
+   * The owner and the scope are both in the WHERE (not merely checked before): this is the
+   * write a conversation reaches a row with, and a `user`-level row must not be deletable from
+   * a conversation's panel.
+   */
+  softDeletePreferenceForUser(
+    userId: string,
+    sessionId: string,
+    preferenceId: string
+  ): boolean;
+  /**
+   * Every live session-level preference of a conversation, source ids included — a fork's read.
+   * Deliberately not `listSessionPreferencesForUser`: the wire shape drops `sourceMessageId`,
+   * and a copy keeps it.
+   */
+  listPreferencesForClone(userId: string, sessionId: string): PreferenceCloneRow[];
+  /** Insert one copied preference — a fork's write. */
+  clonePreference(input: PreferenceCloneInsert): void;
 
   /**
    * A conversation's diagrams, by session. Bare session id like `listThreadsBySession`: every
@@ -4714,6 +4831,55 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   const stmtDeleteInsight = db.prepare(
     `DELETE FROM insight_items WHERE session_id = @sessionId AND id = @insightId`
   );
+
+  /*
+   * User preferences. The owner is a column here rather than a join through sessions, because a
+   * `user`-level row has no session to reach one through — and every read filters `deleted_at`,
+   * the table's DDL comment says why this entity is soft-deleted unlike `insight_items`.
+   */
+  const stmtListSessionPreferencesForUser = db.prepare(
+    `SELECT * FROM user_preferences
+      WHERE user_id = @userId AND scope = 'session' AND scope_id = @sessionId
+        AND deleted_at IS NULL
+      ORDER BY created_at ASC, rowid ASC`
+  );
+  /*
+   * The model's view: all three levels in one read. The CASE ranks the scopes ascending (user,
+   * workspace, session), so the list the injected block renders is already in specificity order
+   * and a formatter cannot silently reorder it.
+   */
+  const stmtListPreferencesForContext = db.prepare(
+    `SELECT * FROM user_preferences
+      WHERE user_id = @userId AND deleted_at IS NULL
+        AND ((scope = 'user')
+          OR (scope = 'workspace' AND scope_id = @workspaceId)
+          OR (scope = 'session' AND scope_id = @sessionId))
+      ORDER BY CASE scope WHEN 'user' THEN 0 WHEN 'workspace' THEN 1 ELSE 2 END ASC,
+               created_at ASC, rowid ASC`
+  );
+  const stmtInsertPreference = db.prepare(
+    `INSERT INTO user_preferences
+       (id, user_id, scope, scope_id, type, content, source, source_message_id, created_at, updated_at)
+     VALUES (@id, @userId, @scope, @scopeId, @type, @content, @source, @sourceMessageId, @createdAt, @updatedAt)`
+  );
+  // The owner and the scope are both in the WHERE: a conversation's route may not reach an
+  // account-level row, and a sibling conversation's id matches nothing.
+  const stmtSoftDeletePreference = db.prepare(
+    `UPDATE user_preferences SET deleted_at = @now, updated_at = @now
+      WHERE id = @preferenceId AND user_id = @userId AND scope = 'session'
+        AND scope_id = @sessionId AND deleted_at IS NULL`
+  );
+  const stmtListPreferencesForClone = db.prepare(
+    `SELECT * FROM user_preferences
+      WHERE user_id = @userId AND scope = 'session' AND scope_id = @sessionId
+        AND deleted_at IS NULL
+      ORDER BY created_at ASC, rowid ASC`
+  );
+  const stmtClonePreference = db.prepare(
+    `INSERT INTO user_preferences
+       (id, user_id, scope, scope_id, type, content, source, source_message_id, created_at, updated_at)
+     VALUES (@id, @userId, 'session', @targetSessionId, @type, @content, @source, @sourceMessageId, @createdAt, @updatedAt)`
+  );
   // Owner-scoped, the route's read: the owner is in the WHERE by joining to workspaces,
   // because sessions reach their owner the same way messages do.
   const stmtListDiagramsForUser = db.prepare(
@@ -6266,6 +6432,68 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     deleteInsightForUser(userId, sessionId, insightId) {
       if (!this.getInsightForUser(userId, sessionId, insightId)) return false;
       return stmtDeleteInsight.run({ sessionId, insightId }).changes > 0;
+    },
+
+    listSessionPreferencesForUser(userId, sessionId) {
+      return (
+        stmtListSessionPreferencesForUser.all({ userId, sessionId }) as PreferenceRow[]
+      ).map(mapPreference);
+    },
+
+    listPreferencesForContext(userId, workspaceId, sessionId) {
+      return (
+        stmtListPreferencesForContext.all({ userId, workspaceId, sessionId }) as PreferenceRow[]
+      ).map(mapPreference);
+    },
+
+    createPreference(input) {
+      const at = input.createdAt ?? now();
+      const updatedAt = input.updatedAt ?? at;
+      stmtInsertPreference.run({
+        id: input.id,
+        userId: input.userId,
+        scope: input.scope,
+        scopeId: input.scopeId,
+        type: input.type,
+        content: input.content,
+        source: input.source,
+        sourceMessageId: input.sourceMessageId,
+        createdAt: at,
+        updatedAt,
+      });
+      return {
+        id: input.id,
+        scope: input.scope,
+        scopeId: input.scopeId,
+        type: input.type,
+        content: input.content,
+        source: input.source,
+        createdAt: at,
+      };
+    },
+
+    softDeletePreferenceForUser(userId, sessionId, preferenceId) {
+      return (
+        stmtSoftDeletePreference.run({ userId, sessionId, preferenceId, now: now() }).changes > 0
+      );
+    },
+
+    listPreferencesForClone(userId, sessionId) {
+      return (stmtListPreferencesForClone.all({ userId, sessionId }) as PreferenceRow[]).map(
+        (r) => ({
+          id: r.id,
+          type: r.type as PreferenceType,
+          content: r.content,
+          source: r.source as PreferenceSource,
+          sourceMessageId: r.source_message_id,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        })
+      );
+    },
+
+    clonePreference(input) {
+      stmtClonePreference.run(input);
     },
 
     upsertDiagram(input) {

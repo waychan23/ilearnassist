@@ -78,6 +78,8 @@ import {
   MIN_UPLOAD_LIMIT_BYTES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
+  PREFERENCE_EXTRACT_TEXT_MAX,
+  PREFERENCE_TOOL_NAME,
   PROFILE_ABOUT_MAX,
   type UsagePurpose,
   EXPLORE_TOOL_NAME,
@@ -98,6 +100,7 @@ import {
 } from "@ilearnassist/shared";
 import {
   insightReasoningSetting,
+  preferenceReasoningSetting,
   threadReasoningSetting,
   type AppConfig,
 } from "./config.js";
@@ -132,7 +135,14 @@ import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
 import { makeInsightGenerator } from "./agent/insights.js";
+import { extractPreference } from "./agent/preferences.js";
 import { buildInsightViews, generateInsights } from "./insights.js";
+import {
+  effectivePreferencesEnabled,
+  parseExtractedPreference,
+  preferencesBlock,
+  savePreference,
+} from "./preferences.js";
 import {
   bucketBy,
   buildSessionRows,
@@ -182,6 +192,7 @@ import { buildTools } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { collectPageGuidance } from "./tools/collectPage.js";
 import { plotGuidance } from "./tools/plot.js";
+import { preferenceGuidance } from "./tools/preferences.js";
 import { tableGuidance } from "./tools/table.js";
 import { fileWriteGuidance } from "./tools/fileTools.js";
 import { exploreGuidance } from "./tools/explore.js";
@@ -415,6 +426,15 @@ function withValidatedScope(
       return { ok: false, message: "smartContext must be true, false or null" };
     }
   }
+  // The same refusal for `userPreferences`: the read is `?? default`, so a coerced `"false"`
+  // would store a truthy string under one build and mean "off" under another — a mode whose
+  // switch and the server disagree. `null` is a real value (follow the context mode).
+  if ("userPreferences" in settings) {
+    const value = (settings as { userPreferences?: unknown }).userPreferences;
+    if (value !== undefined && value !== null && typeof value !== "boolean") {
+      return { ok: false, message: "userPreferences must be true, false or null" };
+    }
+  }
   if (!("workspaceScope" in settings)) return { ok: true, settings };
   const normalized = normalizeWorkspaceScope(
     (settings as { workspaceScope?: unknown }).workspaceScope
@@ -480,6 +500,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   // The insight pass's own switch, read at the same moment for the same reason. Two variables
   // rather than one because each changes its own call alone, by design.
   const insightReasoning = insightReasoningSetting();
+  // And the preference extraction's third switch, same rule: it changes that call alone.
+  const preferenceReasoning = preferenceReasoningSetting();
 
   /**
    * The turn currently streaming for each session, so another request can stop it.
@@ -3322,6 +3344,154 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return { ok: true };
   });
 
+  /* ------------------------------ user preferences ------------------------------- */
+
+  /*
+   * The preference panel's records, object-not-widget like the notes and insight routes above:
+   * a preference outlives the panel that lists it, so uninstalling the widget must not hide
+   * what the user (or the agent) already recorded. Every route resolves the session through
+   * `getSessionForUser` first, which turns another account's id — and an id that never existed
+   * — into the same 404.
+   *
+   * The list is this conversation's **session-level** rows only. The user-level and
+   * workspace-level reads are the model's view (`listPreferencesForContext`, injected and
+   * readable through `ila_query`), deliberately not the panel's: a panel that listed an
+   * account-level rule would offer a delete the conversation does not own.
+   */
+  app.get("/api/sessions/:id/preferences", async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    return { preferences: db.listSessionPreferencesForUser(userId, id) };
+  });
+
+  /**
+   * The manual extraction: the selection action "作为用户偏好" turns one selected passage into
+   * one stored rule.
+   *
+   * **A model call, not a parse.** The requirement is that the passage is converted into an
+   * executable rule; storing it verbatim would be recording a sentence rather than a
+   * preference, and it could not decide what it supersedes. The call is out of band — this
+   * route is a plain POST, not a turn — and it runs on the conversation's own model, the
+   * insight pass's rule.
+   *
+   * Outcomes are three, not two. `saved` returns the new row and the updated list; `skipped`
+   * says the model read the passage and found no standing requirement, which is an answer
+   * rather than a failure; a provider failure or an unusable answer is `PREFERENCE_EXTRACT_FAILED`
+   * with the words in `params.detail`, and nothing was written. A replace id the extraction
+   * named but the conversation does not hold fails the same way rather than being skipped
+   * (`savePreference`'s rule): a delete that did not happen must not look like one.
+   */
+  app.post("/api/sessions/:id/preferences/extract", { config: { requiresSessionLock: true } }, async (request, reply) => {
+    const userId = actor(request).id;
+    const { id } = request.params as { id: string };
+    const owned = db.getSessionForUser(id, userId);
+    if (!owned) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+
+    const body = request.body as { text?: unknown; messageId?: unknown } | undefined;
+    const text = typeof body?.text === "string" ? body.text.trim() : "";
+    if (!text) {
+      return reply.code(400).send(apiError("INVALID_FIELD", "text is required"));
+    }
+    if (text.length > PREFERENCE_EXTRACT_TEXT_MAX) {
+      return reply
+        .code(400)
+        .send(
+          apiError(
+            "INVALID_FIELD",
+            `text must be at most ${PREFERENCE_EXTRACT_TEXT_MAX} characters`
+          )
+        );
+    }
+    const messageId = typeof body?.messageId === "string" ? body.messageId : null;
+    if (messageId !== null) {
+      const message = db.getMessageForUser(messageId, userId);
+      if (!message || message.sessionId !== id) {
+        return reply.code(404).send(apiError("MESSAGE_NOT_FOUND", "message not found"));
+      }
+    }
+
+    const provider = db.getProvider(resolveProviderId(undefined, owned.session.settings));
+    const modelId = resolveModelId(provider, undefined, owned.session.settings);
+    const existing = db.listPreferencesForContext(userId, owned.session.workspaceId, id);
+
+    let raw: string;
+    try {
+      raw = await extractPreference({
+        provider,
+        modelId,
+        text,
+        existing,
+        reasoning: preferenceReasoning,
+        onUsage: passRecorder({
+          userId,
+          workspaceId: owned.session.workspaceId,
+          sessionId: id,
+          provider,
+          modelId,
+          purpose: "preference",
+        }),
+      });
+    } catch (err) {
+      return reply.code(502).send(
+        apiError("PREFERENCE_EXTRACT_FAILED", "preference extraction failed", {
+          detail: err instanceof Error ? err.message : String(err),
+        })
+      );
+    }
+
+    const extracted = parseExtractedPreference(raw);
+    if (extracted === null) {
+      return reply.code(502).send(
+        apiError("PREFERENCE_EXTRACT_FAILED", "preference extraction failed", {
+          detail: "the model returned no usable preference",
+        })
+      );
+    }
+    if (extracted.status === "skipped") {
+      return { status: "skipped", preferences: db.listSessionPreferencesForUser(userId, id) };
+    }
+
+    try {
+      const saved = savePreference(db, userId, id, {
+        type: extracted.type,
+        content: extracted.content,
+        source: "manual",
+        sourceMessageId: messageId,
+        replaces: extracted.replaces,
+      });
+      /*
+       * Recording installs the panel that lists it, exactly as the tool's own call does — from
+       * silence, never over a decision (`installWidgetForToolUse`), and only after the write
+       * committed, so a failure cannot leave a panel behind.
+       */
+      installWidgetForToolUse({ db, userId, sessionId: id, toolName: PREFERENCE_TOOL_NAME });
+      return { status: "saved", preference: saved.preference, preferences: saved.preferences };
+    } catch (err) {
+      return reply.code(502).send(
+        apiError("PREFERENCE_EXTRACT_FAILED", "preference extraction failed", {
+          detail: err instanceof Error ? err.message : String(err),
+        })
+      );
+    }
+  });
+
+  app.delete("/api/sessions/:id/preferences/:preferenceId", { config: { requiresSessionLock: true } }, async (request, reply) => {
+    const userId = actor(request).id;
+    const { id, preferenceId } = request.params as { id: string; preferenceId: string };
+    if (!db.getSessionForUser(id, userId)) {
+      return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+    }
+    if (!db.softDeletePreferenceForUser(userId, id, preferenceId)) {
+      return reply.code(404).send(apiError("PREFERENCE_NOT_FOUND", "preference not found"));
+    }
+    return { ok: true };
+  });
+
 
   /* -------------------------------- usage stats -------------------------------- */
   /*
@@ -4740,6 +4910,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * `SystemPromptInput.smartContextGuidance`.
      */
     smartContextGuidance?: string;
+    /**
+     * Present when the conversation's effective `userPreferences` switch is on AND at least one
+     * preference applies. Its presence is the whole switch — there is no tool to ask, because
+     * recording and injection are deliberately independent — and the block it carries is the
+     * user's standing rules with their scope-precedence sentence.
+     */
+    preferencesGuidance?: string;
+    /**
+     * Present when `ila_save_preference` survived assembly. The tool may exist in any
+     * conversation; this is the half that tells the model to record only what the user asked
+     * for in so many words, never what it inferred.
+     */
+    preferenceGuidance?: string;
   }
 
   /**
@@ -5021,6 +5204,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           registerPlot(db, session.id, saved);
         },
       },
+      /*
+       * The preference tool's write, passed in every conversation whose allow-list lets it
+       * through: `auto-install` mode like the plan and diagram tools, so recording a rule installs
+       * the panel that lists it. The domain rules — validation, the replace protocol, the
+       * refusal — live in `preferences.ts`; this closure only names the owner and the
+       * conversation, so a call site cannot reach someone else's rows. `source: "auto"` is the
+       * agent's own recording; the selection action's writes are `"manual"`.
+       */
+      preference: {
+        save: (saved) =>
+          savePreference(db, input.userId, session.id, {
+            type: saved.type,
+            content: saved.content,
+            source: "auto",
+            replaces: saved.replaces,
+          }),
+      },
       // Not gated on anything: the conversation's own record exists from the moment the
       // conversation does, whether or not any widget is installed to show it.
       query: {
@@ -5063,6 +5263,26 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        */
       explore: scopeIsEmpty(scope) ? undefined : { db, userId: input.userId, scope },
     });
+
+    /*
+     * Whether this turn injects the user's preferences. The explicit answer is the session's;
+     * `null`/absent follows the context mode — on for smart context or an active summary, off on
+     * the full history. The summary read is skipped when it cannot matter (smart context is
+     * already on, or the setting is explicit), so the ordinary full-context turn pays no query.
+     *
+     * The rows are read only when the block would be present: a conversation with injection off
+     * pays nothing, and the three scopes come from one statement (`listPreferencesForContext`)
+     * so the model's view and the injected block can never disagree about which rows apply.
+     */
+    const preferencesEnabled = effectivePreferencesEnabled(
+      session.settings,
+      session.settings.userPreferences == null && session.settings.smartContext !== true
+        ? db.activeContextSummaryForUser(session.id, input.userId) !== undefined
+        : false
+    );
+    const preferenceRows = preferencesEnabled
+      ? db.listPreferencesForContext(input.userId, workspace.id, session.id)
+      : [];
 
     return {
       provider,
@@ -5133,6 +5353,25 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        */
       smartContextGuidance:
         session.settings.smartContext === true ? smartContextGuidance() : undefined,
+      /*
+       * The user's standing rules, present exactly when the effective switch is on and there is
+       * something to say. An enabled conversation with no preferences carries no block at all, so
+       * a fresh conversation is byte-identical to one from before the feature existed. Read above
+       * the return rather than inline because the rows are also the whole of what "is there
+       * anything to inject" means.
+       */
+      preferencesGuidance:
+        preferenceRows.length > 0 ? preferencesBlock(preferenceRows) : undefined,
+      /*
+       * `ila_save_preference`'s positive half, asked of the assembled array like the table and
+       * plot blocks below: a Copilot whose allow-list excludes the tool is never taught a call
+       * it cannot make. Note the switch is the array, never `preferencesEnabled` — recording a
+       * rule and being told about one are independent, and a conversation with injection off
+       * still needs to know how to record.
+       */
+      preferenceGuidance: tools.some((t) => t.name === PREFERENCE_TOOL_NAME)
+        ? preferenceGuidance()
+        : undefined,
       /*
        * `ila_table`'s half, and it is load-bearing in a way the others are not: nothing on the
        * server can write into a model's reply, so "the table also appears inline, as ordinary
@@ -5562,6 +5801,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
         smartContextGuidance: ctx.smartContextGuidance,
+        preferencesGuidance: ctx.preferencesGuidance,
+        preferenceGuidance: ctx.preferenceGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
@@ -5832,6 +6073,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
         smartContextGuidance: ctx.smartContextGuidance,
+        preferencesGuidance: ctx.preferencesGuidance,
+        preferenceGuidance: ctx.preferenceGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,

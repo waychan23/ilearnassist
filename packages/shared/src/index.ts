@@ -52,6 +52,7 @@ export const ALL_TOOL_NAMES = [
   "ila_query",
   "ila_recall",
   "ila_explore",
+  "ila_save_preference",
 ] as const;
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
@@ -140,6 +141,7 @@ export const QUERY_KINDS = [
   "table",
   "plot",
   "resource",
+  "preference",
 ] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
@@ -585,6 +587,112 @@ export interface PlanConflictAnswer {
 /** One answer shape per suspending tool; the tool call's `name` is the discriminant. */
 export type InteractiveAnswer = AskUserAnswers | QuizAnswers | PlanConflictAnswer;
 
+/* -------------------------------- user preferences -------------------------------- */
+
+/**
+ * The preference tool's name: what records one "user preference" — a standing requirement the
+ * user stated about how the agent should work.
+ *
+ * Shared for the `TABLE_TOOL_NAME` reason: the client switches on it (the widget refreshes on a
+ * call and the panel is installed by one), and it is in `ALL_TOOL_NAMES`, so a name only the
+ * server knew would be a tool nobody could allow-list.
+ */
+export const PREFERENCE_TOOL_NAME = "ila_save_preference";
+
+/**
+ * The two labelled kinds of preference the feature supports, and the reason it is an enum rather
+ * than free text: the model reads them in the injected block, and a `negative` preference
+ * ("不要用列表回答") is the *opposite instruction* to a positive one about the same thing —
+ * a string a model has to interpret can invert, a discriminant cannot.
+ */
+export const PREFERENCE_TYPES = ["positive", "negative"] as const;
+export type PreferenceType = (typeof PREFERENCE_TYPES)[number];
+
+/**
+ * The three levels a preference can live at, **in ascending specificity**.
+ *
+ * The order is the precedence rule: a session preference overrides a workspace one, which
+ * overrides a user one. Only session-level preferences can be created today — the other two
+ * levels exist so the read path, the injected block and the table are already multi-level — but
+ * the order is declared here rather than derived, because it is a product rule rather than an
+ * implementation detail.
+ */
+export const PREFERENCE_SCOPES = ["user", "workspace", "session"] as const;
+export type PreferenceScope = (typeof PREFERENCE_SCOPES)[number];
+
+/**
+ * Where a preference came from: the agent recording one during a turn (`auto`), or the user
+ * pressing the selection action (`manual`). Display-only provenance, never a switch.
+ */
+export const PREFERENCE_SOURCES = ["auto", "manual"] as const;
+export type PreferenceSource = (typeof PREFERENCE_SOURCES)[number];
+
+/**
+ * How long one preference may be.
+ *
+ * A preference is one executable rule ("回答先给结论，再展开"), not a paragraph — the cap is what
+ * keeps the injected block bounded when a session accumulates a dozen of them. The tool schema
+ * refuses longer rather than truncating, so nothing is stored half-written.
+ */
+export const PREFERENCE_CONTENT_MAX = 500;
+
+/**
+ * How much of a selected passage the manual extraction route accepts.
+ *
+ * The selection is a passage of a message, not a document: four thousand characters is a long
+ * excerpt, and the cap exists because the passage is inlined into the extraction call's prompt.
+ */
+export const PREFERENCE_EXTRACT_TEXT_MAX = 4_000;
+
+/** How many existing preferences one call may name as superseded. Bounds a single delete set. */
+export const PREFERENCE_MAX_REPLACES = 20;
+
+/**
+ * One stored preference, as the API carries it.
+ *
+ * `scopeId` is the workspace's or conversation's id for those levels and `null` for `user`; it
+ * never travels without `scope`, which is what says what the id means.
+ */
+export interface UserPreference {
+  id: string;
+  scope: PreferenceScope;
+  scopeId: string | null;
+  type: PreferenceType;
+  content: string;
+  source: PreferenceSource;
+  createdAt: string;
+}
+
+/** `GET /api/sessions/:id/preferences` — this conversation's own (session-level) rows. */
+export interface GetSessionPreferencesResponse {
+  preferences: UserPreference[];
+}
+
+/**
+ * The manual extraction's request: a passage the user pointed at, plus the message it came from
+ * when the client can name one. The passage is the material; the extraction converts it into a
+ * preference and decides what it supersedes.
+ */
+export interface ExtractPreferenceInput {
+  text: string;
+  /** The message whose selection this was, for provenance. Validated when present. */
+  messageId?: string;
+}
+
+/**
+ * The extraction's outcome.
+ *
+ * `skipped` is not an error: the model read the passage and found no requirement about how the
+ * agent should work, and saying so is more honest than storing a sentence nobody asked for.
+ */
+export interface ExtractPreferenceResponse {
+  status: "saved" | "skipped";
+  /** The stored row, only with `saved`. */
+  preference?: UserPreference;
+  /** This conversation's list after the write, so the panel can adopt it without a second read. */
+  preferences: UserPreference[];
+}
+
 /* ------------------------------------ widgets ------------------------------------ */
 
 /**
@@ -618,6 +726,7 @@ export const WIDGET_IDS = [
   "diagram",
   "insight",
   "sources",
+  "preferences",
 ] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
@@ -758,6 +867,18 @@ export const WIDGETS: readonly WidgetDefinition[] = [
    * from" — a workspace's own listing is the library dialog, which the chat header opens.
    */
   { id: "sources", scopes: ["session"] },
+  /*
+   * The preferences panel is the diagram widget's shape applied to a memory: `ila_save_preference`
+   * is `auto-install` so recording one — by a turn or by the selection action — brings the panel
+   * that lists it, while the tool stays an ordinary, allow-listable one. It is deliberately not in
+   * `DEFAULT_WIDGET_IDS`: the feature is experimental, and a conversation that never records a
+   * preference should not carry an empty panel by default.
+   */
+  {
+    id: "preferences",
+    scopes: ["session"],
+    tools: { names: [PREFERENCE_TOOL_NAME], mode: "auto-install" },
+  },
 ];
 
 /**
@@ -1776,6 +1897,7 @@ export const USAGE_PURPOSES = [
   "insight",
   "summary.media",
   "summary.context",
+  "preference",
 ] as const;
 
 export type UsagePurpose = (typeof USAGE_PURPOSES)[number];
@@ -2398,6 +2520,15 @@ export const API_ERROR_CODES = [
   "CONTEXT_EMPTY",
   "COMPACT_FAILED",
   "CONTEXT_PENDING_QUESTION",
+  /*
+   * User preferences. `PREFERENCE_NOT_FOUND` is the delete's answer for an id that is unknown,
+   * another account's, another conversation's, or not session-scoped — one code for the four,
+   * like `NOTE_NOT_FOUND`. `PREFERENCE_EXTRACT_FAILED` is the manual extraction's model call
+   * failing, with the provider's own words in `params.detail` (the `COMPACT_FAILED` shape); the
+   * route wrote nothing, so the retry is pressing the action again.
+   */
+  "PREFERENCE_NOT_FOUND",
+  "PREFERENCE_EXTRACT_FAILED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -3492,6 +3623,20 @@ export interface SessionSettings {
    * `null`/absent means off, the same "inherit" every other field uses.
    */
   smartContext?: boolean | null;
+  /**
+   * Experimental: inject this conversation's **user preferences** into every turn's system
+   * prompt — the standing requirements the user stated about how the agent should work.
+   *
+   * `true` always injects, `false` never does, and `null`/absent means **follow the context
+   * mode**: on when the conversation runs on the smart-context window or has an active
+   * compaction summary, off on the full history. The default follows the mode because the
+   * injected block is what carries those preferences once the history no longer does.
+   *
+   * Injection is only half the feature: recording preferences (`ila_save_preference`, the
+   * selection action) happens whether or not this is on — the switch decides what the model is
+   * *told*, not what it may remember.
+   */
+  userPreferences?: boolean | null;
   /** Maximum ReAct steps (tool rounds) for a single turn. */
   maxSteps?: number | null;
   /**

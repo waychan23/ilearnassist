@@ -146,6 +146,13 @@ export interface RunAgentInput {
    * `SystemPromptInput.smartContextGuidance`.
    */
   smartContextGuidance?: string;
+  /**
+   * The user's stored preferences, when the conversation injects them and there is at least one
+   * — see `SystemPromptInput.preferencesGuidance`.
+   */
+  preferencesGuidance?: string;
+  /** `ila_save_preference`'s positive half — see `preferenceGuidance`. */
+  preferenceGuidance?: string;
   /** The account's own description of itself — see `SystemPromptInput.about`. */
   about?: string;
   /**
@@ -403,6 +410,25 @@ export interface SystemPromptInput {
    * see is deliberately narrow rather than the whole conversation.
    */
   smartContextGuidance?: string;
+  /**
+   * The user's stored preferences, rendered from the catalog — `chat.preferences` with the rows
+   * substituted — and present exactly when the conversation's effective `userPreferences`
+   * switch is on AND at least one applies.
+   *
+   * Its presence is the switch, and the switch itself is a session setting plus the context mode
+   * (`effectivePreferencesEnabled`): there is no assembled tool it could be asked of, because
+   * recording a preference and being told about one are deliberately independent. The block
+   * carries the scope-precedence sentence, which is the part a list of rows cannot state.
+   */
+  preferencesGuidance?: string;
+  /**
+   * `ila_save_preference`'s positive half — present when the tool survived assembly.
+   *
+   * The requirement's explicit-only boundary lives here: the tool may be called in any
+   * conversation, and this is what tells the model to record only what the user asked for in so
+   * many words, never what it inferred.
+   */
+  preferenceGuidance?: string;
 }
 
 /**
@@ -461,6 +487,13 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
    */
   const smartContext = block(input.smartContextGuidance);
 
+  /*
+   * The user's standing preferences, beside the context blocks: they are facts about this
+   * conversation's setting, and they qualify every later block that describes how to work.
+   * Present independently of the smart-context block — either can apply without the other.
+   */
+  const preferences = block(input.preferencesGuidance);
+
   const clock = block(
     renderPrompt("chat.system.clock", { local: input.clock.local, zone: input.clock.zone })
   );
@@ -503,6 +536,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   const quiz = block(input.quizGuidance);
   const makeupCard = block(input.makeupGuidance);
   const collectPage = block(input.collectPageGuidance);
+  const preference = block(input.preferenceGuidance);
   const table = block(input.tableGuidance);
   const plot = block(input.plotGuidance);
   const fileWrite = block(input.fileWriteGuidance);
@@ -515,6 +549,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     about,
     contextSummary,
     smartContext,
+    preferences,
     clock,
     workspace,
     codeFence,
@@ -523,6 +558,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     quiz,
     makeupCard,
     collectPage,
+    preference,
     table,
     plot,
     explore,
@@ -697,6 +733,8 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         about: input.about,
         contextSummary: input.contextSummary,
         smartContextGuidance: input.smartContextGuidance,
+        preferencesGuidance: input.preferencesGuidance,
+        preferenceGuidance: input.preferenceGuidance,
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
         makeupGuidance: input.makeupGuidance,
