@@ -9,6 +9,7 @@ import {
   ALL_TOOL_NAMES,
   defaultWidgetEnabled,
   defaultWidgetIdsForScope,
+  isBuiltinTool,
   isWidgetBoundTool,
   widgetsForScope,
 } from "../../api/types";
@@ -32,15 +33,24 @@ const toolLabel = (name: string): string => {
 };
 
 /**
- * `required`-mode tools are not checkable: a Copilot allow-list can neither enable them (the
- * widget install does) nor remove them (they bypass the list in all three states), so a box
- * here would be a control that did nothing. Today that is the quiz pair and nothing else — the
- * plan and diagram tools are `auto-install`, which means they are ordinary tools a Copilot may
- * switch like any other. The `isWidgetBoundTool` predicate is what draws that line.
+ * Two kinds of tool are not checkable, and each predicate draws one line.
+ *
+ * `required`-mode tools: a Copilot allow-list can neither enable them (the widget install does)
+ * nor remove them (they bypass the list in all three states), so a box here would be a control
+ * that did nothing. Today that is the quiz pair and nothing else — the plan and diagram tools
+ * are `auto-install`, which means they are ordinary tools a Copilot may switch like any other.
+ *
+ * **Built-in** tools (`isBuiltinTool`): the conversation's own record and transcript reads,
+ * assembled in every turn whatever the allow-list says, because a conversation with no
+ * capabilities is not one that asked to forget what was said — and the smart-context mode's
+ * prompt names both as the way back to earlier messages. A box that can never take effect is
+ * the same lie as the one above.
  *
  * They still live in `ALL_TOOL_NAMES` so a stale allow-list naming one never errors.
  */
-const pickableTools = computed(() => ALL_TOOL_NAMES.filter((name) => !isWidgetBoundTool(name)));
+const pickableTools = computed(() =>
+  ALL_TOOL_NAMES.filter((name) => !isWidgetBoundTool(name) && !isBuiltinTool(name))
+);
 
 /**
  * The generation parameters are a child component's business now — it was the third copy of that

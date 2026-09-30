@@ -7,6 +7,7 @@ import ThreadWidget from "./ThreadWidget.vue";
 import NotesWidget from "./NotesWidget.vue";
 import DiagramWidget from "./DiagramWidget.vue";
 import InsightWidget from "./InsightWidget.vue";
+import PreferencesWidget from "./PreferencesWidget.vue";
 import ResourcesWidget from "./ResourcesWidget.vue";
 import { claimNotes, releaseNotes, setNotesWritable } from "../composables/notes";
 
@@ -91,6 +92,8 @@ export function widgetLabel(id: WidgetId, t: Translate): string {
       return t("widgets.insight.name");
     case "sources":
       return t("widgets.sources.name");
+    case "preferences":
+      return t("widgets.preferences.name");
   }
 }
 
@@ -111,6 +114,8 @@ export function widgetHint(id: WidgetId, t: Translate): string {
       return t("widgets.insight.hint");
     case "sources":
       return t("widgets.sources.hint");
+    case "preferences":
+      return t("widgets.preferences.hint");
   }
 }
 
@@ -235,4 +240,11 @@ export const WIDGET_MODULES: Record<WidgetId, WidgetModule> = {
    * anyway — and loading it is not a decision the install makes for the user).
    */
   sources: { component: ResourcesWidget },
+  /*
+   * The preference panel is a viewer with a delete, and it needs no lifecycle: no `onActive`
+   * (it claims no host capability — the recording path is the agent's tool and the host's
+   * selection action, neither of which needs this panel on screen), and no install hook (the
+   * listing it loads anyway is all the setup there is).
+   */
+  preferences: { component: PreferencesWidget },
 };

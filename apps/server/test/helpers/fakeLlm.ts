@@ -93,6 +93,12 @@ const OUT_OF_BAND_MARKERS = [
    * stored as the compacted context.
    */
   "context-compression function",
+  /*
+   * `agent/preferences.ts` — `preference.system`. The manual extraction route's answer is
+   * scripted through `matches` for the compactor's reason: the default reply is the sticky
+   * title, and a spec about preferences must say what the extracted rule is.
+   */
+  "user-preference extraction function",
 ];
 
 /**

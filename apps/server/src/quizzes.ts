@@ -78,8 +78,22 @@ function resolveNode(
   // The current chapter: the earliest-started in-progress node, deterministic on the
   // positions when two were opened together. Chapters not started and completed ones do
   // not claim a quiz.
+  //
+  // The rollup marks a chapter in progress alongside its topic, so containers whose
+  // descendant is underway are excluded: the quiz is about the topic, not the chapter that
+  // contains it. Everything else about the choice is unchanged.
+  const byId = new Map(live.map((n) => [n.id, n]));
+  const containersOfUnderway = new Set<string>();
+  for (const n of live) {
+    if (n.status !== "in_progress") continue;
+    for (let p = n.parentId; p; p = byId.get(p)?.parentId ?? null) {
+      const already = containersOfUnderway.has(p);
+      containersOfUnderway.add(p);
+      if (already) break;
+    }
+  }
   const underway = live
-    .filter((n) => n.status === "in_progress")
+    .filter((n) => n.status === "in_progress" && !containersOfUnderway.has(n.id))
     .sort((a, b) => {
       const at = (a.anchorAt ?? "").localeCompare(b.anchorAt ?? "");
       if (at !== 0) return at;

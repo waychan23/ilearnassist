@@ -158,6 +158,7 @@ export function forkSession(db: AppDb, params: ForkSessionParams): ForkResult {
     cloneTables(db, targetId, sourceTables, threadMap);
     clonePlots(db, targetId, sourcePlots, threadMap);
     cloneInsights(db, userId, source.id, targetId);
+    clonePreferences(db, userId, source.id, targetId);
     cloneWidgets(db, userId, source.id, targetId);
     cloneQuestionCounter(db, source.id, targetId);
     remapMessageJson(db, copiedMessages, msgMap, {
@@ -589,6 +590,32 @@ function cloneInsights(
       ...item,
       id: newId(),
       sessionId: targetSessionId,
+    });
+  }
+}
+
+/* ------------------------------ user preferences ------------------------------- */
+
+/**
+ * The conversation's live session-level preferences, copied to the branch.
+ *
+ * Session-level only: the account-level and workspace-level rows are not the conversation's to
+ * duplicate, and a fork that copied them would make one account's standing rules appear twice
+ * the moment the branch's own list is read. The source timestamps are kept, so the copied list
+ * reads in the order the preferences were recorded.
+ */
+function clonePreferences(
+  db: AppDb,
+  userId: string,
+  sourceSessionId: string,
+  targetSessionId: string
+): void {
+  for (const preference of db.listPreferencesForClone(userId, sourceSessionId)) {
+    db.clonePreference({
+      ...preference,
+      id: newId(),
+      userId,
+      targetSessionId,
     });
   }
 }

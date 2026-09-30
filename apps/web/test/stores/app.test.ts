@@ -100,6 +100,7 @@ const mocks = vi.hoisted(() => ({
     listSessionResources: vi.fn(),
     listResources: vi.fn(),
     keepSessionPage: vi.fn(),
+    extractPreference: vi.fn(),
     deleteResource: vi.fn(),
     reparseResource: vi.fn(),
     getResource: vi.fn(),
@@ -2454,6 +2455,127 @@ describe("the diagram widget", () => {
     } finally {
       off();
     }
+  });
+});
+
+describe("user preferences", () => {
+  it("emits preference.changed when the recording tool finishes, and not for another tool", async () => {
+    /*
+     * The panel holds its list locally, so the only thing that can tell it the server wrote a
+     * rule is this event — emitted from the one `tool_end` arm the other mid-turn events use.
+     */
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      streamOf(
+        {
+          type: "tool_end",
+          toolCall: { id: "p1", name: "ila_save_preference", input: "{}", output: "Recorded" },
+        },
+        {
+          type: "tool_end",
+          toolCall: { id: "f1", name: "write_file", input: "{}", output: "x" },
+        },
+        { type: "done" }
+      );
+      const store = await readyStore();
+      await store.sendMessage("记下我的偏好");
+
+      expect(seen.filter((t) => t === "preference.changed")).toHaveLength(1);
+    } finally {
+      off();
+    }
+  });
+
+  /*
+   * The default rule, one case per test: `readyStore` loads once per store, and a second call
+   * in the same test would re-read nothing — the first `ensureLoaded` has already listed.
+   */
+  it("keeps preferences off on the full history by default", async () => {
+    const store = await readyStore({ sessions: [session()] });
+    expect(store.effectiveUserPreferences).toBe(false);
+  });
+
+  it("defaults preferences on under smart context", async () => {
+    const store = await readyStore({ sessions: [session({ settings: { smartContext: true } })] });
+    expect(store.effectiveUserPreferences).toBe(true);
+  });
+
+  it("defaults preferences on once the context is compacted", async () => {
+    mocks.api.getContextState.mockResolvedValue({
+      summary: {
+        id: "cs1",
+        content: "Recap.",
+        throughMessageId: "m1",
+        throughCreatedAt: "t",
+        messageCount: 1,
+        createdAt: "t",
+      },
+      totalMessages: 2,
+      tailMessages: 1,
+    });
+    const store = await readyStore({ sessions: [session()] });
+    expect(store.effectiveUserPreferences).toBe(true);
+  });
+
+  it("lets an explicit answer override the mode either way", async () => {
+    // The switch the composer draws is the state a turn will actually use, not the stored one.
+    const off = await readyStore({
+      sessions: [session({ settings: { smartContext: true, userPreferences: false } })],
+    });
+    expect(off.effectiveUserPreferences).toBe(false);
+  });
+
+  it("lets an explicit on stand on the full history", async () => {
+    const on = await readyStore({ sessions: [session({ settings: { userPreferences: true } })] });
+    expect(on.effectiveUserPreferences).toBe(true);
+  });
+
+  it("extracts a passage through the server and announces the new list", async () => {
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+    try {
+      mocks.api.extractPreference.mockResolvedValue({
+        status: "saved",
+        preference: { id: "p1" },
+        preferences: [{ id: "p1" }],
+      });
+      const store = await readyStore();
+
+      const ok = await store.extractPreferenceFromSelection({
+        text: "我不喜欢用表格",
+        messageId: "m1",
+      });
+      expect(ok).toBe(true);
+      expect(mocks.api.extractPreference).toHaveBeenCalledWith("s1", {
+        text: "我不喜欢用表格",
+        messageId: "m1",
+      });
+      expect(seen.filter((t) => t === "preference.changed")).toHaveLength(1);
+    } finally {
+      off();
+    }
+  });
+
+  it("reports a decline through the toast rather than looking broken", async () => {
+    // The model read the passage and found no standing requirement. Not an error, but the
+    // press has to answer, and the toast is the only global channel the app has.
+    mocks.api.extractPreference.mockResolvedValue({ status: "skipped", preferences: [] });
+    const store = await readyStore();
+
+    const ok = await store.extractPreferenceFromSelection({ text: "地球是圆的" });
+    expect(ok).toBe(false);
+    expect(store.error).toContain("没有可记录");
+  });
+
+  it("reports an extraction failure through the toast", async () => {
+    mocks.api.extractPreference.mockRejectedValue(new Error("provider exploded"));
+    const store = await readyStore();
+
+    expect(await store.extractPreferenceFromSelection({ text: "随便一段" })).toBe(false);
+    expect(store.error).toContain("provider exploded");
   });
 });
 

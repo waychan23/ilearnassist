@@ -59,6 +59,11 @@ const MUST_BE_GATED = [
   "POST /api/sessions/:id/insights/generate",
   "PATCH /api/sessions/:id/insights/:insightId",
   "DELETE /api/sessions/:id/insights/:insightId",
+  // Recording a preference changes what every later turn is told, and the manual extraction is
+  // a model call whose result is visible to the account's other clients the moment it lands —
+  // the same claim a note makes.
+  "POST /api/sessions/:id/preferences/extract",
+  "DELETE /api/sessions/:id/preferences/:preferenceId",
   "POST /api/sessions/:id/resources",
   // Keeping a page writes a reference the whole account can see from that conversation's
   // sources panel, which is the same claim an upload makes — so it holds the same lock.
@@ -110,6 +115,7 @@ const EXEMPT = [
   "GET /api/sessions/:id/plots",
   "GET /api/sessions/:id/notes",
   "GET /api/sessions/:id/insights",
+  "GET /api/sessions/:id/preferences",
   "GET /api/sessions/:id/files",
   "GET /api/sessions/:id/files/content",
   "GET /api/sessions/:id/files/raw",

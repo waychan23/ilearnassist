@@ -70,7 +70,8 @@ beforeEach(() => {
  */
 async function sendOneTurn(
   workspaceScope?: unknown,
-  widgets?: string[]
+  widgets?: string[],
+  lockedTools = false
 ): Promise<Record<string, unknown>> {
   const workspace = await newWorkspace(env, `W-${Math.random().toString(36).slice(2)}`);
   const session = await newSession(env, workspace.id, widgets ? { widgets } : {});
@@ -80,6 +81,21 @@ async function sendOneTurn(
       method: "PATCH",
       url: `/api/sessions/${session.id}`,
       payload: { settings: { workspaceScope } },
+    });
+    expect(patched.statusCode).toBe(200);
+  }
+
+  /*
+   * A conversation locked down to no tools at all. The built-in reads survive it
+   * (`BUILTIN_TOOL_NAMES`), and without this switch the case below could not reach the empty
+   * allow-list through a real turn — the hole the `workspaceScope` note above describes for
+   * `ila_explore`.
+   */
+  if (lockedTools) {
+    const patched = await env.inject({
+      method: "PATCH",
+      url: `/api/sessions/${session.id}`,
+      payload: { allTools: false, tools: [] },
     });
     expect(patched.statusCode).toBe(200);
   }
@@ -172,6 +188,23 @@ describe("the tools a provider is sent", () => {
     // And the same in the other direction: a name in the table that the schema does not carry
     // is a rule about a field nobody can send.
     expect([...reachable].filter((field) => !advertised.includes(field))).toEqual([]);
+  });
+
+  it("offers the built-in record reads even with an empty allow-list", async () => {
+    /*
+     * `ila_query` and `ila_recall` are `BUILTIN_TOOL_NAMES`: assembled whatever the allow-list
+     * says, because they read the conversation's own record — a locked-down Copilot asked for no
+     * capabilities, not for amnesia — and the smart-context prompt names both as the way back.
+     * Asserted through a real turn with `allTools: false, tools: []`, the one state this file's
+     * other cases never reach.
+     */
+    const tools = sentTools(await sendOneTurn(undefined, undefined, true));
+    const names = tools.map((t) => t.function?.name).sort();
+    expect(names).toEqual(["ila_query", "ila_recall"]);
+    // Their schemas are object-typed like every other tool's — read off the same request.
+    for (const tool of tools) {
+      expect(tool.function?.parameters?.type, tool.function?.name).toBe("object");
+    }
   });
 
   it("names every tool it offers, so a schema-less entry cannot hide", async () => {

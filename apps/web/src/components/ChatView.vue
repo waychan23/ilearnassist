@@ -400,6 +400,21 @@ const selectionActions = computed<SelectionAction[]>(() => [
     disabled: store.isActiveSessionReadOnly,
     disabledReason: t("lock.other"),
   },
+  {
+    /*
+     * "作为用户偏好" — the manual half of preference recording.
+     *
+     * The host's own action rather than a widget's, for `ask`'s reason exactly: recording a
+     * standing requirement is something every conversation can do, and the widget claim is a
+     * single holder that the notes panel takes. It is a write — the server runs an extraction
+     * call and stores a row — so the gate is the session lease, like `ask`.
+     */
+    id: "preference",
+    label: t("preferences.toolbar.asPreference"),
+    icon: "pin",
+    disabled: store.isActiveSessionReadOnly,
+    disabledReason: t("lock.other"),
+  },
   ...currentSelectionActions(),
 ]);
 
@@ -489,6 +504,20 @@ function onToolbarPick(id: string): void {
     store.stageReference(messageReference(current));
     // No `pendingAnchor`: nothing opens. The composer takes the caret on its own when a
     // reference arrives — see the watcher there, which every 追问 entry point shares.
+    clearSelection();
+    return;
+  }
+
+  if (id === "preference") {
+    /*
+     * The passage travels as the quote the selection anchored, exactly as a note does. The
+     * store's action reports its own failure through the toast, so there is nothing to await
+     * here — the bar closes immediately and the panel (or the toast) answers for it.
+     */
+    void store.extractPreferenceFromSelection({
+      text: current.anchor.quote,
+      messageId: current.messageId,
+    });
     clearSelection();
     return;
   }

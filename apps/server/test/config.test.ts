@@ -10,6 +10,8 @@ import {
   insightReasoningSetting,
   INSIGHT_REASONING_ENV,
   parseReasoning,
+  preferenceReasoningSetting,
+  PREFERENCE_REASONING_ENV,
   resolveDataRoot,
   resolveEnv,
   threadReasoningSetting,
@@ -410,6 +412,7 @@ describe("the out-of-band reasoning switches", () => {
     expect(parseReasoning("   ", NAME)).toBe("auto");
     expect(threadReasoningSetting({})).toBe("auto");
     expect(insightReasoningSetting({})).toBe("auto");
+    expect(preferenceReasoningSetting({})).toBe("auto");
   });
 
   it.each([
@@ -455,11 +458,20 @@ describe("the out-of-band reasoning switches", () => {
     }
   });
 
-  it("keeps the two switches independent", () => {
-    // The whole reason for a second variable: tuning the classifier must not silently re-tune
-    // the reflection pass, and vice versa.
+  it("keeps the switches independent", () => {
+    // The whole reason for more than one variable: tuning the classifier must not silently
+    // re-tune the reflection pass or the preference extraction, and vice versa.
     expect(threadReasoningSetting({ [INSIGHT_REASONING_ENV]: "off" })).toBe("auto");
     expect(insightReasoningSetting({ [THREAD_REASONING_ENV]: "off" })).toBe("auto");
+    expect(preferenceReasoningSetting({ [THREAD_REASONING_ENV]: "off" })).toBe("auto");
+    expect(threadReasoningSetting({ [PREFERENCE_REASONING_ENV]: "off" })).toBe("auto");
+    // And each answers its own variable.
+    expect(
+      preferenceReasoningSetting({
+        [PREFERENCE_REASONING_ENV]: "off",
+        [INSIGHT_REASONING_ENV]: "on",
+      })
+    ).toBe("off");
   });
 });
 

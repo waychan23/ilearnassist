@@ -3,11 +3,12 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 // allow-list this module filters by: Settings → Copilots checkboxes produce these names. Kept
 // here as a re-export so the server's own callers and tests read it as a tool-assembly fact.
 export { ALL_TOOL_NAMES, type ToolName } from "@ilearnassist/shared";
-import { isWidgetBoundTool } from "@ilearnassist/shared";
+import { isBuiltinTool, isWidgetBoundTool } from "@ilearnassist/shared";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
 import { buildPlotTool, type PlotToolContext } from "./plot.js";
+import { buildPreferenceTool, type PreferenceToolContext } from "./preferences.js";
 import { buildTableTool, type TableToolContext } from "./table.js";
 import { buildDocumentTool, type DocumentToolContext } from "./documentTools.js";
 import { buildExploreTool, type ExploreToolContext } from "./explore.js";
@@ -81,6 +82,10 @@ const NON_FILE_TOOLS = new Set<string>([
   "ila_explore",
   "ila_table",
   "ila_plot",
+  // `ila_save_preference` writes one database row and no file, on `ila_table`'s argument
+  // exactly: a state the user asked the agent to remember has no sandbox, and a file-tools
+  // switch must not remove a capability that never had one.
+  "ila_save_preference",
 ]);
 
 export interface BuildToolsInput {
@@ -182,17 +187,21 @@ export interface BuildToolsInput {
    * five kinds answer for five different panels. Binding it at all would hide the agent's read of
    * the conversation's own plan, quizzes, threads, notes and diagrams from the conversations that
    * need it most, which is the opposite of what a discovery tool is for.
+   *
+   * `ila_query` is also **built-in** (`BUILTIN_TOOL_NAMES`): assembled in every turn whatever
+   * the allow-list says, and kept out of a Copilot's checklist, because the record it reads
+   * exists in every conversation and the smart-context mode's prompt names it as the way back.
    */
   query?: QueryToolContext;
   /**
    * Present whenever a session context exists — always, in practice; the field is optional so
    * a test can pin what its absence assembles (nothing).
    *
-   * `ila_recall` is ordinary and allow-listable like `ila_query`, and assembled **in every
-   * conversation** rather than only when a compaction is in force. The tool's availability
-   * must not vary with the context it reads — a description cannot state "sometimes absent" —
-   * and the same read is what recovers messages a `maxContextMessages` window trimmed, which
-   * no summary row marks. A Copilot that does not want it simply does not tick it.
+   * `ila_recall` is **built-in** like `ila_query`: assembled in every turn whatever the
+   * allow-list says, and kept out of a Copilot's checklist. The tool's availability must not
+   * vary with the context it reads — a description cannot state "sometimes absent" — and the
+   * same read is what recovers messages a `maxContextMessages` window trimmed, which no
+   * summary row marks, and what the smart-context window deliberately left out.
    */
   recall?: RecallToolContext;
   /**
@@ -202,6 +211,16 @@ export interface BuildToolsInput {
    * step the model wastes discovering that.
    */
   explore?: ExploreToolContext;
+  /**
+   * Present whenever a session context exists — always, in practice; the field is optional so a
+   * test can pin what its absence assembles (nothing).
+   *
+   * `ila_save_preference` is `auto-install` mode like the table tool: ordinary and
+   * allow-listable, with a call installing the panel that lists what was recorded. Recording is
+   * deliberately not gated on the injection switch — that switch decides what the model is
+   * *told*, not what it may remember.
+   */
+  preference?: PreferenceToolContext;
 }
 
 /**
@@ -261,6 +280,9 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
   if (input.table) all.push(buildTableTool(input.table));
   // The table's line applied to the third artifact tool, with the same reason: a row and no file.
   if (input.plot) all.push(buildPlotTool(input.plot));
+  // The fourth, and the same argument: a preference is a state the model records in a row, and
+  // the file-tools switch has no bearing on it. See `NON_FILE_TOOLS`.
+  if (input.preference) all.push(buildPreferenceTool(input.preference));
   // Ordinary and allow-listable like the diagram tool, but unlike it *kept* when the file
   // tools are switched off — it writes nothing. See `NON_FILE_TOOLS`.
   if (input.query) all.push(buildQueryTool(input.query));
@@ -282,7 +304,19 @@ export function buildTools(input: BuildToolsInput): StructuredToolInterface[] {
     // solely because its widget is installed, and a ticked/unticked box must neither enable nor
     // remove it (it is not shown in the checklist for that reason). An `auto-install` tool is not
     // in that set — the allow-list governs it like any other tool.
-    if (allowed && !allowed.has(t.name) && !isWidgetBoundTool(t.name)) return false;
+    //
+    // A **built-in** tool bypasses it for the third reason (`BUILTIN_TOOL_NAMES`): it reads the
+    // conversation's own record, so a locked-down Copilot is a conversation that asked for no
+    // capabilities rather than one that asked to forget what was said — and the smart-context
+    // mode's prompt promises these reads exist. No widget to ask about, no box to tick.
+    if (
+      allowed &&
+      !allowed.has(t.name) &&
+      !isWidgetBoundTool(t.name) &&
+      !isBuiltinTool(t.name)
+    ) {
+      return false;
+    }
     return true;
   });
 }

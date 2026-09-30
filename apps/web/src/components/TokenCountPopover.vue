@@ -70,6 +70,13 @@ const messageCount = computed(() => store.messages.length);
 const usage = computed(() => store.sessionUsage);
 /** Which context the next turn will use, as the last server read said. */
 const summary = computed(() => store.contextState?.summary ?? null);
+/**
+ * The experimental smart-context mode, read from the session setting because it *is* the mode
+ * in force: it wins over a compaction outright, so the summary above is not what a turn would
+ * carry while it is on. The preview door is withheld here rather than opened on a dialog that
+ * cannot describe this mode — see the template.
+ */
+const smartContext = computed(() => store.sessionSettings.smartContext === true);
 
 const level = computed(() => (ratio.value > 0.9 ? "high" : ratio.value > 0.7 ? "warn" : "ok"));
 
@@ -155,15 +162,31 @@ function viewContext() {
         Which context the next turn will use. A one-line answer plus a door: the full state —
         the summary, its point, the restore control — belongs in a dialog that can show a
         paragraph, not in a hover card.
+
+        The door is **withheld** while smart context is on. That dialog answers the question
+        with the compaction state, and smart context is precisely the mode in which that state
+        is not what a turn sends — a door onto a dialog that would show the wrong answer is
+        worse than no door, and the switch itself is in the composer, one line below.
       -->
       <div class="section">
         <div class="row section-head">
           <span>{{ t("context.modeLabel") }}</span>
           <span class="num" data-testid="tokens-context-mode">
-            {{ summary ? t("context.modeCompacted") : t("context.modeFull") }}
+            {{
+              smartContext
+                ? t("context.modeSmart")
+                : summary
+                  ? t("context.modeCompacted")
+                  : t("context.modeFull")
+            }}
           </span>
         </div>
-        <button class="link-btn" data-testid="context-preview-open" @click="viewContext">
+        <button
+          v-if="!smartContext"
+          class="link-btn"
+          data-testid="context-preview-open"
+          @click="viewContext"
+        >
           {{ t("context.open") }}
         </button>
       </div>

@@ -143,11 +143,11 @@ function planNodeIndex(tree: readonly PlanTreeNode[] | undefined) {
 }
 
 const DESCRIPTION = [
-  "Look up this conversation's own record: its study plan, the quiz questions it has asked (with the learner's answers and their verdicts), how the conversation was split into topics, the learner's notes, the diagrams it has drawn, the tables it has recorded, the math figures it has plotted, and the material it holds.",
+  "Look up this conversation's own record: its study plan, the quiz questions it has asked (with the learner's answers and their verdicts), how the conversation was split into topics, the learner's notes, the diagrams it has drawn, the tables it has recorded, the math figures it has plotted, the user's standing preferences for how you work, and the material it holds.",
   "",
   "Use it whenever the answer depends on what has already happened here rather than on general knowledge — what the learner has already covered, what they got wrong, what they wrote down, what they pushed back on, or what they asked for a picture of. The learner's questions often refer back to material you cannot see from the last few messages, and this is how you look it up instead of guessing or asking them to repeat it.",
   "",
-  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table`, `plot` or `resource`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, a plotted figure, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"plot\"` with a `name` returns the figure's JSON spec, which is the same spec ila_plot accepted, so you can revise it; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question.",
+  "Pick one kind per call (`plan`, `quiz`, `thread`, `note`, `diagram`, `table`, `plot`, `preference` or `resource`); call it more than once if you need more than one. When the user's message names something this conversation holds — a diagram, a table, a plotted figure, one of their notes, or a question they were asked — this is how you read it. `kind: \"diagram\"` with a `name` returns the diagram's mermaid source, which lives in the conversation's own folder where read_file cannot reach it; `kind: \"table\"` with a `name` returns the recorded markdown; `kind: \"plot\"` with a `name` returns the figure's JSON spec, which is the same spec ila_plot accepted, so you can revise it; `kind: \"note\"` or `kind: \"quiz\"` with an `id` returns that one note or question; `kind: \"preference\"` lists the user's standing preferences with the ids ila_save_preference takes in `replaces`.",
   "",
   "If an answer comes back with \"truncated\": true, you are seeing part of the set: call again with a larger offset or a narrower filter rather than assuming you have seen it all.",
 ].join("\n");
@@ -255,6 +255,7 @@ export const ALLOWED_FIELDS: Record<QueryKind, readonly (keyof QueryInput)[]> = 
   table: ["name", "limit"],
   plot: ["name", "limit"],
   resource: ["query", "limit", "offset"],
+  preference: ["limit", "offset"],
 };
 
 /**
@@ -776,6 +777,41 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     });
   };
 
+  /**
+   * `kind: "preference"` — the user's standing requirements, all three levels in one read.
+   *
+   * This exists because the injected block is only present while the conversation's
+   * `userPreferences` switch resolves to on: a model recording a rule when injection is off
+   * (or reading before it was ever turned on) has no other way to see what it would be
+   * superseding, and the replace protocol would become guesswork. It is the notes read's shape —
+   * the model reads, the user writes — with one difference: the model *does* write these, through
+   * `ila_save_preference`, which is why the ids matter here.
+   */
+  const preference = (input: { limit?: number; offset?: number }): string => {
+    const all = ctx.db.listPreferencesForContext(ctx.userId, ctx.workspaceId, ctx.sessionId);
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? QUERY_DEFAULT_LIMIT;
+    const items = all.slice(offset, offset + limit).map((p) => ({
+      id: p.id,
+      scope: p.scope,
+      type: p.type,
+      content: p.content,
+      createdAt: p.createdAt,
+    }));
+    return page({
+      kind: "preference",
+      items,
+      total: all.length,
+      offset,
+      note:
+        "The user's standing preferences about how the assistant should work. `scope` is ordered " +
+        "by specificity: a session rule overrides a workspace rule, which overrides a user rule; " +
+        "within one scope a later rule overrides an earlier one. To record a new one, call " +
+        "ila_save_preference, naming any preference this rule contradicts or refines by its `id` " +
+        "in `replaces` — the later statement wins and the old rule is deleted.",
+    });
+  };
+
   const HANDLERS: Record<QueryKind, (input: QueryInput) => Promise<string>> = {
     plan: async () => plan(),
     quiz: async (input) => quiz(input),
@@ -785,6 +821,7 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
     table: (input) => table(input),
     plot: (input) => plot(input),
     resource,
+    preference: async (input) => preference(input),
   };
 
   return tool(

@@ -1063,6 +1063,49 @@ export const DDL = `
   CREATE INDEX IF NOT EXISTS idx_insights_session
     ON insight_items(session_id, adopted, created_at);
 
+  -- The user's standing requirements about how the agent should work — "用户偏好".
+  --
+  -- One table for three levels rather than three tables: "scope" says which level a row lives at
+  -- and "scope_id" names the workspace or conversation it belongs to (NULL for user). Only
+  -- session-level rows can be created today, but the injected block and every read are already
+  -- multi-level, and a self-describing scope column is what keeps a later workspace or account
+  -- preference out of a migration. PREFERENCE_SCOPES in packages/shared declares the
+  -- precedence, ascending: user < workspace < session.
+  --
+  -- **Soft-deleted, unlike insight_items** — and the difference is the nature of the row, not its
+  -- table. An insight is derived: the same pass can regenerate the same observation, so "drop it"
+  -- is the same statement the next wipe makes. A preference is a record of something the user
+  -- said to the agent, converted into a rule; nothing can reproduce it if it is gone, and two
+  -- writers end rows here (the agent's tool, and the model-driven conflict replacement that
+  -- deletes superseded rows). Keeping the superseded row is what makes "this replaced that"
+  -- inspectable later, and the user's own delete reaches the same column. Every read filters
+  -- deleted_at IS NULL, the app-wide rule.
+  --
+  -- user_id is stored rather than reached through the session, unlike notes, because a user-level
+  -- or workspace-level row has no session to reach it through — and the owner has to be in the WHERE
+  -- for every read (the ForUser rule), which a join through sessions could not supply for the
+  -- two levels that outlive any conversation. source_message_id carries no foreign key, like
+  -- notes.message_id: a deleted message does not invalidate the preference extracted from it.
+  --
+  -- New table, so no SCHEMA_VERSION bump (see the note on counters).
+  CREATE TABLE IF NOT EXISTS user_preferences (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL,
+    scope_id TEXT,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_message_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  -- The read is "this account's rows at the levels that apply", and the order within a level is
+  -- creation order (newest last), which the injection does not depend on but a stable list does.
+  CREATE INDEX IF NOT EXISTS idx_user_preferences_place
+    ON user_preferences(user_id, scope, scope_id, created_at);
+
   /*
    * Who may write to a conversation: one lease per session, held by one client.
    *

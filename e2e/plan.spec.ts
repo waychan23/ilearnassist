@@ -173,7 +173,7 @@ test.describe("the plan widget", () => {
     await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(5);
   });
 
-  test("completing every child completes its chapter, with no parent status sent", async ({
+  test("a chapter follows its children: underway when one starts, completed when all do", async ({
     page,
     request,
   }) => {
@@ -188,6 +188,30 @@ test.describe("the plan widget", () => {
     const intro = await idOf(page, "1.1 Intro");
     const setup = await idOf(page, "1.2 Setup");
     const chapter2 = await idOf(page, "Chapter 2");
+
+    // Starting one topic — without naming its chapter — makes the chapter underway, and its
+    // title borrows that topic's start marker. It is no longer a play-from target.
+    await scriptLlm(request as APIRequestContext, {
+      turns: [
+        {
+          toolCalls: [
+            {
+              id: "call_start",
+              name: "ila_update_plan_progress",
+              args: { nodes: [{ id: setup, status: "in_progress" }] },
+            },
+          ],
+        },
+        { content: "开始学 1.2。" },
+      ],
+    });
+    await send(page, "开始学 1.2");
+    await expect(page.getByTestId(`plan-node-${chapter1}`)).toHaveAttribute(
+      "data-node-status",
+      "in_progress"
+    );
+    await expect(page.getByTestId(`plan-jump-${chapter1}`)).toBeVisible();
+    await expect(page.getByTestId(`plan-play-${chapter1}`)).toHaveCount(0);
 
     // Only the leaves are named: Chapter 1 is not in the call and completes from its children.
     await scriptLlm(request as APIRequestContext, {

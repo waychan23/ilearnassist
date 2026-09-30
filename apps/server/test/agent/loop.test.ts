@@ -90,6 +90,8 @@ interface RunOptions {
   capabilities?: ModelCapability[];
   /** Where an unqualified write goes, as `turnContext` would have resolved it. */
   writeLocation?: FileLocation;
+  /** The smart-context prompt block, as `turnContext` passes it when the mode is on. */
+  smartContextGuidance?: string;
   /** Aborts the turn; see `RunAgentInput.signal`. */
   signal?: AbortSignal;
   /** Overridden to point the provider at something that cannot answer. */
@@ -136,6 +138,7 @@ async function run(options: RunOptions) {
     sessionId: "s1",
     sessionDirPath: join(scratch, "ws", "sessions", "s1"),
     writeLocation: options.writeLocation ?? "session",
+    smartContextGuidance: options.smartContextGuidance,
     vision: options.vision ?? false,
     toolUse: options.toolUse ?? false,
     history: options.history ?? [],
@@ -510,6 +513,97 @@ describe("runAgentStream — history handling", () => {
     expect(sent.messages[1]!.role).toBe("user");
     expect(JSON.stringify(sent.messages)).toContain("newest");
     expect(JSON.stringify(sent.messages)).not.toContain("oldest");
+  });
+
+  it("carries only the two newest history messages in smart context mode", async () => {
+    const history: Message[] = [
+      message({ role: "user", content: "oldest" }),
+      message({ role: "assistant", content: "old reply" }),
+      message({ role: "user", content: "middle" }),
+      message({ role: "assistant", content: "mid reply" }),
+      message({ role: "user", content: "newest" }),
+      message({ role: "assistant", content: "new reply" }),
+    ];
+
+    await run({ turns: [{ content: "ok" }], history, settings: { smartContext: true } });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    // system + the newest user/assistant pair + the new user turn.
+    expect(sent.messages).toHaveLength(4);
+    expect(sent.messages[1]!.role).toBe("user");
+    expect(sent.messages[2]!.role).toBe("assistant");
+    const wire = JSON.stringify(sent.messages);
+    expect(wire).toContain("newest");
+    expect(wire).toContain("new reply");
+    expect(wire).not.toContain("oldest");
+    expect(wire).not.toContain("middle");
+  });
+
+  it("lets smart context win over maxContextMessages", async () => {
+    /*
+     * The mode's contract is "the newest two", so a larger `maxContextMessages` must not widen
+     * it — the two are not min()ed together, or the mode's promise would depend on a field it
+     * says nothing about. This is the direction a caller is most likely to get wrong, because
+     * `maxContextMessages` looks like the knob for exactly this.
+     */
+    const history: Message[] = [
+      message({ role: "user", content: "oldest" }),
+      message({ role: "assistant", content: "old reply" }),
+      message({ role: "user", content: "middle" }),
+      message({ role: "assistant", content: "mid reply" }),
+      message({ role: "user", content: "newest" }),
+      message({ role: "assistant", content: "new reply" }),
+    ];
+
+    await run({
+      turns: [{ content: "ok" }],
+      history,
+      settings: { smartContext: true, maxContextMessages: 5 },
+    });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    expect(sent.messages).toHaveLength(4);
+    expect(JSON.stringify(sent.messages)).not.toContain("middle");
+  });
+
+  it("does not advance a smart window to a user turn, so a resumed or regenerated turn keeps its anchor", async () => {
+    /*
+     * `trimHistory`'s ordinary rule drops a leading assistant message so a `maxContextMessages`
+     * window always opens on a user turn. The smart window must not: `/regenerate` reads its
+     * history after peeling the reply, so the newest two are often [assistant, user], and
+     * `/answers` resumes from an assistant row carrying the `ask_user` call. Advancing to a
+     * user turn would drop the exchange the turn is continuing from — the one the model was
+     * just asked to resume.
+     */
+    const history: Message[] = [
+      message({ role: "user", content: "old question" }),
+      message({ role: "assistant", content: "old answer" }),
+      message({ role: "user", content: "the peeled question" }),
+    ];
+
+    await run({
+      turns: [{ content: "ok" }],
+      history,
+      settings: { smartContext: true },
+      userMessage: null,
+    });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    expect(sent.messages).toHaveLength(3);
+    expect(sent.messages[1]!.role).toBe("assistant");
+    expect(String(sent.messages[1]!.content)).toContain("old answer");
+    expect(sent.messages[2]!.role).toBe("user");
+    expect(String(sent.messages[2]!.content)).toContain("the peeled question");
+  });
+
+  it("appends the smart-context guidance when the caller passes it", async () => {
+    await run({
+      turns: [{ content: "ok" }],
+      smartContextGuidance: "SMART-CONTEXT-MARKER",
+    });
+
+    const sent = llm.requests()[0] as { messages: { role: string; content: unknown }[] };
+    expect(String(sent.messages[0]!.content)).toContain("SMART-CONTEXT-MARKER");
   });
 
   it("keeps a diagram's source in history, so the model can revise its own drawing", async () => {

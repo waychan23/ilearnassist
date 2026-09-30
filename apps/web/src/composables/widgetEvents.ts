@@ -79,6 +79,16 @@ export type WidgetEvent =
    */
   | { type: "plot.changed"; sessionId: string }
   /**
+   * An `ila_save_preference` call recorded a rule during a turn — or the selection action's
+   * manual extraction saved one outside a turn — so the preference panel refetches.
+   *
+   * One event for both writers on purpose: the fact is "this conversation's preference list
+   * changed", and the panel must not care which path wrote it. The manual route has no turn end
+   * to ride, which is the `resource.changed` argument for keeping it its own frame rather than
+   * folding it into `turn.finished`.
+   */
+  | { type: "preference.changed"; sessionId: string }
+  /**
    * A widget asked to scroll the conversation to a tool-call card — a plan node's start
    * anchor. The widget cannot reach ChatView's scroll container, which is what makes this an
    * event. Scrolling to the card (rather than the message top) lands on the node's start.

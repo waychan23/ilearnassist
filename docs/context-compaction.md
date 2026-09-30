@@ -141,10 +141,48 @@ it got:
 
 The tool is assembled in **every** conversation rather than only when a summary is active: its
 availability must not vary with the state it reads (a description cannot say "sometimes
-absent"), and the same read is what recovers messages a `maxContextMessages` window trimmed.
-`chat.guidance.recall` is appended whenever it survives assembly, so the model is told the
-transcript is reachable at the moment it matters — the summary block says what was compacted,
-and the guidance says it can be looked up.
+absent"), and the same read is what recovers messages a `maxContextMessages` window trimmed —
+or a smart-context window left out. It is **built-in** (`BUILTIN_TOOL_NAMES`, with `ila_query`):
+the tool allow-list can neither enable nor remove it, and the Copilot checklist does not offer a
+box for it. `chat.guidance.recall` is appended whenever it survives assembly, so the model is
+told the transcript is reachable at the moment it matters — the summary block says what was
+compacted, and the guidance says it can be looked up.
+
+## Smart context mode (experimental)
+
+A session-level switch in the composer that replaces *what* a turn sends: instead of the full
+history or a compaction summary, only the newest `SMART_CONTEXT_MESSAGES` (2) history messages,
+plus a system-prompt block that says the window is deliberately narrow and points at the reads
+that stand in for the rest.
+
+| where | what |
+| --- | --- |
+| `SessionSettings.smartContext` | the switch, in the settings blob — `true`/`false`/`null`, no schema change |
+| `agent/smartContext.ts` | the window (`smartContextHistory`) and the block (`chat.guidance.smartContext`) |
+| `trimHistory` | applies the window **first**, so `maxContextMessages` is ignored while the mode is on |
+
+- **The mode wins over an active summary, at read time.** `effectiveContextFor` returns the whole
+  stored history and no summary when the switch is on; the loop cuts the window. The summary row
+  and `sessions.active_summary_id` are not touched, so switching the mode off restores the
+  compacted context exactly as it was — and turns written under the mode carry no
+  `messages.summary_id`, because they did not run under one.
+- **The window is cut over messages, and a leading assistant message is kept.** A `Message` row
+  carries its own tool calls and results, so a cut can never leave a dangling `tool_calls` block;
+  and a regenerated turn often opens on the assistant row it is replacing. Advancing to a user
+  turn (what `maxContextMessages` does) would drop the very exchange a resumed or regenerated
+  turn is continuing from.
+- **The way back is built in**, which is what makes the mode coherent: the block names
+  `ila_recall` and `ila_query`, and both are `BUILTIN_TOOL_NAMES` — assembled whatever the
+  allow-list says. A conversation whose Copilot allows no tools asked for no capabilities, not
+  for amnesia.
+- **Compaction is unavailable in the UI while the mode is on** — the composer's compress button
+  is disabled, and the token popover withholds the preview's door, because the dialog describes
+  the compaction state and that state is not what a turn would send. The routes themselves are
+  unchanged: `/compact` still folds the full stored history if called directly, and the summary
+  it writes takes effect once the mode is switched off.
+- `test/smart-context.test.ts` and `e2e/smart-context.spec.ts` read the assembled request off the
+  fake LLM — the same proof shape as compaction's, because the window is a fact about the wire
+  rather than about the UI.
 
 ## Deliberate edges
 

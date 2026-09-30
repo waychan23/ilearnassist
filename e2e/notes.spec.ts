@@ -156,7 +156,15 @@ test.describe("the notes widget", () => {
       (document.querySelector('[data-testid="messages"]') as HTMLElement).scrollTop = 0;
     });
 
-    await selectText(page, replyContent(page), FIRST_PHRASE);
+    /*
+     * The *first* phrase of the line, not the later one the other cases select: this test is
+     * about the corner placement, and the bar is now three buttons wide. A selection near the
+     * list's right edge is pushed left by the edge-avoidance clamp — correct behaviour, but it
+     * would make the corner assertion measure the clamp instead. Selecting at the line's start
+     * leaves the bar room, so the corner is what is pinned.
+     */
+    const LEAD_PHRASE = "光合作用发生在叶绿体中";
+    await selectText(page, replyContent(page), LEAD_PHRASE);
 
     /*
      * The bar mounts on the `mouseup` `selectText` dispatches, which is a render later — so this

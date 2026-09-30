@@ -39,9 +39,15 @@ catalogs' rule, never keyed by the module that happens to read them.
 | `chat.system.persona`, `.clock`, `.workspace`, `.noEscape`, `.grantedRead` | `buildSystemPrompt` |
 | `chat.guidance.codeFence` | `buildSystemPrompt` — how to name a file in a code fence. **Unconditional**, alone among the guidance blocks: it is about the format of a reply rather than about a capability, so there is no assembled tool to ask about. Without it the client's file-name header would be drawing data nothing produces — see the code-block bullet in `CLAUDE.md` |
 | `chat.guidance.plan` / `.quiz` / `.makeupCard` / `.collectPage` / `.table` / `.explore` | the tool module that owns each, appended to the turn's system prompt |
+| `chat.contextSummary` | `buildSystemPrompt` — the compaction summary standing in for the messages before the point |
+| `chat.guidance.recall` | `tools/recall.ts` — the transcript read's positive half |
+| `chat.guidance.smartContext` | `agent/smartContext.ts` — present when `SessionSettings.smartContext` is on. The one guidance block whose switch is a **session setting** rather than an assembled tool: the two reads it names are built-in, so there is no array to ask |
+| `chat.guidance.preference` | `tools/preferences.ts` — appended when `ila_save_preference` survived assembly. Carries the explicit-only boundary: record what the user asked for in so many words, never what the model inferred |
+| `chat.preferences` | `preferences.ts` — the injected user-preference block, present when the effective `userPreferences` switch is on and at least one applies. Its `{{preferences}}` is one `<preference id scope type>` element per row, and the text states the scope precedence — a fact a list of rows cannot carry |
 | `title.system` | `agent/title.ts` — the auto-titler |
 | `thread.system` | `threads.ts` — the turn classifier |
 | `insight.system` | `insights.ts` — the insight pass |
+| `preference.system` | `agent/preferences.ts` — the selection action's manual extraction call |
 | `mediaSummary.system` | `agent/mediaSummary.ts` — the image describer |
 
 **Scope is deliberate.** Tool descriptions and schema `describe()` strings stay in code: they are
@@ -215,9 +221,10 @@ Three consequences worth knowing before editing it:
 
 `apps/server/test/helpers/fakeLlm.ts` decides whether a request is an out-of-band call by looking for
 a **substring of that call's system prompt** — `"topic-classification function"`,
-`"reflective study coach"`, `"titling function"`.
+`"reflective study coach"`, `"titling function"`, `"context-compression function"`,
+`"user-preference extraction function"`.
 
-That is prose, not a stable identifier, so **reflowing one of those three prompts breaks the test
+That is prose, not a stable identifier, so **reflowing one of those prompts breaks the test
 harness rather than the app**: the fake LLM stops recognising the call and the failure lands
 somewhere unrelated. `test/prompts.test.ts` asserts each marker is still present in its catalog
 entry, which turns a reflow into one named failing line. If you change one of those sentences,

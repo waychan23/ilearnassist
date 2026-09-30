@@ -592,6 +592,33 @@ The consequences that are decisions rather than details:
   value and already an allowed dynamic prefix, so the filter spells a category the same way every
   other surface does. Its own strings are under `widgets.sources.*`.
 
+### A list over rows the server also writes: the preferences widget
+
+The preferences widget (`id: "preferences"`, `PreferencesWidget.vue`) is the insight panel's shape
+with one difference that decides its lifecycle: **the list has two writers the component cannot
+see.** The agent's `ila_save_preference` call writes mid-turn, and the selection action's manual
+extraction route writes outside any turn — so unlike the insight panel, which subscribes to
+nothing because every change is its own decision, this one subscribes to `preference.changed`.
+
+- **The event has its own frame rather than riding `turn.finished`.** The manual route has no turn
+  end to ride, and a widget that refreshed on every turn would pay a fetch for conversations where
+  nothing was recorded. One event covers both writers because the fact is "this conversation's
+  preference list changed", not "a tool ran".
+- **It is `auto-install` on the tool, and the manual route installs explicitly.** Recording a rule
+  puts the panel that lists it in the conversation, from silence and never over a decision
+  (`installWidgetForToolUse`). A manual save has no `tool_end` for the client to sync from, so
+  `extractPreferenceFromSelection` also refreshes the installed list after a save — otherwise the
+  tab would not appear until a reload.
+- **It is deliberately not in `DEFAULT_WIDGET_IDS`.** The feature is experimental, and a
+  conversation that never records a preference should not carry an empty panel.
+- **Delete confirms first**, like every other destructive control the user presses; a failure
+  after the confirmation goes to the toast.
+- Its rows are **session-level only**, unlike the injected block and `ila_query`, which read all
+  three levels. A panel that listed an account-level rule would offer a delete the conversation
+  does not own.
+- Its strings live under `widgets.preferences.*` and the feature's own words (the two type labels,
+  the toolbar action, the decline message) under `preferences.*`.
+
 ### Widget groups
 
 `WIDGET_GROUPS` in the shared package is a **client-side** bundling only (the study pack is
@@ -632,7 +659,9 @@ Each widget that has a rule of its own has a spec of its own: `e2e/plan.spec.ts`
 `e2e/quiz-widget.spec.ts`, `e2e/thread-widget.spec.ts`, `e2e/notes.spec.ts`,
 `e2e/diagram.spec.ts`, `e2e/insight.spec.ts` — the last scripting a pass over HTTP and then
 asserting what a person sees: an item you keep surviving the next pass while the rest are
-replaced, and a pass that produced nothing usable leaving the list exactly as it was — and
+replaced, and a pass that produced nothing usable leaving the list exactly as it was —
+`e2e/preferences.spec.ts`, whose panel appears from a recorded rule and whose manual action runs a
+real extraction against the fake model — and
 `e2e/resources-widget.spec.ts`, which makes its material the two ways a conversation really gets
 some (an upload through the composer, a file a scripted tool call wrote) because "those two land
 in one list" is the registry's claim rather than the panel's.

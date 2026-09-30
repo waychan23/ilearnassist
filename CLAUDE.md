@@ -270,6 +270,8 @@ apps/server/src/
   agent/clock.ts          # what time it is where the user is, for the turn's prompt
   agent/callUsage.ts      # the one place usage_metadata becomes a MessageUsage
   agent/compact.ts        # context compaction: transcript, chunking, the fold call
+  agent/smartContext.ts   # the experimental smart-context window: the cut and its prompt block
+  agent/preferences.ts    # the selection action's out-of-band preference extraction call
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
   agent/mediaSummary.ts   # one line about an image, from the model that saw it
@@ -293,11 +295,13 @@ apps/server/src/
   tools/plot.ts           # ila_plot — records a math figure's JSON spec (and its row)
   tools/query.ts          # ila_query — the agent reads the conversation's own record, by kind
   tools/recall.ts         # ila_recall — the agent reads the stored transcript back (recent/search)
+  tools/preferences.ts    # ila_save_preference — the agent records a standing user requirement
   tools/explore.ts        # ila_explore — the agent reads the `@`-granted workspaces: files, messages
   tools/resultPage.ts     # the paging engine ila_query and ila_explore share: clip, renderPage
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   plots.ts                # plot rows: plotName, validatePlotSpec, registerPlot, listPlotViews
+  preferences.ts          # user preferences: the effective switch, save/replace, the block, the parser
   widgets.ts              # the widget-selection validator (pure)
   usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
   notes.ts                # the notes widget's records: what a body may become a note (pure)
@@ -337,7 +341,8 @@ apps/web/src/
   widgets/DiagramWidget.vue # the 图表 panel: the conversation's diagram, table and plot rows
   widgets/InsightWidget.vue # the insight panel: typed observations, a generate button, adopt/delete
   widgets/ResourcesWidget.vue # the material panel: what this conversation holds, filtered by category
-  widgets/*Widget.vue     # the seven panels (plan, quiz, thread, notes, diagram, insight, sources)
+  widgets/PreferencesWidget.vue # the 用户偏好 panel: recorded rules, delete, a live refresh on change
+  widgets/*Widget.vue     # the eight panels (plan, quiz, thread, notes, diagram, insight, sources, preferences)
   utils/mention.ts        # the `@`-mention: is the caret in one, and where the name goes
   utils/resourcePicker.ts # the `@` list: tabs, type pills, grouping, the flat keyboard index
   utils/workspaceScope.ts # the `@` grant's set algebra on the client (what the next value is)
@@ -1236,8 +1241,9 @@ public half.
     the previous summary with the messages since its point rather than re-reading the originals.
     **`ila_recall` is the way back**: it reads the current conversation's stored transcript
     (`recent` / `search`, message text only, paged through `resultPage`), assembled in every
-    conversation rather than only when a summary is active, with `chat.guidance.recall` appended
-    whenever it survives the allow-list. Cross-conversation search stays `ila_explore`'s, behind
+    conversation rather than only when a summary is active — **built-in** (`BUILTIN_TOOL_NAMES`,
+    with `ila_query`), so no allow-list can remove it — with `chat.guidance.recall` appended
+    whenever it survives assembly. Cross-conversation search stays `ila_explore`'s, behind
     the `@` grant.
   - **Nothing is written until the model answers, and the composer pauses while it does.** A
     failure (`COMPACT_FAILED`, provider words in `params.detail`) leaves the pointer and the
@@ -1254,6 +1260,54 @@ public half.
     and still work on new turns, but a compacted message's reference is no longer *replayed*;
     `session_references` is a table, so the material is reachable again by `@` or `ila_query`.
     Make-up is unaffected: quiz rows are a table, and its record is appended after the point.
+- **Smart context is the third context mechanism, and it is a mode rather than a preference.**
+  The experimental `SessionSettings.smartContext` switch (a button in the composer, effective
+  immediately; on the welcome screen it stages `draftSettings`) makes every turn carry only the
+  newest `SMART_CONTEXT_MESSAGES` (2) history messages plus `chat.guidance.smartContext`.
+  `effectiveContextFor` returns the whole stored history and **no** active summary; `trimHistory`
+  applies the window first, so `maxContextMessages` is ignored. Four things are load-bearing:
+  - **The summary is bypassed at read time, never cleared.** The row and
+    `sessions.active_summary_id` are untouched — turning the mode off restores the compacted
+    context exactly as it was — and turns written under the mode carry no `messages.summary_id`.
+    The composer's compress button is disabled and `TokenCountPopover` withholds the preview's
+    door (the dialog describes the compaction state, which is not what a turn would send); the
+    `/compact` and `/context` routes are deliberately unchanged.
+  - **The window is cut over *messages*, not turns, and a leading assistant row is kept.**
+    `smartContextHistory` (`agent/smartContext.ts`) does **not** apply `trimHistory`'s
+    advance-to-user rule: a `Message` row carries its own tool calls and results, so a cut can
+    never leave a dangling `tool_calls` block, and a regenerated or resumed turn legitimately
+    opens on the assistant row it is continuing from.
+  - **`ila_recall` and `ila_query` are built-in, and that is what makes the mode coherent.**
+    `BUILTIN_TOOL_NAMES` bypasses the allow-list in all three states, and the Copilot checklist
+    filters with `isBuiltinTool` beside `isWidgetBoundTool` — a box for one could neither enable
+    nor remove it. The rule is about the tools, not the mode: they read the conversation's own
+    record, and a conversation with no capabilities did not ask to forget what was said. The
+    smart block names both as the way back.
+  - **The prompt block's switch is the session setting, not a tool array.** `smartContextGuidance`
+    is present exactly when `settings.smartContext` is on — there is no assembled tool that could
+    have failed — and it is the only thing that tells the model its visible history is
+    deliberately narrow. See `docs/context-compaction.md`.
+- **User preferences are a memory with three levels, two writers and one write path.** The
+  experimental `SessionSettings.userPreferences` switch injects the standing rules the user stated
+  about how the agent should work; recording them is deliberately **independent of that switch**
+  (it decides what the model is *told*, not what it may remember). `savePreference`
+  (`preferences.ts`) is the single write: one transaction deletes every named `replaces` id and
+  inserts the new row, and **an id the conversation does not hold refuses the whole write** rather
+  than being skipped — a delete that did not happen must never look like one. Two writers reach it:
+  the agent's `ila_save_preference` during a turn, and the selection action 作为用户偏好 through
+  `POST …/preferences/extract`, which runs an out-of-band call (`agent/preferences.ts`, its own
+  `ILA_PREFERENCE_REASONING` and a `preference` ledger purpose) and answers `saved`, `skipped` (an
+  answer, not a failure) or `PREFERENCE_EXTRACT_FAILED`. `effectivePreferencesEnabled` is the
+  default rule — explicit `true`/`false`, or following the context mode when `null` (on for smart
+  context or an active summary) — and the client computes the same expression for the composer's
+  toggle, which writes an explicit answer and has no "back to default". The injected block is
+  present only when the switch resolves on AND at least one rule applies, so a fresh conversation
+  is byte-identical to one from before the feature. Only **session-level** rows can be created, but
+  every read (the block, `ila_query kind "preference"`) covers all three scopes in ascending
+  specificity with the precedence stated in the prompt; the panel lists session-level only, because
+  a conversation must not offer a delete it does not own. The table is **soft-deleted**, unlike
+  `insight_items`: a preference is a record of something the user said, and the superseded row is
+  what makes "this replaced that" inspectable. See `docs/user-preferences.md`.
 - **A Copilot is owned, and "platform" is not a tier — it is a published one.** `copilots` carries
   `user_id` and a `visibility` of `private` or `public`, not an admin role, so a Copilot the
   operator wants every account to have is simply one they published, and "ordinary users cannot
@@ -1291,7 +1345,10 @@ public half.
   readers derive from the flag rather than trusting the list. `ALL_TOOL_NAMES` lives in
   `packages/shared` for the same reason `ASK_USER_TOOL_NAME` does — the client writes the
   allow-list and the server filters by it, and the copies had already drifted: the client's list was
-  missing `read_document`, which therefore could not be chosen at all.
+  missing `read_document`, which therefore could not be chosen at all. **Two tools are outside the
+  allow-list entirely**: `BUILTIN_TOOL_NAMES` (`ila_query`, `ila_recall`) are assembled in every
+  turn whatever the three states say and are filtered out of the Copilot checklist, because they
+  read the conversation's own record — see the smart-context bullet above.
 - **A tool's parameters schema must convert to a top-level `"type": "object"`, and a zod union does
   not.** `ila_query` shipped as a `z.discriminatedUnion`, which is the better *type* — a field that
   means nothing for a kind cannot be written for it, and `switch` exhaustiveness is free — and it
@@ -2298,8 +2355,9 @@ public half.
 For the full architecture and configuration reference, see `docs/`. Those files that are working
 references rather than background: `docs/design-system.md` for anything visual, `docs/prompts.md`
 before changing any system prompt or adding one, `docs/usage.md` before touching the token ledger or
-the statistics pages, `docs/widgets.md` before adding a widget to the right sidebar, and
-`docs/session-locks.md` before touching anything that writes to a conversation from more than one
-client. `docs/local/demo-gifs.md` — gitignored, not part of this repository — is the recording
+the statistics pages, `docs/widgets.md` before adding a widget to the right sidebar,
+`docs/user-preferences.md` before touching the preference store, its extraction or its injection,
+and `docs/session-locks.md` before touching anything that writes to a conversation from more than
+one client. `docs/local/demo-gifs.md` — gitignored, not part of this repository — is the recording
 brief for the READMEs' animated demos; the slots are in both READMEs as commented-out image
 lines, so the naming and the content are specified in one place rather than agreed per take.

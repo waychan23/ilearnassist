@@ -2226,6 +2226,13 @@ pre.code-block {
   color: var(--text);
 }
 
+/* The smart-context switch, on: the bulb takes the accent rather than a second glyph — the
+   `session-pin.on` convention, with `aria-pressed` carrying the same state for anything that
+   cannot see colour. Off, it is an ordinary `.icon-btn` and says nothing. */
+.composer .smart-context-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
 /* ----------------------------- shared controls ------------------------------ */
 
 .btn {
@@ -3142,6 +3149,7 @@ pre.code-block {
   .composer .send-btn,
   .composer .attach-btn,
   .composer .params-btn,
+  .composer .smart-context-btn,
   .topbar .nav-toggle,
   /*
    * The same control on the workspace home's header, which is a header of its own rather than
