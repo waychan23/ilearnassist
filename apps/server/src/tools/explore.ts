@@ -2,7 +2,12 @@ import { readFile, realpath, readdir, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
-import { EXPLORE_KINDS, EXPLORE_TOOL_NAME, type ExploreKind } from "@ilearnassist/shared";
+import {
+  EXPLORE_KINDS,
+  EXPLORE_TOOL_NAME,
+  stripInlineMarkers,
+  type ExploreKind,
+} from "@ilearnassist/shared";
 import type { AppDb } from "../db.js";
 import { resolveInWorkspace } from "../workspace.js";
 import { renderPrompt } from "../prompts.js";
@@ -334,7 +339,7 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
       id: m.id,
       role: m.role,
       createdAt: m.createdAt,
-      content: clip(m.content, EXPLORE_MESSAGE_MAX),
+      content: clip(stripInlineMarkers(m.content), EXPLORE_MESSAGE_MAX),
       ...(m.stopped ? { stopped: true } : {}),
       ...(m.toolCalls?.length
         ? {
@@ -433,7 +438,7 @@ export function buildExploreTool(ctx: ExploreToolContext): StructuredToolInterfa
       workspace: row.workspace_name,
       role: row.role,
       createdAt: row.created_at,
-      content: clip(row.content, EXPLORE_MESSAGE_MAX),
+      content: clip(stripInlineMarkers(row.content), EXPLORE_MESSAGE_MAX),
     }));
 
     /*

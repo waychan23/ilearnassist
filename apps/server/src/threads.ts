@@ -4,6 +4,7 @@ import {
   PLOT_TOOL_NAME,
   TABLE_TOOL_NAME,
   planNodeNumbers,
+  stripInlineMarkers,
   type GetSessionThreadsResponse,
   type Message,
   type PlanTreeNode,
@@ -246,7 +247,8 @@ export function threadSystemPrompt(): string {
 }
 
 function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
+  // Markers are positioning syntax, not words the classifier or panel reads.
+  const flat = stripInlineMarkers(text).replace(/\s+/g, " ").trim();
   return flat.length > max ? flat.slice(0, max).trimEnd() + "…" : flat;
 }
 
