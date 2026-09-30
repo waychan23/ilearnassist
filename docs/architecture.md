@@ -1520,9 +1520,14 @@ Only the message list scrolls. `html/body/#app` and `.app` are `overflow: hidden
 sidebar keeps exactly one `.side-scroll`, so nav and footer stay pinned.
 
 `.app` is a grid with **two or three** tracks: the sidebar, the conversation, and — when widgets
-are installed and the viewport is wide enough — the widget panel. The third is added by a class
-`App.vue` puts on the element, from the same component that sets `--widget-w`, so the track and
-the custom property it reads always arrive together. See
+are installed and the viewport is wide enough — the widget panel. The sidebar and the widget panel
+are both **resizable preferences**, so `App.vue` binds `--sidebar-w` and `--widget-w` on the
+element and the tracks read them; a track and the custom property it reads always arrive together.
+The sidebar's ceiling is a fact about the compact breakpoint rather than a measured window (480px
+still leaves the conversation its 380px minimum at 901px), and the widget panel's ceiling reads
+the sidebar's *current* width, so widening the sidebar narrows the panel rather than the
+conversation. Both widths live in `composables/sidebarPanel.ts` and `composables/widgetPanel.ts`,
+persisted in `localStorage`; collapse stays unpersisted. See
 [Widgets (right sidebar)](#widgets-right-sidebar).
 
 `.messages-wrap` (`position: relative`) holds the scroller and is what the minimap rail

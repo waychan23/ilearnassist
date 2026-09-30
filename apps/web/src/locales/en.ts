@@ -453,6 +453,7 @@ const en: typeof MessageSchema = {
     openNav: "Open navigation",
     collapse: "Collapse the sidebar",
     expand: "Expand the sidebar",
+    resize: "Resize the sidebar (arrow keys for a nudge)",
   },
 
   files: {

@@ -320,6 +320,7 @@ apps/web/src/
   composables/messageSelection.ts  # noticing a selection inside one message
   composables/notes.ts    # the notes widget's data (module singleton, not a store)
   composables/relativeTime.ts  # a timestamp as "3 分钟前", from the shared time.* keys
+  composables/sidebarPanel.ts  # the left sidebar's persisted width + clamping
   composables/theme.ts    # light/dark/auto
   composables/widgetActivation.ts  # which widget is live on what is on screen (onActive)
   composables/widgetEvents.ts  # the widget event bus (no store import, so no cycle)

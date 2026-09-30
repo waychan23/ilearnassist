@@ -24,6 +24,7 @@ import {
 } from "./composables/ui";
 import { isCompact } from "./composables/breakpoints";
 import { widgetPanel } from "./composables/widgetPanel";
+import { sidebarPanel } from "./composables/sidebarPanel";
 import { confirmState } from "./composables/confirm";
 import type { View } from "./composables/ui";
 import Icon from "./components/Icon.vue";
@@ -206,7 +207,7 @@ watch(
          conversation, not a floating thing over it. */
       'with-widgets': widgetPanelInFlow,
     }"
-    :style="{ '--widget-w': widgetPanel.widthCss.value }"
+    :style="{ '--widget-w': widgetPanel.widthCss.value, '--sidebar-w': sidebarPanel.widthCss.value }"
   >
     <template v-if="uiState.authReady">
       <Sidebar v-if="view === 'chat'" :inert="!uiState.drawerOpen && isCompact" />

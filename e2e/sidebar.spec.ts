@@ -15,7 +15,7 @@ import { scriptLlm } from "./llm";
  * holds the sheet to its tokens and `composables/ui.test.ts` to the state transitions.
  */
 
-/** The collapsed sidebar's width, in line with the `272px` the sheet spells out open. */
+/** The collapsed sidebar's width, in line with the `SIDEBAR_DEFAULT_WIDTH` the composable opens at. */
 const RAIL_WIDTH = 52;
 const OPEN_WIDTH = 272;
 
@@ -41,6 +41,9 @@ test("the header toggle narrows the sidebar to a rail, and back again", async ({
   // only thing the user sees.
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(RAIL_WIDTH, 0);
   await expect(page.getByTestId("session-list")).toBeHidden();
+  // The resize handle goes with the open width — a rail has no width to drag, and the gutter it
+  // reserves must not be left behind as 8px of dead space beside a centred toggle.
+  await expect(page.getByTestId("sidebar-resize")).toHaveCount(0);
   // The way out goes with it — and it is still the way out, since the chat header's back arrow
   // is gone and this row is where the workspace list is reached. A rail is the toggle and
   // nothing else, which is what keeps it from becoming a second, cramped copy of the sidebar.
@@ -60,6 +63,42 @@ test("the header toggle narrows the sidebar to a rail, and back again", async ({
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(OPEN_WIDTH, 0);
   await expect(page.getByTestId("session-list")).toBeVisible();
   await expect(page.getByTestId("workspace-name")).toBeVisible();
+});
+
+test("resizes by dragging, clamps, and remembers the width", async ({ page }) => {
+  /*
+   * The browser half of the width preference. `sidebarPanel.test.ts` holds the clamp arithmetic
+   * and `style.test.ts` the track; what only a browser answers is that the handle is wired to the
+   * grid — a width written into a custom property nothing reads would pass both.
+   */
+  await page.goto("/");
+  await enterWorkspace(page);
+
+  const sidebar = page.getByTestId("sidebar");
+  const before = (await sidebar.boundingBox())!.width;
+
+  const handle = page.getByTestId("sidebar-resize");
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // The handle is on the sidebar's *right* edge, so dragging right widens it.
+  await page.mouse.move(box.x + 120, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  const wider = (await sidebar.boundingBox())!.width;
+  expect(wider).toBeGreaterThan(before);
+
+  await page.reload();
+  await enterWorkspace(page);
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(wider, 0);
+
+  // Dragged far past the ceiling, it stops at it rather than taking the conversation's room.
+  const handle2 = (await page.getByTestId("sidebar-resize").boundingBox())!;
+  await page.mouse.move(handle2.x + 2, handle2.y + handle2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(2000, handle2.y + handle2.height / 2, { steps: 10 });
+  await page.mouse.up();
+  expect((await sidebar.boundingBox())!.width).toBeLessThanOrEqual(480);
 });
 
 test("the foot of the sidebar is the account's menu, and no longer the workspaces root", async ({

@@ -35,8 +35,10 @@ import { router } from "../router";
  * `authReady`.
  *
  * `sidebarCollapsed` is the drawer's near neighbour and the one pair worth reading together:
- * the drawer says where the sidebar *is*, this says how wide it is, and the sidebar's own
- * toggle is a different control on each viewport because of it. The field carries the rest.
+ * the drawer says where the sidebar *is*, this says whether it is a rail — the one width that is
+ * a state rather than a preference, since `sidebarPanel.ts` owns the dragged width — and the
+ * sidebar's own toggle is a different control on each viewport because of it. The field carries
+ * the rest.
  */
 export type View = "login" | "password" | "home" | "chat" | "account" | "admin" | "usage";
 

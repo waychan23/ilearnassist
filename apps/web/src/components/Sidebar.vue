@@ -6,6 +6,7 @@ import { useAppStore } from "../stores/app";
 import { openSession } from "../composables/openSession";
 import { confirm } from "../composables/confirm";
 import { isCompact } from "../composables/breakpoints";
+import { sidebarPanel } from "../composables/sidebarPanel";
 import type { Session, SessionLockView } from "../api/types";
 import {
   closeDrawer,
@@ -240,6 +241,56 @@ async function onDeleteSession(session: Session) {
 /* Deleting a workspace moved to its card on the workspace home. It was a glyph beside the
    dropdown it used to share a row with, which put a destructive action one mis-click from
    the control the user was actually reaching for. */
+
+/* ------------------------------- drag to resize ------------------------------- */
+
+/**
+ * Whether the resize handle is on screen at all.
+ *
+ * Two viewports it is not: a compact one's sidebar is a fixed drawer with no track to widen,
+ * and a rail has no width to drag. The *same* boolean paints the handle and reserves its
+ * gutter (`style.css` keys the padding off the class this drives), so the strip and the
+ * padding can never disagree about being there.
+ */
+const showResize = computed(() => !isCompact.value && !sidebarRail.value);
+
+/*
+ * Pointer events with capture, so a fast drag that leaves the handle keeps resizing it rather
+ * than stopping the moment the cursor crosses out of an 8px strip. `delta` is not inverted,
+ * unlike the widget panel's: this handle is on the sidebar's *right* edge, so dragging right
+ * widens it.
+ */
+let startX = 0;
+let startWidth = 0;
+
+function startResize(event: PointerEvent): void {
+  (event.target as HTMLElement).setPointerCapture(event.pointerId);
+  startX = event.clientX;
+  startWidth = sidebarPanel.effectiveWidth.value;
+  window.addEventListener("pointermove", onResizeMove);
+  window.addEventListener("pointerup", stopResize, { once: true });
+}
+
+function onResizeMove(event: PointerEvent): void {
+  sidebarPanel.setWidth(startWidth + (event.clientX - startX));
+}
+
+function stopResize(): void {
+  window.removeEventListener("pointermove", onResizeMove);
+}
+
+/**
+ * The keyboard's way to do what the drag does.
+ *
+ * A separator is a control, so it has to be operable without a pointer — a handle that could only
+ * be dragged would be unreachable to anyone using a keyboard, and the width would be a preference
+ * only some people could set.
+ */
+function onResizeKey(event: KeyboardEvent): void {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  sidebarPanel.stepWidth((event.key === "ArrowRight" ? 1 : -1) * 16);
+}
 </script>
 
 <template>
@@ -247,7 +298,7 @@ async function onDeleteSession(session: Session) {
     id="app-sidebar"
     class="sidebar"
     data-testid="sidebar"
-    :class="{ open: uiState.drawerOpen, collapsed: sidebarRail }"
+    :class="{ open: uiState.drawerOpen, collapsed: sidebarRail, resizable: showResize }"
   >
     <!--
       The sidebar's header: out on the left, where you are in the middle, the rail's toggle
@@ -492,6 +543,28 @@ async function onDeleteSession(session: Session) {
       the row is for someone who does not), and the library row opens pre-filtered to it.
     -->
     <AppMenu class="side-menu" in-workspace />
+
+    <!--
+      The drag handle, in the gutter the `.resizable` class reserves at the sidebar's right
+      edge. `role="separator"` with `aria-orientation="vertical"` is what a resizable vertical
+      divider is, and it is focusable so its arrow keys are reachable.
+
+      Rendered from `showResize`, which is also what pads the sidebar — see the script. The
+      handle is absolutely positioned into that padding rather than taking a flex column of its
+      own, because the session list's scrollbar sits at this same edge and the two must not
+      overlap; `style.css` carries the whole of that argument.
+    -->
+    <div
+      v-if="showResize"
+      class="sidebar-resize"
+      role="separator"
+      aria-orientation="vertical"
+      tabindex="0"
+      :aria-label="t('sidebar.resize')"
+      data-testid="sidebar-resize"
+      @pointerdown="startResize"
+      @keydown="onResizeKey"
+    ></div>
 
     <NewSessionDialog v-if="showNewSession" @close="showNewSession = false" />
   </aside>

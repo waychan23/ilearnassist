@@ -161,6 +161,10 @@ test("layout: the sidebar is a drawer, and the pane gets the whole width", async
   await expect(sidebar).toBeVisible();
   await expect(page.getByTestId("drawer-backdrop")).toBeVisible();
 
+  // The drag handle is not offered — a fixed overlay has no track to widen, the widget panel's
+  // own rule at the other edge.
+  await expect(page.getByTestId("sidebar-resize")).toHaveCount(0);
+
   await page.getByTestId("drawer-backdrop").tap({ position: { x: 380, y: 400 } });
   await expect(sidebar).toBeHidden();
 });

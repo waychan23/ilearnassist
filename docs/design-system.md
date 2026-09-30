@@ -244,6 +244,7 @@ Tier 2, in `style.css`, for structures several components need:
 | `.widget-panel` / `.widget-column` / `.widget-body` | `.vertical`, `.collapsed`, `.open` | The right sidebar: the column, the scroller under the strip, and the two states. `open` is the drawer form below 900px |
 | `.widget-tabs` / `.widget-tab` | `[aria-selected]`, `.vertical` | The widget strip. A **variant** of `.tabs`/`.tab` rather than the same class, and the reason is the vertical rail: `.tab`'s only state signal is a `border-bottom` underline, which does not survive a column |
 | `.widget-resize` | | The panel's drag handle. A `role="separator"` on the panel's left edge |
+| `.sidebar` / `.sidebar-resize` | `.resizable` | The left sidebar's column and its drag handle — a `role="separator"` on its right edge. `resizable` reserves the handle's gutter as padding rather than laying it over the scrollbar, which sits at that same edge |
 | `.widget-checks` | | A widget checkbox group inside a `.field`, in the two create dialogs |
 | `.list-row` | | A row in a settings list: the box, and the flex row inside it. Variants keep their own gap, padding and alignment |
 | `.row-actions` | | The icon-button cluster at the end of a row |

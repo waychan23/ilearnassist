@@ -596,6 +596,8 @@ export default {
      *  rather than describing the button, and there is no second "current state" string. */
     collapse: "收起侧边栏",
     expand: "展开侧边栏",
+    /** The drag handle's accessible name, phrased like `widgets.panel.resize`. */
+    resize: "调整侧边栏宽度（左右方向键微调）",
   },
 
   /**

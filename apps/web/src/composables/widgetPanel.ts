@@ -1,4 +1,5 @@
 import { computed, ref } from "vue";
+import { sidebarPanel } from "./sidebarPanel";
 
 /**
  * The widget panel's own preferences: how wide it is, which edge its tab strip is on, and which
@@ -96,18 +97,12 @@ function write(key: string, value: string): void {
 }
 
 /**
- * The left sidebar's own track, from `style.css`. Duplicated as a number because this arithmetic
- * cannot read a custom property — and it is `grid-template-columns: 272px …` there, a literal by
- * the same argument the sheet gives.
- */
-const SIDEBAR_WIDTH = 272;
-
-/**
  * How much room the conversation keeps, whatever else is on screen.
  *
  * Not a token and not a preference: it is the point below which the message column stops being
  * readable, and a panel is never worth that. Roughly a comfortable measure of prose at the app's
- * own type scale.
+ * own type scale. It is also the number the left sidebar's ceiling is chosen against, from the
+ * other side — see `SIDEBAR_MAX_WIDTH`.
  */
 const MIN_CHAT_WIDTH = 380;
 
@@ -117,14 +112,22 @@ const MIN_CHAT_WIDTH = 380;
  * A stored width travels between windows, and a panel sized for a 1440px screen would eat most of
  * a 1024px one — the failure being a conversation squeezed to a column nobody can read, on a
  * setting the user never changed. So the ceiling is derived from the window as well: whatever is
- * left after the sidebar and the conversation's minimum, and never more than `WIDGET_MAX_WIDTH`
- * even when there is room.
+ * left after the left sidebar and the conversation's minimum, and never more than
+ * `WIDGET_MAX_WIDTH` even when there is room.
+ *
+ * The sidebar's width is **read** rather than assumed. It used to be a `272` duplicated here,
+ * and that stopped being a fact when the sidebar became draggable: a 480px sidebar would have
+ * left this arithmetic reserving 272 and the two panels together would have taken the room the
+ * conversation needs. Reading it also makes the painted width reactive — dragging the sidebar
+ * wider re-clamps this panel's `effectiveWidth` in the same frame, while the stored value is
+ * left alone, so widening the sidebar is never what loses the panel's chosen width. The
+ * dependency is one-way on purpose: the widget panel yields to the sidebar, never the reverse.
  *
  * The *stored* value is left alone, so widening the window again restores what they chose.
  */
 export function usableMaxWidth(): number {
   if (typeof window === "undefined") return WIDGET_MAX_WIDTH;
-  const spare = window.innerWidth - SIDEBAR_WIDTH - MIN_CHAT_WIDTH;
+  const spare = window.innerWidth - sidebarPanel.effectiveWidth.value - MIN_CHAT_WIDTH;
   return Math.min(WIDGET_MAX_WIDTH, Math.max(WIDGET_MIN_WIDTH, Math.floor(spare)));
 }
 

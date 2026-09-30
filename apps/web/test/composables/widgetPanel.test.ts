@@ -11,15 +11,18 @@ import {
   WIDGET_WIDTH_KEY,
   WIDGET_RAIL_WIDTH,
 } from "../../src/composables/widgetPanel.js";
+import { sidebarPanel, SIDEBAR_MAX_WIDTH } from "../../src/composables/sidebarPanel.js";
 
 /*
  * The panel's preferences. A module singleton whose values outlive a test, so each one starts from
  * cleared storage and reloads — the same discipline `test/composables/ui.test.ts` uses for
- * `uiState`.
+ * `uiState`. The sidebar's own singleton is reset alongside, because this panel's ceiling reads
+ * its width.
  */
 
 beforeEach(() => {
   localStorage.clear();
+  sidebarPanel.reload();
   widgetPanel.reload();
   widgetPanel.setCollapsed(false);
   widgetPanel.orientation.value = "horizontal";
@@ -90,6 +93,29 @@ describe("the panel's width", () => {
     // clamped even when the stored one is not — which is the case a smaller window creates.
     expect(clampWidth(WIDGET_MAX_WIDTH)).toBeLessThanOrEqual(usableMaxWidth());
     expect(usableMaxWidth()).toBeGreaterThanOrEqual(WIDGET_MIN_WIDTH);
+  });
+
+  it("yields to the sidebar's width rather than assuming it", () => {
+    /*
+     * The sidebar is draggable now, so the 272px this arithmetic used to hard-code is not a fact
+     * any more. A wide sidebar has to narrow this ceiling, or the two panels together would take
+     * the room the conversation needs — which is the failure the ceiling exists to prevent.
+     */
+    const before = usableMaxWidth();
+    sidebarPanel.setWidth(SIDEBAR_MAX_WIDTH);
+    expect(usableMaxWidth()).toBeLessThan(before);
+  });
+
+  it("re-clamps the painted width, but not the stored one, when the sidebar widens", () => {
+    // Reading the sidebar's width reactively is what makes this automatic: the panel yields in
+    // the same frame, and widening the sidebar is never what loses the width the user chose.
+    widgetPanel.setWidth(usableMaxWidth());
+    const stored = widgetPanel.width.value;
+    sidebarPanel.setWidth(SIDEBAR_MAX_WIDTH);
+
+    expect(widgetPanel.effectiveWidth.value).toBe(usableMaxWidth());
+    expect(widgetPanel.effectiveWidth.value).toBeLessThan(stored);
+    expect(widgetPanel.width.value).toBe(stored);
   });
 });
 
