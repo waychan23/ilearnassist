@@ -806,6 +806,17 @@ export default {
       count: "{count} 个工具调用",
       running: "正在使用工具[{name}]…",
     },
+    /**
+     * The `web_fetch` card's own control: the user's half of keeping a page.
+     *
+     * `keep` names what the press does; `kept` is the state it lands in, and it names the
+     * destination because "已保留" alone would leave the reader wondering where it went.
+     */
+    fetch: {
+      keep: "保留为参考资料",
+      keeping: "保留中…",
+      kept: "已保留到参考资料",
+    },
   },
 
   /**

@@ -697,6 +697,19 @@ export const api = {
    */
   addResourcePage: (input: AddResourcePageInput) =>
     request<WorkResource>("/resources/pages", { method: "POST", body: JSON.stringify(input) }),
+  /**
+   * Keep a page in a conversation — the control a `web_fetch` card draws.
+   *
+   * The conversation, never a workspace, which is the mirror of `addResourcePage`: the page was
+   * read *inside* this conversation, and the panel it must appear in is that conversation's. The
+   * server re-fetches the URL (the turn's page cache is long gone), so this can refuse a page that
+   * became unreachable — the failure arrives as `PAGE_FETCH_FAILED`.
+   */
+  keepSessionPage: (sessionId: string, url: string) =>
+    request<WorkResource>(`/sessions/${sessionId}/resources/pages`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
   moveWorkspaceEntry: (workspaceId: string, input: { from: string; to: string }) =>
     request<{ from: string; to: string }>(`/workspaces/${workspaceId}/files/move`, {
       method: "POST",

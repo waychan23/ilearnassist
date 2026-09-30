@@ -13,12 +13,14 @@ import type { UserLayout } from "./paths.js";
 /**
  * A page becomes a reference, whoever asked for it.
  *
- * Two callers want exactly this and neither owns it: `ila_collect_page`, when the **model**
- * decides a page it read is worth keeping, and the library's "add a link", when the **user**
- * pastes a URL in. What they share is the whole of the operation — fetch through the guard,
- * extract the text, store both halves, write the rows — and what differs is one field: the
- * summary, which only a model can write. So the difference is a parameter rather than a second
- * implementation, and the SSRF guard in particular has one call site for pages, not two.
+ * Three callers want exactly this and none owns it: `ila_collect_page`, when the **model**
+ * decides a page it read is worth keeping; the library's "add a link", when the **user** pastes
+ * a URL in; and `POST /api/sessions/:id/resources/pages`, when the user keeps a page from the
+ * `web_fetch` card the model left in the conversation. What they share is the whole of the
+ * operation — fetch through the guard, extract the text, store both halves, write the rows — and
+ * the differences are two parameters: the owner, and the summary, which only a model can write.
+ * So the differences are parameters rather than a second implementation, and the SSRF guard in
+ * particular has one call site for pages, not three.
  *
  * Three records, and each holds what the others cannot:
  *

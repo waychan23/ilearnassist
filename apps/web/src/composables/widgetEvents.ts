@@ -32,6 +32,15 @@ export type WidgetEvent =
    */
   | { type: "turn.finished"; sessionId: string }
   /**
+   * A reference was kept outside any turn — the "keep as a source" control on a `web_fetch` card.
+   *
+   * The sources panel refreshes on `turn.finished`, and this is that event's other half: the page
+   * is kept *after* the turn that read it has ended, so there is no turn end to ride, and waiting
+   * for the next one would leave the panel missing a row the user just asked for. It carries the
+   * session id like `turn.finished` because the panel is session-scoped.
+   */
+  | { type: "resource.changed"; sessionId: string }
+  /**
    * A plan tool (`ila_make_plan` / `ila_update_plan_progress`) committed during a turn, so the
    * plan widget refetches mid-turn without waiting for the turn to end. Carries the session id
    * like `turn.finished`.

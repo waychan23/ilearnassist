@@ -86,6 +86,17 @@ describe("the catalog", () => {
       "recall",
     ]);
   });
+
+  it("gives the keep-a-page guidance its obligation, not only its preference", () => {
+    /*
+     * The sentence this pins is the difference between a preference and an instruction. Runs were
+     * observed adopting a page — quoting it in the reply — and never calling `ila_collect_page`,
+     * so the page the answer came from was missing from the conversation's sources. The positive
+     * half already said when keeping was *allowed*; this says when it is *required*, which is the
+     * half a model that read the tool's restriction as "usually do not" was ignoring.
+     */
+    expect(promptText("chat.guidance.collectPage")).toContain("must be kept before the turn ends");
+  });
 });
 
 describe("renderPrompt", () => {

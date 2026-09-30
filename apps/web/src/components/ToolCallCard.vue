@@ -11,10 +11,12 @@ import {
   isInteractiveTool,
   type ToolCall,
 } from "../api/types";
+import { keepablePageUrl } from "../utils/fetchResult";
 import { CARDLESS_TOOL_NAMES } from "../utils/toolCallCards";
 import AskUserCard from "./AskUserCard.vue";
 import DiagramCard from "./DiagramCard.vue";
 import FileCard from "./FileCard.vue";
+import KeepPageButton from "./KeepPageButton.vue";
 import PlanConflictCard from "./PlanConflictCard.vue";
 import PlotCard from "./PlotCard.vue";
 import QuizCard from "./QuizCard.vue";
@@ -91,6 +93,14 @@ const isFileWrite = computed(() => props.toolCall.name === WRITE_FILE_TOOL_NAME)
  */
 const cardless = computed(() => CARDLESS_TOOL_NAMES.has(props.toolCall.name));
 
+/**
+ * The URL this call's card can keep, when it is a `web_fetch` that succeeded — see
+ * `keepablePageUrl`. Its own branch of the generic card rather than a specialized component,
+ * because the card's shape does not change: the head and the disclosure are the same, and the
+ * control is one footer line under them.
+ */
+const keepUrl = computed(() => keepablePageUrl(props.toolCall));
+
 const open = ref(false);
 const { t, te } = useI18n();
 
@@ -164,6 +174,14 @@ const prettyInput = computed(() => {
         <div class="key">{{ t("tools.result") }}</div>
         <pre>{{ props.toolCall.output }}</pre>
       </div>
+    </div>
+    <!--
+      The user's half of keeping a page. Outside the disclosure on purpose: the card is collapsed
+      by default, and a control only reachable by opening the arguments is a control most readers
+      would never find.
+    -->
+    <div v-if="keepUrl" class="tool-actions">
+      <KeepPageButton :url="keepUrl" />
     </div>
   </div>
 </template>

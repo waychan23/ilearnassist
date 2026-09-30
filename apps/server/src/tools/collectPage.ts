@@ -58,6 +58,12 @@ export type { PageCache };
  * The guidance lives in the catalog (`chat.guidance.collectPage`) so it can be tuned without a
  * rebuild.
  *
+ * **It is not the only way a page gets kept.** The `web_fetch` card carries a "keep as a source"
+ * control, so the user has their own answer to "this one mattered" when the model did not ask —
+ * the same `captureWebPage` under a session owner, reached through
+ * `POST /api/sessions/:id/resources/pages`. That door is why the guidance can carry an obligation
+ * without the feature depending on the model's compliance.
+ *
  * A function rather than a constant, and that is load-bearing: the catalog is patched by the
  * process entry point (`<dataRoot>/config.patch.json`), which runs *after* every module has been
  * evaluated. A module-level constant would be the bundled text forever, so a tuned prompt would

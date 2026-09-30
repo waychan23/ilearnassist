@@ -601,6 +601,15 @@ const en: typeof MessageSchema = {
       count: "{count} tool call | {count} tool calls",
       running: "Using {name}…",
     },
+    /**
+     * The `web_fetch` card's own control: the user's half of keeping a page. See `zh-CN` for the
+     * wording rule — `kept` names the destination, because "kept" alone says nowhere.
+     */
+    fetch: {
+      keep: "Keep as a source",
+      keeping: "Keeping…",
+      kept: "Kept as a source",
+    },
   },
 
   askUser: {
