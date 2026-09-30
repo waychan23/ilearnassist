@@ -203,6 +203,102 @@ export const PLOT_TOOL_NAME = "ila_plot";
 export const WRITE_FILE_TOOL_NAME = "write_file";
 
 /**
+ * The tools whose cards are **artifacts** — a drawing, a figure or a written file the
+ * conversation now holds — and therefore render inline at their position in the reply
+ * rather than above it as a background action.
+ *
+ * Every other non-interactive tool is a step on the way to an answer, and keeps the
+ * above-text layout. The list lives here because both the server (offset recording,
+ * guidance presence) and the web (inline rendering) switch on it.
+ */
+export const ARTIFACT_TOOL_NAMES = [
+  DIAGRAM_TOOL_NAME,
+  PLOT_TOOL_NAME,
+  WRITE_FILE_TOOL_NAME,
+] as const;
+
+export function isArtifactTool(name: string): boolean {
+  return (ARTIFACT_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/* ------------------------------ inline markers ------------------------------ */
+
+/** Opening text of an inline-artifact marker; the closing counterpart. */
+export const ARTIFACT_MARKER_OPEN = "[[artifact:";
+export const ARTIFACT_MARKER_CLOSE = "]]";
+
+/**
+ * The marker grammar: a kind word, a slash, then the artifact's handle, with an optional
+ * write location for files. One line, own paragraph:
+ *
+ *   [[artifact:diagram/auth-flow]]
+ *   [[artifact:plot/sine-curve]]
+ *   [[artifact:file/src/main.rs?location=session]]
+ *
+ * ASCII and punctuation-heavy on purpose: ordinary prose in no language produces it by
+ * accident. `ARTIFACT_MARKER_PATTERN` is the source string both for the global scanner
+ * regex and for the whole-line test in `stripInlineMarkers`.
+ */
+export const ARTIFACT_MARKER_PATTERN =
+  "\\[\\[artifact:(diagram|plot|file)\\/([^\\]\\n]+?)(?:\\?location=(workspace|session))?\\]\\]";
+
+export const ARTIFACT_MARKER_REGEX = new RegExp(ARTIFACT_MARKER_PATTERN, "g");
+
+/** A code-fence line (```` or `~~~`, three or more, optionally indented) with its char. */
+const FENCE_LINE = /^\s*(`{3,}|~{3,})/;
+
+/**
+ * Remove every inline-artifact marker from text meant to be read as plain text — copies,
+ * searches, compaction, classifier and titler inputs.
+ *
+ * Fence-aware: a marker-like string inside a code block is content and stays. A line that
+ * is exactly one marker is dropped with its newline; an inline marker is removed and the
+ * rest of the line kept. Runs of blank lines are collapsed and the result trimmed.
+ */
+export function stripInlineMarkers(text: string): string {
+  const lines = text.split("\n");
+  let fence: "`" | "~" | null = null;
+  const kept: string[] = [];
+
+  for (const line of lines) {
+    const fenceMatch = line.match(FENCE_LINE);
+    if (fenceMatch) {
+      const mark = fenceMatch[1]![0] === "~" ? "~" : "`";
+      if (fence === null) fence = mark;
+      else if (mark === fence) fence = null;
+      kept.push(line);
+      continue;
+    }
+    if (fence !== null) {
+      kept.push(line);
+      continue;
+    }
+    if (new RegExp(`^\\s*${ARTIFACT_MARKER_PATTERN}\\s*$`).test(line)) continue;
+    kept.push(line.replace(ARTIFACT_MARKER_REGEX, ""));
+  }
+
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * The shared name slug: lowercase, letters/numbers survive (Han included), everything
+ * else collapses to `-`, capped at 48; `fallback` is what a name with no surviving
+ * character becomes.
+ *
+ * Shared because the web's marker/call identity math has to match the server's
+ * `diagramFileName` and plot naming byte-for-byte.
+ */
+export function slugifyName(name: string, fallback: string): string {
+  const base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return base || fallback;
+}
+
+/**
  * The tool the sources panel's manual keep is drawn on.
  *
  * Shared for the `WRITE_FILE_TOOL_NAME` reason — the client picks a call out of an assistant
@@ -2062,6 +2158,14 @@ export interface ToolCall {
    * can be derived from the other without the card parsing prose.
    */
   answer?: InteractiveAnswer;
+  /**
+   * Character offset into the assistant message's `content` at which this call's card
+   * belongs, recorded for the artifact-producing tools (`ila_diagram`, `ila_plot`,
+   * `write_file`) as the automatic backstop when the model wrote no inline marker.
+   * Absent on every other call, on suspending calls, and on rows persisted before this
+   * feature. Rides the existing `tool_calls` JSON — no column, no migration.
+   */
+  contentOffset?: number;
 }
 
 /**
