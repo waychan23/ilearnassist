@@ -173,6 +173,76 @@ test.describe("the plan widget", () => {
     await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(5);
   });
 
+  test("completing every child completes its chapter, with no parent status sent", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("Plan rollup");
+    await planSession(page, name);
+
+    await scriptLlm(request as APIRequestContext, { turns: makeTurn("call_make", TREE) });
+    await send(page, "制定学习计划");
+    await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(4);
+
+    const chapter1 = await idOf(page, "Chapter 1");
+    const intro = await idOf(page, "1.1 Intro");
+    const setup = await idOf(page, "1.2 Setup");
+    const chapter2 = await idOf(page, "Chapter 2");
+
+    // Only the leaves are named: Chapter 1 is not in the call and completes from its children.
+    await scriptLlm(request as APIRequestContext, {
+      turns: [
+        {
+          toolCalls: [
+            {
+              id: "call_leaves",
+              name: "ila_update_plan_progress",
+              args: {
+                nodes: [
+                  { id: intro, status: "completed" },
+                  { id: setup, status: "completed" },
+                ],
+              },
+            },
+          ],
+        },
+        { content: "第一章学完了。" },
+      ],
+    });
+    await send(page, "第一章两节都看完了");
+
+    await expect(page.getByTestId(`plan-node-${chapter1}`)).toHaveAttribute(
+      "data-node-status",
+      "completed"
+    );
+    // The promoting call is the chapter's completion anchor, so it stays a jump target.
+    await expect(page.getByTestId(`plan-jump-${chapter1}`)).toBeVisible();
+    // Chapter 2 is untouched, so the plan as a whole is still underway.
+    await expect(page.getByTestId(`plan-node-${chapter2}`)).toHaveAttribute(
+      "data-node-status",
+      "not_started"
+    );
+    await expect(page.getByTestId("plan-status-badge")).toHaveText("进行中");
+
+    // Completing it — and nothing else — finishes the plan: every live node is completed now.
+    await scriptLlm(request as APIRequestContext, {
+      turns: [
+        {
+          toolCalls: [
+            {
+              id: "call_last",
+              name: "ila_update_plan_progress",
+              args: { nodes: [{ id: chapter2, status: "completed" }] },
+            },
+          ],
+        },
+        { content: "计划全部完成。" },
+      ],
+    });
+    await send(page, "第二章也看完了");
+    await expect(page.getByTestId("plan-status-badge")).toHaveText("已完成");
+  });
+
   test("a node's jump opens the folded run hiding its start anchor", async ({ page, request }) => {
     /*
      * 定位 scrolls the chat to the exact tool-call card a node began with — and that card can be

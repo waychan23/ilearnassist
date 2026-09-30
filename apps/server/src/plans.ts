@@ -157,6 +157,158 @@ function derivePlanStatus(live: { status: PlanNodeStatus }[]): PlanStatus {
   return "not_started";
 }
 
+/** What the rollup reads, so a stored row and a pending insert can both take part. */
+interface RollupNode {
+  id: string;
+  parentId: string | null;
+  position: number;
+  status: PlanNodeStatus;
+  removedVersion: number | null;
+  anchorToolCallId: string | null;
+  anchorAt: string | null;
+}
+
+/** A live node's derived state: its status, and the anchor a click should land on. */
+interface EffectiveNode {
+  status: PlanNodeStatus;
+  anchorToolCallId: string | null;
+  anchorAt: string | null;
+}
+
+/**
+ * The status and anchor every node must hold, derived from its live children.
+ *
+ * Status:
+ * - Every live child completed → `completed` (a chapter is done when its topics are; the
+ *   promotion cascades, so a completion can finish its section, chapter and the whole plan).
+ * - A completed container with any unfinished child → `in_progress`: it is unfinished again,
+ *   not merely un-opened, because part of it is done.
+ * - Otherwise no opinion: a leaf's own status, an empty container, and a container someone
+ *   opened (jump) or skipped all keep whatever the row says. Deriving `not_started` for every
+ *   all-unstarted parent would erase the `in_progress` jump deliberately writes.
+ *
+ * Anchor: a container that reads as `completed` or `in_progress` but carries no anchor of its
+ * own — a chapter just rolled up, or one a jump opened — borrows the anchor of the **first
+ * live child in document order** that is itself jumpable (completed or in_progress, with an
+ * anchor to land on; a derived container child answers the same way). The chapter's click then
+ * lands where its first started/finished section begins, and a completion rolled up from rows
+ * written before the rollup existed is locatable without a stored marker of its own.
+ *
+ * Tombstones are not children any more. A `skipped` child is unfinished and blocks the
+ * rollup, the same reading `derivePlanStatus` takes.
+ *
+ * Read as well as written: `buildCurrentTree` derives display state from it, so rows written
+ * before the rollup existed (or by an older build) still render consistently, and the write
+ * paths persist exactly what a read derives.
+ */
+function effectiveNodes(nodes: RollupNode[]): Map<string, EffectiveNode> {
+  const live = nodes.filter((n) => n.removedVersion === null);
+  const childrenOf = new Map<string, RollupNode[]>();
+  for (const n of live) {
+    if (!n.parentId) continue;
+    const list = childrenOf.get(n.parentId) ?? [];
+    list.push(n);
+    childrenOf.set(n.parentId, list);
+  }
+  // Document order, so "the first jumpable child" is a well-defined one.
+  for (const list of childrenOf.values()) list.sort((a, b) => a.position - b.position);
+
+  const status = new Map<string, PlanNodeStatus>(live.map((n) => [n.id, n.status]));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const n of live) {
+      const children = childrenOf.get(n.id);
+      if (!children || children.length === 0) continue;
+      const current = status.get(n.id)!;
+      const allDone = children.every((c) => status.get(c.id) === "completed");
+      const next: PlanNodeStatus = allDone
+        ? "completed"
+        : current === "completed"
+          ? "in_progress"
+          : current;
+      if (next !== current) {
+        status.set(n.id, next);
+        changed = true;
+      }
+    }
+  }
+
+  // A node's own anchor wins; otherwise a jumpable container borrows, fixpoint, so a derived
+  // child's borrowed anchor can itself be borrowed one level up.
+  const anchors = new Map<string, { toolCallId: string; at: string | null }>();
+  for (const n of live) {
+    if (n.anchorToolCallId) anchors.set(n.id, { toolCallId: n.anchorToolCallId, at: n.anchorAt });
+  }
+  changed = true;
+  while (changed) {
+    changed = false;
+    for (const n of live) {
+      if (anchors.has(n.id)) continue;
+      const children = childrenOf.get(n.id);
+      if (!children || children.length === 0) continue;
+      const own = status.get(n.id)!;
+      if (own !== "completed" && own !== "in_progress") continue;
+      const first = children.find((c) => {
+        const childStatus = status.get(c.id)!;
+        return (
+          (childStatus === "completed" || childStatus === "in_progress") && anchors.has(c.id)
+        );
+      });
+      const borrowed = first ? anchors.get(first.id) : undefined;
+      if (borrowed) {
+        anchors.set(n.id, borrowed);
+        changed = true;
+      }
+    }
+  }
+
+  return new Map(
+    live.map((n) => [
+      n.id,
+      {
+        status: status.get(n.id)!,
+        anchorToolCallId: anchors.get(n.id)?.toolCallId ?? null,
+        anchorAt: anchors.get(n.id)?.at ?? null,
+      },
+    ])
+  );
+}
+
+/**
+ * Persist what `effectiveNodes` says the containers must be, reading the plan's rows fresh.
+ *
+ * A promotion takes the derived anchor — the first jumpable child's marker — so a rolled-up
+ * chapter lands where that section began, not on whatever call happened to trigger the scan;
+ * `completingCallId` is only the fallback for a container whose children carry no anchor, and
+ * is empty on the paths with no call to name (an edit or a jump). A demotion keeps whatever
+ * the row carries, the same way an explicit `in_progress` keeps its anchor.
+ */
+function persistEffectiveStatuses(
+  db: AppDb,
+  planId: string,
+  ts: string,
+  completingCallId: string
+): void {
+  const rows = db.listPlanNodes(planId);
+  const effective = effectiveNodes(rows);
+  for (const row of rows) {
+    const node = effective.get(row.id);
+    if (!node || node.status === row.status) continue;
+    if (node.status === "completed") {
+      db.updatePlanNodeProgress(
+        planId,
+        row.id,
+        "completed",
+        node.anchorToolCallId ?? (completingCallId || null),
+        node.anchorAt ?? (completingCallId ? ts : null)
+      );
+    } else {
+      db.updatePlanNodeProgress(planId, row.id, node.status, row.anchorToolCallId, row.anchorAt);
+    }
+  }
+}
+
 /* ------------------------------------ commits ------------------------------------ */
 
 function commitCreate(db: AppDb, sessionId: string, submitted: NormNode[]): PlanCommitResult {
@@ -262,15 +414,41 @@ function commitEdit(db: AppDb, plan: PlanRecord, submitted: NormNode[]): PlanCom
   const removed = existing.filter((r) => r.removedVersion === null && !touched.has(r.id));
 
   // Status the plan should hold after the merge: surviving nodes keep their progress, new
-  // nodes start unstarted, tombstones stop counting.
-  const liveAfter: { status: PlanNodeStatus }[] = [];
-  for (const row of existing) {
-    if (row.removedVersion !== null) continue;
-    if (removed.some((r) => r.id === row.id)) continue;
-    liveAfter.push({ status: row.status });
+  // nodes start unstarted, tombstones stop counting — and containers derive from their live
+  // children, so an added child reopens a completed parent while dropping the last unfinished
+  // child completes it. Moved nodes count under the parent this edit gives them, which is why
+  // the merge applies `structureUpdates` rather than reading `existing` as it was.
+  const moved = new Map(structureUpdates.map((u) => [u.id, u]));
+  const merged: RollupNode[] = [];
+  for (const r of existing) {
+    if (r.removedVersion !== null) continue;
+    if (removed.some((x) => x.id === r.id)) continue;
+    const place = moved.get(r.id);
+    merged.push({
+      id: r.id,
+      parentId: place?.parentId ?? r.parentId,
+      position: place?.position ?? r.position,
+      status: r.status,
+      removedVersion: null,
+      anchorToolCallId: r.anchorToolCallId,
+      anchorAt: r.anchorAt,
+    });
   }
-  for (const _ of inserts) liveAfter.push({ status: "not_started" });
-  const finalStatus = derivePlanStatus(liveAfter);
+  for (const n of inserts) {
+    merged.push({
+      id: n.id,
+      parentId: n.parentId,
+      position: n.position,
+      status: n.status,
+      removedVersion: null,
+      anchorToolCallId: null,
+      anchorAt: null,
+    });
+  }
+  const effective = effectiveNodes(merged);
+  const finalStatus = derivePlanStatus(
+    [...effective.values()].map((n) => ({ status: n.status }))
+  );
 
   const writes = (): void => {
     // Increments version = version + 1 and sets the final status in one statement.
@@ -287,6 +465,10 @@ function commitEdit(db: AppDb, plan: PlanRecord, submitted: NormNode[]): PlanCom
       db.updatePlanNodeStructure({ ...u, planId: plan.id });
     }
     for (const row of removed) db.softDeletePlanNode(plan.id, row.id, newVersion);
+    // The shape is final now, so the same reconciliation the progress path runs persists the
+    // derived container statuses. No tool call exists on an edit, so promotions carry the
+    // node's own anchor or none.
+    persistEffectiveStatuses(db, plan.id, ts, "");
     db.setPlanStatus(plan.id, finalStatus, ts);
   };
   db.raw.transaction(writes)();
@@ -392,17 +574,18 @@ export function applyProgress(
       }
     }
 
+    // Completing a node can complete its ancestors; reopening one can reopen them. The rollup
+    // runs before the plan status so that status sees the nodes as they now stand.
+    persistEffectiveStatuses(db, plan.id, ts, anchorToolCallId);
+
     let status: PlanStatus;
     if (input.planStatus) {
       status = input.planStatus;
     } else {
       const live = db
         .listPlanNodes(plan.id)
-        .filter((r) => r.removedVersion === null && !(input.nodes ?? []).some((n) => n.id === r.id))
+        .filter((r) => r.removedVersion === null)
         .map((r) => ({ status: r.status }));
-      for (const n of input.nodes ?? []) {
-        if (n.status !== "deleted") live.push({ status: n.status });
-      }
       status = derivePlanStatus(live);
     }
     db.setPlanStatus(plan.id, status, ts);
@@ -427,6 +610,10 @@ function buildCurrentTree(rows: PlanNodeRecord[]): PlanTreeNode[] {
     byParent.set(row.parentId, list);
   }
   const known = new Set(rows.map((r) => r.id));
+  // Display state is derived, not copied: a plan whose rows predate the rollup (or were
+  // written by a build without it) still reads as its children say it is — including the
+  // anchor a rolled-up container borrows from its first jumpable child.
+  const effective = effectiveNodes(rows);
 
   const build = (parentId: string | null): PlanTreeNode[] => {
     const list = byParent.get(parentId) ?? [];
@@ -440,14 +627,17 @@ function buildCurrentTree(rows: PlanNodeRecord[]): PlanTreeNode[] {
       .filter((r) => r.removedVersion !== null)
       .sort((a, b) => a.position - b.position);
     return [...alive, ...tombstones].map((r) => {
+      const derived = effective.get(r.id);
       const node: PlanTreeNode = {
         id: r.id,
         title: r.title,
-        status: r.status,
+        status: derived?.status ?? r.status,
       };
       // A click jumps to the node's start marker (in_progress call before the content), or to
-      // the completion call when no separate start was recorded.
-      if (r.anchorToolCallId) node.anchorToolCallId = r.anchorToolCallId;
+      // the completion call when no separate start was recorded; a rolled-up container borrows
+      // its first jumpable child's marker.
+      const anchor = derived?.anchorToolCallId ?? r.anchorToolCallId;
+      if (anchor) node.anchorToolCallId = anchor;
       const children = build(r.id);
       if (children.length > 0) node.children = children;
       return node;
@@ -558,6 +748,10 @@ export function jumpToNode(db: AppDb, sessionId: string, nodeId: string): PlanJu
     for (const id of openedIds) {
       db.updatePlanNodeProgress(plan.id, id, "in_progress", null, null);
     }
+    // A jump only skips and opens nodes, but the reconciliation still runs: an opened child
+    // under a completed container reopens it, which is the legacy state the rollup must not
+    // leave standing. No call is being completed here.
+    persistEffectiveStatuses(db, plan.id, ts, "");
     const rows = db.listPlanNodes(plan.id).filter((r) => r.removedVersion === null);
     db.setPlanStatus(plan.id, derivePlanStatus(rows.map((r) => ({ status: r.status }))), ts);
   };

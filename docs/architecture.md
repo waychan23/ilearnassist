@@ -265,9 +265,19 @@ session-scoped plan widget. The split is:
   `in_progress` call placed before its content (tool call id, in the `done_tool_call_id`
   column — widened without a rename): kept through completion, cleared when the node returns
   to not-started/skipped, and what the panel's click scrolls to (the tool-call card, not the
-  message top). The plan auto-completes when every live node is completed; `deleted` is
-  unreachable from this tool. The tool description carries the *mark-before-teaching* timing
-  rule, which is what makes the anchor meaningful rather than a completion marker.
+  message top). **Containers follow their children**: a chapter/section completes itself once
+  every live child is completed (cascading up, so the last topic can finish its chapter and the
+  plan), and reopens if a child reopens or an edit adds one. The rollup runs after every
+  progress write, after an edit, and after a jump — and `buildCurrentTree` derives the same
+  status on read, so rows written before the rollup existed still render consistently. A
+  container that reads underway/done without a marker of its own **borrows the anchor of its
+  first jumpable child in document order** (completed or in-progress, with an anchor; a derived
+  container answers the same way), so a rolled-up chapter stays a locate target and its click
+  lands where that first section began — not on whatever call happened to trigger the scan. A
+  `skipped` child is unfinished and blocks it; a tombstone is not a child any more. The plan
+  auto-completes when every live node is completed; `deleted` is unreachable from this tool.
+  The tool description carries the *mark-before-teaching* timing rule, which is what makes the
+  anchor meaningful rather than a completion marker.
 - The panel's two user actions reduce to a user message on the ordinary `/chat` path. The
   footer "adjust plan" composer sends `调整计划：<text>`; "jump to chapter" first POSTs
   `/plan/nodes/:id/jump`, which in one transaction marks every prior undone node `skipped`

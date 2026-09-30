@@ -287,6 +287,202 @@ describe("applyProgress", () => {
     expect(updated.status).toBe("completed");
   });
 
+  it("rolls a completed leaf up through every ancestor and completes the plan", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([
+        {
+          title: "C",
+          children: [
+            { title: "C1", children: [{ title: "C1a" }, { title: "C1b" }] },
+            { title: "C2" },
+          ],
+        },
+        { title: "D" },
+      ])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const leaves = ["C1a", "C1b", "C2", "D"].map((t) => byTitle(view, t).id);
+
+    const updated = applyProgress(
+      db,
+      SESSION,
+      { nodes: leaves.map((id) => ({ id, status: "completed" as const })) },
+      "call_leaves"
+    );
+
+    // No container was named: C1 completed from its children, and C1's completion completed C.
+    expect(byTitle(updated, "C1").status).toBe("completed");
+    expect(byTitle(updated, "C").status).toBe("completed");
+    expect(updated.status).toBe("completed");
+    // Both rolled-up containers borrow their first jumpable child's marker — C1a's call here.
+    expect(byTitle(updated, "C1").anchorToolCallId).toBe("call_leaves");
+    expect(byTitle(updated, "C").anchorToolCallId).toBe("call_leaves");
+  });
+
+  it("borrows the first jumpable child's anchor in document order, not the last completion", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([{ title: "A", children: [{ title: "A1" }, { title: "A2" }, { title: "A3" }] }, { title: "B" }])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const planId = db.getPlanBySession(SESSION)!.id;
+    // Straight to the rows, the way the pre-rollup writer left them. A1 finishes last in
+    // wall-clock order; document order is what picks the chapter's marker.
+    db.updatePlanNodeProgress(planId, byTitle(view, "A1").id, "completed", "call_a1", "2026-01-03T00:00:00.000Z");
+    db.updatePlanNodeProgress(planId, byTitle(view, "A2").id, "completed", "call_a2", "2026-01-01T00:00:00.000Z");
+    db.updatePlanNodeProgress(planId, byTitle(view, "A3").id, "completed", "call_a3", "2026-01-02T00:00:00.000Z");
+
+    const reread = readCurrentPlan(db, SESSION)!;
+    expect(byTitle(reread, "A").status).toBe("completed");
+    expect(byTitle(reread, "A").anchorToolCallId).toBe("call_a1");
+  });
+
+  it("borrows through a derived container: a rolled-up ancestor reaches the deepest first child", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([{ title: "C", children: [{ title: "C1", children: [{ title: "C1a" }, { title: "C1b" }] }] }])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const planId = db.getPlanBySession(SESSION)!.id;
+    // C1a is a start-then-complete so its stored anchor is the start call, not the completion.
+    db.updatePlanNodeProgress(planId, byTitle(view, "C1a").id, "in_progress", "call_start", "2026-01-01T00:00:00.000Z");
+    db.updatePlanNodeProgress(planId, byTitle(view, "C1a").id, "completed", "call_start", "2026-01-01T00:00:00.000Z");
+    db.updatePlanNodeProgress(planId, byTitle(view, "C1b").id, "completed", "call_second", "2026-01-02T00:00:00.000Z");
+
+    const reread = readCurrentPlan(db, SESSION)!;
+    expect(byTitle(reread, "C1").status).toBe("completed");
+    expect(byTitle(reread, "C1").anchorToolCallId).toBe("call_start");
+    expect(byTitle(reread, "C").status).toBe("completed");
+    expect(byTitle(reread, "C").anchorToolCallId).toBe("call_start");
+  });
+
+  it("persists the borrowed anchor, not the call that happened to trigger the scan", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([{ title: "A", children: [{ title: "A1" }, { title: "A2" }] }, { title: "B" }])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const a = byTitle(view, "A");
+    const b = byTitle(view, "B");
+    const planId = db.getPlanBySession(SESSION)!.id;
+    // Rows from before the rollup existed: children completed, no marker on the chapter.
+    db.updatePlanNodeProgress(planId, byTitle(view, "A1").id, "completed", "call_a1", "2026-01-01T00:00:00.000Z");
+    db.updatePlanNodeProgress(planId, byTitle(view, "A2").id, "completed", "call_a2", "2026-01-02T00:00:00.000Z");
+
+    // An unrelated progress write drives the full-plan rescan.
+    const updated = applyProgress(db, SESSION, { nodes: [{ id: b.id, status: "in_progress" }] }, "call_trigger");
+
+    expect(byTitle(updated, "A").status).toBe("completed");
+    expect(byTitle(updated, "A").anchorToolCallId).toBe("call_a1");
+    const stored = db.listPlanNodes(planId).find((r) => r.id === a.id)!;
+    expect(stored.status).toBe("completed");
+    expect(stored.anchorToolCallId).toBe("call_a1");
+  });
+
+  it("keeps a container's start anchor when it rolls up, and reopens it when a child reopens", () => {
+    const view = seeded();
+    const a = byTitle(view, "A");
+    const a1 = byTitle(view, "A1");
+
+    const started = applyProgress(db, SESSION, { nodes: [{ id: a.id, status: "in_progress" }] }, "call_start");
+    expect(byTitle(started, "A").anchorToolCallId).toBe("call_start");
+
+    const done = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "completed" }] }, "call_done");
+    expect(byTitle(done, "A").status).toBe("completed");
+    expect(byTitle(done, "A").anchorToolCallId).toBe("call_start");
+
+    const reopened = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "in_progress" }] }, "call_again");
+    expect(byTitle(reopened, "A").status).toBe("in_progress");
+  });
+
+  it("does not roll up while a skipped child is unfinished", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([{ title: "A", children: [{ title: "A1" }, { title: "A2" }] }, { title: "B" }])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const a1 = byTitle(view, "A1");
+    const a2 = byTitle(view, "A2");
+
+    const partial = applyProgress(
+      db,
+      SESSION,
+      { nodes: [{ id: a1.id, status: "completed" }, { id: a2.id, status: "skipped" }] },
+      "call_1"
+    );
+    expect(byTitle(partial, "A").status).not.toBe("completed");
+  });
+
+  it("an edit completes a container whose last unfinished child was dropped, and reopens one given a new child", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([{ title: "A", children: [{ title: "A1" }, { title: "A2" }] }, { title: "B" }])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const a = byTitle(view, "A");
+    const a1 = byTitle(view, "A1");
+    const b = byTitle(view, "B");
+    applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "completed" }] }, "call_1");
+    expect(byTitle(readCurrentPlan(db, SESSION)!, "A").status).not.toBe("completed");
+
+    // Dropping the unfinished A2 leaves only a completed child: the edit completes A.
+    const v2 = makePlan(db, SESSION, {
+      tree: [
+        { id: a.id, title: "A", children: [{ id: a1.id, title: "A1" }] },
+        { id: b.id, title: "B" },
+      ],
+    });
+    if (planConflicted(v2)) throw new Error("should edit");
+    expect(byTitle(readCurrentPlan(db, SESSION)!, "A").status).toBe("completed");
+
+    // A fresh not-started child reopens it.
+    const v3 = makePlan(db, SESSION, {
+      tree: [
+        { id: a.id, title: "A", children: [{ id: a1.id, title: "A1" }, { title: "A3" }] },
+        { id: b.id, title: "B" },
+      ],
+    });
+    if (planConflicted(v3)) throw new Error("should edit");
+    expect(byTitle(readCurrentPlan(db, SESSION)!, "A").status).toBe("in_progress");
+  });
+
+  it("derives container completion on read, so rows written before the rollup existed still render", () => {
+    const view = seeded();
+    const a = byTitle(view, "A");
+    const a1 = byTitle(view, "A1");
+    // Straight to the row, the way the pre-rollup writer left it: A's only child completed
+    // while A itself still says not_started.
+    db.updatePlanNodeProgress(
+      db.getPlanBySession(SESSION)!.id,
+      a1.id,
+      "completed",
+      "call_old",
+      "2026-01-01T00:00:00.000Z"
+    );
+
+    const reread = readCurrentPlan(db, SESSION)!;
+    expect(byTitle(reread, "A").status).toBe("completed");
+    // …and it borrows A1's marker so the checked chapter is still a locate target.
+    expect(byTitle(reread, "A").anchorToolCallId).toBe("call_old");
+    // The derivation is display-only; the stored row is untouched.
+    const stored = db.listPlanNodes(db.getPlanBySession(SESSION)!.id).find((r) => r.id === a.id)!;
+    expect(stored.status).toBe("not_started");
+    expect(stored.anchorToolCallId).toBeNull();
+  });
+
   it("treats skipped as underway, not completed", () => {
     const view = seeded();
     const b = byTitle(view, "B");

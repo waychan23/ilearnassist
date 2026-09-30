@@ -83,6 +83,7 @@ const PROGRESS_DESCRIPTION = [
   "Update study progress on the current plan, in one batched call. Two levels:",
   "- `planStatus`: one of not_started | in_progress | completed. Usually you can omit it — when every non-deleted node is completed the plan completes itself, and any started node makes it in_progress.",
   "- `nodes`: each {id, status}. Node status is one of not_started | in_progress | completed | skipped.",
+  "- Containers (a chapter/section with children) follow their children: one completes itself once EVERY child is completed, and reopens if a child reopens. Mark the topic you actually taught; there is no need to send a container's own status.",
   "",
   "Timing matters:",
   "- Call this tool to mark a node `in_progress` BEFORE you start teaching it — make the tool call first, then produce the content for that node. This is what puts the panel's marker at the start of the node.",
