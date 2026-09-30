@@ -1130,7 +1130,9 @@ describe("POST /api/sessions/:id/chat", () => {
     await chat(session.id, { message: "hi" });
 
     const turn = streamedTurn();
-    expect(turn.tools).toEqual(["read_file"]);
+    // The two built-in record reads are assembled whatever the list says; the restriction this
+    // case is about is what remains: no page-keeping tool, and no guidance for one.
+    expect(turn.tools.sort()).toEqual(["ila_query", "ila_recall", "read_file"].sort());
     expect(turn.system).not.toContain("ila_collect_page");
   });
 
@@ -1285,11 +1287,16 @@ describe("POST /api/sessions/:id/chat", () => {
     expect(tools).not.toContain("delete_file");
   });
 
-  it("sends no tools at all when the conversation is allowed none", async () => {
+  it("sends no tools but the built-in reads when the conversation is allowed none", async () => {
     /*
      * The state that used to be unreachable. An empty allow-list meant "no restriction", so a
      * Copilot locked down to nothing arrived at the model with every tool — the widest possible
      * reading of the narrowest possible selection.
+     *
+     * The two built-in reads (`BUILTIN_TOOL_NAMES`) are the deliberate exception: they read the
+     * conversation's own record, which a locked-down Copilot asked for no capabilities does not
+     * mean it asked to forget — and the smart-context prompt names both as the way back. Every
+     * other capability is absent, which is the half this case protects.
      */
     const { session } = await sessionFromCopilot({
       name: "Silent",
@@ -1302,7 +1309,7 @@ describe("POST /api/sessions/:id/chat", () => {
     await chat(session.id, { message: "hi" });
 
     const { tools } = sentToModel();
-    expect(tools).toEqual([]);
+    expect(tools.sort()).toEqual(["ila_query", "ila_recall"].sort());
     // The turn still ran, so this is a tool-less conversation rather than a failed request.
     expect(await messagesOf(session.id)).toHaveLength(2);
   });

@@ -270,6 +270,7 @@ apps/server/src/
   agent/clock.ts          # what time it is where the user is, for the turn's prompt
   agent/callUsage.ts      # the one place usage_metadata becomes a MessageUsage
   agent/compact.ts        # context compaction: transcript, chunking, the fold call
+  agent/smartContext.ts   # the experimental smart-context window: the cut and its prompt block
   agent/model.ts          # ChatOpenAI builder + reasoning SSE tap
   agent/title.ts          # auto-generated conversation titles
   agent/mediaSummary.ts   # one line about an image, from the model that saw it
@@ -1236,8 +1237,9 @@ public half.
     the previous summary with the messages since its point rather than re-reading the originals.
     **`ila_recall` is the way back**: it reads the current conversation's stored transcript
     (`recent` / `search`, message text only, paged through `resultPage`), assembled in every
-    conversation rather than only when a summary is active, with `chat.guidance.recall` appended
-    whenever it survives the allow-list. Cross-conversation search stays `ila_explore`'s, behind
+    conversation rather than only when a summary is active — **built-in** (`BUILTIN_TOOL_NAMES`,
+    with `ila_query`), so no allow-list can remove it — with `chat.guidance.recall` appended
+    whenever it survives assembly. Cross-conversation search stays `ila_explore`'s, behind
     the `@` grant.
   - **Nothing is written until the model answers, and the composer pauses while it does.** A
     failure (`COMPACT_FAILED`, provider words in `params.detail`) leaves the pointer and the
@@ -1254,6 +1256,33 @@ public half.
     and still work on new turns, but a compacted message's reference is no longer *replayed*;
     `session_references` is a table, so the material is reachable again by `@` or `ila_query`.
     Make-up is unaffected: quiz rows are a table, and its record is appended after the point.
+- **Smart context is the third context mechanism, and it is a mode rather than a preference.**
+  The experimental `SessionSettings.smartContext` switch (a button in the composer, effective
+  immediately; on the welcome screen it stages `draftSettings`) makes every turn carry only the
+  newest `SMART_CONTEXT_MESSAGES` (2) history messages plus `chat.guidance.smartContext`.
+  `effectiveContextFor` returns the whole stored history and **no** active summary; `trimHistory`
+  applies the window first, so `maxContextMessages` is ignored. Four things are load-bearing:
+  - **The summary is bypassed at read time, never cleared.** The row and
+    `sessions.active_summary_id` are untouched — turning the mode off restores the compacted
+    context exactly as it was — and turns written under the mode carry no `messages.summary_id`.
+    The composer's compress button is disabled and `TokenCountPopover` withholds the preview's
+    door (the dialog describes the compaction state, which is not what a turn would send); the
+    `/compact` and `/context` routes are deliberately unchanged.
+  - **The window is cut over *messages*, not turns, and a leading assistant row is kept.**
+    `smartContextHistory` (`agent/smartContext.ts`) does **not** apply `trimHistory`'s
+    advance-to-user rule: a `Message` row carries its own tool calls and results, so a cut can
+    never leave a dangling `tool_calls` block, and a regenerated or resumed turn legitimately
+    opens on the assistant row it is continuing from.
+  - **`ila_recall` and `ila_query` are built-in, and that is what makes the mode coherent.**
+    `BUILTIN_TOOL_NAMES` bypasses the allow-list in all three states, and the Copilot checklist
+    filters with `isBuiltinTool` beside `isWidgetBoundTool` — a box for one could neither enable
+    nor remove it. The rule is about the tools, not the mode: they read the conversation's own
+    record, and a conversation with no capabilities did not ask to forget what was said. The
+    smart block names both as the way back.
+  - **The prompt block's switch is the session setting, not a tool array.** `smartContextGuidance`
+    is present exactly when `settings.smartContext` is on — there is no assembled tool that could
+    have failed — and it is the only thing that tells the model its visible history is
+    deliberately narrow. See `docs/context-compaction.md`.
 - **A Copilot is owned, and "platform" is not a tier — it is a published one.** `copilots` carries
   `user_id` and a `visibility` of `private` or `public`, not an admin role, so a Copilot the
   operator wants every account to have is simply one they published, and "ordinary users cannot
@@ -1291,7 +1320,10 @@ public half.
   readers derive from the flag rather than trusting the list. `ALL_TOOL_NAMES` lives in
   `packages/shared` for the same reason `ASK_USER_TOOL_NAME` does — the client writes the
   allow-list and the server filters by it, and the copies had already drifted: the client's list was
-  missing `read_document`, which therefore could not be chosen at all.
+  missing `read_document`, which therefore could not be chosen at all. **Two tools are outside the
+  allow-list entirely**: `BUILTIN_TOOL_NAMES` (`ila_query`, `ila_recall`) are assembled in every
+  turn whatever the three states say and are filtered out of the Copilot checklist, because they
+  read the conversation's own record — see the smart-context bullet above.
 - **A tool's parameters schema must convert to a top-level `"type": "object"`, and a zod union does
   not.** `ila_query` shipped as a `z.discriminatedUnion`, which is the better *type* — a field that
   means nothing for a kind cannot be written for it, and `switch` exhaustiveness is free — and it

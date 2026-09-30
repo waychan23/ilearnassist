@@ -170,6 +170,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { serverTimeZone, turnClock, type TurnClock } from "./agent/clock.js";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { applyContextSummary, summarizeContext, type CompactMessage } from "./agent/compact.js";
+import { smartContextGuidance } from "./agent/smartContext.js";
 import { describeModel } from "./agent/model.js";
 import { classifyProviderError } from "./agent/providerErrors.js";
 import { fallbackTitle, generateTitle, type TitleMessage } from "./agent/title.js";
@@ -385,14 +386,19 @@ function widgetError(code: "UNKNOWN_WIDGET" | "WIDGET_SCOPE_UNSUPPORTED"): ApiEr
 }
 
 /**
- * Check the one settings field the server reads as a grant, and leave the rest alone.
+ * Check the two settings fields the server reads as more than a preference, and leave the rest
+ * alone.
  *
  * `settings` is otherwise passed straight through on both write routes — it is a JSON blob the
  * client owns, and the merge in `updateSessionForUser` is what makes a partial write work. But
  * `workspaceScope` is *not* an ordinary preference: it decides what a model may read, so a
  * malformed one is refused by name rather than stored and left to resolve to something nobody
  * chose. `"true"` for `all` is the case this exists for — it is truthy, so a coerced value
- * would be a grant the caller never asked for.
+ * would be a grant the caller never asked for. `smartContext` is refused the same way for the
+ * same reason: the read is `=== true`, so a coerced `"false"` would store `1`/truthy under one
+ * build and mean nothing under another — a mode whose state the screen states and the server
+ * reads differently. `null` is a real value here (inherit/off, the `SessionSettings` rule), so
+ * only a present non-boolean is refused.
  *
  * **Ownership is not checked here**, deliberately: a workspace can be deleted between the chip
  * being drawn and the save landing, and failing the save for that would be failing it for
@@ -402,7 +408,14 @@ function widgetError(code: "UNKNOWN_WIDGET" | "WIDGET_SCOPE_UNSUPPORTED"): ApiEr
 function withValidatedScope(
   settings: SessionSettings | undefined
 ): { ok: true; settings: SessionSettings | undefined } | { ok: false; message: string } {
-  if (!settings || !("workspaceScope" in settings)) return { ok: true, settings };
+  if (!settings) return { ok: true, settings };
+  if ("smartContext" in settings) {
+    const value = (settings as { smartContext?: unknown }).smartContext;
+    if (value !== undefined && value !== null && typeof value !== "boolean") {
+      return { ok: false, message: "smartContext must be true, false or null" };
+    }
+  }
+  if (!("workspaceScope" in settings)) return { ok: true, settings };
   const normalized = normalizeWorkspaceScope(
     (settings as { workspaceScope?: unknown }).workspaceScope
   );
@@ -2360,11 +2373,20 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
    * copies of that rule is how a regenerate would replay a history the last turn did not use.
    */
   function effectiveContextFor(
-    sessionId: string,
+    session: Session,
     userId: string
   ): { summary: ContextSummary | undefined; history: Message[] } {
-    const messages = db.listMessagesForUser(sessionId, userId);
-    const summary = db.activeContextSummaryForUser(sessionId, userId);
+    const messages = db.listMessagesForUser(session.id, userId);
+    /*
+     * Smart context is a mode, not a preference, and it wins over a compaction outright: the
+     * turn will carry only the newest `SMART_CONTEXT_MESSAGES` messages (the loop's `trimHistory`
+     * makes that cut), so a summary standing in for the messages before a point has nothing left
+     * to stand in for. The summary row and `sessions.active_summary_id` are deliberately left
+     * alone — refusing a summary is a read-time decision here, which is what makes turning the
+     * mode off restore the compacted context exactly as it was.
+     */
+    if (session.settings.smartContext === true) return { summary: undefined, history: messages };
+    const summary = db.activeContextSummaryForUser(session.id, userId);
     const history = summary ? applyContextSummary(messages, summary) : messages;
     return { summary, history };
   }
@@ -2437,7 +2459,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           );
       }
 
-      const { summary: previous, history } = effectiveContextFor(id, userId);
+      const { summary: previous, history } = effectiveContextFor(session, userId);
       if (history.length === 0) {
         return reply
           .code(400)
@@ -4711,6 +4733,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     exploreGuidance?: string;
     /** Present when `ila_recall` survived assembly; the way back to a summarized history. */
     recallGuidance?: string;
+    /**
+     * Present when the conversation runs on the smart-context window. Its presence switches on
+     * the prompt block that tells the model its visible history is deliberately narrow and that
+     * the built-in reads are how to look anything earlier up — see
+     * `SystemPromptInput.smartContextGuidance`.
+     */
+    smartContextGuidance?: string;
   }
 
   /**
@@ -5095,6 +5124,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       recallGuidance: tools.some((t) => t.name === RECALL_TOOL_NAME)
         ? recallGuidance()
         : undefined,
+      /*
+       * The smart-context statement, and the one guidance whose switch is the session setting
+       * rather than the assembled array. It is asked of the setting because there is nothing a
+       * tool array could answer: the two reads it names are **built-in** (`BUILTIN_TOOL_NAMES`),
+       * assembled in every turn whether or not the allow-list mentions them, so the mode cannot
+       * be on while its way back is missing.
+       */
+      smartContextGuidance:
+        session.settings.smartContext === true ? smartContextGuidance() : undefined,
       /*
        * `ila_table`'s half, and it is load-bearing in a way the others are not: nothing on the
        * server can write into a model's reply, so "the table also appears inline, as ordinary
@@ -5483,7 +5521,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     // Read the effective history *after* the route's write, so the resumed run sees it — and
     // cut at the compaction point, the same context `/chat` would send. Read outside the `try`
     // so the catch can attribute its `⚠️` row to the same summary this turn ran under.
-    const { summary, history } = effectiveContextFor(id, userId);
+    const { summary, history } = effectiveContextFor(session, userId);
     try {
       // Wall-clock time for the call, which is the ledger's one non-token figure. Measured around
       // the whole run rather than around the provider request: a turn that spends four seconds in
@@ -5523,6 +5561,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
+        smartContextGuidance: ctx.smartContextGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,
@@ -5714,8 +5753,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
     // Read the effective history *before* persisting the new user turn, so it isn't replayed
     // twice — and cut at the compaction point, so a compacted conversation does not send the
-    // messages the summary already stands in for.
-    const { summary, history } = effectiveContextFor(id, userId);
+    // messages the summary already stands in for. A smart-context conversation reads the whole
+    // stored history here and lets the loop's window cut it, so the two modes cannot disagree.
+    const { summary, history } = effectiveContextFor(session, userId);
 
     const userMessage = db.createMessage({
       id: newId(),
@@ -5791,6 +5831,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         fileWriteGuidance: ctx.fileWriteGuidance,
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
+        smartContextGuidance: ctx.smartContextGuidance,
         onToolUsed: ctx.onToolUsed,
         clock: ctx.clock,
         signal: turn.signal,

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebFetchConfig, WebSearchConfig } from "../../src/config.js";
 import { dataLayout, userLayout } from "../../src/paths.js";
 import {
+  BUILTIN_TOOL_NAMES,
   DIAGRAM_TOOL_NAME,
   EXPLORE_TOOL_NAME,
   PLAN_TOOL_NAMES,
@@ -213,15 +214,6 @@ describe("buildTools", () => {
     expect(names({ query: undefined })).not.toContain("ila_query");
   });
 
-  it("lets a Copilot allow-list choose ila_query like any other tool", () => {
-    // It is ordinary, not widget-bound: a bound tool bypasses the allow-list in all three of
-    // its states, and this one must be excluded by a list that does not name it.
-    expect(names({ allowedNames: ["read_file", "ila_query"] }).sort()).toEqual([
-      "ila_query",
-      "read_file",
-    ]);
-  });
-
   it("omits ila_recall when there is no conversation to read", () => {
     // The context carries the session and the owner, so its absence is the only thing that can
     // switch the tool off — the `ila_query` rule. In a real turn it is always there.
@@ -229,11 +221,22 @@ describe("buildTools", () => {
     expect(names()).toContain("ila_recall");
   });
 
-  it("lets a Copilot allow-list choose ila_recall like any other tool", () => {
-    expect(names({ allowedNames: ["read_file", "ila_recall"] }).sort()).toEqual([
-      "ila_recall",
-      "read_file",
-    ]);
+  it("assembles the two built-in reads whatever the allow-list says", () => {
+    /*
+     * `ila_query` and `ila_recall` are `BUILTIN_TOOL_NAMES`: a Copilot's allow-list can neither
+     * add nor remove them. Not a widget's install either — the widget-bound tools bypass the
+     * list in all three states, and these bypass it in all three for their own reason: they read
+     * the conversation's own record, so a locked-down Copilot asked for no capabilities rather
+     * than for amnesia, and the smart-context mode's prompt names both as the way back.
+     */
+    // Named list that excludes them: they survive beside what the list names.
+    expect(names({ allowedNames: ["read_file"] }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, "read_file"].sort()
+    );
+    // Empty list ("no tools"): the built-ins are the only things left.
+    expect(names({ allowedNames: [] }).sort()).toEqual([...BUILTIN_TOOL_NAMES].sort());
+    // And naming one of them in the list is not what puts it there — the other is present too.
+    expect(names({ allowedNames: ["read_file", "ila_query"] })).toContain("ila_recall");
   });
 
   it("adds read_document even when this turn attached nothing", () => {
@@ -290,10 +293,9 @@ describe("buildTools", () => {
   it("lets a Copilot allow-list choose ila_explore like any other tool", () => {
     // Ordinary, not widget-bound: a list that does not name it must exclude it. Asserting
     // `explore: undefined` switches it off is not enough — the allow-list is a second gate.
-    expect(names({ explore: explore(), allowedNames: ["read_file", "ila_explore"] }).sort()).toEqual([
-      "ila_explore",
-      "read_file",
-    ]);
+    expect(
+      names({ explore: explore(), allowedNames: ["read_file", "ila_explore"] }).sort()
+    ).toEqual([...BUILTIN_TOOL_NAMES, "ila_explore", "read_file"].sort());
   });
 
   it("keeps read_document when the file tools are disabled", () => {
@@ -306,8 +308,10 @@ describe("buildTools", () => {
     expect(names({ webFetch: { enabled: false, maxChars: 1000 } })).not.toContain("web_fetch");
   });
 
-  it("restricts to a Copilot's allow-list", () => {
-    expect(names({ allowedNames: ["read_file", "web_search"] }).sort()).toEqual(["read_file", "web_search"]);
+  it("restricts to a Copilot's allow-list, the built-in reads excepted", () => {
+    expect(names({ allowedNames: ["read_file", "web_search"] }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, "read_file", "web_search"].sort()
+    );
   });
 
   it("treats an absent allow-list as 'no restriction'", () => {
@@ -322,18 +326,23 @@ describe("buildTools", () => {
     );
   });
 
-  it("treats an empty allow-list as 'no tools', not as everything", () => {
+  it("treats an empty allow-list as 'no tools', the built-in reads excepted", () => {
     /*
      * This used to be the other way round, and that was the bug: `length > 0` gated the filter,
      * so an empty list skipped it entirely. A Copilot the user had deliberately locked down to
      * no tools therefore got *every* tool — the widest possible reading of the narrowest
      * possible selection — and "deny everything" could not be expressed at all.
+     *
+     * The two built-in reads are the deliberate exception (`BUILTIN_TOOL_NAMES`), so this is
+     * "no tools" minus the conversation's own record — see the dedicated case above.
      */
-    expect(names({ allowedNames: [], documents })).toEqual([]);
+    expect(names({ allowedNames: [], documents }).sort()).toEqual([...BUILTIN_TOOL_NAMES].sort());
   });
 
   it("lets a Copilot allow-list exclude read_document", () => {
-    expect(names({ allowedNames: ["read_file"], documents })).toEqual(["read_file"]);
+    expect(names({ allowedNames: ["read_file"], documents }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, "read_file"].sort()
+    );
   });
 
   /* ------------------------------ quiz (widget-bound) ------------------------------ */
@@ -351,11 +360,11 @@ describe("buildTools", () => {
   it("lets widget-bound quiz tools bypass the allow-list in every state", () => {
     // Named list: not in it, still there.
     expect(names({ quiz, quizReview, quizMakeup, allowedNames: ["read_file"] }).sort()).toEqual(
-      [...QUIZ_TOOL_NAMES, "read_file"].sort()
+      [...QUIZ_TOOL_NAMES, ...BUILTIN_TOOL_NAMES, "read_file"].sort()
     );
-    // Empty list ("no tools"): the bound tools survive, and nothing else does.
+    // Empty list ("no tools"): the bound tools and the built-in reads survive, nothing else.
     expect(names({ quiz, quizReview, quizMakeup, allowedNames: [] }).sort()).toEqual(
-      [...QUIZ_TOOL_NAMES].sort()
+      [...QUIZ_TOOL_NAMES, ...BUILTIN_TOOL_NAMES].sort()
     );
     // An allow-list that does not name quiz cannot remove it: the widget is the switch.
     const namedOnly = names({ quiz, quizReview, quizMakeup, allowedNames: ["read_file"] });
@@ -375,10 +384,10 @@ describe("buildTools", () => {
     expect(built).not.toContain("ila_review_quiz");
   });
 
-  it("applies the allow-list on top of the config gates", () => {
-    expect(names({ allowedNames: ["web_fetch", "write_file"], fileToolsEnabled: false })).toEqual([
-      "web_fetch",
-    ]);
+  it("applies the allow-list on top of the config gates, the built-in reads excepted", () => {
+    expect(
+      names({ allowedNames: ["web_fetch", "write_file"], fileToolsEnabled: false }).sort()
+    ).toEqual([...BUILTIN_TOOL_NAMES, "web_fetch"].sort());
   });
 
   /* -------------------- plan (auto-install, allow-listable) -------------------- */
@@ -399,10 +408,14 @@ describe("buildTools", () => {
      * plan tools used to bypass the allow-list, because they were assembled solely by the widget
      * install and a ticked box could neither enable nor remove them. They are ordinary now — the
      * allow-list governs them — and what the widget gets in exchange is the install on call.
+     * The built-in reads are beside them here because they bypass every allow-list; they are
+     * not plan tools and do not change this case's subject.
      */
-    expect(names({ plan, allowedNames: ["read_file"] })).toEqual(["read_file"]);
-    // "No tools" really does mean no tools, these included.
-    expect(names({ plan, allowedNames: [] })).toEqual([]);
+    expect(names({ plan, allowedNames: ["read_file"] }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, "read_file"].sort()
+    );
+    // "No tools" really does mean no tools, these included — only the built-ins remain.
+    expect(names({ plan, allowedNames: [] }).sort()).toEqual([...BUILTIN_TOOL_NAMES].sort());
     // Absent list: the default set plus the plan tools. Said that way rather than as a count,
     // so a new tool has to be added to nothing — and `read_document`'s absence (this fixture
     // has no sources) is not silently part of a number.
@@ -432,10 +445,12 @@ describe("buildTools", () => {
      * tool answers. Here a Copilot can turn diagrams off without turning the panel off, and vice
      * versa; what the mode adds is that drawing one installs the panel that lists it.
      */
-    expect(names({ allowedNames: [DIAGRAM_TOOL_NAME] })).toEqual([DIAGRAM_TOOL_NAME]);
+    expect(names({ allowedNames: [DIAGRAM_TOOL_NAME] }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, DIAGRAM_TOOL_NAME].sort()
+    );
     expect(names({ allowedNames: ["read_file"] })).not.toContain(DIAGRAM_TOOL_NAME);
-    // "No tools" really does mean no tools, this one included.
-    expect(names({ allowedNames: [] })).toEqual([]);
+    // "No tools" really does mean no tools, this one included — only the built-ins remain.
+    expect(names({ allowedNames: [] }).sort()).toEqual([...BUILTIN_TOOL_NAMES].sort());
   });
 
   it("drops the diagram tool when the file tools are disabled", () => {
@@ -463,9 +478,11 @@ describe("buildTools", () => {
   it("treats the table tool as allow-listable in all three states", () => {
     // `auto-install`, like its sibling: a Copilot can turn tables off without turning the 图表
     // panel off, and recording one installs the panel that lists it.
-    expect(names({ allowedNames: [TABLE_TOOL_NAME] })).toEqual([TABLE_TOOL_NAME]);
+    expect(names({ allowedNames: [TABLE_TOOL_NAME] }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, TABLE_TOOL_NAME].sort()
+    );
     expect(names({ allowedNames: ["read_file"] })).not.toContain(TABLE_TOOL_NAME);
-    expect(names({ allowedNames: [] })).toEqual([]);
+    expect(names({ allowedNames: [] }).sort()).toEqual([...BUILTIN_TOOL_NAMES].sort());
   });
 
   it("keeps the table tool when the file tools are disabled", () => {
@@ -491,9 +508,11 @@ describe("buildTools", () => {
   it("treats the plot tool as allow-listable in all three states", () => {
     // `auto-install`, like its siblings: a Copilot can turn figures off without turning the 图表
     // panel off, and plotting one installs the panel that lists it.
-    expect(names({ allowedNames: [PLOT_TOOL_NAME] })).toEqual([PLOT_TOOL_NAME]);
+    expect(names({ allowedNames: [PLOT_TOOL_NAME] }).sort()).toEqual(
+      [...BUILTIN_TOOL_NAMES, PLOT_TOOL_NAME].sort()
+    );
     expect(names({ allowedNames: ["read_file"] })).not.toContain(PLOT_TOOL_NAME);
-    expect(names({ allowedNames: [] })).toEqual([]);
+    expect(names({ allowedNames: [] }).sort()).toEqual([...BUILTIN_TOOL_NAMES].sort());
   });
 
   it("keeps the plot tool when the file tools are disabled", () => {

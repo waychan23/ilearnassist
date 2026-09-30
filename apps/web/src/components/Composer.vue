@@ -254,16 +254,45 @@ function stop() {
 }
 
 /**
+ * The experimental smart-context switch.
+ *
+ * Immediate rather than drafted, like the widget toggles: it is the mode the *next* turn runs
+ * under, and a reader flipping it is deciding what this conversation sends from now on. The
+ * write goes through `updateSettings`, which PATCHes a live conversation and stages the welcome
+ * screen's `draftSettings` — so the switch works before a conversation exists, and the value is
+ * carried onto the session when one is created.
+ */
+const smartContext = computed(() => store.sessionSettings.smartContext === true);
+/** True while the write is in flight, so a double click cannot flip the mode twice. */
+const smartContextPending = ref(false);
+
+async function toggleSmartContext(): Promise<void> {
+  smartContextPending.value = true;
+  try {
+    await store.updateSettings({ smartContext: !smartContext.value });
+  } catch (e) {
+    store.setError(e instanceof Error ? e.message : String(e));
+  } finally {
+    smartContextPending.value = false;
+  }
+}
+
+/**
  * Compression: confirm the cost, run it, then show what it produced.
  *
  * The confirm is not about destruction — a compaction is reversible — but about a *model call*
  * the user pays for and waits on, and about what changes: every later turn sends the summary.
  * Opening the preview on success is the other half of that: the user pressed a button whose
  * whole output is text they cannot otherwise see until the next reply.
+ *
+ * Disabled while smart context is on: that mode *is* the context mechanism in force, so a
+ * summary would have nothing left to stand in for. The reason is one click away, in the switch
+ * beside this button — which is why this is disabled rather than hidden.
  */
 const compactDisabled = computed(
   () =>
     readOnly.value ||
+    smartContext.value ||
     store.streaming.active ||
     parsingDocuments.value ||
     store.compacting ||
@@ -274,6 +303,7 @@ const compactDisabled = computed(
 );
 const compactTitle = computed(() => {
   if (readOnly.value) return t("lock.other");
+  if (smartContext.value) return t("context.smartActive");
   if (store.messages.length === 0) return t("context.empty");
   if (store.hasPendingQuestion) return t("context.pendingQuestion");
   return t("context.compact");
@@ -659,6 +689,23 @@ function onInput() {
               @click="compactContext"
             >
               <Icon name="compress" :class="{ spin: store.compacting }" />
+            </button>
+            <!--
+              The experimental smart-context switch, beside the compress button it replaces:
+              both answer "what context does the next turn carry", and a reader should see the
+              current answer without opening a dialog. Immediate rather than saved with the
+              session dialog, because it decides the mode the next turn runs under.
+            -->
+            <button
+              class="icon-btn smart-context-btn"
+              data-testid="smart-context-toggle"
+              :title="t('composer.smartContext')"
+              :aria-label="t('composer.smartContext')"
+              :aria-pressed="smartContext"
+              :disabled="readOnly || smartContextPending"
+              @click="toggleSmartContext"
+            >
+              <Icon name="bulb" />
             </button>
             <span
               v-if="store.activeCopilotName"

@@ -399,6 +399,8 @@ const en: typeof MessageSchema = {
     stop: "Stop generating",
     stopping: "Stopping…",
     attach: "Add an image or file",
+    /** The experimental smart-context switch — see the Chinese catalog for the label's rule. */
+    smartContext: "Smart context (experimental)",
     /*
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — so they are kept short and conversational rather than being
@@ -807,6 +809,7 @@ const en: typeof MessageSchema = {
     modeLabel: "Current context",
     modeFull: "Full context",
     modeCompacted: "Compacted context",
+    modeSmart: "Smart context (latest 2)",
     fullNote: "The model receives all {count} messages verbatim.",
     compactedNote:
       "The model receives the summary plus the {count} messages after the compaction point, verbatim.",
@@ -817,6 +820,8 @@ const en: typeof MessageSchema = {
     summary: "Summary",
     empty: "This conversation has no messages yet",
     compact: "Compact context",
+    /** Why the compress button is inert while smart context is on — the disabled title. */
+    smartActive: "Smart context is on: only the latest 2 history messages are sent, so compaction is unavailable.",
     compacting: "Compacting…",
     compactingHint: "Compacting the context — new messages are paused until it finishes…",
     pendingQuestion: "A card is waiting for an answer — answer or skip it before compacting.",

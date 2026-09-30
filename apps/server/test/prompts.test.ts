@@ -72,6 +72,7 @@ describe("the catalog", () => {
       "persona",
       "about",
       "contextSummary",
+      "smartContext",
       "clock",
       "workspace",
       "codeFence",
@@ -288,6 +289,19 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt(promptInput({ persona: "  You are a physics tutor.  " }));
     expect(prompt.startsWith("You are a physics tutor.")).toBe(true);
     expect(prompt).not.toContain("You are a helpful, precise AI assistant.");
+  });
+
+  it("states the smart-context window when the session runs that mode", () => {
+    // The block's *presence* is the switch — there is no tool to ask about, because the two
+    // reads it names are built-in. This pins the wiring; the text's own obligation ("look first,
+    // then answer") is pinned by the catalog entry's description and the integration test.
+    const bare = buildSystemPrompt(promptInput());
+    const smart = buildSystemPrompt(promptInput({ smartContextGuidance: promptText("chat.guidance.smartContext") }));
+    expect(bare).not.toContain("smart context mode");
+    expect(smart).toContain("smart context mode");
+    expect(smart).toContain("ila_recall");
+    expect(smart).toContain("ila_query");
+    expect(smart).not.toContain("\n\n\n");
   });
 
   it("swaps the sandbox sentence when the conversation holds an @ grant", () => {

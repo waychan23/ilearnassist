@@ -831,6 +831,28 @@ export function isWidgetBoundTool(name: string): boolean {
 }
 
 /**
+ * The tools this build ships as **built-in**: assembled in every turn, whatever the session's
+ * tool allow-list says, and kept out of a Copilot's checklist because a box there could neither
+ * enable nor remove them.
+ *
+ * These two read the conversation's own record — its stored transcript (`ila_recall`) and its
+ * plan, quizzes, notes, diagrams and tables (`ila_query`) — and they are the app's way back to
+ * what a `maxContextMessages` window trimmed, a compaction summary dropped, or the smart-context
+ * window deliberately left out. A conversation whose allow-list is empty is a conversation that
+ * asked for no capabilities; it is not one that asked to forget what was said, so the two reads
+ * survive `allTools: false` with an empty list.
+ *
+ * Deliberately not `isWidgetBoundTool`: no widget switches these, so their assembly cannot
+ * depend on an install. `buildTools` bypasses the allow-list for a name here, and the Copilot
+ * editor filters them out of its checklist.
+ */
+export const BUILTIN_TOOL_NAMES = [QUERY_TOOL_NAME, RECALL_TOOL_NAME] as const;
+
+export function isBuiltinTool(name: string): boolean {
+  return (BUILTIN_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/**
  * Which widget a tool call installs, if any — the reverse of the two lookups above, and the only
  * place that answers "does calling this tool install something?".
  *
@@ -3432,6 +3454,16 @@ export interface ProviderModel {
 }
 
 /**
+ * How many history messages the smart-context window carries.
+ *
+ * Shared rather than server-only because the number is part of the mode's description rather
+ * than an implementation detail: the server assembles the window with it, this file's
+ * `SessionSettings` doc states it, and the UI copy says "the latest 2" in both catalogs. One
+ * constant is what keeps the count from becoming three different numbers.
+ */
+export const SMART_CONTEXT_MESSAGES = 2;
+
+/**
  * Per-conversation generation parameters. Stored on the session; a Copilot supplies
  * the defaults that get copied in when the conversation is created.
  * `null`/absent means "inherit from the next level up".
@@ -3447,6 +3479,19 @@ export interface SessionSettings {
   maxTokens?: number | null;
   /** How many prior history messages to replay into the model context, in **messages**. */
   maxContextMessages?: number | null;
+  /**
+   * Experimental: this conversation runs on the **smart-context window** instead of the full
+   * history or a compaction summary.
+   *
+   * When `true`, a turn carries only the newest `SMART_CONTEXT_MESSAGES` history messages and
+   * `maxContextMessages` is ignored; an active compaction summary is not sent either (the row and
+   * the session's pointer are kept, so turning the mode off restores the compacted context). The
+   * system prompt says the history is deliberately narrow and points at `ila_recall` /
+   * `ila_query` — the built-in reads — for anything earlier.
+   *
+   * `null`/absent means off, the same "inherit" every other field uses.
+   */
+  smartContext?: boolean | null;
   /** Maximum ReAct steps (tool rounds) for a single turn. */
   maxSteps?: number | null;
   /**

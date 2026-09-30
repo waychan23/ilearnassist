@@ -39,6 +39,9 @@ catalogs' rule, never keyed by the module that happens to read them.
 | `chat.system.persona`, `.clock`, `.workspace`, `.noEscape`, `.grantedRead` | `buildSystemPrompt` |
 | `chat.guidance.codeFence` | `buildSystemPrompt` — how to name a file in a code fence. **Unconditional**, alone among the guidance blocks: it is about the format of a reply rather than about a capability, so there is no assembled tool to ask about. Without it the client's file-name header would be drawing data nothing produces — see the code-block bullet in `CLAUDE.md` |
 | `chat.guidance.plan` / `.quiz` / `.makeupCard` / `.collectPage` / `.table` / `.explore` | the tool module that owns each, appended to the turn's system prompt |
+| `chat.contextSummary` | `buildSystemPrompt` — the compaction summary standing in for the messages before the point |
+| `chat.guidance.recall` | `tools/recall.ts` — the transcript read's positive half |
+| `chat.guidance.smartContext` | `agent/smartContext.ts` — present when `SessionSettings.smartContext` is on. The one guidance block whose switch is a **session setting** rather than an assembled tool: the two reads it names are built-in, so there is no array to ask |
 | `title.system` | `agent/title.ts` — the auto-titler |
 | `thread.system` | `threads.ts` — the turn classifier |
 | `insight.system` | `insights.ts` — the insight pass |

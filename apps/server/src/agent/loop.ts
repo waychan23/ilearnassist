@@ -28,6 +28,7 @@ import { redactQuizInput } from "../tools/quiz.js";
 import type { TurnClock } from "./clock.js";
 import { buildModel } from "./model.js";
 import { usageOfChunks } from "./callUsage.js";
+import { smartContextHistory } from "./smartContext.js";
 
 /** Fallback ReAct step budget when a session does not set one. */
 const DEFAULT_MAX_STEPS = 15;
@@ -140,6 +141,11 @@ export interface RunAgentInput {
   exploreGuidance?: string;
   /** `ila_recall`'s positive half — see `SystemPromptInput.recallGuidance`. */
   recallGuidance?: string;
+  /**
+   * The smart-context mode's own block, present exactly when the session has it on — see
+   * `SystemPromptInput.smartContextGuidance`.
+   */
+  smartContextGuidance?: string;
   /** The account's own description of itself — see `SystemPromptInput.about`. */
   about?: string;
   /**
@@ -385,6 +391,18 @@ export interface SystemPromptInput {
    * history something to look up rather than something to apologize for.
    */
   recallGuidance?: string;
+  /**
+   * The smart-context mode's whole statement: this turn carries only the newest
+   * `SMART_CONTEXT_MESSAGES` history messages, and the built-in reads are how to look up
+   * anything earlier.
+   *
+   * Present exactly when the session has `settings.smartContext` set, and it is not the
+   * `collectPageGuidance` shape: there is no assembled tool to ask about, because the two reads
+   * it names (`ila_recall`, `ila_query`) are built-in and assembled in every turn. Its
+   * **presence** is what tells the model something no tool schema can — that the history it can
+   * see is deliberately narrow rather than the whole conversation.
+   */
+  smartContextGuidance?: string;
 }
 
 /**
@@ -434,6 +452,14 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
       ? renderPrompt("chat.contextSummary", { summary: input.contextSummary })
       : ""
   );
+
+  /*
+   * The smart-context statement, beside the summary and never both at once: the two are the
+   * two answers to "what stands in for the messages this turn does not carry", and the route
+   * already decided which by handing one of them over. It sits here rather than with the
+   * capability blocks because it is context about the context, the summary's own argument.
+   */
+  const smartContext = block(input.smartContextGuidance);
 
   const clock = block(
     renderPrompt("chat.system.clock", { local: input.clock.local, zone: input.clock.zone })
@@ -488,6 +514,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     persona,
     about,
     contextSummary,
+    smartContext,
     clock,
     workspace,
     codeFence,
@@ -589,10 +616,6 @@ async function buildHistoryMessages(
 }
 
 /**
- * Trim history to the session's `maxContextMessages`, measured in messages. After slicing
- * we drop any leading assistant message so the window always opens on a user turn.
- */
-/**
  * Whether the configured model declares chain of thought.
  *
  * The gate on replaying `reasoning_content` (see `withReplayedReasoning`): only a model
@@ -605,7 +628,24 @@ function isReasoningModel(provider: ProviderRecord | undefined, modelId: string)
   return !!provider?.models.find((m) => m.modelId === id)?.capabilities.includes("reasoning");
 }
 
+/**
+ * Trim history to the window this session runs with.
+ *
+ * Two windows, one function, because they are two answers to the same question and a second
+ * cut site is how `/chat` and `/answers` would stop agreeing about what a turn carries.
+ *
+ * **Smart context first, and it wins.** `settings.smartContext` is a mode rather than a
+ * preference: its whole contract is the newest `SMART_CONTEXT_MESSAGES` messages, so
+ * `maxContextMessages` is deliberately ignored while it is on — letting both apply would send
+ * `min(2, max)` and make the mode's own promise depend on a field it says nothing about. The
+ * cut itself is `smartContextHistory`'s, which does **not** drop a leading assistant message:
+ * see its note for why a resumed or regenerated turn may legitimately open on one.
+ *
+ * Otherwise: `maxContextMessages`, measured in messages. After slicing we drop any leading
+ * assistant message so the window always opens on a user turn.
+ */
 function trimHistory(history: Message[], settings: SessionSettings): Message[] {
+  if (settings.smartContext === true) return smartContextHistory(history);
   const max = settings.maxContextMessages;
   if (!max || max <= 0 || history.length <= max) return history;
   let trimmed = history.slice(-max);
@@ -656,6 +696,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         persona: input.systemPrompt,
         about: input.about,
         contextSummary: input.contextSummary,
+        smartContextGuidance: input.smartContextGuidance,
         planGuidance: input.planGuidance,
         quizGuidance: input.quizGuidance,
         makeupGuidance: input.makeupGuidance,

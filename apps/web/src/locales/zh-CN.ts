@@ -531,6 +531,12 @@ export default {
     stopping: "正在停止…",
     attach: "添加图片或文件",
     /*
+     * The experimental smart-context switch. One label, used as both the tooltip and the
+     * accessible name: the state is on `aria-pressed`, and a label that changed with it would
+     * rename the control every time it is pressed.
+     */
+    smartContext: "智能上下文（实验特性）",
+    /*
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — which is why they are short enough to read as one and why the
      * component sends the rendered label rather than a separate string that could drift from it.
@@ -1087,6 +1093,7 @@ export default {
     modeLabel: "当前上下文",
     modeFull: "全量上下文",
     modeCompacted: "压缩上下文",
+    modeSmart: "智能上下文（最近 2 条）",
     fullNote: "发送给模型的上下文为全部 {count} 条消息原文。",
     compactedNote: "发送给模型的上下文为压缩总结 + 压缩点之后的 {count} 条消息原文。",
     covered: "覆盖消息",
@@ -1096,6 +1103,8 @@ export default {
     summary: "总结内容",
     empty: "本会话还没有消息",
     compact: "压缩上下文",
+    /* Why the compress button is inert while smart context is on — the disabled title. */
+    smartActive: "智能上下文已开启：仅发送最近 2 条历史消息，压缩不可用。",
     compacting: "压缩中…",
     compactingHint: "正在压缩上下文，完成前无法发送新消息…",
     pendingQuestion: "有等待回答的问题，请先回答或跳过，再压缩上下文。",
