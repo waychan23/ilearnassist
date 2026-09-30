@@ -1830,6 +1830,7 @@ pre.code-block {
  */
 .markdown .katex-block {
   margin: 0 0 var(--space-5);
+  padding: .5em 0;
   overflow-x: auto;
 }
 .markdown .katex-block > .katex-display {
