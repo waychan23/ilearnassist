@@ -84,11 +84,15 @@ onMounted(() => {
   unsubscribe = subscribeWidgetEvents((event) => {
     /*
      * `turn.finished`, because a turn is what links a `@`-reference and what a tool writes a file
-     * through — and there is no narrower event to ride: nothing announces "a source was added",
-     * because the client is what asked for every addition and the store already knows. A library
-     * upload lands in a *workspace*, which this list does not show.
+     * through. `resource.changed` is the other half: the `web_fetch` card's "keep as a source"
+     * keeps a page after the turn that read it has ended, so no turn end announces it — and the
+     * store, which made the call, holds no copy of this list. A library upload lands in a
+     * *workspace*, which this list does not show.
      */
-    if (event.type === "turn.finished" && event.sessionId === store.activeSessionId) {
+    if (
+      (event.type === "turn.finished" || event.type === "resource.changed") &&
+      event.sessionId === store.activeSessionId
+    ) {
       void load();
     }
   });

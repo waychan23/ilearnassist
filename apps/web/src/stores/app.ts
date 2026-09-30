@@ -2599,6 +2599,31 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
+   * Keep a page the conversation read — the control a `web_fetch` card carries.
+   *
+   * Returns whether it landed, and reports a failure through the toast rather than throwing: the
+   * caller is a button whose next move is "nothing happened" on a refusal and a kept state on
+   * success, so a boolean is the whole answer it needs.
+   *
+   * The server re-fetches the URL and writes the reference, so the sources panel's own copy is
+   * stale the moment this returns; `resource.changed` is what tells it to re-read. It is an event
+   * rather than a `watch` because the panel holds its rows locally — the store knows the write
+   * landed, but not what the next listing will say.
+   */
+  async function keepFetchedPage(url: string): Promise<boolean> {
+    const sessionId = activeSessionId.value;
+    if (!sessionId) return false;
+    try {
+      await api.keepSessionPage(sessionId, url);
+      emitWidgetEvent({ type: "resource.changed", sessionId });
+      return true;
+    } catch (e) {
+      setError(messageOf(e));
+      return false;
+    }
+  }
+
+  /**
    * Reference a source in the next turn, the way `@` names it.
    *
    * An unparsed document is extracted first, because the requirement is exact about it: a
@@ -3573,6 +3598,7 @@ export const useAppStore = defineStore("app", () => {
     signOut,
     loadResources,
     deleteResource,
+    keepFetchedPage,
     deleteMessage,
     regenerateLastMessage,
     refreshConfig,

@@ -99,6 +99,7 @@ const mocks = vi.hoisted(() => ({
     uploadAttachment: vi.fn(),
     listSessionResources: vi.fn(),
     listResources: vi.fn(),
+    keepSessionPage: vi.fn(),
     deleteResource: vi.fn(),
     reparseResource: vi.fn(),
     getResource: vi.fn(),
@@ -565,6 +566,65 @@ describe("the library", () => {
     // pretended otherwise — a row that vanishes and comes back is worse than an error.
     expect(store.resources.map((r) => r.id)).toEqual(["a1"]);
     expect(store.resourcesError).toBe("gone");
+  });
+});
+
+describe("keeping a page from its web_fetch card", () => {
+  it("writes the reference, then tells the sources panel to re-read", async () => {
+    /*
+     * The panel holds its list locally and refreshes on turn ends, so a keep made *after* a turn
+     * has no turn end to ride: `resource.changed` is the announcement, and the assertion is that
+     * the store makes it only once the server said yes.
+     */
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: { type: string; sessionId?: string }[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e));
+
+    try {
+      mocks.api.keepSessionPage.mockResolvedValue(resourceOf({ id: "kept" }));
+      const store = await readyStore();
+
+      const ok = await store.keepFetchedPage("https://example.com/a");
+
+      expect(ok).toBe(true);
+      expect(mocks.api.keepSessionPage).toHaveBeenCalledWith("s1", "https://example.com/a");
+      expect(seen).toContainEqual({ type: "resource.changed", sessionId: "s1" });
+      expect(store.error).toBeNull();
+    } finally {
+      off();
+    }
+  });
+
+  it("reports a refusal through the toast, and announces no change", async () => {
+    // The server wrote nothing, so a panel sent to re-read would be reading for a row that is
+    // not there — and the refusal is the user's to act on, which is the toast's job.
+    const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
+    const seen: string[] = [];
+    const off = subscribeWidgetEvents((e) => seen.push(e.type));
+
+    try {
+      mocks.api.keepSessionPage.mockRejectedValue(
+        new ApiError("PAGE_FETCH_FAILED", "无法保存这个网页链接：refused", 400)
+      );
+      const store = await readyStore();
+
+      const ok = await store.keepFetchedPage("http://127.0.0.1:9/nope");
+
+      expect(ok).toBe(false);
+      expect(seen).not.toContain("resource.changed");
+      expect(store.error).toBe("无法保存这个网页链接：refused");
+    } finally {
+      off();
+    }
+  });
+
+  it("does nothing when no conversation is open", async () => {
+    const store = useAppStore();
+    await enterApp(store);
+    // Deliberately no `selectSession`: a card cannot be on screen without one, so this is the
+    // race rather than a state the UI can be in.
+    expect(await store.keepFetchedPage("https://example.com/a")).toBe(false);
+    expect(mocks.api.keepSessionPage).not.toHaveBeenCalled();
   });
 });
 

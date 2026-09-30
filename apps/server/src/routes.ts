@@ -3808,6 +3808,57 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
+   * Keep a fetched page in this conversation — the user's answer to "this one mattered".
+   *
+   * The other half of `ila_collect_page`, and the difference is who decided: the model keeps the
+   * pages it can see are load-bearing, and this lets the person say so about a page it read and
+   * set aside. The `web_fetch` card draws the control on a call that succeeded, so the URL is one
+   * the turn actually read.
+   *
+   * A **conversation**, never a workspace, unlike `/api/resources/pages`: the library's add-link
+   * is material added to a workspace from outside a conversation, while this is a page one
+   * conversation was working from. It reads back through `GET /api/resources?sessionId=`, the
+   * same listing the conversation's sources panel uses.
+   *
+   * The fetch is re-issued through `captureWebPage` — the same SSRF guard, the same rows, the same
+   * `parsed/` text as every other capture — because the turn's page cache is gone by the time the
+   * card is clicked. Keeping a page that is already kept is a no-op for the bytes: the reading's
+   * hash identifies the page and `idx_wr_place` identifies the reference, so a second press
+   * refreshes rather than duplicates.
+   *
+   * Gated on the write lock like every other session-scoped write: keeping a page is a write to a
+   * conversation, and a read-only client is one that cannot.
+   */
+  app.post(
+    "/api/sessions/:id/resources/pages",
+    { config: { requiresSessionLock: true } },
+    async (request, reply) => {
+      const user = actor(request);
+      const { id } = request.params as { id: string };
+      if (!db.getSessionForUser(id, user.id)) {
+        return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      }
+
+      const body = request.body as { url?: string };
+      const url = body?.url?.trim();
+      if (!url) return reply.code(400).send(apiError("DATA_REQUIRED", "a URL is required"));
+
+      try {
+        const resource = await captureWebPage(db, {
+          user: treeFor(user),
+          userId: user.id,
+          owner: { kind: "session", id },
+          url,
+        });
+        return reply.code(201).send(toResource(resource));
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send(apiError("PAGE_FETCH_FAILED", detail, { detail }));
+      }
+    }
+  );
+
+  /**
    * Every file this account has uploaded, newest first.
    *
    * Account-wide rather than per-conversation, because that is what a source *is* — the same

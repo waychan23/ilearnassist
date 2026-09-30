@@ -201,6 +201,18 @@ export const PLOT_TOOL_NAME = "ila_plot";
 export const WRITE_FILE_TOOL_NAME = "write_file";
 
 /**
+ * The tool the sources panel's manual keep is drawn on.
+ *
+ * Shared for the `WRITE_FILE_TOOL_NAME` reason — the client picks a call out of an assistant
+ * message by this name — and a constant rather than a literal because it is now a card-special
+ * name: `fetchResult.ts` reads it to decide whether a call offers "keep as a source". The URL is
+ * the call's own argument; the action re-fetches through `POST
+ * /api/sessions/:id/resources/pages`, because nothing survives the turn that would let the client
+ * hand the server the bytes it already has.
+ */
+export const WEB_FETCH_TOOL_NAME = "web_fetch";
+
+/**
  * The plan tools' names. Declared here rather than in the plan section below because the
  * widget registry names the plan widget's tools at module-eval time, and a `const` used in
  * an initializer has to exist first.

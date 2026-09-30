@@ -1992,6 +1992,20 @@ pre.code-block {
   margin-bottom: var(--space-1);
 }
 
+/*
+ * The keep-a-page footer on a `web_fetch` card — its own row under the disclosure rather than
+ * inside it, because the card is closed by default and this is the one action a reader may want
+ * without reading the arguments.
+ */
+.tool-card .tool-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
 .tool-card pre {
   background: var(--code-bg);
   border: 1px solid var(--border);

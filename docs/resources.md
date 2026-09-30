@@ -320,13 +320,23 @@ rather than a special one. The uniform part is that a reference points at a pars
 way: a `work_resources` row's `parsed_file_id` names a `files` row whether its entity is a file or
 a page.
 
-**One reference, held by whoever asked.** A page kept by a turn is the conversation's; a link the
-user pasted into the library is the workspace's. It used to write the workspace's as well, so that
-a page kept in one conversation would be readable from another — and that was a second row the
-library showed twice for one page, because readability never depended on it: the third arm of
-`listReadableWorkResources` already admits any reference owned by a *sibling* conversation in the
-same workspace. Sharing a page further is `@`-pointing at it in the next conversation, which is
-what shares every other piece of material.
+**One reference, held by whoever asked.** A page kept by a turn, or by the user from that turn's
+`web_fetch` card, is the conversation's; a link the user pasted into the library is the
+workspace's. It used to write the workspace's as well, so that a page kept in one conversation
+would be readable from another — and that was a second row the library showed twice for one page,
+because readability never depended on it: the third arm of `listReadableWorkResources` already
+admits any reference owned by a *sibling* conversation in the same workspace. Sharing a page
+further is `@`-pointing at it in the next conversation, which is what shares every other piece of
+material.
+
+**The user has the same door, on the card.** A model is not always right about which pages the
+conversation is about — it has been observed quoting a page in its reply and never keeping it —
+so a `web_fetch` call that succeeded carries a 保留为参考资料 control, and
+`POST /api/sessions/:id/resources/pages` runs the same `captureWebPage` under the conversation's
+owner. It re-fetches, because the turn's page cache is gone by the time the card is pressed, and
+the guard runs on that fetch exactly as it did on the turn's. The press is idempotent for the
+model's own reason: the reading's hash and `idx_wr_place` make a second keep a refresh rather than
+a duplicate.
 
 Three properties are worth knowing:
 
@@ -343,7 +353,10 @@ Three properties are worth knowing:
   assembly — `routes.ts` asks the assembled array rather than the config, so a Copilot whose
   allow-list excludes it is never told about a call it cannot make. Without it the model sees only
   the tool's own description, which is phrased as a *restriction* and reads as "usually do not":
-  the tool was built, wired and tested for a while before anyone noticed it never ran.
+  the tool was built, wired and tested for a while before anyone noticed it never ran. The
+  guidance carries an **obligation** — a page the answer came from must be kept before the turn
+  ends — because the same observation came back: a page can be adopted into a reply and never
+  kept. The card's manual control above is that fix's user-side half.
 
 ## Referencing with `@`
 

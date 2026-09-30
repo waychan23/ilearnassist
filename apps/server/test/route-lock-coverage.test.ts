@@ -60,6 +60,9 @@ const MUST_BE_GATED = [
   "PATCH /api/sessions/:id/insights/:insightId",
   "DELETE /api/sessions/:id/insights/:insightId",
   "POST /api/sessions/:id/resources",
+  // Keeping a page writes a reference the whole account can see from that conversation's
+  // sources panel, which is the same claim an upload makes — so it holds the same lock.
+  "POST /api/sessions/:id/resources/pages",
   "POST /api/sessions/:id/chat",
   "POST /api/sessions/:id/answers",
   "POST /api/sessions/:id/regenerate",
