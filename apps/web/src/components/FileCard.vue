@@ -96,8 +96,9 @@ const previewHtml = computed(() =>
 
 const size = computed(() => new TextEncoder().encode(content.value).length);
 
-/** The disclosure. Closed by default: the file is what this card is for. */
-const open = ref(false);
+/** The disclosure. Open by default: the preview is the point of the card, and a fold most
+ *  readers never open makes it a header with a secret. The head still folds it away. */
+const open = ref(true);
 
 /**
  * Show the whole file — in the preview dialog, at the root it was written into.
@@ -179,9 +180,21 @@ function noteAbout(): void {
       -->
       <div v-if="open" class="file-preview" data-testid="file-preview">
         <pre class="hljs" v-html="previewHtml"></pre>
-        <div v-if="hidden > 0" class="file-more">
+        <!--
+          The line count is a control rather than a caption: it is the one place that says there
+          is more, so it is also the shortest way to ask for it — and it opens the same dialog the
+          head's expand button does. A `<button>`, so the action is reachable by keyboard and
+          announced as an action; its own text is the label, which is why there is no `aria-label`
+          repeating it.
+        -->
+        <button
+          v-if="hidden > 0"
+          class="file-more"
+          data-testid="file-more"
+          @click="openFile"
+        >
           {{ t("files.card.moreLines", { count: hidden }) }}
-        </div>
+        </button>
       </div>
 
       <div class="file-actions">
@@ -239,11 +252,25 @@ function noteAbout(): void {
   font-size: var(--fs-2);
   color: var(--code-fg);
 }
+/* A full-width row rather than `.btn.ghost`: the divider above it is what makes it read as the
+   end of the preview rather than as a control floating under it, and the ghost's pill would
+   either lose that rule or span the card at a radius it does not have. */
 .file-more {
-  padding: var(--space-3) var(--space-4);
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
   border-top: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
   color: var(--text-3);
+  font-family: inherit;
   font-size: var(--fs-1);
+  text-align: left;
+  cursor: pointer;
+}
+.file-more:hover {
+  background: var(--panel-2);
+  color: var(--text-2);
 }
 .file-actions {
   display: flex;

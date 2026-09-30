@@ -68,20 +68,31 @@ test("a written file is a card, not a second copy of its text", async ({ page, r
   /*
    * And the file's text is **not** in the reply. This is the requirement, and the assertion has to
    * be on the absence of a code block rather than on the card's presence: a card beside a pasted
-   * copy would pass every check above and be exactly the problem.
+   * copy would pass every check above and be exactly the problem. Scoped to the message's markdown
+   * body, because the card itself now previews the file's head by default — "the reply" is the
+   * prose, not the artifact.
    */
   const message = page.getByTestId("message-assistant").last();
   await expect(message.locator("pre.code-block")).toHaveCount(0);
-  await expect(message).not.toContainText("println!");
+  await expect(message.getByTestId("message-content")).not.toContainText("println!");
 
-  // The preview is behind the disclosure, and bounded — the head of the file, not the file.
-  await card.getByTestId("file-head").click();
+  // The preview is open without asking, and bounded — the head of the file, not the file.
   const preview = card.getByTestId("file-preview");
   await expect(preview).toBeVisible();
   await expect(preview.locator("pre")).toContainText("println!");
+
+  // The head still folds it away: open is the default, not the only state.
+  await card.getByTestId("file-head").click();
+  await expect(preview).toBeHidden();
+  await card.getByTestId("file-head").click();
+  await expect(preview).toBeVisible();
+
   // 40 comment lines past the 20-line preview, and the count says so rather than the file just
-  // stopping.
-  await expect(card.locator(".file-more")).toBeVisible();
+  // stopping. It is a control, not a caption: it opens the whole file in the preview dialog.
+  const more = card.getByTestId("file-more");
+  await expect(more).toBeVisible();
+  await more.click();
+  await expect(page.getByTestId("file-preview-body")).toContainText("println!");
 });
 
 test("the card opens the file at the root it was written into", async ({ page, request }) => {
