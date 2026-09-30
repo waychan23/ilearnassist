@@ -91,6 +91,17 @@ test("a plotted figure renders inline as a drawing, with its label", async ({ pa
   await expect(figure.locator("svg")).toBeVisible();
   await expect(figure.locator("svg")).toContainText("顶点");
 
+  // Offset placement: the card sits between the two steps' prose rather than above them.
+  const intro = page.getByText("我画一下。", { exact: true });
+  const outro = page.getByText("画好了。", { exact: true });
+  const [introBox, cardBox, outroBox] = await Promise.all([
+    intro.boundingBox(),
+    card.boundingBox(),
+    outro.boundingBox(),
+  ]);
+  expect(introBox!.y + introBox!.height).toBeLessThanOrEqual(cardBox!.y);
+  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(outroBox!.y);
+
   // The head names the tool and the model's own figure name, and 定位's anchor is the call.
   await expect(card.getByTestId("plot-head")).toContainText("坐标图");
   await expect(card.getByTestId("plot-head")).toContainText("抛物线");

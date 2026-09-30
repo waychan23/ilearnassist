@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { highlightFile, renderMarkdown } from "../../src/utils/markdown.js";
+import {
+  countTablesIn,
+  highlightFile,
+  parseBlockLines,
+  renderMarkdown,
+} from "../../src/utils/markdown.js";
 
 /**
  * The labels every call would pass in a component. A helper rather than a second argument at each
@@ -457,5 +462,22 @@ describe("highlightFile", () => {
 
   it("keeps multi-byte characters intact", () => {
     expect(highlightFile("// 工作空间\nconst a = 1;", "a.ts")).toContain("工作空间");
+  });
+});
+
+describe("parseBlockLines", () => {
+  it("gives each block token its source-line span", () => {
+    const blocks = parseBlockLines("# title\n\nparagraph");
+    const heading = blocks.find((t) => t.type === "heading_open");
+    const paragraph = blocks.find((t) => t.type === "paragraph_open");
+    expect(heading).toMatchObject({ startLine: 0, endLine: 1 });
+    expect(paragraph).toMatchObject({ startLine: 2, endLine: 3 });
+  });
+
+  it("counts tables", () => {
+    const one = "| a |\n| - |\n| 1 |";
+    expect(countTablesIn(one)).toBe(1);
+    expect(countTablesIn(`${one}\n\n${one}`)).toBe(2);
+    expect(countTablesIn("no tables here")).toBe(0);
   });
 });

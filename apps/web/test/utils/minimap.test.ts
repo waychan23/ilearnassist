@@ -126,6 +126,18 @@ describe("messagePreview", () => {
     );
     expect(preview).toBe("look at this");
   });
+
+  it("strips inline artifact markers", () => {
+    const preview = messagePreview(
+      message({
+        role: "assistant",
+        content: "before\n\n[[artifact:diagram/x]]\n\nafter",
+      })
+    );
+    expect(preview).not.toContain("[[artifact");
+    expect(preview).toContain("before");
+    expect(preview).toContain("after");
+  });
 });
 
 describe("buildMinimapAnchors", () => {
