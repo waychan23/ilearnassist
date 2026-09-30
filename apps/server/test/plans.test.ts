@@ -483,6 +483,70 @@ describe("applyProgress", () => {
     expect(stored.anchorToolCallId).toBeNull();
   });
 
+  it("reads a container in_progress while a child is underway, borrowing that child's anchor", () => {
+    const view = seeded();
+    const a = byTitle(view, "A");
+    const a1 = byTitle(view, "A1");
+    // Straight to the row: a topic started, its chapter never named.
+    db.updatePlanNodeProgress(
+      db.getPlanBySession(SESSION)!.id,
+      a1.id,
+      "in_progress",
+      "call_start",
+      "2026-01-01T00:00:00.000Z"
+    );
+
+    const reread = readCurrentPlan(db, SESSION)!;
+    expect(byTitle(reread, "A").status).toBe("in_progress");
+    expect(byTitle(reread, "A").anchorToolCallId).toBe("call_start");
+    // Display-only, as with a rolled-up completion.
+    const stored = db.listPlanNodes(db.getPlanBySession(SESSION)!.id).find((r) => r.id === a.id)!;
+    expect(stored.status).toBe("not_started");
+  });
+
+  it("persists a container promoted to in_progress by a started child, anchor and all", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([{ title: "A", children: [{ title: "A1" }, { title: "A2" }] }, { title: "B" }])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const a = byTitle(view, "A");
+    const b = byTitle(view, "B");
+    const planId = db.getPlanBySession(SESSION)!.id;
+    db.updatePlanNodeProgress(planId, byTitle(view, "A1").id, "in_progress", "call_child", "2026-01-01T00:00:00.000Z");
+
+    // An unrelated write drives the full-plan rescan and persists the derived status/anchor.
+    const updated = applyProgress(db, SESSION, { nodes: [{ id: b.id, status: "in_progress" }] }, "call_trigger");
+    expect(byTitle(updated, "A").status).toBe("in_progress");
+    expect(byTitle(updated, "A").anchorToolCallId).toBe("call_child");
+    const stored = db.listPlanNodes(planId).find((r) => r.id === a.id)!;
+    expect(stored.status).toBe("in_progress");
+    expect(stored.anchorToolCallId).toBe("call_child");
+  });
+
+  it("does not drag a container into in_progress from skipped children alone", () => {
+    const v1 = makePlan(
+      db,
+      SESSION,
+      input([{ title: "A", children: [{ title: "A1" }, { title: "A2" }] }])
+    );
+    if (planConflicted(v1)) throw new Error("should create");
+    const view = readCurrentPlan(db, SESSION)!;
+    const a1 = byTitle(view, "A1");
+    const a2 = byTitle(view, "A2");
+
+    const skipped = applyProgress(
+      db,
+      SESSION,
+      { nodes: [{ id: a1.id, status: "skipped" }, { id: a2.id, status: "skipped" }] },
+      "call_skip"
+    );
+    // A passed-over chapter stays playable; only a started/finished child makes it underway.
+    expect(byTitle(skipped, "A").status).toBe("not_started");
+  });
+
   it("treats skipped as underway, not completed", () => {
     const view = seeded();
     const b = byTitle(view, "B");

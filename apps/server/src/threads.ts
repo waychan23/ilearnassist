@@ -121,22 +121,25 @@ function flatPlanNodes(plan: PlanView): Map<string, { number: string; node: Plan
   return out;
 }
 
-/** The first live node currently `in_progress`, DFS in plan order. */
+/**
+ * The live node currently `in_progress`, DFS in plan order.
+ *
+ * The rollup marks a container in progress alongside its descendant, so an in-progress node
+ * whose child is underway is the chapter, not the topic: the topic is what the turn is
+ * about. The first underway node in plan order therefore answers with its first underway
+ * descendant when it has one, and with itself otherwise.
+ */
 export function currentPlanNode(plan: PlanView | undefined): string | undefined {
   if (!plan) return undefined;
-  let found: string | undefined;
-  const walk = (nodes: readonly PlanTreeNode[]): void => {
+  const walk = (nodes: readonly PlanTreeNode[]): string | undefined => {
     for (const node of nodes) {
-      if (found) return;
-      if (node.status === "in_progress") {
-        found = node.id;
-        return;
-      }
-      if (node.children) walk(node.children);
+      if (node.status !== "in_progress") continue;
+      const inner = node.children ? walk(node.children) : undefined;
+      return inner ?? node.id;
     }
+    return undefined;
   };
-  walk(plan.tree);
-  return found;
+  return walk(plan.tree);
 }
 
 interface PlanProgressChange {
@@ -345,9 +348,12 @@ export function buildThreadPrompt(input: PromptInput): string {
 
   if (input.plan) {
     const nodes = flatPlanNodes(input.plan);
+    // One marker, on the deepest underway node: the rollup puts a chapter in progress
+    // alongside its topic, and marking both would tell the classifier two nodes are current.
+    const currentId = currentPlanNode(input.plan);
     const lines: string[] = [];
     for (const { number, node } of nodes.values()) {
-      const marker = node.status === "in_progress" ? "  ← current" : "";
+      const marker = node.id === currentId ? "  ← current" : "";
       lines.push(`${number}. ${clip(node.title, 80)} [${node.status}]${marker}`);
     }
     sections.push(`<plan>\n${lines.join("\n")}\n</plan>`);

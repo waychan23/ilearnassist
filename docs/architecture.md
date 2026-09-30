@@ -265,9 +265,12 @@ session-scoped plan widget. The split is:
   `in_progress` call placed before its content (tool call id, in the `done_tool_call_id`
   column — widened without a rename): kept through completion, cleared when the node returns
   to not-started/skipped, and what the panel's click scrolls to (the tool-call card, not the
-  message top). **Containers follow their children**: a chapter/section completes itself once
-  every live child is completed (cascading up, so the last topic can finish its chapter and the
-  plan), and reopens if a child reopens or an edit adds one. The rollup runs after every
+  message top). **Containers follow their children**: a chapter/section is `in_progress` as
+  soon as one live child is completed or in progress, and completes itself once every live
+  child is completed (cascading up, so the last topic can finish its chapter and the plan); it
+  reopens if a child reopens or an edit adds one. A child that is only `skipped` does not drag
+  the container along — the jump marks a passed-over chapter and its topics together, and
+  flipping the chapter would take its play affordance away. The rollup runs after every
   progress write, after an edit, and after a jump — and `buildCurrentTree` derives the same
   status on read, so rows written before the rollup existed still render consistently. A
   container that reads underway/done without a marker of its own **borrows the anchor of its

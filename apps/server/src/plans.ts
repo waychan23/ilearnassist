@@ -181,8 +181,12 @@ interface EffectiveNode {
  * Status:
  * - Every live child completed → `completed` (a chapter is done when its topics are; the
  *   promotion cascades, so a completion can finish its section, chapter and the whole plan).
- * - A completed container with any unfinished child → `in_progress`: it is unfinished again,
- *   not merely un-opened, because part of it is done.
+ * - Any child completed or in_progress, or a completed container with any unfinished child →
+ *   `in_progress`. A chapter with a topic underway is underway, for the same reason at the
+ *   plan level `derivePlanStatus` treats any started node as in progress.
+ * - A child that is only `skipped` does **not** drag the container into `in_progress`; the
+ *   jump marks a passed-over chapter and its topics together, and flipping the chapter would
+ *   take its play affordance away (only not-started/skipped nodes are playable).
  * - Otherwise no opinion: a leaf's own status, an empty container, and a container someone
  *   opened (jump) or skipped all keep whatever the row says. Deriving `not_started` for every
  *   all-unstarted parent would erase the `in_progress` jump deliberately writes.
@@ -222,9 +226,13 @@ function effectiveNodes(nodes: RollupNode[]): Map<string, EffectiveNode> {
       if (!children || children.length === 0) continue;
       const current = status.get(n.id)!;
       const allDone = children.every((c) => status.get(c.id) === "completed");
+      const started = children.some((c) => {
+        const childStatus = status.get(c.id);
+        return childStatus === "completed" || childStatus === "in_progress";
+      });
       const next: PlanNodeStatus = allDone
         ? "completed"
-        : current === "completed"
+        : started || current === "completed"
           ? "in_progress"
           : current;
       if (next !== current) {
@@ -278,11 +286,12 @@ function effectiveNodes(nodes: RollupNode[]): Map<string, EffectiveNode> {
 /**
  * Persist what `effectiveNodes` says the containers must be, reading the plan's rows fresh.
  *
- * A promotion takes the derived anchor — the first jumpable child's marker — so a rolled-up
- * chapter lands where that section began, not on whatever call happened to trigger the scan;
- * `completingCallId` is only the fallback for a container whose children carry no anchor, and
- * is empty on the paths with no call to name (an edit or a jump). A demotion keeps whatever
- * the row carries, the same way an explicit `in_progress` keeps its anchor.
+ * A promotion takes the derived anchor — the first jumpable child's marker — so a container
+ * that rolls up or starts up lands where that section began, not on whatever call happened to
+ * trigger the scan; `completingCallId` is only the fallback for a container whose children
+ * carry no anchor, and is empty on the paths with no call to name (an edit or a jump). A
+ * container whose own row already carries an anchor keeps it, the same way a demotion and an
+ * explicit `in_progress` do.
  */
 function persistEffectiveStatuses(
   db: AppDb,
@@ -304,7 +313,10 @@ function persistEffectiveStatuses(
         node.anchorAt ?? (completingCallId ? ts : null)
       );
     } else {
-      db.updatePlanNodeProgress(planId, row.id, node.status, row.anchorToolCallId, row.anchorAt);
+      // in_progress, whether promoted from not-started/skipped or demoted from completed:
+      // keep the row's own anchor when it has one, otherwise persist the borrowed one so the
+      // stored row answers exactly what a read derives.
+      db.updatePlanNodeProgress(planId, row.id, node.status, node.anchorToolCallId, node.anchorAt);
     }
   }
 }
