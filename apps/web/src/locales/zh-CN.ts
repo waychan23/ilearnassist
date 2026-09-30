@@ -82,6 +82,17 @@ export default {
    * preview, which knows nothing about a tool call.
    */
   /**
+   * The transient states of an inline artifact slot.
+   */
+  inlineArtifact: {
+    /** Marker seen in the text, tool not started yet. */
+    pending: "正在生成…",
+    /** A marker whose artifact never came, once the turn is done. */
+    dangling: "未找到对应的图表或文件",
+    /** The artifact call failed. */
+    error: "图表或文件生成失败",
+  },
+  /**
    * A table's title bar in a reply — the strip above the markdown, not the table itself.
    *
    * Its own namespace rather than a corner of `diagram`: the bar is drawn by the *message* renderer

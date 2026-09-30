@@ -2872,6 +2872,10 @@ export const useAppStore = defineStore("app", () => {
           id: ev.toolCall.id,
           name: ev.toolCall.name,
           input: ev.toolCall.input,
+          // Artifact card's inline position (absent on every other call).
+          ...(ev.toolCall.contentOffset !== undefined
+            ? { contentOffset: ev.toolCall.contentOffset }
+            : {}),
         });
         break;
       case "tool_end": {

@@ -2,7 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
-import type { GetSessionThreadsResponse, PlanTreeNode } from "../api/types";
+import {
+  stripInlineMarkers,
+  type GetSessionThreadsResponse,
+  type PlanTreeNode,
+} from "../api/types";
 import { useAppStore } from "../stores/app";
 import { emitWidgetEvent, subscribeWidgetEvents } from "../composables/widgetEvents";
 import Icon from "../components/Icon.vue";
@@ -180,7 +184,7 @@ function leafText(row: Extract<ThreadTreeRow, { kind: "message" }>): string {
 }
 
 function leafTitle(row: Extract<ThreadTreeRow, { kind: "message" }>): string {
-  return row.message.content || t("thread.toolCall");
+  return stripInlineMarkers(row.message.content) || t("thread.toolCall");
 }
 </script>
 

@@ -59,6 +59,14 @@ const en: typeof MessageSchema = {
    * preview, which knows nothing about a tool call.
    */
   /**
+   * The transient states of an inline artifact slot.
+   */
+  inlineArtifact: {
+    pending: "Preparing artifact…",
+    dangling: "Referenced artifact not found",
+    error: "Artifact failed",
+  },
+  /**
    * A table's title bar in a reply — the strip above the markdown, not the table itself. See the
    * Chinese catalog for why it is not a corner of `diagram`.
    */
