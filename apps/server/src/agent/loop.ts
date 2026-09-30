@@ -412,13 +412,10 @@ export interface SystemPromptInput {
   smartContextGuidance?: string;
   /**
    * The user's stored preferences, rendered from the catalog — `chat.preferences` with the rows
-   * substituted — and present exactly when the conversation's effective `userPreferences`
-   * switch is on AND at least one applies.
+   * substituted — and present exactly when at least one applies.
    *
-   * Its presence is the switch, and the switch itself is a session setting plus the context mode
-   * (`effectivePreferencesEnabled`): there is no assembled tool it could be asked of, because
-   * recording a preference and being told about one are deliberately independent. The block
-   * carries the scope-precedence sentence, which is the part a list of rows cannot state.
+   * Injection is built in: there is no switch and no assembled tool it could be asked of. The
+   * block carries the scope-precedence sentence, which is the part a list of rows cannot state.
    */
   preferencesGuidance?: string;
   /**

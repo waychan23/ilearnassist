@@ -538,12 +538,6 @@ export default {
      */
     smartContext: "智能上下文（实验特性）",
     /*
-     * The experimental user-preferences switch: whether the next turn's system prompt carries
-     * this conversation's stored preferences. One label for tooltip and accessible name, state
-     * on `aria-pressed`, like the switch beside it.
-     */
-    userPreferences: "用户偏好（实验特性）",
-    /*
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — which is why they are short enough to read as one and why the
      * component sends the rendered label rather than a separate string that could drift from it.
@@ -1515,9 +1509,9 @@ export default {
       empty: "这个会话还没有记录用户偏好。当你明确说出对助手工作方式的要求时，它会出现在这里。",
       /**
        * Said once, under the list: the connection between this panel and what a turn sends is
-       * not guessable from the rows, and the experiment's switch lives in the composer.
+       * not guessable from the rows.
        */
-      note: "偏好会在调用模型时作为系统提示注入（可用输入框的「用户偏好」开关控制）；每条偏好左侧是它的类型：期望 / 不期望。",
+      note: "偏好会在每次调用模型时作为系统提示注入；每条偏好左侧是它的类型：期望 / 不期望。",
     },
   },
 

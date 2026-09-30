@@ -1,13 +1,14 @@
 # User preferences
 
 A conversation remembers the standing requirements its user states about how the assistant should
-work — "回答先给结论", "不要使用表格", "写文件前先问我" — and can inject them into every turn's
-system prompt. The feature is **experimental** and its injection switch is a session setting, the
-smart-context switch's shape.
+work — "回答先给结论", "不要使用表格", "写文件前先问我" — and injects them into every turn's
+system prompt. **Injection is built in**: a conversation that holds a live preference always
+carries the block, and one that holds none always sends nothing. There is no switch; the way to
+stop a rule is to delete it (the panel) or supersede it (a later recording).
 
 The requirement this implements, in one line:
 
-> 用户偏好：会话级别的长期要求，两种类型（期望 / 不期望），只在用户显式要求时提取；同一会话内后提取的覆盖旧的；可用实验开关注入系统提示词。
+> 用户偏好：会话级别的长期要求，两种类型（期望 / 不期望），只在用户显式要求时提取；同一会话内后提取的覆盖旧的；内置注入系统提示词。
 
 ## The three levels
 
@@ -40,8 +41,8 @@ place the validation, the transaction and the replace protocol live.
 The agent's tool, `auto-install` mode: ordinary and allow-listable, and calling it installs the
 用户偏好 panel that lists it. `chat.guidance.preference` carries the explicit-only boundary — a
 model may record what the user asked for in so many words and must never infer a preference from a
-reaction, a tone, or its own judgement. Recording is deliberately **not** gated on the injection
-switch: that switch decides what the model is *told*, not what it may remember.
+reaction, a tone, or its own judgement. Recording and injection are independent mechanisms: a rule
+recorded here is injected on every later turn, with nothing to switch on.
 
 ### From a selection: 作为用户偏好
 
@@ -71,23 +72,21 @@ the more specific rule.
 
 ## Injection
 
-`SessionSettings.userPreferences` is tri-state, like every field in that blob:
+Every turn reads the applicable preferences and, when there is at least one, renders
+`chat.preferences` into the system prompt — one `<preference id scope type>` element per row —
+beside the context blocks, before the clock. No session setting, no tool and no mode gates it: a
+conversation with no rules sends no block at all, so a fresh conversation is byte-identical to one
+from before the feature existed, and its absence always means "nothing stored" rather than
+"switched off".
 
-| value | meaning |
-| --- | --- |
-| `true` | always inject |
-| `false` | never inject |
-| `null`/absent | **follow the context mode**: on for smart context or an active compaction summary, off on the full history |
+That the block rides every turn is what makes the feature work under the other context
+mechanisms: a smart-context window or a compaction summary drops the history a rule was stated in,
+and the injected block is what carries it forward.
 
-The default follows the mode because the injected block is what carries the preferences once the
-history no longer does. `effectivePreferencesEnabled` (server) and `store.effectiveUserPreferences`
-(client) compute the same expression, so the composer's toggle shows the state a turn will use
-without a round trip. Pressing the toggle writes the opposite as an explicit answer; there is
-deliberately no "back to default" control.
-
-The block is present only when the switch is effectively on **and** at least one preference
-applies, rendered by `chat.preferences` with one `<preference id scope type>` element per row. A
-fresh conversation is byte-identical to one from before the feature existed.
+There was briefly a tri-state session switch (`SessionSettings.userPreferences`) and a composer
+toggle; both were removed. A control whose default followed another mode's state, and whose off
+position silently stopped the assistant obeying the user's own stated rules, was more state than
+the feature wanted — deleting the rule is the honest way to stop following it.
 
 ## Reading it
 
@@ -96,8 +95,8 @@ fresh conversation is byte-identical to one from before the feature existed.
 - `DELETE /api/sessions/:id/preferences/:preferenceId` — soft delete; unknown, foreign or
   non-session ids are `PREFERENCE_NOT_FOUND`. The panel confirms before calling it, like every
   other destructive control.
-- `ila_query kind "preference"` — the model's read, all three levels with ids, for conflicts when
-  injection is off or the history was trimmed.
+- `ila_query kind "preference"` — the model's explicit read, all three levels with ids, for
+  conflicts without relying on what its prompt happens to hold.
 
 ## A fork copies them
 
@@ -110,8 +109,8 @@ timestamps. The account-level and workspace-level rows are not the conversation'
   a sentence rather than a preference, and it could not judge conflicts.
 - **No read of preferences from another conversation** is possible, at any level: the reads are
   owner-scoped and the session arm is scoped to the conversation.
-- **The panel is not in `DEFAULT_WIDGET_IDS`.** The feature is experimental, and a conversation
-  that never records a preference should not carry an empty panel; recording one installs it.
+- **The panel is not in `DEFAULT_WIDGET_IDS`.** A conversation that never records a preference
+  should not carry an empty panel; recording one installs it.
 - **The usage ledger gets a `preference` purpose**, so the extraction's cost sits beside the six
   other calls rather than inside the turn's total.
 
@@ -119,8 +118,8 @@ timestamps. The account-level and workspace-level rows are not the conversation'
 
 | File | Covers |
 | --- | --- |
-| `apps/server/test/preferences.test.ts` | the effective switch, the write and its refusals, the two renderers, the extraction parser |
-| `apps/server/test/preference-routes.test.ts` | the tool's write and auto-install, the injected block on every default, `ila_query`, the extraction route's three outcomes, GET/DELETE |
+| `apps/server/test/preferences.test.ts` | the write and its refusals, the two renderers, the extraction parser |
+| `apps/server/test/preference-routes.test.ts` | the tool's write and auto-install, the block injected whenever rules exist (and absent when none do), `ila_query`, the extraction route's three outcomes, GET/DELETE |
 | `apps/server/test/fork.test.ts` | the clone |
-| `apps/web/test/stores/app.test.ts` | the effective computed, the `preference.changed` event, the selection action's outcomes |
+| `apps/web/test/stores/app.test.ts` | the `preference.changed` event and the selection action's outcomes |
 | `e2e/preferences.spec.ts` | the whole gesture: a stated rule recorded and listed, injection read off the wire, deletion, and the hand-made extraction from a selection |

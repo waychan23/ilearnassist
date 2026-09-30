@@ -402,8 +402,6 @@ const en: typeof MessageSchema = {
     attach: "Add an image or file",
     /** The experimental smart-context switch — see the Chinese catalog for the label's rule. */
     smartContext: "Smart context (experimental)",
-    /** The experimental user-preferences switch — the smart-context switch's rule. */
-    userPreferences: "User preferences (experimental)",
     /*
      * The canned replies above the input. Each label is also the message that gets sent — the
      * chip *is* the sentence — so they are kept short and conversational rather than being
@@ -1197,8 +1195,8 @@ const en: typeof MessageSchema = {
       noSession: "Open a conversation and its preferences are listed here.",
       empty:
         "No preferences recorded yet. When you state explicitly how the assistant should work, it appears here.",
-      /** The panel's connection to what a turn sends, and to the composer's switch. */
-      note: "Preferences are injected into the system prompt when a model is called (controlled by the “User preferences” switch in the composer); each row's tag is its kind: wanted / not wanted.",
+      /** The panel's connection to what a turn sends. */
+      note: "Preferences are injected into the system prompt on every model call; each row's tag is its kind: wanted / not wanted.",
     },
   },
 

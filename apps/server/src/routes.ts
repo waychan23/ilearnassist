@@ -138,7 +138,6 @@ import { makeInsightGenerator } from "./agent/insights.js";
 import { extractPreference } from "./agent/preferences.js";
 import { buildInsightViews, generateInsights } from "./insights.js";
 import {
-  effectivePreferencesEnabled,
   parseExtractedPreference,
   preferencesBlock,
   savePreference,
@@ -426,15 +425,7 @@ function withValidatedScope(
       return { ok: false, message: "smartContext must be true, false or null" };
     }
   }
-  // The same refusal for `userPreferences`: the read is `?? default`, so a coerced `"false"`
-  // would store a truthy string under one build and mean "off" under another — a mode whose
-  // switch and the server disagree. `null` is a real value (follow the context mode).
-  if ("userPreferences" in settings) {
-    const value = (settings as { userPreferences?: unknown }).userPreferences;
-    if (value !== undefined && value !== null && typeof value !== "boolean") {
-      return { ok: false, message: "userPreferences must be true, false or null" };
-    }
-  }
+
   if (!("workspaceScope" in settings)) return { ok: true, settings };
   const normalized = normalizeWorkspaceScope(
     (settings as { workspaceScope?: unknown }).workspaceScope
@@ -4911,10 +4902,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      */
     smartContextGuidance?: string;
     /**
-     * Present when the conversation's effective `userPreferences` switch is on AND at least one
-     * preference applies. Its presence is the whole switch — there is no tool to ask, because
-     * recording and injection are deliberately independent — and the block it carries is the
-     * user's standing rules with their scope-precedence sentence.
+     * Present when at least one preference applies to this conversation. Its presence is the
+     * whole condition — there is no switch and no tool to ask, because injection is built in —
+     * and the block it carries is the user's standing rules with their scope-precedence
+     * sentence.
      */
     preferencesGuidance?: string;
     /**
@@ -5265,24 +5256,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     });
 
     /*
-     * Whether this turn injects the user's preferences. The explicit answer is the session's;
-     * `null`/absent follows the context mode — on for smart context or an active summary, off on
-     * the full history. The summary read is skipped when it cannot matter (smart context is
-     * already on, or the setting is explicit), so the ordinary full-context turn pays no query.
-     *
-     * The rows are read only when the block would be present: a conversation with injection off
-     * pays nothing, and the three scopes come from one statement (`listPreferencesForContext`)
-     * so the model's view and the injected block can never disagree about which rows apply.
+     * The user's standing rules, read on **every** turn: injection is built in, so a
+     * conversation that holds a live preference always carries the block and one that holds
+     * none always sends nothing. The three scopes come from one statement
+     * (`listPreferencesForContext`), so the model's read (`ila_query`) and the injected block
+     * can never disagree about which rows apply.
      */
-    const preferencesEnabled = effectivePreferencesEnabled(
-      session.settings,
-      session.settings.userPreferences == null && session.settings.smartContext !== true
-        ? db.activeContextSummaryForUser(session.id, input.userId) !== undefined
-        : false
-    );
-    const preferenceRows = preferencesEnabled
-      ? db.listPreferencesForContext(input.userId, workspace.id, session.id)
-      : [];
+    const preferenceRows = db.listPreferencesForContext(input.userId, workspace.id, session.id);
 
     return {
       provider,
@@ -5354,20 +5334,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       smartContextGuidance:
         session.settings.smartContext === true ? smartContextGuidance() : undefined,
       /*
-       * The user's standing rules, present exactly when the effective switch is on and there is
-       * something to say. An enabled conversation with no preferences carries no block at all, so
-       * a fresh conversation is byte-identical to one from before the feature existed. Read above
-       * the return rather than inline because the rows are also the whole of what "is there
-       * anything to inject" means.
+       * The user's standing rules, present exactly when there is something to say. A
+       * conversation with no preferences carries no block at all, so a fresh conversation is
+       * byte-identical to one from before the feature existed.
        */
       preferencesGuidance:
         preferenceRows.length > 0 ? preferencesBlock(preferenceRows) : undefined,
       /*
        * `ila_save_preference`'s positive half, asked of the assembled array like the table and
-       * plot blocks below: a Copilot whose allow-list excludes the tool is never taught a call
-       * it cannot make. Note the switch is the array, never `preferencesEnabled` — recording a
-       * rule and being told about one are independent, and a conversation with injection off
-       * still needs to know how to record.
+       * plot blocks below, so a Copilot whose allow-list excludes the tool is never taught a
+       * call it cannot make.
        */
       preferenceGuidance: tools.some((t) => t.name === PREFERENCE_TOOL_NAME)
         ? preferenceGuidance()

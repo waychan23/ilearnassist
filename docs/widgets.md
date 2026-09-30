@@ -609,8 +609,11 @@ nothing because every change is its own decision, this one subscribes to `prefer
   (`installWidgetForToolUse`). A manual save has no `tool_end` for the client to sync from, so
   `extractPreferenceFromSelection` also refreshes the installed list after a save — otherwise the
   tab would not appear until a reload.
-- **It is deliberately not in `DEFAULT_WIDGET_IDS`.** The feature is experimental, and a
-  conversation that never records a preference should not carry an empty panel.
+- **It is deliberately not in `DEFAULT_WIDGET_IDS`.** A conversation that never records a
+  preference should not carry an empty panel.
+- **The panel is only the view.** Injection into the system prompt is built in — every turn with
+  at least one rule carries the block — and lives in `preferences.ts`; see
+  `docs/user-preferences.md`.
 - **Delete confirms first**, like every other destructive control the user presses; a failure
   after the confirmation goes to the toast.
 - Its rows are **session-level only**, unlike the injected block and `ila_query`, which read all

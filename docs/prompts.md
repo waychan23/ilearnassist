@@ -43,7 +43,7 @@ catalogs' rule, never keyed by the module that happens to read them.
 | `chat.guidance.recall` | `tools/recall.ts` — the transcript read's positive half |
 | `chat.guidance.smartContext` | `agent/smartContext.ts` — present when `SessionSettings.smartContext` is on. The one guidance block whose switch is a **session setting** rather than an assembled tool: the two reads it names are built-in, so there is no array to ask |
 | `chat.guidance.preference` | `tools/preferences.ts` — appended when `ila_save_preference` survived assembly. Carries the explicit-only boundary: record what the user asked for in so many words, never what the model inferred |
-| `chat.preferences` | `preferences.ts` — the injected user-preference block, present when the effective `userPreferences` switch is on and at least one applies. Its `{{preferences}}` is one `<preference id scope type>` element per row, and the text states the scope precedence — a fact a list of rows cannot carry |
+| `chat.preferences` | `preferences.ts` — the injected user-preference block, present whenever at least one rule applies (injection is built in; there is no switch). Its `{{preferences}}` is one `<preference id scope type>` element per row, and the text states the scope precedence — a fact a list of rows cannot carry |
 | `title.system` | `agent/title.ts` — the auto-titler |
 | `thread.system` | `threads.ts` — the turn classifier |
 | `insight.system` | `insights.ts` — the insight pass |

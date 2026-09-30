@@ -29,8 +29,6 @@ let env: TestEnv;
 const EXTRACT_MARKER = "user-preference extraction function";
 /** A phrase only the injected block carries. */
 const BLOCK_MARKER = "<user_preferences>";
-/** The compactor's marker, for the compaction case. */
-const COMPACT_MARKER = "context-compression function";
 
 beforeAll(async () => {
   llm = await startFakeLlm();
@@ -176,32 +174,25 @@ describe("the preference tool in a turn", () => {
 });
 
 describe("what a turn's system prompt carries", () => {
-  it("omits the block on the full context when the setting is absent", async () => {
-    const workspace = await newWorkspace(env, "pref-block-off");
-    const session = await newSession(env, workspace.id);
-    seed(env.user.id, session.id, "回答先给结论");
-    llm.script([{ content: "好的" }]);
-
-    await chat(session.id, "普通问题");
-    expect(systemWith("普通问题")).not.toContain(BLOCK_MARKER);
-  });
-
-  it("injects the block when the switch is on", async () => {
+  it("injects the block whenever the conversation has rules", async () => {
+    // Injection is built in: no switch, no mode. A full-history turn with a stored rule
+    // carries the block, with the ids and the precedence sentence.
     const workspace = await newWorkspace(env, "pref-block-on");
     const session = await newSession(env, workspace.id);
     const id = seed(env.user.id, session.id, "回答先给结论");
-    await setSettings(session.id, { userPreferences: true });
     llm.script([{ content: "好的" }]);
 
-    await chat(session.id, "打开后的问题");
-    const system = systemWith("打开后的问题");
+    await chat(session.id, "普通问题");
+    const system = systemWith("普通问题");
     expect(system).toContain(BLOCK_MARKER);
     expect(system).toContain(id);
     expect(system).toContain("回答先给结论");
     expect(system).toContain("session rule overrides a workspace rule");
   });
 
-  it("injects by default under smart context", async () => {
+  it("keeps injecting under smart context", async () => {
+    // The deliberately narrow window is exactly where the block matters most, so the mode must
+    // not displace it.
     const workspace = await newWorkspace(env, "pref-block-smart");
     const session = await newSession(env, workspace.id);
     seed(env.user.id, session.id, "不要使用表格");
@@ -212,36 +203,15 @@ describe("what a turn's system prompt carries", () => {
     expect(systemWith("智能上下文的问题")).toContain(BLOCK_MARKER);
   });
 
-  it("injects by default when the context is compacted", async () => {
-    const workspace = await newWorkspace(env, "pref-block-compact");
+  it("sends no block when the conversation has no rules", async () => {
+    // The absence means "nothing stored", never "switched off": a fresh conversation is
+    // byte-identical to one from before the feature existed.
+    const workspace = await newWorkspace(env, "pref-block-empty");
     const session = await newSession(env, workspace.id);
-    seed(env.user.id, session.id, "回答先给结论");
-    // Two turns so the compactor has something to fold.
-    llm.script([{ content: "第一答" }]);
-    await chat(session.id, "第一个问题");
-    llm.setMatches([{ includes: COMPACT_MARKER, content: "Recap." }]);
-    const compacted = await env.inject({
-      method: "POST",
-      url: `/api/sessions/${session.id}/context/compact`,
-    });
-    expect(compacted.statusCode).toBe(200);
-
-    llm.script([{ content: "好的" }]);
-    await chat(session.id, "压缩后的问题");
-    const system = systemWith("压缩后的问题");
-    expect(system).toContain(BLOCK_MARKER);
-    expect(system).toContain("回答先给结论");
-  });
-
-  it("withholds the block when the switch is explicitly off, even under smart context", async () => {
-    const workspace = await newWorkspace(env, "pref-block-explicit-off");
-    const session = await newSession(env, workspace.id);
-    seed(env.user.id, session.id, "回答先给结论");
-    await setSettings(session.id, { smartContext: true, userPreferences: false });
     llm.script([{ content: "好的" }]);
 
-    await chat(session.id, "显式关闭的问题");
-    expect(systemWith("显式关闭的问题")).not.toContain(BLOCK_MARKER);
+    await chat(session.id, "没有偏好时的问题");
+    expect(systemWith("没有偏好时的问题")).not.toContain(BLOCK_MARKER);
   });
 });
 

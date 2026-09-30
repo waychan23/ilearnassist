@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PREFERENCE_CONTENT_MAX } from "@ilearnassist/shared";
 import { DEFAULT_SESSION_TITLE, createDb, newId, type AppDb } from "../src/db.js";
 import {
-  effectivePreferencesEnabled,
   formatPreferences,
   parseExtractedPreference,
   preferencesBlock,
@@ -59,24 +58,6 @@ afterEach(() => {
     /* already closed */
   }
   rmSync(root, { recursive: true, force: true });
-});
-
-describe("effectivePreferencesEnabled", () => {
-  it("follows the context mode when the setting is absent", () => {
-    // Full history, nothing compacted: off.
-    expect(effectivePreferencesEnabled({}, false)).toBe(false);
-    // An active summary, or the smart-context window: on.
-    expect(effectivePreferencesEnabled({}, true)).toBe(true);
-    expect(effectivePreferencesEnabled({ smartContext: true }, false)).toBe(true);
-  });
-
-  it("lets an explicit answer override the mode either way", () => {
-    expect(
-      effectivePreferencesEnabled({ userPreferences: false, smartContext: true }, true)
-    ).toBe(false);
-    expect(effectivePreferencesEnabled({ userPreferences: true }, false)).toBe(true);
-    expect(effectivePreferencesEnabled({ userPreferences: null }, true)).toBe(true);
-  });
 });
 
 describe("savePreference", () => {

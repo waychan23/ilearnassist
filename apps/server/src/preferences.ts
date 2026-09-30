@@ -5,7 +5,6 @@ import {
   PREFERENCE_TYPES,
   type PreferenceSource,
   type PreferenceType,
-  type SessionSettings,
   type UserPreference,
 } from "@ilearnassist/shared";
 import { newId, type AppDb } from "./db.js";
@@ -24,26 +23,12 @@ import { parseModelJson } from "./modelJson.js";
  * the manual extraction route (`POST …/preferences/extract`) that turns a selected passage into
  * a preference with an out-of-band model call. Both end in `savePreference`, which is the one
  * place the conflict rule and the row shape live.
- */
-
-/**
- * Whether a turn injects the preference block.
  *
- * `true`/`false` are explicit answers; `null`/absent means **follow the context mode**: on when
- * the conversation runs on the smart-context window or has an active compaction summary, off on
- * the full history. The default is the mode's because the injected block is what carries the
- * preferences once the history no longer does — a narrow window or a summary is exactly when
- * "the user asked for no bullet lists" would otherwise be forgotten.
- *
- * The same expression is computed on the client for the composer's toggle, so the switch and
- * the wire agree about what "on" means without a round trip.
+ * **Injection has no switch.** A conversation that holds a live preference injects it into
+ * every turn's system prompt; one that holds none sends no block. The feature is built in, and
+ * "do not follow my stated rules this turn" is not a state the product offers — the way to stop
+ * a rule is to delete it (the panel) or supersede it (a later recording).
  */
-export function effectivePreferencesEnabled(
-  settings: SessionSettings,
-  hasActiveSummary: boolean
-): boolean {
-  return settings.userPreferences ?? (settings.smartContext === true || hasActiveSummary);
-}
 
 /** One preference as the injected block and the tool result render it. */
 export function formatPreferences(rows: readonly UserPreference[]): string {

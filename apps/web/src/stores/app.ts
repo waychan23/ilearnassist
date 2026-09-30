@@ -606,27 +606,6 @@ export const useAppStore = defineStore("app", () => {
     () => activeSession.value?.settings ?? draftSettings.value
   );
 
-  /**
-   * Whether this conversation injects the user's stored preferences.
-   *
-   * The exact server-side rule (`effectivePreferencesEnabled`): the setting's explicit answer,
-   * or — when it is `null`/absent — the context mode, on for smart context or an active
-   * summary and off for the full history. Computed here so the composer's toggle shows the
-   * state a turn will actually use; the server recomputes it per turn from the same inputs, so
-   * the two agree without the client having to be told.
-   *
-   * On the welcome screen there is no summary to consult and none can exist before the first
-   * turn, so the draft settings' `smartContext` alone decides — which is what the rule reduces
-   * to there anyway.
-   */
-  const effectiveUserPreferences = computed(() => {
-    const settings = sessionSettings.value;
-    return (
-      settings.userPreferences ??
-      (settings.smartContext === true || contextState.value?.summary != null)
-    );
-  });
-
   const currentProviderId = computed(() => {
     const candidates = [
       sessionSettings.value.providerId,
@@ -3642,7 +3621,6 @@ export const useAppStore = defineStore("app", () => {
     myCopilots,
     publicCopilots,
     sessionSettings,
-    effectiveUserPreferences,
     currentProviderId,
     effectiveModelId,
     effectiveModel,

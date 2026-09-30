@@ -3623,20 +3623,6 @@ export interface SessionSettings {
    * `null`/absent means off, the same "inherit" every other field uses.
    */
   smartContext?: boolean | null;
-  /**
-   * Experimental: inject this conversation's **user preferences** into every turn's system
-   * prompt — the standing requirements the user stated about how the agent should work.
-   *
-   * `true` always injects, `false` never does, and `null`/absent means **follow the context
-   * mode**: on when the conversation runs on the smart-context window or has an active
-   * compaction summary, off on the full history. The default follows the mode because the
-   * injected block is what carries those preferences once the history no longer does.
-   *
-   * Injection is only half the feature: recording preferences (`ila_save_preference`, the
-   * selection action) happens whether or not this is on — the switch decides what the model is
-   * *told*, not what it may remember.
-   */
-  userPreferences?: boolean | null;
   /** Maximum ReAct steps (tool rounds) for a single turn. */
   maxSteps?: number | null;
   /**

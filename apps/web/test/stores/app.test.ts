@@ -2488,50 +2488,6 @@ describe("user preferences", () => {
     }
   });
 
-  /*
-   * The default rule, one case per test: `readyStore` loads once per store, and a second call
-   * in the same test would re-read nothing — the first `ensureLoaded` has already listed.
-   */
-  it("keeps preferences off on the full history by default", async () => {
-    const store = await readyStore({ sessions: [session()] });
-    expect(store.effectiveUserPreferences).toBe(false);
-  });
-
-  it("defaults preferences on under smart context", async () => {
-    const store = await readyStore({ sessions: [session({ settings: { smartContext: true } })] });
-    expect(store.effectiveUserPreferences).toBe(true);
-  });
-
-  it("defaults preferences on once the context is compacted", async () => {
-    mocks.api.getContextState.mockResolvedValue({
-      summary: {
-        id: "cs1",
-        content: "Recap.",
-        throughMessageId: "m1",
-        throughCreatedAt: "t",
-        messageCount: 1,
-        createdAt: "t",
-      },
-      totalMessages: 2,
-      tailMessages: 1,
-    });
-    const store = await readyStore({ sessions: [session()] });
-    expect(store.effectiveUserPreferences).toBe(true);
-  });
-
-  it("lets an explicit answer override the mode either way", async () => {
-    // The switch the composer draws is the state a turn will actually use, not the stored one.
-    const off = await readyStore({
-      sessions: [session({ settings: { smartContext: true, userPreferences: false } })],
-    });
-    expect(off.effectiveUserPreferences).toBe(false);
-  });
-
-  it("lets an explicit on stand on the full history", async () => {
-    const on = await readyStore({ sessions: [session({ settings: { userPreferences: true } })] });
-    expect(on.effectiveUserPreferences).toBe(true);
-  });
-
   it("extracts a passage through the server and announces the new list", async () => {
     const { subscribeWidgetEvents } = await import("../../src/composables/widgetEvents.js");
     const seen: string[] = [];

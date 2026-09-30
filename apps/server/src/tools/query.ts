@@ -780,12 +780,12 @@ export function buildQueryTool(ctx: QueryToolContext): StructuredToolInterface {
   /**
    * `kind: "preference"` — the user's standing requirements, all three levels in one read.
    *
-   * This exists because the injected block is only present while the conversation's
-   * `userPreferences` switch resolves to on: a model recording a rule when injection is off
-   * (or reading before it was ever turned on) has no other way to see what it would be
-   * superseding, and the replace protocol would become guesswork. It is the notes read's shape —
-   * the model reads, the user writes — with one difference: the model *does* write these, through
-   * `ila_save_preference`, which is why the ids matter here.
+   * The injected block already carries these on every turn one exists, so this read is not the
+   * only way to see them — it is the *explicit* one: a model about to record a rule can ask for
+   * the current ids without relying on what its prompt happens to hold, which is what keeps the
+   * replace protocol from becoming guesswork after a summary or a narrow window. It is the notes
+   * read's shape — the model reads, the user writes — with one difference: the model *does* write
+   * these, through `ila_save_preference`, which is why the ids matter here.
    */
   const preference = (input: { limit?: number; offset?: number }): string => {
     const all = ctx.db.listPreferencesForContext(ctx.userId, ctx.workspaceId, ctx.sessionId);

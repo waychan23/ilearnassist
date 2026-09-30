@@ -301,7 +301,7 @@ apps/server/src/
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   plots.ts                # plot rows: plotName, validatePlotSpec, registerPlot, listPlotViews
-  preferences.ts          # user preferences: the effective switch, save/replace, the block, the parser
+  preferences.ts          # user preferences: save/replace, the injected block, the parser
   widgets.ts              # the widget-selection validator (pure)
   usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
   notes.ts                # the notes widget's records: what a body may become a note (pure)
@@ -1287,27 +1287,25 @@ public half.
     is present exactly when `settings.smartContext` is on — there is no assembled tool that could
     have failed — and it is the only thing that tells the model its visible history is
     deliberately narrow. See `docs/context-compaction.md`.
-- **User preferences are a memory with three levels, two writers and one write path.** The
-  experimental `SessionSettings.userPreferences` switch injects the standing rules the user stated
-  about how the agent should work; recording them is deliberately **independent of that switch**
-  (it decides what the model is *told*, not what it may remember). `savePreference`
+- **User preferences are a memory with three levels, two writers and one write path, and
+  injection is built in.** A conversation that holds a live preference always carries the block in
+  its system prompt; one that holds none always sends nothing — **there is no switch**, and a
+  removed composer toggle is a deliberate reversal rather than an omission: "do not follow my
+  stated rules this turn" is not a state the product offers, and the way to stop a rule is to
+  delete it (the panel, confirmed) or supersede it (a later recording). `savePreference`
   (`preferences.ts`) is the single write: one transaction deletes every named `replaces` id and
   inserts the new row, and **an id the conversation does not hold refuses the whole write** rather
   than being skipped — a delete that did not happen must never look like one. Two writers reach it:
   the agent's `ila_save_preference` during a turn, and the selection action 作为用户偏好 through
   `POST …/preferences/extract`, which runs an out-of-band call (`agent/preferences.ts`, its own
   `ILA_PREFERENCE_REASONING` and a `preference` ledger purpose) and answers `saved`, `skipped` (an
-  answer, not a failure) or `PREFERENCE_EXTRACT_FAILED`. `effectivePreferencesEnabled` is the
-  default rule — explicit `true`/`false`, or following the context mode when `null` (on for smart
-  context or an active summary) — and the client computes the same expression for the composer's
-  toggle, which writes an explicit answer and has no "back to default". The injected block is
-  present only when the switch resolves on AND at least one rule applies, so a fresh conversation
-  is byte-identical to one from before the feature. Only **session-level** rows can be created, but
-  every read (the block, `ila_query kind "preference"`) covers all three scopes in ascending
-  specificity with the precedence stated in the prompt; the panel lists session-level only, because
-  a conversation must not offer a delete it does not own. The table is **soft-deleted**, unlike
-  `insight_items`: a preference is a record of something the user said, and the superseded row is
-  what makes "this replaced that" inspectable. See `docs/user-preferences.md`.
+  answer, not a failure) or `PREFERENCE_EXTRACT_FAILED`. Only **session-level** rows can be
+  created, but every read (the block, `ila_query kind "preference"`) covers all three scopes in
+  ascending specificity with the precedence stated in the prompt; the panel lists session-level
+  only, because a conversation must not offer a delete it does not own. The table is
+  **soft-deleted**, unlike `insight_items`: a preference is a record of something the user said,
+  and the superseded row is what makes "this replaced that" inspectable. See
+  `docs/user-preferences.md`.
 - **A Copilot is owned, and "platform" is not a tier — it is a published one.** `copilots` carries
   `user_id` and a `visibility` of `private` or `public`, not an admin role, so a Copilot the
   operator wants every account to have is simply one they published, and "ordinary users cannot

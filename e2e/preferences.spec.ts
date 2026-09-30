@@ -5,7 +5,7 @@ import { enterWorkspace } from "./workspaces";
 
 /**
  * User preferences end to end: a stated rule is recorded, listed in the right-hand panel,
- * injected into the next request when the switch is on, and removable.
+ * injected into every later request, and removable.
  *
  * The part only a browser can check is the *gesture*: a real selection producing the toolbar's
  * "作为用户偏好" button, and the panel appearing from the server-side install a manual save
@@ -85,12 +85,7 @@ test("records a stated preference, lists it, injects it when switched on, and de
   await expect(page.getByTestId("preferences-list")).toContainText("回答先给结论");
   await expect(page.getByTestId("preferences-list")).toContainText("期望");
 
-  // Full history, no compaction, setting absent: the switch is off and says so.
-  const toggle = page.getByTestId("user-preferences-toggle");
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
-
+  // Injection is built in — no switch to flip: the very next turn already carries the rule.
   await send(page, "第二个问题", "第二个回答");
   const sent = JSON.stringify(await requestWith(request, "第二个问题"));
   expect(sent).toContain("<user_preferences>");
