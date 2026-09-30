@@ -327,6 +327,7 @@ apps/web/src/
   composables/widgetPanel.ts   # the panel's persisted preferences + width clamping
   utils/apiError.ts       # server code → user-facing message
   utils/fileTree.ts       # the tree's arithmetic: flatten, move, find the parent row
+  utils/inlineArtifacts.ts # markers + contentOffset → ordered text/slot segments (pure)
   utils/fileViewer.ts     # the preview viewer's gate + theme/locale mapping (no DOM, no chunk)
   utils/openFileViewer.ts # the lazy viewer chunk + its vendor sheet — the only importer of it
   utils/locale.ts         # browser-language detection + the alias table
@@ -1028,6 +1029,26 @@ public half.
   only for the content-block shape the tap cannot see. (Token usage is read from the
   step's *chunks* rather than the reduced message — `concat` does carry `usage_metadata`
   now, but the chunk scan does not depend on that staying true.)
+- **Artifact cards render inline at their prose position; other action cards stay above the
+  reply.** Cards for the three artifact-producing tools (`ila_diagram`, `ila_plot`,
+  `write_file` — `ARTIFACT_TOOL_NAMES` in shared) are the things the reply points to, so
+  they render interleaved with the text; every other non-interactive tool is a step on the
+  way and keeps the above-text grouping, and question tools stay below. Position comes from
+  a hybrid: the model may write a marker on its own paragraph —
+  `[[artifact:diagram/<name>]]`, `[[artifact:plot/<name>]]`,
+  `[[artifact:file/<path>]]` (optionally `?location=session|workspace`) — matched to the
+  call by shared identity math (`slugifyName` for names with a trailing extension
+  stripped, POSIX-normalized path; a file marker's `location` is strict when named and
+  path-only otherwise); a call with no marker falls back to its `contentOffset` — the
+  character offset recorded in the loop, riding the existing `tool_calls` JSON, no
+  migration; neither present → legacy above layout. The arithmetic is the pure
+  `utils/inlineArtifacts.ts` (`buildInlineParts`), used by streaming and persisted
+  rendering alike, and cuts snap forward past unsplittable blocks (code, quote, table,
+  list item) — a card inside an atomic block has no HTML position. Markers are positioning
+  syntax rather than content: every plain-text consumer strips them through the shared
+  `stripInlineMarkers` (recall, explore, threads, compaction, titler, minimap, message
+  copy), and slot subtrees carry `data-note-skip` inside one `data-note-root`. A model
+  that cooperates gets pixel-exact placement; nothing depends on it.
 - **The message is exactly what streamed, and nothing trims it.** A turn is several utterances —
   "我先把要点写成一个文件", then the answer — and `messages.content` is all of them, in step
   order, one paragraph each, joined by `STEP_SEPARATOR` (`"\n\n"`). The rule is stated as an
