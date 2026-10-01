@@ -278,13 +278,14 @@ const renderedParts = computed<RenderedPart[]>(() => {
     const count = countTablesIn(part.text);
     const headings = tableHeadings.value.slice(tableCursor, tableCursor + count);
     tableCursor += count;
-    const tables =
-      !props.streaming && headings.length
-        ? {
-            headings,
-            labels: { untitled: t("table.untitled"), annotate: t("notes.annotate") },
-          }
-        : undefined;
+    // Passed even when the slice is empty: a table with no `ila_table` call still gets the
+    // generic bar (renderTables' count-mismatch path). Streaming passes nothing.
+    const tables = props.streaming
+      ? undefined
+      : {
+          headings,
+          labels: { untitled: t("table.untitled"), annotate: t("notes.annotate") },
+        };
 
     const isLastText = parts.slice(i + 1).every((p) => p.kind !== "text");
     let html = renderMarkdown(part.text, markdownLabels.value, tables);
