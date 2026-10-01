@@ -1217,9 +1217,20 @@ export interface PlanTreeNode extends PlanSnapshotNode {
    * `ila_update_plan_progress` call that first put it `in_progress` (placed before the
    * teaching content, so a click jumps to the node's start), falling back to the call that
    * completed it when a model finished a node without a separate start call. Cleared when
-   * the node returns to not-started/skipped.
+   * the node returns to not-started; deliberately **kept** when the node is skipped, since
+   * a skipped node may have been in progress.
    */
   anchorToolCallId?: string;
+  /**
+   * The message the node's first start marker sits in (or its sole completion marker).
+   * Null when the node was queued by a jump but teaching never began. Its presence is what
+   * distinguishes a skipped node that had been in progress.
+   */
+  startMessageId?: string;
+  /** When the node was last skipped. */
+  skippedAt?: string;
+  /** The last live message at the moment of the skip — the abandoned position. */
+  skippedMessageId?: string;
   children?: PlanTreeNode[];
 }
 
