@@ -2,6 +2,7 @@ import { z } from "zod";
 import type {
   ChapterJump,
   PlanNodeInput,
+  PlanNodeStart,
   PlanNodeStatus,
   PlanSnapshotNode,
   PlanStatus,
@@ -594,8 +595,9 @@ export function applyProgress(
         // differs from one never begun. The message position is filled post-turn.
         db.skipPlanNode(plan.id, row.id, ts, null);
       } else {
-        // Explicit reset to not-started clears every marker.
+        // Explicit reset to not-started clears every marker, including start positions.
         db.updatePlanNodeProgress(plan.id, row.id, change.status, null, null, null, null, null);
+        db.deletePlanNodeStarts(row.id);
       }
     }
 
@@ -678,11 +680,34 @@ function buildCurrentTree(rows: PlanNodeRecord[]): PlanTreeNode[] {
 export function buildPlanView(db: AppDb, plan: PlanRecord): PlanView {
   const rows = db.listPlanNodes(plan.id);
   const versions: PlanVersionSummary[] = db.listPlanVersions(plan.id);
+  const tree = buildCurrentTree(rows);
+
+  // Start positions attach per node from the position table; a node without any keeps the
+  // field absent.
+  const startsByNode = new Map<string, PlanNodeStart[]>();
+  for (const start of db.listPlanNodeStarts(plan.id)) {
+    const list = startsByNode.get(start.nodeId) ?? [];
+    list.push({
+      position: start.position,
+      messageId: start.messageId,
+      ...(start.toolCallId ? { toolCallId: start.toolCallId } : {}),
+    });
+    startsByNode.set(start.nodeId, list);
+  }
+  const attach = (nodes: PlanTreeNode[]): void => {
+    for (const node of nodes) {
+      const starts = startsByNode.get(node.id);
+      if (starts) node.starts = starts;
+      if (node.children) attach(node.children);
+    }
+  };
+  attach(tree);
+
   return {
     planId: plan.id,
     version: plan.version,
     status: plan.status,
-    tree: buildCurrentTree(rows),
+    tree,
     versions,
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt,
@@ -820,6 +845,31 @@ export interface PlanMessageResolution {
 }
 
 /**
+ * Record one start position of a node: where teaching began or resumed.
+ *
+ * Idempotent per (node, message) — the same assistant message may be discovered both as the
+ * anchor's message and as a chapter-jump turn. The ordinal is per node in recorded order,
+ * which is the "位置 N" the panel lists.
+ */
+export function recordNodeStart(
+  db: AppDb,
+  planId: string,
+  nodeId: string,
+  position: { messageId: string; toolCallId?: string | null }
+): void {
+  if (db.hasPlanNodeStart(nodeId, position.messageId)) return;
+  db.insertPlanNodeStart({
+    id: newId(),
+    planId,
+    nodeId,
+    position: db.countPlanNodeStarts(nodeId) + 1,
+    messageId: position.messageId,
+    toolCallId: position.toolCallId ?? null,
+    startedAt: new Date().toISOString(),
+  });
+}
+
+/**
  * Resolve the message columns of a session's plan nodes.
  *
  * Anchors are tool-call ids, so the start message resolves by mapping every live message's
@@ -852,6 +902,10 @@ export function resolvePlanStartMessages(
       const messageId = anchorMessages.get(node.anchorToolCallId);
       if (messageId) {
         db.fillPlanNodeMessageIds(planRow.id, node.id, messageId, null);
+        recordNodeStart(db, planRow.id, node.id, {
+          messageId,
+          toolCallId: node.anchorToolCallId,
+        });
         starts += 1;
       }
     }

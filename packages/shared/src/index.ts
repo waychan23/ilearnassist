@@ -1238,7 +1238,21 @@ export interface PlanTreeNode extends PlanSnapshotNode {
   skippedAt?: string;
   /** The last live message at the moment of the skip — the abandoned position. */
   skippedMessageId?: string;
+  /**
+   * Every message position where teaching of this node began or resumed, in order. Absent
+   * when teaching never started. A node taught, skipped and returned holds several — the
+   * panel renders them as a position picker.
+   */
+  starts?: PlanNodeStart[];
   children?: PlanTreeNode[];
+}
+
+/** One position where a plan node's teaching started/resumed. */
+export interface PlanNodeStart {
+  position: number;
+  messageId: string;
+  /** The in_progress progress call when the position came from one. */
+  toolCallId?: string;
 }
 
 /** Anything carrying an id/children tree, which is both snapshot and current nodes. */

@@ -43,6 +43,7 @@ import type {
   TitleRetryResult,
   TitleState,
   ToolCall,
+  ChapterJump,
   TurnRequestMeta,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
@@ -139,6 +140,7 @@ import {
   jumpToNode,
   parseChapterJump,
   readPlanVersion,
+  recordNodeStart,
   renderChapterJumpGuidance,
   resolvePlanStartMessages,
 } from "./plans.js";
@@ -5485,6 +5487,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * message. Absent when finishing outside a timed turn.
        */
       turnStartedAtIso?: string;
+      /**
+       * The chapter-jump claim when this turn immediately follows a play-button jump. Its
+       * target records a start position at this turn's assistant message.
+       */
+      chapterJump?: ChapterJump;
     }
   ): Promise<void> {
     /*
@@ -5544,8 +5551,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       resolvePlanStartMessages(db, userId, id, opts.turnStartedAtIso
         ? { assistantMessageId: assistantMessage.id, sinceIso: opts.turnStartedAtIso }
         : undefined);
+      // A chapter-jump turn is itself a start/resume position. Same-message dedupe covers the
+      // case the model also made an in_progress call in this message.
+      if (opts.chapterJump) {
+        recordNodeStart(db, db.getPlanBySession(id)!.id, opts.chapterJump.nodeId, {
+          messageId: assistantMessage.id,
+        });
+      }
     } catch {
-      // A column resolution problem never costs the reader their persisted turn.
+      // A column/position resolution problem never costs the reader their persisted turn.
     }
 
     /*
@@ -6139,6 +6153,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         attachments: [...storedAttachments, ...referencedAttachments],
         summaryId: summary?.id,
         turnStartedAtIso: new Date(turnStartedAt).toISOString(),
+        chapterJump,
       });
     } catch (err) {
       failTurn(id, ctx, err, sse, summary?.id);
