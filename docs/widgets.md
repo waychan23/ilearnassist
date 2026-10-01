@@ -396,6 +396,37 @@ panel shows data the tools produce:
 See `apps/server/src/quizzes.ts` for the domain logic and `apps/web/src/utils/quizTree.ts`
 for the panel's pure tree/filter builder.
 
+### A versioned, progress-tracked widget: the plan widget
+
+The plan widget (`id: "plan"`) holds one plan per conversation across **two kinds of state**:
+
+- `plan_versions.tree_json` are *structural* snapshots — id/title/children, nothing else. Every
+  edit adds a version, and history browsing reads each version exactly as it was left; progress
+  never rewrites it.
+- `plan_nodes` holds each node exactly once under a server UUID that survives renames and moves,
+  and that is the only place progress lives. The current tree is rebuilt from those rows; a node
+  dropped by an edit stays as a `deleted` tombstone at its last place rather than vanishing.
+
+Two rules around skipping and jumping, both load-bearing:
+
+- **A skip preserves the node's start marker.** The progress call that first put a node
+  `in_progress` stays its anchor, and the node records `skipped_at` plus `skipped_message_id` —
+  the last live message at that moment, the abandoned position. So a skipped node that was in
+  progress (it has an anchor/`start_message_id`) is distinguishable from a never-started one in
+  the panel (`skip-dot` vs `skip`) and on the row. Resetting to `not_started` is the only thing
+  that clears those markers.
+- **A chapter jump tells the model what it is entering.** `jumpToNode` skips everything undone
+  before the target and reports `started` (whether the target held a start marker),
+  `startMessageId` and `skippedMessageId`. The composed user turn carries them as
+  `chapterJump`; after validation they become a prompt block that — in smart context mode
+  especially — directs the model to read the earlier stretch back with `ila_recall` (`mode:
+  "range"` or `"around"`) and continue, instead of restarting the chapter.
+
+Anchor ids are tool-call ids and preserved verbatim across a fork; their message columns map
+through the copied-message map and are dropped when that message was not copied.
+
+See `apps/server/src/plans.ts` for the domain logic.
+
 ### An out-of-band post-turn widget: the thread widget
 
 The thread widget (`id: "thread"`) names **no tools at all**: it derives its data with a
