@@ -147,6 +147,8 @@ interface Row {
   hasChildren: boolean;
   status?: PlanNodeStatus;
   anchorToolCallId?: string;
+  /** A skipped row had a start marker: studied in part before being skipped. */
+  started?: boolean;
   /** Play affordance: chapters that can be jumped to (not started yet, or skipped). */
   playable: boolean;
 }
@@ -177,6 +179,7 @@ const rows = computed<Row[]>(() => {
         row.anchorToolCallId = node.anchorToolCallId;
         row.playable =
           !historyMode.value && (node.status === "not_started" || node.status === "skipped");
+        if (node.status === "skipped" && node.anchorToolCallId) row.started = true;
       }
       out.push(row);
       if (!collapsed.value.has(node.id)) walk(children, depth + 1);
@@ -269,7 +272,7 @@ const currentPathDisabled = computed(() => historyMode.value || !plan.value);
 
 /* --------------------------------- status UI --------------------------------- */
 
-function statusLabel(status: PlanNodeStatus): string {
+function statusLabel(status: PlanNodeStatus, row?: Row): string {
   switch (status) {
     case "not_started":
       return t("plan.status.not_started");
@@ -278,7 +281,10 @@ function statusLabel(status: PlanNodeStatus): string {
     case "completed":
       return t("plan.status.completed");
     case "skipped":
-      return t("plan.status.skipped");
+      // Distinct wording for a skipped node that had been in progress.
+      return row?.anchorToolCallId
+        ? t("plan.status.skippedStarted")
+        : t("plan.status.skipped");
     case "deleted":
       return t("plan.status.deleted");
   }
@@ -309,7 +315,7 @@ async function jumpToChapter(row: Row): Promise<void> {
 
   const ok = await confirm({
     message: t("plan.jumpConfirm", { number: row.number, title: row.title }),
-    detail: t("plan.jumpConfirmDetail"),
+    detail: t("plan.jumpConfirmDetail") + (row.started ? `\n${t("plan.jumpConfirmRestartHint")}` : ""),
     confirmText: t("plan.jumpConfirmOk"),
   });
   if (!ok) return;
@@ -320,7 +326,22 @@ async function jumpToChapter(row: Row): Promise<void> {
     // Refresh immediately; the message below then takes the model into the chapter.
     plan.value = res.plan;
     const message = t("plan.jumpMessage", { number: res.number, title: res.title });
-    await store.sendPanelMessage(message);
+    // Tell the model this follows a jump and whether the chapter had started, so it can
+    // recover the earlier stretch instead of restarting.
+    await store.sendPanelMessage(message, {
+      chapterJump: {
+        nodeId: row.id,
+        number: res.number,
+        title: res.title,
+        started: res.started,
+        ...(res.started
+          ? {
+              startMessageId: res.startMessageId ?? undefined,
+              skippedMessageId: res.skippedMessageId ?? undefined,
+            }
+          : {}),
+      },
+    });
   } catch {
     // A stale node (edited away between render and click): the next turn.finished refetch
     // removes it; leave the panel as-is rather than toast inside it.
@@ -456,6 +477,21 @@ async function submitAdjust(): Promise<void> {
               <span v-else class="plan-caret-spacer" aria-hidden="true" />
 
               <!--
+                A skipped row shows its state marker (dot if it had started) in addition to the
+                play action. Other playable rows (not started) show just play; non-playable
+                rows show their own status icon.
+              -->
+              <span
+                v-if="row.playable && row.status === 'skipped'"
+                class="plan-status-icon"
+                :data-status="row.anchorToolCallId ? 'skipped_started' : 'skipped'"
+                :title="statusLabel(row.status, row)"
+              >
+                <Icon v-if="row.anchorToolCallId" name="skip-dot" />
+                <Icon v-else name="skip" />
+              </span>
+
+              <!--
                 Play on undone/skipped nodes: jump study there (a confirm, a server-side
                 progress rewrite, then a chat message). Status otherwise carries its own icon.
               -->
@@ -474,7 +510,6 @@ async function submitAdjust(): Promise<void> {
                 <template v-if="!historyMode">
                   <Icon v-if="row.status === 'completed'" name="check" />
                   <Icon v-else-if="row.status === 'in_progress'" name="progress" />
-                  <Icon v-else-if="row.status === 'skipped'" name="skip" />
                   <Icon v-else-if="row.status === 'deleted'" name="close" />
                   <Icon v-else name="circle" />
                 </template>
@@ -497,7 +532,7 @@ async function submitAdjust(): Promise<void> {
               <span
                 v-else
                 class="plan-title"
-                :title="row.status ? statusLabel(row.status) : undefined"
+                :title="row.status ? statusLabel(row.status, row) : undefined"
               >
                 <span class="plan-no">{{ row.number }}</span>{{ row.title }}
               </span>

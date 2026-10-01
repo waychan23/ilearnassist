@@ -1340,6 +1340,8 @@ const en: typeof MessageSchema = {
     jumpConfirm: "Jump to chapter {number} {title} now?",
     jumpConfirmDetail:
       "Earlier unfinished chapters (including the one currently in progress) are marked skipped and can be caught up later.",
+    jumpConfirmRestartHint:
+      "This chapter was studied in part before: after the jump the earlier stretch is read back first, so it continues instead of restarting.",
     jumpConfirmOk: "Jump to chapter",
     jumpMessage: "Update progress: jump to chapter {number} {title}",
     adjust: "Adjust plan",
@@ -1353,6 +1355,7 @@ const en: typeof MessageSchema = {
       in_progress: "In progress",
       completed: "Completed",
       skipped: "Skipped",
+      skippedStarted: "Skipped (studied in part)",
       deleted: "Deleted",
     },
   },

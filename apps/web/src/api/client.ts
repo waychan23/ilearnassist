@@ -953,8 +953,15 @@ export const api = {
   jumpPlanNode: (
     sessionId: string,
     nodeId: string
-  ): Promise<{ plan: PlanView; number: string; title: string; skippedCount: number }> =>
-    request(`/sessions/${sessionId}/plan/nodes/${nodeId}/jump`, { method: "POST" }),
+  ): Promise<{
+    plan: PlanView;
+    number: string;
+    title: string;
+    skippedCount: number;
+    started: boolean;
+    startMessageId: string | null;
+    skippedMessageId: string | null;
+  }> => request(`/sessions/${sessionId}/plan/nodes/${nodeId}/jump`, { method: "POST" }),
 
   // Quiz questions for the quiz widget. An empty list is the ordinary empty state.
   listQuizQuestions: (sessionId: string) =>

@@ -317,6 +317,14 @@ export const ICON_PATHS = {
     "M8 5.5V8l2.2 1.4",
   ],
   skip: ["M4.5 4.5L9 8L4.5 11.5", "M10 4.5L14 8L10 11.5", "M12 4.5V11.5"],
+  /* Skipped AFTER being in progress: the fast-forward chevrons plus a small ring dot
+     marking prior progress. */
+  "skip-dot": [
+    "M3.5 4.5L8 8L3.5 11.5",
+    "M9 4.5L10.8 6.1",
+    "M10.8 9.9L9 11.5",
+    "M14 8a1.3 1.3 0 1 1-2.6 0 1.3 1.3 0 0 1 2.6 0Z",
+  ],
   history: [
     "M3 8a5.5 5.5 0 1 1 1.6 3.9",
     "M3 4.5V8h3.5",

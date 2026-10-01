@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "./fixtures";
-import { scriptLlm } from "./llm";
+import { FAKE_LLM, scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
 
 /**
@@ -454,6 +454,82 @@ test.describe("the plan widget", () => {
     );
     // Skipped nodes stay playable so a learner can come back to them.
     await expect(page.getByTestId(`plan-play-${intro}`)).toBeVisible();
+  });
+
+  test("a half-studied skipped node shows a distinct icon and continues instead of restarting", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("Plan skip return");
+    await planSession(page, name);
+
+    await scriptLlm(request as APIRequestContext, { turns: makeTurn("call_make", TREE) });
+    await send(page, "制定学习计划");
+    await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(4);
+
+    const intro = await idOf(page, "1.1 Intro");
+    const setup = await idOf(page, "1.2 Setup");
+
+    // Teach intro briefly: the bookkeeping call first, then content.
+    await scriptLlm(request as APIRequestContext, {
+      turns: [
+        {
+          toolCalls: [
+            {
+              id: "call_intro",
+              name: "ila_update_plan_progress",
+              args: { nodes: [{ id: intro, status: "in_progress" }] },
+            },
+          ],
+        },
+        { content: "我们先学 Intro 的要点。" },
+      ],
+    });
+    await send(page, "开始 intro");
+    await expect(page.getByTestId(`plan-node-${intro}`)).toHaveAttribute(
+      "data-node-status",
+      "in_progress"
+    );
+
+    // Jump forward to setup: intro is skipped but keeps its prior progress.
+    await scriptLlm(request as APIRequestContext, { turns: [{ content: "我们开始学 Setup。" }] });
+    await page.getByTestId(`plan-play-${setup}`).click();
+    await page.getByTestId("confirm-accept").click();
+    await expect(page.getByTestId("message-assistant").last()).toContainText("我们开始学 Setup");
+
+    // Distinct icon marker, and the distinct tooltip label — unlike a never-started skip.
+    const introIcon = page.locator(
+      `[data-testid="plan-node-${intro}"] .plan-status-icon`
+    );
+    await expect(introIcon).toHaveAttribute("data-status", "skipped_started");
+    await expect(introIcon).toHaveAttribute("title", "已跳过（学过一部分）");
+
+    // Jump back: the confirm names the continue-not-restart behavior.
+    await scriptLlm(request as APIRequestContext, {
+      turns: [{ content: "好的，我们继续学 Intro，不从头重来。" }],
+    });
+    await page.getByTestId(`plan-play-${intro}`).click();
+    await expect(page.locator(".modal, [role='dialog']").first()).toContainText("已学习一部分");
+    await page.getByTestId("confirm-accept").click();
+
+    await expect(page.getByTestId("message-assistant").last()).toContainText("继续学 Intro");
+    await expect(page.getByTestId(`plan-node-${intro}`)).toHaveAttribute(
+      "data-node-status",
+      "in_progress"
+    );
+
+    // The model was told the chapter had started, with ids to read the earlier stretch.
+    const requests = (await request
+      .get(`${FAKE_LLM}/__requests`)
+      .then((r) => r.json())) as {
+      stream?: boolean;
+      messages: { role: string; content: string }[];
+    }[];
+    const streamed = requests.filter((r) => r.stream === true);
+    expect(streamed.length).toBeGreaterThan(0);
+    const system = streamed[0]!.messages[0]!;
+    expect(system.role).toBe("system");
+    expect(system.content).toContain("had already started");
   });
 
   test("the footer composer sends an adjustment as a normal user message", async ({

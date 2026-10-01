@@ -1704,6 +1704,8 @@ export default {
     jumpToChapter: "跳到本章节",
     jumpConfirm: "是否跳到章节 {number} {title} 学习？",
     jumpConfirmDetail: "尚未完成的前置章节会标记为「已跳过」（包括当前进行中的章节），以后可以回来补学。",
+    /** Appended to the jump confirm when the target was skipped after being in progress. */
+    jumpConfirmRestartHint: "该章节之前已学习一部分：跳转后会先补读之前的内容再继续，不会从头重新开始。",
     jumpConfirmOk: "跳到本章节",
     /** The user message assembled after a jump; {number} and {title} name the target. */
     jumpMessage: "调整进度，跳到章节{number} {title}",
@@ -1718,6 +1720,8 @@ export default {
       in_progress: "进行中",
       completed: "已完成",
       skipped: "已跳过",
+      /** Skipped after being in progress: studied in part. */
+      skippedStarted: "已跳过（学过一部分）",
       deleted: "已删除",
     },
   },
