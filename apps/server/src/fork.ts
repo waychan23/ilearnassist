@@ -127,7 +127,7 @@ export function forkSession(db: AppDb, params: ForkSessionParams): ForkResult {
         .map((p) => [p.oldId, p.newId] as const)
     );
 
-    const { nodeMap } = clonePlan(db, source.id, targetId, copiedCallIds);
+    const { nodeMap } = clonePlan(db, source.id, targetId, copiedCallIds, msgMap);
     const wrMap = cloneWorkResources(db, userId, source.id, targetId);
     cloneSessionReferences(db, source.id, targetId, wrMap);
     const quizMap = cloneQuizQuestions(db, source.id, targetId, copiedCallIds, nodeMap);
@@ -180,14 +180,16 @@ export function forkSession(db: AppDb, params: ForkSessionParams): ForkResult {
  *
  * The **anchor** on a node is dropped when the call it names was not copied — a node completed
  * after the cut keeps its status and its place but cannot jump to a card that is not in this
- * conversation, and `null` is exactly "no anchor". Versions are structure only, so rewriting
- * their node ids through the same map is what makes history browseable in the branch.
+ * conversation, and `null` is exactly "no anchor". The start/skip message ids map through the
+ * copied-message map (messages get new ids; a dropped message drops the reference). Versions
+ * are structure only, so rewriting their node ids through the same map makes history browseable.
  */
 function clonePlan(
   db: AppDb,
   sourceSessionId: string,
   targetSessionId: string,
-  copiedCallIds: ReadonlySet<string>
+  copiedCallIds: ReadonlySet<string>,
+  msgMap: ReadonlyMap<string, string>
 ): { planId: string | null; nodeMap: Map<string, string> } {
   const sourcePlan = db.getPlanBySession(sourceSessionId);
   if (!sourcePlan) return { planId: null, nodeMap: new Map() };
@@ -209,6 +211,13 @@ function clonePlan(
   for (const node of nodes) {
     const anchorKept =
       node.anchorToolCallId !== null && copiedCallIds.has(node.anchorToolCallId);
+    // Message references travel only when their message was copied, mapped to its new id.
+    const startMessageId = anchorKept && node.startMessageId
+      ? msgMap.get(node.startMessageId) ?? null
+      : null;
+    const skippedMessageId = node.skippedMessageId
+      ? msgMap.get(node.skippedMessageId) ?? null
+      : null;
     db.insertPlanNode({
       id: nodeMap.get(node.id)!,
       planId,
@@ -220,6 +229,10 @@ function clonePlan(
       removedVersion: node.removedVersion,
       doneToolCallId: anchorKept ? node.anchorToolCallId : null,
       doneAt: anchorKept ? node.anchorAt : null,
+      startMessageId,
+      // The skip instant is a fact that survives; the position follows the messages.
+      skippedAt: node.skippedAt,
+      skippedMessageId,
     });
   }
 
