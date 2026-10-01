@@ -65,6 +65,7 @@ export const ICON_PATHS = {
   edit: ["M11.25 2.75L13.25 4.75L5.75 12.25L2.75 13.25L3.75 10.25Z", "M10.25 3.75L12.25 5.75"],
 
   "caret-down": ["M4 6.5L8 10.5L12 6.5"],
+  "caret-up": ["M4 9.5L8 5.5L12 9.5"],
   "caret-right": ["M6.5 4L10.5 8L6.5 12"],
   "caret-left": ["M9.5 4L5.5 8L9.5 12"],
 

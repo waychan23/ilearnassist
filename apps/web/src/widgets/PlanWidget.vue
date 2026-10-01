@@ -36,14 +36,14 @@ const historyFailed = ref(false);
 const selectedVersion = ref<number | "latest">("latest");
 /** Explicitly collapsed branch ids; everything starts expanded. */
 const collapsed = ref<Set<string>>(new Set());
-/** Expanded position sub-lists; a multi node starts collapsed (position 1 still shown). */
-const expandedPositions = ref<Set<string>>(new Set());
+/** Collapsed position sub-lists: the set names nodes the user folded. Default expanded. */
+const collapsedPositions = ref<Set<string>>(new Set());
 
 function togglePositions(nodeId: string): void {
-  const next = new Set(expandedPositions.value);
+  const next = new Set(collapsedPositions.value);
   if (next.has(nodeId)) next.delete(nodeId);
   else next.add(nodeId);
-  expandedPositions.value = next;
+  collapsedPositions.value = next;
 }
 
 /** Footer composer state. Declared before `resetView`/the immediate watch below use them. */
@@ -76,7 +76,7 @@ function resetView(): void {
   historyFailed.value = false;
   selectedVersion.value = "latest";
   collapsed.value = new Set();
-  expandedPositions.value = new Set();
+  collapsedPositions.value = new Set();
   adjusting.value = false;
   adjustText.value = "";
 }
@@ -179,7 +179,17 @@ interface PositionRow {
   toolCallId?: string;
 }
 
-type Row = NodeRow | PositionRow;
+/** The expand/collapse control in the position sub-list, after position 1. */
+interface ToggleRow {
+  kind: "toggle";
+  id: string;
+  nodeId: string;
+  depth: number;
+  expanded: boolean;
+  count: number;
+}
+
+type Row = NodeRow | PositionRow | ToggleRow;
 
 type DisplayNode = PlanTreeNode | PlanSnapshotNode;
 
@@ -193,20 +203,37 @@ const rows = computed<Row[]>(() => {
   const out: Row[] = [];
 
   /** Position sub-list rows for one multi node; position 1 always, others when expanded. */
-  const positionRows = (node: PlanTreeNode, depth: number): PositionRow[] => {
+  /**
+   * Position rows plus, for a multi node, the toggle row. Position 1 always; the toggle
+   * sits right after it; the rest follow only when expanded.
+   */
+  const positionRows = (node: PlanTreeNode, depth: number): Row[] => {
     const starts = node.starts ?? [];
-    const expanded = expandedPositions.value.has(node.id);
-    return starts
-      .filter((start) => expanded || start.position === 1)
-      .map((start) => ({
-        kind: "position" as const,
-        id: `${node.id}:${start.position}`,
-        nodeId: node.id,
-        depth,
-        position: start.position,
-        messageId: start.messageId,
-        ...(start.toolCallId ? { toolCallId: start.toolCallId } : {}),
-      }));
+    const expanded = !collapsedPositions.value.has(node.id);
+    const toPosition = (start: PlanNodeStart): PositionRow => ({
+      kind: "position",
+      id: `${node.id}:${start.position}`,
+      nodeId: node.id,
+      depth,
+      position: start.position,
+      messageId: start.messageId,
+      ...(start.toolCallId ? { toolCallId: start.toolCallId } : {}),
+    });
+
+    const [first, ...others] = starts;
+    if (!first) return [];
+    const rows: Row[] = [toPosition(first)];
+    // The collapse toggle immediately after position 1.
+    rows.push({
+      kind: "toggle",
+      id: `toggle:${node.id}`,
+      nodeId: node.id,
+      depth,
+      expanded,
+      count: starts.length,
+    });
+    if (expanded) rows.push(...others.map(toPosition));
+    return rows;
   };
 
   const walk = (nodes: DisplayNode[], depth: number): void => {
@@ -360,6 +387,11 @@ function jumpToStart(row: NodeRow): void {
   } else if (row.starts?.length) {
     emitWidgetEvent({ type: "chat.jumpToMessage", messageId: row.starts[0]!.messageId });
   }
+}
+
+/** Tooltip for the position sub-list control; literal keys the catalog guard can find. */
+function positionsToggleTitle(row: ToggleRow): string {
+  return row.expanded ? t("plan.positionsHideHint") : t("plan.positionsShowHint");
 }
 
 /** Jump to one position in a node's position sub-list. */
@@ -541,6 +573,23 @@ async function submitAdjust(): Promise<void> {
               </button>
             </li>
 
+            <!-- Expand/collapse control right after position 1. -->
+            <li
+              v-else-if="row.kind === 'toggle'"
+              class="plan-position-toggle-row"
+              :style="{ '--plan-depth': row.depth - 1 }"
+            >
+              <button
+                class="plan-positions-toggle"
+                :title="positionsToggleTitle(row)"
+                :data-testid="'plan-positions-toggle-' + row.nodeId"
+                :aria-expanded="row.expanded"
+                @click="togglePositions(row.nodeId)"
+              >
+                <Icon :name="row.expanded ? 'caret-up' : 'caret-down'" />
+              </button>
+            </li>
+
             <li
               v-else
               class="plan-row"
@@ -623,26 +672,6 @@ async function submitAdjust(): Promise<void> {
               >
                 <span class="plan-no">{{ row.number }}</span>{{ row.title }}
               </span>
-
-              <!--
-                Position picker on multi-start nodes: a caret toggle beside the title. The
-                sub-list below always carries position 1 and, when open, the rest.
-              -->
-              <button
-                v-if="row.multi"
-                class="plan-positions-toggle icon-btn"
-                :title="
-                  expandedPositions.has(row.id)
-                    ? t('plan.positionsHide')
-                    : t('plan.positionsShow', { n: row.starts?.length ?? 0 })
-                "
-                :aria-label="t('plan.jumpToChapter')"
-                :data-testid="'plan-positions-toggle-' + row.id"
-                :aria-expanded="expandedPositions.has(row.id)"
-                @click="togglePositions(row.id)"
-              >
-                <Icon :name="expandedPositions.has(row.id) ? 'caret-down' : 'caret-right'" />
-              </button>
             </li>
             </template>
           </ul>

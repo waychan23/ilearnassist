@@ -535,25 +535,23 @@ test.describe("the plan widget", () => {
     expect(system.role).toBe("system");
     expect(system.content).toContain("had already started");
 
-    // Intro now holds two start positions: a position picker appears beside its title.
+    // Intro now holds two start positions. The control defaults to expanded and sits in
+    // the sub-list right after position 1 (not beside the node title).
     const toggle = page.getByTestId(`plan-positions-toggle-${intro}`);
     await expect(toggle).toBeVisible();
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-
-    // Collapsed: only position 1 is listed, labelled 位置1.
-    let positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
-    await expect(positionRows).toHaveCount(1);
-    await expect(positionRows.first()).toContainText("位置1");
-    await expect(page.getByTestId(`plan-position-${intro}-1`)).toBeVisible();
-
-    // Expand: position 2 appears too.
-    await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
-    await expect(positionRows).toHaveCount(2);
-    await expect(page.getByTestId(`plan-position-${intro}-2`)).toContainText("位置2");
+    await expect(toggle).toHaveAttribute("title", "多次学习该章节，有多个消息位置，点击折叠");
 
-    // Click position 2: the chat scrolls to that resume message (the last assistant one).
+    // Default expanded: both positions listed, in order, 位置1 then the control then 位置2.
+    let positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
+    await expect(positionRows).toHaveCount(2);
+    await expect(page.getByTestId(`plan-position-${intro}-1`)).toContainText("位置1");
+    await expect(page.getByTestId(`plan-position-${intro}-2`)).toContainText("位置2");
+    // The control is indented under its node.
+    const indented = await toggle.evaluate((el) => getComputedStyle(el.closest("li")!).paddingLeft);
+    expect(parseFloat(indented)).toBeGreaterThan(0);
+
+    // Click position 2 first (while expanded): the chat scrolls to that resume message.
     const resumeMessage = page.getByTestId("message-assistant").last();
     await page.getByTestId(`plan-position-${intro}-2`).click();
     const inView = await resumeMessage.evaluate((el) => {
@@ -562,12 +560,20 @@ test.describe("the plan widget", () => {
     });
     expect(inView).toBe(true);
 
-    // Collapse again: position 2 hidden, position 1 stays.
+    // Collapse: position 2 hides, the control flips with its tooltip; position 1 stays.
     await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toHaveAttribute("title", "多次学习该章节，有多个消息位置，点击展开");
     await expect(page.getByTestId(`plan-position-${intro}-2`)).toHaveCount(0);
+    positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
+    await expect(positionRows).toHaveCount(1);
     await expect(page.getByTestId(`plan-position-${intro}-1`)).toBeVisible();
 
-    // A single-position node (setup) carries no picker.
+    // Expand again: position 2 returns.
+    await toggle.click();
+    await expect(page.getByTestId(`plan-position-${intro}-2`)).toBeVisible();
+
+    // A single-position node (setup) carries no control.
     await expect(page.getByTestId(`plan-positions-toggle-${setup}`)).toHaveCount(0);
   });
 

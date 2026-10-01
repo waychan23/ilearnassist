@@ -1339,8 +1339,10 @@ const en: typeof MessageSchema = {
     jumpToChapter: "Jump to this chapter",
     jumpToPosition: "Jump to this message position",
     positionN: "Position {n}",
-    positionsShow: "Show all {n} positions",
-    positionsHide: "Collapse the other positions",
+    positionsShowHint:
+      "This chapter has been studied several times and holds several message positions — click to expand",
+    positionsHideHint:
+      "This chapter has been studied several times and holds several message positions — click to collapse",
     jumpConfirm: "Jump to chapter {number} {title} now?",
     jumpConfirmDetail:
       "Earlier unfinished chapters (including the one currently in progress) are marked skipped and can be caught up later.",

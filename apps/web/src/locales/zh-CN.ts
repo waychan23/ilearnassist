@@ -1705,8 +1705,9 @@ export default {
     /** Position sub-list on a node with several start positions. */
     jumpToPosition: "跳转到这个消息位置",
     positionN: "位置{n}",
-    positionsShow: "展开全部 {n} 个位置",
-    positionsHide: "折叠其他位置",
+    /** Tooltip on the control inside the position sub-list. */
+    positionsShowHint: "多次学习该章节，有多个消息位置，点击展开",
+    positionsHideHint: "多次学习该章节，有多个消息位置，点击折叠",
     jumpConfirm: "是否跳到章节 {number} {title} 学习？",
     jumpConfirmDetail: "尚未完成的前置章节会标记为「已跳过」（包括当前进行中的章节），以后可以回来补学。",
     /** Appended to the jump confirm when the target was skipped after being in progress. */
