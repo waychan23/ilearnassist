@@ -1541,7 +1541,6 @@ body {
 .plan-status-icon[data-status="in_progress"] {
   color: var(--warning);
 }
-.plan-status-icon[data-status="skipped"],
 .plan-status-icon[data-status="skipped_started"] {
   color: var(--warning);
 }

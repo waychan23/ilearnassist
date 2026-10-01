@@ -412,8 +412,8 @@ Two rules around skipping and jumping, both load-bearing:
 - **A skip preserves the node's start marker.** The progress call that first put a node
   `in_progress` stays its anchor, and the node records `skipped_at` plus `skipped_message_id` —
   the last live message at that moment, the abandoned position. So a skipped node that was in
-  progress (it has an anchor/`start_message_id`) is distinguishable from a never-started one in
-  the panel (`skip-dot` vs `skip`) and on the row. Resetting to `not_started` is the only thing
+  progress (it has an anchor/`start_message_id`) shows a `pause` icon, while a never-started skip
+  shows **no icon at all**, like an unstarted node. Resetting to `not_started` is the only thing
   that clears those markers.
 - **A chapter jump tells the model what it is entering.** `jumpToNode` skips everything undone
   before the target and reports `started` (whether the target held a start marker),

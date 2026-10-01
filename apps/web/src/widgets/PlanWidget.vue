@@ -477,18 +477,21 @@ async function submitAdjust(): Promise<void> {
               <span v-else class="plan-caret-spacer" aria-hidden="true" />
 
               <!--
-                A skipped row shows its state marker (dot if it had started) in addition to the
-                play action. Other playable rows (not started) show just play; non-playable
-                rows show their own status icon.
+                Only a skipped row that had started carries a marker (pause icon) beside play.
+                A never-started skip shows no icon, like an unstarted node; non-playable rows
+                show their own status icon.
               -->
               <span
-                v-if="row.playable && row.status === 'skipped'"
+                v-if="
+                  row.playable &&
+                  row.status === 'skipped' &&
+                  row.anchorToolCallId
+                "
                 class="plan-status-icon"
-                :data-status="row.anchorToolCallId ? 'skipped_started' : 'skipped'"
+                data-status="skipped_started"
                 :title="statusLabel(row.status, row)"
               >
-                <Icon v-if="row.anchorToolCallId" name="skip-dot" />
-                <Icon v-else name="skip" />
+                <Icon name="pause" />
               </span>
 
               <!--

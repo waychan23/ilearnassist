@@ -452,11 +452,15 @@ test.describe("the plan widget", () => {
       "data-node-status",
       "not_started"
     );
-    // Skipped nodes stay playable so a learner can come back to them.
+    // Skipped nodes stay playable so a learner can come back to them. A never-started skip
+    // carries no state marker of its own.
     await expect(page.getByTestId(`plan-play-${intro}`)).toBeVisible();
+    await expect(
+      page.locator(`[data-testid="plan-node-${intro}"] .plan-status-icon`)
+    ).toHaveCount(0);
   });
 
-  test("a half-studied skipped node shows a distinct icon and continues instead of restarting", async ({
+  test("a paused, half-studied skipped node shows a pause icon and continues instead of restarting", async ({
     page,
     request,
   }) => {
