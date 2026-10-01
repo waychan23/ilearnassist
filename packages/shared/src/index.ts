@@ -82,7 +82,14 @@ export const RECALL_TOOL_NAME = "ila_recall";
  * text, newest first. Both page with `offset` — back in time for `recent`, through the hits
  * for `search`.
  */
-export const RECALL_MODES = ["recent", "search"] as const;
+/**
+ * `ila_recall` modes:
+ * - `recent` — newest messages, `offset` pages back.
+ * - `search` — messages containing `query`.
+ * - `around` — one message plus the `before`/`after` messages around it.
+ * - `range` — two messages and everything between them.
+ */
+export const RECALL_MODES = ["recent", "search", "around", "range"] as const;
 
 export type RecallMode = (typeof RECALL_MODES)[number];
 

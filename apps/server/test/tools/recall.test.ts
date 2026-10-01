@@ -93,7 +93,7 @@ type Page = {
   offset: number;
   returned: number;
   truncated: boolean;
-  items: { role: string; content: string; createdAt: string }[];
+  items: { id: string; role: string; content: string; createdAt: string }[];
   note: string;
 };
 
@@ -202,6 +202,132 @@ describe("mode: search", () => {
     await expect(build().invoke({ mode: "search", query: "   " })).rejects.toThrow(
       /needs a `query`/
     );
+  });
+});
+
+describe("mode: around", () => {
+  it("returns the named message with five each side by default, oldest first", async () => {
+    const msgs = Array.from({ length: 11 }, (_, i) => add("user", `m${i}`));
+    const middle = msgs[5]!;
+
+    const page = await ask({ mode: "around", messageId: middle.id });
+    expect(page.kind).toBe("around");
+    expect(page.items.map((i) => i.content)).toEqual(msgs.map((m) => m.content));
+    expect(page.items[5]!.id).toBe(middle.id);
+    expect(page.total).toBe(11);
+    expect(page.truncated).toBe(false);
+  });
+
+  it("takes before/after bounds and clips to the conversation ends", async () => {
+    const msgs = Array.from({ length: 6 }, (_, i) => add("user", `n${i}`));
+
+    const page = await ask({
+      mode: "around",
+      messageId: msgs[1]!.id,
+      before: 10,
+      after: 1,
+    });
+    expect(page.items.map((i) => i.content)).toEqual(["n0", "n1", "n2"]);
+  });
+
+  it("accepts zero bounds", async () => {
+    const msgs = [add("user", "a"), add("user", "b"), add("user", "c")];
+
+    const page = await ask({
+      mode: "around",
+      messageId: msgs[1]!.id,
+      before: 0,
+      after: 0,
+    });
+    expect(page.items.map((i) => i.content)).toEqual(["b"]);
+  });
+
+  it("carries the message id and the neighbours' ids", async () => {
+    const msgs = [add("user", "a"), add("user", "b"), add("user", "c")];
+    const page = await ask({ mode: "around", messageId: msgs[1]!.id });
+    expect(page.items.map((i) => i.id)).toEqual(msgs.map((m) => m.id));
+  });
+
+  it("errors on an unknown message id", async () => {
+    add("user", "x");
+    await expect(build().invoke({ mode: "around", messageId: "nope" })).rejects.toThrow(
+      /no live message with id nope/
+    );
+  });
+
+  it("refuses the fields of other modes", async () => {
+    const m = add("user", "x");
+    await expect(
+      build().invoke({ mode: "around", messageId: m.id, query: "x" })
+    ).rejects.toThrow(/"around" does not take "query"/);
+  });
+});
+
+describe("mode: range", () => {
+  it("returns two named messages and everything between, inclusive", async () => {
+    const msgs = Array.from({ length: 7 }, (_, i) => add("user", `r${i}`));
+
+    const page = await ask({
+      mode: "range",
+      fromMessageId: msgs[1]!.id,
+      toMessageId: msgs[4]!.id,
+    });
+    expect(page.items.map((i) => i.content)).toEqual(["r1", "r2", "r3", "r4"]);
+    expect(page.total).toBe(4);
+    expect(page.truncated).toBe(false);
+  });
+
+  it("normalizes reversed ids", async () => {
+    const msgs = Array.from({ length: 5 }, (_, i) => add("user", `r${i}`));
+
+    const page = await ask({
+      mode: "range",
+      fromMessageId: msgs[4]!.id,
+      toMessageId: msgs[2]!.id,
+    });
+    expect(page.items.map((i) => i.content)).toEqual(["r2", "r3", "r4"]);
+  });
+
+  it("returns one message when both ends are the same", async () => {
+    const msgs = [add("user", "a"), add("user", "b")];
+    const page = await ask({
+      mode: "range",
+      fromMessageId: msgs[1]!.id,
+      toMessageId: msgs[1]!.id,
+    });
+    expect(page.items.map((i) => i.content)).toEqual(["b"]);
+  });
+
+  it("truncates a long range and says to name closer messages", async () => {
+    const long = "字".repeat(800);
+    const msgs = Array.from({ length: 60 }, () => add("user", long));
+
+    const page = await ask({
+      mode: "range",
+      fromMessageId: msgs[0]!.id,
+      toMessageId: msgs[59]!.id,
+    });
+    expect(page.truncated).toBe(true);
+    expect(page.items.length).toBeLessThan(60);
+    expect(page.note).toContain("closer messages");
+  });
+
+  it("errors naming an unknown end", async () => {
+    const m = add("user", "x");
+    await expect(
+      build().invoke({ mode: "range", fromMessageId: m.id, toMessageId: "nope" })
+    ).rejects.toThrow(/no live message with id nope/);
+    await expect(
+      build().invoke({ mode: "range", fromMessageId: "nope", toMessageId: m.id })
+    ).rejects.toThrow(/no live message with id nope/);
+  });
+
+  it("refuses the fields of other modes", async () => {
+    const a = add("user", "a");
+    const b = add("user", "b");
+    await expect(
+      build().invoke({ mode: "range", fromMessageId: a.id, toMessageId: b.id, offset: 1 })
+    ).rejects.toThrow(/"range" does not take "offset"/);
   });
 });
 

@@ -57,6 +57,11 @@ export function renderPage(input: {
   total: number;
   offset: number;
   extra?: Record<string, unknown>;
+  /**
+   * Replaces the generic "page with a larger offset" truncation sentence for modes that
+   * cannot page (around/range). The note prefix is still prepended.
+   */
+  truncatedNote?: string;
 }): string {
   /*
    * `truncated` answers one question — "is there more of this set that you have not seen" — and
@@ -85,9 +90,11 @@ export function renderPage(input: {
         truncated,
         items,
         note: truncated
-          ? `${input.note} Only ${items.length} of the ${input.total - input.offset} items ` +
-            `from this offset are here. Call ${input.tool} again with a larger offset, ` +
-            "or narrow with a filter, rather than treating this as the whole set."
+          ? input.truncatedNote
+            ? `${input.note} ${input.truncatedNote}`
+            : `${input.note} Only ${items.length} of the ${input.total - input.offset} items ` +
+              `from this offset are here. Call ${input.tool} again with a larger offset, ` +
+              "or narrow with a filter, rather than treating this as the whole set."
           : input.note,
       },
       null,
