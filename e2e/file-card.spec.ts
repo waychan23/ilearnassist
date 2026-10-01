@@ -60,6 +60,18 @@ test("a written file is a card, not a second copy of its text", async ({ page, r
 
   const card = page.getByTestId("file-card").last();
   await expect(card).toBeVisible();
+
+  // The recorded offset puts the card between the two steps' prose, not above the message.
+  const intro = page.getByText("我把它写下来。", { exact: true });
+  const outro = page.getByText("已经写好了，需要我解释哪一部分？", { exact: true });
+  const [introBox, cardBox, outroBox] = await Promise.all([
+    intro.boundingBox(),
+    card.boundingBox(),
+    outro.boundingBox(),
+  ]);
+  expect(introBox!.y + introBox!.height).toBeLessThanOrEqual(cardBox!.y);
+  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(outroBox!.y);
+
   // The three facts a reader needs to recognise it: the tool, the path, and how big it is.
   await expect(card.locator(".name")).toBeVisible();
   await expect(card.locator(".path")).toHaveText("src/main.rs");
@@ -74,7 +86,9 @@ test("a written file is a card, not a second copy of its text", async ({ page, r
    */
   const message = page.getByTestId("message-assistant").last();
   await expect(message.locator("pre.code-block")).toHaveCount(0);
-  await expect(message.getByTestId("message-content")).not.toContainText("println!");
+  await expect(
+    message.getByTestId("message-content").filter({ hasText: "println!" })
+  ).toHaveCount(0);
 
   // The preview is open without asking, and bounded — the head of the file, not the file.
   const preview = card.getByTestId("file-preview");

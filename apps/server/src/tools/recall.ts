@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   RECALL_MODES,
   RECALL_TOOL_NAME,
+  stripInlineMarkers,
   type Message,
   type RecallMode,
 } from "@ilearnassist/shared";
@@ -155,7 +156,7 @@ function checkFields(input: RecallInput): void {
 function recallItem(message: Message, max = RECALL_MESSAGE_MAX): Record<string, unknown> {
   return {
     role: message.role,
-    content: clip(message.content, max),
+    content: clip(stripInlineMarkers(message.content), max),
     createdAt: message.createdAt,
   };
 }
@@ -219,7 +220,9 @@ export function buildRecallTool(ctx: RecallToolContext): StructuredToolInterface
       throw new Error('mode "search" needs a `query` — the text to look for inside messages.');
     }
     const all = liveMessages()
-      .filter((m) => m.content.toLowerCase().includes(needle.toLowerCase()))
+      .filter((m) =>
+        stripInlineMarkers(m.content).toLowerCase().includes(needle.toLowerCase())
+      )
       // Newest first: a hit from yesterday is more likely to be what a question is about than
       // one from the first hour of the conversation.
       .reverse();

@@ -140,6 +140,17 @@ test("the model's diagram is drawn in the conversation", async ({ page, request 
   await expect(card(page)).toBeVisible({ timeout: 20_000 });
   await waitForDiagram(page);
 
+  // The recorded offset puts the card between the two steps' prose, not above the message.
+  const intro = page.getByText("我画一张图。", { exact: true });
+  const outro = page.getByText("画好了。", { exact: true });
+  const [introBox, cardBox, outroBox] = await Promise.all([
+    intro.boundingBox(),
+    card(page).boundingBox(),
+    outro.boundingBox(),
+  ]);
+  expect(introBox!.y + introBox!.height).toBeLessThanOrEqual(cardBox!.y);
+  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(outroBox!.y);
+
   /*
    * Text, never coordinates. `htmlLabels: false` makes every label a real SVG `<text>`, so the
    * label is in the output — and a geometry assertion would be font-dependent, passing on one

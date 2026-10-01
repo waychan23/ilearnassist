@@ -1999,6 +1999,37 @@ pre.code-block {
 }
 
 /*
+ * An inline artifact slot without a card yet — pending, dangling or failed: a quiet panel
+ * standing where the card will be (or should have been). Dashed while pending so it reads
+ * as a placeholder; the inner artifact cards carry their own margins, so only this panel
+ * needs one.
+ */
+.artifact-slot .slot-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-3);
+  font-size: var(--fs-3);
+}
+
+.artifact-slot .slot-state .spin {
+  animation: spin 1s linear infinite;
+}
+
+.artifact-slot .slot-state.dangling {
+  border-style: solid;
+}
+
+.artifact-slot .slot-state.error {
+  border-style: solid;
+  color: var(--danger-text);
+}
+
+/*
  * A collapsed run of tool calls, drawn as the same card with a summary head.
  *
  * The head is a real `<button>` because it carries `aria-expanded` — a disclosure a keyboard

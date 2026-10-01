@@ -406,6 +406,99 @@ describe("runAgentStream — tool calling", () => {
   });
 });
 
+describe("runAgentStream — contentOffset", () => {
+  it("records the artifact position on tool_start, tool_end and the result call", async () => {
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
+    const { events, result } = await run({
+      tools: [files.writeFile],
+      turns: [
+        {
+          content: "Writing now.",
+          toolCalls: [
+            { id: "call_1", name: "write_file", args: { path: "a.txt", content: "x" } },
+          ],
+        },
+        { content: "Done." },
+      ],
+    });
+
+    const expected = "Writing now.".length;
+    const start = events.find((e) => e.type === "tool_start") as Extract<
+      ChatStreamEvent,
+      { type: "tool_start" }
+    >;
+    const end = events.find((e) => e.type === "tool_end") as Extract<
+      ChatStreamEvent,
+      { type: "tool_end" }
+    >;
+    expect(start.toolCall.contentOffset).toBe(expected);
+    expect(end.toolCall.contentOffset).toBe(expected);
+    expect(result.toolCalls[0]!.contentOffset).toBe(expected);
+  });
+
+  it("gives two artifact calls in one step the same offset and keeps call order", async () => {
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
+    const { result } = await run({
+      tools: [files.writeFile],
+      turns: [
+        {
+          content: "Two files.",
+          toolCalls: [
+            { id: "call_1", name: "write_file", args: { path: "a.txt", content: "a" } },
+            { id: "call_2", name: "write_file", args: { path: "b.txt", content: "b" } },
+          ],
+        },
+        { content: "Done." },
+      ],
+    });
+
+    const expected = "Two files.".length;
+    expect(result.toolCalls.map((tc) => [tc.id, tc.contentOffset])).toEqual([
+      ["call_1", expected],
+      ["call_2", expected],
+    ]);
+  });
+
+  it("records the offset before the next step's separator arrives", async () => {
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
+    const { result } = await run({
+      tools: [files.writeFile],
+      turns: [
+        {
+          content: "First step.",
+          toolCalls: [
+            { id: "call_1", name: "write_file", args: { path: "a.txt", content: "x" } },
+          ],
+        },
+        { content: "Second." },
+      ],
+    });
+
+    expect(result.toolCalls[0]!.contentOffset).toBe("First step.".length);
+  });
+
+  it("records no offset on a background tool", async () => {
+    const files = fileToolsFor(join(scratch, "ws"), { defaultLocation: "workspace" }).tools;
+    const { events, result } = await run({
+      tools: [files.readFile],
+      turns: [
+        {
+          content: "Reading.",
+          toolCalls: [{ id: "call_1", name: "read_file", args: { path: "missing.txt" } }],
+        },
+        { content: "ok" },
+      ],
+    });
+
+    const start = events.find((e) => e.type === "tool_start") as Extract<
+      ChatStreamEvent,
+      { type: "tool_start" }
+    >;
+    expect(start.toolCall.contentOffset).toBeUndefined();
+    expect(result.toolCalls[0]!.contentOffset).toBeUndefined();
+  });
+});
+
 describe("runAgentStream — step breaks", () => {
   it("separates two speaking steps with a paragraph break", async () => {
     const { events } = await run({

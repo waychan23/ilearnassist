@@ -462,3 +462,48 @@ md.use(katexPlugin, {
   enableFencedBlocks: true,
 });
 
+/* --------------------------- block structure (snapping) --------------------------- */
+
+export interface BlockTokenLine {
+  type: string;
+  /** First line the token spans, 0-based. */
+  startLine: number;
+  /** Line after the token's last line, 0-based. */
+  endLine: number;
+  /** The token's nesting level. */
+  level: number;
+}
+
+/**
+ * The block-level tokens of text, each with its source-line span.
+ *
+ * Thin wrapper over the one configured markdown-it instance: the artifact snapper asks
+ * only "which block does this line belong to and where does it end", so a second parser
+ * is never needed. Inline and map-less tokens are dropped.
+ */
+export function parseBlockLines(text: string): BlockTokenLine[] {
+  return md
+    .parse(text, {})
+    .map((token): BlockTokenLine | null => {
+      const map = token.map;
+      if (!map) return null;
+      return {
+        type: token.type,
+        startLine: map[0]!,
+        endLine: map[1]!,
+        level: token.level,
+      };
+    })
+    .filter((token): token is BlockTokenLine => token !== null);
+}
+
+/**
+ * Number of Markdown tables in text, by counting `table_open` tokens.
+ *
+ * Lets the message renderer slice the `ila_table` heading list per text segment while
+ * keeping the positional pairing.
+ */
+export function countTablesIn(text: string): number {
+  return md.parse(text, {}).filter((token) => token.type === "table_open").length;
+}
+

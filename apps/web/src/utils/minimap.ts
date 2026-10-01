@@ -1,5 +1,5 @@
 import { i18n } from "../i18n";
-import type { Message } from "../api/types";
+import { stripInlineMarkers, type Message } from "../api/types";
 
 /**
  * Minimap rail helpers, modelled on chatbox's `MessageMinimapRail`.
@@ -64,7 +64,7 @@ export function normalizePreviewText(text: string, fallback = ""): string {
  * user sent files with no text, so an image-only turn is not a blank anchor.
  */
 export function messagePreview(message: Message, maxLength = MINIMAP_PREVIEW_MAX_LENGTH): string {
-  let text = message.content.trim();
+  let text = stripInlineMarkers(message.content);
   if (!text && message.attachments?.length) {
     text = message.attachments
       .map((a) => (a.kind === "image" ? i18n.global.t("minimap.image") : i18n.global.t("minimap.file", { name: a.name })))

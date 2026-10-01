@@ -1,5 +1,6 @@
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { slugifyName } from "@ilearnassist/shared";
 import { workspaceSessionsDir, workspaceWorkdir } from "./paths.js";
 
 /**
@@ -88,14 +89,9 @@ export function resolveInWorkspace(
  * wire.
  */
 export function slugify(name: string, fallback: string): string {
-  const base = name
-    .toLowerCase()
-    .trim()
-    // Keep CJK characters (and common scripts) so non-Latin names stay readable.
-    .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return base || fallback;
+  // The rule now lives in the shared package: the web's marker/call identity math has to
+  // match this byte-for-byte — see `slugifyName`.
+  return slugifyName(name, fallback);
 }
 
 /**

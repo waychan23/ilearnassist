@@ -78,6 +78,7 @@ describe("the catalog", () => {
       "workspace",
       "codeFence",
       "fileWrite",
+      "inlineArtifact",
       "plan",
       "quiz",
       "makeupCard",

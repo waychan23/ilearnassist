@@ -9,6 +9,7 @@ import {
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
   QUIZ_TOOL_NAME,
+  isArtifactTool,
   type Attachment,
   type ChatStreamEvent,
   type FileLocation,
@@ -133,6 +134,12 @@ export interface RunAgentInput {
   plotGuidance?: string;
   /** `write_file`'s other half — see `fileWriteGuidance`. */
   fileWriteGuidance?: string;
+  /**
+   * The inline-artifact marker spec, present exactly when one of the three artifact tools
+   * (`ila_diagram`, `ila_plot`, `write_file`) survived assembly — see
+   * `SystemPromptInput.inlineArtifactGuidance`.
+   */
+  inlineArtifactGuidance?: string;
   /**
    * What the user opened to this conversation with `@`, on turns where `ila_explore` is
    * assembled. Absent on every ordinary conversation, and it does more than add a paragraph —
@@ -371,6 +378,14 @@ export interface SystemPromptInput {
   /** `write_file`'s other half — see `fileWriteGuidance`. */
   fileWriteGuidance?: string;
   /**
+   * The inline-artifact marker spec.
+   *
+   * Its **presence** is the switch, the `collectPageGuidance` rule: the route asks the
+   * assembled tool array, so a Copilot whose allow-list excludes every artifact tool is
+   * never given a marker spec it cannot use.
+   */
+  inlineArtifactGuidance?: string;
+  /**
    * What the user has opened to this conversation with `@`.
    *
    * Its **presence** is the switch, the `collectPageGuidance` rule: the route asks the assembled
@@ -537,6 +552,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   const table = block(input.tableGuidance);
   const plot = block(input.plotGuidance);
   const fileWrite = block(input.fileWriteGuidance);
+  // The inline-marker spec, beside the write block it belongs with.
+  const inlineArtifact = block(input.inlineArtifactGuidance);
   // The `@` grant, which qualifies the workspace block above it.
   const explore = block(input.exploreGuidance);
   // And the way back to what a summary dropped, which is the other half of that context note.
@@ -551,6 +568,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     workspace,
     codeFence,
     fileWrite,
+    inlineArtifact,
     plan,
     quiz,
     makeupCard,
@@ -739,6 +757,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         tableGuidance: input.tableGuidance,
         plotGuidance: input.plotGuidance,
         fileWriteGuidance: input.fileWriteGuidance,
+        inlineArtifactGuidance: input.inlineArtifactGuidance,
         exploreGuidance: input.exploreGuidance,
         recallGuidance: input.recallGuidance,
       })
@@ -894,8 +913,15 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         // input is what the card renders. The suspending arm stores its own redacted record,
         // but a call that fails validation lands on the ordinary path below.
         const clientInput = name === QUIZ_TOOL_NAME ? redactQuizInput(args) : args;
+        // Artifact cards render inline, at where this step's text ends. A step's text has
+        // fully streamed before any of its tools run, so two calls in the step share one
+        // offset. Other calls record nothing and keep their above-text placement.
+        const offsetField = isArtifactTool(name) ? { contentOffset: finalContent.length } : {};
 
-        input.onEvent({ type: "tool_start", toolCall: { id, name, input: clientInput } });
+        input.onEvent({
+          type: "tool_start",
+          toolCall: { id, name, input: clientInput, ...offsetField },
+        });
 
         let output = "";
         const t = toolByName.get(name);
@@ -953,6 +979,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
                   name,
                   input: JSON.stringify(err.recordedInput ?? call.args ?? {}),
                   status: "awaiting",
+                  ...offsetField,
                 });
                 // Note the deliberate absence of a `tool_end` event to match the
                 // `tool_start` above — there is no result to report yet.
@@ -973,8 +1000,11 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
           output = `Unknown tool "${name}".`;
         }
 
-        toolCalls.push({ id, name, input: clientInput, output });
-        input.onEvent({ type: "tool_end", toolCall: { id, name, input: clientInput, output } });
+        toolCalls.push({ id, name, input: clientInput, output, ...offsetField });
+        input.onEvent({
+          type: "tool_end",
+          toolCall: { id, name, input: clientInput, output, ...offsetField },
+        });
 
         messages.push(new ToolMessage({ tool_call_id: id, name, content: output }));
       }

@@ -5,6 +5,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 export { ALL_TOOL_NAMES, type ToolName } from "@ilearnassist/shared";
 import { isBuiltinTool, isWidgetBoundTool } from "@ilearnassist/shared";
 import type { WebFetchConfig, WebSearchConfig } from "../config.js";
+import { renderPrompt } from "../prompts.js";
 import { buildAskUserTool } from "./askUser.js";
 import { buildDiagramTool, type DiagramToolContext } from "./diagram.js";
 import { buildPlotTool, type PlotToolContext } from "./plot.js";
@@ -87,6 +88,16 @@ const NON_FILE_TOOLS = new Set<string>([
   // switch must not remove a capability that never had one.
   "ila_save_preference",
 ]);
+
+/**
+ * The inline-artifact marker spec, one block for all three artifact tools.
+ *
+ * The route appends it when at least one of them survived assembly — presence of the tool
+ * is the switch, the collectPageGuidance rule.
+ */
+export function inlineArtifactGuidance(): string {
+  return renderPrompt("chat.guidance.inlineArtifact");
+}
 
 export interface BuildToolsInput {
   /**

@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import {
   isInteractiveTool,
+  stripInlineMarkers,
   TABLE_TOOL_NAME,
   type Message,
   type ToolCall,
@@ -14,7 +15,8 @@ import { copyText } from "../utils/clipboard";
 import { confirm } from "../composables/confirm";
 import { openNoteFromHighlight, requestNoteEditor } from "../composables/messageNotes";
 import { objectNoteRequest } from "../composables/notes";
-import { renderMarkdown, type TableHeading } from "../utils/markdown";
+import { countTablesIn, renderMarkdown, type TableHeading } from "../utils/markdown";
+import { buildInlineParts, type SlotStatus } from "../utils/inlineArtifacts";
 import { formatTokens } from "../utils/format";
 import { applyNoteHighlights, noteIdAt, type NoteHighlightMark } from "../utils/noteAnchor";
 import { groupToolCalls } from "../utils/toolCallGroups";
@@ -91,7 +93,7 @@ const toolCalls = computed(() =>
 );
 
 /**
- * Tool cards that belong above the reply, and the questions that belong below it.
+ * Artifact cards interleaved with the reply, and the question cards that belong below it.
  *
  * A question is not an action the agent took on the way to answering — it is the last thing
  * in the turn, and the sentence in front of it introduces it ("请先回答下面几个问题：").
@@ -99,14 +101,31 @@ const toolCalls = computed(() =>
  * explaining it, and while streaming it read as though the message had already ended and
  * then started talking again.
  *
- * Grouped by the shared `isInteractiveTool` rather than a name comparison each, so a third
- * question tool lands on the right side of the reply without an edit here. A *failed*
- * question call is grouped the same way and renders as an ordinary card — see
- * `ToolCallCard` — which is right because it happened in the same step as the one that
- * suspended, so it is at the end of the turn either way.
+ * `isInteractiveTool` is shared rather than a name comparison each, so a third question
+ * tool lands on the right side of the reply without an edit here. A *failed* question call
+ * renders as an ordinary card — see `ToolCallCard` — which is right because it happened in
+ * the same step as the one that suspended, so it is at the end of the turn either way.
  */
-const actionToolCalls = computed(() => toolCalls.value.filter((tc) => !isInteractiveTool(tc.name)));
 const questionToolCalls = computed(() => toolCalls.value.filter((tc) => isInteractiveTool(tc.name)));
+
+/**
+ * The ordered parts: text segments with artifact cards interleaved. Same path while
+ * streaming and once persisted; `settled` decides whether a marker with no call yet is a
+ * pending slot or a dangling one.
+ */
+const inline = computed(() =>
+  buildInlineParts(content.value, toolCalls.value, { settled: !props.streaming })
+);
+
+/**
+ * Calls still rendered above the reply: background actions and artifact calls the inline
+ * builder could not place (no marker, no usable offset), in original order.
+ */
+const aboveCalls = computed(() =>
+  toolCalls.value.filter(
+    (tc) => !isInteractiveTool(tc.name) && !inline.value.consumedCallIds.has(tc.id)
+  )
+);
 
 /**
  * The calls this message makes that render nothing at all — `ila_table`'s, whose artifact is the
@@ -126,15 +145,14 @@ const anchorToolCallIds = computed(() =>
 );
 
 /**
- * The actions, with runs of consecutive calls collapsed into one entry each.
+ * The above-text calls, with runs of consecutive calls collapsed into one entry each.
  *
- * Grouping happens *here*, after `toolCalls` has already chosen between the live stream and
- * the persisted message, so the collapsed view is identical during a turn and after it — a
- * reader who saw three calls fold into one line does not watch it unfold when the turn ends.
- * The arithmetic itself is in `utils/toolCallGroups`. A run of one is a `single` and renders
- * exactly as it did before there was any grouping.
+ * Grouping happens *here*, after the inline builder has taken its calls out, so the
+ * collapsed view is identical during a turn and after it. The arithmetic itself is in
+ * `utils/toolCallGroups`. A run of one is a `single` and renders exactly as it did before
+ * there was any grouping.
  */
-const actionRuns = computed(() => groupToolCalls(actionToolCalls.value));
+const aboveRuns = computed(() => groupToolCalls(aboveCalls.value));
 const error = computed(() => props.streaming?.error ?? null);
 /**
  * Whether the user cut this reply short.
@@ -224,24 +242,58 @@ const tableHeadings = computed(() => {
   return headings;
 });
 
-/**
- * The words a table's bar needs, or `null` where a table should be left alone.
- *
- * Null in a **streaming** message: the calls arrive as the turn runs, so a table drawn before its
- * `ila_table` call has landed would be titling against a moving set — and the count guard would
- * flip a bar on and off as the turn went. The bar appears with the message, which is when its
- * headings are settled.
- */
-const tableWords = computed(() =>
-  props.streaming
-    ? null
-    : { headings: tableHeadings.value, labels: { untitled: t("table.untitled"), annotate: t("notes.annotate") } }
-);
+interface RenderedTextPart {
+  kind: "text";
+  html: string;
+}
+interface RenderedSlotPart {
+  kind: "slot";
+  status: SlotStatus;
+  toolCall?: ToolCall;
+}
+type RenderedPart = RenderedTextPart | RenderedSlotPart;
 
-const rendered = computed(() => {
-  if (!content.value) return "";
-  const html = renderMarkdown(content.value, markdownLabels.value, tableWords.value ?? undefined);
-  return props.streaming ? html + '<span class="streaming-cursor"></span>' : html;
+/**
+ * The ordered parts with each text segment rendered to HTML.
+ *
+ * Table title bars are paired positionally **per segment**: headings are sliced in order by
+ * how many tables each segment holds. Streaming passes no table words (the calls arrive as
+ * the turn runs), and the streaming cursor rides the last text segment.
+ */
+const renderedParts = computed<RenderedPart[]>(() => {
+  const parts = inline.value.parts;
+  const out: RenderedPart[] = [];
+  let tableCursor = 0;
+
+  parts.forEach((part, i) => {
+    if (part.kind === "slot") {
+      out.push({
+        kind: "slot",
+        status: part.status,
+        ...(part.toolCall ? { toolCall: part.toolCall } : {}),
+      });
+      return;
+    }
+
+    const count = countTablesIn(part.text);
+    const headings = tableHeadings.value.slice(tableCursor, tableCursor + count);
+    tableCursor += count;
+    // Passed even when the slice is empty: a table with no `ila_table` call still gets the
+    // generic bar (renderTables' count-mismatch path). Streaming passes nothing.
+    const tables = props.streaming
+      ? undefined
+      : {
+          headings,
+          labels: { untitled: t("table.untitled"), annotate: t("notes.annotate") },
+        };
+
+    const isLastText = parts.slice(i + 1).every((p) => p.kind !== "text");
+    let html = renderMarkdown(part.text, markdownLabels.value, tables);
+    if (props.streaming && isLastText) html += '<span class="streaming-cursor"></span>';
+    out.push({ kind: "text", html });
+  });
+
+  return out;
 });
 
 /* ---------------------------------- notes ---------------------------------- */
@@ -281,7 +333,9 @@ function drawNoteMarks(): void {
   applyNoteHighlights(root, messageId, myNoteMarks.value);
 }
 
-watch([rendered, myNoteMarks], () => void nextTick(drawNoteMarks), { flush: "post" });
+watch([renderedParts, myNoteMarks], () => void nextTick(drawNoteMarks), {
+  flush: "post",
+});
 onMounted(() => void nextTick(drawNoteMarks));
 
 /**
@@ -336,7 +390,8 @@ const copied = ref(false);
 async function copyMessage() {
   if (!content.value) return;
   try {
-    await copyText(content.value);
+    // Markers are positioning syntax: the copy reads like the rendered reply.
+    await copyText(stripInlineMarkers(content.value));
     copied.value = true;
     setTimeout(() => (copied.value = false), 1500);
   } catch {
@@ -540,23 +595,62 @@ const usageText = computed(() => {
         :duration-ms="reasoningMs"
       />
       <!--
-        A run of two or more actions is one card; a lone call is the card it always was. The
-        `v-if`/`v-else` is written out rather than folded into the `v-for`, because it is what
-        narrows the union for `vue-tsc` — `run.calls` does not exist on the `single` arm.
+        Above-text calls: a run of two or more background actions is one card; a lone call is
+        the card it always was. The `v-if`/`v-else` is written out rather than folded into
+        the `v-for`, because it is what narrows the union for `vue-tsc` — `run.calls` does
+        not exist on the `single` arm.
       -->
-      <template v-for="run in actionRuns" :key="run.kind === 'group' ? run.calls[0]!.id : run.call.id">
+      <template v-for="run in aboveRuns" :key="run.kind === 'group' ? run.calls[0]!.id : run.call.id">
         <ToolCallGroup v-if="run.kind === 'group'" :calls="run.calls" />
         <ToolCallCard v-else :tool-call="run.call" />
       </template>
+
+      <!--
+        The reply itself: text segments with artifact cards interleaved. The wrapper — not
+        any one segment — is the note root: all visible prose lives under it, and the slot
+        subtrees carry data-note-skip so the anchor arithmetic never counts the cards.
+      -->
       <div
-        v-if="rendered"
+        v-if="renderedParts.length"
         ref="noteRoot"
-        class="markdown"
+        class="inline-artifacts"
         data-note-root
-        data-testid="message-content"
         @click="onContentClick"
-        v-html="rendered"
-      ></div>
+      >
+        <template v-for="(part, i) in renderedParts" :key="i">
+          <div
+            v-if="part.kind === 'text'"
+            class="markdown text-segment"
+            data-testid="message-content"
+            v-html="part.html"
+          ></div>
+          <div
+            v-else
+            class="artifact-slot"
+            :data-slot-status="part.status"
+            data-note-skip
+          >
+            <ToolCallCard v-if="part.toolCall" :tool-call="part.toolCall" />
+            <div
+              v-else-if="part.status === 'pending'"
+              class="slot-state pending"
+              data-testid="artifact-pending"
+            >
+              <Icon name="retry" class="spin" /> {{ t("inlineArtifact.pending") }}
+            </div>
+            <div
+              v-else-if="part.status === 'dangling'"
+              class="slot-state dangling"
+              data-testid="artifact-dangling"
+            >
+              <Icon name="warning" /> {{ t("inlineArtifact.dangling") }}
+            </div>
+            <div v-else class="slot-state error" data-testid="artifact-error">
+              <Icon name="warning" /> {{ t("inlineArtifact.error") }}
+            </div>
+          </div>
+        </template>
+      </div>
       <!-- Outside the content block above: a stop pressed before any text arrived leaves
            an empty reply, and that one still needs to say why it is empty. -->
       <div v-if="stopped" class="stopped-note" data-testid="message-stopped">

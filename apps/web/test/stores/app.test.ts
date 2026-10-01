@@ -1154,6 +1154,20 @@ describe("sendMessage", () => {
     expect(store.streaming.toolCalls[0]!.output).toBe("contents");
   });
 
+  it("keeps an artifact call's content offset from tool_start", async () => {
+    const store = await readyStore();
+    streamOf(
+      {
+        type: "tool_start",
+        toolCall: { id: "c1", name: "write_file", input: "{}", contentOffset: 12 },
+      },
+      { type: "done" }
+    );
+
+    await store.sendMessage("write it");
+    expect(store.streaming.toolCalls[0]!.contentOffset).toBe(12);
+  });
+
   it("records usage for the turn", async () => {
     const store = await readyStore();
     streamOf({ type: "usage", usage: { totalTokens: 42 } }, { type: "done" });

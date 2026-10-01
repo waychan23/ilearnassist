@@ -95,6 +95,8 @@ import {
   TABLE_TOOL_NAME,
   USERNAME_MAX_LENGTH,
   WRITE_FILE_TOOL_NAME,
+  isArtifactTool,
+  stripInlineMarkers,
   type QuizMakeupSubmitBody,
   type QuizQuestion,
 } from "@ilearnassist/shared";
@@ -187,7 +189,7 @@ import { uniqueSessionTitle } from "./sessionTitles.js";
 import { writeParsedText } from "./documents/store.js";
 import { needsSummary, summarizeImage } from "./agent/mediaSummary.js";
 import { createSseWriter } from "./stream.js";
-import { buildTools } from "./tools/index.js";
+import { buildTools, inlineArtifactGuidance } from "./tools/index.js";
 import { QUIZ_QUESTION_COUNTER } from "./tools/quiz.js";
 import { collectPageGuidance } from "./tools/collectPage.js";
 import { plotGuidance } from "./tools/plot.js";
@@ -2487,7 +2489,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
 
       const messages: CompactMessage[] = history.map((m) => ({
         role: m.role,
-        content: m.content,
+        content: stripInlineMarkers(m.content),
         toolCalls: (m.toolCalls ?? []).map((tc) => ({ name: tc.name, output: tc.output })),
       }));
 
@@ -2971,8 +2973,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   function titleMessagesFor(sessionId: string, userId: string): TitleMessage[] | undefined {
     const messages = db.listMessagesForUser(sessionId, userId);
     if (!messages.some((m) => m.role === "user" && m.content.trim())) return undefined;
-    if (!messages.some((m) => m.role === "assistant" && m.content.trim())) return undefined;
-    return messages.map((m) => ({ role: m.role, content: m.content }));
+    if (
+      !messages.some((m) => m.role === "assistant" && stripInlineMarkers(m.content).trim())
+    )
+      return undefined;
+    return messages.map((m) => ({ role: m.role, content: stripInlineMarkers(m.content) }));
   }
 
   /**
@@ -4888,6 +4893,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     /** Present when `write_file` survived assembly — the other half of the file card. */
     fileWriteGuidance?: string;
     /**
+     * Present when one of the three artifact tools survived assembly — the inline-marker
+     * spec.
+     */
+    inlineArtifactGuidance?: string;
+    /**
      * Present when the conversation holds an `@` grant **and** `ila_explore` survived assembly.
      * Its presence is what flips the workspace note's read prohibition — see `buildSystemPrompt`.
      */
@@ -5377,6 +5387,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       fileWriteGuidance: tools.some((t) => t.name === WRITE_FILE_TOOL_NAME)
         ? fileWriteGuidance()
         : undefined,
+      // The inline-marker spec, present when any of the three artifact tools survived.
+      inlineArtifactGuidance: tools.some((t) => isArtifactTool(t.name))
+        ? inlineArtifactGuidance()
+        : undefined,
       /*
        * The `auto-install` side effect, and the only reason the loop takes a callback for it: the
        * loop knows which tool ran, and this closure knows whose conversation it ran in. It
@@ -5774,6 +5788,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         tableGuidance: ctx.tableGuidance,
         plotGuidance: ctx.plotGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
+        inlineArtifactGuidance: ctx.inlineArtifactGuidance,
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
         smartContextGuidance: ctx.smartContextGuidance,
@@ -6046,6 +6061,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         tableGuidance: ctx.tableGuidance,
         plotGuidance: ctx.plotGuidance,
         fileWriteGuidance: ctx.fileWriteGuidance,
+        inlineArtifactGuidance: ctx.inlineArtifactGuidance,
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
         smartContextGuidance: ctx.smartContextGuidance,
