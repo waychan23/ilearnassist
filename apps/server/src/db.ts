@@ -2718,6 +2718,14 @@ export interface AppDb {
     startMessageId: string | null,
     skippedMessageId: string | null
   ): void;
+  /** Point a node's skip at this message unconditionally — post-turn resolution. */
+  setPlanNodeSkippedMessage(
+    planId: string,
+    nodeId: string,
+    messageId: string
+  ): void;
+  /** The newest live message id in a session, or null when it has none. */
+  lastSessionMessageId(sessionId: string): string | null;
 
   /*
    * Quiz questions (quiz widget). Ownership is reached through the session like plans: the
@@ -4576,6 +4584,16 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
            skipped_message_id = COALESCE(skipped_message_id, @skippedMessageId)
      WHERE id = @id AND plan_id = @planId`
   );
+  // Set the skip message unconditionally (a second skip lands at a new message position).
+  const stmtSetPlanNodeSkippedMessage = db.prepare(
+    `UPDATE plan_nodes SET skipped_message_id = @messageId
+     WHERE id = @id AND plan_id = @planId`
+  );
+  // The newest live message — the abandoned position a skip records.
+  const stmtLastSessionMessageId = db.prepare(
+    `SELECT id FROM messages WHERE session_id = ? AND deleted_at IS NULL
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`
+  );
 
   /* --------------------------------- quizzes -------------------------------- */
   /*
@@ -6170,6 +6188,12 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     },
     fillPlanNodeMessageIds(planId, nodeId, startMessageId, skippedMessageId) {
       stmtFillPlanNodeMessageIds.run({ id: nodeId, planId, startMessageId, skippedMessageId });
+    },
+    setPlanNodeSkippedMessage(planId, nodeId, messageId) {
+      stmtSetPlanNodeSkippedMessage.run({ id: nodeId, planId, messageId });
+    },
+    lastSessionMessageId(sessionId) {
+      return (stmtLastSessionMessageId.get(sessionId) as { id: string } | undefined)?.id ?? null;
     },
 
     insertQuizQuestions(rows) {

@@ -7,11 +7,13 @@ import { createDb, DEFAULT_SESSION_TITLE, type AppDb } from "../src/db.js";
 import {
   applyProgress,
   forceMakePlan,
+  jumpToNode,
   makePlan,
   planConflicted,
   planTreeInputSchema,
   readCurrentPlan,
   readPlanVersion,
+  resolvePlanStartMessages,
 } from "../src/plans.js";
 
 let root: string;
@@ -267,12 +269,25 @@ describe("applyProgress", () => {
     expect(byTitle(done, "A1").anchorToolCallId).toBe("call_done");
   });
 
-  it("clears the anchor when the node goes back to not-started or skipped", () => {
+  it("keeps the start anchor when a started node is skipped, so it differs from one never begun", () => {
     const view = seeded();
     const a1 = byTitle(view, "A1");
     applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "in_progress" }] }, "call_start");
     const skipped = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "skipped" }] }, "call_2");
-    expect(byTitle(skipped, "A1").anchorToolCallId).toBeUndefined();
+    const skippedNode = byTitle(skipped, "A1");
+    expect(skippedNode.anchorToolCallId).toBe("call_start");
+    // A never-started node skipped the same way carries no anchor.
+    const b = byTitle(view, "B");
+    const skipped2 = applyProgress(db, SESSION, { nodes: [{ id: b.id, status: "skipped" }] }, "call_3");
+    expect(byTitle(skipped2, "B").anchorToolCallId).toBeUndefined();
+  });
+
+  it("clears every marker when a node is explicitly reset to not-started", () => {
+    const view = seeded();
+    const a1 = byTitle(view, "A1");
+    applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "in_progress" }] }, "call_start");
+    const reset = applyProgress(db, SESSION, { nodes: [{ id: a1.id, status: "not_started" }] }, "call_2");
+    expect(byTitle(reset, "A1").anchorToolCallId).toBeUndefined();
   });
 
   it("completes the plan when every live node is completed", () => {
@@ -608,5 +623,140 @@ describe("history ownership", () => {
   it("answers undefined for a version that never existed", () => {
     makePlan(db, SESSION, input(basicTree()));
     expect(readPlanVersion(db, OWNER, SESSION, 7)).toBeUndefined();
+  });
+});
+
+describe("jumpToNode", () => {
+  function seeded(): PlanView {
+    const v1 = makePlan(db, SESSION, input(basicTree()));
+    if (planConflicted(v1)) throw new Error("should create");
+    return readCurrentPlan(db, SESSION)!;
+  }
+
+  it("keeps the start anchor of an in-progress node it skips, and records the message position", () => {
+    const view = seeded();
+    applyProgress(db, SESSION, { nodes: [{ id: byTitle(view, "A").id, status: "in_progress" }] }, "call_a");
+    // The abandoned position: a user message, then the assistant message carrying the anchor.
+    db.createMessage({ id: "m1", sessionId: SESSION, role: "user", content: "开始学 A" });
+    db.createMessage({
+      id: "m2",
+      sessionId: SESSION,
+      role: "assistant",
+      content: "好的",
+      toolCalls: [{ id: "call_a", name: "ila_update_plan_progress", input: "{}" }],
+    });
+
+    const result = jumpToNode(db, SESSION, byTitle(readCurrentPlan(db, SESSION)!, "B").id);
+
+    expect(result.started).toBe(false);
+    expect(result.startMessageId).toBeNull();
+    expect(result.skippedMessageId).toBeNull();
+    expect(result.skippedCount).toBe(2); // A and A1
+
+    const after = flatten(result.view.tree);
+    const skippedA = after.find((n) => n.title === "A")!;
+    expect(skippedA.status).toBe("skipped");
+    expect(skippedA.anchorToolCallId).toBe("call_a"); // half-studied marker kept
+    expect(skippedA.skippedMessageId).toBe("m2"); // abandoned position
+    expect(skippedA.skippedAt).toBeTruthy();
+    const skippedA1 = after.find((n) => n.title === "A1")!;
+    expect(skippedA1.status).toBe("skipped");
+    expect(skippedA1.anchorToolCallId).toBeUndefined(); // never started
+    expect(skippedA1.skippedMessageId).toBe("m2");
+    expect(after.find((n) => n.title === "B")!.status).toBe("in_progress");
+  });
+
+  it("reports a started target on revisit and keeps its anchor while clearing skip facts", () => {
+    const view = seeded();
+    applyProgress(db, SESSION, { nodes: [{ id: byTitle(view, "A").id, status: "in_progress" }] }, "call_a");
+    db.createMessage({ id: "m1", sessionId: SESSION, role: "user", content: "学 A" });
+    db.createMessage({
+      id: "m2",
+      sessionId: SESSION,
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_a", name: "ila_update_plan_progress", input: "{}" }],
+    });
+    jumpToNode(db, SESSION, byTitle(readCurrentPlan(db, SESSION)!, "B").id);
+    // The post-turn resolution the route runs: anchor call_a sits in m2.
+    expect(resolvePlanStartMessages(db, OWNER, SESSION).starts).toBe(1);
+
+    const back = jumpToNode(db, SESSION, byTitle(readCurrentPlan(db, SESSION)!, "A").id);
+    expect(back.started).toBe(true);
+    expect(back.startMessageId).toBe("m2");
+    expect(back.skippedMessageId).toBe("m2");
+
+    const reopened = byTitle(back.view, "A");
+    expect(reopened.status).toBe("in_progress");
+    expect(reopened.anchorToolCallId).toBe("call_a");
+    expect(reopened.skippedAt).toBeUndefined();
+    expect(reopened.skippedMessageId).toBeUndefined();
+  });
+
+  it("records a null message position when the session has no messages yet", () => {
+    seeded();
+    const result = jumpToNode(db, SESSION, byTitle(readCurrentPlan(db, SESSION)!, "B").id);
+    expect(result.skippedCount).toBe(2);
+    expect(byTitle(result.view, "A").skippedMessageId ?? null).toBeNull();
+  });
+
+  it("refuses a completed node and an unknown node", () => {
+    const view = seeded();
+    expect(() => jumpToNode(db, SESSION, "nope")).toThrow(/not a live node/);
+    const done = applyProgress(
+      db,
+      SESSION,
+      { nodes: [{ id: byTitle(view, "A1").id, status: "completed" }] },
+      "call_1"
+    );
+    expect(() => jumpToNode(db, SESSION, byTitle(done, "A1").id)).toThrow(/already completed/);
+  });
+});
+
+describe("resolvePlanStartMessages", () => {
+  it("resolves an anchor to its message, idempotently", () => {
+    const v1 = makePlan(db, SESSION, input(basicTree()));
+    if (planConflicted(v1)) throw new Error("should create");
+    applyProgress(db, SESSION, { nodes: [{ id: byTitle(v1, "A").id, status: "in_progress" }] }, "call_a");
+    db.createMessage({ id: "m1", sessionId: SESSION, role: "user", content: "学 A" });
+    db.createMessage({
+      id: "m2",
+      sessionId: SESSION,
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_a", name: "ila_update_plan_progress", input: "{}" }],
+    });
+
+    expect(resolvePlanStartMessages(db, OWNER, SESSION)).toEqual({ starts: 1, skips: 0 });
+    expect(byTitle(readCurrentPlan(db, SESSION)!, "A").startMessageId).toBe("m2");
+    expect(resolvePlanStartMessages(db, OWNER, SESSION)).toEqual({ starts: 0, skips: 0 });
+  });
+
+  it("resolves a turn's progress-tool skip to that turn's message, bounded by sinceIso", () => {
+    const v1 = makePlan(db, SESSION, input(basicTree()));
+    if (planConflicted(v1)) throw new Error("should create");
+    const planId = db.getPlanBySession(SESSION)!.id;
+    const a = byTitle(v1, "A");
+    const b = byTitle(v1, "B");
+    // An old skip on B, before the turn being finished.
+    db.skipPlanNode(planId, b.id, "2020-01-01T00:00:00.000Z", null);
+
+    const sinceIso = new Date().toISOString();
+    applyProgress(db, SESSION, { nodes: [{ id: a.id, status: "skipped" }] }, "call_x");
+    db.createMessage({ id: "m3", sessionId: SESSION, role: "assistant", content: "跳过 A" });
+
+    const result = resolvePlanStartMessages(db, OWNER, SESSION, {
+      assistantMessageId: "m3",
+      sinceIso,
+    });
+    expect(result).toEqual({ starts: 0, skips: 1 });
+    const reread = readCurrentPlan(db, SESSION)!;
+    expect(byTitle(reread, "A").skippedMessageId).toBe("m3");
+    // The old skip on B is untouched.
+    expect(byTitle(reread, "B").skippedMessageId ?? null).toBeNull();
+  });
+
+  it("answers zero counts when the session has no plan", () => {
+    expect(resolvePlanStartMessages(db, OWNER, SESSION)).toEqual({ starts: 0, skips: 0 });
   });
 });

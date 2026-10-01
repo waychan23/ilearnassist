@@ -133,7 +133,12 @@ import {
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import { installWidgetForToolUse } from "./widgetInstall.js";
-import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
+import {
+  buildPlanView,
+  jumpToNode,
+  readPlanVersion,
+  resolvePlanStartMessages,
+} from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
 import { makeInsightGenerator } from "./agent/insights.js";
@@ -5464,6 +5469,11 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * context. Written onto the assistant row as provenance; absent on a full-context turn.
        */
       summaryId?: string;
+      /**
+       * The turn's start instant, bounding which progress-tool skips resolve to this turn's
+       * message. Absent when finishing outside a timed turn.
+       */
+      turnStartedAtIso?: string;
     }
   ): Promise<void> {
     /*
@@ -5513,6 +5523,19 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       summaryId: opts.summaryId,
     });
     db.touchSession(id);
+
+    /*
+     * Resolve the plan's start/skip message columns now the turn's assistant message exists:
+     * anchors marked during this turn resolve to it, and progress-tool skips made during it
+     * land on it. Failures here must not fail the turn — the call is best effort.
+     */
+    try {
+      resolvePlanStartMessages(db, userId, id, opts.turnStartedAtIso
+        ? { assistantMessageId: assistantMessage.id, sinceIso: opts.turnStartedAtIso }
+        : undefined);
+    } catch {
+      // A column resolution problem never costs the reader their persisted turn.
+    }
 
     /*
      * The turn, in the ledger. One row per finished turn — not per ReAct step — because the model
@@ -5805,6 +5828,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         userMessage: null,
         user: treeFor(actor(request)),
         summaryId: summary?.id,
+        turnStartedAtIso: new Date(turnStartedAt).toISOString(),
       });
     } catch (err) {
       failTurn(id, ctx, err, sse, summary?.id);
@@ -6081,6 +6105,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         // user pointed at with `@` deserves a description as much as one they dragged in.
         attachments: [...storedAttachments, ...referencedAttachments],
         summaryId: summary?.id,
+        turnStartedAtIso: new Date(turnStartedAt).toISOString(),
       });
     } catch (err) {
       failTurn(id, ctx, err, sse, summary?.id);
