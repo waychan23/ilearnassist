@@ -4504,6 +4504,24 @@ export interface TurnRequestMeta {
   timezone?: string;
 }
 
+/**
+ * Context carried with the user message immediately after a chapter jump
+ * (`POST …/plan/nodes/:id/jump`). It tells the model which chapter it is being asked to
+ * (re)enter, and whether teaching had previously begun there, so it can recover the earlier
+ * stretch with `ila_recall` instead of restarting or guessing.
+ */
+export interface ChapterJump {
+  nodeId: string;
+  /** The node's hierarchical number, e.g. "2.1". */
+  number: string;
+  title: string;
+  /** Teaching had actually started before (a skipped node with a start marker). */
+  started: boolean;
+  /** Present when `started` and the positions resolved; message ids in this conversation. */
+  startMessageId?: string;
+  skippedMessageId?: string;
+}
+
 export interface ChatInput extends TurnRequestMeta {
   message: string;
   provider?: string;
@@ -4528,6 +4546,8 @@ export interface ChatInput extends TurnRequestMeta {
    * diagram*, and the agent is told which one so it can look it up — see `TurnReference`.
    */
   refs?: TurnReference[];
+  /** Present on the user turn that immediately follows a chapter jump. */
+  chapterJump?: ChapterJump;
 }
 
 /* ---------------------------------- Chat stream events -------------------------------- */

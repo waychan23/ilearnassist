@@ -13,6 +13,7 @@ import {
   planTreeInputSchema,
   readCurrentPlan,
   readPlanVersion,
+  renderChapterJumpGuidance,
   resolvePlanStartMessages,
 } from "../src/plans.js";
 
@@ -758,5 +759,40 @@ describe("resolvePlanStartMessages", () => {
 
   it("answers zero counts when the session has no plan", () => {
     expect(resolvePlanStartMessages(db, OWNER, SESSION)).toEqual({ starts: 0, skips: 0 });
+  });
+});
+
+describe("renderChapterJumpGuidance", () => {
+  const claim = (started: boolean) => ({
+    nodeId: "n1",
+    number: "1.1",
+    title: "T",
+    started,
+    startMessageId: "m1",
+    skippedMessageId: "m2",
+  });
+
+  it("names the range recovery in smart/started mode", () => {
+    const text = renderChapterJumpGuidance(claim(true), true);
+    expect(text).toContain("had already started");
+    expect(text).toContain('mode: "range"');
+    expect(text).toContain("m1");
+    expect(text).toContain("m2");
+  });
+
+  it("says there is no earlier stretch in smart/fresh mode", () => {
+    const text = renderChapterJumpGuidance(claim(false), true);
+    expect(text).toContain("had not actually begun");
+    expect(text).not.toContain("m1");
+  });
+
+  it("offers the range read in default/started mode", () => {
+    const text = renderChapterJumpGuidance(claim(true), false);
+    expect(text).toContain("had already started");
+    expect(text).toContain('mode: "range"');
+  });
+
+  it("states the chapter had not begun in default/fresh mode", () => {
+    expect(renderChapterJumpGuidance(claim(false), false)).toContain("had not begun");
   });
 });

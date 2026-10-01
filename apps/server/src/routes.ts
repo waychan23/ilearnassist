@@ -134,9 +134,12 @@ import {
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import { installWidgetForToolUse } from "./widgetInstall.js";
 import {
+  assertValidChapterJump,
   buildPlanView,
   jumpToNode,
+  parseChapterJump,
   readPlanVersion,
+  renderChapterJumpGuidance,
   resolvePlanStartMessages,
 } from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
@@ -2824,7 +2827,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
     try {
       const result = jumpToNode(db, id, nodeId);
-      return { plan: result.view, number: result.number, title: result.title, skippedCount: result.skippedCount };
+      return {
+        plan: result.view,
+        number: result.number,
+        title: result.title,
+        skippedCount: result.skippedCount,
+        started: result.started,
+        startMessageId: result.startMessageId,
+        skippedMessageId: result.skippedMessageId,
+      };
     } catch {
       // No plan, unknown/deleted/completed node: the same 404 a missing object gives, since
       // the jump target is the thing that does not exist.
@@ -5947,6 +5958,25 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
 
     /*
+     * The chapter-jump claim, present on the turn right after the play button. Shape parsed
+     * like the rest of the body; the claim verified against the plan before it becomes a
+     * prompt block.
+     */
+    const chapterJump = parseChapterJump(body?.chapterJump);
+    if (chapterJump === null) {
+      return reply.code(400).send(apiError("INVALID_FIELD", "chapterJump is malformed"));
+    }
+    if (chapterJump) {
+      try {
+        assertValidChapterJump(db, userId, id, chapterJump);
+      } catch (err) {
+        return reply
+          .code(400)
+          .send(apiError("INVALID_FIELD", err instanceof Error ? err.message : String(err)));
+      }
+    }
+
+    /*
      * A `@`-reference is the user pointing at their own material, wherever it is — and what makes
      * it readable on the *next* turn too is a **link of this conversation's own**, not a copy for
      * this one. It is recorded in `session_references`: the fact that this conversation is *about*
@@ -6089,6 +6119,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
         smartContextGuidance: ctx.smartContextGuidance,
+        chapterJumpGuidance: chapterJump
+          ? renderChapterJumpGuidance(chapterJump, session.settings.smartContext === true)
+          : undefined,
         preferencesGuidance: ctx.preferencesGuidance,
         preferenceGuidance: ctx.preferenceGuidance,
         onToolUsed: ctx.onToolUsed,

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  ChapterJump,
   PlanNodeInput,
   PlanNodeStatus,
   PlanSnapshotNode,
@@ -11,6 +12,7 @@ import type {
 } from "@ilearnassist/shared";
 import { planNodeNumbers } from "@ilearnassist/shared";
 import { newId, type AppDb, type PlanNodeInsert, type PlanNodeRecord, type PlanRecord } from "./db.js";
+import { renderPrompt } from "./prompts.js";
 
 /**
  * The versioned plan behind the plan widget.
@@ -864,6 +866,75 @@ export function resolvePlanStartMessages(
     }
   }
   return { starts, skips };
+}
+
+const chapterJumpInputSchema = z.object({
+  nodeId: z.string().min(1).max(100),
+  number: z.string().min(1).max(40),
+  title: z.string().min(1).max(PLAN_TITLE_MAX),
+  started: z.boolean(),
+  startMessageId: z.string().max(64).optional(),
+  skippedMessageId: z.string().max(64).optional(),
+});
+
+/** Parse an optional chapter-jump field: undefined absent, null malformed. */
+export function parseChapterJump(raw: unknown): ChapterJump | null | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const result = chapterJumpInputSchema.safeParse(raw);
+  return result.success ? (result.data as ChapterJump) : null;
+}
+
+/**
+ * Validate a chapter-jump claim the client sent, before it reaches a prompt.
+ *
+ * The jump just opened the node, so the row is live and its anchor presence says whether it
+ * had started — the client's flag must agree. Any message ids must be live messages of this
+ * session. The claim is input from outside like every other body field, which is why it is
+ * verified rather than rendered straight into the system prompt.
+ */
+export function assertValidChapterJump(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  jump: ChapterJump
+): void {
+  const plan = db.getPlanBySession(sessionId);
+  if (!plan) throw new Error("chapterJump: this conversation has no plan");
+  const node = db.listPlanNodes(plan.id).find((n) => n.id === jump.nodeId);
+  if (!node || node.removedVersion !== null) {
+    throw new Error(`chapterJump: node ${jump.nodeId} is not a live node in this plan`);
+  }
+  if (jump.started !== !!node.anchorToolCallId) {
+    throw new Error("chapterJump: the started flag does not agree with the node's state");
+  }
+  const messageIds = new Set(db.listMessagesForUser(sessionId, userId).map((m) => m.id));
+  for (const id of [jump.startMessageId, jump.skippedMessageId]) {
+    if (id !== undefined && !messageIds.has(id)) {
+      throw new Error(`chapterJump: no live message with id ${id} in this conversation`);
+    }
+  }
+}
+
+/**
+ * The prompt block for the turn that follows a chapter jump.
+ *
+ * The key selects two axes: smart context on/off and whether teaching the target had begun.
+ * The caller decides both — the chat route knows the session setting and the jump result —
+ * so this only renders, and a tuned deployment can rewrite any of the four blocks.
+ */
+export function renderChapterJumpGuidance(jump: ChapterJump, smartContext: boolean): string {
+  const prefix = smartContext
+    ? "chat.guidance.chapterJump.smart"
+    : "chat.guidance.chapterJump.default";
+  if (!jump.started) {
+    return renderPrompt(`${prefix}.fresh`, { number: jump.number, title: jump.title });
+  }
+  return renderPrompt(prefix, {
+    number: jump.number,
+    title: jump.title,
+    startMessageId: jump.startMessageId ?? "",
+    skippedMessageId: jump.skippedMessageId ?? "",
+  });
 }
 
 /** One historical version, structure only. `undefined` when the version never existed. */
