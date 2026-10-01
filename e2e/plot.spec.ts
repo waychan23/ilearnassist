@@ -231,6 +231,9 @@ test("the panel filters three kinds once it holds all three", async ({ page, req
     ],
   });
   await send(page, "画一个流程图");
+  // Wait the turn out before the next script: a queued turn still unconsumed would be
+  // wiped by the next scriptLlm reset (this was a pre-existing race in the test).
+  await expect(page.getByTestId("diagram-row").filter({ hasText: "flow" })).toBeVisible();
 
   await scriptLlm(request, {
     turns: [
@@ -248,6 +251,7 @@ test("the panel filters three kinds once it holds all three", async ({ page, req
     ],
   });
   await send(page, "记一个表格");
+  await expect(page.getByTestId("diagram-row").filter({ hasText: "对比" })).toBeVisible();
 
   const filter = page.getByTestId("figure-filter");
   await expect(filter).toBeVisible();
