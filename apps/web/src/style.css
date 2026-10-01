@@ -1570,18 +1570,18 @@ body {
 }
 
 /*
- * Position sub-list: clearly indented under its node — a left margin plus an extra
- * indentation step, and a dashed rail joining the rows. Distinct from node children.
+ * Position sub-list indented under its node. The indent is on MARGIN-LEFT, so the li's
+ * border-left (the dashed rail joining the rows) itself moves right with the indentation
+ * rather than staying at the node edge; padding is only the small gap after the rail.
  */
-.plan-position-row,
-.plan-position-toggle-row {
+.plan-position-row {
   display: flex;
   align-items: center;
   padding-top: 1px;
   padding-bottom: 1px;
-  padding-left: calc(var(--space-4) * (var(--plan-depth, 0) + 1) + var(--space-5));
+  padding-left: var(--space-2);
   border-left: var(--space-1) dashed var(--border);
-  margin-left: calc(var(--space-4) * var(--plan-depth, 0));
+  margin-left: calc(var(--space-4) * (var(--plan-depth, 0) + 1) + var(--space-5));
 }
 .plan-position {
   background: none;

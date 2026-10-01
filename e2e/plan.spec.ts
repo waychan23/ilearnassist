@@ -542,14 +542,31 @@ test.describe("the plan widget", () => {
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(toggle).toHaveAttribute("title", "多次学习该章节，有多个消息位置，点击折叠");
 
-    // Default expanded: both positions listed, in order, 位置1 then the control then 位置2.
+    // Default expanded: both positions listed, 位置1 (with the control on the same row)
+    // and 位置2 on its own row.
     let positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
     await expect(positionRows).toHaveCount(2);
     await expect(page.getByTestId(`plan-position-${intro}-1`)).toContainText("位置1");
     await expect(page.getByTestId(`plan-position-${intro}-2`)).toContainText("位置2");
-    // The control is indented under its node.
-    const indented = await toggle.evaluate((el) => getComputedStyle(el.closest("li")!).paddingLeft);
-    expect(parseFloat(indented)).toBeGreaterThan(0);
+
+    // The control shares the row with position 1 — not a row of its own.
+    const sameRow = await toggle.evaluate((el, firstId) => {
+      const li = el.closest("li");
+      return li?.querySelector(`[data-testid="plan-position-${firstId}-1"]`) !== null;
+    }, intro);
+    expect(sameRow).toBe(true);
+
+    // The dashed rail (the li's border-left) itself is indented past the node title.
+    const railOffset = await page
+      .locator(`[data-testid="plan-position-${intro}-1"]`)
+      .evaluate((el) => {
+        const positionLi = el.closest("li")!;
+        const nodeLi = positionLi.previousElementSibling as HTMLElement | null;
+        const railX = positionLi.getBoundingClientRect().left;
+        const nodeX = nodeLi?.getBoundingClientRect().left ?? railX;
+        return { railX, nodeX };
+      });
+    expect(railOffset.railX).toBeGreaterThan(railOffset.nodeX + 8);
 
     // Click position 2 first (while expanded): the chat scrolls to that resume message.
     const resumeMessage = page.getByTestId("message-assistant").last();

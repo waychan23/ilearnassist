@@ -177,19 +177,11 @@ interface PositionRow {
   position: number;
   messageId: string;
   toolCallId?: string;
+  /** Present on position 1 of a multi node: the expand/collapse control on the same row. */
+  toggle?: { expanded: boolean; count: number };
 }
 
-/** The expand/collapse control in the position sub-list, after position 1. */
-interface ToggleRow {
-  kind: "toggle";
-  id: string;
-  nodeId: string;
-  depth: number;
-  expanded: boolean;
-  count: number;
-}
-
-type Row = NodeRow | PositionRow | ToggleRow;
+type Row = NodeRow | PositionRow;
 
 type DisplayNode = PlanTreeNode | PlanSnapshotNode;
 
@@ -202,15 +194,14 @@ const rows = computed<Row[]>(() => {
   const numbers = planNodeNumbers(roots);
   const out: Row[] = [];
 
-  /** Position sub-list rows for one multi node; position 1 always, others when expanded. */
   /**
-   * Position rows plus, for a multi node, the toggle row. Position 1 always; the toggle
-   * sits right after it; the rest follow only when expanded.
+   * Position rows for one multi node. Position 1 always and carries the expand/collapse
+   * control on the same row; the rest follow only when expanded.
    */
   const positionRows = (node: PlanTreeNode, depth: number): Row[] => {
     const starts = node.starts ?? [];
     const expanded = !collapsedPositions.value.has(node.id);
-    const toPosition = (start: PlanNodeStart): PositionRow => ({
+    const toPosition = (start: PlanNodeStart, withToggle: boolean): PositionRow => ({
       kind: "position",
       id: `${node.id}:${start.position}`,
       nodeId: node.id,
@@ -218,22 +209,15 @@ const rows = computed<Row[]>(() => {
       position: start.position,
       messageId: start.messageId,
       ...(start.toolCallId ? { toolCallId: start.toolCallId } : {}),
+      ...(withToggle ? { toggle: { expanded, count: starts.length } } : {}),
     });
 
     const [first, ...others] = starts;
     if (!first) return [];
-    const rows: Row[] = [toPosition(first)];
-    // The collapse toggle immediately after position 1.
-    rows.push({
-      kind: "toggle",
-      id: `toggle:${node.id}`,
-      nodeId: node.id,
-      depth,
-      expanded,
-      count: starts.length,
-    });
-    if (expanded) rows.push(...others.map(toPosition));
-    return rows;
+    return [
+      toPosition(first, true),
+      ...(expanded ? others.map((start) => toPosition(start, false)) : []),
+    ];
   };
 
   const walk = (nodes: DisplayNode[], depth: number): void => {
@@ -389,9 +373,9 @@ function jumpToStart(row: NodeRow): void {
   }
 }
 
-/** Tooltip for the position sub-list control; literal keys the catalog guard can find. */
-function positionsToggleTitle(row: ToggleRow): string {
-  return row.expanded ? t("plan.positionsHideHint") : t("plan.positionsShowHint");
+/** Tooltip for the position control; literal keys the catalog guard can find. */
+function positionsToggleTitle(toggle: { expanded: boolean }): string {
+  return toggle.expanded ? t("plan.positionsHideHint") : t("plan.positionsShowHint");
 }
 
 /** Jump to one position in a node's position sub-list. */
@@ -571,22 +555,17 @@ async function submitAdjust(): Promise<void> {
               >
                 <span class="plan-position-label">{{ t("plan.positionN", { n: row.position }) }}</span>
               </button>
-            </li>
 
-            <!-- Expand/collapse control right after position 1. -->
-            <li
-              v-else-if="row.kind === 'toggle'"
-              class="plan-position-toggle-row"
-              :style="{ '--plan-depth': row.depth - 1 }"
-            >
+              <!-- Expand/collapse control on the SAME row as position 1. -->
               <button
+                v-if="row.toggle"
                 class="plan-positions-toggle"
-                :title="positionsToggleTitle(row)"
+                :title="positionsToggleTitle(row.toggle)"
                 :data-testid="'plan-positions-toggle-' + row.nodeId"
-                :aria-expanded="row.expanded"
+                :aria-expanded="row.toggle.expanded"
                 @click="togglePositions(row.nodeId)"
               >
-                <Icon :name="row.expanded ? 'caret-up' : 'caret-down'" />
+                <Icon :name="row.toggle.expanded ? 'caret-up' : 'caret-down'" />
               </button>
             </li>
 
