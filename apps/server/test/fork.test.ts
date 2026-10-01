@@ -299,6 +299,25 @@ async function seedSource(): Promise<Fixture> {
   // verify a copy maps them to its own messages (and drops what was not copied).
   const planId = db.getPlanBySession(session.id)!.id;
   db.fillPlanNodeMessageIds(planId, nodeId, cutMessage.id, tailMessage.id);
+  // Two start positions: one at the cut, one at the tail — a full copy carries both, a cut
+  // copy only the first.
+  db.insertPlanNodeStart({
+    id: newId(),
+    planId,
+    nodeId,
+    position: 1,
+    messageId: cutMessage.id,
+    toolCallId: "call-diagram",
+    startedAt: new Date().toISOString(),
+  });
+  db.insertPlanNodeStart({
+    id: newId(),
+    planId,
+    nodeId,
+    position: 2,
+    messageId: tailMessage.id,
+    startedAt: new Date().toISOString(),
+  });
 
   return {
     workspace,
@@ -345,6 +364,18 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
     expect(copied.map((m) => m.id)).not.toEqual(sourceMessages.slice(0, 2).map((m) => m.id));
     expect(copied.map((m) => m.id)).not.toContain(fix.tailMessage.id);
 
+    // The tail start position is not copied; the cut survivor renumbers to position 1 and
+    // addresses the copy's own message.
+    const cutPlan = db.getPlanBySession(branch.id)!;
+    const cutStarts = db.listPlanNodeStarts(cutPlan.id);
+    expect(cutStarts).toHaveLength(1);
+    expect(cutStarts[0]).toMatchObject({
+      nodeId: cutStarts[0]!.nodeId,
+      position: 1,
+      messageId: copied[1]!.id,
+      toolCallId: "call-diagram",
+    });
+
     // A full copy carries the graph, all of it new, all of it referring to the copy.
     const full = (await fork(fix.session.id, fix.tailMessage.id, { title: "Full" })).json<Session>();
     const fullMessages = await messagesOf(full.id);
@@ -374,6 +405,14 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
     expect(copiedWindow.startMessageId).toBe(fullMessages[1]!.id);
     expect(copiedWindow.skippedMessageId).toBe(tailCopy.id);
     expect(copiedWindow.startMessageId).not.toBe(fix.cutMessage.id);
+
+    // Both start positions carry over, mapped to the copy's messages, tool-call ids kept.
+    const fullStarts = db.listPlanNodeStarts(plan.id);
+    expect(fullStarts.map((s) => [s.position, s.messageId, s.toolCallId])).toEqual([
+      [1, fullMessages[1]!.id, "call-diagram"],
+      [2, tailCopy.id, null],
+    ]);
+
     expect(db.listPlanVersions(plan.id)).toHaveLength(db.listPlanVersions(sourcePlan.id).length);
     // Every version's structural snapshot names the copy's nodes.
     const copiedIds = new Set(copiedNodes.map((n) => n.id));

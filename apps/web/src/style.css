@@ -1569,6 +1569,42 @@ body {
   text-decoration: line-through;
 }
 
+/* Position sub-list: distinct from node rows — a dashed rail with small muted chips. */
+.plan-position-row {
+  display: flex;
+  align-items: center;
+  padding-left: calc(var(--space-4) * var(--plan-depth, 0));
+  padding-top: 1px;
+  padding-bottom: 1px;
+  border-left: var(--space-1) dashed var(--border);
+  margin-left: calc(var(--space-4) * var(--plan-depth, 0) + var(--space-3));
+}
+.plan-position {
+  background: none;
+  border: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: var(--fs-2);
+}
+.plan-position:hover {
+  color: var(--accent);
+  background: var(--panel-2);
+}
+.plan-positions-toggle {
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  border-radius: var(--radius-sm);
+}
+.plan-positions-toggle .icon {
+  font-size: var(--fs-2);
+}
+
 /* --------------------------------- messages --------------------------------- */
 
 .msg {

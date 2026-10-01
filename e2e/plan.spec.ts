@@ -534,6 +534,41 @@ test.describe("the plan widget", () => {
     const system = streamed[0]!.messages[0]!;
     expect(system.role).toBe("system");
     expect(system.content).toContain("had already started");
+
+    // Intro now holds two start positions: a position picker appears beside its title.
+    const toggle = page.getByTestId(`plan-positions-toggle-${intro}`);
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    // Collapsed: only position 1 is listed, labelled 位置1.
+    let positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
+    await expect(positionRows).toHaveCount(1);
+    await expect(positionRows.first()).toContainText("位置1");
+    await expect(page.getByTestId(`plan-position-${intro}-1`)).toBeVisible();
+
+    // Expand: position 2 appears too.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
+    await expect(positionRows).toHaveCount(2);
+    await expect(page.getByTestId(`plan-position-${intro}-2`)).toContainText("位置2");
+
+    // Click position 2: the chat scrolls to that resume message (the last assistant one).
+    const resumeMessage = page.getByTestId("message-assistant").last();
+    await page.getByTestId(`plan-position-${intro}-2`).click();
+    const inView = await resumeMessage.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    });
+    expect(inView).toBe(true);
+
+    // Collapse again: position 2 hidden, position 1 stays.
+    await toggle.click();
+    await expect(page.getByTestId(`plan-position-${intro}-2`)).toHaveCount(0);
+    await expect(page.getByTestId(`plan-position-${intro}-1`)).toBeVisible();
+
+    // A single-position node (setup) carries no picker.
+    await expect(page.getByTestId(`plan-positions-toggle-${setup}`)).toHaveCount(0);
   });
 
   test("the footer composer sends an adjustment as a normal user message", async ({

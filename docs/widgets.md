@@ -421,9 +421,15 @@ Two rules around skipping and jumping, both load-bearing:
   `chapterJump`; after validation they become a prompt block that — in smart context mode
   especially — directs the model to read the earlier stretch back with `ila_recall` (`mode:
   "range"` or `"around"`) and continue, instead of restarting the chapter.
+- **Start positions are a list, not one point.** Every chapter-jump turn lands in
+  `plan_node_starts` (anchor resolution records the first start the same way), so a node taught,
+  skipped and returned to holds several ordered positions. Single-position nodes keep the title
+  click as above; multi-position nodes render a collapsible sub-list styled distinctly from
+  tree children — collapsed it shows `位置1`, expanded `位置1..N`, each jumping to that message.
 
-Anchor ids are tool-call ids and preserved verbatim across a fork; their message columns map
-through the copied-message map and are dropped when that message was not copied.
+Anchor ids are tool-call ids and preserved verbatim across a fork; position rows and message
+columns map through the copied-message map — anything whose message was not copied is dropped,
+and the survivors renumber contiguously.
 
 See `apps/server/src/plans.ts` for the domain logic.
 

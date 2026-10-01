@@ -255,6 +255,37 @@ function clonePlan(
     });
   }
 
+  /*
+   * Start positions ride along per node, ordered. A position whose message was not copied is
+   * dropped (positions only address messages in this conversation), and the survivors
+   * renumber 1..M so '位置 N' stays contiguous. Tool-call ids are preserved verbatim.
+   */
+  const startsByNode = new Map<string, ReturnType<AppDb["listPlanNodeStarts"]>>();
+  for (const start of db.listPlanNodeStarts(sourcePlan.id)) {
+    const list = startsByNode.get(start.nodeId) ?? [];
+    list.push(start);
+    startsByNode.set(start.nodeId, list);
+  }
+  for (const [oldNodeId, starts] of startsByNode) {
+    const newNodeId = nodeMap.get(oldNodeId);
+    if (!newNodeId) continue;
+    let nextPosition = 0;
+    for (const start of starts) {
+      const newMessageId = msgMap.get(start.messageId);
+      if (!newMessageId) continue;
+      nextPosition += 1;
+      db.insertPlanNodeStart({
+        id: newId(),
+        planId,
+        nodeId: newNodeId,
+        position: nextPosition,
+        messageId: newMessageId,
+        toolCallId: start.toolCallId,
+        startedAt: start.startedAt,
+      });
+    }
+  }
+
   return { planId, nodeMap };
 }
 

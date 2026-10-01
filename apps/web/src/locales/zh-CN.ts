@@ -1702,6 +1702,11 @@ export default {
     jumpToCompletion: "跳转到完成这个节点的位置",
     jumpToStart: "跳转到开始学习这个节点的位置",
     jumpToChapter: "跳到本章节",
+    /** Position sub-list on a node with several start positions. */
+    jumpToPosition: "跳转到这个消息位置",
+    positionN: "位置{n}",
+    positionsShow: "展开全部 {n} 个位置",
+    positionsHide: "折叠其他位置",
     jumpConfirm: "是否跳到章节 {number} {title} 学习？",
     jumpConfirmDetail: "尚未完成的前置章节会标记为「已跳过」（包括当前进行中的章节），以后可以回来补学。",
     /** Appended to the jump confirm when the target was skipped after being in progress. */

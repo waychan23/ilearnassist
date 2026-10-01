@@ -13,6 +13,7 @@ import {
   planTreeInputSchema,
   readCurrentPlan,
   readPlanVersion,
+  recordNodeStart,
   renderChapterJumpGuidance,
   resolvePlanStartMessages,
 } from "../src/plans.js";
@@ -759,6 +760,79 @@ describe("resolvePlanStartMessages", () => {
 
   it("answers zero counts when the session has no plan", () => {
     expect(resolvePlanStartMessages(db, OWNER, SESSION)).toEqual({ starts: 0, skips: 0 });
+  });
+});
+
+describe("recordNodeStart", () => {
+  function seeded(): { planId: string; a: string; b: string } {
+    const v1 = makePlan(db, SESSION, input(basicTree()));
+    if (planConflicted(v1)) throw new Error("should create");
+    const planId = db.getPlanBySession(SESSION)!.id;
+    return { planId, a: byTitle(v1, "A").id, b: byTitle(v1, "B").id };
+  }
+
+  it("numbers starts per node in recorded order and dedupes the same message", () => {
+    const { planId, a } = seeded();
+
+    recordNodeStart(db, planId, a, { messageId: "m1", toolCallId: "c1" });
+    expect(db.countPlanNodeStarts(a)).toBe(1);
+    // Same node/message is a no-op, even reached through another path.
+    recordNodeStart(db, planId, a, { messageId: "m1" });
+    expect(db.countPlanNodeStarts(a)).toBe(1);
+
+    recordNodeStart(db, planId, a, { messageId: "m3" });
+    const starts = db.listPlanNodeStarts(planId).filter((s) => s.nodeId === a);
+    expect(starts.map((s) => s.position)).toEqual([1, 2]);
+    expect(starts[0]).toMatchObject({ messageId: "m1", toolCallId: "c1" });
+    expect(starts[1]).toMatchObject({ messageId: "m3", toolCallId: null });
+  });
+
+  it("numbers each node independently", () => {
+    const { planId, a, b } = seeded();
+    recordNodeStart(db, planId, b, { messageId: "x" });
+    expect(db.listPlanNodeStarts(planId).map((s) => `${s.nodeId}:${s.position}`)).toEqual([
+      `${b}:1`,
+    ]);
+    recordNodeStart(db, planId, a, { messageId: "y" });
+    recordNodeStart(db, planId, b, { messageId: "z" });
+    const byNode = db
+      .listPlanNodeStarts(planId)
+      .reduce<Record<string, number>>((acc, s) => {
+        acc[s.nodeId] = s.position;
+        return acc;
+      }, {});
+    expect(byNode[a]).toBe(1);
+    expect(byNode[b]).toBe(2);
+  });
+
+  it("records the first start when the anchor message resolves", () => {
+    const { planId, a } = seeded();
+    applyProgress(db, SESSION, { nodes: [{ id: a, status: "in_progress" }] }, "call_a");
+    db.createMessage({ id: "m1", sessionId: SESSION, role: "user", content: "学 A" });
+    db.createMessage({
+      id: "m2",
+      sessionId: SESSION,
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_a", name: "ila_update_plan_progress", input: "{}" }],
+    });
+
+    expect(resolvePlanStartMessages(db, OWNER, SESSION).starts).toBe(1);
+    const starts = db.listPlanNodeStarts(planId).filter((s) => s.nodeId === a);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ position: 1, messageId: "m2", toolCallId: "call_a" });
+  });
+
+  it("keeps starts through a skip but deletes them on an explicit reset to not-started", () => {
+    const { planId, a } = seeded();
+    recordNodeStart(db, planId, a, { messageId: "m1" });
+    applyProgress(db, SESSION, { nodes: [{ id: a, status: "skipped" }] }, "c");
+    expect(db.countPlanNodeStarts(a)).toBe(1);
+
+    applyProgress(db, SESSION, { nodes: [{ id: a, status: "not_started" }] }, "c2");
+    expect(db.countPlanNodeStarts(a)).toBe(0);
+    // The reset view carries no positions.
+    expect(byTitle(readCurrentPlan(db, SESSION)!, "A").starts ?? []).toEqual([]);
   });
 });
 
