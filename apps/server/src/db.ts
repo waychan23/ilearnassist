@@ -205,6 +205,37 @@ interface PlanVersionRow {
   created_at: string;
 }
 
+/** One node-start position row; see `schema.ts`. */
+interface PlanNodeStartRow {
+  id: string;
+  plan_id: string;
+  node_id: string;
+  position: number;
+  message_id: string;
+  tool_call_id: string | null;
+  started_at: string;
+}
+
+export interface PlanNodeStartRecord {
+  id: string;
+  planId: string;
+  nodeId: string;
+  position: number;
+  messageId: string;
+  toolCallId: string | null;
+  startedAt: string;
+}
+
+export interface PlanNodeStartInsert {
+  id: string;
+  planId: string;
+  nodeId: string;
+  position: number;
+  messageId: string;
+  toolCallId?: string | null;
+  startedAt: string;
+}
+
 /** A plan as the server layer holds it. One per session. */
 export interface PlanRecord {
   id: string;
@@ -2727,6 +2758,17 @@ export interface AppDb {
   /** The newest live message id in a session, or null when it has none. */
   lastSessionMessageId(sessionId: string): string | null;
 
+  /* ---------------------------- node start positions ---------------------------- */
+  /** Every node's start positions in a plan, ordered. */
+  listPlanNodeStarts(planId: string): PlanNodeStartRecord[];
+  /** Whether a start at this node/message already exists. */
+  hasPlanNodeStart(nodeId: string, messageId: string): boolean;
+  /** How many start positions a node holds. */
+  countPlanNodeStarts(nodeId: string): number;
+  insertPlanNodeStart(input: PlanNodeStartInsert): void;
+  /** Remove all of a node's starts (explicit reset). */
+  deletePlanNodeStarts(nodeId: string): void;
+
   /*
    * Quiz questions (quiz widget). Ownership is reached through the session like plans: the
    * ForUser pair is what routes read; the session-id-only accessors run on an
@@ -4595,6 +4637,25 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
      ORDER BY created_at DESC, rowid DESC LIMIT 1`
   );
 
+  /* ------------------------------ node start positions ------------------------------ */
+  const stmtListPlanNodeStarts = db.prepare(
+    `SELECT * FROM plan_node_starts WHERE plan_id = ? ORDER BY node_id, position ASC`
+  );
+  const stmtGetPlanNodeStart = db.prepare(
+    `SELECT id FROM plan_node_starts WHERE node_id = ? AND message_id = ?`
+  );
+  const stmtCountPlanNodeStarts = db.prepare(
+    `SELECT count(*) AS n FROM plan_node_starts WHERE node_id = ?`
+  );
+  const stmtInsertPlanNodeStart = db.prepare(
+    `INSERT INTO plan_node_starts
+       (id, plan_id, node_id, position, message_id, tool_call_id, started_at)
+     VALUES (@id, @planId, @nodeId, @position, @messageId, @toolCallId, @startedAt)`
+  );
+  const stmtDeletePlanNodeStarts = db.prepare(
+    `DELETE FROM plan_node_starts WHERE node_id = ?`
+  );
+
   /* --------------------------------- quizzes -------------------------------- */
   /*
    * Same scoping shape as plans: the ForUser reads join through to the workspace owner,
@@ -6194,6 +6255,38 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     },
     lastSessionMessageId(sessionId) {
       return (stmtLastSessionMessageId.get(sessionId) as { id: string } | undefined)?.id ?? null;
+    },
+
+    listPlanNodeStarts(planId) {
+      return (stmtListPlanNodeStarts.all(planId) as PlanNodeStartRow[]).map((r) => ({
+        id: r.id,
+        planId: r.plan_id,
+        nodeId: r.node_id,
+        position: r.position,
+        messageId: r.message_id,
+        toolCallId: r.tool_call_id,
+        startedAt: r.started_at,
+      }));
+    },
+    hasPlanNodeStart(nodeId, messageId) {
+      return stmtGetPlanNodeStart.get(nodeId, messageId) !== undefined;
+    },
+    countPlanNodeStarts(nodeId) {
+      return (stmtCountPlanNodeStarts.get(nodeId) as { n: number }).n;
+    },
+    insertPlanNodeStart(input) {
+      stmtInsertPlanNodeStart.run({
+        id: input.id,
+        planId: input.planId,
+        nodeId: input.nodeId,
+        position: input.position,
+        messageId: input.messageId,
+        toolCallId: input.toolCallId ?? null,
+        startedAt: input.startedAt,
+      });
+    },
+    deletePlanNodeStarts(nodeId) {
+      stmtDeletePlanNodeStarts.run(nodeId);
     },
 
     insertQuizQuestions(rows) {

@@ -764,6 +764,25 @@ export const DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_plan_nodes_plan ON plan_nodes(plan_id, parent_id, position);
 
+  -- Every position where teaching of a node BEGAN or RESUMED: a node may be started, skipped
+  -- and returned to several times, so its teaching sits at several message positions. Unlike
+  -- the node's first-start cache (plan_nodes.start_message_id) this is the full list, which
+  -- the panel renders as a position picker. 'tool_call_id' is the in_progress marker when the
+  -- position came from one (preserved verbatim across forks); 'message_id' is the position
+  -- itself and maps through the copied-message map on a fork.
+  CREATE TABLE IF NOT EXISTS plan_node_starts (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    message_id TEXT NOT NULL,
+    tool_call_id TEXT,
+    started_at TEXT NOT NULL,
+    UNIQUE (node_id, message_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_plan_node_starts_node
+    ON plan_node_starts(node_id, position);
+
   -- The quiz widget's questions. One row per question, created when 'ila_quiz' suspends —
   -- BEFORE the user answers — so that a question the learner walked away from is already a
   -- thing the panel can list and later re-answer.
